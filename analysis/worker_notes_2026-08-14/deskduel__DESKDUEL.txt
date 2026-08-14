@@ -1,0 +1,114 @@
+DESKTOP CLIMB CHAMPIONS vs MINI CLIMB CHAMPIONS -- duel comparison
+2026-08-14. All duels run ON THE DESKTOP (arena.exe, threads=8) so the
+mini's CPU stayed free; nothing ran on the mini besides copying two small
+JSON files. Desktop's live climb (TTAClimb_2p/3p/4p) was left untouched.
+
+SETUP
+- A = desktop champion (desk_Np.json), B = FROZEN copy of the mini's
+  champion at time of test (mini_Np.json, copied from the live
+  rust_champion_Np.json BEFORE this run so the mini's climb couldn't
+  rewrite it mid-comparison).
+    2p: desk gen 57406  vs  mini gen 44852
+    3p: desk gen 26270  vs  mini gen 15861
+    4p: desk gen 12129  vs  mini gen 9650
+- arena --a desk_Np.json --b mini_Np.json --players N --games 240 --threads 8
+  (240 games, not 6 -- seat-paired, so this is a real sample, not two deals
+  of noise).
+- Desktop's Rust engine is ONE DAY OLDER than the mini's (missing 11 rule
+  fixes landed 2026-08-14). Both sides of every duel played under the SAME
+  (desktop, older) engine, so each duel is still a fair, apples-to-apples
+  vector-vs-vector comparison. But this means: a desktop win here is a
+  recommendation to TEST that vector on the mini's current engine before
+  installing it, not a green light to copy the file over blind -- an old
+  engine's local optimum is not guaranteed to survive 11 rule fixes.
+- Reminder on vs_anchor: the desktop's vs_anchor (0.975/0.967/1.0) being
+  higher than the mini's (0.933/0.942/0.925) is NOT evidence by itself --
+  that metric is near-saturated and measured against one fixed anchor with
+  a known blind spot. The duel below is the actual evidence, and in this
+  case it happens to agree with vs_anchor's direction, which makes the duel
+  win more credible, not the anchor number.
+
+VERDICTS (verbatim from arena.exe)
+
+--- 2p ---  (120 deals x 2 seats)
+win rate     74.0%  +/- 5.7   (null 50.0%)   p = 0.0000
+             [naive +/- 5.5, rho +0.04, deff 1.06, 120 deals]
+culture      A 106.3   best other 65.9   lead +40.4 +/- 7.8
+verdict      accept -- duel_desk_2p beats duel_mini_2p (interval clear of the null)
+
+--- 3p ---  (80 deals x 3 seats)
+win rate     42.1%  +/- 6.8   (null 33.3%)   p = 0.0099
+             [naive +/- 6.3, rho +0.06, deff 1.16, 80 deals]
+culture      A 147.5   best other 156.4   lead -8.9 +/- 8.2
+verdict      accept -- duel_desk_3p beats duel_mini_3p (interval clear of the null)
+
+--- 4p ---  (60 deals x 4 seats)
+win rate     52.1%  +/- 5.9   (null 25.0%)   p = 0.0000
+             [naive +/- 6.3, rho -0.05, deff 0.87, 60 deals]
+culture      A 257.2   best other 254.4   lead +2.7 +/- 8.9
+verdict      accept -- duel_desk_4p beats duel_mini_4p (interval clear of the null)
+
+All three: desktop's vector wins outright by arena's own gate (whole CI
+clear of the null), not just on point estimate. 2p and 4p wins are large
+and unambiguous. 3p win is real (p=0.0099, CI clear) but much thinner --
+only 8.8 points above the null vs. 24/27 points for 2p/4p -- and its
+CULTURE LEAD IS NEGATIVE (-8.9): the desktop 3p vector wins more games
+while accumulating less culture than the best other seat. That is a
+genuine caveat on the 3p result even though the win-rate gate passes.
+
+CLAMP-PINNING CHECK
+CLAMP = 60.0 (magnitude), only "culture" is exempt (frozen at 1.0, not
+mutated). A coordinate sitting at exactly +/-60.0 is "pinned" -- it hit the
+wall and mutation can't move it further; the RUNAWAY log line is climb's own
+alarm for this.
+
+  desk_2p (gen 57406): 1 pinned  -- tech_redundancy_discount = 60
+  desk_3p (gen 26270): 1 pinned  -- attack_target_weakness = 60
+                        (matches the RUNAWAY log line reported for this arm)
+  desk_4p (gen 12129): 2 pinned  -- best_theater = 60, rival_free_ca = 60
+                        (also 2 more coords near the wall: workers = 57.5,
+                        workers_late = 58.7)
+  desk TOTAL: 4 pinned coordinates across the three vectors
+
+  mini_2p (gen 44852): 0 pinned
+  mini_3p (gen 15861): 1 pinned  -- workers_late = 60
+                        (also culture_rate = 59.6, workers = 59.0 near wall)
+  mini_4p (gen 9650):  2 pinned  -- tactic_level = -60, unit_workers = -60
+                        NOTE: this vector's `workers` = 101.14, which
+                        EXCEEDS the clamp entirely -- almost certainly a
+                        legacy value from before CLAMP=60 governed this
+                        weight (clamp() only fires on values written by
+                        mutation, not on values loaded from an older file),
+                        not something the current climb could produce.
+  mini TOTAL: 3 pinned coordinates across the three vectors
+
+Verdict on pinning: the desktop arm is not uniquely pathological here --
+4 pinned coordinates vs. the mini's 3, roughly the same rate. Pinning shows
+up on both sides at every player count. It is a real, pre-existing
+shortcoming of the mutation/clamp scheme in general (both climbs hit it),
+not something specific to the desktop run that should disqualify its
+champions outright. The 3p pin on attack_target_weakness is worth watching
+(it's the coordinate that triggered the RUNAWAY log), but the 3p vector
+still won its duel against a mini 3p champion that has its own pin, so
+pinning alone isn't deciding this outcome.
+
+RECOMMENDATION
+  2p: INSTALL-CANDIDATE -- large, unambiguous duel win (74% vs 50% null).
+      Test on the mini's current (newer) engine before promoting, since the
+      duel ran on the day-old desktop engine; expect the result to hold
+      given the size of the margin.
+  3p: TEST FURTHER -- duel win is real but thin (42.1% vs 33.3% null,
+      p=0.0099) and comes with a negative culture lead plus a pinned
+      coordinate at the clamp wall. Re-run on the mini's current engine
+      with a larger game count before treating this as settled; don't
+      promote off this result alone.
+  4p: INSTALL-CANDIDATE -- large, unambiguous duel win (52.1% vs 25% null),
+      positive culture lead too. Test on the mini's current engine before
+      promoting, same caveat as 2p (day-old engine), but the margin is wide
+      enough that a reversal is unlikely.
+
+Bottom line: the duel evidence (not vs_anchor) says the desktop's climb IS
+currently producing better weight vectors at 2p and 4p, and probably at 3p
+too but with less margin -- for ALL THREE, "better" means "test on the
+mini's real engine before installing," because the duel was necessarily run
+under yesterday's rules.

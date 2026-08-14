@@ -1,0 +1,305 @@
+diff --git a/rust/src/debugflags.rs b/rust/src/debugflags.rs
+index 0d1543f..35cdd94 100644
+--- a/rust/src/debugflags.rs
++++ b/rust/src/debugflags.rs
+@@ -36,6 +36,7 @@ fn flag(name: &str) -> bool {
+ static REPLAY_DEBUG: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG"));
+ static REPLAY_DEBUG_ALL: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_ALL"));
+ static REPLAY_DEBUG_TECHS: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_TECHS"));
++static COLONIZE_FALLBACK_DUMP: LazyLock<bool> = LazyLock::new(|| flag("COLONIZE_FALLBACK_DUMP"));
+ 
+ /// `REPLAY_DEBUG`: per-game replay tracing.
+ pub fn replay_debug() -> bool {
+@@ -54,6 +55,15 @@ pub fn replay_debug_techs() -> bool {
+     *REPLAY_DEBUG_TECHS
+ }
+ 
++/// `COLONIZE_FALLBACK_DUMP`: one stderr line per `Replayer::
++/// approximate_colonize` fire, naming the journal's own next sacrifice
++/// clause the fallback could not honour. Measurement-only scaffolding for
++/// the colonize-sacrifice reconstruction fidelity pass; inert (one static
++/// bool read) otherwise.
++pub fn colonize_fallback_dump() -> bool {
++    *COLONIZE_FALLBACK_DUMP
++}
++
+ // ============================================================== tests ====
+ 
+ #[cfg(test)]
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 6725226..51c2352 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -164,7 +164,7 @@ use crate::discard_solver::{DiscardSolver, FutureNeed};
+ use crate::event_plan::EventPlan;
+ use crate::moves::{ChurchillChoice, PactSide};
+ use crate::state::{
+-    Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, MAX_HAND, MAX_PLAYERS,
++    Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, TechSlot, MAX_HAND, MAX_PLAYERS,
+ };
+ use crate::{apply, costs, economy, effects, game, legal, CardId, CardType, Move};
+ 
+@@ -2180,9 +2180,18 @@ impl<'a> Replayer<'a> {
+         let Some(Pending::Colonize(c)) = self.state.pending.top() else { return Ok(()) };
+         let player = c.player;
+         let Some(sac) = self.colonize_sacrifices.front() else {
++            if crate::debugflags::colonize_fallback_dump() {
++                eprintln!("COLONIZE_FALLBACK reason=queue-empty actor={player} line={}", self.current_lineno);
++            }
+             return self.approximate_colonize();
+         };
+         if sac.actor != player {
++            if crate::debugflags::colonize_fallback_dump() {
++                eprintln!(
++                    "COLONIZE_FALLBACK reason=wrong-actor sac_actor={} player={player} line={}",
++                    sac.actor, sac.lineno
++                );
++            }
+             return self.approximate_colonize();
+         }
+         let sac = self.colonize_sacrifices.pop_front().expect("just peeked");
+@@ -2209,6 +2218,17 @@ impl<'a> Replayer<'a> {
+             } else {
+                 owed.first().copied()
+             };
++            // The journal NAMES the sacrificed unit. When it is not yet a
++            // legal `Move::SendUnit` continuation, that is our own ARMY
++            // reconstruction missing it or having it parked on the wrong
++            // tech card -- not the human making an illegal move. Ground it
++            // the same way `ground_auction_winner_hand` already grounds a
++            // colonization's BONUS cards ahead of time; see
++            // `ground_army_unit_for_consumption`'s own doc for why this is a
++            // sound reconstruction repair, not a fabricated move.
++            if let Some(SacrificeClause::Unit(card)) = next {
++                self.ground_army_unit_for_consumption(player, card, &owed);
++            }
+             let legal = legal::legal_moves(&self.state);
+             let mv = match next {
+                 Some(SacrificeClause::Unit(card)) => Move::SendUnit { card },
+@@ -2219,12 +2239,26 @@ impl<'a> Replayer<'a> {
+                 Some(SacrificeClause::CookDiscard) => {
+                     match legal.as_slice().iter().find(|m| matches!(m, Move::SendDiscard { .. })) {
+                         Some(&m) => m,
+-                        None => return self.approximate_colonize(),
++                        None => {
++                            if crate::debugflags::colonize_fallback_dump() {
++                                eprintln!(
++                                    "COLONIZE_FALLBACK reason=cook-discard-unavailable actor={player} line={}",
++                                    sac.lineno
++                                );
++                            }
++                            return self.approximate_colonize();
++                        }
+                     }
+                 }
+                 None => Move::SendDone,
+             };
+             if !legal.as_slice().contains(&mv) {
++                if crate::debugflags::colonize_fallback_dump() {
++                    eprintln!(
++                        "COLONIZE_FALLBACK reason=illegal-move actor={player} line={} clause={next:?} mv={mv:?}",
++                        sac.lineno
++                    );
++                }
+                 return self.approximate_colonize();
+             }
+             apply::apply(&mut self.state, mv);
+@@ -2235,6 +2269,67 @@ impl<'a> Replayer<'a> {
+         )))
+     }
+ 
++    /// Ground the journal's own NAMED colonize-sacrifice unit into this
++    /// binary's reconstructed army when [`Replayer::drain_colonize`] cannot
++    /// yet offer it as a legal [`Move::SendUnit`] -- the ARMY-side
++    /// counterpart of [`Replayer::ground_for_consumption`]: swap one worker
++    /// off whichever OTHER unit this binary's own reconstruction currently
++    /// has available onto `card` instead. Total army size (workers on unit
++    /// tech cards) is UNCHANGED -- this only ever corrects WHICH unit types
++    /// this binary believes make up the army, never how many units exist.
++    /// The journal naming a unit as sacrificed is itself proof the human
++    /// held it; injecting it here is exactly the "the journal is a stream of
++    /// facts about the hidden state, use it" repair this file's other
++    /// grounding helpers already make for `hand_military`, applied to the
++    /// army instead.
++    ///
++    /// Never picks a victim `owed` still needs for a LATER clause of this
++    /// same sacrifice (mirrors `ground_auction_winner_hand`'s identical
++    /// caution for bonus cards) -- stealing a unit this same colonization is
++    /// about to need again would just relocate the gap, not close it.
++    ///
++    /// DELIBERATELY REFUSES to ground when no such victim exists, rather
++    /// than growing the army by an ungrounded worker: a grant-without-a-
++    /// victim variant was tried and measured (`colofix__COLOFIX.txt`) --
++    /// it fixed one more fallback fire but net REGRESSED the corpus by
++    /// inflating a player's worker count past what an unrelated, otherwise
++    /// correctly-reconstructed later `ChoiceKind::LosePop` destroy-choice
++    /// (game 7522866) expected, permanently stalling that replay. A no-op
++    /// here just falls through to the pre-existing
++    /// [`Replayer::approximate_colonize`] fallback, unchanged from before
++    /// this repair existed -- strictly no worse than the baseline.
++    fn ground_army_unit_for_consumption(&mut self, actor: u8, card: CardId, owed: &[SacrificeClause]) {
++        let Some(Pending::Colonize(c)) = self.state.pending.top_mut() else { return };
++        if c.pool.contains(card) {
++            return;
++        }
++        let Some(victim) = c
++            .pool
++            .as_slice()
++            .iter()
++            .copied()
++            .find(|&id| id != card && !owed.contains(&SacrificeClause::Unit(id)))
++        else {
++            return;
++        };
++        if crate::debugflags::colonize_fallback_dump() {
++            eprintln!(
++                "GROUND_ARMY_SWAP actor={actor} card={card:?} victim={victim:?} pool_before={:?}",
++                c.pool.as_slice()
++            );
++        }
++        c.pool.remove_first(victim);
++        c.pool.push(card);
++        let p = &mut self.state.players[actor as usize];
++        if let Some(slot) = p.techs.get_mut(victim) {
++            slot.workers = slot.workers.saturating_sub(1);
++        }
++        match p.techs.get_mut(card) {
++            Some(slot) => slot.workers += 1,
++            None => p.techs.insert(card, TechSlot { workers: 1, stored: 0 }),
++        }
++    }
++
+     /// Repeatedly pick the engine's own first-offered continuation of an
+     /// open `Pending::Colonize` until it clears -- the fallback for a
+     /// colonization whose journal record [`Replayer::drain_colonize`] could
+@@ -4946,8 +5041,17 @@ fn parse_sacrifice_clauses(
+                 .and_then(colonization_bonus_card)
+                 .map(SacrificeClause::Bonus),
+             ["Military", "card", "+1"] => Some(SacrificeClause::CookDiscard),
+-            [unit] => sacrificed_unit_card(unit, card_index).map(SacrificeClause::Unit),
+-            _ => None,
++            // Every OTHER unit card name is one word ("Warrior"/"Cannon"/
++            // "Knights"/...), which is why this used to be a `[unit]`
++            // single-word pattern -- but "Modern Infantry" (age IV) is two
++            // words, and that pattern silently swallowed it into the `_ =>
++            // None` catch-all below (this function's own doc: unrecognised
++            // clauses are SKIPPED, not errors), which is indistinguishable
++            // from "not a unit at all" instead of "a unit whose name has a
++            // space in it". Joining unconditionally handles every unit name
++            // this binary's own card table has, one word or several,
++            // without special-casing "Modern Infantry" by string.
++            words => sacrificed_unit_card(&words.join(" "), card_index).map(SacrificeClause::Unit),
+         };
+         if let Some(one) = one {
+             out.extend(std::iter::repeat_n(one, n as usize));
+@@ -11632,6 +11736,38 @@ mod tests {
+         assert!(parse_sacrifice_clauses("Purple bids 3", &card_index).is_none(), "not a colonize line");
+     }
+ 
++    /// REGRESSION (real game `7522267`): every other unit card BGO's journal
++    /// names is one word ("Warrior"/"Cannon"/"Knights"/...), but "Modern
++    /// Infantry" (age IV) is two, and the old `[unit]` single-word match arm
++    /// silently swallowed its clause into the same `_ => None` catch-all
++    /// that legitimately skips `"Colonization bonus: +N"` / `"Total force:
++    /// N"` -- indistinguishable, from the caller's side, from the human not
++    /// having sacrificed a Modern Infantry at all. That dropped clause left
++    /// `drain_colonize` a unit short of what the journal's own `"Total
++    /// force"` demanded, which it could never make up (every other unit was
++    /// already spoken for), forcing `approximate_colonize` and, on the real
++    /// game, a `StuckPending` a full colonize event later once the
++    /// mis-tracked army ran out of substitutes entirely.
++    #[test]
++    fn a_colonize_line_names_a_two_word_unit_card_and_does_not_drop_it() {
++        let card_index = build_card_index();
++        let (_, clauses) = parse_sacrifice_clauses(
++            "Purple colonizes a Developed Territory Sacrificed Units:; 1 Cannon; 1 Warrior; \
++             1 Modern Infantry; Colonization bonus: +2; Total force: 11; Purple gets 5 science",
++            &card_index,
++        )
++        .expect("a colonize line parses");
++        assert_eq!(
++            clauses,
++            vec![
++                SacrificeClause::Unit(card_index["Cannon"]),
++                SacrificeClause::Unit(card_index["Warriors"]),
++                SacrificeClause::Unit(card_index["Modern Infantry"]),
++            ],
++            "the two-word unit name must not be silently dropped"
++        );
++    }
++
+     /// Each of the three military bonus cards prints a distinct colonization
+     /// value, so `"+N"` alone is a full card identity -- the same property
+     /// `defense_bonus_card` relies on, asserted here so a future card-table
+@@ -11693,6 +11829,71 @@ mod tests {
+         assert!(!r.colonize_approximated, "this colonization was replayed, not approximated");
+     }
+ 
++    /// REGRESSION (real games `7521757`/`7523177`, hand-traced in
++    /// `analysis/worker_notes_2026-08-14/popor__POPOR.txt`): the journal
++    /// names the sacrificed unit, but this binary's own reconstructed ARMY
++    /// (built off earlier, imperfectly-replayed `Build`/`Upgrade` actions)
++    /// simply does not have that unit card in the player's tableau yet --
++    /// the unit's tech card was never inserted, only a DIFFERENT unit type
++    /// (`Warriors` here) is available. Before `ground_army_unit_for_
++    /// consumption` existed, `drain_colonize` had no legal continuation for
++    /// `Move::SendUnit { card: Knights }` and fell straight to
++    /// `approximate_colonize`, which -- offering the engine's own
++    /// first-offered move -- would have sacrificed the (kept, cheaper)
++    /// Warriors instead, exactly the "more, weaker substitute units" failure
++    /// this whole pass exists to close.
++    ///
++    /// The fix grounds `Knights` into the tableau by swapping ONE worker off
++    /// `Warriors` onto it -- total army size unchanged, only the reconstructed
++    /// TYPE composition corrected to match the journal's own claim.
++    #[test]
++    fn a_colonization_grounds_a_named_unit_missing_from_the_reconstructed_army_by_swapping_it_in() {
++        let card_index = build_card_index();
++        let warriors = card_index["Warriors"];
++        // A second, DISTINCT Age I unit type, so `interact::colonize`'s own
++        // auto-drain (`colonize_auto`: "keep applying while exactly one
++        // legal move exists") does not just greedily consume every Warrior
++        // on its own before `drain_colonize` ever runs -- with two types
++        // available, `colonize_moves` always offers 2+ choices, so control
++        // reaches `drain_colonize` with `Pending::Colonize` still fully
++        // open, exactly like a real branching colonization.
++        let swordsmen = card_index["Swordsmen"];
++        let knights = card_index["Knights"];
++        let territory = card_index["Vast Territory (I)"];
++        let bid = knights.get().effects.strength as u8;
++        let mut sacrifices = VecDeque::new();
++        sacrifices.push_back(ColonizeSacrifice {
++            lineno: 200,
++            actor: 0,
++            territory: "Vast Territory".to_string(),
++            clauses: vec![SacrificeClause::Unit(knights)],
++        });
++        let mut r =
++            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
++        // One Warriors, one Swordsmen, NO Knights slot at all -- this
++        // binary's own reconstruction is missing the unit the journal names.
++        r.state.players[0].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 1;
++        r.state.players[0].techs.insert(swordsmen, crate::state::TechSlot { workers: 1, stored: 0 });
++        assert!(!r.state.players[0].techs.has(knights), "the test fixture starts without Knights, on purpose");
++
++        crate::interact::colonize(&mut r.state, 0, territory, bid);
++        r.drain_colonize().expect("the journal's own list is legal here once the named unit is grounded");
++
++        assert!(r.state.pending.is_empty(), "the force resolved");
++        assert!(!r.colonize_approximated, "this colonization was replayed, not approximated");
++        assert_eq!(
++            r.state.players[0].techs.get(knights).map(|s| s.workers),
++            Some(0),
++            "the Knight was grounded in, then immediately sacrificed"
++        );
++        let remaining_army = r.state.players[0].techs.workers(warriors) + r.state.players[0].techs.workers(swordsmen);
++        assert_eq!(
++            remaining_army, 1,
++            "exactly one worker (Warriors or Swordsmen) was swapped out to ground the Knight -- \
++             army size is unchanged (started at 2), not grown"
++        );
++    }
++
+     /// REGRESSION (found chasing the culture-oracle divergence on real game
+     /// `7522152`): a colonize whose `Pending::Colonize` has EXACTLY one legal
+     /// continuation at every step (a single available unit, no bonus/discard

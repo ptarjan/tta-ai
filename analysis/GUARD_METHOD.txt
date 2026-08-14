@@ -1,10 +1,10 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
     updated 2026-08-14
-    base commit ....... 58e4cd9  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 644 of 1011
+    base commit ....... c6b97e5  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 649 of 1011   (603 of those match index.tsv exactly)
     frozen id list .... /private/tmp/guard_ids.txt
-    committed copy .... analysis/guard_ids_644.txt
+    committed copy .... analysis/guard_ids_649.txt
 Earlier sections of this file still name base 9f6104d and 509 games. That is
 history, not instruction. The METHOD below is unchanged and still correct;
 only the numbers moved.

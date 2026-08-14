@@ -1,0 +1,218 @@
+PHANTOM MILITARY-HAND CARD -- fix pass, 2026-08-14
+===================================================
+
+OUTCOME: (a) -- a real, confirmed fix landed clean (zero regressions, full
+test suite green, clippy clean), PLUS an honest partial (c): the dominant
+share of the 481-game +1-delta bucket remains NOT conclusively pinned
+within this pass's budget, with two concrete hypotheses investigated and
+RULED OUT (see section 3) so the next worker does not re-walk them.
+
+Clone: /private/tmp/handfix (branched from 58e4cd9, same base the drift/
+popor passes used). Deleted after this file and both patches were written
+and verified non-empty.
+Patches:
+  - analysis/worker_notes_2026-08-14/handfix.patch -- `git diff` isolating
+    ONLY this pass's own changes (the `ground_for_consumption` fix + its
+    two doc comments + one new unit test), computed by diffing against a
+    throwaway branch that has popor.patch applied and nothing else, so the
+    inherited oracle instrumentation is cleanly excluded as the task asked.
+    108 lines, all mine.
+  - analysis/worker_notes_2026-08-14/handfix_full_including_inherited_
+    oracle.patch -- `git diff 58e4cd9 HEAD`, i.e. the popor.patch harness
+    (DRIFT_AUDIT/POP_AUDIT, applied unmodified per the task's own setup
+    step) PLUS my fix, for provenance/reproducibility.
+
+===========================================================================
+1. THE FIX
+===========================================================================
+`Replayer::ground_for_consumption` (`rust/src/replay_common.rs`, private,
+the general "ensure `card` is in `actor`'s hand, evicting one filler card
+of unknown identity first" primitive behind `consume_named_military_card`
+-- the sanctioned way `PlayTactic`/`DeclareWar`/`PlayAggression`/
+`ProposePact`/defense-card-spend ground and play a NAMED military card in
+one atomic step, plus `ColumbusColonize`'s own direct call) had the EXACT
+"net-zero wash" bug `resolve_political_decision`'s own `PrepareEvent`
+handling was explicitly fixed for (see that function's own doc, and
+`docs/REPLAY.md`'s "Discard-phase hand-size oracle" section) -- but never
+got the matching fix:
+
+    if let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id.get().base_name)) {
+        hand.remove_first(victim);
+    }
+    hand.push(card);                     // <-- pushed UNCONDITIONALLY
+
+When every card currently in `actor`'s hand is already PROVEN by
+`DiscardSolver::needed_after` to be played by name at some later line (a
+"fully-protected, not merely empty" hand -- the same edge case
+`resolve_political_decision`'s own comment names for real repro game
+`7522634` round 3), there is no disposable filler to evict, and the old
+code just pushed the needed card anyway with NO compensating eviction. The
+very next thing `consume_named_military_card` does is apply the consuming
+`Move` (`PlayTactic`/etc.), which removes that SAME card identity from
+hand again -- so the whole call nets to ZERO instead of the real -1 a
+played card leaves behind. Unlike `PrepareEvent`'s own wash, which at
+least records a `military_hand_deficit` entry a later real draw can repay,
+this one recorded NOTHING -- a PERMANENT phantom card, not a temporary
+window.
+
+FIX: give `ground_for_consumption` the identical `military_hand_deficit`
+fallback `resolve_political_decision` already uses, so every no-filler
+wash in the file shares one repayment path:
+
+    if let Some(victim) = victim {
+        self.state.players[actor as usize].hand_military.remove_first(victim);
+    } else {
+        self.military_hand_deficit[actor as usize] += 1;
+    }
+    self.state.players[actor as usize].hand_military.push(card);
+
+Scope note: this is a SHARED primitive. Its callers are mostly squarely
+mine (PlayTactic/DeclareWar/PlayAggression/ProposePact/defense, all via
+`consume_named_military_card`), but `ColumbusColonize` also calls
+`ground_for_consumption` DIRECTLY (not through the wrapper, per that
+function's own doc -- "an unavoidable `resolve_intervening` step sits
+between the ground and the consuming `Move::ColumbusColonize`"). Columbus's
+colonize-without-sacrifice ability is colonize-ADJACENT but is NOT
+`approximate_colonize` or "the colonize handler in apply.rs" the other
+worker's brief named -- I judged it in scope as a shared low-level
+primitive fix, not a colonize-sacrifice-fidelity change, and it can only
+ever make Columbus's own hand accounting MORE correct (adds a
+never-previously-tracked deficit), never touches `parse_sacrifice_clauses`,
+`drain_colonize`, or `approximate_colonize`. Flagging LOUDLY per the task's
+own instruction in case this needs reconciling with the colonize worker's
+own patch (their clone: /private/tmp/colofix, seen running concurrently).
+`ground_auction_winner_hand` has the IDENTICAL missing-fallback shape
+(`replay_common.rs` ~2183-2236, found by a sub-agent during this pass) but
+is squarely colonize-sacrifice territory (grounds bonus cards ahead of a
+`Move::SendBonus`) -- NOT touched, named here as a concrete next step for
+whoever owns that lane.
+
+UNIT TEST: `consuming_a_named_military_card_with_no_disposable_filler_
+records_a_deficit_that_a_later_draw_repays` (`replay_common.rs`, next to
+the sibling `preparing_an_event_with_no_disposable_filler_records_a_
+deficit_that_a_later_draw_repays` test the `PrepareEvent` fix already has).
+CONFIRMED RED by reverting the fix (reverted to the plain `if let Some
+{...}` with no `else`) and re-running: the test's own
+`assert_eq!(r.military_hand_deficit[0], 1, ...)` panics immediately
+(deficit stays 0, and the later repay call is then a no-op, so the
+post-repay hand length assertion would also fail). Fix restored, GREEN
+confirmed, full `cargo test --profile fasttest` reconfirmed 1389+ passing,
+zero failures across every binary. `cargo clippy --all-targets -- -D
+warnings` clean.
+
+===========================================================================
+2. MEASURED IMPACT
+===========================================================================
+Corpus-wide "how often does the no-filler branch even fire" check (temp
+instrumentation, added, used, reverted before the final patch -- same
+convention as popor's own `POP_TRACE_DUMP`): only 15 occurrences across
+the WHOLE 1011-game corpus. This bug is real and now correctly repaid, but
+RARE -- it is not, on its own, the dominant mechanism behind the 481-game
++1-delta bucket. This matches the drift-oracle before/after numbers:
+
+  DRIFT_AUDIT `hand_military_excess` first-divergence count:
+    before: 624/1011 games (481 at delta +1)
+    after:  622/1011 games (479 at delta +1)
+  "Military hand ledger" SimulatorBug/ConsumingPlay classification (the
+  bucket this fix's callers feed):
+    before: 55 games
+    after:  53 games
+
+  SCOREDIV_DUMP_COMPLETED guard (`/private/tmp/guard_ids.txt`, 644 games):
+    after:  644/1011, EXACT SAME ID SET as before
+    REGRESSIONS: (empty)
+    WINS: (empty)
+
+Small movement (2 games), zero regressions, zero completion-count change --
+exactly the "fidelity fix that doesn't move completions" shape the task
+brief itself warned is normal (divergence doesn't predict completion,
+69.5% vs 63.7%). Reported honestly rather than oversold.
+
+===========================================================================
+3. HYPOTHESES INVESTIGATED AND RULED OUT (so the next pass does not re-walk them)
+===========================================================================
+Per-game cross-tab was built (temp instrumentation: dumped every game in
+the +1-delta bucket with its `colonize_approximated` flag and its
+`HandLedgerVerdict`/last-ledger-event classification; added, used,
+reverted before the final patch). Of 482 dumped +1-delta games, 453 (94%)
+have `colonize_approximated=false` -- confirming, as the task's own brief
+expected, that the vast majority of this bucket is independent of the
+OTHER worker's colonize-approximation-fallback lane. Breakdown of those
+453 by last-ledger-event: PrepareEvent 167 (37%, by far the largest),
+Draw 116, Discard 93, ConsumingPlay 65 (the bucket THIS fix targets),
+DefenseConsume 3.
+
+(a) RULED OUT: `military_hand_deficit` repayment leak. Hypothesis: maybe
+    `resolve_political_decision`'s existing `PrepareEvent` deficit fix
+    itself frequently fails to repay (its own repayment loop can ALSO hit
+    "no disposable filler" and just leaves the debt owed, per that
+    function's own doc). Measured directly: at the moment
+    `check_discard_phase_oracle` first records a divergence, printed
+    `self.military_hand_deficit[actor]` corpus-wide -- nonzero in only
+    4/1481 checkpoints. The existing fix is NOT leaking; it is, as its own
+    doc claims, "usually self-correcting." The large PrepareEvent-tagged
+    bucket above is therefore best read as a PROXIMITY artifact (whichever
+    ledger-tracked action most recently preceded the checkpoint), not a
+    causal one -- consistent with `drift__DRIFT.txt`'s own warning that
+    "the true first divergence is routinely several rounds earlier."
+
+(b) RULED OUT (by code reading, not full corpus trace): the
+    `drift__DRIFT.txt` deep-dive's own named next suspect for game
+    `7523791` -- "does sacrificing TWO DIFFERENT-VALUE Colonization bonus
+    cards (`+1` and `+2`) in the same colonize actually remove BOTH from
+    `hand_military`?" Read `interact.rs`'s `colonize_step` `Move::
+    SendBonus` arm in full: each commit does `c.bpool.remove_first(card)`,
+    `c.bonuses.push(card)`, AND `hand_military.remove_first(card)` --
+    keyed by the SPECIFIC `CardId` each clause parses to (a `+1` bonus
+    card and a `+2` bonus card are different table entries with different
+    identities, so there is no aliasing between them). `drain_colonize`'s
+    own `owed` computation is a proper multiset difference against
+    `c.bonuses`, so two distinct clauses each get their own `Move::
+    SendBonus` call and each removes its own card. This mechanism reads as
+    CORRECT for the multi-different-value case; I could not reproduce the
+    drift note's suspicion from the code, though I did not walk a full
+    corpus trace to be 100% certain no OTHER games hit an edge case here.
+    NOTE: `7523791` itself has `colonize_approximated=false` and its
+    `HandLedgerVerdict` is `UnmodelledEvent: PrepareEvent` (ledger's own
+    text-scan ALSO disagrees with the journal here, so this is not even a
+    "SimulatorBug" case) -- this specific game's true root cause remains
+    unpinned by anyone as of this pass.
+
+===========================================================================
+4. NAMED NEXT STEPS (not this pass's to take further)
+===========================================================================
+- `ground_auction_winner_hand`'s identical missing-fallback shape (section
+  1) -- colonize-sacrifice lane, not touched here.
+- The `UnmodelledEvent` classification (the ledger's OWN pure-text-scan
+  model disagreeing with the journal, independent of this binary's
+  reconstruction -- 96+77+53+42+5+1 = 274 of the 482 dumped +1-delta games)
+  is larger than `SimulatorBug` (208) in this bucket. Since the ledger is
+  built purely from `ledger_event_kind_for_action_class`'s five-class
+  model (`Draw`/`Discard`/`ConsumingPlay`/`PrepareEvent`/`DefenseConsume`,
+  see `replay_common.rs` ~4544), a class of journal-visible,
+  hand-size-changing event this five-class model does not cover at all
+  (rather than a bug in how any ONE class is counted) would show up
+  exactly this way -- worth enumerating every `"<Color> ..."` journal verb
+  that can plausibly touch a military hand and checking each is in that
+  match, the same style `drift__DRIFT.txt`'s own science/resources
+  `discard_blocked` guard gap was found.
+- `LedgerEventKind::Draw`'s own doc already flags that it collapses THREE
+  different real mechanisms (ordinary end-of-turn draw, event-triggered
+  draw, AND colonization-territory-reward draw like Strategic Territory's
+  5) into one tag -- the 116-game Draw-tagged bucket could hide a
+  colonize-adjacent miscount (territory-reward draws) inside what LOOKS
+  like an ordinary-draw bucket; worth a finer-grained ledger tag before
+  the next pass trusts this classification's face value.
+
+===========================================================================
+GUARD (exact numbers)
+===========================================================================
+Before: 644/1011 (`/private/tmp/guard_ids.txt`)
+After:  644/1011 (this session's `/tmp/hf_ids.txt` / `/tmp/hf_final_ids.txt`, re-run twice)
+REGRESSIONS: (empty)
+WINS: (empty)
+DRIFT (hand_military_excess first-divergence): 624 -> 622 games; +1-delta
+sub-bucket 481 -> 479 games.
+Full `cargo test --profile fasttest`: 1389 lib tests + all binary/suite
+tests, 0 failed, both before and after. `cargo clippy --all-targets -- -D
+warnings`: clean.
