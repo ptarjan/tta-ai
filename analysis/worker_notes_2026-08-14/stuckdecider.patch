@@ -1,0 +1,65 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index ce21541..4918f61 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -3601,6 +3601,52 @@ fn resolve_plunder_age(card: CardId, raw_text: &str) -> CardId {
+         .unwrap_or(card)
+ }
+ 
++/// Resolves `card` (a "plays <Aggression>" line's `corpus::build_card_index`
++/// arbitrary same-name pick -- `best_age_sibling`'s own doc comment) to the
++/// age-sibling whose OWN printed `military_action_cost` matches the
++/// journal's own trailing `"uses N military action"` clause
++/// ([`civil_and_military_uses`]) -- the same "read the exact printed number
++/// off THIS line instead of guessing" approach [`resolve_plunder_age`] just
++/// above already uses for Plunder's own "up to N" cap, generalized to every
++/// OTHER Aggression card whose age-siblings differ in cost (confirmed:
++/// Raid 1/2/3 MA, `card_table.rs`).
++///
++/// A no-op (returns `card` unchanged) when:
++/// - `card`'s family is Plunder -- [`resolve_plunder_age`]'s own job; all
++///   three of Plunder's age-siblings tie at 1 MA (`analysis/worker_notes_
++///   2026-08-14/decider__DECIDER.txt`), so cost alone cannot disambiguate
++///   them and this function must not fight that one's own correction;
++/// - the line carries no `"uses N military action"` clause, or the number
++///   does not parse;
++/// - zero or more than one sibling shares that exact cost (a genuine tie,
++///   or evidence this card's family does not vary by MA cost at all) --
++///   never worse than the pre-correction guess in either case.
++///
++/// Root-caused on game `7523354` line 233: BGO's own printed text is Raid's
++/// Age II wording ("...2 urban buildings: one of Age II or older and one of
++/// Age I or older...", 2 MA) but the bare-name lookup resolved to
++/// `"Aggression: Raid (I)"` (1 MA) -- under-deducting `military_actions` by
++/// 1 for the rest of the turn, which cascades into a wrong end-of-turn draw
++/// count and, several rounds later, masks a real discard requirement the
++/// journal states and this binary's own reconstruction does not (`analysis/
++/// worker_notes_2026-08-14/decider__DECIDER.txt`'s STEP 1). Measured
++/// corpus-wide: this shape (`SimulatorBug`-tagged discard-oracle divergence)
++/// covers roughly 75% of the `StuckPending: decider != expected actor,
++/// phase Actions, no pending` bucket.
++fn resolve_aggression_age(card: CardId, raw_text: &str) -> CardId {
++    if card.get().base_name == "Aggression: Plunder" {
++        return card;
++    }
++    let Some(wanted_ma) = civil_and_military_uses(raw_text).1 else {
++        return card;
++    };
++    let matches: Vec<CardId> = family_siblings(card).into_iter().filter(|&id| id.get().military_action_cost as i32 == wanted_ma).collect();
++    match matches.as_slice() {
++        [only] => *only,
++        [] | [_, ..] => card,
++    }
++}
++
+ /// Resolves which age-sibling of `named` (`corpus::build_card_index`'s
+ /// necessarily arbitrary same-name pick -- see `best_age_sibling`'s doc
+ /// comment) actually produced `wanted`'s observed cost on THIS journal line,
+@@ -7190,6 +7236,7 @@ fn apply_one(
+             // `analysis/worker_notes_2026-08-14/discardsolve__
+             // DISCARDSOLVE.txt`.
+             let card = resolve_plunder_age(card, raw_text);
++            let card = resolve_aggression_age(card, raw_text);
+             let target = color_after(rest, " against ").ok_or_else(|| MismatchKind::ParserGap("could not parse aggression target colour".into()))?;
+             r.consume_named_military_card(actor, card, Move::Aggression { card, target: target.seat() }, true)?;
+             resolve_aggression_defense(r, next_text)
