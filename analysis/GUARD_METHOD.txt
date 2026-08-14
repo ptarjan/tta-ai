@@ -1,0 +1,88 @@
+REPLAY-COMPLETION REGRESSION GUARD -- the cheap, correct method
+================================================================
+
+WHY THIS FILE EXISTS
+--------------------
+Do NOT run a full 1011-game corpus sweep to check your fix. Several workers run
+at once on a 6-core machine and the redundant sweeps dominate the cost.
+
+Also do NOT use the `replay` binary's per-game COMPLETE/STOPPED verdict as your
+regression guard. It is NOT equivalent to `replaystats`: the two binaries do not
+resolve hidden information the same way, and they disagree on 68 games (`replay`
+finishes 222 of the corpus, `replaystats` finishes 290, and 8 of the 28
+score-diverging games that `replaystats` completes and scores are called STOPPED
+by `replay`). A guard list built from `replay` silently under-protects every game
+only `replaystats` can finish. The headline metric is `replaystats`, so the guard
+must be `replaystats` too.
+
+THE AUTHORITATIVE BASELINE (already generated, do not regenerate)
+-----------------------------------------------------------------
+    /private/tmp/guard_ids.txt     290 sorted IDs: every game that completes at
+                                   base 3fc32b5, per `replaystats`
+    /private/tmp/guard_index.tsv   index.tsv header + exactly those 290 rows
+    /private/tmp/full_baseline_0814.txt
+                                   full raw `replay` dump -- use ONLY to enumerate
+                                   your bucket's game IDs by grepping its
+                                   stop-reason text, never as a guard
+
+STEP 1 -- add the completed-ID dump to YOUR clone (one edit, ~30 seconds)
+-------------------------------------------------------------------------
+In your clone's rust/src/bin/replaystats.rs, find this existing block (grep for
+`DEBUG completed`):
+
+            if std::env::var("REPLAY_DEBUG").is_ok() {
+                eprintln!("DEBUG completed: {}", meta.id);
+            }
+
+and insert immediately after it:
+
+            // A dedicated gate for JUST the completed-game IDs. `REPLAY_DEBUG`
+            // above also turns on the engine's whole per-action trace, which is
+            // far too much output to sit through merely to learn which games
+            // finished. This list is the input to the replay-completion
+            // regression guard: a fix may only be landed if every ID printed
+            // here before the change is still printed after it.
+            if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
+                println!("SCOREDIV_COMPLETED_ID {}", meta.id);
+            }
+
+Commit that on its own. (It is already landed in the live tree, so it will merge
+cleanly; if your clone already has it, skip this step.)
+
+STEP 2 -- build your check index: the 290 guard games + your own bucket
+-----------------------------------------------------------------------
+    cd <your clone>
+    cp /private/tmp/guard_index.tsv /tmp/<name>_check.tsv
+    # append your bucket's rows (BUCKET_IDS = a file of your bucket's game IDs,
+    # one per line, that are NOT already in guard_ids.txt)
+    awk 'NR==FNR{k[$1];next} FNR>1 && ($1 in k)' BUCKET_IDS sources/bgo/index.tsv \
+        >> /tmp/<name>_check.tsv
+
+STEP 3 -- run it, once, at the end
+-----------------------------------
+    cd rust
+    PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+        /tmp/<name>_check.tsv /private/tmp/bgo-journals/journals \
+        > /tmp/<name>_after.txt 2>&1
+    grep '^SCOREDIV_COMPLETED_ID' /tmp/<name>_after.txt | awk '{print $2}' | sort \
+        > /tmp/<name>_completed_after.txt
+
+NEVER pipe replaystats through `head` -- SIGPIPE truncates or kills the run.
+Redirect to a file, then grep the file.
+
+STEP 4 -- the bar
+------------------
+    # REGRESSIONS: must be EMPTY. Any ID here is a game that completed before
+    # your change and does not now. That blocks landing, full stop.
+    comm -23 /private/tmp/guard_ids.txt /tmp/<name>_completed_after.txt
+
+    # WINS: games from your bucket that now complete.
+    comm -13 /private/tmp/guard_ids.txt /tmp/<name>_completed_after.txt
+
+Judge by these two ID SETS. Never by a mean, an average, or any aggregate --
+positive and negative errors cancel and a mean can improve while the fix is
+wrong. Quote both `comm` outputs verbatim in your notes.
+
+`cargo test --profile difftest` and `cargo clippy --all-targets -- -D warnings`
+still run as before -- those are fast and stay local.

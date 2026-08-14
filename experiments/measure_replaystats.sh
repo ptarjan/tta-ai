@@ -22,6 +22,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+# Rust lives in ~/.cargo/bin, which is not on the default PATH on this machine
+# (nor in a cron/nohup environment). Without this the script dies at the first
+# cargo invocation with "cargo: command not found".
+export PATH="$HOME/.cargo/bin:$PATH"
+
 DATE=$(date +%F)
 INDEX=sources/bgo/index.tsv
 JOURNALS=/private/tmp/bgo-journals/journals
