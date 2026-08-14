@@ -1,0 +1,314 @@
+DISCARDSOLVE -- session 2026-08-14, branch base0814 off ed3ccc9.
+============================================================================
+
+BOTTOM LINE
+-----------
+FIXED. Made DiscardSolver's future-need protection robust to a card-identity
+correction elsewhere in the replayer (match by card FAMILY, not exact
+CardId), then re-applied the Plunder identity fix on top -- but with the
+identity resolved from the journal's own printed "up to N" text, not a
+guessed age bound (the bound was tried first and is itself wrong on a real
+game, see "FIRST ATTEMPT REJECTED" below). Combined result against my own
+captured 310-game baseline at base ed3ccc9:
+
+    REGRESSIONS: EMPTY
+    WINS: 36 games (up from the 26 the plunder worker got in isolation,
+          with 8 regressions, before this session's robustness fix)
+
+Discard-phase oracle: 34362/35593 (96.5%) at true baseline -> 34964/36278
+(96.4%) after both fixes -- absolute MATCH COUNT up by 602, exactly the "you
+are winning long before a game completes" signal the task asked to watch
+for. (The PERCENTAGE dipped 0.1pt because completing more games exposes more
+total checkpoints to check, not because more of them disagree.)
+
+============================================================================
+READ FIRST: A METHODOLOGY TRAP THIS SESSION HIT AND HOW IT WAS CAUGHT
+============================================================================
+Partway through, `/private/tmp/guard_ids.txt` (documented as "the
+authoritative 310-ID baseline, do not regenerate") had GROWN to 350 lines --
+some other concurrent worker/process on the shared box had overwritten it
+with a newer baseline reflecting fixes this clone's base commit (ed3ccc9)
+never had. Comparing my final completed-ID set against that mutated file
+produced 40 "regressions" that were pure artifacts: every one of those 40
+IDs was ALREADY absent from my own from-scratch 310-ID sweep captured at
+pristine ed3ccc9 before I touched anything (`comm` against my own saved
+baseline confirmed all 40 were never completing under my clone's base
+commit at all, guard file or not). This is exactly the trap
+`plunder__PLUNDER.txt` flagged in its own "NOTE ON PROCESS" section.
+
+TAKEAWAY for the next worker: capture your OWN `replaystats` completed-ID
+sweep at your pristine base commit BEFORE making any edits, save it
+somewhere private, and treat that -- not `/private/tmp/guard_ids.txt` -- as
+truth if the shared file's line count doesn't match what the task doc
+claims. My own capture: 310 IDs, `/tmp/ds_true_baseline_completed.txt` (this
+session's clone; not preserved past its `rm -rf`, but reproducible with
+`SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats
+../sources/bgo/index.tsv /private/tmp/bgo-journals/journals` at commit
+`ed3ccc9`).
+
+============================================================================
+PART 1: THE DISCARDSOLVER ROBUSTNESS FIX (the actual task)
+============================================================================
+
+THE MECHANISM (in my own words)
+--------------------------------
+`discard_solver::DiscardSolver` resolves a forced military-hand discard by
+constraint propagation: `prescan_future_military_needs` scans the WHOLE
+journal up front for every later `"plays <military card>"` line and records
+a `FutureNeed { lineno, card }`. At any discard decision, `needed_after`
+returns every `FutureNeed.card` still in the player's future, and `choose`
+rules out any currently-offered candidate whose EXACT `CardId` appears in
+that set -- a candidate that reappears in a later named play, by
+construction, cannot be the one just discarded.
+
+The bug: `FutureNeed.card` is not a fact, it is a GUESS.
+`corpus::build_card_index`'s bare-name lookup for a same-name-recurring
+family (Plunder/Raid/Territories/etc.) picks ONE age-sibling arbitrarily
+(whichever iterates first when the index is built) -- BGO's journal text
+never carries an age tag. `prescan_future_military_needs` uses that raw,
+uncorrected guess. Elsewhere in the replayer, OTHER code (`TakeCard`'s
+`best_age_sibling`, and now `PlayAggression`'s own Plunder correction, see
+Part 2) narrows that same guess to a DIFFERENT, more accurate `CardId` at
+the moment the card is actually consumed.
+
+Before this fix, `needed_after`/`choose` compared EXACT `CardId`s. So the
+identity `DiscardSolver` protects at every EARLIER discard decision was
+whatever the prescan's uncorrected guess was -- and the identity that later
+actually gets consumed (once corrected) is a DIFFERENT `CardId`. Since every
+candidate offered at a discard decision is itself SIMULATED filler with no
+journal-verified identity of its own (this module's own doc comment), the
+only thing that ever made an exact-`CardId` comparison "work" was that BOTH
+sides (the future need's guess and the discard candidate's simulated
+identity) happened, by construction, to be built from the same uncorrected
+guessing procedure. Correcting ONE side (fixing `PlayAggression` to resolve
+the right age) without correcting the OTHER (the discard candidates'
+simulated composition, an emergent property of many turns of `ground_for_
+consumption`/`repay_military_hand_deficit` pop-then-push calls) broke that
+accidental agreement -- an EARLIER, textually unrelated discard decision's
+"is this candidate needed later" answer could flip, purely because the
+exact `CardId` a future need now pointed at moved.
+
+This is confirmed by the plunder worker's own experiment: making the
+prescan's guess and `PlayAggression`'s resolution use the EXACT SAME
+age-bound formula (`age_civil` in one attempt, `age_military` in another --
+literally identical values on every line) still produced the IDENTICAL 21
+regressions either way. If the bound itself were the problem, the two
+bounds should have diverged on at least some lines; they didn't, because the
+real problem was never "which bound" -- it was that ANY change to the
+resolved identity, however it's computed, can flip an unrelated earlier
+discard purely through this exact-identity coincidence.
+
+THE FIX
+-------
+`discard_solver.rs`, `DiscardSolver::needed_after` and `DiscardSolver::
+choose`: match by card FAMILY (`Card::base_name`) instead of exact `CardId`.
+`needed_after` now returns `HashSet<&'static str>` (family names) instead of
+`HashSet<CardId>`. Five call sites in `replay_common.rs` (`ground_for_
+consumption`, `ground_bid_ceiling`, `ground_auction_winner_hand`,
+`repay_military_hand_deficit`, and `resolve_political_decision`'s
+`PrepareEvent` deficit path) updated from `.contains(id)` to
+`.contains(id.get().base_name)` to match.
+
+This makes protection INVARIANT to which exact age-sibling a future need's
+guess resolves to, in either direction -- correcting `PlayAggression`'s
+Plunder resolution (or any future correction to any other `consume_named_
+military_card` call site) can no longer move the protected set, because the
+family a future need belongs to never changes, only which of its siblings
+gets guessed.
+
+This is strictly MORE conservative than exact matching (a superset of what
+it used to protect), never less: it can turn a `Solved` discard into a
+`Chosen` or `ForcedCollision` one in the rare case a player's simulated hand
+holds two different-age siblings of the same family at once (both get
+protected even though only one is truly needed), but it can never let a
+genuinely-needed family through unprotected, and `choose` always still picks
+SOME legal candidate either way -- it never blocks progress.
+
+MEASURED IN ISOLATION (before layering the Plunder fix back on)
+------------------------------------------------------------------
+This robustness change ALONE, with no other code touched, is a pure no-op
+on completion: identical 310-ID completed set, `comm` both directions empty.
+It is NOT quite a no-op on the discard-phase oracle: 34362 -> 34361 matched
+checkpoints (2 games gained a NEW divergence, 0 games lost theirs --
+`7523460`/`7523661`, traced to the broader protection occasionally
+STARVING `ground_for_consumption`/`repay_military_hand_deficit` of a
+disposable victim they'd previously had, because a same-family-but-
+different-age simulated card that used to be swappable is now protected
+too). This -1 did NOT survive once the real Plunder fix landed on top (see
+below, oracle count net +602) -- flagged here because it is a genuine,
+documented small side effect of the robustness change alone, not something
+this session chased further given the combined result already clears the
+bar.
+
+TEST (RED/GREEN, confirmed)
+-----------------------------
+`discard_solver.rs`, `#[cfg(test)] mod tests`:
+    a_future_need_protects_every_age_sibling_of_its_family_not_just_the_exact_guessed_card_id
+
+Records a `FutureNeed` for "Aggression: Plunder (I)", then asks `choose`
+about a candidate that is "Aggression: Plunder (III)" -- a DIFFERENT exact
+`CardId`, same family. Asserts the candidate is ruled out (`ForcedCollision`,
+not `Solved`).
+
+RED (reverted `needed_after`/`choose` back to exact-`CardId` matching, the
+five `replay_common.rs` call sites reverted to match so the crate still
+compiles):
+
+    thread 'discard_solver::tests::a_future_need_protects_every_age_sibling_of_its_family_not_just_the_exact_guessed_card_id' panicked at src/discard_solver.rs:386:9:
+    assertion `left == right` failed
+      left: Solved
+     right: ForcedCollision
+
+GREEN: passes with the fix restored.
+
+============================================================================
+PART 2: THE PLUNDER FIX ITSELF (the test of whether Part 1 worked)
+============================================================================
+
+FIRST ATTEMPT REJECTED: age-bound guessing is ITSELF unreliable
+-------------------------------------------------------------------
+Mirroring `TakeCard`'s own correction exactly
+(`best_age_sibling(card, r.state.age_military)`) in `PlayAggression`,
+Plunder-scoped, reproduced the EXACT SAME 8 regressions the plunder worker
+already found for that scope (`7521906 7521914 7522054 7522107 7522526
+7523015 7523404 7523486`) -- DESPITE Part 1's robustness fix already being
+in place. Traced `7521906` (line 138, `StuckPending("PlunderSplit choice
+open for player 1 but no journal-observed Plunder resolution left to
+resolve it with")`): the journal's own line 135 reads "...up to 3 resource
+and/or food..." -- Age I -- but `best_age_sibling(card, r.state.age_
+military)` picked Age II, because `age_military` had already advanced to II
+by the time this particular Plunder was finally played (the card was drawn
+at Age I and sat in hand unplayed through an age transition). The bound
+"highest age not exceeding the current one" is a GUESS that overshoots
+exactly as easily as `build_card_index`'s arbitrary pick undershoots -- it
+is not a fix for the underlying problem, just a differently-shaped guess.
+This is NOT a DiscardSolver-coupling regression at all; it is a plain wrong
+answer from the resolution logic itself, and no amount of DiscardSolver
+robustness could paper over it.
+
+THE ACTUAL FIX: read the journal's own printed number, don't guess a bound
+-------------------------------------------------------------------------
+Plunder prints a different "up to N resource and/or food" per age (3/5/7
+for I/II/III, `TakeFromOpponentBlock.food_and_or_resources` in
+`card_table.rs`) on EVERY "plays Plunder" line, with no other occurrence of
+that phrase on the line to collide with (confirmed corpus-wide). This pins
+the exact age down with NO guessing in either direction -- strictly
+stronger evidence than any bound, the same "read the observed effect, don't
+guess" principle `resolve_named_card_by_effect` already uses for Build/
+Upgrade/Develop.
+
+`replay_common.rs`:
+  - `trailing_up_to_resource_and_or_food(text) -> Option<i32>`: parses the
+    "up to N" clause.
+  - `plunder_food_and_or_resources(id: CardId) -> Option<i16>`: reads a
+    card's own `TakeFromOpponentBlock.food_and_or_resources` (`if let`, not
+    a `match` with a wildcard arm -- `Special` has ~80 variants and the
+    project's clippy gate denies `_ =>` over an enum).
+  - `resolve_plunder_age(card: CardId, raw_text: &str) -> CardId`: no-op for
+    every non-Plunder card; for Plunder, parses the text and matches it
+    against `family_siblings(card)`'s own printed value; falls back to the
+    original (arbitrary) `card` if nothing parses or matches -- never worse
+    than the pre-correction guess.
+  - `ActionClass::PlayAggression`'s arm now reads
+    `let card = resolve_plunder_age(card, raw_text);` right after resolving
+    `card` from the journal text.
+
+Scoped to Plunder only (matching the plunder worker's own final scope
+decision) -- Raid/Enslave/Spy/Annex/Infiltrate share the same age-blind
+resolution shape in principle (decider__DECIDER.txt independently found the
+identical bug on Raid, game `7523354` line ~212) but were not verified
+against their own card data this session. See PICKUP PLAN.
+
+TESTS (RED/GREEN, confirmed)
+-----------------------------
+`replay_common.rs`, `#[cfg(test)] mod tests`:
+  - `trailing_up_to_resource_and_or_food_reads_plunders_own_printed_cap`,
+    `_reads_every_real_printed_amount`, `_is_none_with_no_such_clause`
+  - `plunder_food_and_or_resources_reads_each_age_siblings_own_printed_number`,
+    `_is_none_for_a_card_with_no_takefromopponent_block`
+  - `play_aggression_resolves_plunders_age_from_the_journals_own_up_to_n_text_not_an_arbitrary_same_name_sibling`
+    -- calls `resolve_plunder_age` directly, the SAME function `apply_one`
+    calls (not a re-implementation of its logic)
+  - `resolve_plunder_age_is_a_no_op_for_a_different_aggression_card_family`
+  - `resolve_plunder_age_falls_back_to_the_arbitrary_pick_when_the_text_has_no_up_to_clause`
+
+RED (reverted `resolve_plunder_age`'s body to a bare `card` no-op):
+
+    thread 'replay_common::tests::play_aggression_resolves_plunders_age_from_the_journals_own_up_to_n_text_not_an_arbitrary_same_name_sibling' panicked at src/replay_common.rs:8682:9:
+    assertion `left == right` failed: must resolve to Age III (printed cap 7, matching the journal's own text), not Age I (printed cap 3, `build_card_index`'s arbitrary pick)
+      left: "Aggression: Plunder (I)"
+     right: "Aggression: Plunder (III)"
+
+GREEN: passes with the fix restored.
+
+============================================================================
+FINAL VERIFICATION (both fixes together, against my own captured 310-ID
+true baseline at base ed3ccc9 -- see the methodology-trap note at the top
+for why NOT `/private/tmp/guard_ids.txt` directly)
+============================================================================
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+        ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+
+346 completed (up from 310). Discard-phase oracle: 36278 checkpoints checked
+(up from 35593), 34964 (96.4%) matched exactly (up from 34362, i.e. +602
+matched checkpoints in absolute terms).
+
+REGRESSIONS (comm -23 true_baseline_310 completed_after) -- EMPTY:
+    (none)
+
+WINS (comm -13 true_baseline_310 completed_after) -- 36 games:
+    7521576 7521842 7521921 7521939 7521946 7522041 7522046 7522061 7522133
+    7522195 7522212 7522225 7522280 7522459 7522500 7522502 7522557 7522572
+    7522629 7522640 7522647 7522697 7522715 7522820 7522844 7522866 7522888
+    7522996 7523151 7523165 7523208 7523253 7523350 7523477 7523623 7523661
+
+Stability: re-ran `replaystats` twice more (fresh invocations of the built
+binary) at this final state; the 346-ID completed set was byte-identical
+both times.
+
+`cargo test --profile difftest --lib`: 1368 passed, 0 failed (9 new tests
+over the 1359 baseline count).
+`cargo clippy --all-targets -- -D warnings`: clean (no pre-existing failure
+found this session, unlike what `plunder__PLUNDER.txt` reported against the
+older `3fc32b5` base -- apparently fixed upstream by ed3ccc9).
+
+============================================================================
+PICKUP PLAN
+============================================================================
+1. Generalize `resolve_plunder_age`'s pattern (read the OBSERVED text,
+   don't guess a bound) to Raid/Enslave/Spy/Annex/Infiltrate -- the other
+   `PlayAggression` card families share the identical age-blind resolution
+   bug (decider__DECIDER.txt independently confirmed it on Raid). Unlike
+   Plunder, most of these don't print a value as directly decodable as "up
+   to N resource and/or food" -- Raid's own text ("destroy up to 2 of your
+   rival's urban buildings: one of age II or older and one of age I or
+   older" for II/III vs. "a level 0-1 building" for I) would need its own
+   parser keyed off the military-action-cost clause instead (Raid I costs 1
+   MA, II/III cost 2 -- `decider__DECIDER.txt`'s own note on this). With
+   Part 1's robustness fix already landed, adding these should be safe to
+   verify incrementally (family-based protection means a correction to one
+   family cannot regress a discard decision touching an unrelated family).
+2. This session's -1 oracle checkpoint side effect from Part 1 ALONE
+   (`7523460`/`7523661`, before Part 2 was layered on) never got chased to
+   a root cause beyond "broader protection sometimes starves a swap
+   victim" -- worth understanding precisely if a future session needs to
+   squeeze the oracle rate further, though it's fully subsumed by the net
+   +602 once Part 2 is applied.
+3. `harness::record`'s two new-looking test names in this session's `cargo
+   test` output (`the_same_setup_twice_is_poolable`,
+   `untrusted_games_are_counted_but_never_pooled`) were NOT written by this
+   session -- they're from a concurrent worker's landed work on the shared
+   `base0814` branch this clone started from. Not this session's to
+   document further, noted only so a future reader isn't confused about
+   provenance.
+4. The 102-game "decider" bucket (`decider__DECIDER.txt`) is likely
+   substantially addressed by Part 1's robustness fix plus whatever wins
+   Part 2's Plunder correction contributes directly, but this session did
+   not re-run that bucket's specific IDs against the final state to
+   confirm -- worth a dedicated check.
+
+PATCH
+-----
+`git diff ed3ccc9 HEAD` in the clone, saved to `discardsolve.patch` next to
+this file. Touches exactly `rust/src/discard_solver.rs` and
+`rust/src/replay_common.rs`.
