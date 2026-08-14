@@ -44,9 +44,9 @@ must be `replaystats` too.
 
 THE AUTHORITATIVE BASELINE (already generated, do not regenerate)
 -----------------------------------------------------------------
-    /private/tmp/guard_ids.txt     310 sorted IDs: every game that completes at
-                                   base ed3ccc9, per `replaystats`
-    /private/tmp/guard_index.tsv   index.tsv header + exactly those 310 rows
+    /private/tmp/guard_ids.txt     350 sorted IDs: every game that completes at
+                                   base c429281+churchill, per `replaystats`
+    /private/tmp/guard_index.tsv   index.tsv header + exactly those 350 rows
     /private/tmp/full_baseline_0814.txt
                                    full raw `replay` dump -- use ONLY to enumerate
                                    your bucket's game IDs by grepping its
@@ -76,7 +76,7 @@ and insert immediately after it:
 Commit that on its own. (It is already landed in the live tree, so it will merge
 cleanly; if your clone already has it, skip this step.)
 
-STEP 2 -- build your check index: the 290 guard games + your own bucket
+STEP 2 -- build your check index: the 350 guard games + your own bucket
 -----------------------------------------------------------------------
     cd <your clone>
     cp /private/tmp/guard_index.tsv /tmp/<name>_check.tsv
@@ -111,5 +111,5 @@ Judge by these two ID SETS. Never by a mean, an average, or any aggregate --
 positive and negative errors cancel and a mean can improve while the fix is
 wrong. Quote both `comm` outputs verbatim in your notes.
 
-`cargo test --profile difftest` and `cargo clippy --all-targets -- -D warnings`
+`cargo test --profile fasttest` and `cargo clippy --all-targets -- -D warnings`
 still run as before -- those are fast and stay local.

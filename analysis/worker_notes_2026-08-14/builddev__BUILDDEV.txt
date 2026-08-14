@@ -1,0 +1,262 @@
+BUILD + DEVELOP IllegalMove buckets -- investigation notes
+Worker: builddev (clone /private/tmp/builddev, base commit ed3ccc9)
+Date: 2026-08-14
+
+SCOPE
+-----
+Bucket "IllegalMove: Build" (103 games, /private/tmp/bucket_build.txt) and
+"IllegalMove: Develop" (65 games, /private/tmp/bucket_develop.txt) -- the two
+biggest stop reasons in the 1011-game human replay corpus, treated as ONE
+investigation per the task brief. workers_free==0 (27 of the Build failures)
+was already ruled out by a previous worker and NOT re-derived here.
+
+
+ROOT CAUSE (one sentence)
+--------------------------
+Winston Churchill's once-per-turn choice ("score 3 culture" OR "you have 3
+science and 3 resources for developing military unit technologies and
+building/upgrading units", sources/bga_throughtheages_material.inc.php #186)
+was NEVER modeled for the military branch: BGO does not print a distinct
+journal line announcing that choice (unlike the culture branch's "End turn
+Winston Churchill scores 3 culture." suffix), so nothing in the replayer
+ever applied Move::Churchill{Military}, leaving p.mil_discount/
+p.mil_sci_discount permanently at 0 for every Churchill-led player who
+picked the military option -- and every later Build/Upgrade/Develop line
+that tried to spend from that (correctly nonzero, per BGO) pool was
+rejected as an IllegalMove.
+
+
+HOW IT WAS FOUND
+-----------------
+1. Dumped both buckets' raw failure text via REPLAY_DUMP_BUCKET and grouped
+   by card name -- no single card dominated either bucket (spread across
+   ~40 different cards each), ruling out a per-card cost bug.
+2. Re-ran both buckets' 168 games together with REPLAY_DEBUG=1, extracted
+   the LAST "DEBUG try_apply fail" + detail block per game (the existing
+   `costs::build_cost_for`/`tech_cost_net` diagnostic already printed there).
+   Every single Build/Develop failure showed a real, non-None printed cost
+   -- so these are NOT "unbuildable card" or parser-gap failures, they are
+   genuine affordability failures against costs the engine itself agrees are
+   correct.
+3. Tabulated the `leader=` field across all 168 failures:
+     Develop bucket (65 total): 34 have leader=Winston Churchill, and 26 of
+       those 34 are develops of a military-UNIT tech (Riflemen, Cavalrymen,
+       Cannon, Air Forces, Tanks, Modern Infantry, Rockets, Military Theory)
+       -- exactly the CardType set costs::tech_cost_net applies
+       p.mil_sci_discount to.
+     Build bucket (103 total): 28 have leader=Winston Churchill, and 24 of
+       those 28 are builds of a military unit -- exactly costs::
+       build_cost_net's is_unit() gate for p.mil_discount.
+4. Traced one concrete example end to end (game 7523818, round 16, Orange
+   builds Cannon then Air Forces): journal shows "Orange plays Wave of
+   Nationalism Orange gets 6 military resource" then "... Military Build-Up
+   ... gets 8 military resource" then two builds paying "loses N military
+   resource" -- so p.mil_discount really is a real, spendable per-turn pool
+   in the true game, our engine already implements h_play_action's own
+   ResourcesForMilitaryUnitsPerStrongerCivilization grant correctly for
+   THOSE two cards, and the Build arm's own cost pre-check
+   (total_paid_for_build == build_cost_for) already passes by construction
+   -- so the bug had to be downstream, in real affordability, which is
+   exactly where Churchill's missing synthesis lives.
+5. `lost_military_resource`'s own doc comment (pre-existing, in
+   replay_common.rs) had already flagged the tell: "even on lines with NO
+   preceding Patriotism-style grant visible in the journal at all (a
+   currently-unexplained baseline case)". That unexplained case IS
+   Churchill's silent choice -- confirmed by grepping every Churchill-
+   related phrase in the whole corpus (`grep -rh Churchill
+   bgo-journals/journals/*.tsv`): the ONLY two phrasings that ever appear
+   are "elects Winston Churchill" and "scores 3 culture."; the military
+   option is never announced as its own line, corpus-wide, 0 exceptions.
+
+
+THE FIX
+-------
+File: rust/src/replay_common.rs (single file, +171/-8 lines, one commit
+"Synthesize Winston Churchill's silent military choice for
+Build/Upgrade/Develop" on top of ed3ccc9 in the clone).
+
+Added `lost_military_science(text)`, the DevelopTechnology-side twin of the
+pre-existing `lost_military_resource(text)` (reads the "loses N military
+science" clause, e.g. "Orange discovers Air Forces Orange loses 3 military
+science; Orange loses 9 science").
+
+Added `maybe_synthesize_churchill_military(r, actor, raw_text)`: if the
+line shows evidence of a military-resource or military-science spend that
+the player's CURRENT pool cannot cover, and the player's leader is Winston
+Churchill with the choice not yet spent this turn, applies
+`Move::Churchill{choice: Military}` (the existing, already-legal move --
+legal.rs:611-614 already offered it, it was simply never called) before the
+Build/Upgrade/Develop line is applied -- exactly mirroring how the
+pre-existing `apply_churchill_end_turn_choice` synthesizes the Culture
+choice off the "End turn ... scores 3 culture." line's glued-on prefix.
+
+Gated on the pool being SHORT of what the line needs, not merely on the
+clause's presence: a player already topped up by Wave of Nationalism/
+Military Build-Up/Patriotism this same turn needs no synthesis, and
+synthesizing anyway would wrongly mark `churchill_used`, breaking this
+turn's own end-of-turn Culture-choice line if that is what the human
+actually picked (the two choices are mutually exclusive by the rules, and
+`try_apply` legality-checks the synthesized move exactly like every other
+synthesized move this file inserts -- a wrong guess fails loud, not
+silently).
+
+Called at the three sites that can hit `p.mil_discount`/`p.mil_sci_discount`:
+  - ActionClass::BuildBuilding | ActionClass::BuildUnit (before the
+    existing want/got cost pre-check)
+  - ActionClass::UpgradeUnit | ActionClass::UpgradeProduction (before
+    convert_trade_food_shortfall)
+  - ActionClass::DevelopTechnology (before try_apply -- this arm previously
+    had NO cost check of any kind)
+
+Also updated the stale doc comment on `lost_military_resource` that called
+this shape "a currently-unexplained baseline case" -- it is now explained
+and cross-referenced.
+
+
+TESTS ADDED (rust/src/replay_common.rs, #[cfg(test)] mod tests)
+-----------------------------------------------------------------
+- lost_military_science_reads_a_loses_military_science_clause
+- lost_military_science_ignores_an_unrelated_loses_clause
+- maybe_synthesize_churchill_military_fills_the_resource_pool_from_a_build_lines_evidence
+- maybe_synthesize_churchill_military_is_a_no_op_when_the_pool_already_covers_the_line
+- maybe_synthesize_churchill_military_is_a_no_op_without_churchill_in_play
+
+RED CONFIRMATION (quoted verbatim)
+-----------------------------------
+Reverted `maybe_synthesize_churchill_military`'s body to an unconditional
+`Ok(())` stub (keeping the tests and call sites untouched), rebuilt, ran
+`cargo test --profile difftest --lib maybe_synthesize_churchill_military`:
+
+    running 3 tests
+    test replay_common::tests::maybe_synthesize_churchill_military_is_a_no_op_when_the_pool_already_covers_the_line ... ok
+    test replay_common::tests::maybe_synthesize_churchill_military_fills_the_resource_pool_from_a_build_lines_evidence ... FAILED
+    test replay_common::tests::maybe_synthesize_churchill_military_is_a_no_op_without_churchill_in_play ... ok
+
+    failures:
+    ---- replay_common::tests::maybe_synthesize_churchill_military_fills_the_resource_pool_from_a_build_lines_evidence stdout ----
+    thread '...' panicked at src/replay_common.rs:9690:9:
+    assertion `left == right` failed: the whole once-per-turn grant, not just the 2 this line needed
+      left: 0
+     right: 3
+
+    test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 1361 filtered out; finished in 0.00s
+
+Restored the real function body immediately after; full suite then passed
+1364/1364, and `cargo clippy --all-targets --profile difftest -- -D
+warnings` was clean (no wildcard `_ =>` arms added; every `match` on
+`Special`/`ActionClass`/`Move` this fix touches was already exhaustive).
+
+
+GUARD RESULT (verbatim, per GUARD_METHOD.txt)
+-----------------------------------------------
+Check file: /tmp/bd_check.tsv = guard_index.tsv's 310 rows + this task's
+168-game Build/Develop bucket, 479 rows total.
+
+    === REGRESSIONS (must be empty) ===
+    (empty)
+
+    === WINS ===
+    7521066
+    7521090
+    7521605
+    7521662
+    7521856
+    7521888
+    7521940
+    7521969
+    7522000
+    7522067
+    7522106
+    7522279
+    7522544
+    7522612
+    7522679
+    7522770
+    7522858
+    7523036
+    7523115
+    7523210
+    7523216
+    7523257
+    7523264
+    7523360
+    7523416
+    7523449
+    7523454
+    7523470
+    7523499
+    7523559
+    7523616
+    7523631
+    7523655
+    (33 games)
+
+Zero regressions. 33 new exact-score completions.
+
+Bucket sizes before -> after (full 1011-game corpus, REPLAY_DUMP_BUCKET
+count):
+    IllegalMove: Build:    103 -> 82   (-21)
+    IllegalMove: Develop:   65 -> 36   (-29)
+    combined:              168 -> 118  (-50, 30% of the combined bucket)
+
+Full-corpus SCOREDIV_DUMP_COMPLETED count went 310 -> 350 (the extra ~7
+above the 343 you'd naively expect from 310+33 are games outside this
+task's specific 168-game bucket whose OWN failure was also, incidentally,
+this same Churchill gap, surfaced under a different bucket name (e.g. an
+earlier turn's PlayActionCard/UnrecoverableHiddenInfo path) -- a bonus, not
+double-counted in the guard's 33.
+
+
+PICKUP PLAN -- biggest remaining sub-cause
+--------------------------------------------
+After this fix, 10 of the remaining 82 Build failures still show a "loses N
+military resource" clause. 6-7 of those have "Wave of Nationalism" or
+"Military Build-Up" (both `Special::ResourcesForMilitaryUnitsPerStronger
+Civilization`) visible nearby in their own journal -- e.g. games 7523818,
+7521837, 7522242, 7521775, 7523383, 7523438, 7521943.
+
+Traced game 7523818 (Napoleon Bonaparte leader, round 16) all the way down:
+`apply.rs`'s `h_play_action` handler for
+`ResourcesForMilitaryUnitsPerStrongerCivilization` computes `n` = "number of
+OTHER active players with `effects::state_stats(...).strength` strictly
+greater than mine" and multiplies by the per-player-count table entry. In
+this game the human's own Wave of Nationalism/Military Build-Up plays
+clearly returned a nonzero grant (BGO printed "gets 6"/"gets 8"), but a
+targeted debug print at that exact call site showed this binary computing
+`mine=16, n=0` -- i.e. this binary believes its OWN reconstructed strength
+(16) already exceeds the opponent's, when the true game required at least
+one stronger civilization. This is a SEPARATE root cause from Churchill's
+(it fires through `h_play_action`'s own explicit `PlayActionCard` line, not
+a silently-missing move) -- most likely either the ACTING player's own
+`state_stats.strength` is over-counted (Napoleon's `StrengthPerUnitType`
+double-applying, or a build the true player hadn't actually made yet still
+counted) or the OPPONENT's `state_stats.strength` is under-counted in this
+binary's reconstruction. `effects::army_strength` requires `p.tactic` to be
+set; worth checking whether the opponent's tactic assignment has drifted by
+this point in a way that zeroes their army-strength contribution.
+
+Start there: add the same one-line debug (`mine`/`n`/`per`/opponent
+strengths) at apply.rs's `h_play_action`
+ResourcesForMilitaryUnitsPerStrongerCivilization block, re-run just the 6-7
+affected games with REPLAY_DEBUG_ALL=1, and compare both players'
+`state_stats.strength` breakdown against what the journal's surrounding
+lines imply (unit counts, tactics played, leader).
+
+Remaining 36 Develop failures (down from 65, 0 of them show a "military
+science" clause any more -- the Churchill sub-cause is fully cleared from
+Develop) are a long tail spread across many non-unit techs (Computers x6,
+Satellites x3, Engineering x3, Democracy x3, Civil Service x3, ...) with no
+single dominant leader or card -- likely several independent, smaller
+science-cost/discount-tracking bugs. Needs individual per-game triage, not
+one shared cause; a good next split point if picked up by a fresh worker.
+
+
+FILES
+-----
+Clone:   /private/tmp/builddev (deleted after this write-up, per the task's
+         cleanup instruction)
+Patch:   /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/builddev.patch
+         (git diff ed3ccc9 HEAD, 171 insertions / 8 deletions, single file
+         rust/src/replay_common.rs)
+Commit in clone: 4650020 "Synthesize Winston Churchill's silent military
+         choice for Build/Upgrade/Develop"
