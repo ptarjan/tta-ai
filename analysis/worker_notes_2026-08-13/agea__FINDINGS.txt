@@ -1,0 +1,150 @@
+Age A replenish bug -- findings (in progress, updated as work proceeds)
+========================================================================
+
+THE BUG
+-------
+rust/src/game.rs fn replenish() (around line 454) started with:
+
+    if state.age_civil == Age::A {
+        state.civil_deck = CardList::new();   // discards the remaining Age A deck
+        advance_age(state, rng);               // builds/shuffles the Age I deck
+    }
+
+...and only then swept/slid/dealt. So the FIRST card-row replenish of every
+game dealt Age I cards into the row, when the rules say it should deal the
+remaining Age A cards (20-card Age A civil deck: 13 dealt at setup, 7 left;
+the first replenish needs exactly player_count + sweep_count = 5 at every
+player count, so 2 of the 7 are boxed unseen when Age A ends).
+
+CROSS-CHECK AGAINST sources/
+-----------------------------
+/Users/pt/tta-ai/sources/ does NOT contain BGA's actual server-side game
+engine code -- only card reference data (bga_throughtheages_material.inc.php
+is card/material data, not game logic) and ~1000 real played-game journals
+under sources/bgo/journals.tar.gz (BGA replay logs: date, player, age,
+round, action text).
+
+I grepped ~1000 journals for "Stockpile" (an Age-A-only civil card) and
+found many real games where a player takes Stockpile while the journal's
+own age column already reads "I" (e.g. game 7521259: "Orange I 2 Orange
+takes Stockpile in hand"). That's consistent with Age A cards persisting in
+a mixed-age row past the A->I boundary (the existing code comment on line
+~472: "a row can hold two ages at once across an age boundary"), and does
+not contradict the fix. It's not fully conclusive by itself (Stockpile could
+have been in the original 13-card setup deal and just taken late), but it
+corroborates rather than contradicts the RULES_SPEC/CGE-playthrough evidence
+already given in the task. No implementation-code contradiction found.
+
+THE FIX
+-------
+Restructured replenish() to:
+1. Capture `first_replenish = state.age_civil == Age::A` BEFORE sweeping.
+2. Sweep + slide as before (unchanged).
+3. deal(state, rng) -- fills from whatever `civil_deck` currently is. For
+   the first replenish this is still the 7-card Age A remainder (we no
+   longer clear it first). `deal`'s own existing exhaustion fallback
+   (advance_age called mid-loop if the deck it's drawing from runs dry)
+   already implements RULES_SPEC 1.10's "if Age A civil cards run out while
+   filling, continue filling from the Age I deck" -- nothing new needed
+   for that path.
+4. AFTER deal, `if first_replenish && state.age_civil == Age::A { advance_age(state, rng); }`
+   -- this is the normal case (Age A deck had 7, only 5 needed, so it does
+   NOT run dry inside deal, and age_civil is still A after deal returns).
+   This call boxes whatever's left of the Age A civil_deck (silently
+   overwritten by advance_age's `build_deck(nxt, ..)`, same "never dealt is
+   unseen" reasoning the original code already used) and installs the Age I
+   civil/military decks, civil-shuffled-then-military off the same rng
+   stream (unchanged order, per advance_age's existing code).
+   The `state.age_civil == Age::A` re-check guards against double-advancing
+   in the (currently unreachable, but implemented per spec) case where
+   `deal` itself already advanced the age because the Age A deck DID run
+   dry mid-fill -- in that branch age_civil is already Age::I by the time
+   we get here, so the explicit call is skipped.
+
+state.age_civil handling: it is NOT touched until the very end. While the
+remaining Age A cards are being dealt (deal(state, rng) call), age_civil
+reads as Age::A the whole time, same as before the sweep -- nothing reads
+age_civil during that window to decide anything else, so no other change
+was needed. advance_age's own `ended != Age::A` guard (unchanged) still
+correctly reads Age::A when the explicit post-deal call fires, so no
+antiquation and no yellow-token loss happen at this transition, and the
+civil-then-military shuffle order off the same rng stream is preserved
+(advance_age's deck-building code was not touched).
+
+TESTS (rust/src/game.rs, #[cfg(test)] mod tests)
+-------------------------------------------------
+Added (all RED-verified by reverting the fix and rerunning, then restored):
+
+1. the_first_replenish_deals_the_remaining_age_a_cards_not_age_i_cards
+   (loops p in [2,3,4]) -- after simulating the P-players-already-took-a-card
+   precondition and calling replenish once, asserts: row full (13), every
+   row card is Age::A, and the trailing p+sweep_count(p) (=5) row slots
+   equal the Age-A deck's own top cards in pop order (positional check, not
+   identity/contains -- CardId is an index into the shared card table, so
+   duplicate physical copies of the same printed card share one CardId, and
+   a naive `.contains()` on values silently miscounts when the surviving
+   row and the newly dealt cards share a duplicated type).
+   RED (bug reverted), 2p case:
+     thread 'game::tests::the_first_replenish_deals_the_remaining_age_a_cards_not_age_i_cards' panicked at src/game.rs:1258:13:
+     2p: every row card is still Age A right after the first replenish
+
+2. exactly_two_age_a_civil_cards_never_appear (loops p in [2,3,4]) --
+   same positional derivation, then asserts exactly 2 of the 7 remaining
+   Age A cards are never dealt (boxed).
+   RED (bug reverted), 2p case:
+     thread 'game::tests::exactly_two_age_a_civil_cards_never_appear' panicked at src/game.rs:1307:13:
+     assertion `left == right` failed: 2p: the dealt cards are the Age A deck's own top cards
+       left: [Printing Press, Frugality (I), Alchemy, Theocracy, Printing Press]
+      right: [Stock Pile, Julius Caesar, Hammurabi, Cultural Heritage (A), Rich Land (A)]
+   (This is the actual bug in action: the old code dealt Printing
+   Press/Frugality/Alchemy/Theocracy -- Age I cards -- instead of Stock
+   Pile/Julius Caesar/Hammurabi/Cultural Heritage/Rich Land -- the real
+   Age A cards. Note Stock Pile, Julius Caesar, Hammurabi appearing here
+   independently corroborates the task's CGE playthrough evidence.)
+
+3. the_age_a_to_age_i_transition_skips_antiquation_and_yellow_token_loss --
+   regression guard: puts an Age A card in a hand, replenishes, asserts no
+   cull, not recorded in civil_removed, yellow_bank unchanged (18) for both
+   players. This one stayed GREEN even against the reverted buggy code
+   (expected -- the antiquation/yellow-loss guard in advance_age was never
+   the buggy part; this test guards against MY restructuring breaking it,
+   not against the original bug).
+
+Helper: simulate_first_turns_taken(s, p) -- sets the row's rightmost p
+slots to CardId::NONE, simulating that each of p players has already taken
+one row card before the first replenish fires (RULES_SPEC 1.10's real
+precondition). Placed outside the sweep's leftmost 0..n range so it doesn't
+collide with it, which is what makes p + sweep_count(p) land on exactly 5
+at every player count (verified in the test, not just asserted).
+
+FULL SUITE RESULT
+-----------------
+`cargo test --profile difftest` from rust/: every test binary green.
+1268 lib tests (unittests src/lib.rs), every src/bin/*.rs unit test suite
+(27 binaries total), and the integration suite (tests/suite/main.rs,
+including replay-based full-game tests like
+random_game::ages_advance_in_printed_order_through_the_whole_supply and
+random_game::no_civil_card_appears_more_often_than_it_is_printed, which
+exercise replenish/deal/advance_age end-to-end) -- 0 failed everywhere.
+No pre-existing test needed updating; nothing was fitted to the old buggy
+deal closely enough to break.
+
+COMMIT
+------
+master f22a638 "Fix replenish() to deal from the remaining Age A deck, not
+Age I", in /private/tmp/agea, committed by pathspec (rust/src/game.rs
+only; no conflict markers found).
+
+PLAY IMPACT
+-----------
+The row after the FIRST replenish of every game (2p, 3p, and 4p alike)
+now holds 13 Age A cards, where it previously held 8 Age A cards + 5 Age I
+cards. That changes the opening of literally every game: 5 cards that were
+wrongly available a full age early (Age I civil cards, sometimes fairly
+strong techs/wonders) are gone from that decision point, replaced by the
+correct 5 remaining Age A cards (yellow action cards, and occasionally an
+Age A wonder/leader). Any bot or heuristic tuned against self-play games
+run before this fix was learning against a systematically wrong opening
+book for every single game in its training/eval corpus.
+
+STATUS: DONE.

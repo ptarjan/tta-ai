@@ -1,0 +1,257 @@
+UNITS FIX -- uprising and row_last_copy
+========================================
+Scratch clone: /private/tmp/unitsfix (cp -Rc of /private/tmp/landbase).
+Files changed: rust/src/bots/weighted/features.rs, rust/src/bots/weighted/row.rs,
+rust/src/bots/weighted/weights.rs. No other file touched.
+
+
+BUG 1: uprising (flat 0/1 penalty pinned at the clamp)
+--------------------------------------------------------
+
+DIAGNOSIS
+Feature computation, rust/src/bots/weighted/features.rs:511 (pre-fix):
+
+    f.set(WeightKey::Uprising, if discontent > f64::from(p.workers_free) { 1.0 } else { 0.0 });
+
+The feature is a bare 0/1 indicator. Weight (weights.rs:481, unchanged):
+
+    Uprising => "uprising", -12.0;
+
+`eval.rs`'s generic `WeightKey::ALL` loop does `total += w[k] * f[k]` for
+Uprising like every other flat key, so the ONLY thing the climb can ever do
+is set one number that is the penalty of "an uprising happened" -- with no
+way to distinguish a catastrophic mid/late-game uprising (large economy, big
+production forfeited) from a nearly-free turn-1 one (tiny economy, almost
+nothing forfeited). RULES_SPEC.md:181 (6.3) and :378 (item 9) both spell out
+that an uprising is not a fixed-size event: "if discontent workers > unused
+workers, skip the entire Production Phase (score/corruption/production/
+consumption all skipped)". `economy.rs`'s own `end_of_turn` doc comment
+(economy.rs:596-628) lists the same steps skipped: 3a science+culture
+scoring, 3b corruption, 3c food production, 3d food consumption, 3e resource
+production. Since the feature could never carry the size of that forfeit,
+the coefficient had to average the true, size-varying cost across every
+board size the league ever saw, and the live log shows the climb doing
+exactly what an unrepresentable-magnitude bug looks like: pushed all the way
+to the clamp and stuck there (`uprising = -60.000 (clamp 60.0) -- pinned
+coordinate`, gen 42804, 2p).
+
+FIX (features.rs, in `pub fn features`, "--- happiness" block)
+Scale the indicator by the gross production actually forfeited this turn --
+the same four `Stats` fields (`s.science`, `s.culture`, `s.food`,
+`s.resources`) `economy::end_of_turn` step 3a/3c/3e would otherwise apply to
+the player, already read once per call by this same function
+(`effects::compute`, features.rs:286) and already guaranteed non-negative by
+"Limits on Ratings" (effects.rs:1440-1448, `.max(0)` on all four). This is a
+rulebook fact the ENGINE computes -- not a fitted formula: no coefficient of
+any kind appears in the magnitude, only the existing Stats reading.
+
+    let uprising_production_at_stake = f64::from(s.science + s.culture + s.food + s.resources);
+    f.set(
+        WeightKey::Uprising,
+        if discontent > f64::from(p.workers_free) { uprising_production_at_stake } else { 0.0 },
+    );
+
+Now the same `WeightKey::Uprising` coefficient means "evaluator-value per
+point of production actually at stake" at every position, instead of
+"the cost of an uprising" averaged over every board size that has ever
+happened. `WeightKey::Uprising` keeps its `NonPositive` sign-intent
+classification (weights.rs:1025, unchanged) unmodified and still correct,
+since the new magnitude is >= 0 by construction, same as `Discontent`/
+`StrengthDeficit` beside it.
+
+TEST: rust/src/bots/weighted/features.rs, `mod tests`, new test
+`uprising_scales_with_the_production_actually_at_stake_not_a_flat_0_1`
+(inserted right after `a_bigger_population_costs_the_food_rate_exactly_the_consumption_it_owes`).
+Builds two boards with the IDENTICAL discontent-vs-workers_free overshoot
+(yellow_bank=7, workers_free=3, so the 0/1 CONDITION never changes) but
+different production (`science_rate_extra`/`culture_rate_extra` bumped by
+20 on the second), and asserts the bigger board's `Uprising` feature is
+strictly larger, plus a separate check that "no uprising" still reads
+exactly 0.0 regardless of production size.
+
+RED CONFIRMATION (exact text seen)
+Reverted the fix back to the bare 0/1 formula, reran just this test:
+
+    thread 'bots::weighted::features::tests::uprising_scales_with_the_production_actually_at_stake_not_a_flat_0_1' panicked at src/bots/weighted/features.rs:911:9:
+    a bigger production base facing the IDENTICAL uprising condition must forfeit more: small=1 big=1
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1338 filtered out
+
+Then restored the fix and reran: passes (see full-suite counts below).
+
+
+BUG 2: row_last_copy (weighted composite fed into a second weight)
+--------------------------------------------------------------------
+
+DIAGNOSIS
+`row::row_last_copy` (rust/src/bots/weighted/row.rs, pre-fix line 485):
+
+    let val = cards::card_potential(name, w, Some(&base), Some(late), &mut scratch);
+    ...
+    let gone = 1.0 - counting::lookup(outlook, name, 0.0);
+    if gone > 0.0 {
+        total += val * gone;
+    }
+
+`cards::card_potential(id, w, ...)` (cards.rs:1743-1861) is itself a full
+weighted composite: every branch of `card_potential_core` returns SOME
+learned WeightKey's coefficient times a sub-valuation (`TechBoardCredit`,
+`GovBoardCredit`, `ActionBoardCredit`, `WonderBoardCredit`, `UnitTechCredit`,
+`TacticBoardCredit`, `AggressionBoardCredit`, `WarBoardCredit`,
+`PactBoardCredit`, `EventBoardCredit`, or the generic
+`CardBoardCredit`/`CardRateCredit` fallback via `sum_yields`, which itself
+dots every printed card yield against its own WeightKey). `eval::evaluate`
+(eval.rs:385-388, unchanged by this fix) then multiplies that ALREADY-priced
+composite by a SECOND, independent coefficient:
+
+    let rlc = w.get(WeightKey::RowLastCopy);
+    if rlc != 0.0 {
+        total += rlc * row::row_last_copy(state, idx, w, ctx);
+    }
+
+This exact defect is the one `weights.rs`'s own sign-intent audit flagged
+and explicitly declined to touch (rust/src/bots/weighted/weights.rs, pre-fix
+lines 1154-1158): "`RowLastCopy` is explicitly out of scope for THIS audit's
+fix set ('its defect is units, not sign')" -- SIGNAUDIT.txt:514-516 repeats
+the same verdict. Because `card_potential(w)`'s composite moves every time
+ANY OTHER weight in `w` moves (not just `rlc`), the fitted `rlc` had no
+fixed, position-independent price: doubling e.g. `card_rate_credit` doubles
+this reading even though `rlc` itself never changed -- "the coefficient has
+no consistent meaning" is exactly this.
+(Sibling keys `RowUrgency`/`RowBargainForgone`/`HandPotential`/etc. share
+`card_potential(w)`'s bilinearity too, but that is DOCUMENTED, ACCEPTED
+architecture for those ten "identity-aware" keys, per
+docs/BOT_ARCHITECTURE.md:78-84 and docs/AGREEMENT_FIT.md's own "ten
+coordinates ... bilinear in the real evaluate" section -- `RowLastCopy` is
+the one weights.rs itself already flagged as a genuine defect rather than
+an accepted approximation, which is why it is the one fixed here.)
+
+FIX (row.rs, `row_last_copy`)
+`card_potential` is still called -- "does the player want this card at
+all" is still the right question, and every other caller in this file
+(`row_pressure`) gates on it the same way -- but it is now used ONLY as the
+existing `> 0.0` filter, never as a magnitude. What is actually summed is
+`gone` itself: a deterministic, rulebook-derived probability
+(`counting::civil_outlook`) that does not depend on `w` at all.
+
+    let val = cards::card_potential(name, w, Some(&base), Some(late), &mut scratch);
+    if val <= 0.0 {
+        continue;
+    }
+    let gone = 1.0 - counting::lookup(outlook, name, 0.0);
+    if gone > 0.0 {
+        total += gone;
+    }
+
+`eval::evaluate` needed NO change: `rlc * row::row_last_copy(...)` is now
+exactly one weight (`rlc`) applied to a state-only, `w`-independent
+quantity ("count of wanted, about-to-vanish-forever row slots"), so `rlc`'s
+learned value means the same thing -- evaluator-value per about-to-vanish
+wanted card -- at every position. `weights.rs`'s stale "out of scope" comment
+(lines 1154-1158) is updated to record the fix; `RowLastCopy` keeps its
+`Free` sign-intent classification (fixing the units did not establish a
+sign any rule cites).
+
+TESTS (row.rs, `mod tests`)
+1. `row_last_copy_matches_the_gone_only_formula` -- rewrite of the existing
+   `row_last_copy_matches_the_one_minus_outlook_formula` (renamed): pins
+   `row_last_copy(state, idx, w, None) == gone` (not `val * gone`) for a
+   wanted "Colossus" in slot 0, computing `gone` independently via
+   `counting::civil_outlook` the same way the original test did.
+2. `row_last_copy_depends_on_no_weight_but_its_own` -- new, and the direct
+   pin of the bug itself: sweeps every `WeightKey` except `RowLastCopy`,
+   bumps it by +7.0, and (skipping only the cases where the bump flips
+   `card_potential`'s own `> 0.0` gate, a legitimate, unrelated dependency
+   every caller in this file already has) asserts `row_last_copy`'s reading
+   is UNCHANGED. At least one non-gate-flipping perturbation is required to
+   exist (`checked > 0`) so the test cannot pass vacuously.
+
+RED CONFIRMATION (exact text seen)
+Reverted `total += gone;` back to `total += val * gone;`, reran both tests:
+
+    test bots::weighted::row::tests::row_last_copy_matches_the_gone_only_formula ... FAILED
+    thread '...row_last_copy_matches_the_gone_only_formula' panicked at src/bots/weighted/row.rs:818:9:
+    total=1.9000000000000004 expected=1
+
+    test bots::weighted::row::tests::row_last_copy_depends_on_no_weight_but_its_own ... FAILED
+    thread '...row_last_copy_depends_on_no_weight_but_its_own' panicked at src/bots/weighted/row.rs:867:13:
+    assertion `left == right` failed: row_last_copy moved from 1.9000000000000004 to 15.899999999999999 when only strength changed (card still wanted under the new weight) -- it must depend on no weight but its own
+      left: 15.899999999999999
+     right: 1.9000000000000004
+
+    test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1336 filtered out
+
+Then restored the fix and reran: both pass (see full-suite counts below).
+
+
+FULL SUITE
+------------
+cd /private/tmp/unitsfix/rust && cargo test --profile difftest --lib
+
+    test result: ok. 1339 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.43s
+
+(build itself, separately, `cargo build --profile difftest --lib`: clean,
+zero warnings introduced by this change.)
+
+
+CHANGED FILES / HUNKS FOR LANDING
+------------------------------------
+NOTE: another worker is concurrently editing weights.rs/features.rs/legal.rs
+on the same base, appending NEW WeightKey variants. Nothing below reorders,
+renumbers or reformats any existing line outside the hunks listed; every
+edit is either a comment update or a tightly localized code change.
+
+rust/src/bots/weighted/features.rs
+  1. `pub fn features(...)`, "--- happiness" block (around original line
+     511): replaced the bare `f.set(WeightKey::Uprising, if ... {1.0} else
+     {0.0})` with the production-scaled version + a doc comment explaining
+     the units fix. Nothing else in the function touched.
+  2. `mod tests`: inserted new test
+     `uprising_scales_with_the_production_actually_at_stake_not_a_flat_0_1`
+     between `a_bigger_population_costs_the_food_rate_exactly_the_consumption_it_owes`
+     and `wonder_terms_are_zero_with_no_wonder_in_progress`. Nothing else in
+     the test module touched.
+
+rust/src/bots/weighted/row.rs
+  1. `row_last_copy`'s own doc comment (above `pub fn row_last_copy`):
+     expanded with a "UNITS FIX" paragraph explaining the old vs new
+     formula. Nothing else in the doc comment reworded beyond that
+     insertion.
+  2. `row_last_copy`'s body: `total += val * gone;` -> `total += gone;`,
+     plus a short inline comment on the `let val = ...` line above it.
+     Nothing else in the function changed (signature, gating,
+     `visible`/`outlook`/`scratch` plumbing all untouched).
+  3. `mod tests`: renamed `row_last_copy_matches_the_one_minus_outlook_formula`
+     to `row_last_copy_matches_the_gone_only_formula` and updated its body
+     to assert against `gone` instead of `val * gone` (doc comment updated
+     to match). Inserted a new test
+     `row_last_copy_depends_on_no_weight_but_its_own` immediately after it.
+     No other test in the module touched.
+
+rust/src/bots/weighted/weights.rs
+  1. `WeightKey::sign_intent`'s match arm for
+     `RowUrgency | RowBargainForgone | RowLastCopy | RivalDesire | RivalTakeShare => Free`
+     (around original line 1159): updated ONLY the comment above the arm
+     (lines 1154-1158) to record that `RowLastCopy`'s units defect is now
+     fixed. The match arm itself (the code line) is byte-for-byte
+     unchanged, and no other arm in this `match` was touched.
+
+
+WHAT WAS NOT TOUCHED / OUT OF SCOPE
+--------------------------------------
+- `row::row_pressure` (`RowUrgency`/`RowBargainForgone`) shares
+  `card_potential(w)`'s bilinearity with the old `row_last_copy`, but that
+  pattern is documented, accepted project architecture for the ten
+  "identity-aware" keys (docs/BOT_ARCHITECTURE.md, docs/AGREEMENT_FIT.md) and
+  was never named in this task -- not touched.
+- `eval::evaluate`'s own `total += rlc * row::row_last_copy(...)` line
+  (eval.rs:385-388) needed no edit at all -- the fix lives entirely inside
+  `row_last_copy`'s own computation.
+- `weights.rs`'s `sign_intent` classification for both keys (`NonPositive`
+  for `Uprising`, `Free` for `RowLastCopy`) is unchanged -- both fixes are
+  UNITS fixes, no sign was declared or altered, per the task's own hard
+  rule.
+- Neither the `-60.0` uprising clamp width nor `RowLastCopy`'s 0.0 default
+  weight were touched. Both keys remain fully free/learned parameters; only
+  the magnitude they price changed.
+
+BOTH BUGS WERE COMPLETED within budget.

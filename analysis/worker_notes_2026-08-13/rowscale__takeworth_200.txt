@@ -1,0 +1,157 @@
+games        200
+players      2
+weights      /private/tmp/cardworth/frozen_champion_2p.json
+elapsed      4.1s
+
+## takeworth (n=200 games, 400 player-games, 7031 Take-decision samples)
+
+Reconciliation check: max |sum(per_key deltas) - raw_delta| over all samples = 0.000000000
+
+### ALL chosen Takes (n=7031)
+  mean delta vs EndTurn : 384.7635
+  mean raw delta (after-before, what per-key sums to): 384.0709
+  top 12 WeightKeys by mean |contribution|:
+    row_last_copy              mean_signed= 374.1299  mean_abs= 374.1299
+    ca_left                    mean_signed=  12.3229  mean_abs=  12.3229
+    hand_value_early           mean_signed=  -9.4168  mean_abs=   9.4168
+    row_urgency                mean_signed=   7.1607  mean_abs=   7.1612
+    hand_potential             mean_signed=   2.4383  mean_abs=   2.5346
+    civil_action_surplus       mean_signed=   1.9223  mean_abs=   1.9223
+    row_bargain_forgone        mean_signed=  -1.7001  mean_abs=   1.7001
+    wonder_stages_left         mean_signed=  -1.6487  mean_abs=   1.6487
+    hand_civil                 mean_signed=  -1.1978  mean_abs=   1.1978
+    hand_value                 mean_signed=   1.1427  mean_abs=   1.1427
+    science_surplus            mean_signed=  -0.5676  mean_abs=   0.7474
+    wonder_turns_to_finish     mean_signed=  -0.4303  mean_abs=   0.4303
+  ca_left mean contribution         :   12.3229
+  sum of all OTHER keys ("what the card gives"), mean:  371.7480
+  ratio ca_left / sum(other)        : 0.033
+  row_last_copy attribution: full delta mean=374.1299, taken-card's-OWN-term slice mean=366.9797 (98.1% of the full delta -- the rest is refill + other-row-cards' outlook shift, NOT attributable to the taken card)
+  card_board_* family, mean contribution:
+    card_board_leader      mean=   0.0000  present_on=7031/7031 takes
+    card_board_wonder      mean=   0.0000  present_on=7031/7031 takes
+    card_board_credit      mean=   0.0000  present_on=0/7031 takes
+    card_board_government  mean=   0.0000  present_on=7031/7031 takes
+    card_board_action      mean=   0.0000  present_on=7031/7031 takes
+    card_board_bonus       mean=   0.0000  present_on=7031/7031 takes
+
+### Takes costing 1 civil action(s) (n=1724)
+  mean delta vs EndTurn : 99.2725
+  mean raw delta (after-before, what per-key sums to): 98.5799
+  top 12 WeightKeys by mean |contribution|:
+    row_last_copy              mean_signed=  87.2726  mean_abs=  87.2726
+    row_urgency                mean_signed=  15.0171  mean_abs=  15.0190
+    hand_value_early           mean_signed=  -7.4769  mean_abs=   7.4769
+    ca_left                    mean_signed=   5.2699  mean_abs=   5.2699
+    hand_civil                 mean_signed=  -1.2393  mean_abs=   1.2393
+    hand_value                 mean_signed=   1.1497  mean_abs=   1.1497
+    wonder_stages_left         mean_signed=  -1.0210  mean_abs=   1.0210
+    row_bargain_forgone        mean_signed=  -0.8179  mean_abs=   0.8179
+    hand_potential             mean_signed=   0.5779  mean_abs=   0.7897
+    civil_action_surplus       mean_signed=   0.7166  mean_abs=   0.7166
+    science_surplus            mean_signed=  -0.4517  mean_abs=   0.6907
+    wonder_turns_to_finish     mean_signed=  -0.3600  mean_abs=   0.3600
+  ca_left mean contribution         :    5.2699
+  sum of all OTHER keys ("what the card gives"), mean:   93.3100
+  ratio ca_left / sum(other)        : 0.056
+  row_last_copy attribution: full delta mean=87.2726, taken-card's-OWN-term slice mean=82.1884 (94.2% of the full delta -- the rest is refill + other-row-cards' outlook shift, NOT attributable to the taken card)
+  card_board_* family, mean contribution:
+    card_board_leader      mean=   0.0000  present_on=1724/1724 takes
+    card_board_wonder      mean=   0.0000  present_on=1724/1724 takes
+    card_board_credit      mean=   0.0000  present_on=0/1724 takes
+    card_board_government  mean=   0.0000  present_on=1724/1724 takes
+    card_board_action      mean=   0.0000  present_on=1724/1724 takes
+    card_board_bonus       mean=   0.0000  present_on=1724/1724 takes
+
+### Takes costing 2 civil action(s) (n=1703)
+  mean delta vs EndTurn : 418.8553
+  mean raw delta (after-before, what per-key sums to): 418.1627
+  top 12 WeightKeys by mean |contribution|:
+    row_last_copy              mean_signed= 402.5731  mean_abs= 402.5731
+    row_urgency                mean_signed=  12.5151  mean_abs=  12.5151
+    ca_left                    mean_signed=  10.8583  mean_abs=  10.8583
+    hand_value_early           mean_signed=  -8.4391  mean_abs=   8.4391
+    hand_potential             mean_signed=   2.6234  mean_abs=   2.6835
+    civil_action_surplus       mean_signed=   1.9929  mean_abs=   1.9929
+    wonder_stages_left         mean_signed=  -1.4664  mean_abs=   1.4664
+    row_bargain_forgone        mean_signed=  -1.2770  mean_abs=   1.2770
+    hand_civil                 mean_signed=  -1.2081  mean_abs=   1.2081
+    hand_value                 mean_signed=   1.1137  mean_abs=   1.1137
+    science_surplus            mean_signed=  -0.6090  mean_abs=   0.7545
+    wonder_turns_to_finish     mean_signed=  -0.4327  mean_abs=   0.4327
+  ca_left mean contribution         :   10.8583
+  sum of all OTHER keys ("what the card gives"), mean:  407.3045
+  ratio ca_left / sum(other)        : 0.027
+  row_last_copy attribution: full delta mean=402.5731, taken-card's-OWN-term slice mean=396.4825 (98.5% of the full delta -- the rest is refill + other-row-cards' outlook shift, NOT attributable to the taken card)
+  card_board_* family, mean contribution:
+    card_board_leader      mean=   0.0000  present_on=1703/1703 takes
+    card_board_wonder      mean=   0.0000  present_on=1703/1703 takes
+    card_board_credit      mean=   0.0000  present_on=0/1703 takes
+    card_board_government  mean=   0.0000  present_on=1703/1703 takes
+    card_board_action      mean=   0.0000  present_on=1703/1703 takes
+    card_board_bonus       mean=   0.0000  present_on=1703/1703 takes
+
+### Takes costing 3 civil action(s) (n=3361)
+  mean delta vs EndTurn : 540.4107
+  mean raw delta (after-before, what per-key sums to): 539.7182
+  top 12 WeightKeys by mean |contribution|:
+    row_last_copy              mean_signed= 532.5997  mean_abs= 532.5997
+    ca_left                    mean_signed=  16.2951  mean_abs=  16.2951
+    hand_value_early           mean_signed= -11.3722  mean_abs=  11.3722
+    hand_potential             mean_signed=   3.4791  mean_abs=   3.5334
+    civil_action_surplus       mean_signed=   2.5790  mean_abs=   2.5790
+    row_bargain_forgone        mean_signed=  -2.4417  mean_abs=   2.4417
+    wonder_stages_left         mean_signed=  -1.2975  mean_abs=   1.2975
+    hand_civil                 mean_signed=  -1.2405  mean_abs=   1.2405
+    hand_value                 mean_signed=   1.2247  mean_abs=   1.2247
+    row_urgency                mean_signed=   0.9143  mean_abs=   0.9144
+    science_surplus            mean_signed=  -0.6472  mean_abs=   0.8270
+    wonder_turns_to_finish     mean_signed=  -0.3138  mean_abs=   0.3138
+  ca_left mean contribution         :   16.2951
+  sum of all OTHER keys ("what the card gives"), mean:  523.4231
+  ratio ca_left / sum(other)        : 0.031
+  row_last_copy attribution: full delta mean=532.5997, taken-card's-OWN-term slice mean=523.8526 (98.4% of the full delta -- the rest is refill + other-row-cards' outlook shift, NOT attributable to the taken card)
+  card_board_* family, mean contribution:
+    card_board_leader      mean=   0.0000  present_on=3361/3361 takes
+    card_board_wonder      mean=   0.0000  present_on=3361/3361 takes
+    card_board_credit      mean=   0.0000  present_on=0/3361 takes
+    card_board_government  mean=   0.0000  present_on=3361/3361 takes
+    card_board_action      mean=   0.0000  present_on=3361/3361 takes
+    card_board_bonus       mean=   0.0000  present_on=3361/3361 takes
+
+### Takes costing something other than 1/2/3 (surcharges) (n=243)
+  mean delta vs EndTurn : 18.4983
+  mean raw delta (after-before, what per-key sums to): 17.8058
+  top 12 WeightKeys by mean |contribution|:
+    row_last_copy              mean_signed=  18.1056  mean_abs=  18.1056
+    ca_left                    mean_signed=  17.6866  mean_abs=  17.6866
+    wonder_stages_left         mean_signed= -12.2369  mean_abs=  12.2369
+    hand_value_early           mean_signed=  -2.9850  mean_abs=   2.9850
+    wonder_turns_to_finish     mean_signed=  -2.5224  mean_abs=   2.5224
+    civil_action_surplus       mean_signed=   0.8991  mean_abs=   0.8991
+    wonder_remaining           mean_signed=  -0.7375  mean_abs=   0.7375
+    row_bargain_forgone        mean_signed=  -0.6675  mean_abs=   0.6675
+    row_urgency                mean_signed=   0.2940  mean_abs=   0.2940
+    hand_civil                 mean_signed=  -0.2416  mean_abs=   0.2416
+    hand_value                 mean_signed=   0.1608  mean_abs=   0.1608
+    take_cost_paid             mean_signed=   0.1093  mean_abs=   0.1093
+  ca_left mean contribution         :   17.6866
+  sum of all OTHER keys ("what the card gives"), mean:    0.1191
+  ratio ca_left / sum(other)        : 148.463
+  row_last_copy attribution: full delta mean=18.1056, taken-card's-OWN-term slice mean=10.9588 (60.5% of the full delta -- the rest is refill + other-row-cards' outlook shift, NOT attributable to the taken card)
+  card_board_* family, mean contribution:
+    card_board_leader      mean=   0.0000  present_on=243/243 takes
+    card_board_wonder      mean=   0.0000  present_on=243/243 takes
+    card_board_credit      mean=   0.0000  present_on=0/243 takes
+    card_board_government  mean=   0.0000  present_on=243/243 takes
+    card_board_action      mean=   0.0000  present_on=243/243 takes
+    card_board_bonus       mean=   0.0000  present_on=243/243 takes
+
+### Cost distribution of chosen Takes:
+  cost=0  n=48 (0.7%)
+  cost=1  n=1724 (24.5%)
+  cost=2  n=1703 (24.2%)
+  cost=3  n=3361 (47.8%)
+  cost=4  n=184 (2.6%)
+  cost=5  n=11 (0.2%)
+  cost=6  n=0 (0.0%)

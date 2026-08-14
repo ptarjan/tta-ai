@@ -1,0 +1,13 @@
+games        20 (10 deals x 2 seats)
+players      2
+kind         weighted
+A            rust_champion_2p
+B            rust_champion_2p
+mean moves   215.5
+elapsed      0.7s  (29.9 games/s)
+
+win rate     50.0%  +/- 0.0   (null 50.0%)   p = 1.0000
+             [naive +/- 21.3, rho -1.00, deff 0.00, 10 deals]
+culture      A 36.5   best other 36.5   lead +0.0 +/- 0.0
+
+verdict      inconclusive -- the interval still straddles the null

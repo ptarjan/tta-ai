@@ -1,0 +1,17 @@
+## Source: agent_group4 batch (1860c69a-72af-46b5-a71e-5cdb90c23326.jsonl, 19f62548-673c-46fd-b743-aa1d881fed44.jsonl, 24dbd092-2f23-46b5-8ece-ec8332333daa.jsonl, 25ddf9aa-f94f-4fd5-98bb-7c54f947114d.jsonl, 5fc5cebb-86b9-4457-869b-9a8932e0de5b.jsonl, 8392c5ac-22b7-48e9-9a26-85c331ba2d58.jsonl, 8ba42cf9-a1a3-4d5b-87ca-4a13044cab9c.jsonl, 996b6265-ff57-4974-b588-fb0ae50bcfd0.jsonl)
+## Measurement: NONE FOUND
+## Data:
+Searched all 8 files for: n_score_checked, n_score_exact, "exact match", score_check,
+IllegalMove, StuckPending, ParserGap, UnrecoverableHiddenInfo, EventPlanInfeasible,
+census, "win rate", gauntlet, divergen*, mismatch, tta-ai, "Through the Ages" (case
+sensitive grep on raw jsonl) -- zero hits in every file. Also checked for bare 7-digit
+game-ID-like numbers (\b[0-9]{7}\b) -- zero hits in every file.
+
+All 8 sessions have cwd=/Users/pt (not the tta-ai repo) and their opening user turns
+are trivial/unrelated: "hi" (x4), "Does this work?", "Run `uname -n` and tell me just
+the hostname.", a local-command-caveat wrapper, and "Test". None reference the
+Through the Ages AI project, replay validation, or simulator comparisons.
+
+Conclusion: no confirmed measurements to report from this batch.
+
+---

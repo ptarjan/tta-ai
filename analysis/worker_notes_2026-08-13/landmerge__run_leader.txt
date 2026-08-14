@@ -1,0 +1,13 @@
+policy       LeaderByRoundThree
+games        1000 (500 deals x 2 seats)
+champion     /private/tmp/rowdig/frozen_champion_2p.json
+elapsed      41.9s  (23.9 games/s)
+
+win rate     51.1%  +/- 3.0   (null 50.0%)   p = 0.4467
+             [naive +/- 3.1, rho -0.08, deff 0.93, 500 deals]
+
+mine      achieved  13.5%  (135/1000)   forced-decisions 0   fallthrough-decisions 0   fallthrough-rate 0.0%
+leader    achieved 100.0%  (1000/1000)   forced-decisions 2000   fallthrough-decisions 145   fallthrough-rate 6.8%
+military  achieved  98.3%  (983/1000)   forced-decisions 0   fallthrough-decisions 0   fallthrough-rate 0.0%
+
+verdict      inconclusive -- the interval straddles 50%

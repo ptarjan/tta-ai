@@ -1,0 +1,200 @@
+COLONYSIGN -- is the champion's -2.09 price on `colonies` a genuine defect?
+==============================================================================
+GATE COVERAGE BUG: NO. `WeightKey::Colonies` is currently classified `Free`
+(rust/src/bots/weighted/weights.rs:1118, inside the big `=> Free` arm at
+1112-1118), not `NonNegative`. A `Free` key has no sign constraint, so -2.09
+is a LEGAL value under the sign gates added 2026-08-13 -- there is no bug
+where a declared-benefit key is slipping past a gate that should reject it.
+The interesting finding is a DIFFERENT one: `Colonies` looks like it SHOULD
+be `NonNegative` on the same rules-citation grounds `Wonders`/`CivilActions`
+already are, and currently is not -- see below. That is a coverage GAP
+(never audited), not a coverage BUG (gate present but broken).
+
+MATCH-PLAY (MEASURED, 2p, seat-paired, --threads 2, arena --profile
+difftest, seed 42): colonies clamped to 0.0 vs unmodified champion (-2.09),
+640 games: 49.8% +/- 0.3 (null 50.0%) -- INCONCLUSIVE. colonies set to +0.5
+vs unmodified champion, 640 games: 49.7% +/- 0.4 (null 50.0%) --
+INCONCLUSIVE. Neither interval clears the 50% null; full detail in (4).
+==============================================================================
+
+(1) WHERE `Colonies` LIVES TODAY
+-----------------------------------------------------------------------------
+- `WeightKey::Colonies` variant: weights.rs:142.
+- Feature write: `f.set(WeightKey::Colonies, p.colonies.len() as f64)` --
+  features.rs:557. A raw STOCK: how many territory cards this player has
+  colonized and still holds. Nothing about the auction itself.
+- Default weight: `Colonies => "colonies", 2.0;` -- weights.rs:560 (authored
+  default is POSITIVE 2.0 -- the human author's own prior was "colonies are
+  good").
+- `sign_intent` classification: weights.rs:1118, inside the `Free` arm
+  (1112-1118), grouped with `Strength`, `TechLevels`, `GovLevel`, etc. under
+  the blanket comment at 1104-1111: "no RULES_SPEC citation ... guessing its
+  sign is exactly what this table exists to refuse to do." `Colonies` was
+  swept into that catch-all bucket without its own citation being checked --
+  it is NOT one of the four keys (`CivilActions`, `CivilActionSurplus`,
+  `Wonders`, and the earlier `TacticGain`) that got individually promoted to
+  `NonNegative` with a specific rules citation in this same audit.
+- `eval::dominance_repair` (eval.rs:865-895+) reads `sign_intent` directly
+  (no second copied table) and repairs both at champion load AND at
+  `bin/climb.rs` mutation time. Since `Colonies` is `Free`, no repair is ever
+  applied to it -- confirmed by reading the repair loop: it `filter_map`s
+  `WeightKey::ALL` through `sign_intent()`, and `Free` keys are filtered out
+  (eval.rs:882, 891). So there is genuinely no gate touching this coordinate
+  at all right now, at load or at mutation.
+
+(2) WHAT OWNING A COLONY ACTUALLY DOES -- RULES_SPEC + BGA source
+-----------------------------------------------------------------------------
+RULES_SPEC 11.5 (docs/RULES_SPEC.md:287): "Gaining the colony ... territory
+card into your play area = colony. Apply its PERMANENT effects (bottom
+symbols: ratings, yellow/blue tokens, colonization modifiers...) FIRST, then
+the IMMEDIATE effect ..."
+
+The permanent effect is a genuine ongoing benefit, confirmed by RULES_SPEC's
+own framing of losing one: "In rare circumstances you might lose your colony
+... you lose its permanent effect" (sources/ubg_subsequent-rounds.txt:106) --
+losing it is described as losing something valuable, not shedding a burden.
+
+Checked all 12 base-game Territory cards in the BGA implementation
+(sources/bga_throughtheages_material.inc.php, grep `'type' => 'Territory',`
+-- lines 870, 907, 951, 1108, 1152, 1677, 1868, 2201, 2294, 2340, 2399, 3071:
+Developed Territory I/II, Wealthy Territory I/II, Vast Territory I/II,
+Historic Territory I/II, Strategic Territory I/II, Inhabited Territory I/II
+-- exactly 12, matching `state.rs:443`'s `colonies: CardList<12>` cap).
+Every card's `bonus_per` (permanent effect) is additive: +blue/+yellow
+tokens, +happy face, +strength, or (Inhabited) a population increase. The
+ONLY subtraction anywhere in the set is Vast Territory's token mix,
+`'tokendelta' => array('blue' => -1, 'yellow' => 3)` (age I) / `-1/+4` (age
+II) -- and even that card nets MORE total tokens (more population capacity)
+plus an immediate food gain; it is not a printed penalty, it is a
+composition shift within a card whose printed effect the auction still prices
+as worth winning. `rust/src/effects.rs:1411-1425` confirms the engine applies
+a colony's stored `CardEffects` through the exact same `add_flat`/
+`apply_special` path used for government/tech/wonder/leader bonuses -- no
+colony-specific subtraction branch exists anywhere in the resolver.
+
+CONCLUSION on the rules question: a colony's permanent effect is, without
+exception in the base game, a benefit or a wash-with-upside. This is the same
+class of citable fact `Wonders`/`CivilActions` were promoted to `NonNegative`
+for (weights.rs:978-989, "Raw board STOCKS the rules only ever ADD effects
+for"). `Colonies` belongs in that bucket and was simply missed by this
+audit pass, not deliberately left `Free`.
+
+(3) IS -2.09 PRICING THE COLONY OR THE BIDDING?
+-----------------------------------------------------------------------------
+The feature set already separates these: `Colonies` (features.rs:557, the
+STOCK held) is a completely different coordinate from `AuctionCommitted`/
+`AuctionBid` (features.rs:559-560, the bidding TRADE-OFF -- how much
+strength/units/bonus-cards this move commits to a live auction). weights.rs's
+own comment on the latter two (1160-1163) already states the auction-cost
+concern explicitly: "Auction bidding is a genuine trade-off (paying more to
+win a colony/aggression slot), not a rules-imposed penalty the player never
+chooses" -- and leaves THOSE `Free`, correctly, since bidding cost really is
+a genuine strategic trade-off with no fixed sign.
+
+So structurally, -2.09 cannot be a mispriced bidding cost -- that cost is
+already carried on separate coordinates. -2.09 must be pricing the STOCK
+itself: the champion's evaluator believes that, holding everything else
+(strength, tech, workers, etc.) fixed, an ADDITIONAL colony in play makes a
+position worse. Per (2), no rules mechanism produces that. The likely
+explanation is a confound from self-play training data (a hill-climbed
+vector, not the human-outcome regression): positions with more colonies
+disproportionately follow a *recent* colonization action, which temporarily
+depletes military strength/units (the very turn's sacrifice) -- and if
+`StrengthRel`/`Strength` don't fully absorb that dip in the bot's own
+self-play sampling distribution, some of the correlation leaks onto
+`Colonies` instead. That is a plausible fitting artifact, not a rules-forced
+sign -- exactly the shape `PopCost`'s own doc comment already describes for
+a different key (weights.rs:1013-1025).
+
+(4) MEASUREMENT
+-----------------------------------------------------------------------------
+Copied the live champion aside first (`champion_2p_BASE.json`, md5-identical
+to `champion_2p_now.json` at copy time) and pointed every run at the copy --
+never at `champion_2p_now.json` itself, which the live climb can rewrite on
+promotion. Built two variants from that same copy, changing ONLY
+`weights.colonies`:
+  - `champion_2p_coloniesZERO.json`: colonies clamped to 0.0 (what
+    `dominance_repair` now does automatically once (5)'s fix is loaded).
+  - `champion_2p_coloniesPOS.json`: colonies set to +0.5 (small positive,
+    inside the `NonNegative` legal region but far below the +2.0 authored
+    default, to avoid overshooting into an untested regime).
+`rust/target/difftest/arena`, `--players 2 --threads 2`, seat-paired
+(A and B alternate seats across deals, so seat advantage cancels).
+
+  MEASURED: coloniesZERO vs BASE (-2.09), seed 42, 640 games (320 deals x 2
+  seats): win rate 49.8% +/- 0.3 (95% CI [49.5%, 50.1%]), null 50.0%,
+  p = 0.3173. INCONCLUSIVE -- interval straddles the null.
+
+  MEASURED: coloniesPOS (+0.5) vs BASE (-2.09), seed 42, 640 games (320
+  deals x 2 seats): win rate 49.7% +/- 0.4 (95% CI [49.3%, 50.1%]), null
+  50.0%, p = 0.1566. INCONCLUSIVE -- interval straddles the null.
+
+Both intervals are tight (naive +/- ~3.9%, but the seat-paired estimator
+tightens that to +/- 0.3-0.4% off rho ~ -0.99) yet still straddle 50%, and
+if anything sit fractionally BELOW it, not above. Read plainly: in 2p
+self-play against the SAME opponent, this one coefficient's sign does not
+detectably move the needle either way. That is not surprising -- `colonies`
+is nonzero in 38.7% of positions but its magnitude (0-3, capped at 12) times
+even the +2.0 authored default is small next to the vector's
+larger-magnitude coordinates, so it rarely swings an argmax decision on its
+own in a single-coefficient swap.
+
+HYPOTHESISED (not measured): a rules-correct sign matters more than this one
+head-to-head arena result shows, for two reasons neither arena run can see:
+(a) it prevents the climb from re-drifting `colonies` further negative on
+future generations (the mutation-time repair in (1) is idempotent but only
+if the classification is in place -- it does nothing while `Free`), and (b)
+a human-facing bot (this project's actual deployment target per
+`docs/CHAMPION_VS_HUMANS.md`) is evaluated against real human corpora where
+colony-heavy midgame positions are far more common than in bot self-play,
+so a decision-relevant swing this arena test's sampling distribution rarely
+exercises could still matter there. Flagged as hypothesis, not measured --
+do not read the 90-tool-call budget's absence of a corpus-agreement run as
+evidence either way.
+
+(5) THE FIX LANDED
+-----------------------------------------------------------------------------
+Structural, not a value: reclassified `WeightKey::Colonies` from `Free` to
+`NonNegative("prices a held colony's always-additive permanent effect")` in
+the one `sign_intent` match arm (`rust/src/bots/weighted/weights.rs`, the
+`CivilActions | CivilActionSurplus | Wonders => NonNegative(...)` arm grew a
+new `Colonies => NonNegative(...)` arm right after it; `Colonies` was
+removed from the `Free` bucket list it used to sit in). No formula, no
+hardcoded replacement value -- `dominance_repair`/`bin/climb.rs`'s
+mutation-time guard (both already generic over `sign_intent`, eval.rs:
+881-895) do the actual repair (UP to 0.0, per `SignIntent::NonNegative`'s own
+doc comment), so the champion's FITTED magnitude is never touched by this
+change except to forbid the sign the rules never license -- the climb is
+still free to refit any non-negative value it likes on the next generation.
+No other file needed to change; `dominance_repair` and the climb guard both
+read `sign_intent()` directly, not a copied table.
+
+Confirmed by direct load: with the fix, `load_weights` on the untouched
+`champion_2p_BASE.json` copy (still carrying -2.09 on disk) now returns
+`colonies == 0.0` -- the repair fires silently at load time exactly as
+`eval.rs`'s own doc comment on `dominance_repair` promises.
+
+Test added (`rust/src/bots/weighted/weights.rs`, `#[cfg(test)] mod tests`):
+`colonies_is_classified_non_negative_because_a_colonys_permanent_effect_is_
+always_additive` -- confirmed RED before the fix (assertion failure against
+`SignIntent::NonNegative`), GREEN after. Full `cargo test --profile
+difftest --lib` (1322 tests) and `cargo test --profile difftest --bin
+climb` (48 tests, including `no_mutant_ever_prices_a_benefit_shaped_weight_
+as_a_downside`, the generic guard test this change is now covered by) both
+pass with no other regressions.
+
+(6) BOTTOM LINE
+-----------------------------------------------------------------------------
+-2.09 on `colonies` is a genuine rules-inversion (owning a colony's
+permanent effect is never a rules-imposed downside, cited chapter and verse
+above), but it was never a GATE bug -- `Colonies` was simply never audited
+into the `NonNegative` bucket its own class (`Wonders`/`CivilActions`)
+already occupies. The fix is the missing classification, landed as a
+one-arm structural change with no fitted value touched. Head-to-head arena
+measurement of the fix's practical effect (clamped-to-0 or nudged
+positive vs the unrepaired -2.09) is INCONCLUSIVE at n=640 seat-paired
+games each -- this coefficient does not move 2p self-play win rate enough
+for this sample size to see it either way. The case for landing the fix
+rests on the rules citation and on closing the same drift class this
+audit's own precedent (`TacticGain`, `PopCost`, `HandValue`) was already
+gating for, not on a measured win-rate gain.

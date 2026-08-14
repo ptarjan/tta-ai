@@ -1,0 +1,240 @@
+## Source: 6d619809-d37a-4284-a565-529b9a85894e.jsonl, mtime 2026-08-13 22:16 (file size 147124548 bytes)
+## Measurement: Final-score cross-check progression (replaystats), same 1011-game corpus sampled at increasing completion counts over the session (2026-08-07/08). Shows engine-computed final scores never exactly matching BGO journal's recorded scores at any sample size reached.
+## Data:
+[jsonl line 50602, timestamp ~2026-08-07T10:30]
+# replaystats: 1011 games sampled, 14 completed to state.game_over
+## Final-score cross-check
+14/14 completed games actually flipped state.game_over (the other 0 reached the journal's own "End of game" marker but hit a mismatch afterward, so `game::scores` was never computed for them); 0/14 of those matched index.tsv exactly (sorted per-game score-list compare).
+delta distribution for the 28 non-matching player-scores (engine minus index.tsv, sorted ascending, mean -3.07): [-27, -26, -25, -20, -16, -14, -10, -9, -9, -6, -5, -4, -3, -2, -2, -2, 0, 0, 3, 4, 4, 6, 7, 9, 9, 9, 20, 23]
+mean rounds reached: 10.69 (mean 19.27 total rounds per sampled game)
+decisions recorded: 155394 (40.0% in Age II or later)
+hand cards grounded from a bid's own force ceiling: 63 (in 47 games)
+
+[jsonl line 51496]
+# replaystats: 1011 games sampled, 76 completed to state.game_over
+76/76 completed games actually flipped state.game_over; 0/76 of those matched index.tsv exactly.
+delta distribution for the 160 non-matching player-scores (mean -9.11): [-48, -48, -43, -42, -38, -37, -36, -36, -33, -33, -30, -30, -28, -27, -26, -26, -26, -25, -25, -25, -24, -24, -24, -24, -23, -23, -23, -23, -23, -22, -22, -22, -22, -22, -21, -19, -18, -17, -17, -17, -17, -17, -17, -16, -16, -16, -16, -16, -16, -16, -16, -15, -15, -15, -15, -14, -14, -14, -14, -13, -13, -13, -13, -13, -12, -12, -12, -12, -12, -12, -12, -11, -11, -11, -10, -10, -10, -10, -9, -9, -9, -9, -9, -9, -9, -9, -8, -8, -7, -6, -6, -6, -6, -6, -6, -5, -5, -5, -4, -3, -3, -3, -2, -2, -2, -1, -1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 7, 7, 8, 8, 8, 9, 9, 9, 11, 12, 12, 12, 12, 13, 15, 17, 18, 19, 21]
+
+[jsonl line 52369]
+# replaystats: 1011 games sampled, 98 completed to state.game_over
+98/98 completed; 0/98 matched exactly.
+delta distribution for the 208 non-matching player-scores (mean -7.15): [-37, -37, -36, -33, -33, -33, -31, -30, -30, -27, -27, -27, -26, -26, -25, -25, -24, -24, -24, -24, -23, -23, -23, -23, -22, -22, -22, -22, -21, -21, -20, -20, -20, -19, -18, -18, -18, -18, -17, -17, -17, -17, -17, -17, -17, -17, -16, -16, -16, -16, -16, -16, -16, -16, -15, -15, -15, -15, -14, -14, -14, -14, -14, -14, -13, -13, -13, -13, -13, -13, -12, -12, -12, -12, -12, -12, -12, -11, -11, -11, -11, -10, -10, -10, -10, -10, -9, -9, -9, -9, -9, -9, -9, -9, -9, -9, -9, -8, -8, -7, -7, -7, -7, -6, -6, -6, -6, -6, -6, -6, -6, -6, -5, -5, -5, -5, -5, -5, -5, -4, -4, -4, -4, -3, -3, -3, -3, -3, -2, -2, -2, -2, -2, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 11, 12, 12, 12, 12, 13, 14, 14, 15, 17, 18, 19, 21, 21]
+
+[jsonl line 52545, timestamp 2026-08-08T03:08:17.494Z -- LARGEST/latest sample of this run]
+# replaystats: 1011 games sampled, 112 completed to state.game_over
+## Final-score cross-check
+112/112 completed games actually flipped state.game_over (the other 0 reached the journal's own "End of game" marker but hit a mismatch afterward); 1/112 of those matched index.tsv exactly (sorted per-game score-list compare).
+delta distribution for the 235 non-matching player-scores (engine minus index.tsv, sorted ascending, mean -6.63): [-37, -37, -36, -33, -33, -33, -31, -30, -30, -27, -27, -27, -26, -26, -26, -25, -25, -24, -24, -24, -24, -23, -23, -23, -23, -22, -22, -22, -22, -21, -21, -21, -20, -20, -20, -19, -18, -18, -18, -18, -17, -17, -17, -17, -17, -17, -17, -17, -17, -16, -16, -16, -16, -16, -16, -16, -15, -15, -15, -15, -14, -14, -14, -14, -14, -14, -14, -13, -13, -13, -13, -13, -12, -12, -12, -12, -12, -12, -12, -12, -12, -11, -11, -11, -11, -11, -11, -10, -10, -10, -10, -10, -9, -9, -9, -9, -9, -9, -9, -9, -9, -9, -9, -8, -8, -8, -8, -8, -8, -8, -7, -7, -7, -7, -7, -6, -6, -6, -6, -6, -6, -6, -6, -6, -6, -5, -5, -5, -5, -5, -5, -5, -5, -5, -4, -4, -4, -4, -3, -3, -3, -3, -3, -2, -2, -2, -2, -2, -2, -2, -2, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8, 8, 9, 9, 9, 9, 9, 11, 12, 12, 12, 12, 13, 14, 14, 15, 17, 18, 19, 20, 21, 21, 27, 28]
+mean rounds reached: 13.33 (mean 19.27 total rounds per sampled game)
+decisions recorded: 218306 (55.5% in Age II or later)
+hand cards grounded from a bid's own force ceiling: 188 (in 119 games)
+journal-observed takes accepted despite failing ONLY the hand_full gate: 316 (in 106 games; the known corpus shape is ~109 games' worth -- a much larger number here means the override is too loose)
+
+[jsonl line 52797 -- separate, smaller 150-game sample, different run]
+# replaystats: 150 games sampled, 16 completed to state.game_over
+16/16 completed games actually flipped state.game_over; 0/16 of those matched index.tsv exactly.
+delta distribution for the 35 non-matching player-scores (mean -10.31): [-39, -37, -30, -28, -24, -24, -22, -22, -19, -17, -15, -15, -14, -13, -13, -11, -8, -7, -7, -7, -7, -5, -5, -5, -3, -2, -2, -1, 1, 2, 2, 3, 5, 13, 15]
+
+---
+
+## Source: 6d619809-d37a-4284-a565-529b9a85894e.jsonl, mtime 2026-08-13 22:16
+## Measurement: Discard-phase hand-size oracle (1011-game corpus, 112 games completed to game_over at time of measurement) — cross-validates engine's reconstructed military-hand-excess against journal-derived checkpoints; plus a "military hand ledger" breakdown of WHY it diverges, classifying root cause per-game.
+## Data:
+[jsonl line 52545, timestamp 2026-08-08T03:08:17.494Z]
+## Discard-phase hand-size oracle
+31604 `(actor, round)` checkpoints had a cross-validated journal count to check this binary's own reconstructed military-hand excess against; 30439 (96.3%) matched exactly.
+646/1011 games sampled had at least one checkpoint disagree (FIRST divergence only, one line per game):
+- 7523809 line 272 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 9 limit 5)
+- 7523357 line 173 (round 6 age I, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 7 limit 3)
+- 7523354 line 250 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7523353 line 339 (round 17 age IV, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523350 line 189 (round 11 age II, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523347 line 179 (round 6 age I, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523341 line 187 (round 6 age I, Grey): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523338 line 444 (round 12 age III, Grey): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523335 line 214 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522612 line 206 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522668 line 154 (round 5 age I, Grey): journal's cross-validated excess 4, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522645 line 151 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+[list truncated in captured tool output at 12 of 646 entries -- transcript did not show the remaining rows]
+
+## Military hand ledger: classifying WHY the discard-phase oracle diverges
+| games | reason | example |
+|---|---|---|
+| 137 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was PrepareEvent | 7523809 line 272 (round 14 age III, Purple): journal excess 2, simulator excess 4, ledger excess 2 (ledger's own last event: Some((PrepareEvent, 264))) |
+| 110 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was Draw | 7523347 line 179 (round 6 age I, Green): journal excess 1, simulator excess 2, ledger excess 1 (ledger's own last event: Some((Draw, 145))) |
+| 83 | UnmodelledEvent: last ledger event was PrepareEvent | 7523353 line 339 (round 17 age IV, Purple): journal excess 2, simulator excess 1, ledger excess 3 (ledger's own last event: Some((PrepareEvent, 323))) |
+| 79 | SimulatorBug (ledger agrees with journal) -- last ledger event was Discard | 7522639 line 230 (round 13 age III, Purple): journal excess 3, simulator excess 2, ledger excess 3 (ledger's own last event: Some((Discard, 210))) |
+| 68 | UnmodelledEvent: last ledger event was Draw | 7522612 line 206 (round 13 age III, Orange): journal excess 2, simulator excess 1, ledger excess 3 (ledger's own last event: Some((Draw, 187))) |
+| 63 | SimulatorBug (ledger agrees with journal) -- last ledger event was ConsumingPlay | 7523357 line 173 (round 6 age I, Orange): journal excess 3, simulator excess 4, ledger excess 3 (ledger's own last event: Some((ConsumingPlay, 169))) |
+| 43 | UnmodelledEvent: last ledger event was Discard | 7523338 line 444 (round 12 age III, Grey): journal excess 1, simulator excess 3, ledger excess 3 (ledger's own last event: Some((Discard, 391))) |
+| 33 | UnmodelledEvent: last ledger event was ConsumingPlay | 7522666 line 295 (round 12 age III, Green): journal excess 0, simulator excess 2, ledger excess 2 (ledger's own last event: Some((ConsumingPlay, 286))) |
+| 18 | SimulatorBug (ledger agrees with journal) -- last ledger event was ColonizeConsume | 7523032 line 217 (round 9 age II, Orange): journal excess 0, simulator excess 1, ledger excess 0 (ledger's own last event: Some((ColonizeConsume, 204))) |
+
+---
+
+## Source: 6d619809-d37a-4284-a565-529b9a85894e.jsonl, mtime 2026-08-13 22:16
+## Measurement: Culture oracle (1011-game corpus, 2026-08-09T04:04:29Z) — cross-validates engine's reconstructed running culture total against journal "(now M)" checkpoints, plus per-ActionClass divergence breakdown and politics false-skip counts.
+## Data:
+[jsonl line 55041]
+## Culture oracle
+34487 "End turn" checkpoints had a `"(now M)"` running total to check this binary's own reconstructed `state.players[_].culture` against; 32776 (95.0%) matched exactly.
+253/1011 games sampled had at least one checkpoint disagree (FIRST divergence only, ranked by the ActionClass immediately preceding it):
+| games | preceding ActionClass | example |
+|---|---|---|
+| 103 | TakeCard | 7523809 line 353 (Orange): journal says (now 89), this binary computes 95 (delta 6) |
+| 24 | Discard | 7522618 line 162 (Purple): journal says (now 46), this binary computes 43 (delta -3) |
+| 18 | BuildUnit | 7522661 line 137 (Orange): journal says (now 20), this binary computes 19 (delta -1) |
+| 16 | ElectLeader | 7523791 line 104 (Grey): journal says (now 7), this binary computes 6 (delta -1) |
+| 16 | UpgradeProduction | 7523087 line 179 (Purple): journal says (now 27), this binary computes 25 (delta -2) |
+| 15 | BuildWonderStage | 7523072 line 126 (Purple): journal says (now 17), this binary computes 16 (delta -1) |
+| 14 | PlayTactic | 7521853 line 181 (Orange): journal says (now 13), this binary computes 12 (delta -1) |
+| 13 | BuildBuilding | 7522242 line 234 (Purple): journal says (now 18), this binary computes 19 (delta 1) |
+| 10 | IncreasePopulation | 7521858 line 104 (Green): journal says (now 4), this binary computes 3 (delta -1) |
+| 8 | DevelopTechnology | 7522173 line 268 (Orange): journal says (now 16), this binary computes 15 (delta -1) |
+| 5 | PlayActionCard | 7521365 line 156 (Grey): journal says (now 10), this binary computes 9 (delta -1) |
+| 4 | EndTurn | 7522152 line 340 (Purple): journal says (now 73), this binary computes 54 (delta -19) |
+| 4 | WinWar | 7523079 line 211 (Purple): journal says (now 73), this binary computes 61 (delta -12) |
+| 2 | UpgradeUnit | 7522773 line 468 (Orange): journal says (now 31), this binary computes 35 (delta 4) |
+| 1 | Destroy | 7523640 line 355 (Purple): journal says (now 66), this binary computes 68 (delta 2) |
+
+civil-age premature advances: 0 games
+politics false-skips (occurrence count for the still-open hand_military gap, not damage): 57 across 55 games
+politics false-skips left UNRECOVERED (the true damage signal -- should be 0): 0 across 0 games
+
+---
+
+## Source: 6d619809-d37a-4284-a565-529b9a85894e.jsonl, mtime 2026-08-13 22:16
+## Measurement: Stop-reason histogram (replay failure buckets), full 1011-game corpus, ranked by count — this appears to be a LATER/larger run than the 112-completed one above (top bucket differs; includes ParserGap entries with card-specific take-cost failures). Header line preceding table: "politics false-skips left UNRECOVERED (the true damage signal -- should be 0): 0 across 0 games". Timestamp 2026-08-08T03:08:06.120Z (jsonl line 52539).
+## Data:
+| count | mean round reached | reason | example |
+|---|---|---|---|
+| 239 | 11.9 | StuckPending: decider # != expected actor #, phase Actions, no pending | 7523357 line 389: Orange discards 1 card |
+| 110 | 13.2 | IllegalMove: Build | 7523818 line 308: Orange builds Air Forces Orange loses 7 military resource |
+| 60 | 13.4 | StuckPending: PlunderSplit choice open for player # but no journal-observed Plunder resolution left to resolve it with | 7523350 line 326: Orange takes Multimedia in hand Orange uses 3 civil action |
+| 52 | 15.8 | IllegalMove: Develop | 7522632 line 400: Green discovers Computers Green loses 8 science |
+| 45 | 18.1 | IllegalMove: PolPass | 7523809 line 368: Orange passes Political Phase |
+| 43 | 12.7 | IllegalMove: Upgrade | 7522645 line 325: Orange upgrades Alchemy to Computers using Urban Growth Orange spends 1 resource |
+| 41 | 12.5 | IllegalMove: WonderStep | 7522652 line 440: Orange builds 4 stages of First Space Flight Orange spends 16 resources; ; Wonder completed; Orange scores 27 culture |
+| 35 | 13.5 | StuckPending: LosePop choice open for player # but no journal-observed destroy line left to resolve it with | 7522635 line 382: Orange upgrades Warrior to Riflemen Orange spends 3 resources |
+| 33 | 10.7 | StuckPending: auction decider # owes a real bid/pass decision (# legal moves) but the upcoming line (Pass) is neither, and more than BidPass is legally available -- not a forced pass | 7523791 line 200: Green passes |
+| 30 | 12.7 | IllegalMove: PlayAction | 7521847 line 350: Purple upgrades Alchemy to Computers using Efficient Upgrade Purple spends 2 resources |
+| 24 | 13.7 | IllegalMove: Pop | 7522616 line 351: Green increases population Green spends 4 food |
+| 22 | 13.6 | IllegalMove: Aggression | 7522630 line 331: Orange plays Armed Intervention against Purple Take up to 7 culture from your rival.; ; Orange uses 2 military action |
+| 21 | 13.1 | IllegalMove: Take | 7523330 line 91: Purple takes Taj Mahal in hand |
+| 15 | 9.9 | IllegalMove: Revolution | 7521520 line 323: Orange revolutions Change government to Republic; 1 science points spent; Green loses 1 science; Orange loses 1 science; Orange scores 3 culture |
+| 15 | 10.2 | UnrecoverableHiddenInfo: unpaired BGO client-side undo ("puts X back in the row" with no matching preceding take) | 7523030 line 185: Purple puts Reserves back in the row Purple gets 1 civil action |
+| 8 | 15.0 | IllegalMove: War | 7522633 line 283: Orange declares War over Culture on Purple ... |
+| 7 | 12.6 | IllegalMove: PlayLeader | 7523043 line 159: Purple elects Napoleon Bonaparte Leonardo Da Vinci dies; Purple gets 1 civil action |
+| 6 | 10.8 | StuckPending: no auto-resolution for pending choice DestroyOwn (decider #, options #) | 7521741 line 242: Purple destroys Bronze |
+| 6 | 13.3 | StuckPending: auction decider # owes a real bid/pass decision (# legal moves) but the upcoming line (Bid) is neither, and more than BidPass is legally available -- not a forced pass | 7523035 line 276: Purple bids 4 |
+| 5 | 8.4 | IllegalMove: Barbarossa | 7522870 line 401: Barbarossa enlists a Warrior; Green spends 3 food; Green spends 1 resource |
+| 5 | 7.6 | IllegalMove: CopyTactic | 7520722 line 215: Green adopts existing tactics I / Medieval Army |
+| 4 | 17.0 | IllegalMove: Destroy | 7523648 line 259: Purple disbands Warrior |
+| 3 | 13.3 | IllegalMove: PlayTactic | 7522875 line 274: Orange sets up new tactics III / Mechanized Army |
+| 3 | 12.0 | StuckPending: Raid choice open for player # but no journal-observed Raid/Terrorism destroy line left to resolve it with | 7522403 line 426: Green discovers Constitutional Monarchy using Breakthrough Green loses 12 science; Green gets 3 science |
+| 3 | 14.3 | IllegalMove: Bid | 7521535 line 2: Orange bids 17 |
+| 2 | 19.0 | ParserGap: Reserves (III)'s take cost per the journal is # civil action(s), but no available row slot reproduces that under this binary's own cost formula | 7523479 line 351 |
+| 2 | 18.0 | ParserGap: Engineering's take cost per the journal is # civil action(s) ... | 7522125 line 345 |
+[remainder of table is ~30 more rows, all count=1, individual ParserGap/UnrecoverableHiddenInfo entries for specific cards (Bill Gates, Civil Service, Urban Growth combos, Bach, Tanks, Internet, Journalism, Rich Land, Satellites, Air Forces, Communism, etc.) each tied to one specific 7-digit game ID and line number — captured in full in the raw transcript at jsonl line 52539 if deeper detail is later needed.]
+
+(Earlier, smaller-sample stop-reason histogram from the SAME corpus at 14/1011 completed, jsonl line 50602, 2026-08-07T10:30:30Z, for comparison — top buckets were different, dominated by simple per-card-type IllegalMove buckets rather than the StuckPending decider-mismatch bucket:)
+| count | mean round reached | reason | example |
+|---|---|---|---|
+| 270 | 11.2 | IllegalMove: Take | 7523818 line 276: Orange takes Mechanized Agriculture in hand Orange uses 2 civil action |
+| 109 | 9.2 | IllegalMove: Pop | 7523357 line 326: Grey increases population Grey spends 3 food |
+| 104 | 10.5 | IllegalMove: Build | 7523355 line 230: Orange builds Religion Orange spends 3 resources |
+| 92 | 9.7 | IllegalMove: WonderStep | 7523791 line 185: Orange builds 1 stage of St. Peter's Basilica Orange spends 4 resources |
+| 88 | 12.2 | StuckPending: decider # != expected actor #, phase Actions, no pending | 7523090 line 219: Purple discards 1 card |
+| 87 | 10.1 | IllegalMove: Upgrade | 7522668 line 164: Purple upgrades Warrior to Swordsmen Purple loses 1 military resource |
+| 52 | 10.6 | IllegalMove: PlayAction | 7522639 line 116: Purple discovers Alchemy using Breakthrough Purple loses 4 science; Purple gets 2 science |
+| 45 | 11.8 | IllegalMove: Develop | 7523347 line 234: Purple discovers Iron Purple loses 5 science |
+| 20 | 10.6 | StuckPending: auction decider owes a real bid/pass decision but upcoming line is neither | 7522536 line 274: Purple passes |
+| 15 | 15.1 | StuckPending: no auto-resolution for pending choice Raid | 7523809 line 244 |
+| 14 | 8.2 | IllegalMove: Aggression | 7521853 line 313 |
+| 9 | 14.7 | StuckPending: no auto-resolution for pending choice TakeRow | 7523592 line 263 |
+| 7 | 5.4 | IllegalMove: Revolution | 7523662 line 36 |
+| 6 | 6.3 | UnrecoverableHiddenInfo: unpaired BGO client-side undo | 7523665 line 72 |
+| 6 | 6.2 | UnrecoverableHiddenInfo: build cost mismatch for Warriors | 7523070 line 143 |
+| 5 | 8.2 | IllegalMove: PlayLeader | 7523043 line 159 |
+| 5 | 8.8 | UnrecoverableHiddenInfo: build cost mismatch for Printing Press | 7521724 line 157 |
+| 5 | 6.6 | IllegalMove: Barbarossa | 7521729 line 210 |
+| 4 | 7.8 | IllegalMove: CopyTactic | 7521491 line 186 |
+| 4 | 13.5 | IllegalMove: Bid | 7523353 line 344 |
+| 4 | 15.2 | StuckPending: no auto-resolution for pending choice FlipWonder | 7523614 line 330 |
+| 4 | 5.8 | UnrecoverableHiddenInfo: build cost mismatch for Philosophy | 7522512 line 95 |
+| 4 | 11.0 | StuckPending: no auto-resolution for pending choice DestroyOwn | 7521741 line 242 |
+| 4 | 13.2 | StuckPending: no auto-resolution for pending choice LosePop | 7522638 line 314 |
+| 4 | 6.8 | UnrecoverableHiddenInfo: build cost mismatch for Knights | 7521894 line 269 |
+
+---
+
+## Source: 6d619809-d37a-4284-a565-529b9a85894e.jsonl, mtime 2026-08-13 22:16
+## Measurement: Training-league gauntlet win-rates per arm (2p/3p/4p), latest results at time queried (2026-08-12T13:48:38Z), read from rust_league_{2,3,4}p.log via `grep 'gauntlet=' ... | tail -1`. Bracketed values are win-rate (0-1) of the named champion/opponent-weight-set vs the current arm; trailing JSON objects are separate "scatter"/"rescale"/"group" perturbation-move records with share/lo/n fields.
+## Data:
+[jsonl line 58601]
+=== 2p last gauntlet ===
+[champion_2p_gen1454_140key_2026-08-06=0.717
+champion_3p_gen1384_140key_2026-08-06=0.550
+champion_4p_gen448_140key_2026-08-06=0.842
+champion_2p_gen19554_140key_2026-08-08=0.700
+champion_3p_gen12364_140key_2026-08-08=0.642
+champion_4p_gen4034_140key_2026-08-08=0.850
+human_weights=1.000] pool=[champion_4p_gen4034_140key_2026-08-08=0.817
+gen36280=0.500/0.600
+champion_2p_gen1454_140key_2026-08-06=0.733/0.733
+gen36280(confirm)=0.538/0.518]
+{"op":"scatter","moved":39,"share":0.5583,"lo":0.5099,"n":120}
+{"op":"scatter","moved":39,"share":0.4948,"lo":0.4476,"n":96}
+
+=== 3p last gauntlet ===
+[champion_2p_gen1454_140key_2026-08-06=0.100
+champion_3p_gen1384_140key_2026-08-06=0.383
+champion_4p_gen448_140key_2026-08-06=0.408
+champion_2p_gen19554_140key_2026-08-08=0.500
+champion_3p_gen12364_140key_2026-08-08=0.217
+champion_4p_gen4034_140key_2026-08-08=0.283
+human_weights=0.850]
+{"op":"rescale:targeting","moved":3,"share":0.3333,"lo":0.3333,"n":48}
+{"op":"scatter","moved":39,"share":0.3125,"lo":0.2399,"n":48}
+
+=== 4p last gauntlet ===
+[champion_2p_gen1454_140key_2026-08-06=0.367
+champion_3p_gen1384_140key_2026-08-06=0.267
+champion_4p_gen448_140key_2026-08-06=0.317
+champion_2p_gen19554_140key_2026-08-08=0.417
+champion_3p_gen12364_140key_2026-08-08=0.208
+champion_4p_gen4034_140key_2026-08-08=0.433
+human_weights=0.967]
+{"op":"rescale:board","moved":10,"share":0.2292,"lo":0.1815,"n":48}
+{"op":"group:economy+military","moved":45,"share":0.1250,"lo":0.0156,"n":24}
+
+---
+
+## Source: 6d619809-d37a-4284-a565-529b9a85894e.jsonl, mtime 2026-08-13 22:16
+## Measurement: Training-league A/B duel telemetry samples (routine background monitor pings, NOT a single comprehensive table — there are 1351 "win rate" occurrences across the transcript; these are two representative samples). Format: candidate vs incumbent @Nplayers: win rate X% +/- CI (null Y%, p=..., n=games) culture A vs B [duration].
+## Data:
+[jsonl line ~2440]
+win rate 9.7%  ... win rate 39.8% ... (early-session duel pair, insufficient context captured to label arms reliably -- raw only)
+
+[jsonl line 3491, timestamp 2026-07-27T01:46:13.293Z, task-notification "horizon A/B duel results"]
+def_new.json vs def_old.json @2p: win rate 45.6% +/- 4.9% (null 50.0%, p=0.0782, n=400) culture 102 vs 107 [62.5s]
+ch2p_new.json vs ch2p_old.json @2p: win rate 49.6% +/- 4.9% (null 50.0%, p=0.8805, n=400) culture 109 vs 109 [92.0s]
+def_new.json vs def_old.json @4p: win rate 29.5% +/- 4.4% (null 25.0%, p=0.0474, n=400) culture 144 vs 127 [194.0s]
+
+---
+
+## Source: 6d619809-d37a-4284-a565-529b9a85894e.jsonl, mtime 2026-08-13 22:16
+## Measurement: Specific weight-credit / feature-blind-spot numbers cited in assistant narrative when dispatching a "coverage audit" subagent (jsonl line 3671, part of a longer planning message, not a table but concrete numbers referenced as prior findings).
+## Data:
+"the 2p weight-credit run scored `colonies` at a mean edge of −0.0007, i.e. no detectable effect on winning at all."
+"the 2p champion carries a `strength_lead` weight of 6.392 that can never fire because `unit_workers` is pinned at 0.000."
+"Meanwhile the three arms keep training — 2p at 332 generations, 3p and 4p just past their clean restart on the new feature scale." [narrative status, not exact per-arm generation counts for 3p/4p]
+
+---
+
+## NOTES ON WHAT WAS SEARCHED BUT NOT INCLUDED (false positives / not real data)
+- `n_score_checked`/`score_check`/`n_score_exact` keyword hits at jsonl lines 68206-68342 (near end of file) were mostly Rust source-code definitions (the `MismatchKind` enum, `replaystats.rs` doc comments) surfaced via grep tool calls, or background-agent-dispatch prompts/launch acknowledgements with NO result data yet returned (the file ends mid-run with a shell error "No space left on device" at line 68342 — the background agents' actual results were never captured in this transcript).
+- Many hundreds of "census"/"gauntlet"/"win rate" hits are routine recurring training-monitor telemetry (background `task-notification` pings, `queue-operation` entries) rather than one-off analytical result tables; cataloguing all ~1351 "win rate" occurrences was out of scope/budget — two representative samples included above.
+- A "legal-vs-taken census" per mechanic (2p/3p/4p) was explicitly commissioned via a background subagent (agentId a0614c2bd72eff4e8, task "Audit underused mechanics and colonies") but its actual output/report table was not found materialized in this transcript (only the dispatch prompt and periodic status-check tool calls were present within grep budget); the subagent's full transcript lives in a separate `.output` file not accessible from this session's jsonl.
+- A card-by-card "times legal / times taken / times played / times reached end-of-game scoring" audit was likewise commissioned (jsonl ~line 13181) but its result table was not located within budget.

@@ -1,0 +1,13 @@
+policy       MineFirst
+games        1000 (500 deals x 2 seats)
+champion     /private/tmp/rowdig/frozen_champion_2p.json
+elapsed      42.8s  (23.4 games/s)
+
+win rate     52.4%  +/- 2.8   (null 50.0%)   p = 0.0955
+             [naive +/- 3.1, rho -0.16, deff 0.84, 500 deals]
+
+mine      achieved 100.0%  (1000/1000)   forced-decisions 1000   fallthrough-decisions 0   fallthrough-rate 0.0%
+leader    achieved  49.9%  (499/1000)   forced-decisions 0   fallthrough-decisions 0   fallthrough-rate 0.0%
+military  achieved  57.4%  (574/1000)   forced-decisions 0   fallthrough-decisions 0   fallthrough-rate 0.0%
+
+verdict      inconclusive -- the interval straddles 50%

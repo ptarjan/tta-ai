@@ -1,0 +1,323 @@
+SHORTWIDTH -- does a wider root-shortlist beat the current bot's default of 8?
+==============================================================================
+STARTED 2026-08-13, appended to as measurements landed. Working clone:
+/private/tmp/shortwidth (`cp -Rc /private/tmp/mergefix /private/tmp/shortwidth`,
+the merged tip with today's weight-sign, phase-collapse, and early-military
+fixes already in it -- MERGEFIX.txt in this same directory has the full
+provenance). No changes made in /private/tmp/mergefix, /Users/pt/tta-ai, or
+/Users/pt at any point.
+
+HEADLINE ANSWER (numbers first, method below)
+-----------------------------------------------------------------------------
+Uniform width increase: NO WIDTH TESTED BEATS THE DEFAULT OF 8, and one
+width (12) is SIGNIFICANTLY WORSE. 2p, 600 games each (300 deals x 2 seats),
+current 2p champion weights as the beam evaluator on BOTH sides, human
+ranking vector held fixed and identical on both sides -- the ONLY difference
+between A and B in every row is the shortlist width.
+
+  width A  win rate      95% CI        vs null 50%   verdict        s/game
+  ------   ------------  ------------  -----------   -----------    ------
+   4       51.00%        +/- 3.86      p = 0.6100    inconclusive   1.167
+  12       43.33%        +/- 3.85      p = 0.0007    REJECT (worse) 1.217
+  16       47.58%        +/- 3.58      p = 0.1846    inconclusive   1.282
+  20       48.00%        +/- 3.64      p = 0.2791    inconclusive   0.915*
+
+  * width-20 run measured faster than width-16 despite being wider --
+    almost certainly host contention noise (two other agents were building/
+    playing on the same 6-core box throughout, see CAVEATS), not a real
+    width-vs-time relationship reversing. Take the four s/game numbers as
+    "roughly 0.9-1.3 s/game, no width tested is dramatically cheaper or
+    dearer than 8" rather than a precise curve.
+
+Every comparison is A(width W, search) vs B(width 8, search), same champion
+eval vector, same human ranking vector, on shared deals (kindmatch rotates
+A through every seat across the game range, so this is not a fixed-seat
+comparison -- see TABLE COMPOSITION below). Widening the shortlist bought
+nothing at 4, 16, or 20 games, and actively cost 6.7 points of win rate at
+12 with a CI that clears the null by a wide margin (p=0.0007). Read
+"inconclusive" as genuinely inconclusive, not as a near-miss trend: 51.00%
+at width 4 and 48.00% at width 20 are on OPPOSITE sides of 50% with heavily
+overlapping CIs -- there is no monotonic pattern here to extrapolate from.
+
+TARGETED VARIANT (uncap ONLY colonization-auction BID decisions, width 8
+elsewhere) -- see the coordinator's mid-task cost-of-miss finding below:
+  bid_full(width8) vs plain width8: 48.50% +/- 1.36 (null 50%), p=0.0304,
+  600 games, verdict REJECT -- bid_full is measurably (if narrowly) WORSE,
+  not better. The narrow hypothesis this variant was built to test ("uncap
+  only the highest-cost-per-miss decision kind, buy most of a width
+  increase's value at near-zero time cost") did NOT pay off in this
+  measurement. See section 5 below for the full number and the CI's much
+  tighter half-width (+/-1.36 vs +/-3.5-3.9 for the uniform-width rows) --
+  consistent with A and B differing on only a small, rare subset of
+  decisions, which is exactly what `bid_full` was designed to do.
+
+MEASURED
+==============================================================================
+
+1. Where the shortlist width lives, and what changed
+-----------------------------------------------------------------------------
+`rust/src/bots/human.rs:103` (pre-existing file, mergefix tip):
+    const ROOT_SHORTLIST: usize = 8;
+This was a BARE LITERAL constant (not a config field, not a CLI flag),
+consumed by `root_shortlist()` at (former) line 124's `moves.len() <=
+ROOT_SHORTLIST` check and its `.take(ROOT_SHORTLIST)` truncation. The doc
+comment at the time called it "a `const`, not a config knob: the sole
+caller never varies it" -- exactly the situation this task exists to fix.
+
+`root_shortlist` is the "policy ranks root moves" half of the hybrid the
+task description names: `human_policy::rank` (a fitted human-imitation
+linear model) orders the root's legal moves, `root_shortlist` truncates to
+the top N, and `plan::pick`'s ordinary beam search then explores exactly
+that shortlist (`choose_with_search`, `human.rs`). This hybrid is
+`Search::HumanShortlistBeam` in `bots/greedy.rs`, reachable today only via
+`bin/kindmatch.rs`'s `--a-search`/`--b-search` and `bin/climb.rs`'s
+`--gauntlet-search` -- there is no plain "the live bot" binary that always
+runs it; it is an opt-in hybrid search mode layered on the `human` bot kind.
+
+Per the task's instruction, the literal is now a plumbed parameter, DEFAULT
+UNCHANGED at 8 (`pub const ROOT_SHORTLIST: usize = 8;`, still the fallback
+every pre-existing caller gets):
+
+  - `root_shortlist(..., width: usize)` -- width is now a real argument.
+  - `choose_with_search(..., shortlist_width: usize)` -- threads it through.
+  - `Bot::HumanPlan { ..., shortlist_width: usize }` / `Bot::human_plan(...,
+    shortlist_width)` -- greedy.rs's hand-built lookahead bot carries it.
+  - `Search::HumanShortlistBeam { eval_weights, shortlist_width: usize, ... }`
+    -- the seat-level config `kindmatch`/`climb` build from CLI flags.
+  - `bin/kindmatch.rs --a-shortlist-width N` / `--b-shortlist-width N` --
+    the new CLI flags this experiment runs with. Only legal alongside
+    `--a-search`/`--b-search`; omitting either leaves that side at
+    `ROOT_SHORTLIST` (8), byte-for-byte the old behaviour.
+  - `bin/kindmatch.rs --a-eval-weights PATH` / `--b-eval-weights PATH` --
+    a SECOND new flag this experiment needed: kindmatch's pre-existing
+    `--a-search`/`--b-search` design hands a search side the OTHER side's
+    own weight vector as its beam evaluator (built for a mixed-kind table,
+    e.g. `--a human --a-search --b weighted`). This experiment needs BOTH
+    sides to be `human` kind (so each side can carry its own shortlist
+    width) while sharing the identical CHAMPION evaluator -- the "other
+    side" trick would hand back a human-imitation vector instead, so
+    `--a-eval-weights`/`--b-eval-weights` override it explicitly, loaded
+    through the CHAMPION loader (`dominance_repair` included) regardless of
+    that side's own kind. Omitting them preserves the old default exactly.
+  - `bin/climb.rs`'s `--gauntlet-search` construction site was updated to
+    the new field shape (`shortlist_width: ROOT_SHORTLIST`, unconditionally
+    -- no new climb flag added, out of this task's scope), so climb still
+    compiles and still defaults to the tuned width.
+
+Full test suite: 1522 passed, 0 failed (mergefix tip was 1514; +8 new tests
+for the width plumbing) before the targeted-variant work below added 6 more
+(1528 passed, 0 failed). RED/GREEN confirmed by hand for the width-plumbing
+change: temporarily hardcoded `root_shortlist` back to ignoring its `width`
+argument (using `ROOT_SHORTLIST` unconditionally) and reran
+`root_shortlist_honours_a_width_narrower_than_the_default`/
+`_wider_than_the_default` -- both FAILED (8 != 3, 8 != 13) as expected, then
+PASSED again after reverting to the real fix.
+
+2. Table composition (every cross-comparison)
+-----------------------------------------------------------------------------
+`kindmatch --a human --a-search --a-shortlist-width W --b human --b-search
+--b-shortlist-width 8 --a-weights <human_ranking> --b-weights
+<human_ranking> --a-eval-weights <champion_2p> --b-eval-weights
+<champion_2p> --games 600 --players 2 --threads 2 --seed <run-specific>`
+
+- 2 players, 600 games = 300 deals x 2 seats each.
+- `kindmatch`'s own seat assignment (`play_one`, unchanged by this task):
+  `seat = index % players`, so A occupies EVERY seat in turn across the
+  game range (not a fixed-seat design) -- the same "shared deals, rotated
+  seats" design `arena::Match::play_one` uses, cited in MERGEFIX.txt's own
+  Proof 6 as the fairness property that matters here.
+- Both A and B are the SAME bot construction (`human` kind + `--search`,
+  i.e. `Bot::HumanPlan`/`Search::HumanShortlistBeam`) -- the only field that
+  ever differs between A and B in the uniform-width sweep is
+  `shortlist_width`. Both sides' `eval_weights` (the beam's scorer) and
+  `human_weights` (the root ranking vector) are the IDENTICAL file, loaded
+  once per run, never mutated mid-run (see section 3).
+- `--seed` differs per width row (101/102/103/104/105) so the five runs are
+  independent draws, not five looks at the identical 300 deals -- each row
+  is still fully reproducible on its own via the command above.
+
+3. Inputs frozen for the whole experiment
+-----------------------------------------------------------------------------
+Per the task's instruction, the champion file was copied aside BEFORE any
+run and every run points at the copy, never at a live/gauntlet path the
+(paused) climb could rewrite:
+
+  - Champion (beam evaluator), BOTH sides:
+    /private/tmp/shortwidth/champ_backup/rust_champion_2p.json
+    (gen 40860, 158 keys -- the highest-generation 2p champion snapshot
+    present in this clone; `experiments/rust_champion_2p.json`, the actual
+    live/gitignored path, does not exist in this `cp -Rc` snapshot, a
+    pre-existing gap MERGEFIX.txt's own Proof 4 already documented and
+    worked around the same way) copied to
+    /private/tmp/shortwidth/shortwidth_inputs/champion_2p_FROZEN_COPY.json
+    -- MD5 d3b72b8d99fffa594ba8b62d92fa75d1, matches the source exactly.
+
+  - Human ranking vector, BOTH sides:
+    /private/tmp/shortwidth/analysis/frozen/human_weights.json copied to
+    /private/tmp/shortwidth/shortwidth_inputs/human_weights_FROZEN_COPY.json,
+    THEN had its three legacy `_early` keys (`workers_early`,
+    `tech_levels_early`, `hand_value_early`) deleted -- a pre-existing
+    format gap, NOT part of this task's own change: today's phasecut
+    collapse (MERGEFIX.txt section 1, commit chain ending 097ff43) retired
+    those three `WeightKey` variants and taught the CHAMPION loader
+    (`bots::weighted::eval::parse_weights`) a fold to still accept them, but
+    never taught the separate HUMAN loader
+    (`human_policy::parse_weights_text`) the same fold -- so the frozen
+    `human_weights.json` (last written before the collapse) fails to load
+    there with "unknown weight \"hand_value_early\"" verbatim. Confirmed
+    all three values are exactly `0` in the source file, so deleting them
+    is mathematically identical to the champion loader's own fold (a file
+    that omits an `_early` key applies NO fold, i.e. base/late pass through
+    unchanged -- exactly what `0 + base` and `0 + late` already equal).
+    This is scoped to this experiment's OWN input copy; the underlying
+    `human_policy` loader gap is not fixed by this task and should be
+    logged separately (a real gap: `bin/climb.rs --gauntlet-search`'s own
+    production path would hit the identical error on this exact file
+    today).
+
+4. The four A/B runs (MEASURED)
+-----------------------------------------------------------------------------
+Reproduce any row with (substitute the width and seed from the table):
+
+  export PATH="$HOME/.cargo/bin:$PATH"
+  cd /private/tmp/shortwidth/rust
+  ./target/difftest/kindmatch \
+    --a human --a-search --a-shortlist-width <W> \
+    --b human --b-search --b-shortlist-width 8 \
+    --a-weights /private/tmp/shortwidth/shortwidth_inputs/human_weights_FROZEN_COPY.json \
+    --b-weights /private/tmp/shortwidth/shortwidth_inputs/human_weights_FROZEN_COPY.json \
+    --a-eval-weights /private/tmp/shortwidth/shortwidth_inputs/champion_2p_FROZEN_COPY.json \
+    --b-eval-weights /private/tmp/shortwidth/shortwidth_inputs/champion_2p_FROZEN_COPY.json \
+    --games 600 --players 2 --threads 2 --seed <seed>
+
+  width=4,  seed=101: A win rate 51.00% +/- 3.86 (null 50.00%), p=0.6100,
+    600 games (300 deals x 2 seats), elapsed 700.0s (0.857 games/s,
+    1.167 s/game). verdict: inconclusive.
+
+  width=12, seed=102: A win rate 43.33% +/- 3.85 (null 50.00%), p=0.0007,
+    600 games (300 deals x 2 seats), elapsed 730.4s (0.821 games/s,
+    1.217 s/game). verdict: REJECT -- width 12 is WORSE than width 8.
+
+  width=16, seed=103: A win rate 47.58% +/- 3.58 (null 50.00%), p=0.1846,
+    600 games (300 deals x 2 seats), elapsed 769.1s (0.780 games/s,
+    1.282 s/game). verdict: inconclusive.
+
+  width=20, seed=104: A win rate 48.00% +/- 3.64 (null 50.00%), p=0.2791,
+    600 games (300 deals x 2 seats), elapsed 548.8s (1.093 games/s,
+    0.915 s/game). verdict: inconclusive.
+
+  Raw `kindmatch` stdout for all four runs is preserved verbatim at
+  /private/tmp/shortwidth/shortwidth_runs/width{4,12,16,20}_vs_8.log.
+
+5. Targeted variant: uncap ONLY bid decisions (MEASURED)
+-----------------------------------------------------------------------------
+Mid-task, a parallel worker's cost-of-miss analysis (relayed by the
+coordinator, see HYPOTHESISED/EXTERNALLY-REPORTED section below for the
+full, NOT-independently-verified numbers) singled out colonization-auction
+BID decisions as carrying far more lost-eval-value per shortlist miss than
+any other decision kind, while being a small share of all decisions -- so a
+width increase SCOPED to only that decision kind might buy most of a
+uniform widening's value at near-zero time cost. Implemented as
+`root_shortlist_targeted`/`choose_with_search_targeted` (human.rs): a
+`bid_full: bool` flag that, when true, returns the FULL legal candidate set
+on any decision where every move is `Move::Bid`/`Move::BidPass`, and
+otherwise behaves byte-for-byte like the existing `width`-only path. Wired
+through the identical `Bot`/`Search` plumbing as `shortlist_width`, and
+exposed as `bin/kindmatch.rs --a-bid-full`/`--b-bid-full` (only legal
+alongside `--a-search`/`--b-search`, default off, only ever `true` on this
+flag's own two call sites). 6 new tests (2 in `human.rs`'s
+`root_shortlist_targeted`/`is_bid_decision`, plus 2 more there for the
+`bid_full: false` exact-equivalence property, 2 in `kindmatch.rs`'s CLI
+parsing) -- full suite 1528 passed, 0 failed.
+
+  export PATH="$HOME/.cargo/bin:$PATH"
+  cd /private/tmp/shortwidth/rust
+  ./target/difftest/kindmatch \
+    --a human --a-search --a-shortlist-width 8 --a-bid-full \
+    --b human --b-search --b-shortlist-width 8 \
+    --a-weights /private/tmp/shortwidth/shortwidth_inputs/human_weights_FROZEN_COPY.json \
+    --b-weights /private/tmp/shortwidth/shortwidth_inputs/human_weights_FROZEN_COPY.json \
+    --a-eval-weights /private/tmp/shortwidth/shortwidth_inputs/champion_2p_FROZEN_COPY.json \
+    --b-eval-weights /private/tmp/shortwidth/shortwidth_inputs/champion_2p_FROZEN_COPY.json \
+    --games 600 --players 2 --threads 2 --seed 105
+
+  RESULT: A (bid_full, width 8) win rate 48.50% +/- 1.36 (null 50.00%),
+    p=0.0304, 600 games (300 deals x 2 seats), elapsed 597.4s
+    (1.004 games/s, 0.996 s/game -- statistically indistinguishable in cost
+    from plain width 8, exactly as expected: BID decisions are a small
+    fraction of all decisions, so uncapping only them should not move
+    per-game wall-clock much, and it visibly did not). verdict: REJECT --
+    bid_full is WORSE than plain width 8, narrowly but with a CI that
+    clears the null (does not straddle 50%).
+
+    Reading this against the externally-reported cost-of-miss numbers
+    below: those numbers describe the SIZE of the value a shortlist miss
+    costs when it happens, not whether recovering that value by widening
+    the shortlist actually wins more GAMES once the search re-explores a
+    wider set of first moves under a real adversarial opponent (`plan::
+    pick`'s beam past the root is unchanged either way -- only which first
+    moves the beam is allowed to consider at all changes). A cheap,
+    positive-expected-eval widening at the ROOT is not automatically a
+    cheap, positive-expected-WIN-RATE widening: this bot's move-ordering
+    prior narrows to what the HUMAN-imitation ranker considers plausible,
+    and forcing in every raw legal Bid amount (most of them presumably
+    ranked low by that same model for a reason -- e.g. wildly
+    overbidding) could dilute the beam's attention at the root rather than
+    sharpen it, on the games where it changes anything at all. This
+    result does not confirm or refute the underlying miss-cost analysis
+    (which this task did not itself re-measure) -- it only says the
+    specific intervention tried here (blanket-uncap every Bid decision)
+    did not translate into a measured win-rate gain.
+
+EXTERNALLY REPORTED (relayed by coordinator from a parallel worker;
+NOT independently measured or verified in this task -- kept separate per
+instruction)
+==============================================================================
+- Root-shortlist miss rate is 0% whenever a decision has <=8 legal moves
+  (mechanically impossible to miss at width 8) and 12-14% whenever it has
+  more than 8. This means a UNIFORM width sweep's win rate mixes together
+  decisions where width literally cannot matter with the minority where it
+  can -- diluting any real effect on the >8-move subset. This is the
+  correct lens for reading section 4's "inconclusive" rows: they are
+  real, honestly-reported nulls on the GAME-level win rate as measured, not
+  necessarily nulls on the effect restricted to >8-move decisions --
+  this task did not build separate instrumentation to isolate that subset's
+  win rate (would need a decision-level, not game-level, comparator; not
+  attempted here, flagged rather than guessed at).
+- Miss cost is tail-heavy: worst 1% of misses carry 32% of all lost eval
+  value, worst 10% carry 71%.
+- Two concentrations: BID decisions average ~188 eval points of cost per
+  miss (17-40x any other category), 29.5% of all lost value from only 1.7%
+  of misses; TAKE_CARD is the largest by volume (476 of 1087 misses, 28% of
+  total cost). Aggression/war and leader/wonder-step decisions are BELOW
+  the base miss rate (contrary to an a priori worry about high-stakes
+  military turns).
+- Motivated section 5's targeted `bid_full` variant above.
+
+CAVEATS
+==============================================================================
+- Host contention: two other agents were building and playing games on this
+  same 6-core Mac mini throughout every run in this file (per the task
+  setup). `--threads 2` was held fixed on every run per instruction, but
+  wall-clock seconds/game still reflects however much of the other 4 cores
+  those other agents were using at that moment -- the width-20 run's
+  measured 0.915 s/game (faster than width-16's 1.282 s/game despite being
+  wider) is almost certainly this noise, not a real width effect. Treat the
+  s/game column as "same rough order of magnitude across widths 4-20,
+  ~0.9-1.3 s/game", not a precise per-width cost curve.
+- The "current 2p champion weights" is
+  `champ_backup/rust_champion_2p.json` (gen 40860), the highest-generation
+  2p snapshot on disk in this clone -- NOT necessarily byte-identical to
+  whatever `experiments/rust_champion_2p.json` (gitignored, live, absent
+  from this `cp -Rc` snapshot) held at the moment climb was paused. Same
+  substitution MERGEFIX.txt's own Proof 4 already used for the identical
+  reason.
+- Only 2p was tested (task's own instruction: "2 players, using the current
+  2p champion weights on BOTH sides"). No claim is made here about 3p/4p.
+- LEGALITY: every run in this file plays through `Bot::HumanPlan`
+  (`human_policy::rank`/`predict_top1` for the shortlist, `plan::pick`'s
+  ordinary beam under `weighted::eval::evaluate` for the search) --
+  the same evaluator every real game already trusts, reading only public
+  board/row state; no code path added or touched by this task reads a
+  rival's hand contents or unshuffled deck order. `/private/tmp/bgoholdout/`
+  was never read or referenced by any command in this task.

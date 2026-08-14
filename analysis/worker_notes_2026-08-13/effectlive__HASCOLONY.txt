@@ -1,0 +1,197 @@
+HASCOLONY: WeightKey::HasColony feature addition
+==================================================
+Scratch clone: /private/tmp/hascolony (copied from /private/tmp/colonysign via
+`cp -Rc`, preserving rust/target). All work done under
+/private/tmp/hascolony/rust. Nothing outside /private/tmp/hascolony was
+touched; no git command was ever run outside this tree.
+
+WHAT WAS ADDED
+--------------
+A new boolean WeightKey, HasColony, mirroring WeightKey::HasUnit's shape
+exactly: 0.0 with zero colonies, 1.0 with one or more. It is a cliff, not a
+slope, priced separately from the existing linear Colonies count. Left
+Free (no sign_intent declared) per instructions -- the direction is
+genuinely unknown and must be climbed, and a sign declaration here would
+repeat the mistake just reverted in commit 52c3615 ("Revert 'Classify
+Colonies as NonNegative...'"), which is HEAD~1 in this tree. Colonies
+itself (computation, default, classification) was NOT touched.
+
+Citation for the cliff: RULES_SPEC.md line 123 (section 5.4) -- Annex
+prints "one opponent who owns at least one colony" as its target clause,
+and rust/src/legal.rs's aggression_target_qualifies (line 170) gates it on
+q.colonies.is_empty(). That is the one fact about holding a colony that was
+priced nowhere before this change; every other colony benefit already
+flows into other priced coordinates (production/culture/science/strength)
+or EventScoringMargin.
+
+FILES CHANGED (all under rust/src/)
+------------------------------------
+rust/src/bots/weighted/weights.rs
+  - line 143: new enum variant `HasColony` (inserted right after Colonies).
+  - lines 562-573: weight_key_table! entry `HasColony => "has_colony", 0.0;`
+    with doc comment citing RULES_SPEC 5.4 / legal.rs, seeded at 0.0 like
+    HasUnit.
+  - lines 903-906 (impl WeightKey::group): added `HasColony` into the
+    Military WeightGroup arm alongside Colonies/HasUnit/Pacts/etc.
+  - line 1133 (impl WeightKey::sign_intent): added `HasColony` into the
+    Free arm alongside Colonies/HasUnit -- NOT given a sign.
+  - No test edits were needed inside weights.rs itself: the round-trip/
+    name-coverage tests already there are macro-generated off
+    WeightKey::ALL and pick up HasColony automatically. The four
+    behavioral tests for this feature live in features.rs (3) and
+    legal.rs (1), listed below.
+
+rust/src/bots/weighted/features.rs
+  - lines 558-562: feature computation,
+    `f.set(WeightKey::HasColony, if p.colonies.is_empty() { 0.0 } else { 1.0 });`
+    placed directly after the existing `Colonies` line, with a doc comment
+    citing legal.rs's aggression_target_qualifies as the ground truth.
+  - lines 911-957 (new): three tests in the existing `mod tests` block:
+      has_colony_is_zero_with_no_colonies
+      has_colony_flips_to_one_with_the_first_colony
+      has_colony_stays_one_with_several_colonies_it_is_a_cliff_not_a_count
+
+rust/src/legal.rs
+  - lines 1472-1511 (approx, inside `mod tests`): one new test,
+    has_colony_feature_agrees_with_annex_targeting_legality, placed in
+    legal.rs (not features.rs) because it needs the module-private
+    `politics_moves`/`attacker_ready_to_win`/`one_player_state` test
+    helpers that already anchor the existing
+    annex_is_not_offered_against_a_target_with_no_colony /
+    annex_is_offered_against_a_target_holding_a_colony tests, which are the
+    ground truth this new test cross-checks the feature against (calls
+    crate::bots::weighted::features::features directly rather than
+    re-deriving the boolean locally).
+
+EXHAUSTIVE-MATCH DISCIPLINE -- VERIFIED, NO LATENT DEFECT
+-----------------------------------------------------------
+Adding the WeightKey::HasColony variant forced compiler errors (before I
+fixed them) at exactly two match sites: `WeightKey::group()` and
+`WeightKey::sign_intent()`, both in weights.rs, both `match self { ... }`
+with no wildcard arm -- exactly as expected. After fixing both, the crate
+builds clean.
+
+I searched separately for any `_ =>` arm anywhere in weights.rs/features.rs
+that might have silently swallowed the new variant without erroring:
+  - weights.rs has three `_ => panic!(...)` arms (WeightKey::early/late/
+    trailing) -- these are intentional runtime guards for keys with no
+    early/late/trailing partner, not silent defaults; HasColony (like
+    Colonies and HasUnit) simply has no such partner and was never meant to
+    appear there.
+  - features.rs has two `_ => {}` arms, both on `match kind` where
+    `kind: CardType` -- unrelated to WeightKey entirely.
+No latent wildcard defect found; the exhaustive-match discipline holds.
+
+TESTS: RED THEN GREEN
+----------------------
+Confirmed RED by temporarily removing the `f.set(WeightKey::HasColony, ...)`
+call in features.rs (falling back to the declared 0.0 default) and
+re-running `cargo test --profile difftest has_colony`. Exact failure text
+observed:
+
+  thread 'bots::weighted::features::tests::has_colony_flips_to_one_with_the_first_colony' panicked at src/bots/weighted/features.rs:938:9:
+  assertion `left == right` failed: has_colony must flip to 1.0 the instant any colony is owned
+    left: 0.0
+   right: 1.0
+
+  thread 'legal::tests::has_colony_feature_agrees_with_annex_targeting_legality' panicked at src/legal.rs:1500:9:
+  assertion `left == right` failed: target 1 now owns a colony
+    left: 0.0
+   right: 1.0
+
+  thread 'bots::weighted::features::tests::has_colony_stays_one_with_several_colonies_it_is_a_cliff_not_a_count' panicked at src/bots/weighted/features.rs:956:9:
+  assertion `left == right` failed: has_colony must stay at 1.0, not climb to 3.0, with a third colony
+    left: 0.0
+   right: 1.0
+
+  test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 1321 filtered out
+
+(The 4th test, has_colony_is_zero_with_no_colonies, trivially passed even
+without the fix -- it asserts the ZERO baseline, which coincides with the
+unset default. That's expected and does not weaken the RED evidence for
+the other three, which cover the actually load-bearing behavior.)
+
+Restored the fix; re-ran `cargo test --profile difftest has_colony`:
+  running 4 tests
+  test bots::weighted::features::tests::has_colony_stays_one_with_several_colonies_it_is_a_cliff_not_a_count ... ok
+  test bots::weighted::features::tests::has_colony_flips_to_one_with_the_first_colony ... ok
+  test bots::weighted::features::tests::has_colony_is_zero_with_no_colonies ... ok
+  test legal::tests::has_colony_feature_agrees_with_annex_targeting_legality ... ok
+  test result: ok. 4 passed; 0 failed
+
+FULL TEST SUITE
+-----------------
+`cargo test --profile difftest` (whole workspace, all binaries + lib):
+main lib test target: 1325 passed; 0 failed; 0 ignored (was 1321 before
+this change; +4 new tests, all passing). Every other test binary in the
+workspace: 0 failed across the board (1 pre-existing ignored test,
+unrelated to this change). Ran the full suite twice (once right after
+implementing, once again after removing the temporary compatibility-probe
+test below) -- identical all-green result both times.
+
+WEIGHTKEY::ALL LENGTH
+------------------------
+157 (was 156 before this change, +1 for HasColony). Verified by counting
+`weight_key_table!` entries directly (grep -c on the `Variant => "name",
+default;` line shape) and cross-checked implicitly by every ALL-length-
+dependent test in weights.rs (e.g. the round-trip/name tests keyed off
+WeightKey::ALL.len()) passing in the full suite run above.
+
+COMPATIBILITY CHECK -- WEIGHT JSON FILES
+-------------------------------------------
+FINDING: the exact paths named in the task,
+  experiments/rust_champion_2p.json
+  experiments/rust_champion_3p.json
+  experiments/rust_champion_4p.json
+do NOT exist in this repo snapshot. `experiments/` contains only
+`frozen/champion_{2,3,4}p_strengthcheck.json`, `deploy/`, and two shell
+scripts. The champion vectors with those exact base names instead live at
+  champ_backup/rust_champion_2p.json
+  champ_backup/rust_champion_3p.json
+  champ_backup/rust_champion_4p.json
+I loaded those as the closest match to what the task evidently meant (same
+filenames, different directory), plus the frozen file exactly as named:
+  analysis/frozen/human_weights.json
+via a temporary #[test] added to rust/src/bots/weighted/eval.rs's test
+module (calling the same `load_weights` the production loaders use),
+run once, and then removed (not part of the committed diff -- confirmed
+via `git diff --stat` showing only weights.rs/features.rs/legal.rs
+changed).
+
+Result -- all four loaded with NO error, and all four picked up the
+correct default (0.0, i.e. "no colony") for the new key, since none of
+them mention `has_colony`:
+  OK: champ_backup/rust_champion_2p.json -> has_colony=0
+  OK: champ_backup/rust_champion_3p.json -> has_colony=0
+  OK: champ_backup/rust_champion_4p.json -> has_colony=0
+  OK: analysis/frozen/human_weights.json -> has_colony=0
+
+analysis/frozen/human_weights.json was only ever READ, never rewritten --
+confirmed by `git diff --stat` / `git status --short` showing no
+modification to any file under analysis/frozen/.
+
+THINGS I WAS UNSURE ABOUT / DID NOT DO
+-----------------------------------------
+- The task's four named weight-file paths don't exist as given; I used the
+  same-named files in champ_backup/ instead and reported the discrepancy
+  above rather than silently substituting without a note, or inventing a
+  file. If experiments/rust_champion_*p.json is supposed to exist and
+  doesn't in this scratch clone, that's worth someone checking against the
+  live repo (outside this sandbox's scope to investigate further).
+- I did not add a permanent regression test for the weight-file
+  compatibility check itself (only the four feature-shape/legality tests
+  explicitly required). The check was real (via a temporary test, run and
+  removed) but I judged a permanent "does loading old files still work"
+  test to be outside the explicitly enumerated test list, to keep the diff
+  minimal; happy to add one if wanted.
+- I did not touch WeightKey::early/late/trailing or PHASE_KEYS/
+  STANDING_KEYS -- HasColony has no early/late/trailing partner, same as
+  Colonies and HasUnit, so nothing there needed updating, and I left it
+  that way rather than inventing a partner that doesn't exist.
+
+COMMIT
+------
+a12d21d "Add WeightKey::HasColony: price the Annex-target cliff separately
+from the colony count" -- committed by pathspec only:
+rust/src/bots/weighted/weights.rs rust/src/bots/weighted/features.rs
+rust/src/legal.rs

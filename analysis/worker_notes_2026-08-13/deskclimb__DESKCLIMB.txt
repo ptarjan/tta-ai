@@ -1,0 +1,204 @@
+DESKTOP CLIMB -- Through the Ages Rust hill-climb, second independent population
+Machine: micro@100.68.145.15 (Tailscale), Windows, cmd.exe over ssh, 28 logical cores
+Written: 2026-08-13 ~22:05 by Claude (desktop climb subagent)
+
+STATUS: SUCCESS. All 3 arms (2p/3p/4p) launched, verified running and climbing,
+survive ssh session close, confirmed across multiple separate ssh reconnections.
+
+=== STEP 1: SOURCE SHIPPED ===
+Fresh dir created: C:\Users\micro\tta-desk (old one did not exist, so no delete needed)
+Transferred via:
+  cd /Users/pt/tta-ai
+  find rust -path rust/target -prune -o -path rust/rankdata -prune -o \
+       -path rust/src.bak-20260813 -prune -o -type f -print > /tmp/tta_filelist.txt
+  find analysis/frozen -type f >> /tmp/tta_filelist.txt
+  echo experiments/rust_champion_{2,3,4}p.json >> /tmp/tta_filelist.txt   (3 lines)
+  tar czf - -T /tmp/tta_filelist.txt | ssh micro@100.68.145.15 \
+       "tar xzf - -C C:\Users\micro\tta-desk"
+Pre-tested with a 1-line dummy file through the same pipe before the real transfer.
+
+Contents copied (144 files total, verified equal on both sides via file count):
+  - rust/  EXCLUDING:
+      - rust/target        (huge, Mac build useless on Windows -- per instructions)
+      - rust/rankdata       (9.8 GB of neural-net rank data. Confirmed by grep that
+        nothing in climb.rs or its dependency graph reads it or "checkpoints" paths --
+        only neuraltrain.rs / rankdata.rs / neuraleval.rs / replaystats.rs do, and
+        those are the closed neural-training workstream, explicitly out of scope.)
+      - rust/src.bak-20260813  (a same-day backup copy of src/, not real source, not
+        referenced by Cargo.toml)
+      rust tree actually copied: ~16.7 MB, 144 files incl. everything below.
+  - analysis/frozen/  (gauntlet opponents + human_weights.json -- all 16 files)
+  - experiments/rust_champion_2p.json, _3p.json, _4p.json -- COPIES, not linked to the
+    mini's live files. These sit at the exact --out path each arm uses, so climb.exe's
+    own "RESUMED from if it already exists" behaviour picks them up automatically --
+    each arm resumed from the mini's gen at copy time (2p started at gen 43016, 3p at
+    gen 14721, 4p at gen 9427) rather than from the built-in default vector.
+  - docs/ and sources/ were NOT copied. Per rust/Cargo.toml's own comment, card data is
+    baked into src/card_table.rs at compile time; docs/*.json and sources/ are only
+    read by `cargo test`'s fixtures module at TEST time, which nothing here runs. If a
+    future change makes climb or its build depend on either, this assumption breaks --
+    revisit by diffing against what `cargo build --release --bin climb` actually opens.
+
+=== STEP 2: BUILD ===
+Command actually used (deliberately narrower than the literal instruction):
+  set PATH=C:\Users\micro\.cargo\bin;%PATH%
+  cd C:\Users\micro\tta-desk\rust
+  cargo build --release --bin climb
+Ran via a build.bat (avoids ssh/cmd quoting pain), executed synchronously over ssh
+(the connection just stays open until the remote command finishes -- no detachment
+trick needed here since climb.rs is fast to build; only needed for the long-lived
+arms in step 3).
+
+WHY --bin climb, not a bare `cargo build --release`: rust/src/bin/ has ~29 binaries
+(climb, neuraltrain, rankdata, selfplay, humantrain, ...). The package has a lib.rs,
+so building one bin still compiles the shared lib once and links only that target,
+skipping ~28 binaries we don't need. This is the same LTO=fat, codegen-units=1,
+opt-level=3 release profile from Cargo.toml -- no compiler settings were changed, only
+which binaries get built. Game logic was NOT touched.
+
+Result: built in 41.42s (cold, no cache) -- far under the 10-25 min estimate from the
+task, because that estimate was for the mini's full multi-binary build. Confirmed
+target/release/climb.exe exists (1,270,470 bytes) and `climb.exe --help` prints the
+expected flag list (--players, --gauntlet, --gauntlet-kind, --gauntlet-search,
+--threads, --seed, --pool-k, etc.) matching the mini's binary's interface.
+
+No Windows-specific build errors occurred -- nothing needed fixing.
+
+=== STEP 3: LAUNCH ===
+Source of truth for the base command line: read directly off the mini's running
+processes with `ps aux | grep climb` (pids 50846/50852/50858, launched by
+experiments/rust_league.sh). All --gauntlet / --gauntlet-kind / --gauntlet-search
+arguments were copied VERBATIM (same files, same order, same repeated
+--gauntlet-kind human toggling), only file paths adjusted from Unix forward-slash
+relative paths to Windows backslash relative paths against C:\Users\micro\tta-desk
+as the working directory (the desktop equivalent of the mini's tta-ai root).
+
+Changes made from the mini's command line, all deliberate:
+  --seed         2/3/4   -> 102/103/104   (independent trajectory, not a duplicate)
+  --out, --log            -> under C:\Users\micro\tta-desk\experiments\ (own tree,
+                              never touches the mini's files)
+  --threads      2       -> 8              (3 arms x 8 = 24 of 28 logical cores,
+                                             4 left as headroom, per instructions)
+  --hours        6       -> 168 (1 week)   NOT specified by the task instructions --
+                              my own call. The mini's --hours 6 exists because
+                              experiments/rust_league.sh is cron-relaunched every 10
+                              minutes on the mini, so a 6-hour cap plus a watchdog
+                              means "pick up a rebuilt binary periodically." There is
+                              NO equivalent cron/relauncher set up on the desktop in
+                              this session, so a 6-hour cap would just mean the arms
+                              silently stop with nobody restarting them. 168h buys a
+                              week of unattended climbing; see "TO RESTART" below for
+                              what to do when it or the box's uptime runs out, and
+                              consider building a real watchdog (Task Scheduler
+                              recurring trigger, or a small script) if this desktop
+                              population is meant to run indefinitely like the mini's.
+
+Exact command lines launched (one per arm; also saved on the desktop as
+C:\Users\micro\tta-desk\climb_2p.bat / climb_3p.bat / climb_4p.bat):
+
+--- 2p (C:\Users\micro\tta-desk\climb_2p.bat) ---
+cd /d C:\Users\micro\tta-desk
+rust\target\release\climb.exe --players 2 --out experiments\rust_champion_2p.json --log experiments\logs\rust_climb_2p.jsonl --threads 8 --hours 168 --seed 102 --gauntlet analysis\frozen\gauntlet\champion_2p_gen1454_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_3p_gen1384_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_4p_gen448_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_2p_gen19554_140key_2026-08-08.json --gauntlet analysis\frozen\gauntlet\champion_3p_gen12364_140key_2026-08-08.json --gauntlet analysis\frozen\gauntlet\champion_4p_gen4034_140key_2026-08-08.json --gauntlet-kind human --gauntlet analysis\frozen\human_weights.json --gauntlet-kind human --gauntlet-search analysis\frozen\gauntlet\champion_2p_gen19554_140key_2026-08-08.json --gauntlet analysis\frozen\human_weights.json > experiments\logs\rust_league_2p.log 2>&1
+
+--- 3p (C:\Users\micro\tta-desk\climb_3p.bat) ---
+cd /d C:\Users\micro\tta-desk
+rust\target\release\climb.exe --players 3 --out experiments\rust_champion_3p.json --log experiments\logs\rust_climb_3p.jsonl --threads 8 --hours 168 --seed 103 --gauntlet analysis\frozen\gauntlet\champion_2p_gen1454_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_3p_gen1384_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_4p_gen448_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_2p_gen19554_140key_2026-08-08.json --gauntlet analysis\frozen\gauntlet\champion_3p_gen12364_140key_2026-08-08.json --gauntlet analysis\frozen\gauntlet\champion_4p_gen4034_140key_2026-08-08.json --gauntlet-kind human --gauntlet analysis\frozen\human_weights.json --gauntlet-kind human --gauntlet-search analysis\frozen\gauntlet\champion_3p_gen12364_140key_2026-08-08.json --gauntlet analysis\frozen\human_weights.json > experiments\logs\rust_league_3p.log 2>&1
+
+--- 4p (C:\Users\micro\tta-desk\climb_4p.bat) ---
+cd /d C:\Users\micro\tta-desk
+rust\target\release\climb.exe --players 4 --out experiments\rust_champion_4p.json --log experiments\logs\rust_climb_4p.jsonl --threads 8 --hours 168 --seed 104 --gauntlet analysis\frozen\gauntlet\champion_2p_gen1454_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_3p_gen1384_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_4p_gen448_140key_2026-08-06.json --gauntlet analysis\frozen\gauntlet\champion_2p_gen19554_140key_2026-08-08.json --gauntlet analysis\frozen\gauntlet\champion_3p_gen12364_140key_2026-08-08.json --gauntlet analysis\frozen\gauntlet\champion_4p_gen4034_140key_2026-08-08.json --gauntlet-kind human --gauntlet analysis\frozen\human_weights.json --gauntlet-kind human --gauntlet-search analysis\frozen\gauntlet\champion_4p_gen4034_140key_2026-08-08.json --gauntlet analysis\frozen\human_weights.json > experiments\logs\rust_league_4p.log 2>&1
+
+HOW THEY SURVIVE SSH SESSION END (this took real trial and error -- record it):
+  Tried and FAILED:
+    - `start /b cmd /c ...bat` over ssh: process never actually started (no cargo/
+      climb process, no log file appeared even after waiting).
+    - PowerShell `Start-Process -FilePath ... -WindowStyle Hidden` (both inline
+      -Command and as a .ps1 file run via `powershell -File`): DID start a process
+      (confirmed with -PassThru and a captured PID), but that process died partway
+      through a 30-second test job with only partial output flushed -- Windows
+      OpenSSH's server places remote-spawned processes in a Job Object tied to the
+      ssh session, and closing the session tears down the job, killing children,
+      REGARDLESS of Start-Process's own detachment flags.
+  What WORKED, verified with a 30-second ping test across three separate fresh ssh
+  connections (process alive mid-run, log fully written and process gone cleanly
+  after completion, all observed from sessions that did not launch it):
+    schtasks /create /tn <name> /tr "<path-to-bat>" /sc once /st 23:59 /f
+    schtasks /run /tn <name>
+  Task Scheduler launches the process under its own service, outside the ssh
+  session's job object entirely, so it is unaffected by the ssh connection closing.
+
+  Applied for real as:
+    schtasks /create /tn TTAClimb_2p /tr "C:\Users\micro\tta-desk\climb_2p.bat" /sc once /st 23:59 /f
+    schtasks /create /tn TTAClimb_3p /tr "C:\Users\micro\tta-desk\climb_3p.bat" /sc once /st 23:59 /f
+    schtasks /create /tn TTAClimb_4p /tr "C:\Users\micro\tta-desk\climb_4p.bat" /sc once /st 23:59 /f
+    schtasks /run /tn TTAClimb_2p
+    schtasks /run /tn TTAClimb_3p
+    schtasks /run /tn TTAClimb_4p
+  (/st 23:59 is irrelevant for a task launched with /run -- /run fires immediately
+  regardless of the scheduled trigger time; the trigger just has to be syntactically
+  valid at creation time.)
+
+Verified survival: same three climb.exe PIDs (163916 = 2p, 164568 = 3p,
+164132 = 4p) observed alive across THREE separate, later ssh reconnections, with
+growing RSS and growing jsonl log files each time -- not the ssh session that
+launched them.
+
+=== STEP 4: THROUGHPUT, DESKTOP vs MINI (measured, not estimated) ===
+Computed by summing each generation's own "secs" field in its jsonl log over the
+generations observed so far (own-reported per-gen wall time, not wall-clock delta
+across my polls -- more accurate since it excludes my own poll gaps):
+
+  Arm   Desktop --threads 8         Mini --threads 2 (baseline)      Speedup
+  2p    19 gens, 55.3s -> 2.9 s/gen   ~22 s/gen                        ~7.6x
+  3p    17 gens, 52.3s -> 3.1 s/gen   ~19 s/gen                        ~6.1x
+  4p    23 gens, 166.0s -> 7.2 s/gen  ~172 s/gen                       ~23.9x
+
+All three arms had at least one gen with a real accept-gate pool check inside the
+sampled window (2p: gens 43018/43022/43024/43025; 3p: gen 14733; 4p: none yet -- 4p's
+gauntlet/pool checks are rarer per generation at this sigma/rejection rate, so the 4p
+number above is probably an undercount of true steady-state cost and should be
+revisited once a pool-check generation lands there too). All three sampled windows
+included multiple `"accepted":true` generations, i.e. this is not just measuring
+free rejects.
+
+=== KILL / RESTART (for a future session) ===
+Kill everything (all three arms at once -- safe, nothing else on the box is named
+climb.exe):
+  ssh micro@100.68.145.15 "taskkill /F /IM climb.exe"
+
+Kill one arm only (PIDs will differ after any restart -- match by command line):
+  ssh micro@100.68.145.15 "powershell -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='climb.exe'\\\" | Where-Object {$_.CommandLine -match '--players 2'} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }\""
+  (swap '--players 2' for 3 or 4 for the other arms)
+
+Restart an arm (climb.exe resumes from --out automatically, no data lost):
+  ssh micro@100.68.145.15 "schtasks /run /tn TTAClimb_2p"
+  ssh micro@100.68.145.15 "schtasks /run /tn TTAClimb_3p"
+  ssh micro@100.68.145.15 "schtasks /run /tn TTAClimb_4p"
+  (the scheduled tasks are still present -- /run re-fires them any time, they were
+  never on a real recurring schedule, so nothing double-runs them by itself)
+
+If the desktop reboots: all three climb.exe processes die (expected, nothing survives
+a reboot), but their --out champion checkpoints on disk are untouched, so the three
+`schtasks /run` commands above are ALL that is needed to resume exactly where each
+arm left off.
+
+If it has been more than 168 hours: each arm will have exited cleanly on its own
+--hours budget. Same restart commands apply; there is no cron watchdog on this box
+yet unlike the mini's rust_league.sh, so nobody will notice or restart them
+automatically -- that's the one gap versus the mini's setup.
+
+Delete the scheduled tasks (harmless clutter if left, one-shot, will not re-fire on
+their own):
+  ssh micro@100.68.145.15 "schtasks /delete /tn TTAClimb_2p /f"
+  ssh micro@100.68.145.15 "schtasks /delete /tn TTAClimb_3p /f"
+  ssh micro@100.68.145.15 "schtasks /delete /tn TTAClimb_4p /f"
+
+=== FILES ON DESKTOP, FOR REFERENCE ===
+  C:\Users\micro\tta-desk\rust\                       source (no target, no rankdata)
+  C:\Users\micro\tta-desk\rust\target\release\climb.exe   the built binary
+  C:\Users\micro\tta-desk\analysis\frozen\             gauntlet opponents + human wts
+  C:\Users\micro\tta-desk\experiments\rust_champion_{2,3,4}p.json   live champion ckpts
+  C:\Users\micro\tta-desk\experiments\logs\rust_climb_{2,3,4}p.jsonl   per-gen logs
+  C:\Users\micro\tta-desk\experiments\logs\rust_league_{2,3,4}p.log   stdout/stderr
+  C:\Users\micro\tta-desk\climb_{2,3,4}p.bat           the launch scripts (re-runnable)
+  C:\Users\micro\tta-desk\build.bat, build.log         the build script/output

@@ -1,0 +1,206 @@
+REMAINING WORK -- score-divergence investigation, /private/tmp/scorediv
+Written because the session hit a disk-space outage (ENOSPC on /Users/pt/.claude/tmp, the
+harness's OWN tool-output dir, not this repo) that blocked all Bash/cargo/git calls. If you are
+reading this, either that outage is still ongoing (retry Bash with a trivial command like `true`
+first -- if it still throws ENOSPC, this repo's own disk is probably fine, it's the harness tmp
+dir that's full; that is NOT something fixable from inside this task) or it cleared and someone
+picked this up. Everything below assumes you can run Bash again.
+
+SETUP (if starting fresh):
+  cp -Rc /private/tmp/base0814 /private/tmp/scorediv2   <- use a NEW name if /private/tmp/scorediv
+                                                             already has uncommitted work in it;
+                                                             check `git status` there FIRST.
+  cd /private/tmp/scorediv/rust   (or scorediv2/rust)
+  export PATH=$HOME/.cargo/bin:$PATH
+  Never --release. Use --profile difftest for every binary and `cargo test --profile difftest --lib`.
+
+CHECK FIRST: run `git -C /private/tmp/scorediv status` (or wherever). My changes were NEVER
+committed (blocked by the outage before I could run git). If the working tree still has my edits,
+DO NOT re-do the investigation -- just pick up the fixes below. The changed files (uncommitted) are:
+  rust/src/replay_common.rs   -- new final-event award oracle (FinalEventAwardDivergence,
+                                  parse_final_event_journal_amounts, GameResult field + wiring)
+                                  PLUS several TEMPORARY eprintln! debug probes gated on
+                                  SCOREDIV_EVENT_DEBUG / SCOREDIV_LINE_DEBUG env vars that are
+                                  safe to leave (default off) but should be REMOVED before the
+                                  final commit if you don't need them anymore (search
+                                  "TEMPORARY score-divergence investigation aid" and
+                                  "SCOREDIV_LINE_DEBUG"/"SCOREDIV_GROUND"/"SCOREDIV_FINISH_GAME").
+  rust/src/bin/replaystats.rs -- new "## Final-scoring award oracle" report section
+  rust/src/game.rs            -- one TEMPORARY debug eprintln! at the top of `finish_game`
+                                  (SCOREDIV_EVENT_DEBUG-gated), safe but should be removed.
+  rust/src/events.rs          -- one TEMPORARY debug eprintln! inside `evaluate_final_events`
+                                  and one inside `scoring_culture`'s Happiness branch
+                                  (SCOREDIV_HAPPINESS), both SCOREDIV_EVENT_DEBUG-gated, remove
+                                  before final commit.
+  experiments/measure_replaystats.sh  -- NEW FILE, keep, this is real deliverable tooling.
+  analysis/replaystats_2026-08-13.txt, analysis/score_divergence_2026-08-13.txt -- NEW FILES,
+    keep (BEFORE-fix baseline artifacts). Regenerate an AFTER-fix pair once fixes land (same
+    script, will overwrite same-dated files if run same day -- fine, or just diff the "Final-score
+    cross-check" section before/after in your own notes).
+  SCOREDIV.txt, REMAINING.txt -- this pair, keep updating.
+
+STEP 0 -- rebuild and confirm the oracle still compiles/runs (nothing should have changed):
+  cd rust && cargo build --profile difftest --bin replaystats
+  cd .. && bash experiments/measure_replaystats.sh
+  grep -A 15 "Final-scoring award oracle" analysis/replaystats_$(date +%F).txt
+Expect the SAME table as below (baseline, uncommitted code, before any of the 4 fixes):
+  | 4 | Impact of Happiness    | e.g. 7522625 seat 0: journal 16, engine 14 (delta -2) |
+  | 2 | Impact of Population   | e.g. 7523528 seat 0: journal 12, engine 4 (delta -8)  |
+  | 1 | Impact of Architecture | e.g. 7521666 seat 3: journal 5, engine 6 (delta 1)    |
+  | 1 | Impact of Competition  | e.g. 7522075 seat 1: journal 3, engine 6 (delta 3)    |
+And confirm baseline final-score cross-check is STILL: 261/289 exact, 28 diverging (IDs in
+analysis/score_divergence_2026-08-13.txt). If these numbers differ, something in the uncommitted
+tree changed since this was written -- re-derive from scratch rather than trusting this file blindly.
+
+============================================================================
+CAUSE 1 (biggest, 4 game-seat pairs): Impact of Happiness formula, rust/src/events.rs:389-401
+============================================================================
+STATUS: root-caused to `s.happy` (effects::state_stats -> effects::compute, the happy-face
+aggregation) being off by exactly 1, in EITHER direction, for the specific affected seat -- NOT a
+bug in events.rs's scoring_culture formula itself (that arithmetic, `2 * s.happy` capped at 16,
+minus `2 * discontent`, is correct per RULES_SPEC and the card text). The bug is upstream, in
+computing `s.happy`.
+
+Evidence (3 games, confirmed via a temporary debug probe -- same one still in the code, gated on
+SCOREDIV_EVENT_DEBUG, inside scoring_culture's Happiness branch, events.rs, search
+"SCOREDIV_HAPPINESS"):
+  cd rust && SCOREDIV_EVENT_DEBUG=1 ./target/difftest/replay ../sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals <game_id> 2>&1 | grep -E "HAPPINESS|EVENT card=Impact of Happiness"
+  - 7522625 seat 0 (Orange): engine s.happy=7 -> needs 8 (journal wants Orange=16=2*8)
+  - 7522277 seat 1 (Purple): engine s.happy=7 -> needs 6 (journal wants Purple=12=2*6)
+  - 7522906 seat 1 (Purple): engine s.happy=7 -> needs 8 (journal wants Purple=16=2*8)
+  discontent=0 in all three cases (not the discontent term -- purely the happy-face count).
+  Seat mapping confirmed reliable: Color::seat() is fixed (Orange=0, Purple=1, ...,
+  rust/src/corpus.rs:291), not per-game.
+
+NEXT STEPS (not yet done):
+  1. Read `effects::compute`'s happy aggregation (rust/src/effects.rs, search "happy" broadly --
+     `happy_from`, `happy_source_count` at line ~462, and wherever Stats::happy gets its final
+     value/clamp) alongside RULES_SPEC.md's happiness section (search "happy" / "Limits on
+     Ratings" -- around the §6.1/§6.3 area, RULES_SPEC.md line ~181).
+  2. Dump the FULL tableau (techs, colonies, leader, government, completed_wonders,
+     flipped_wonders, homer_wonder) for game 7522906 seat 1 (Purple) at game end -- add a temp
+     debug print in `finish_game` or right before the SCOREDIV_HAPPINESS print, listing every
+     card with production.happy>0 and its slot.workers, every completed wonder with its
+     effects.happy, whether it's flipped, and leader/government happy sources. Compare that
+     enumeration by hand against RULES_SPEC's happy-face rules to find the specific
+     over/under-counted source. Since the error goes BOTH directions across games (once needs +1,
+     once needs -1), the likely culprit is a CONDITIONAL source that sometimes applies and
+     sometimes doesn't when it should be the opposite -- St. Peter's Basilica's
+     ExtraHappyPerHappySource interaction (effects.rs:474-494, the
+     `grants_this_bonus_itself`/`gives_happy_now` logic) is the most complex conditional in that
+     function and the best first suspect, but has NOT been confirmed -- check whether any of the
+     3 affected seats actually holds St. Peter's Basilica or a Homer-boosted wonder before
+     spending more time on it (if none do, that's ruled out and the bug is elsewhere in
+     happy_from/production aggregation).
+  3. Once root-caused, fix in effects.rs (the real happy-face computation), NOT in events.rs
+     (events.rs's formula is already correct).
+  4. Add a #[cfg(test)] test in effects.rs (or wherever the fix lands) reproducing the exact
+     tableau shape that under/over-counts by 1. CONFIRM RED by reverting the fix and re-running
+     the test, quote the failure text in SCOREDIV.txt.
+  5. Re-run experiments/measure_replaystats.sh, confirm: n_score_exact strictly increases, AND
+     the new diverging-ID set is a STRICT SUBSET of {7522625, 7523081, 7521815, 7522277, 7522838,
+     7522822, 7522906, 7522075, 7521790, 7521789, 7523367, 7521882, 7521899, 7522417, 7523528,
+     7522722, 7522974, 7523172, 7522009, 7523233, 7523256, 7522768, 7522813, 7522590, 7521985,
+     7521666, 7523149, 7523102} (the BEFORE set, analysis/score_divergence_2026-08-13.txt). If
+     ANY id outside this set now appears, that is a regression -- revert and reconsider.
+  6. Commit by pathspec: `git -c commit.gpgsign=false commit -F <msgfile> -- <changed files>`,
+     never `git add -A`. Grep for `<<<<<<<` first.
+
+============================================================================
+CAUSE 2 (2 game-seat pairs, LARGE per-pair delta -8): Impact of Population, events.rs:359-367
+============================================================================
+STATUS: suspected but NOT confirmed double-subtraction of discontent. Current code:
+    let workers: i32 = techs.iter().map(|(_,slot)| slot.workers).sum() + p.workers_free;
+    let content = (workers - economy::discontent(state, p)).max(0);
+    total += block.culture_per_content_worker_above_10 * (content - 10).max(0);
+  Comment above it claims workers_free is "PLUS workers_free" additively and then discontent is
+  subtracted on top. Check whether `p.workers_free` (rust/src/state.rs -- read its own field doc)
+  is defined as "idle workers NOT counting discontent ones" (in which case subtracting discontent
+  again is a real double-count bug) or as "ALL unassigned population including discontent" (in
+  which case the current code is correct and the bug is elsewhere, e.g. in economy::discontent
+  itself, or in how `workers_free` gets decremented when a worker becomes discontent).
+  RULES_SPEC.md's own line (search "physically an unused worker moved onto the happiness track",
+  or §6.1/6.3 broadly) is the quote the events.rs comment is paraphrasing -- read the actual
+  RULES_SPEC wording, not just the code comment, since the code comment could itself be a
+  mis-paraphrase.
+NEXT STEPS:
+  1. Confirm/refute the double-subtraction theory by reading state.rs's `workers_free` doc and
+     the code path that moves a worker onto the happiness track (search "discontent" broadly in
+     economy.rs/game.rs for wherever population/happiness state actually gets MUTATED, as
+     opposed to `economy::discontent`, which only READS `p.yellow_bank`/`s.happy` and does not
+     touch `workers_free` at all -- meaning `workers_free` and `discontent` may be two
+     INDEPENDENTLY-computed quantities with no accounting relationship, in which case there's no
+     double-count and the -8 delta has some other cause entirely. Verify with a debug probe like
+     Happiness's, printing `workers` (on-card sum), `p.workers_free`, `economy::discontent(...)`,
+     and `content` for game 7523528 seat 0, and hand-check against RULES_SPEC + the journal's
+     other clues (e.g. does the journal ever print this player's population/happiness numbers
+     elsewhere you can cross-check against?).
+  2. Given the LARGE delta (-8 = 4 workers' worth), this might not be a formula bug at all but a
+     TABLEAU bug (wrong workers-on-cards count) unrelated to Population's own arithmetic -- rule
+     that out by checking if this same seat's `techs` slot-worker counts look plausible (compare
+     against other cards' formulas that also read `slot.workers`, e.g. Architecture/Competition/
+     Industry for the SAME seat in the SAME game, to see if THEIR numbers also look off, which
+     would point to a shared workers-on-cards root cause rather than Population's own code).
+  3. Fix in the engine (not a hardcoded constant), test, confirm RED, re-measure with the same
+     subset discipline as Cause 1, commit separately.
+
+============================================================================
+CAUSE 3 (1 pair, small, delta +1): Impact of Architecture, events.rs:380-387
+============================================================================
+NOT investigated at all. Game 7521666 seat 3 (Grey): journal says 5, engine computes 6.
+  total += block.culture_per_level_of_urban_buildings * id.level() * slot.workers, summed over
+  every tech where id.kind().is_urban().
+Likely a small, single-card discrepancy (one urban building's level or worker count off by 1 for
+this seat) -- check this game's specific tableau for seat 3 the same way as Cause 1/2's debug
+probes. Given it's only 1 pair and small, this is LOWER PRIORITY than causes 1-2; only chase it
+after those are fixed and re-measured, in case fixing 1-2 also incidentally explains this one
+(e.g. if it's the SAME upstream "workers on a slot" miscount as a possible shared root cause with
+Population -- see Cause 2 step 2's cross-check idea).
+
+============================================================================
+CAUSE 4 (1 pair, delta +3): Impact of Competition, events.rs:337-344
+============================================================================
+Confirmed via game 7522075 seat 1 (Purple): journal says 3, engine computes 6.
+    for (id, slot) in p.techs.iter() {
+        if id.kind().is_unit() || id.kind() == CardType::Arena {
+            total += block.culture_per_level_of_military_units_and_arenas * id.level() * slot.workers;
+        }
+    }
+NOT investigated further. Same debug-probe approach: print every unit/arena card + level +
+workers for this seat in this game, compare against what the journal's OWN military-hand/unit
+tracking implies (there may be existing oracles for unit counts elsewhere in replay_common.rs --
+check for a "military" or "unit" oracle before building a new probe from scratch). Delta of +3
+with multiplier 1 (per RULES_SPEC "Impact of Competition" = 1 culture per level) suggests either
+one extra unit counted, or one unit's level/workers overcounted by 3 total -- could be a single
+extra worker on a level-3 unit, or 3 separate level-1 discrepancies. Lower priority than 1-2
+(only 1 pair); chase after re-measuring post causes 1-2, since the affected game (7522075) might
+already flip to exact-match-except-for-this once Happiness/Population fixes land elsewhere (it
+isn't currently flagged for either of those, so probably won't, but re-check).
+
+============================================================================
+NOT YET TOUCHED: the 24 "culture_drifted_in_play=true" diverging games
+============================================================================
+24 of the 28 diverging games have their FIRST divergence from the journal's own "(now M)" running
+culture total somewhere DURING play, before final scoring even starts (culture_oracle_divergence
+is Some for these). Their final-score error is entangled with whatever caused that earlier drift.
+This is a separate, larger investigation: replaystats' own "## Culture oracle" section already
+ranks ALL 78/1011 corpus-wide culture-oracle divergences (not just the 24 that also happen to be
+score-diverging) by the ActionClass immediately preceding the first divergence -- read that table
+(analysis/replaystats_2026-08-13.txt, "## Culture oracle" section) for a ranked starting point.
+Per this task's own scope boundary (score-DIVERGING games that still COMPLETE, not games that fail
+to replay at all), this is in-scope, but is a materially bigger effort than causes 1-4 above
+(likely several distinct root causes, not one). If you fix causes 1-4 and still have budget, this
+is the next thing to open, starting from the Culture-oracle table's top-ranked ActionClass bucket.
+
+============================================================================
+RULED OUT (don't re-investigate)
+============================================================================
+- The "grounding happens after finish_game already fired off the fictional event pile" ordering
+  concern (games where BGO's own journal logs the true final "End turn" line BEFORE its "End of
+  game" marker: 7522822, 7522906, 7521790, 7521789, 7522768, 7522813, 7523149, 7523102) is NOT a
+  bug. The existing `if r.state.game_over { if !completed {...} }` recovery block in
+  replay_common.rs (~line 5355-5410) correctly undoes the wrong award and redoes it against the
+  grounded pile -- hand-verified end-to-end on game 7522906. Do not "fix" this again.
+- n_completed - n_score_checked gap: measured at 0/289 on this corpus. Not a real phenomenon here,
+  nothing to diagnose.

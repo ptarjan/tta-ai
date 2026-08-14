@@ -1,0 +1,70 @@
+    Finished `difftest` profile [optimized] target(s) in 0.07s
+     Running `target/difftest/rowscale --games 200 --players 2 --weights /private/tmp/rowdig/frozen_champion_2p.json --seed 1 --threads 2`
+games        200
+players      2
+weights      /private/tmp/rowdig/frozen_champion_2p.json
+elapsed      7.8s
+
+## rowscale (n=200 games, 400 player-games, 4952 Take-decision samples)
+
+row_last_copy weight in this vector: -3.164819
+
+### ALL chosen Takes (n=4952)
+  raw feature (row::row_last_copy), before/after/delta, score units:
+    full_before                  min=     0.000  median=     9.407  mean=    31.125  max=   705.226
+    full_after                   min=     0.000  median=     0.217  mean=     2.478  max=   140.066
+    full_delta (after-before)    min=  -679.763  median=    -5.890  mean=   -28.647  max=     0.000
+  weighted contribution (rlc=-3.1648 * delta), mean = 90.6638
+  taken card's own before-state factors:
+    val = card_potential(name)   min=     0.000  median=     4.703  mean=    24.840  max=   678.256
+    gone = P(no further copy)    min=     0.000  median=     1.000  mean=     0.669  max=     1.000
+    own_term = val*gone          min=     0.000  median=     4.703  mean=    24.811  max=   678.256
+  everything else in the row-sum:
+    other_slots_sum_before       min=    -0.000  median=     0.382  mean=     6.314  max=   197.826
+    contributing_slots_before (count) min=     0.000  median=     3.000  mean=     2.830  max=     9.000
+  taken card's own_term / full_before, mean-ratio-of-means = 0.7971
+
+### Takes costing 1 civil action(s) (n=1488)
+  raw feature (row::row_last_copy), before/after/delta, score units:
+    full_before                  min=     0.000  median=     1.495  mean=    18.165  max=   464.450
+    full_after                   min=     0.000  median=     0.214  mean=     2.490  max=   140.066
+    full_delta (after-before)    min=  -462.882  median=    -0.148  mean=   -15.676  max=     0.000
+  weighted contribution (rlc=-3.1648 * delta), mean = 49.6103
+  taken card's own before-state factors:
+    val = card_potential(name)   min=     0.000  median=     0.001  mean=     8.592  max=   462.882
+    gone = P(no further copy)    min=     0.000  median=     1.000  mean=     0.521  max=     1.000
+    own_term = val*gone          min=     0.000  median=     0.001  mean=     8.547  max=   462.882
+  everything else in the row-sum:
+    other_slots_sum_before       min=    -0.000  median=     0.223  mean=     9.619  max=   140.066
+    contributing_slots_before (count) min=     0.000  median=     2.000  mean=     2.377  max=     8.000
+  taken card's own_term / full_before, mean-ratio-of-means = 0.4705
+
+### Takes costing 2 civil action(s) (n=1343)
+  raw feature (row::row_last_copy), before/after/delta, score units:
+    full_before                  min=     0.000  median=     5.669  mean=    24.824  max=   705.226
+    full_after                   min=     0.000  median=     0.215  mean=     1.977  max=   140.066
+    full_delta (after-before)    min=  -679.763  median=    -4.703  mean=   -22.846  max=     0.000
+  weighted contribution (rlc=-3.1648 * delta), mean = 72.3037
+  taken card's own before-state factors:
+    val = card_potential(name)   min=     0.000  median=     3.809  mean=    18.970  max=   678.256
+    gone = P(no further copy)    min=     0.000  median=     1.000  mean=     0.623  max=     1.000
+    own_term = val*gone          min=     0.000  median=     3.136  mean=    18.938  max=   678.256
+  everything else in the row-sum:
+    other_slots_sum_before       min=    -0.000  median=     0.279  mean=     5.886  max=   140.066
+    contributing_slots_before (count) min=     0.000  median=     3.000  mean=     2.776  max=     9.000
+  taken card's own_term / full_before, mean-ratio-of-means = 0.7629
+
+### Takes costing 3 civil action(s) (n=2100)
+  raw feature (row::row_last_copy), before/after/delta, score units:
+    full_before                  min=     0.000  median=    19.306  mean=    44.625  max=   500.641
+    full_after                   min=     0.000  median=     0.367  mean=     2.795  max=   116.673
+    full_delta (after-before)    min=  -463.635  median=   -16.641  mean=   -41.830  max=     0.000
+  weighted contribution (rlc=-3.1648 * delta), mean = 132.3846
+  taken card's own before-state factors:
+    val = card_potential(name)   min=     0.000  median=    15.226  mean=    40.351  max=   463.635
+    gone = P(no further copy)    min=     0.000  median=     1.000  mean=     0.809  max=     1.000
+    own_term = val*gone          min=     0.000  median=    15.208  mean=    40.335  max=   463.635
+  everything else in the row-sum:
+    other_slots_sum_before       min=    -0.000  median=     0.648  mean=     4.290  max=   197.826
+    contributing_slots_before (count) min=     0.000  median=     3.000  mean=     3.187  max=     9.000
+  taken card's own_term / full_before, mean-ratio-of-means = 0.9039

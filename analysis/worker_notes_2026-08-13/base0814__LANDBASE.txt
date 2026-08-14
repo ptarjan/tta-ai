@@ -1,0 +1,184 @@
+LANDBASE -- replay 3 verified fixes (0170f8f, 1608f67, f3c78a0) onto a snapshot
+of the LIVE /Users/pt/tta-ai/rust/src tree, in this scratch clone.
+================================================================================
+Working copy: /private/tmp/landbase = cp -Rc of /private/tmp/landmerge (which
+already had all 3 fixes on branch master, landed as commits 0170f8f/1608f67/
+f3c78a0 on top of common ancestor 6de83de). Never ran git outside
+/private/tmp/landbase; never touched /Users/pt or /Users/pt/tta-ai except
+reading.
+
+WHY: /Users/pt/tta-ai/rust/src is UNTRACKED and is what the league actually
+runs. It is ahead of landmerge/master in files today's 3 fixes never
+touched -- notably rust/src/game.rs (Age A first-replenish rules fix) and
+rust/src/advisor/advisor.rs (confirmed_legal_moves fix). Neither exists in
+the scratch lineage. So: snapshot live tree as new base, then cherry-pick
+the 3 fixes on top of it (not the reverse).
+
+STEP 1 PLAN:
+  - branch landbase-base at 0170f8f^ (== 6de83de, common ancestor / parent of
+    fix 1)
+  - overwrite rust/src with /Users/pt/tta-ai/rust/src (read-only source)
+  - diff rust/Cargo.toml and other non-src files under rust/, match if needed
+  - commit as single "live tree snapshot" commit
+  - cargo build --profile difftest, must succeed before proceeding
+
+STEP 1 RESULT:
+  - branch landbase-base created at 6de83de.
+  - rust/Cargo.toml, Cargo.lock, .gitignore, DESIGN.md, tests/, trainer/ all
+    byte-identical between live tree and this commit -- no changes needed.
+  - rust/src overwritten via `rsync -a --delete` from
+    /Users/pt/tta-ai/rust/src (read-only source, never written to).
+  - Diff vs pre-snapshot base: 7 files changed (332 insertions, 406
+    deletions): advisor/advisor.rs, advisor/state_io.rs, bin/replaystats.rs,
+    bots/weighted/eval.rs, game.rs, harness/mod.rs modified;
+    bin/leafdump.rs DELETED (does not exist in the live tree -- it was a
+    scratch-lineage-only addition from commit 6e56364, not referenced from
+    Cargo.toml or any [[bin]] section, autodiscovered target only, safe to
+    drop).
+  - Confirmed before committing: live advisor/advisor.rs HAS
+    confirmed_legal_moves (landbase's old version did not); live game.rs
+    HAS the Age A first_replenish logic.
+  - Committed as 3347765 "Snapshot rust/src from the live /Users/pt/tta-ai
+    tree as the new replay base" on branch landbase-base.
+  - cargo build --profile difftest: SUCCEEDS. "Finished `difftest` profile
+    [optimized] target(s) in 1m 04s". 1 pre-existing warning (dead_code on
+    PlayerAgg.color in bin/humanwinners.rs, unrelated to this work).
+
+================================================================================
+STEP 2 -- cherry-picks
+================================================================================
+All 3 fixes applied with `git cherry-pick -x <sha>` from origin
+(git@github.com:ptarjan/tta-ai.git), which already had all 3 commits as
+ancestors of landmerge's master (already fetched, no extra remote add
+needed). ZERO CONFLICTS on all three -- confirmed by cherry-pick exit status
+(no CONFLICT message, no paused merge state) and by conflict-marker grep
+after each one.
+
+1. 0170f8f -> landed as 3084372 "Make Raiders'/Foray's food-and-or-resources
+   split a real per-player choice". 5 files changed, 496 insertions(+), 176
+   deletions(-). Clean 3-way apply, no conflicts. Touches
+   state.rs/events.rs/interact.rs/replay_common.rs/bots/book.rs as expected.
+   cargo build --profile difftest: SUCCEEDS (2m22s).
+
+2. 1608f67 -> landed as 98508b3 "Recover the 68 TruncatedAfterGameOver human
+   games (222->290)". 1 file changed, 123 insertions(+), 0 deletions --
+   pure insertion into replay_game's `if r.state.game_over` arm in
+   replay_common.rs, exactly where landmerge's own version put it. Clean
+   apply, no conflicts, no interaction with fix 1's changes (disjoint
+   methods, confirmed by the insertion being a pure addition with 0 lines
+   removed/changed). cargo build --profile difftest: SUCCEEDS (56s).
+
+3. f3c78a0 -> landed as 1374995 "Add WeightKey::HasColony: price the
+   Annex-target cliff separately from the colony count". 3 files changed,
+   110 insertions(+), 3 deletions(-): bots/weighted/features.rs,
+   bots/weighted/weights.rs, legal.rs. Clean apply, no conflicts.
+
+CONFLICTS ENCOUNTERED: NONE. All three fixes applied byte-for-byte clean
+against the live-tree-snapshot base, because none of the 8 files the 3
+fixes collectively touch (state.rs, events.rs, interact.rs,
+replay_common.rs, bots/book.rs, bots/weighted/features.rs,
+bots/weighted/weights.rs, legal.rs) overlap with the 7 files the live tree
+snapshot changed relative to the scratch lineage (advisor/advisor.rs,
+advisor/state_io.rs, bin/leafdump.rs, bin/replaystats.rs,
+bots/weighted/eval.rs, game.rs, harness/mod.rs) -- disjoint file sets, so
+no textual conflicts were possible. Since guessing was never required, no
+hunk was resolved by judgment call; every hunk applied automatically.
+
+Final conflict-marker grep after all 3 cherry-picks (rust/src, patterns
+^<<<<<<<, ^=======$, ^>>>>>>>): CLEAN, zero matches.
+
+================================================================================
+STEP 3 -- verification
+================================================================================
+FINAL COMMIT: 1374995506033eb6bea470df6a10b9d78a40981a (branch landbase-base,
+in /private/tmp/landbase)
+
+Commit chain (newest first):
+  1374995 Add WeightKey::HasColony ...
+  98508b3 Recover the 68 TruncatedAfterGameOver human games (222->290)
+  3084372 Make Raiders'/Foray's food-and-or-resources split ...
+  3347765 Snapshot rust/src from the live /Users/pt/tta-ai tree (base)
+  6de83de Bucket the silently-dropped "no mismatch, not completed" ... (common ancestor, unchanged history below this)
+
+cargo test --profile difftest (whole suite, all targets), from rust/:
+  ZERO FAILURES anywhere. Full log: /tmp/landbase_test_full.log
+  lib: 1337 passed; 0 failed; 0 ignored (landmerge's merged branch had 1333;
+    +4 here is expected -- those 4 extra tests live in the live-tree-only
+    files, e.g. the_first_replenish_deals_the_remaining_age_a_cards_not_age_i_cards
+    in game.rs and confirmed_legal_moves tests in advisor.rs, which the
+    scratch lineage never had).
+  Every other unit-test/integration-test target: "test result: ok. N passed;
+  0 failed" across every line grepped (33 "test result:" lines total, all
+  "0 failed"). tests/suite integration binary: 10 passed, 1 ignored
+  (pre-existing bench_random_playouts, untouched by any of these 3 fixes).
+  Doc-tests: 0 passed, 0 failed.
+  No "FAILED" or "^error" lines anywhere in the full log.
+
+WeightKey::ALL.len(): counted directly from the weight_key_table! macro
+invocation in rust/src/bots/weighted/weights.rs (lines 453-738, pattern
+`Ident => "name", value;`): 157. MATCHES the required 157 exactly.
+
+selfplay, REPLAY_DEBUG_ALL=1, 30 games each, seed 100:
+  2p: exit 0, 0 panics, 30/30 games completed (verbose summary printed all
+      30 games' results), DEBUG FoodOrResSplit enqueued: 59 times (1.97/game)
+  3p: exit 0, 0 panics, 30/30 games completed, FoodOrResSplit enqueued: 212
+      times (7.07/game)
+  4p: exit 0, 0 panics, 30/30 games completed, FoodOrResSplit enqueued: 248
+      times (8.27/game) -- matches the prior-pass baseline of ~9/game at 4p.
+  Logs: /tmp/selfplay_2p.log, /tmp/selfplay_3p.log, /tmp/selfplay_4p.log
+
+replaystats ../sources/bgo/index.tsv /tmp/bgo-journals/journals (1011 games
+sampled, full corpus, no sample cap):
+  "289 completed to state.game_over" -- MATCHES the expected ~289 exactly
+  (221 from fix-1-alone baseline + 68 recovered by fix 2, per LANDMERGE.txt's
+  own root-cause arithmetic, unaffected by the live-tree rebase since none
+  of the 7 live-tree-diff files touch replay scoring logic).
+  289/289 completed games flipped state.game_over correctly; 261/289 matched
+  index.tsv's recorded scores exactly (same ratio as landmerge's own run).
+  TruncatedAfterGameOver bucket: ABSENT (0 occurrences) -- confirmed via
+  grep, fix 2 is doing its job.
+  The known pre-existing gap: "StuckPending: FoodOrResSplit choice open for
+  player # but no journal-observed produces line" (game 7522651) and a
+  second FoodOrResSplit stuck case (game 7522963, "no journal-observed
+  spends line") both present at count 1 each -- matches LANDMERGE.txt's own
+  documented gap exactly (fix 1's own pre-existing limitation, not a
+  rebase artifact).
+  Full log: /tmp/landbase_replaystats.log
+
+LIVE-TREE FIXES SURVIVED (the whole point of this exercise):
+  - rust/src/game.rs: `first_replenish` / Age A first-replenish logic
+    STILL PRESENT (grep confirms lines 460, 507, plus its own regression
+    test the_first_replenish_deals_the_remaining_age_a_cards_not_age_i_cards
+    at line 1273) -- survived all 3 cherry-picks untouched, since none of
+    them touch game.rs.
+  - rust/src/advisor/advisor.rs: `confirmed_legal_moves` STILL PRESENT
+    (5 occurrences, same as the live tree) -- survived all 3 cherry-picks
+    untouched, since none of them touch advisor/advisor.rs.
+  CONFIRMED EXPLICITLY: both live-tree fixes are intact in the final commit.
+
+FINAL CONFLICT-MARKER GREP (rust/src, once more at the very end):
+  CLEAN. Zero matches for ^<<<<<<<, ^=======$, ^>>>>>>>.
+
+================================================================================
+COORDINATOR'S LANDING LIST -- rust/src files that now differ from the live
+tree at /Users/pt/tta-ai/rust/src (via `diff -rq`, 8 files, exactly the
+union of what the 3 fixes touch):
+  rust/src/bots/book.rs
+  rust/src/bots/weighted/features.rs
+  rust/src/bots/weighted/weights.rs
+  rust/src/events.rs
+  rust/src/interact.rs
+  rust/src/legal.rs
+  rust/src/replay_common.rs
+  rust/src/state.rs
+No other rust/src files differ from live -- everything else (including
+game.rs and advisor/advisor.rs) is byte-identical to /Users/pt/tta-ai's
+live tree, i.e. this branch is the live tree plus exactly the 3 fixes and
+nothing else.
+
+================================================================================
+COULD NOT VERIFY / HAD TO GUESS: nothing. Every required check above was
+run and produced a real, matching number. No conflicts were encountered
+that required judgment calls between live-tree code and scratch-lineage
+code, since the two change sets never touched the same files.
+================================================================================

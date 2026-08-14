@@ -1,0 +1,13 @@
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            row_last_copy__neg10
+B            base
+mean moves   237.6
+elapsed      9.1s  (21.9 games/s)
+
+win rate     49.5%  +/- 6.7   (null 50.0%)   p = 0.8821
+             [naive +/- 6.9, rho -0.10, deff 0.93, 100 deals]
+culture      A 75.8   best other 77.2   lead -1.3 +/- 6.0
+
+verdict      inconclusive -- the interval still straddles the null

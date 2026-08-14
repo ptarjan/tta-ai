@@ -1,0 +1,299 @@
+FOODFIX -- make Raiders'/Foray's food-and-or-resources split a real
+per-player choice, resolved clockwise from the revealer, instead of
+events::food_or_resources's fixed "resources first" formula.
+=============================================================================
+COMMIT: 0170f8fc8c317b00b9e32584e5186fc2c68f2cda (branch master, this repo)
+  "Make Raiders'/Foray's food-and-or-resources split a real per-player choice"
+  5 files changed, 496 insertions(+), 176 deletions(-)
+=============================================================================
+STATUS: DONE. cargo test --profile difftest is green (1328 lib tests + every
+binary + the integration suite, 0 failures). selfplay ran cleanly at 2p/3p/4p
+with zero crashes. Every new test's RED failure was actually observed by
+reverting the specific piece of the fix it covers, then restored to GREEN.
+
+Working copy: /private/tmp/foodfix (cp -Rc of /private/tmp/foodchoice, which
+was cp -Rc of /private/tmp/gamedrop). Never touched /Users/pt or
+/Users/pt/tta-ai; no git command ever run outside /private/tmp/foodfix. All
+cargo commands used --profile difftest, run from rust/, never --release.
+
+Prior diagnosis (read, not re-derived): /private/tmp/foodchoice/FOODCHOICE.txt
+-- confirms the LIVE ENGINE (not just the replayer) misplays Raiders/Foray,
+cites BGO journal evidence (game 7522886: "Green choses first", differing
+real splits for an identical total-2 loss) and RULES_SPEC.md line 119,
+Section 5.3: "Multiple-player decisions resolve clockwise from the revealing
+player."
+
+-----------------------------------------------------------------------
+THE FIX
+-----------------------------------------------------------------------
+Model copied, as instructed: `decrease_population`'s existing
+`interact::enqueue(state, QueueItem::LosePop{..})` shape (events.rs), and
+`interact::offer_plunder_split`/`plunder_split_options` for split
+enumeration -- reused DIRECTLY for the loss side (not re-implemented),
+since a self-directed loss is capped by the exact same "how much can this
+player's own two banks supply" math Plunder already uses for a victim's
+banks.
+
+New types (rust/src/state.rs):
+- `QueueItem::FoodOrResSplit { player: u8, amount: i16, lose: bool }` --
+  enqueued once per targeted player, from `apply_gains_block`
+  (rust/src/events.rs), in the SAME clockwise-from-revealer order
+  `resolve_count_targets` walks (see "clockwise ordering" below).
+- `ChoiceKind::FoodOrResSplit { lose: bool }` -- options are
+  `ChoiceOption::Gain(GainOption)`, exactly `PlunderSplit`'s own option
+  shape. `lose` distinguishes Raiders' drain direction from Foray's gain
+  direction.
+
+Enumeration (rust/src/interact.rs):
+- Loss (Raiders): `plunder_split_options(&state.players[player], amount)`
+  called DIRECTLY, unmodified -- it already windows the split by what a
+  player's own two banks can supply (r_max/r_min against `resources`/
+  `food`), which is exactly "respecting what the player can actually pay"
+  for a self-directed loss too, not just a victim's. This IS the "player
+  who cannot pay the full amount from one pool" requirement: if a player
+  has 1 food and needs to cover up to 2 of a loss, the (food:2,
+  resources:0) option is never generated, because `r_min = (total -
+  food).max(0)` excludes it. Covered by
+  `plunder_split_options_omits_a_split_the_players_own_short_pool_cannot_cover`.
+- Gain (Foray): new `food_or_res_gain_options`, every split 0..=total with
+  NO cap at option-build time -- deliberately matching `PlunderSplit`'s own
+  existing attacker-gain precedent (its own doc comment in state.rs): the
+  chosen split is capped automatically, per bank, by `economy::gain_food`/
+  `economy::gain_resources` AT RESOLUTION, not filtered out of the option
+  list. This is not a new gap; it is the same simplification PlunderSplit
+  already ships with, called out explicitly rather than inherited silently.
+
+Resolution (rust/src/interact.rs, `resolve_choice`'s new
+`ChoiceKind::FoodOrResSplit` arm):
+  lose  => player.food/.resources -= chosen amounts, saturating (never negative)
+  !lose => economy::gain_food(player, food); economy::gain_resources(player, res)
+
+Clockwise ordering (rust/src/events.rs, `resolve_count_targets`): the
+`strongestPlayers`/`weakestPlayers` loops used to iterate `targets`
+(strength-sorted, for SELECTING who qualifies) and apply each selected
+player's block IN THAT STRENGTH ORDER. Selection is unchanged, but
+resolution order now re-walks `order` (already clockwise from the revealer,
+`order_from`) filtered down to just the selected players -- so whatever
+per-player decision a selected player's own `apply_gains_block` call opens
+(chiefly this new choice) resolves clockwise, not by strength-tie-break
+order. Verified this cannot change `decrease_population`'s existing
+behaviour for any base-game card: `StrongestPlayers`/`WeakestPlayers` is
+printed on exactly 4 cards (Raiders, Foray, Crime Wave, Cold War) and all
+four print `decrease_population: 0`.
+
+Bot wiring: `interact::pending_moves` (legal.rs's only caller for an open
+`Pending::Choice`) already turns ANY choice's options into `Move::Choose{n}`
+candidates, ChoiceKind-agnostic -- so the WEIGHTED (learned) bot picks among
+these splits with its ordinary board-state evaluation, zero new
+special-cased heuristic code, exactly like PlunderSplit already does.
+Grepped every exhaustive match over `ChoiceKind`/`QueueItem` in the whole
+crate (interact.rs's `resolve_choice` + `run_item`, replay_common.rs's
+`categorize_choice` + `resolve_intervening`'s drain match, bots/book.rs's
+`choice`) -- confirmed `bots/weighted/*` has NONE, so there is nowhere a
+hardcoded preference for the learner could even be smuggled in.
+`bots/book.rs` (a SEPARATE, entirely hand-tuned heuristic bot, not the
+learner -- every one of its decisions is hand-scored, mirroring Python's
+book.py) needed a new arm to stay exhaustive; it reuses the existing
+`prod_value`/`PlunderSplit` valuation shape, negated for a loss, same as
+that file already does for every other decision it answers.
+
+`events::food_or_resources` (the old fixed-formula function) is DELETED,
+not kept dead: its one production call site was switched to enqueue
+instead, leaving it with zero callers.
+
+Replayer rewiring (rust/src/replay_common.rs): a PRIOR pass had already
+patched the replayer to journal-correct `food_or_resources`'s wrong guess
+POST-HOC (apply the deterministic split, then overwrite `p.food`/
+`p.resources` against `produces_grants`/`spends_grants`, two FIFOs already
+built by a broad, non-event-aware text-shape prescan of the whole journal).
+Since the engine no longer applies anything synchronously here -- it opens
+a real `Pending::Choice` instead -- that post-hoc correction is now
+provably dead code (deltas would always be zero) and was removed.
+`resolve_intervening`'s own exhaustive choice-dispatch match gained a
+`ChoiceKind::FoodOrResSplit` arm that drains the SAME two FIFOs, but
+resolves them by feeding a real `Move::Choose` into `apply::apply` --
+matching the live choice's own options -- instead of patching fields
+directly. One correctness nuance caught by a pre-existing regression test:
+UNLIKE `PlunderSplit`'s own FIFO consumer (which pops-and-discards a
+non-matching entry while scanning), these two FIFOs must NOT discard a
+miss -- they're filled by text-shape alone, so an entry that isn't this
+choice's answer may still belong to a LATER, unrelated real consumer
+further down the game. Fixed by scanning with `position()` + `Vec::remove`
+(exactly the old post-hoc code's own approach), not `pop_front()` in a
+loop; caught because
+`foray_skips_a_foreign_non_matching_entry_queued_ahead_of_its_own_real_split`
+failed with the pop-and-discard version first, before I'd finished reading
+its own assertion.
+
+-----------------------------------------------------------------------
+FILES CHANGED (see `git diff --stat` in rust/, 5 files, +496/-176)
+-----------------------------------------------------------------------
+- rust/src/state.rs: `QueueItem::FoodOrResSplit` variant + `player()` match
+  arm; `ChoiceKind::FoodOrResSplit` variant, both with doc comments.
+- rust/src/events.rs: deleted `food_or_resources` (old ~30-line function +
+  doc); `apply_gains_block`'s `food_and_or_resources` arm now enqueues
+  instead of calling it; `resolve_count_targets`'s two count-target loops
+  re-walk `order` (clockwise) instead of `targets` (strength-sorted) for
+  resolution order; deleted 4 old `food_or_resources_*` unit tests, added 4
+  new ones (enqueue shape x2, clockwise multi-player ordering x2).
+- rust/src/interact.rs: new `food_or_res_gain_options` (Foray's
+  enumeration); new `QueueItem::FoodOrResSplit` arm in `run_item` (opens the
+  choice, reusing `plunder_split_options` for the loss side); new
+  `ChoiceKind::FoodOrResSplit` arm in `resolve_choice`; 6 new tests (gain
+  enumeration, loss-pool-cap enumeration, pending_moves wiring, resolve loss,
+  resolve gain/blue-token-cap).
+- rust/src/bots/book.rs: new `ChoiceKind::FoodOrResSplit` arm in `choice`
+  (hand-tuned heuristic bot, reuses `PlunderSplit`'s own valuation shape).
+- rust/src/replay_common.rs: removed the dead post-hoc `p.food`/
+  `p.resources` correction block in `resolve_political_decision`'s
+  `PrepareEvent` handling; new `ChoiceKind::FoodOrResSplit` arm in
+  `resolve_intervening`'s drain match; new arm in `categorize_choice`;
+  rewrote the 3 existing food-or-res regression tests to drive
+  `resolve_intervening` directly (enqueue + `run_queue`, exactly like the
+  neighboring `LosePop` tests) instead of asserting on
+  `resolve_political_decision` alone, since that function no longer
+  resolves the choice synchronously.
+
+-----------------------------------------------------------------------
+RED/GREEN -- every new test, actually reverted and re-run
+-----------------------------------------------------------------------
+1. events.rs enqueue tests (both `apply_gains_block_food_and_or_resources_
+   enqueues_a_split_choice_for_a_gain/loss` + both `resolve_event_enqueues_*`
+   clockwise/multi-player tests): reverted `apply_gains_block`'s arm back to
+   the old inline fixed formula. RED (all 4):
+     assertion `left == right` failed
+       left: None
+      right: Some(FoodOrResSplit { player: 0, amount: 3, lose: false })
+   (and the analogous message for each of the other 3). Restored -> GREEN.
+
+2. `resolve_event_enqueues_raiders_food_or_res_splits_clockwise_from_the_
+   revealer_not_by_strength` specifically: reverted ONLY the clockwise
+   reorder (`order.iter().filter(selected.contains)` -> `targets.iter()
+   .take(n)`), leaving the enqueue mechanism intact. RED:
+     assertion `left == right` failed: seat 1, the revealer, resolves first
+       left: Some(FoodOrResSplit { player: 3, amount: 2, lose: true })
+      right: Some(FoodOrResSplit { player: 1, amount: 2, lose: true })
+   -- exactly the predicted strength-tie-break order (3 before 1) vs the
+   correct clockwise order (1 before 3). Restored -> GREEN.
+
+3. `food_or_res_gain_options_offers_every_split_with_no_pool_cap`: reverted
+   the function to return a single (0, total) option (the old formula
+   shape). RED:
+     assertion `left == right` failed
+       left: [Gain(GainOption { food: 0, resources: 3 })]
+      right: [Gain(..0,3..), Gain(..1,2..), Gain(..2,1..), Gain(..3,0..)]
+   Restored -> GREEN.
+
+4. `resolve_choice_food_or_res_split_loss_drains_the_chosen_split_only`:
+   reverted `resolve_choice`'s arm to always take the gain branch. RED:
+     assertion `left == right` failed: 5 - the chosen 1 food
+       left: 5
+      right: 4
+   Restored -> GREEN. (The sibling gain test happened to still pass under
+   this specific revert, since it only exercises the gain branch anyway --
+   noted honestly rather than claimed as a second RED.)
+
+5. `queued_food_or_res_split_opens_a_pending_choice_pending_moves_can_
+   answer`: reverted `run_item`'s `QueueItem::FoodOrResSplit` arm to a
+   no-op. RED:
+     panicked at src/interact.rs:2527:67:
+     expected an open FoodOrResSplit choice
+   Restored -> GREEN.
+
+6. All three replay_common.rs journal-draining tests (`foray_resolves_...`,
+   `raiders_resolves_...`, `foray_skips_a_foreign_...`): reverted
+   `resolve_intervening`'s `FoodOrResSplit` arm to ignore the journal and
+   always pick option 0. RED (all 3):
+     assertion `left == right` failed: 5 + the journal's own 2 food, not the
+     deterministic 0
+       left: 5
+      right: 7
+   (and the loss-direction / skip-a-foreign-entry analogues). Restored ->
+   GREEN.
+   NOTE ON PROCESS: my first pass at these 3 tests called
+   `resolve_political_decision` then a HAND-WRITTEN test-local helper that
+   duplicated the drain logic, rather than driving `resolve_intervening`
+   itself -- reverting the real production arm had ZERO effect on them
+   (still passed), which is exactly the kind of test-doesn't-test-the-code
+   gap this RED/GREEN discipline exists to catch. Caught it, rewrote the 3
+   tests to enqueue directly and call `resolve_intervening` (mirroring the
+   neighboring `LosePop` tests' own shape), and only then is the revert
+   above the one that actually exercises the production match arm.
+
+7. `plunder_split_options_omits_a_split_the_players_own_short_pool_cannot_
+   cover`: this exercises PRE-EXISTING, unmodified code (`plunder_split_
+   options` itself, already covered by its own PlunderSplit test suite) --
+   reused, not changed, by this fix. Flagged honestly rather than claiming
+   a RED against "my" code: there is no revert of MY work that would turn
+   this red, since the property it checks was already true before this
+   task. It stays as a regression test documenting that this SAME windowing
+   now also governs a self-directed loss, not just Plunder's victim-side one.
+
+-----------------------------------------------------------------------
+TEST COUNTS
+-----------------------------------------------------------------------
+`cargo test --profile difftest` (every target, run from rust/):
+  lib:            1328 passed, 0 failed
+  every src/bin/* unittest target: all green (advisor 6, agreefit 6,
+    agreement 4, arena 4, behavcensus 12, botcensus 26, budgetcheck 5,
+    climb 48, kindmatch 13, replaystats 13, selfplay 7, others 0-9 each)
+  tests/suite:    10 passed, 1 ignored (pre-existing bench, not this fix)
+  Doc-tests:      0 (none in this crate)
+  TOTAL: 0 failed anywhere.
+
+-----------------------------------------------------------------------
+SELF-PLAY VERIFICATION
+-----------------------------------------------------------------------
+  ./target/difftest/selfplay --games 60 --players 2 --bots weighted --threads 4 --seed 4242
+  ./target/difftest/selfplay --games 60 --players 3 --bots weighted --threads 4 --seed 4242
+  ./target/difftest/selfplay --games 60 --players 4 --bots weighted --threads 4 --seed 4242
+All three: exit code 0, no panics, games completed and reported normal
+win-rate/culture tables (2p 58.3/41.7 seat split, 3p ~33% each, 4p ~20-30%
+each -- nothing degenerate).
+
+Confirmed the new choice actually fires (not dead code) via the pre-existing
+REPLAY_DEBUG_ALL=1 env flag on a 20-game 4p sample: 156 "FoodOrResSplit
+enqueued" firings (~7.8/game), same order of magnitude as
+FOODCHOICE.txt's own measured 9.68/game at 4p.
+
+Extra stress run for confidence: 300 games at 4p, seed 7, threads 4 -- exit
+0, no crashes.
+
+-----------------------------------------------------------------------
+THINGS I WAS UNSURE ABOUT / CHOSE NOT TO DO -- stated plainly
+-----------------------------------------------------------------------
+- Foray's gain-side option enumeration has NO cap at option-build time
+  (blue tokens only limit what lands at resolution). This is a real,
+  acknowledged simplification, not something the rulebook settles either
+  way -- it exactly mirrors the PRE-EXISTING `PlunderSplit` choice's own
+  attacker-gain arm, so I did not invent a new gap, but I also did not
+  independently verify that pre-existing simplification is itself
+  optimal-play-correct. If a future pass wants the option list itself
+  capped by achievable-given-denomination-consolidation blue-token math,
+  that math is nontrivial (`economy::gain`'s own doc: gains are not
+  monotonic because of token consolidation) and was out of scope here.
+- I widened the `resolve_count_targets` clockwise-ordering fix to BOTH the
+  `strongestPlayers` and `weakestPlayers` loops (not just wherever Raiders/
+  Foray specifically need it), since the underlying RULES_SPEC.md §5.3 rule
+  ("multiple-player decisions resolve clockwise") is general, not specific
+  to food-or-resources. I verified this cannot change any EXISTING
+  observable behavior (decrease_population is 0 on all 4 cards that use
+  these two targeting keys), but I did not get explicit sign-off that
+  widening the scope of the ordering fix beyond "just make the RED test
+  pass" was wanted -- flagging the judgment call rather than making it
+  silently.
+- The task's rule text is explicit about ORDER ("clockwise from the
+  revealing player") but RULES_SPEC.md itself is silent on the CONTENT
+  question (that the split is a genuine per-player choice at all, not just
+  its order) -- that half rests entirely on the BGO journal evidence already
+  gathered by the prior FOODCHOICE.txt pass, which I read and cross-checked
+  against the current code but did not re-derive from a fresh journal read
+  this pass (out of scope: no journal access in this task's instructions).
+- Did not touch `docs/RULES_SPEC.md` or `sources/` themselves -- read-only
+  references for this pass, per the task framing ("cross-reference sources/
+  ... to decide"), not files this fix should be editing.
+- Left the `climb`/`champion_*.json` trained-weight files untouched. Same
+  caveat the prior pass already flagged: any existing trained weights have
+  zero learned skill at this NEW decision point (it did not exist in their
+  training data) and would benefit from further training exposure -- not
+  this task's scope to retrain, and not done.

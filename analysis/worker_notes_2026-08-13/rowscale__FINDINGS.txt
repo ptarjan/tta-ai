@@ -1,0 +1,209 @@
+takeworth: per-WeightKey decomposition of chosen Take moves
+=============================================================
+
+Instrument: rust/src/bin/takeworth.rs (new analysis binary, 3 unit tests,
+all passing). For every turn where WeightedBot::choose actually returned
+Move::Take{slot}, it recomputes the exact 1-ply comparison choose() made
+(same rival_context, same end_turn_bias asymmetry) and additionally walks
+eval::evaluate()'s own body TWICE (pre-take root state, post-take trial
+state), replacing `total +=` with `out.push((label, contribution))` for
+every term evaluate() has (the flat WeightKey::ALL loop, the 4 PHASE_KEYS
+blended pairs, and all 10 non-linear "priced through w" special terms:
+hand_potential, wonder_potential, wonder_promise, hand_mil_potential,
+tactic_gain/short, rival_hand_potential, row_urgency/row_bargain_forgone,
+row_last_copy, my_event_threat). The per-key delta (after-before) for a
+label is exactly the slice of evaluate(after)-evaluate(before) that label
+owns, by construction.
+
+VERIFICATION: pinned by a unit test (per_key_deltas_sum_to_the_raw_score_
+delta) and confirmed on the real run: max |sum(per-key deltas) - raw_delta|
+over all 7031 real Take samples = 0.000000000. The decomposition is exact,
+not approximate.
+
+Weights: frozen 2p champion, copied to
+/private/tmp/cardworth/frozen_champion_2p.json (md5-identical to
+/private/tmp/ipadgame/champion_2p_game.json). Never touched
+/Users/pt/tta-ai or its experiments/rust_champion_*.json.
+
+Sample: 200 self-play 2p games, seed 1..200, both seats playing the frozen
+champion. 400 player-games, 7031 Take decisions. Runtime: 4.1s total
+(6 threads) -- the whole binary, build+test+run, took under a minute.
+
+-------------------------------------------------------------------------
+3a. Mean total score delta of the chosen Take vs ending the turn
+-------------------------------------------------------------------------
+ALL takes (n=7031):    mean delta vs EndTurn = +384.76
+                        mean raw delta (after-before) = +384.07
+(the two differ by end_turn_bias, a constant -0.69 applied only to
+EndTurn's own score, never to Take's)
+
+-------------------------------------------------------------------------
+3b. Top 12 WeightKeys by mean |contribution|, ALL chosen takes (n=7031)
+-------------------------------------------------------------------------
+  row_last_copy            +374.13   <- dominates everything else combined
+  ca_left                   +12.32
+  hand_value_early           -9.42
+  row_urgency                +7.16
+  hand_potential              +2.44
+  civil_action_surplus        +1.92
+  row_bargain_forgone         -1.70
+  wonder_stages_left          -1.65
+  hand_civil                  -1.20
+  hand_value                  +1.14
+  science_surplus             -0.57
+  wonder_turns_to_finish      -0.43
+
+ca_left mean contribution:                 +12.32
+sum of ALL OTHER keys ("what the card gives"), mean: +371.75
+ratio ca_left / sum(other):                 0.033
+
+Restated without row_last_copy: the traditional "what the card gives"
+channels (hand_value, hand_potential, hand_civil, civil_action_surplus,
+science_surplus, wonder_* ) sum to roughly ZERO net (~-2.3) on an average
+chosen take. Virtually the entire positive score behind taking a card comes
+from row_last_copy, not from the card's own production/culture/science/
+board yields, and not from ca_left.
+
+-------------------------------------------------------------------------
+3c. Same breakdown split by take cost (civil actions)
+-------------------------------------------------------------------------
+cost=1 (n=1724, 24.5% of takes):
+  mean delta vs EndTurn = +99.27
+  row_last_copy  +87.27   row_urgency +15.02   hand_value_early -7.48
+  ca_left         +5.27   ...
+  ca_left / sum(other) = 0.056
+
+cost=2 (n=1703, 24.2%):
+  mean delta vs EndTurn = +418.86
+  row_last_copy +402.57   row_urgency +12.52   ca_left +10.86
+  hand_value_early -8.44  ...
+  ca_left / sum(other) = 0.027
+
+cost=3 (n=3361, 47.8% -- the largest bucket, consistent with the earlier
+48.5%-of-takes-cost-3 finding):
+  mean delta vs EndTurn = +540.41
+  row_last_copy +532.60   ca_left +16.30   hand_value_early -11.37
+  hand_potential +3.48  civil_action_surplus +2.58  row_bargain_forgone -2.44
+  ...
+  ca_left / sum(other) = 0.031
+
+other costs (0, 4, 5 -- n=243, 3.5%): row_last_copy and ca_left are
+comparable in size here (+18.11 vs +17.69); this bucket is dominated by
+wonder-surcharge takes where wonder_stages_left swings hard negative
+(-12.24), so "sum(other)" is nearly zero and the ratio is unstable/not
+meaningful (148x) -- reported as-is, not smoothed over.
+
+Across cost=1/2/3, ca_left's SHARE of the total delta does not grow with
+cost the way the working hypothesis predicted (proportional-to-price-paid
+push outvoting a flat card value): its mean value scales up only mildly
+(5.27 -> 10.86 -> 16.30) while row_last_copy scales up in lockstep with it
+(87 -> 403 -> 533) and stays 30-40x larger at every cost tier. The evaluator
+prefers cost-3 takes because row_last_copy (scarcity value of the specific
+card) is larger on those takes, not because ca_left's push is winning a
+close race against a roughly-flat card value.
+
+-------------------------------------------------------------------------
+row_last_copy attribution check (is it really "what the card gives"?)
+-------------------------------------------------------------------------
+row_last_copy sums cards::card_potential(name) * P(no further copy) over
+the ENTIRE VISIBLE ROW, not just the taken slot (row.rs's own doc comment).
+A large before/after swing could come from (a) the taken card's own term
+vanishing, (b) the slot's RANDOM REFILL card entering, or (c) every OTHER
+row card's P(no further copy) shifting because the deck lost a copy.
+Measured directly (taken_card_last_copy_term: the taken card's own before-
+state term, isolated):
+
+  ALL takes:  full delta mean=374.13, taken-card's-own-term slice=366.98
+              (98.1% of the full delta)
+  cost=1:     94.2% attributable to the taken card's own term
+  cost=2:     98.5%
+  cost=3:     98.4%
+  other:      60.5% (wonder-surcharge takes; noisier, smaller n)
+
+So row_last_copy's dominance is REAL and mostly attributable to the
+specific card taken (its own last-copy scarcity), not a refill/deck-noise
+artifact -- clean result, not a confound, for cost 1/2/3 (the 99.3% of
+takes at those three costs). The "other" bucket (surcharge takes, n=243)
+is noisier and only ~60% attributable; not enough signal there to say more.
+
+-------------------------------------------------------------------------
+3d. card_board_* family (card_board_leader, wonder, credit, government,
+    action, bonus)
+-------------------------------------------------------------------------
+Direct per-key contribution: 0.0000 on EVERY sampled take, at every cost,
+despite the weight being present/nonzero (card_board_leader = -1.0158 in
+this frozen champion) and the term being "gated in" (present_on = 100% of
+takes). Reconciled with the source: features::features() never WRITES the
+CardBoardLeader/Wonder/Government/Action/Bonus coordinates at all (per
+features.rs's own doc comment) -- those WeightKeys are read ONLY inside
+cards.rs's card_potential()/board_credit_key() machinery as a per-card-TYPE
+multiplier used when PRICING a leader/wonder/government/action/bonus card
+(registry.rs literally labels them "cards.rs board-credit multiplier").
+That pricing is what feeds row_last_copy, hand_potential, and
+wonder_potential -- all of which DO move on a take.
+
+CANNOT ATTRIBUTE: this decomposition cannot cleanly separate how much of
+the measured +374 mean row_last_copy delta is attributable to the
+card_board_leader=-1.0158 multiplier suppressing leader valuations
+specifically, versus the rest of card_potential's pricing, without a
+further counterfactual re-run (e.g. zeroing card_board_leader and
+re-measuring) -- which is a "what if" experiment, out of scope for a
+measurement-only task. What IS certain: the direct WeightKey::ALL-loop
+contribution of every card_board_* key is exactly 0.0 on a Take, because
+Take never touches board state (a taken card sits in HAND until a later
+Build/PlayLeader/WonderStep move); their real influence, whatever it is,
+is entirely indirect, folded into the row_last_copy/hand_potential numbers
+already reported above.
+
+-------------------------------------------------------------------------
+4. VERDICT
+-------------------------------------------------------------------------
+NO -- on a typical chosen Take, ca_left is NOT the dominant term. It is
+~30x SMALLER than row_last_copy (mean +12.32 vs +374.13 across all takes;
+ratio ca_left/sum(all other keys) = 0.033, i.e. ca_left is about 3.3% the
+size of everything else combined). This holds at every take cost (1/2/3):
+the ratio stays in the 0.027-0.056 range throughout, so the cost-3
+preference is not "ca_left's proportional-to-price push outvoting a flat
+card value" -- row_last_copy itself grows in lockstep with cost and stays
+30-40x larger than ca_left at every tier.
+
+The working hypothesis as stated ("taking a card is intrinsically valued
+far too low, and ca_left compensates by brute force") is NOT supported by
+this decomposition of ACTUALLY CHOSEN takes: the dominant positive term is
+row_last_copy (a card-scarcity/last-copy-avoidance value, 94-98.5%
+attributable to the specific card taken, not a refill artifact), and once
+row_last_copy is set aside, the remaining "traditional" what-the-card-gives
+channels (hand_value, hand_potential, hand_civil, civil_action_surplus,
+science_surplus, wonder_*) sum to roughly ZERO net (~-2.3), essentially
+matching the earlier finding that ordinary moves are priced barely
+negative/near-zero at the margin. It is row_last_copy, not ca_left, that is
+currently doing the work of making Take moves score positive at all.
+
+This does not contradict the earlier established fact that zeroing ca_left
+flips waste from 20.3%->49.4% and loses head-to-head: that experiment
+measured the EndTurn-vs-everything decision across ALL move families and
+ALL turns, including many where row_last_copy is small or zero (row not
+scarce yet). This file only decomposes turns where a Take was ALREADY the
+chosen move -- it says nothing about how often ca_left, rather than
+row_last_copy, is the deciding factor on the marginal turns wastecensus.rs
+found. Not measured here; would need a further slice (row_last_copy near
+zero vs not) to speak to that, which was out of this run's scope.
+
+-------------------------------------------------------------------------
+What could not be cleanly attributed
+-------------------------------------------------------------------------
+1. row_last_copy on the "other cost" bucket (surcharge takes, n=243, 3.5%
+   of the sample): only 60.5% of its delta traces to the taken card's own
+   term vs 94-98.5% elsewhere -- smaller n and wonder-surcharge interaction
+   make this noisier; not investigated further.
+2. card_board_* family's real (indirect) influence on row_last_copy/
+   hand_potential's magnitude -- direct contribution is exactly 0.0 and
+   provably so (features() never writes those coordinates), but their
+   folded-in effect inside cards::card_potential's pricing was not
+   separately isolated (would require a counterfactual re-run, out of
+   scope for measurement-only).
+
+Raw run output: /private/tmp/cardworth/takeworth_200.txt
+Binary: /private/tmp/cardworth/rust/src/bin/takeworth.rs
+Weights used: /private/tmp/cardworth/frozen_champion_2p.json (copy of
+/private/tmp/ipadgame/champion_2p_game.json, md5-verified identical)

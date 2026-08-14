@@ -1,0 +1,4 @@
+2p seed=1 width=4 plies=4 nodes=400 -> Take { slot: 1 } Stats { nodes: 10, searches: 1, wars_priced: 0 }
+3p seed=7 width=3 plies=3 nodes=300 -> Take { slot: 0 } Stats { nodes: 9, searches: 1, wars_priced: 0 }
+4p seed=42 width=5 plies=4 nodes=500 -> Take { slot: 2 } Stats { nodes: 11, searches: 1, wars_priced: 0 }
+3p seed=99 width=8 plies=6 nodes=2000 -> Take { slot: 2 } Stats { nodes: 11, searches: 1, wars_priced: 0 }

@@ -1,0 +1,203 @@
+LEAFREG -- leaf-evaluation regression training data
+=====================================================
+Working copy: /private/tmp/leafreg (cp -Rc of /private/tmp/mergefix). Never touching
+/Users/pt/tta-ai or /Users/pt (forbidden).
+
+Status: DONE. Task 1 identity CONFIRMED (measured, exact). Task 2 dump built,
+run, and verified. Code committed (rust/src/bots/weighted/eval.rs +
+rust/src/bin/leafdump.rs, commit 6e56364, "Add leafdump binary and prove the
+leaf-eval dot-product identity on real BGO games"). Dumped TSV itself
+(/tmp/leaf_dataset.tsv, ~36 MiB) deliberately NOT committed per instructions.
+
+--------------------------------------------------------------------------
+SETUP (MEASURED)
+--------------------------------------------------------------------------
+- /private/tmp/bgoholdout/journals is EMPTY (0 files) on this machine at task start
+  (`find /private/tmp/bgoholdout -type f` -> nothing). Nothing in the repo reads that
+  path (grep for "bgoholdout" across the repo only hits a stale note in
+  /private/tmp/leafreg/OPENINGS.txt: "holdout at /private/tmp/bgoholdout/ was never
+  read."). leafdump.rs never references that path at all -- verified by grep after
+  writing it (see below).
+- sources/bgo/index.tsv has 1011 game rows. sources/bgo/journals.tar.gz has exactly
+  those same 1011 ids (verified: `tar -tzf journals.tar.gz | sed ... | sort` diffed
+  against index.tsv's own ids -- 0 differences besides the tar's own directory
+  entry). /tmp/bgo-journals/journals (pre-existing, extracted before this task, in
+  the SHARED /tmp not the per-task /private/tmp/leafreg copy) was diffed the same
+  way against the tarball and matches exactly -- no stray/leaked holdout game present
+  in the extracted set this task reads from.
+
+--------------------------------------------------------------------------
+TASK 1 -- DOT-PRODUCT IDENTITY PRECONDITION
+--------------------------------------------------------------------------
+HOLDS. MEASURED, not hypothesized.
+
+Test: rust/src/bots/weighted/eval.rs, #[cfg(test)] mod tests,
+  fn linear_features_dotted_with_the_champion_reproduces_evaluate_on_real_replayed_bgo_positions
+Command to reproduce:
+  cd rust && export PATH="$HOME/.cargo/bin:$PATH"
+  cargo test --profile difftest --lib \
+    bots::weighted::eval::tests::linear_features_dotted_with_the_champion_reproduces_evaluate_on_real_replayed_bgo_positions \
+    -- --nocapture --test-threads=1
+
+Result (measured, this run): 6457 real decision points checked, walking
+sources/bgo/index.tsv games in file order against /tmp/bgo-journals/journals
+(the extracted sources/bgo/journals.tar.gz), replayed via
+replay_common::replay_game(record_decisions: true), Weights::default() as w:
+  2p: 3580 decisions   3p: 321 decisions   4p: 2556 decisions
+  max |dot(w, linear_features(state,idx,ctx,w)) - evaluate(state,idx,w,ctx,None)|
+    = 1.4210854715202004e-13  (float noise, not a real discrepancy)
+Every single decision passed the < 1e-6 tolerance assert; none were dropped
+or excluded for disagreeing. This is a genuine identity on real corpus
+states, not merely on the `new_game` toy positions the pre-existing test
+(`linear_features_dotted_with_a_weight_vector_reproduces_evaluate_exactly`,
+same file) already covered.
+
+The code already documents WHY the identity holds (eval.rs's own doc
+comments on `linear_features`, quoted/paraphrased here, not re-derived):
+`evaluate`'s `WeightKey::ALL` loop and its four `PHASE_KEYS` (three
+collapsed to a `start*(1-L)+end*L` two-parameter blend, `StrengthRel` given
+its own round-gated `horizon::combat_unreachable` blend) are mirrored
+coordinate-for-coordinate by `linear_features`'s own `PHASE_KEYS` handling,
+including the `combat_unreachable` gate on `StrengthRel` specifically
+(`out[StrengthRel] *= late` only inside that gate, matching `evaluate`'s
+`if/else`). The ten identity-aware coordinates (HandPotential,
+WonderPotential, WonderPromise, HandMilPotential, TacticGain, TacticShort,
+RivalHandPotential, RowUrgency, RowBargainForgone, RowLastCopy,
+MyEventThreat) are bilinear in `w` in the true `evaluate`, so the identity
+is only exact when `linear_features`'s `freeze` argument equals the `w`
+being dotted -- true here (`Weights::default()` used for both). Ctx was
+built once via `rivals::rival_context(state, idx, None, None)` and shared
+between the `evaluate` and `linear_features` calls in the test (the same
+sharing discipline `WeightedBot::choose`'s own doc comment requires).
+
+--------------------------------------------------------------------------
+TASK 2 -- FEATURE DUMP
+--------------------------------------------------------------------------
+Binary: rust/src/bin/leafdump.rs (committed, code only -- see git log).
+
+MEASURED: WeightKey::ALL currently has 156 entries, not the 162 this task's
+own brief says -- counted two ways (the runtime `WeightKey::ALL.len()`
+leafdump itself prints, AND a direct count of `=>` lines inside weights.rs's
+`weight_key_table! { ... }` invocation). 156 is what actually ships in this
+checkout; 162 was presumably accurate at some earlier point (RETIRED_KEYS
+exists specifically for keys removed after being superseded -- see eval.rs's
+own top doc comment) or is simply the brief's approximation. leafdump's
+column count is NOT hand-written either way -- it walks WeightKey::ALL live,
+so it tracks whatever the real number is on any given checkout.
+
+Exact regeneration command (run from rust/):
+  tar -xzf ../sources/bgo/journals.tar.gz -C /tmp/bgo-journals   # once; already done on this machine
+  export PATH="$HOME/.cargo/bin:$PATH"
+  cargo build --profile difftest --bin leafdump
+  ./target/difftest/leafdump ../sources/bgo/index.tsv /tmp/bgo-journals/journals \
+      > /tmp/leaf_dataset.tsv 2> /tmp/leaf_dataset_report.txt
+
+MEASURED output (this run, full corpus):
+  File: /tmp/leaf_dataset.tsv (NOT committed -- too large, and the task says not to)
+  Size: 37,817,405 bytes (~36 MiB)
+  Rows: 63,918 lines total = 1 header + 63,917 decision rows
+  Columns: 163 = game_id, players, seat, round, 156 WeightKey feature columns
+    (named by WeightKey::name(), in WeightKey::ALL's own declaration order),
+    win, final_score, final_rank
+  Games: 1011/1011 index.tsv rows had a journal file (0 skipped for missing
+    journal). Of those, only 222 replayed all the way to a verified engine
+    outcome (completed == true AND state.game_over == true, i.e. no
+    Mismatch stopped the replay early) -- the other 789 contributed ZERO
+    rows, by design (see leafdump.rs's own doc comment: "a decision with no
+    verified eventual result is not training data, it's noise").
+  Games actually used, by player count: 2p=193, 3p=23, 4p=6 (222 total)
+  Decision rows, by player count (computed from the TSV's own seat/player
+    column, not a separate log): 2p=52,400  3p=8,367  4p=3,150
+  Sanity check (not a correctness proof, but a real one): mean(win) by
+    player count came out 2p=0.5122, 3p=0.3350, 4p=0.2616 -- close to the
+    game-theoretic 1/n baseline (0.50/0.33/0.25) a correctly seat-aligned
+    win label should land near. A silently shuffled/misaligned seat<->score
+    mapping would not reliably produce this.
+
+HYPOTHESIS (not measured further this task): the 222/1011 = 22% completion
+rate is a property of replay_common.rs's own reconstruction fidelity
+(documented elsewhere in this repo, docs/REPLAY.md, as an ongoing, tracked
+gap -- BGO journals don't log every fact the engine needs, e.g. discard
+identities, and a replay stops the instant a human's logged action fails
+`legal_moves()` against the reconstructed state). This task did not
+investigate or attempt to raise that rate -- out of scope ("do not fix
+evaluate()" extends in spirit to "do not go rewrite the replayer" for a
+data-generation task). If more training data is wanted later, the lever is
+replay_common.rs's own fidelity, not leafdump.rs.
+
+HYPOTHESIS: outcome labels (`win`) do not special-case rules §5.11's
+`forced_winner` (a resignation immediately naming a winner independent of
+score) because GameResult does not expose the final GameState to check it --
+see leafdump.rs's own doc comment. Not measured how many of the 222 used
+games this could affect (would require re-deriving `state.forced_winner`,
+out of scope for this pass); flagged rather than silently assumed correct.
+
+Outcome/target columns, exactly as requested: `win` (1/0, this seat vs. every
+seat that round, ties sharing the win, `game::winners`'s own tie-break
+convention), `final_score` (raw final culture for this seat,
+`game::scores`'s own per-seat array), `final_rank` (1-based competition
+ranking off that same array) -- so a later fit can pick win/loss, raw score,
+or rank as its regression target without re-deriving any of the three from
+the others.
+
+--------------------------------------------------------------------------
+LEGALITY (public-information-only)
+--------------------------------------------------------------------------
+MEASURED, structurally, not just reviewed.
+
+FINDING (important, reconciles this task's brief with the actual code): the
+task brief says "Rivals' HAND CONTENTS ... are PRIVATE and must never be
+read." That is TRUE for hand_military but FALSE, per the actual rulebook,
+for hand_civil: docs/RULES_SPEC.md §2.6 "Cards taken are public knowledge
+(open civil cards convention) [RB p.7]" and docs/CHAMPION_VS_HUMANS.md's own
+line 22 ("so a rival's hand_civil is public") both predate this task and
+already establish that a rival's CIVIL hand identity is legitimately public
+-- everyone at the table watches you take a specific card off the face-up
+row into your hand. `bots/weighted/cards.rs::rival_hand_potential` reads
+`q.hand_civil` for exactly this reason (its own doc comment cites the same
+rule) and is the ONLY place in bots/weighted/*.rs that reads a RIVAL's hand
+identity of either kind -- grepped exhaustively (`grep -rn "hand_civil\|
+hand_military" src/bots/weighted/*.rs`, ~90 hits, every non-test,
+non-comment read of `hand_military` outside `replay_common.rs` uses
+`state.players[idx as usize]` i.e. the ACTOR's OWN hand, never a rival's).
+Deck order (civil_deck/military_deck) is read ONLY via `.len()` anywhere in
+bots/weighted/*.rs -- never contents/order. leafdump.rs therefore needed no
+privacy filter of its own: it calls the SAME `linear_features` a live bot
+calls, unmodified.
+
+Test (structural, not textual): rust/src/bots/weighted/eval.rs, same
+#[cfg(test)] mod tests, fn
+  linear_features_never_depends_on_a_rivals_hidden_military_hand_card_identity
+Builds two 3p states identical in every respect except player 1's single
+hand_military card's IDENTITY (CardId(0) vs CardId(1), count fixed at 1 in
+both), computes linear_features for idx=0 on both, asserts the full 162-wide
+vector is identical.
+
+GREEN (unmodified code): PASSED.
+  cargo test --profile difftest --lib \
+    bots::weighted::eval::tests::linear_features_never_depends_on_a_rivals_hidden_military_hand_card_identity \
+    -- --nocapture --test-threads=1
+  -> "test result: ok. 1 passed"
+
+RED (confirmed the test has teeth): temporarily changed eval.rs's
+  out[WeightKey::HandMilPotential as usize] = cards::hand_mil_potential(state, idx, freeze);
+to add `+ state.players[1].hand_military.as_slice().first().map_or(0.0, |c|
+f64::from(c.0))` -- i.e. simulated exactly the rival-military-identity leak
+the test exists to catch -- reran the identical test command, got:
+  thread '...' panicked at src/bots/weighted/eval.rs:1795:13:
+  hand_mil_potential: 0 vs 1 -- a rival's hand_military IDENTITY must never
+  change a feature (only its count may)
+  test result: FAILED. 0 passed; 1 failed
+The failure named the exact coordinate the injected leak touched. Reverted
+immediately after (git diff confirms rust/src/bots/weighted/eval.rs's only
+surviving change is the two new tests, not the temporary break).
+
+Holdout: /private/tmp/bgoholdout/journals is empty on this machine (0
+files); nothing in the repo reads that path; leafdump.rs's own source
+(rust/src/bin/leafdump.rs) was grepped for "bgoholdout" after writing it --
+zero matches. The corpus this task dumped from (sources/bgo/index.tsv, 1011
+rows, cross-checked against sources/bgo/journals.tar.gz's own 1011 entries
+and against the pre-extracted /tmp/bgo-journals/journals, byte-for-byte id
+match on all three) is therefore structurally disjoint from whatever 150
+ids the holdout would contain -- there is no file this task could have
+cross-referenced even by accident.

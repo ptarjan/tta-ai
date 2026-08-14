@@ -1,0 +1,359 @@
+SHORTMISS.txt -- is the shortlist's ~5% miss rate random noise, or does it
+clump on rare high-stakes decisions?
+Status: COMPLETE.
+
+===========================================================================
+0. HEADLINE ANSWER (MEASURED -- see sections 4-7 for full detail)
+===========================================================================
+CONCENTRATED, not random noise -- but not on the specific categories the
+task's own hypothesis named. MISS rate overall is 4.88% (1,087/22,287
+non-trivial holdout decisions; reproduces the documented 95.12% top-8 hit
+rate exactly). The MISS RATE itself is fairly evenly spread once you
+control for legal-move count (structurally 0% when <=8 legal moves exist at
+all, 12-14% whenever there are >10). But the COST of a miss is savagely
+concentrated: the worst 1% of misses (11 of 1,087 decisions) account for
+32% of ALL lost search-eval value in the entire 22,287-decision holdout;
+the worst 10% (109 decisions) account for 71%. One rare category --
+colonization-auction bidding ("Bid", 566 decisions, only 19 misses, a
+BELOW-average 3.36% miss rate) -- averages 187.9 eval points of cost per
+miss when it does miss, ~17x every other category, and by itself accounts
+for 29.5% of the ENTIRE dataset's lost value from 1.7% of its misses.
+CONTRARY to the task's a priori worry, the two categories it explicitly
+named as high-stakes -- aggression_or_war (declaring/fighting a war) and
+leader_or_wonder_step (taking a wonder or a leader) -- are UNDER, not over,
+the base rate: 0/410 misses and 6/566 (1.06%) misses respectively, both
+cheap when they do miss. The real volume driver is take_card (17.0% miss
+rate, 476 of the 1,087 misses, 28% of total cost) -- a routine, frequent
+decision, not a rare one. So: the 95.12% headline number understates real
+risk, but the mechanism is a heavy-tailed COST distribution concentrated in
+one rare, expensive category (colonization bidding) plus a high-volume,
+moderately-expensive routine category (take_card) -- not the war/wonder/
+leader decisions the task suspected going in.
+
+===========================================================================
+KNOWN LIMITATION (state plainly, not buried)
+===========================================================================
+This scratch clone (/private/tmp/shortmiss, cp -Rc of /private/tmp/policytrain1)
+PREDATES today's weight fixes to the search's leaf evaluator -- the
+`eval_weights`/champion file this run loads
+(/private/tmp/rowdig/frozen_champion_2p.json) is the OLD champion, not
+today's corrected one. This is acceptable for a STRUCTURAL question about
+WHICH KINDS of decisions the shortlist misses (the shortlist-building
+mechanism, human_weights ranking legal moves, is unrelated to the leaf
+evaluator), but the absolute miss rate and the absolute cost-in-eval-points
+numbers below are measured against the OLD champion's evaluation, not the
+current bot. Do not read this as a measurement of the current bot's
+shortlist quality.
+
+===========================================================================
+1. SETUP
+===========================================================================
+Clone: /private/tmp/shortmiss (cp -Rc of /private/tmp/policytrain1, itself a
+cp -Rc of /private/tmp/policyloop). Base commit: fdf98c9 "Add hybrid
+self-play data generator for the policy-improvement loop", plus
+policytrain1's own commit 2037a0f "Fine-tune the human-imitation policy on
+the search's picks (policy-improvement loop iteration 1)".
+All work below happens ONLY in /private/tmp/shortmiss;
+/Users/pt/tta-ai was never touched, no git command was ever run there.
+
+===========================================================================
+2. REGENERATION -- the pinned command (from POLICYTRAIN1.txt section 2)
+===========================================================================
+Exact command (run from /private/tmp/shortmiss/rust):
+
+  cargo run --profile difftest --bin policyloop_gen -- --games 100 \
+    --players 2 --seed 100001 --champion /private/tmp/rowdig/frozen_champion_2p.json \
+    --human-weights ../analysis/frozen/human_weights.json \
+    --shortlist-width 8 --explore-random 4 --threads 2 \
+    --out policyloop_data/holdout_2p_seed100001_g100.tpd \
+    --meta-out policyloop_data/holdout_2p_seed100001_g100.meta.tsv \
+    --human-tsv-out policyloop_data/holdout_2p_seed100001_g100.human.tsv \
+    --provenance-out policyloop_data/holdout_2p_seed100001_g100.provenance.json --verbose
+
+Seeds 100001..100100 (100 games), 2p, exploration ON (shortlist_width=8,
+explore_random=4) -- DISJOINT from the training seed range (1..500) used to
+produce the retrained checkpoint referenced in POLICYTRAIN1.txt; this run
+never touches or needs that checkpoint.
+
+Status/output: COMPLETE. 125.3s, 0.80 games/s, 2 threads.
+  22,605 total decision records; 22,287 non-trivial (>1 legal move) --
+  THIS 22,287 is the correct denominator for the 95.12% figure, not the raw
+  22,605 (318 decisions were single-legal-move no-ops -- always a trivial
+  "hit" and carry zero information either way, matching
+  `policyloop::summarize_disagreement`'s own skip and POLICYTRAIN1.txt's own
+  methodology).
+  top-1 (search agreed with policy's own favourite): 8,751/22,287 = 39.27%
+  top-8 (shortlist-hit, rank 0-7): 21,200/22,287 = 95.12% -- reproduces
+  POLICYTRAIN1.txt section 4's number exactly, confirming this clone's setup
+  (same champion, same human_weights, same seeds) is byte-for-byte the same
+  measurement.
+  MISSES (rank >= 8): 1,087/22,287 = 4.88%.
+
+===========================================================================
+3. METHOD FOR THE COST/STRUCTURAL ANALYSIS
+===========================================================================
+The `.tpd`/`.meta.tsv` pair the command above writes records WHICH move the
+search chose and WHERE it ranked under the policy -- enough to reproduce the
+95.12%-style top-8 hit rate, but NOT what the search's own evaluation
+thought the alternatives were worth, which is what "cost" (section 5) needs.
+
+To get that without re-running a second, differently-behaved search, a new
+binary was added: rust/src/bin/shortmiss_scan.rs. It reuses
+`policyloop::build_shortlist` UNCHANGED (identical exploration shortlist,
+identical RNG consumption to `policyloop_gen`) but calls `plan::rank`
+instead of `plan::pick`. `plan::rank`'s own doc comment guarantees its
+winner (`.first()` after a stable descending sort) is IDENTICAL to `pick`'s
+own choice -- same `search_totals` call, same tie-break -- so this is not a
+second search with different behaviour, it is the same search with the
+losing candidates' scores kept instead of thrown away. This is what lets
+"cost of a miss" be measured: for every decision, the best score among the
+plain top-8 shortlist candidates (by policy rank) versus the score of
+whatever the search actually chose.
+
+Pinned config, matching the official regeneration exactly: 100 games, 2p,
+seeds 100001..100100, shortlist_width=8, explore_random=4, champion
+/private/tmp/rowdig/frozen_champion_2p.json, human weights
+../analysis/frozen/human_weights.json, plan defaults (width=8,
+max_nodes=4000, matching PlanConfig::default()).
+
+Command:
+  cd /private/tmp/shortmiss/rust && cargo run --profile difftest --bin shortmiss_scan
+
+HIT/MISS definition: HIT = chosen_policy_rank < 8 (the search's actual pick
+sat inside the policy's plain top-8, i.e. what a non-exploring
+`root_shortlist` would also have offered). MISS = chosen_policy_rank >= 8.
+This matches POLICYTRAIN1.txt section 4's own "top-8 (shortlist-hit)"
+definition exactly.
+
+Category: `human_policy::categorize(chosen_move)` -- the project's existing
+exhaustive `match` over the real `Move` enum (no wildcard arm; a new `Move`
+variant is a compile error there, not a silent `Other`). Not a hand-written
+string list.
+
+Seat position: `game::scores(state)` (the public culture track) at decision
+time, acting seat vs the best-placed rival -- ahead / behind / tied. Public
+information only (culture tokens are face-up on the board); no rival hand
+contents or deck order read anywhere on this path.
+
+Cost: for a MISS, `search's own score for the chosen move` minus `the best
+search score among shortlist candidates whose policy rank is < 8` (both
+read off the SAME `plan::rank` call, no extra search). Clamped at 0 (a
+negative "cost" would mean the search-preferred top-8 alternative scored
+higher than what the search actually picked, which cannot happen by
+construction: the chosen move is the argmax over the WHOLE widened
+shortlist, a superset of the top-8). HITs cost exactly 0 by the same
+construction (the chosen move IS the argmax over the top-8 in that case).
+"Unscored" misses (score missing for the chosen move, or for every top-8
+candidate, because the beam's `cfg.max_nodes` budget starved before a
+terminal value was ever recorded for one side) are counted separately, not
+folded into the distribution as 0.
+
+===========================================================================
+4. MEASURED -- headline numbers
+===========================================================================
+`shortmiss_scan`, run three times (once to validate against the official
+policyloop_gen output, twice more after adding per-bucket cost tracking and
+tail-concentration reporting) -- ALL THREE runs produced byte-identical
+HIT/MISS/rank numbers (95.1227% / 4.8773%, same as the pinned
+policyloop_gen run), confirming determinism end to end.
+
+  total decisions:            22,605
+  non-trivial (>1 legal move): 22,287   <- denominator for every rate below
+  HIT  (chosen_policy_rank < 8): 21,200 / 22,287  (95.1227%)
+  MISS (chosen_policy_rank >= 8): 1,087 / 22,287  ( 4.8773%)
+
+By category (`human_policy::categorize(chosen_move)`, the project's own
+exhaustive match over the real `Move` enum -- n = hit+miss, miss_rate,
+total eval-point cost of that category's misses, mean cost per miss in
+that category):
+
+  category                 n     miss   miss_rate  cost_sum   cost_avg
+  aggression_or_war       410       0      0.00%        0.0        0.0
+  bid                      566      19      3.36%     3569.5      187.9
+  build                   3074     207      6.73%      990.3        4.8
+  end_turn                3795     120      3.16%      318.5        2.7
+  increase_population      918       0      0.00%        0.0        0.0
+  leader_or_wonder_step    566       6      1.06%        6.1        1.0
+  other                   7550     172      2.28%     3373.6       19.6
+  political_action        2137       2      0.09%        4.0        2.0
+  tactics                  475      85     17.89%      418.6        4.9
+  take_card               2796     476     17.02%     3430.6        7.2
+
+("other" is `human_policy::categorize`'s own catch-all -- Choose, Destroy,
+PlayAction, CancelPact, PrepareEvent, RemoveLeaderYellow, ColumbusColonize,
+Barbarossa, BachTheater, Defend/DefendDone, Send*, Churchill, Resign,
+TradeFoodAsResource/TradeResourceAsFood -- kept coarse deliberately, see
+that function's own doc comment; a consumer who wants Defend/ColumbusColonize/
+Barbarossa/Churchill broken out individually would need to extend
+`categorize` itself, not this binary.)
+
+By game round (bucketed; n, miss_rate, total/avg cost of that bucket's
+misses):
+
+  round        n    miss_rate   cost_sum   cost_avg
+  1-3        2338      6.59%      716.2       4.7
+  4-6        3719      7.04%     2774.8      10.6
+  7-9        3779      5.03%     2199.3      11.6
+  10-12      3557      3.60%     1706.5      13.3
+  13+        8894      3.97%     4714.5      13.4
+
+Miss RATE does not climb with round (round 4-6 has the single highest miss
+rate, 7.04%, then it falls). Cost PER MISS climbs steadily with round (4.7
+-> ~13-14), roughly 3x from earliest to latest game phase -- late-game
+misses are individually more expensive even though not more frequent.
+
+By legal move count (bucketed):
+
+  legal_count     n    miss_rate   cost_sum   cost_avg
+  2-5           9262      0.00%        0.0       0.0
+  6-10          5017      0.46%      166.2       7.2
+  11-20         5847     13.55%     7988.4      10.1
+  21-40         2161     12.59%     3956.6      14.5
+
+The 0.00% at legal 2-5 and near-0.46% at 6-10 are STRUCTURAL, not a policy
+quality result: with shortlist_width=8, any decision with <=8 legal moves
+mechanically cannot miss (every legal move IS in the top-8 by definition).
+Once legal_count exceeds 8, miss rate jumps immediately to double digits
+(13.55% / 12.59%) and stays there -- branching factor, not decision "type"
+per se, is the single strongest predictor of whether a miss is even
+possible, and cost per miss also rises with legal_count (7.2 -> 10.1 ->
+14.5).
+
+By acting seat's public culture-track position (game::scores, public
+information only):
+
+  seat      n    miss_rate   cost_sum   cost_avg
+  ahead   9682      4.88%     7029.4      14.9
+  behind  9279      4.66%     3965.3       9.2
+  tied    3326      5.50%     1116.7       6.1
+
+Miss rate is nearly flat across ahead/behind/tied (4.66%-5.50%), but cost
+per miss when ahead (14.9) is more than double cost per miss when behind
+(9.2) -- missing the right move while in the lead is measurably more
+expensive than missing while trailing, in this holdout.
+
+===========================================================================
+5. MEASURED -- cost distribution (the number that matters most)
+===========================================================================
+Cost units: the OLD frozen champion's own `eval::evaluate` score (section
+"KNOWN LIMITATION" above) -- an internal heuristic scale, not calibrated
+win probability or victory points. Read differences as "how much the old
+champion's own search preferred the move it actually got to consider over
+the one it settled for", not as a game-theoretic guarantee.
+
+  misses with a computable cost: 1,087 / 1,087  (unscored/starved: 0 --
+    the search's max_nodes=4000 budget never once starved before scoring
+    both the chosen move and at least one plain-top-8 candidate)
+  misses whose cost is exactly zero: 0 / 1,087 (every miss cost something,
+    however small -- a miss that costs literally nothing did not occur in
+    this holdout)
+  sum of cost, all 1,087 misses:      12,111.318
+  mean cost per miss:                     11.142
+  min / p25 / median / p75 / p90 / p99 / max (eval points):
+     0.000001 / 0.482 / 1.369 / 7.658 / 23.537 / 174.924 / 485.230
+
+Heavy right tail: median cost (1.37) is two orders of magnitude below the
+max (485.2), and the mean (11.14) sits well above the median -- most misses
+are cheap, a few are catastrophic.
+
+Tail concentration (how much of the TOTAL 12,111.3 cost comes from the
+worst N% of misses, by cost):
+
+  top   1% of misses (  11 of 1,087):  3,877.7  ( 32.02% of all miss cost)
+  top   5% of misses (  55 of 1,087):  6,937.4  ( 57.28% of all miss cost)
+  top  10% of misses ( 109 of 1,087):  8,637.1  ( 71.31% of all miss cost)
+  top  25% of misses ( 272 of 1,087): 10,798.3  ( 89.16% of all miss cost)
+
+This is the single most important number in this task: a bare "4.88% miss
+rate" implies the shortlist's failure mode is spread thinly and evenly.
+It is not -- 71% of everything the shortlist ever cost this holdout's
+search came from just 109 of the 22,287 decisions (0.49% of ALL decisions,
+10% of misses). The other 90% of misses (978 decisions) together cost only
+3,474.3 eval points, averaging 3.55 each -- genuinely closer to "noise".
+
+===========================================================================
+6. MEASURED -- rank tail
+===========================================================================
+1-indexed rank of the search's actual pick under the policy's own full
+ranking, for the 1,087 misses only:
+
+  rank 9-12:   821 / 1,087  (75.53% of misses, 3.68% of all 22,287 decisions)
+  rank 13-20:  257 / 1,087  (23.64% of misses, 1.15% of all 22,287 decisions)
+  rank 21+:      9 / 1,087  ( 0.83% of misses, 0.04% of all 22,287 decisions)
+
+Most misses (75.5%) sit just outside the current top-8, at rank 9-12 --
+widening `shortlist_width` from 8 to, say, 12 would mechanically convert
+most of THOSE into hits (though not necessarily cheaply: `plan::pick`'s
+search cost scales with shortlist size, and this analysis does not measure
+whether a wider shortlist changes the search's OWN move quality, only
+whether today's search's pick would then be visible to it). Rank 13-20
+(23.6% of misses) would need a much wider shortlist to reach. Rank 21+ is
+rare (9 decisions, 0.83% of misses) -- POLICYLOOP.txt's own 50-game pilot
+saw a single rank-24 outlier; this 100-game holdout's worst is consistent
+with that (max observed miss rank not tabulated per-decision above, but
+bounded by the 21+ bucket's small count).
+
+===========================================================================
+7. HYPOTHESISED (interpretation -- clearly separated from the MEASURED
+   numbers above; nothing in this section is a new measurement)
+===========================================================================
+- The task's a priori worry -- that misses clump on rare, high-stakes
+  categories like declaring war or taking a wonder/leader -- does NOT hold
+  for THOSE specific categories in this holdout (aggression_or_war: 0
+  misses; leader_or_wonder_step: 1.06% miss rate, cheap when it misses).
+  A plausible reason (not verified further here): `human_policy`'s linear
+  ranker may simply be well-suited to these decisions because they are
+  comparatively rare AND highly differentiated by a few strong features
+  (e.g. "is this wonder good", "is my military strong enough") that a
+  linear scorer can weight cleanly, whereas...
+- ...colonization-auction bidding ("Bid") fits the ORIGINAL worry's SHAPE
+  even though it wasn't named: rare (566/22,287 = 2.5% of decisions), a
+  narrow decision (bid amount `n: u8`, a small ordered set of legal
+  amounts), and its miss rate is unremarkable (3.36%, actually below the
+  4.88% base rate) -- but when it misses, it is catastrophically expensive
+  (187.9 eval points average, the highest of any category by a wide
+  margin, and roughly 40x take_card's own per-miss cost). This looks like
+  exactly the failure mode the task was worried about, just filed under a
+  different category name than the task guessed: an auction is a genuinely
+  discontinuous, all-or-nothing decision (win the colony or don't), so a
+  policy that ranks the WRONG bid into the top-8 can be leaving an entire
+  colony's value on the table, not a marginal card-choice difference.
+- take_card is the largest single contributor to total cost (28% of it)
+  purely on VOLUME (476 misses, the most of any category) at a moderate
+  per-miss cost (7.2) -- this reads as "the policy is measurably worse at
+  ranking which market card to take than at ranking most other decision
+  types" (17.02% miss rate, more than 3x the base rate), not as a rare/
+  high-stakes problem; it is a routine, extremely frequent decision.
+- The legal-move-count finding (section 4) suggests part of the "5% miss"
+  headline is a fixed-width artifact, not a policy-quality one: a
+  shortlist of width 8 cannot possibly miss when 8 or fewer moves are
+  legal, so the entire miss rate is necessarily concentrated in decisions
+  with >8 alternatives (46% of this holdout's non-trivial decisions), where
+  it runs 12-14%, not 4.88%. If the task's real question is "how good is
+  the shortlist when it actually has to choose", 12-14% (not 4.88%) is the
+  more honest headline for the decisions where the shortlist's width is
+  actually being tested.
+- Given the KNOWN LIMITATION (old champion), these cost NUMBERS would
+  likely shift under the current, corrected evaluator -- but the
+  STRUCTURAL finding (cost is tail-concentrated; branching factor and the
+  Bid category drive it; the named "high-stakes" categories are actually
+  fine) depends on the shortlist-construction mechanism and the shape of
+  the decision space, not on the specific eval weights, and is not expected
+  to change qualitatively on a re-run with the fixed champion.
+
+===========================================================================
+8. CLEANUP
+===========================================================================
+Dataset files produced (peak ~170 MB, per the task's own estimate) were
+deleted after every number in sections 4-6 was captured in this file and in
+the run logs (/tmp/shortmiss_holdout_gen.log, /tmp/shortmiss_scan.log,
+/tmp/shortmiss_scan2.log, /tmp/shortmiss_scan3.log) -- none of it is needed
+again; `shortmiss_scan` reads no dataset file at all (it regenerates the
+same deterministic games from the champion/human-weights files and the
+pinned seed range on every run, so the analysis is fully reproducible from
+code + the two frozen weight files alone, no `.tpd`/`.meta.tsv` dependency).
+Deleted: rust/policyloop_data/holdout_2p_seed100001_g100.{tpd,meta.tsv,
+human.tsv,provenance.json} (the ONLY dataset this task produced; nothing
+under /private/tmp/bgoholdout/ was ever read, merged, or touched).
+Kept: rust/src/bin/shortmiss_scan.rs (the new analysis binary, committed by
+pathspec) and this file.

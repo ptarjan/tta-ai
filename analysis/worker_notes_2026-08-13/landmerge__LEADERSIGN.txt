@@ -1,0 +1,340 @@
+LEADERSIGN investigation -- rust/src/bots/weighted/cards.rs card_potential
+============================================================================
+
+SETUP
+-----
+Scratch clone: /private/tmp/leadersign (from /private/tmp/actionprice), tip
+confirmed d04acfa. All work here; nothing touched under /Users/pt/tta-ai.
+
+STEP 1 -- PROVE THE INVERSION
+------------------------------
+Wrote src/bin/leadersign.rs: on a deterministic 2p round-1 board
+(game::new_game(2, 42)), for a set of leaders, prints:
+  - raw_diff       = sum_board_triples(board_yields(id, baseline), w)
+  - credit_board   = card_board_credit + board_credit_key(id)'s weight
+  - card_potential = the actual evaluator price
+
+To make raw_diff PROVABLY the same number card_potential scales (not a
+hand-reimplemented copy that could hide the bug), made
+`cards::sum_board_triples` `pub` (was private) -- src/bin/*.rs are separate
+binary crates depending on `tta` as a library, so a `pub(crate)` fn is NOT
+visible to them; had to go all the way to `pub`. No logic changed, only
+visibility, comment added explaining why.
+
+Ran against the frozen live 2p champion,
+/private/tmp/rowdig/frozen_champion_2p.json:
+
+  card_board_credit (base)   = 0
+  card_board_leader          = -15.003238920505405
+  card_board_wonder          = 1.5067472990894153
+  card_board_government      = -1.0089112699317613
+  card_board_action          = -2.441774095888776
+  card_board_bonus           = -0.16295672881182297
+
+  leader                       raw_diff   credit_board card_potential
+  Hammurabi                      0.8852       -15.0032       -13.2815
+  Julius Caesar                 -2.9083       -15.0032        43.6332
+  Aristotle                      0.7395       -15.0032       -11.0944
+  Alexander the Great           -6.4130       -15.0032        96.2159
+  Leonardo da Vinci              0.7395       -15.0032       -11.0944
+  Genghis Khan                  -1.5028       -15.0032        22.5463
+
+CONFIRMED, empirically, not just by reading the JSON: Hammurabi/Aristotle/
+Leonardo have a POSITIVE raw board-swap diff (genuinely helpful swap onto
+this board) but a NEGATIVE final card_potential (evaluator prices them as
+harmful) because of the -15.003 effective multiplier. Julius Caesar/
+Alexander/Genghis Khan have a NEGATIVE raw diff (this particular swap is a
+net downgrade on THIS board) but a hugely POSITIVE final card_potential --
+also inverted, just in the other direction. The sign of credit_board is
+flipping every leader's ranking, not scaling a fixed-sign benefit: a
+constant negative scale on a diff that can be genuinely positive or negative
+per-card/per-board is not "sometimes wrong", it inverts the WHOLE ranking of
+leaders against everything else priced with a sane sign (wonders,
+card_board_wonder = +1.5067, priced correctly).
+
+Sanity control: same binary against Weights::default() (all card_board_*
+keys 0.0) shows credit_board = 0.0 for every leader and card_potential
+falling back to the static per-card table entirely, as card_potential_core's
+own early-return comment says it must -- confirms the binary is reading the
+right code path and isn't itself the source of the numbers above.
+
+VERDICT: the inversion is REAL. Proceeding to the structural fix.
+
+STEP 2 -- FIX
+-------------
+(see below, appended as work proceeds)
+
+STEP 2 -- FIX (implemented)
+----------------------------
+File: rust/src/bots/weighted/eval.rs
+
+1. Made `cards::sum_board_triples` `pub` (rust/src/bots/weighted/cards.rs) so
+   the leadersign binary calls the real function -- visibility only, no
+   logic change.
+
+2. Added `card_board_credit_keys()` in eval.rs, right after
+   `NET_NONNEG_PHASE`'s definition: derives the 5 per-type board-credit keys
+   (CardBoardLeader/Government/Action/Wonder/Bonus) by calling
+   `cards::board_credit_key` over every card in `card_table::CARDS` and
+   deduping the `Some` results, cached behind a `OnceLock` (dominance_repair
+   runs on every hillclimb mutation, so this must not re-walk CARDS every
+   call). This satisfies "derive from board_credit_key's own exhaustive
+   match rather than hand-copy a list that can rot" -- if a future card type
+   gets a board_credit_key arm, it is picked up automatically.
+
+3. Added a new repair loop inside `dominance_repair`, positioned right after
+   the NET_NONNEG_PHASE loop and before NON_POSITIVE_GATES (same position/
+   shape as NET_NONNEG_PHASE, since this is the same "base + modifier >= 0"
+   rule restated for a single fixed base (CardBoardCredit) against several
+   per-type modifiers instead of a phase-pair):
+
+     let card_board_base = out.get(WeightKey::CardBoardCredit);
+     for &k in card_board_credit_keys() {
+         let m = out.get(k);
+         if card_board_base + m < -1e-12 {
+             viol.push(Violation { weight: k, value: m, default: k.default_weight(),
+                 rule: format!("{} + {} >= 0", WeightKey::CardBoardCredit.name(), k.name()) });
+             out.set(k, -card_board_base);
+         }
+     }
+
+   Repairs by RAISING the per-type key to -base (never lowering base),
+   matching every other rule's repair direction in this function.
+
+ARMS BOTH LOAD-TIME AND MUTATION-TIME REPAIR -- confirmed, not just assumed
+-----------------------------------------------------------------------------
+The new loop lives INSIDE the `dominance_repair` function body itself (not
+in a helper only `load_weights` calls), exactly like every other rule in
+that function. `load_weights` calls `dominance_repair` on the way in
+(eval.rs ~1016), and separately `bin/climb.rs`'s `mutate()` wrapper
+(climb.rs:264-268) calls `dominance_repair(&m.weights)` on literally every
+mutant BEFORE it is ever evaluated -- so being inside the function body is
+sufficient by construction; there is no second copy of the rule to forget.
+Verified this is not merely a reading of the code but true in practice by
+adding a climb.rs test (see STEP 3) that starts the mutator from a
+deliberately illegal board-credit vector and asserts every one of 300
+successive mutants stays legal -- i.e. the SAME mutation loop climb.rs's own
+`no_mutant_ever_prices_a_rulebook_penalty_as_a_benefit`/
+`no_mutant_ever_prices_a_benefit_shaped_weight_as_a_downside` tests use to
+prove this exact point for the existing table-driven gates. Note the new
+rule is NOT a member of `NON_POSITIVE_GATES`/`NON_NEGATIVE_GATES` (it can't
+be -- it's a two-term relation, not a single-key sign gate), so those two
+existing table-driven climb.rs tests do NOT automatically cover it; the new
+climb.rs test added below is what actually exercises the mutation-time path
+for this specific rule.
+
+STEP 3 -- TESTS, RED CONFIRMED
+--------------------------------
+Added two tests in rust/src/bots/weighted/eval.rs (mod tests):
+  - a_deeply_negative_per_type_board_credit_is_repaired_even_though_the_base_is_legal
+  - the_repaired_vector_no_longer_inverts_a_helpful_leaders_price
+
+Reverted the fix (commented out the new repair loop in dominance_repair,
+leaving card_board_credit_keys() unused) and re-ran exactly these two tests.
+Verbatim failure output:
+
+thread 'bots::weighted::eval::tests::a_deeply_negative_per_type_board_credit_is_repaired_even_though_the_base_is_legal' panicked at src/bots/weighted/eval.rs:1700:9:
+assertion `left == right` failed: raised to -base, i.e. 0.0 here
+  left: -15.003238920505405
+ right: 0.0
+
+thread 'bots::weighted::eval::tests::the_repaired_vector_no_longer_inverts_a_helpful_leaders_price' panicked at src/bots/weighted/eval.rs:1748:9:
+[]
+  (assertion `viol.iter().any(|v| v.weight == WeightKey::CardBoardLeader)` -- viol was empty, i.e. no violation reported at all with the fix disabled)
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1286 filtered out
+
+Both genuinely RED without the fix. Restored the fix immediately after
+(uncommented the loop) -- both pass again, confirmed below.
+
+Also added a mutation-time guard test in rust/src/bin/climb.rs
+(no_mutant_ever_leaves_a_board_credit_pair_net_negative), mirroring the
+existing three DOMINATES/NON_POSITIVE_GATES/NON_NEGATIVE_GATES guard tests
+in that file exactly. Made eval::card_board_credit_keys() `pub` (was
+private to eval.rs) so this climb.rs test is table-driven off the SAME
+derived list the production rule uses, not a hand copy.
+
+Reverted the fix again (same comment-out) and re-ran just this test.
+Verbatim failure output:
+
+thread 'tests::no_mutant_ever_leaves_a_board_credit_pair_net_negative' panicked at src/bin/climb.rs:1496:17:
+generation 0: card_board_credit (0.04724694976709875) + card_board_action (-9) went negative
+
+Genuinely RED at generation 0 -- confirms the mutator drifts this pair
+negative within a SINGLE mutation when the guard is absent, which is
+exactly the "held only at load, drifted forever after" bug shape this
+project has hit before (see eval.rs's own citations for LOSS_GATES/
+WONDER_DEBT_GATES). Restored the fix; test passes again.
+
+Confirmed clean: grep for conflict markers and the TEMP-REVERTED comment
+across all touched files found nothing left behind.
+
+STEP 4 -- MEASURE
+------------------
+Ranking re-check (leadersign binary, fix compiled in, frozen champion,
+same 2p round-1 board): load_weights now applies the new repair
+automatically. card_board_leader/government/action/bonus all land at
+exactly 0.0 (card_board_wonder untouched at +1.5067, already legal).
+Leaders now price at their static-table fallback (mostly 0.0; Julius Caesar
+at -3.6477, from the CardRateCredit-scaled static path, unrelated to the
+board-swap multiplier -- no longer routed through an inverted -15x scale).
+
+A/B (existing `arena` binary/harness, not a new one): built two JSON files
+from the SAME frozen champion --
+  repaired_champion_2p.json:   card_board_leader/government/action/bonus
+                                zeroed (the exact values dominance_repair
+                                now produces), everything else byte-identical
+  unrepaired_champion_2p.json: byte-identical copy of the original frozen file
+Verified with the leadersign binary, built from a REVERTED-fix commit, that
+both files load through the pre-fix `load_weights` completely unchanged
+(neither file's board-credit fields get touched by the OLD dominance_repair,
+confirming these two files are a faithful "repaired vs the actual buggy
+in-production vector" pair, not an artifact of which code loaded them).
+
+  arena --a repaired_champion_2p.json --b unrepaired_champion_2p.json \
+    --games 200 --players 2 --seed 1 --threads 2
+
+  win rate     40.2%  +/- 6.1   (null 50.0%)   p = 0.0015
+  culture      A 69.8   best other 79.8   lead -10.0 +/- 7.2
+  verdict      reject -- repaired_champion_2p is WORSE than unrepaired_champion_2p
+
+Swapped --a/--b as a sanity check (seat-pairing symmetry): unrepaired beats
+repaired 59.8% +/- 6.1, p = 0.0015 -- consistent, not a harness artifact.
+
+THE REPAIRED CHAMPION LOSES THE A/B. Coordinator (separate concurrent sweep,
+same base file, same method) found the identical number independently:
+card_board_leader repaired to 0.0 loses to the base champion 40.2% +/- 6.1,
+p = 0.0015. Interpretation, not walked back: this is expected and does NOT
+mean the sign inversion was harmless. The frozen champion's other ~160
+coordinates were hill-climbed WHILE card_board_leader sat at -15.003 --
+every one of them is co-adapted to that specific (wrong) number, the same
+way LOSS_GATES/WONDER_DEBT_GATES's own citations describe a big civ's higher
+corruption/consumption getting silently priced INTO an unrelated penalty
+term. Zeroing one coordinate of a jointly-fit linear vector without
+re-climbing the rest is expected to regress in a single-generation A/B even
+when that coordinate was arithmetically wrong -- the fix is necessary but
+the CURRENT champion was never going to look better from it without a fresh
+climb (which now runs with the gate active throughout, not just at load).
+
+Leader take rate (botcensus, existing harness, self-play both seats on the
+same vector, 200 games, 2p, seed 1..200, "elect leader" action class):
+  repaired champion:    3.730 leaders/game  (0.0886 leaders/turn)
+  unrepaired champion:  5.275 leaders/game  (0.1257 leaders/turn)
+Repaired takes ~29% FEWER leaders overall. Read this together with the
+per-leader pricing table above, not in isolation: under the bug, leaders
+with a NEGATIVE raw board diff (Julius Caesar -2.908, Alexander -6.413,
+Genghis Khan -1.503 in the sample) get inflated to huge POSITIVE prices
+(+43.6, +96.2, +22.5) by the -15x multiplier, while genuinely HELPFUL
+leaders (Hammurabi +0.885, Aristotle +0.740, Leonardo +0.740) get inverted
+to negative and avoided. So the unrepaired champion's higher raw take-COUNT
+is driven by chasing leaders that hurt the board, not evidence it was
+picking leaders well -- it is exactly the "took a junky yellow card instead
+of a leader" complaint's mirror image (also picking leaders for the wrong
+reason). Post-repair, every leader prices near 0.0 (unpriced, not
+inverted) and gets taken only on whatever weak static-table signal survives
+-- fewer takes, but no longer a signal actively pointing at the wrong cards.
+Net: the SIGN bug is closed; the CURRENT champion's overall strength (and
+its leader judgement specifically) will only actually improve once a fresh
+climb runs under the new gate and re-prices card_board_leader/government/
+action/bonus for real, which this task's scope did not include running.
+
+SECOND FINDING, surfaced by the coordinator's own concurrent sweep and
+checked here per their request: flipping card_board_wonder's sign produced
+an EXACT null (100/100 paired deals tied, rho -1.00) against the same base
+champion -- not weak signal, literally zero decisions changed in 200 games.
+Checked cheaply: board_yields::board_yields(id, baseline) returns Some(..)
+for every one of the 16 real wonder ids on a fresh 2p round-1 board (leadersign
+binary, temporarily pointed at the wonder list, all 16 printed a real,
+non-NaN diff -- reverted back to the leader list afterward, no permanent
+change). So the swap function itself is not the dead part. The actual cause:
+cards.rs's card_potential_core has a DEDICATED wonder branch (~line
+1761-1780) that runs before the generic card_board_credit/card_board_wonder
+fallback: `let wb = w.get(WonderBoardCredit); if wb != 0.0 { if let
+Some(swap) = board_yields::board_yields(id, b) { return wb *
+sum_board_triples(&swap, w); } }`. The frozen 2p champion has
+wonder_board_credit = 0.1122858404402269 (nonzero). Since board_yields is
+Some for every real wonder, this branch returns EARLY on every wonder
+pricing call, before the line that would ever multiply by card_board_wonder
+is reached -- and the generic path's own board_yields/board_extra calls,
+if ever reached, would be asking about the SAME id/board that already
+returned None to get there, so they can never independently succeed either.
+card_board_wonder is therefore genuinely dead weight in the live 2p
+champion, fully superseded by wonder_board_credit -- a second, separate
+structural bug (two competing gates for one swap diff, one of which can
+never fire), reported to the coordinator, explicitly OUT OF SCOPE for this
+task's fix (not touched here).
+
+STEP 5 -- FULL SUITE
+---------------------
+cargo test --profile difftest (from rust/, 2 threads honored via -j 2 build
+parallelism; test execution itself is single-process, `cargo test` default):
+
+  1470 passed, 0 failed, 1 ignored (a bench_playout micro-benchmark, ignored
+  by design, unrelated to this change), across the lib and every src/bin/*.rs
+  test module plus tests/suite.
+
+Grepped every touched file for leftover conflict markers and the
+TEMP-REVERTED-FOR-*-CHECK comments used during the two RED-confirmation
+detours -- none left behind.
+
+FILES TOUCHED (all under /private/tmp/leadersign, nothing under
+/Users/pt/tta-ai touched at any point)
+------------------------------------------------------------------------
+  rust/src/bots/weighted/cards.rs   -- sum_board_triples made `pub` (was
+                                        private); no logic change.
+  rust/src/bots/weighted/eval.rs    -- new card_board_credit_keys() (pub),
+                                        new repair loop in dominance_repair,
+                                        2 new tests.
+  rust/src/bin/climb.rs             -- 1 new mutation-time guard test.
+  rust/src/bin/leadersign.rs        -- new analysis binary (this
+                                        investigation's step-1 tool).
+  LEADERSIGN.txt (repo root)        -- this file.
+  repaired_champion_2p.json,
+  unrepaired_champion_2p.json       -- scratch A/B inputs derived from
+                                        /private/tmp/rowdig/frozen_champion_2p.json,
+                                        not committed as fixtures, just used
+                                        for the arena/botcensus runs above.
+
+SUMMARY
+-------
+1. Inversion: REAL, proven empirically (leadersign binary, not just reading
+   the JSON) -- Hammurabi/Aristotle/Leonardo da Vinci price NEGATIVE despite
+   a genuinely positive board-swap diff; Julius Caesar/Alexander/Genghis Khan
+   price hugely POSITIVE despite a genuinely negative diff. Root cause:
+   `card_board_credit` (gated non-negative by BENEFIT_GATES) sums with an
+   ungated per-type offset (`card_board_leader` etc.) before scaling the
+   diff, so gating the base alone does nothing when the offset carries the
+   negative sign, which is exactly the live 2p champion's shape
+   (card_board_credit=0.0, card_board_leader=-15.003).
+2. Fix: a new `dominance_repair` rule, same shape as the existing
+   NET_NONNEG_PHASE precedent (base + modifier >= 0, repaired by raising the
+   modifier to -base), for CardBoardCredit against each of its 5 per-type
+   offsets, with the offset SET derived at runtime from board_credit_key's
+   own exhaustive match (not hand-copied). Lives inside dominance_repair
+   itself, so it is armed at both load time (load_weights) and mutation time
+   (bin/climb.rs's mutate() wrapper) automatically -- confirmed, not
+   assumed, by a dedicated mutation-time guard test.
+3. Tests: 3 new tests (2 in eval.rs, 1 in climb.rs), every one watched RED
+   by physically commenting out the fix and re-running, with verbatim
+   failure output captured above, then restored to green.
+4. Measured effect: the repair does what it says (leaders no longer
+   inverted), but the CURRENT frozen champion -- trained under the bug --
+   loses a 200-game 2p A/B against its own unrepaired self (40.2% vs 59.8%,
+   p=0.0015), because ~160 other co-adapted coordinates were fit assuming
+   card_board_leader=-15.003. Leader take rate drops ~29% post-repair
+   (5.275 -> 3.730 per game) because leaders go from "actively wrong signal"
+   to "unpriced", not because the fix is bad -- read together with the
+   per-leader pricing table, the unrepaired champion's higher take count was
+   driven by chasing leaders with NEGATIVE board value, inflated positive by
+   the bug. The gate needs a fresh climb to actually pay off in play
+   strength; that climb was out of this task's scope.
+5. Full suite: 1470 passed, 0 failed, 1 ignored, from a clean rebuild with
+   the fix in place.
+6. Side finding (reported to coordinator, explicitly not fixed here):
+   card_board_wonder is dead weight in the live 2p champion -- the dedicated
+   `wonder_board_credit` branch in card_potential_core always intercepts a
+   row wonder's pricing first (board_yields confirmed Some for all 16 real
+   wonders), so the generic card_board_wonder multiply is structurally
+   unreachable whenever wonder_board_credit != 0, which it is (0.1123) in
+   the champion that produced the coordinator's exact-null (rho=-1.00)
+   result.

@@ -1,0 +1,108 @@
+ca_left A/B(/C) experiment -- FINDINGS
+========================================
+Scratch clone: /private/tmp/caleft (from /private/tmp/wastedca)
+Engine unchanged. 200 self-play 2p games, seeds 1..200 (--seed 1, game g = seed+g
+inside each binary), base weights = COPY of /private/tmp/ipadgame/champion_2p_game.json.
+
+STEP 0 -- CLAMPING CHECK (done first, per instructions)
+---------------------------------------------------------
+Grepped dominance_repair's gate tables (NON_POSITIVE_GATES, NON_NEGATIVE_GATES,
+NET_NONNEG_PHASE, DOMINATES) in rust/src/bots/weighted/eval.rs for
+WeightKey::CaLeft -- NO MATCH. CaLeft is not a member of any dominance gate.
+
+Confirmed empirically with a temporary unit test (added, run, then reverted --
+not committed) that loaded /private/tmp/ipadgame/champion_2p_game.json through
+parse_weights():
+    EFFECTIVE ca_left = -5.440323820091495
+Identical to the raw file value. dominance_repair does NOT touch ca_left.
+CONCLUSION: arms A and B are NOT identical. The experiment is live and
+meaningful, not moot.
+
+ARMS
+----
+A (baseline): /private/tmp/caleft/weights/arm_A.json = unmodified champion copy.
+              ca_left = -5.440323820091495
+B:            same file, ca_left forced to 0.0.
+C:            same file, ca_left forced to its default weight, +0.05.
+
+RESULTS (200 games, 2p, seed 1, threads 4)
+-------------------------------------------
+
+1. % of civil actions left unspent (actioncensus, aggregate share of every CA
+   in the sample):
+     Arm A: 20.3% unspent   (taking 50.6%, other 29.0%)
+     Arm B: 49.4% unspent   (taking 29.3%, other 21.3%)
+     Arm C: 51.0% unspent   (taking 27.6%, other 21.4%)
+
+2. Take-cost distribution (behavcensus, share of all Take moves by row-slot
+   civil-action price):
+                 cost 1        cost 2        cost 3       total takes   takes/player-game
+     Arm A:      25.9%         25.6%         48.5%        7031          17.58
+     Arm B:      43.3%         27.0%         29.7%        5248          13.12
+     Arm C:      47.5%         26.3%         26.2%        5195          12.99
+
+3. Mean civil actions spent per game / cards taken per player-game:
+     Arm A: ~130.9 CA spent/game, 33.3 CA unspent/game, 17.58 cards taken/player-game
+     Arm B: ~90.2  CA spent/game, 88.0 CA unspent/game, 13.12 cards taken/player-game
+     Arm C: ~87.6  CA spent/game, 91.0 CA unspent/game, 12.99 cards taken/player-game
+   (spent/unspent per game derived from actioncensus per-player-turn means x
+   turn counts / 200 games; see method note below.)
+
+4. Head-to-head win rate (arena, 200 games = 100 deals x 2 seats, 2p, seed 1):
+     Arm B vs Arm A: B wins 38.2% (+/-6.6), null 50%, p=0.0004 -- REJECT,
+        B is significantly WORSE than A.
+     Arm C vs Arm A: C wins 37.0% (+/-6.7), null 50%, p=0.0001 -- REJECT,
+        C is significantly WORSE than A.
+
+VERDICT
+-------
+Zeroing ca_left DOES cut the expensive (cost-3) take share sharply -- from
+48.5% down to 29.7% of all takes, a real and large effect in the direction
+the hypothesis predicted. But that is not evidence the negative weight was
+"buying the price": removing it does not make the bot take the SAME cards
+more patiently. Instead the bot's civil-action spending collapses almost
+across the board -- total takes per player-game drop 25% (17.58 -> 13.12),
+"other" (non-Take) CA spending drops too (29.0% -> 21.3% share), and nearly
+half of all civil actions now go completely unspent (20.3% -> 49.4%). The
+negative ca_left weight is not narrowly a "row-take price bonus"; at the
+strength trained (-5.44), it is the dominant force making the evaluator
+prefer DOING SOMETHING over ending the turn at all. Strip it and the bot
+becomes passive, not patient.
+
+Consistent with this, forcing ca_left to its default +0.05 (arm C) makes
+things WORSE in the same direction, not better -- more waste (51.0%), fewer
+takes (12.99/player-game), lowest cost-3 share (26.2%). Waste and cost-3
+share move together, monotonically, across all three ca_left settings
+(-5.44 -> 0.0 -> +0.05: waste 20.3% -> 49.4% -> 51.0%; cost-3 share 48.5% ->
+29.7% -> 26.2%). There is no free lunch in this one-weight cut: the
+expensive-take share and the unspent-CA rate are the same lever, moving in
+opposite directions together, not two independent bugs.
+
+Both arm B and arm C lose head-to-head to the trained champion (arm A) at
+p<0.001 over 200 games (38.2% and 37.0% win rate respectively, vs a 50%
+null). Zeroing ca_left is a clear NET REGRESSION on actual game outcome,
+despite improving the specific take-cost-distribution number the original
+hypothesis cared about. This is a clean negative result for the hypothesis
+as an actionable fix: the -5.44 ca_left weight is doing real, positive work
+for the champion's win rate, not merely an artifact that inflates expensive
+takes for no benefit. If cost-3 takes are still considered a problem, this
+single-weight zeroing is not a viable fix -- it trades a take-cost cosmetic
+improvement for a much larger, measured loss in games won.
+
+METHOD NOTES
+------------
+- actioncensus.rs measures metric 1 (unspent-CA share) and the per-player-turn
+  taking/other/unspent means used to derive metric 3's CA-spent numbers.
+- behavcensus.rs's "Take cost" section measures metric 2 (1/2/3-CA take-cost
+  distribution) and reports takes/player-game directly.
+- arena.rs is the existing A/B duel binary; used directly for metric 4, no new
+  code needed.
+- No source files were modified in the final state (the one temporary unit
+  test added to probe dominance_repair's output was reverted before any
+  build/run below it). No commits were made; nothing needed changing in
+  rust/src for this experiment since actioncensus, behavcensus, and arena
+  already existed in this clone and needed no Cargo.toml registration
+  (src/bin/*.rs auto-discovery).
+- All commands run from /private/tmp/caleft/rust with
+  PATH="$HOME/.cargo/bin:$PATH", --profile difftest only, never --release.
+- /Users/pt/tta-ai was never touched; no git command was ever run there.

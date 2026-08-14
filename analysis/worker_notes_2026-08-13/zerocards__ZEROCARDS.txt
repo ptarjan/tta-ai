@@ -1,0 +1,121 @@
+ZEROCARDS.txt -- status: STOPPED BY SCOPE CHANGE, no code changes made
+=======================================================================
+
+Paul's instruction arrived mid-investigation: "fix more scoring" actually
+means fixing SCORE COMPUTATION on replayed human games (engine final score
+vs. game-log final score), not evaluator card-pricing weights. This
+card-pricing task (zero-decomposing cards + Leaders pricing channel) is
+OFF-TARGET for right now and was stopped before any file was edited.
+
+No `Edit`/`Write` calls were made against any file under
+/private/tmp/zerocards/rust/src. `git status --short` in
+/private/tmp/zerocards/rust shows zero changes to tracked files (only
+unrelated untracked scratch files from other workers in /private/tmp/
+zerocards/, none of which I touched). There is nothing to commit.
+
+WHAT WAS FOUND (investigation only, not yet acted on)
+-------------------------------------------------------
+
+1. Zero-decomposing cards -- root cause located, not yet measured
+   exhaustively.
+
+   `card_yields` (rust/src/bots/weighted/cards.rs:221-426) has exactly one
+   `match sp { ... }` over `card.special` (lines 374-407), and it ends in a
+   catch-all `_ => {}` (line 405) that currently only documents skipping
+   `Special::FreeCivilAction` deliberately -- but the wildcard also silently
+   swallows every OTHER `Special` variant nobody has explicitly matched,
+   including `Special::AllPlayers(EventBlock)`. That wildcard is the
+   "explicit no-op in the dispatcher" the task description points at.
+
+   Confirmed by reading card_table.rs directly (not yet by running a
+   measurement binary -- that step never happened):
+     - "Development of Settlement" (card_table.rs:2996-3014):
+       special: &[Special::AllPlayers(EventBlock { increase_population: 1,
+       ...all else zero })] -- production/effects/immediate_effects all
+       zero. Decomposes to nothing today.
+     - "Development of Science" (card_table.rs:3015-3033):
+       special: &[Special::AllPlayers(EventBlock { science: 2, ...all else
+       zero })] -- same story, decomposes to nothing today.
+
+   I did NOT yet write the throwaway "run every card through card_yields
+   and print the all-zero ones" binary/test the task asked for as step one,
+   so I cannot report the FULL measured list -- only these two, found by
+   inspection, are confirmed. There are likely more: `DELIBERATELY_UNPRICED`
+   bucket 6 in cards.rs (lines 796-819) lumps `allPlayers` in with genuinely
+   target-selecting keys (`strongestPlayer`, `weakestPlayer`,
+   `playerWithMostCulture`, etc.) under one blanket reason ("addressing:
+   names who an event or pact side applies to, not a yield") -- that reason
+   is factually wrong for `AllPlayers` specifically: an all-players block is
+   not conditional targeting, it unconditionally includes the pricing
+   player, so "an event that grants each player something should decompose
+   to that something" (the task's own instruction) applies directly. The
+   fix that was NOT yet made: give `AllPlayers(EventBlock)` its own match
+   arm in card_yields's Special loop that pushes the SAME per-field mapping
+   `event_block_value` already uses in bots/weighted/events.rs:229-250
+   (block.science -> WeightKey::Science, block.food -> WeightKey::FoodStock,
+   block.increase_population -> WeightKey::FreeWorkers, etc.) as
+   YieldKind::Gain triples, and separately re-examine whether `allPlayers`
+   should stay in DELIBERATELY_UNPRICED at all once that arm exists (it
+   should not, once real cards route through the new arm -- the entry
+   would need to be removed or narrowed, which touches an existing
+   DELIBERATELY_UNPRICED line, not just an append, so needs care under the
+   "no reorder, append-only" constraint on weights.rs -- cards.rs itself
+   has no such constraint since the concurrent worker only owns
+   features.rs/weights.rs).
+
+   `Special::Gain`/`Special::Lose` (also lumped in the same
+   DELIBERATELY_UNPRICED bucket 6, cards.rs:818-819) looked like a related
+   but separate question -- I was mid-check of whether any base-game card
+   prints a STANDALONE `Special::Gain(block)`/`Special::Lose(block)` (i.e.
+   not paired with StrongestPlayer/WeakestPlayer targeting, the way Foray/
+   Raiders use them per bots/weighted/events.rs:1696/1707) when the scope
+   change arrived. That check (grep for "Foray"/"Raiders" in card_table.rs
+   was issued but its output was never read) is unresolved -- worth
+   re-running before touching Gain/Lose.
+
+2. Leaders pricing channel -- NOT YET INVESTIGATED. I had read
+   board_yields.rs's header comments (clone-mutate-diff swap machinery) and
+   card_yields's `board_credit_key` (cards.rs:519-567, confirms
+   `CardType::Leader => Some(WeightKey::CardBoardLeader)` exists as an
+   OFFSET key, not the swap-diff itself) but had not yet traced whether
+   board_yields::board_yields's clone/mutate/diff path actually covers
+   assigning/swapping a Leader, nor checked CardBoardLeader's default
+   weight value. This is the task's second target and is completely open --
+   no verdict, no file:line evidence beyond the one `board_credit_key` line
+   above.
+
+WHERE TO RESUME
+----------------
+1. Write the throwaway measurement (a `#[cfg(test)]` in cards.rs or a
+   `src/bin/*.rs` scratch binary, per the task's own suggestion) that calls
+   `card_yields` for every `CardId` in `crate::card_table::CARDS` and prints
+   every card whose output `Vec<CardYield>` is empty or sums to all zero
+   amounts. Get the FULL list before fixing anything.
+2. For each all-zero card, read its real effect in card_table.rs and cross-
+   reference sources/ (BGA implementation) + docs/RULES_SPEC.md before
+   deciding fixable-honestly vs. DELIBERATELY_UNPRICED-with-a-specific-
+   reason.
+3. For `AllPlayers(EventBlock)` specifically: add a match arm in
+   card_yields's `for &sp in card.special` loop (cards.rs ~374-407) mapping
+   EventBlock fields to WeightKey Gain triples, mirroring
+   bots/weighted/events.rs:229-250's `event_block_value` field list exactly
+   (do not invent a second field-to-weight table). Then narrow/remove the
+   generic "allPlayers" DELIBERATELY_UNPRICED entry (cards.rs:803) since it
+   would no longer be true for a card that now prices through the new arm --
+   keep it (or a narrower version) only if some AllPlayers block genuinely
+   still can't be priced (e.g. one with only boolean/rule-change fields set,
+   no EventBlock field the WeightKey vocabulary covers).
+4. Add a `#[cfg(test)]` regression per fixed card asserting a nonzero
+   decomposition, confirm RED by reverting, then confirm GREEN.
+5. Only after (1)-(4): investigate the Leaders question fresh (board_yields
+   clone/mutate/diff path, CardBoardLeader's default in weights.rs, whether
+   assigning a Leader actually flows through effects::compute the way a
+   Wonder swap does) and report a plain verdict with file:line evidence --
+   do not invent a new coordinate unless the hole is real.
+6. Remember the concurrency constraint if resumed: another worker owns
+   rust/src/bots/weighted/features.rs and weights.rs from the same base
+   commit -- any weights.rs touch must be strictly appended, never
+   reordered/reformatted.
+
+No `cargo test` was run this session (nothing was changed that needed
+verifying). No commit was made -- there is nothing to commit.

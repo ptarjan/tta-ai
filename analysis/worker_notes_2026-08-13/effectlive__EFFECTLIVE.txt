@@ -1,0 +1,301 @@
+EFFECTLIVE.txt
+===============
+Investigation: can the planned climb-with-effect-weights test actually
+produce a real answer, or will it silently fail to move the coordinates it
+is meant to test? Working copy: /private/tmp/effectlive (cp -Rc of
+/private/tmp/effectscope, itself read-only prior work at
+/private/tmp/effectlive/EFFECTSCOPE.txt). No edits to rust/src evaluator
+code; one throwaway measurement binary was added
+(rust/src/bin/effectcensus.rs) and is NOT committed -- nothing in this
+report required a functional change.
+
+
+===========================================================================
+HEADLINE
+===========================================================================
+
+The planned climb CAN produce a meaningful answer. Nothing found here is
+the "flat, null-looking result" failure mode the task was worried about.
+
+  - The climb's mutation set is `WeightKey::ALL` (the compiled Rust enum),
+    filtered only by a one-entry FROZEN list (just `Culture`) -- it does
+    NOT depend on which keys happen to be present in the starting champion
+    JSON file. A key absent from the file is not unreachable; it loads at
+    its compiled default (0.0 for these six) and is exactly as mutable as
+    every other key from generation 1.
+  - No dead branch, feature flag, or extra gate stands between a nonzero
+    weight on any of the six candidate coordinates and `evaluate()`'s
+    output. The only `if`s guarding them are `!= 0.0` short-circuits (an
+    optimization: skip the compute when the multiplying weight is
+    currently 0), not correctness gates.
+  - All six coordinates' underlying features/functions fire (are nonzero)
+    in real self-play positions, at rates from 15.6% to 92% depending on
+    the coordinate and player count, with magnitudes on the same order as
+    -- or larger than -- an established, heavily-trained coordinate
+    (`Culture`).
+
+Conclusion: no code change was required to make the test possible. Nothing
+was changed.
+
+
+===========================================================================
+Q1. Can the climb move them? (the single most important question)
+===========================================================================
+
+ANSWER: the mutation set is `WeightKey::ALL` (the compiled enum), NOT the
+keys present in the loaded champion JSON. A key absent from the champion
+file is fully reachable from generation 1.
+
+Evidence, read in this order:
+
+1. Loading (`rust/src/bots/weighted/eval.rs:1037-1099`, `parse_weights`):
+   line 1060, `let mut w = Weights::defaults();` -- the vector starts at
+   EVERY key's compiled default, not empty. The loop at 1061-1078 then
+   overwrites only the fields the JSON text actually contains
+   (`w.set(key, v)`, line 1077). A key never mentioned in the file simply
+   keeps the value `Weights::defaults()` gave it
+   (`WeightKey::default_weight()`, weights.rs) -- currently 0.0 for all six
+   candidate keys (weights.rs:599,606,607,619,683,731). This is not a
+   "keys present in the file are the only live keys" scheme; it is
+   "every compiled key is always live, the file is a sparse override."
+
+2. Mutation (`rust/src/bin/climb.rs`):
+   - `mutate_raw` (line 270-272):
+     ```
+     let keys: Vec<WeightKey> =
+         WeightKey::ALL.iter().copied().filter(|k| movable(*k)).collect();
+     ```
+     Built straight off the compiled `WeightKey::ALL` list -- not off the
+     champion struct's own populated fields, not off any "keys seen so
+     far" set.
+   - `movable` (line 126-128): `!FROZEN.contains(&key)`.
+   - `FROZEN` (line 94): `const FROZEN: &[WeightKey] = &[WeightKey::Culture];`
+     -- exactly one entry, and it is not any of the six candidates.
+   - `runaway_weights` (line 142-150) iterates the same
+     `WeightKey::ALL.filter(movable)` set for its own bookkeeping,
+     confirming this is the one shared notion of "what can move" the
+     binary uses, not a one-off in `mutate_raw`.
+
+3. CLI surface: `parse_args` in climb.rs (grepped every `"--..."` flag,
+   lines ~836-870) has no `--keys`, `--only-keys`, or any other flag that
+   restricts the candidate key set by name or by "what's in the starting
+   file." `--start` and `--anchor` both load a `Weights` through the same
+   `load_weights`/`parse_weights` path in (1) above, so neither can smuggle
+   in a narrower key set either.
+
+MEASURED corollary: since `parse_weights` seeds absent keys at their
+compiled default and the mutator's key list is `WeightKey::ALL` regardless
+of the loaded file, running the climb from ANY existing champion file
+(2026-08-08 gauntlet frozen files included, none of which mention these six
+names) still gives the mutator all six keys from generation 1, exactly as
+if a brand-new `Weights::defaults()` vector had been the start file.
+
+This directly rules out the specific failure mode this project was burned
+by before (a key present in the compiled enum but invisible to the
+mutator because it never appeared in the seed file) -- that failure mode
+would require the mutation set to be built from `doc.get("weights")`'s own
+keys, and it is not; it is built from the enum.
+
+
+===========================================================================
+Q2. Are they gated off by anything else once nonzero?
+===========================================================================
+
+Verified each of the six reaches `evaluate()`'s arithmetic once its weight
+leaves 0.0, with no dead branch in between:
+
+- `WonderPotential`, `WonderPromise` (eval.rs:336-347): plain
+  `if wp != 0.0 { total += wp * cards::wonder_potential(...) }` and the
+  `WonderPromise` mirror. `cards::wonder_potential`/`wonder_promise`
+  (cards.rs:2039-2133, `wonder_value_scaled`) early-return 0.0 only when
+  the PLAYER has no wonder in progress (`p.wonder.is_none()`, cards.rs:2111)
+  or the delayed-payoff discount is exactly 0.0 (cards.rs:2117) -- both
+  genuine board-state facts, not code that disables the mechanism.
+  IMPORTANT SUB-FINDING: `wonder_value_scaled` does NOT require
+  `CardBoardCredit` to be nonzero to produce a real, differentiating value.
+  When `CardBoardCredit == 0.0` it falls back to the STATIC `card_yields`
+  table (cards.rs:2130-2132), which already reads a wonder's own printed
+  `CardEffects` (civil_actions, culture, happy, ...) and prices them
+  through the ALREADY-LIVE, already-trained coordinates `CivilActions`,
+  `Culture`, `HappyMargin`, etc. (`gains_only_sum`, cards.rs:996-1016, the
+  `YieldKind::Gain` arm applies no extra credit multiplier at all). So
+  Pyramids (civil_actions:1) and Hanging Gardens (culture:1, happy:2)
+  differentiate through `wonder_potential`/`wonder_promise` as soon as
+  THEIR OWN weight is nonzero, independent of `CardBoardCredit` -- matching
+  the existing tests `two_wonders_with_different_powers_score_identically
+  _at_the_moment_they_are_taken` / `pricing_wonder_promise_is_what_lets_
+  the_evaluator_tell_pyramids_from_hanging_gardens` (cards.rs:3305,3353),
+  which only added `CardBoardCredit=1.0` for extra precision (catching
+  Special-driven riders like Great Wall's per-unit strength scaling), not
+  as a prerequisite.
+  `eval::DOMINATES` (eval.rs:848-851) pins `WonderPotential >= WonderPromise`
+  -- a repair, not a kill switch: it raises the dominant side, never zeros
+  either.
+
+- `CardBoardCredit` (cards.rs:1842-1878, `card_potential_core`): gates a
+  richer board-swap-diff path for Leader/Government/Wonder cards in hand
+  (line 1847, `if base == 0.0 && credit_board == 0.0` falls back to the
+  static path). This is the one coordinate of the six where the fallback
+  genuinely is starved for some card types: a Leader/Government's whole
+  effect is typically a `Special` variant with an all-zero flat
+  `CardEffects`, so the static fallback prices it at 0 until
+  `CardBoardCredit` (or its per-type offset, e.g. `CardBoardLeader`) moves
+  off zero. That is exactly the gap this coordinate exists to close, not a
+  gate that prevents it from being learned -- Q3 confirms the underlying
+  board-swap diff is large and fires constantly once probed.
+
+- `WonderAgeOverrun`, `HandPerishable`, `TakeCostShare`
+  (features.rs:536-633, computed unconditionally inside `features()`,
+  which is NOT gated by `priced_only` for these three -- the ONE feature
+  that speed-switch skips is `EventScoringMargin`, features.rs:642,
+  confirmed by grepping every use of the `unpriced` local, there is
+  exactly one). They are read back by `evaluate()`'s main `WeightKey::ALL`
+  loop (eval.rs:162-185) like any other linear coordinate -- the `if wk ==
+  0.0 { continue; }` at line 179 is the same "skip computing a zero
+  contribution" optimization as everywhere else, not a correctness gate,
+  and none of the three appear in `PHASE_KEYS` (the only list that routes
+  a key to different arithmetic).
+
+No feature flag, `#[cfg(...)]`, or additional dead branch was found gating
+any of the six. `dominance_repair` (eval.rs:916 onward) and the
+`non_positive_gates`/`non_negative_gates` machinery (eval.rs:881-895,
+derived exhaustively from `WeightKey::sign_intent`, weights.rs) apply sign
+REPAIRS to these keys like every other key -- they constrain which sign a
+mutant is allowed to settle on, they do not prevent movement.
+
+
+===========================================================================
+Q3. Do the features actually fire? (empirical, self-play)
+===========================================================================
+
+MEASURED with a purpose-built, throwaway census binary
+(`rust/src/bin/effectcensus.rs`, not committed) that plays real self-play
+games with the current frozen 2026-08-08 gauntlet champion at each player
+count and, at every real decision point, reads:
+  - `cards::wonder_potential`/`wonder_promise` directly (the exact values
+    `evaluate()` would multiply by the candidate weight)
+  - whether the actor's hand holds a Leader/Government (the swap types
+    `CardBoardCredit`'s board-aware path exists for), and, with a
+    measurement-only probe vector (`CardBoardCredit` temporarily set to
+    1.0, never saved), the resulting `card_potential` value
+  - `features().get(...)` for `WonderAgeOverrun`, `HandPerishable`,
+    `TakeCostShare`, and `Culture` (the scale-comparison coordinate)
+
+150 self-play games per player count (2p/3p/4p), champion files:
+`analysis/frozen/gauntlet/champion_{2,3,4}p_gen*_140key_2026-08-08.json`.
+
+2p (36,556 decision points):
+  wonder_potential            34.39% nonzero   |v| mean 3.04   max 69.98
+  wonder_promise               39.43% nonzero   |v| mean 2.68   max 46.19
+  hand has Leader/Gov card     33.93% nonzero   |v| mean 132.00 max 523.62
+  wonder_age_overrun           15.61% nonzero   |v| mean 1.63   max 9.62
+  hand_perishable               88.30% nonzero   |v| mean 1.43   max 4.43
+  take_cost_share               51.28% nonzero   |v| mean 0.64   max 1.00
+  Culture (comparison)          82.78% nonzero   |v| mean 15.67  max 116.00
+
+3p (57,676 decision points):
+  wonder_potential              20.62% nonzero   |v| mean 5.14   max 36.17
+  wonder_promise                 37.24% nonzero   |v| mean 7.30   max 60.39
+  hand has Leader/Gov card       62.77% nonzero   |v| mean 98.70  max 367.36
+  wonder_age_overrun             31.55% nonzero   |v| mean 2.41   max 15.00
+  hand_perishable                 89.01% nonzero   |v| mean 1.49   max 5.67
+  take_cost_share                 44.17% nonzero   |v| mean 0.57   max 1.25
+  Culture (comparison)            88.01% nonzero   |v| mean 21.97  max 141.00
+
+4p (95,254 decision points):
+  wonder_potential                21.32% nonzero   |v| mean 53.44  max 264.23
+  wonder_promise                   33.81% nonzero   |v| mean 49.84  max 368.59
+  hand has Leader/Gov card          63.45% nonzero   |v| mean 64.23  max 306.74
+  wonder_age_overrun                19.94% nonzero   |v| mean 4.49  max 15.00
+  hand_perishable                   90.00% nonzero   |v| mean 1.31  max 4.96
+  take_cost_share                   36.96% nonzero   |v| mean 0.62  max 1.20
+  Culture (comparison)              92.00% nonzero   |v| mean 44.99  max 320.00
+
+No coordinate was ever zero across all sampled positions. Every one of the
+six fires on a double-digit-to-90% share of real decisions, at every player
+count tested. This is the opposite of the `auction_bid`/`auction_committed`
+defect the task cites as precedent (0 of 63,917 positions) -- there is no
+analogous dead coordinate here.
+
+
+===========================================================================
+Q3b. Scale comparison
+===========================================================================
+
+IMPORTANT UNIT CAVEAT: `wonder_potential`/`wonder_promise`'s reported
+values already have OTHER live weights baked in internally
+(`gains_only_sum`/`sum_board_triples` multiply by the current
+`CivilActions`/`Culture`/`HappyMargin`/etc. weights before returning, per
+Q2) -- they are "contribution per unit of `WonderPotential`/`WonderPromise`
+weight," the same units `evaluate()` actually multiplies. `Culture`'s
+reported value is the RAW feature (culture stock), still needing its own
+trained weight applied. That makes the comparison exactly the right one for
+"how much would assigning this coordinate a modest weight move the total
+score": wonder_potential's mean contribution-per-unit-weight (3.0 at 2p,
+5.1 at 3p, 53.4 at 4p) is the same order of magnitude as, and at 4p
+considerably LARGER than, Culture's mean raw feature value (15.7 / 22.0 /
+45.0) which itself gets multiplied by Culture's own (nonzero, trained)
+weight to matter. The `hand has Leader/Gov` probe (mean 64-132, using a
+`CardBoardCredit=1.0` stand-in) is larger still. `wonder_age_overrun` (mean
+1.6-4.5), `hand_perishable` (mean 1.3-1.5) and `take_cost_share` (mean
+0.57-0.64, capped at 1.0-1.25 by construction, a genuine ratio) are smaller
+in raw terms but nonzero on 16-90% of positions, comparable to several
+existing small-weight coordinates already live in the champion (not
+measured here, but these are ordinary-sized linear features, not
+vanishingly small ones).
+
+None of the six needs a implausibly large or implausibly tiny weight to
+matter -- a climb that tries values in the same range it already tries for
+every other coordinate will produce genuine, measurable score movement from
+all six.
+
+
+===========================================================================
+Q4. Was anything changed?
+===========================================================================
+
+NOTHING was changed in `rust/src`. Q1-Q3 establish that the mutation set
+already covers all six candidate keys unconditionally, that no gate blocks
+them once nonzero, and that their features fire at healthy rates and scale
+in real positions. There is no "smallest change" to make because nothing
+is broken. Per the task's own instruction ("If nothing needs to change,
+change nothing and say so") -- said here, plainly: change nothing.
+
+The only file added is `rust/src/bin/effectcensus.rs`, a throwaway
+measurement binary (see Q3) that is NOT committed and is not part of the
+deliverable -- it exists only to produce the numbers in this report.
+
+
+===========================================================================
+Q5. Tests
+===========================================================================
+
+`cargo test --profile difftest` (full suite, this copy, after adding the
+throwaway `effectcensus` binary): 1518 passed, 0 failed, 2 ignored
+(`bench_playout::bench_random_playouts`, an intentionally-ignored
+benchmark, counted twice across two test binaries that both declare it).
+No RED/GREEN test pair was needed or added, per Q4 -- no functional change
+was made for a test to guard.
+
+
+===========================================================================
+What I could NOT verify
+===========================================================================
+
+- I did not run an actual climb generation (no league/climb start --
+  explicitly out of scope per the task's hard rules; that is the
+  coordinator's job). Everything above is static-code verification plus
+  an offline self-play census, not a live climb observation.
+- `card_board_credit_keys()` (eval.rs:816-829) walks the real card table
+  once (cached behind a `OnceLock`) to build the per-type offset list
+  (`CardBoardLeader`, etc.) -- I read this and it looks correct and
+  automatic, but did not independently re-derive its output.
+- I did not audit every one of the ~140 other `WeightKey` variants for
+  similar dormant-coordinate risk -- only the six named in the task
+  (`WonderPromise`, `WonderPotential`, `CardBoardCredit`,
+  `WonderAgeOverrun`, `HandPerishable`, `TakeCostShare`) plus `Culture` as
+  the scale comparator.
+- The magnitude numbers are from ONE frozen champion snapshot per player
+  count (the latest 2026-08-08 gauntlet file); I did not check whether
+  these statistics move meaningfully across different champion snapshots
+  or across `--seed` choices beyond the one base seed used here.

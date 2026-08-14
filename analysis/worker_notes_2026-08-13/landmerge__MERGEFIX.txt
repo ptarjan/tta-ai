@@ -1,0 +1,350 @@
+MERGEFIX -- merging strgate/forceopen/earlymil/signaudit/phasecut into one branch
+==============================================================================
+STATUS: COMPLETE.
+
+Working clone: /private/tmp/mergefix (`cp -Rc /private/tmp/strgate /private/tmp/mergefix`).
+No changes made in /private/tmp/strgate, /private/tmp/phasecut, /private/tmp/signaudit,
+/private/tmp/forceopen, /private/tmp/earlymil, /Users/pt/tta-ai, or /Users/pt at any point
+(strgate's own prebuilt `arena` binary was RUN, read-only, for proof 6 below -- nothing
+in that clone was written to). No worktree isolation used (single clone, single working
+tree, sequential operations only).
+
+
+(1) ANCESTRY ESTABLISHED
+-----------------------------------------------------------------------------
+Starting clone (`cp -Rc /private/tmp/strgate`) HEAD log (top 12):
+  f0df90a Add a rules-derived round floor to combat_unreachable; extend strengthrelab
+  6d26d9d Replace round<=3 strength-gate literal with a computed rulebook fact
+  983809a Checkpoint EARLYMIL.txt with parallel-worker findings (BASISCUT, phasecut)
+  578ee9e Fix StrengthRel's always-on base overvaluing early military strength
+  6168d5a Merge the weight sign-intent audit into the forced-opening work
+  ec626cc Structural sign-intent audit: close the card_board_leader bug class for good
+  55b2f3e Force the mined human openings onto the champion and measure the payoff
+  35eafe1 Add canonical-openings measurement: human corpus vs bot self-play
+  0484319 Merge leader board-credit gate into the seat-search work
+  dd589e7 Add --gauntlet-search: wire the human+search hybrid into climb's pool veto
+  92de46f Give Seat a search field: root-shortlist+beam hybrid, expressible outside kindmatch
+  8ad3745 Gate CardBoardCredit's per-type leader/gov/action/wonder/bonus offsets
+
+`git merge-base --is-ancestor <c> HEAD` checked for every required parent commit BEFORE
+touching anything:
+  ec626cc (signaudit)  -> ALREADY ANCESTOR
+  55b2f3e (forceopen)  -> ALREADY ANCESTOR
+  578ee9e (earlymil)   -> ALREADY ANCESTOR
+  6d26d9d (strgate)    -> ALREADY ANCESTOR
+  f0df90a (strgate)    -> ALREADY ANCESTOR
+  phasecut (521e718, 7697c73) -> NOT an ancestor. `git merge-base HEAD phasecut/master`
+    = ec626cc (phasecut branched from signaudit's own tip, same starting point
+    forceopen/earlymil/strgate branched from, but never picked up any of THEIR commits --
+    confirmed by phasecut's own log: 7697c73 -> 521e718 -> ec626cc -> 35eafe1 -> 0484319 -> ...).
+
+CONCLUSION: only phasecut needed an actual merge. Added as a remote and fetched:
+  git remote add phasecut /private/tmp/phasecut
+  git fetch phasecut
+
+
+(2) THE HAZARD -- read PHASECUT.txt and STRGATE.txt (both read-only) first
+-----------------------------------------------------------------------------
+Both docs read in full before touching anything. Summary of the load-bearing fact:
+
+  * PHASECUT.txt Section 0 ("SCOPE CHANGE FROM A PARALLEL COLLISION") records that
+    phasecut's own author READ EARLYMIL.txt mid-task, discovered earlymil's round-gated
+    StrengthRel blend makes that ONE triple (StrengthRel/StrengthRelEarly/StrengthRelLate)
+    genuinely non-redundant (3 real degrees of freedom across two regimes, not the same
+    provable 2-DOF redundancy the other three triples have), and DELIBERATELY EXCLUDED it
+    from the T1-A/C/D collapse. Only Workers/TechLevels/HandValue were collapsed to a
+    2-parameter {start,end} basis; StrengthRel's triple, and its whole code path, was left
+    "untouched byte-for-byte in this clone" (PHASECUT.txt's own words).
+  * STRGATE.txt documents the OTHER half: replacing earlymil's `state.round <= 3` magic
+    constant with `horizon::combat_unreachable(state)`, a rules-derived predicate, still
+    gating the SAME 3-parameter StrengthRel formula phasecut declined to touch.
+
+So the two branches' changes are DESIGNED to be compatible (phasecut's author read
+EARLYMIL.txt specifically to avoid stepping on this), and the merge's job was mechanical:
+combine phasecut's Workers/TechLevels/HandValue collapse with strgate's combat_unreachable
+StrengthRel gate, in the same file, without accidentally collapsing StrengthRel too.
+
+
+(3) CONFLICTS AND RESOLUTIONS
+-----------------------------------------------------------------------------
+`git merge --no-commit --no-ff phasecut/master` produced conflicts in exactly ONE file,
+`rust/src/bots/weighted/eval.rs`, at THREE locations. `rivals.rs`, `registry.rs`, and
+`weights.rs` merged automatically with git's own 3-way merge (no manual resolution
+needed) -- verified by reading their resulting diffs (Section 3d) rather than trusting
+the absence of conflict markers alone.
+
+3a. `evaluate()`'s `WeightKey::ALL` skip condition (line ~162)
+    HEAD (strgate/earlymil side) skipped only `StrengthRel` here (its base term moves
+    into the dedicated block further down). phasecut's side skipped only
+    `Workers`/`TechLevels`/`HandValue` (their base term becomes the collapsed `start`
+    value, added in the phase loop instead). BOTH skips are needed simultaneously --
+    this generic loop must skip all four PHASE_KEYS now, for two different reasons.
+    Resolved to `if PHASE_KEYS.contains(&k) { continue; }`, with a combined comment
+    explaining both reasons. This is not a "pick a side" resolution -- it is the union
+    of both conditions, which is what correctness actually requires.
+
+3b. The large doc comment above the phase-blended body (line ~187-256)
+    Pure documentation conflict -- the two sides wrote different explanations of the
+    same code region because each explains only their own change. Combined into one
+    comment covering both formulas (start/end convex blend for the collapsed three;
+    the combat_unreachable-gated affine blend for StrengthRel) plus the STRUCTURAL FIX
+    rationale (why StrengthRel is different) that HEAD's side had and phasecut's did not
+    need. No code was in this conflict region at all -- confirmed the actual formula
+    code just below (the `if horizon::combat_unreachable(state) {...} else {...}` block
+    for StrengthRel, and the `for &k in PHASE_KEYS { ... matches!(...) ... }` loop for
+    the collapsed three) auto-merged CORRECTLY with no conflict, because the two
+    branches' code edits did not textually overlap -- git's 3-way merge combined them
+    verbatim. Read and traced by hand to confirm: StrengthRel's block computes
+    `early*early_full*v + late*late_full*v` under `combat_unreachable`, exactly
+    strgate's formula; the PHASE_KEYS loop's `matches!` branch computes
+    `start*early*vv`/`end*late*vv` for Workers/TechLevels/HandValue, exactly phasecut's
+    formula; StrengthRel is `continue`d out of that same loop first (line ~298) so it is
+    never double-priced.
+
+3c. `linear_features()`'s matching doc comment (line ~632-654)
+    Same shape as 3b -- comment-only conflict, complementary (not contradictory)
+    explanations of `Workers`/`TechLevels`/`HandValue`'s `out[k] = v*early` overwrite
+    vs. `StrengthRel`'s `out[StrengthRel] *= late` overwrite. Combined into one comment.
+    The code immediately below (the `if horizon::combat_unreachable(state) {
+    out[WeightKey::StrengthRel as usize] *= late; }` guard, and the `matches!` branch
+    in the `for &k in PHASE_KEYS` loop) again auto-merged correctly with no conflict,
+    for the same reason as 3b.
+
+3d. Files that merged with NO conflict at all (verified by reading the diff, not
+    just trusting silence):
+    - `rust/src/bots/weighted/weights.rs`: phasecut's WeightKey enum edit (removes
+      WorkersEarly/TechLevelsEarly/HandValueEarly) and strgate's/earlymil's edits
+      (which never touched those three variants) landed on disjoint lines. Confirmed
+      the resulting PHASE_KEYS doc comment already correctly describes BOTH mechanisms
+      ("StrengthRel keeps the OLD 3-parameter shape (with a parallel fix, commit
+      578ee9e, further round-gating it)") -- this is not an artifact of the merge, it
+      is phasecut's OWN original comment text, written with knowledge of earlymil
+      (Section 2 above) before the merge ever happened.
+    - `rust/src/bots/weighted/registry.rs`: phasecut's PHASE_SUFFIXED_NO_LITERAL_READER/
+      NOT_SET_BY_FEATURES table shrinks (8 -> 5 entries) landed on lines strgate/
+      earlymil never touched.
+    - `rust/src/bots/weighted/rivals.rs`: phasecut's `feature_marginal` edit (the
+      generic PHASE_KEYS branch, `matches!` split for the collapsed three) and
+      earlymil's/strgate's `strength_marginal` (a SEPARATE, dedicated function --
+      confirmed at line 737, untouched by this diff, still calling
+      `horizon::combat_unreachable`) never overlap in the same function at all. Read
+      the merged `feature_marginal` diff directly (Section headline output, reproduced
+      here): it now branches `matches!(key, Workers|TechLevels|HandValue)` to the
+      start/end convex blend, `else` to the original `w.get(key.early())`/
+      `w.get(key.late())` blend used for StrengthRel -- exactly the intended combination.
+
+
+(4) STRENGTH_REL CONFIRMATION
+-----------------------------------------------------------------------------
+Explicitly checked post-merge, not assumed:
+  $ grep -n "StrengthRel\b\|StrengthRelEarly\|StrengthRelLate\|WorkersEarly\|TechLevelsEarly\|HandValueEarly" rust/src/bots/weighted/weights.rs
+    135: StrengthRel,           (base key -- present)
+    312: StrengthRelEarly,      (present)
+    313: StrengthRelLate,       (present)
+    -- WorkersEarly / TechLevelsEarly / HandValueEarly: ABSENT (correctly removed by
+       phasecut's collapse; only Workers/TechLevels/HandValue base keys and
+       WorkersLate/TechLevelsLate/HandValueLate remain for those three).
+
+CONFIRMED: strength_rel kept all three of its keys (StrengthRel, StrengthRelEarly,
+StrengthRelLate). The merge did NOT collapse it. This matches PHASECUT.txt's own
+explicit recommendation to the coordinator (Section 10: "do NOT collapse it after
+earlymil's round-gate lands either").
+
+
+(5) THE SIX PROOFS
+-----------------------------------------------------------------------------
+
+PROOF 1 -- WeightKey::sign_intent exhaustive, no wildcard; derived gates cover every key
+  $ awk '/pub fn sign_intent/,/^    }/' rust/src/bots/weighted/weights.rs | grep -n "_ =>"
+    (no output -- no wildcard arm)
+  Also checked `group()` (no wildcard; only a doc-comment mentions "no wildcard" by
+  name), `early()`/`late()` (both have `_ => panic!(...)` arms, but these are
+  DELIBERATE domain-restriction panics for the PHASE_KEYS-only accessor functions, not
+  a silent classification default -- calling `.early()` on a non-PHASE_KEYS variant is
+  a programming error and panics loudly, which is the intended behaviour these two
+  functions have always had, unrelated to sign_intent's exhaustiveness contract).
+  `cargo build --profile difftest -j 2` (from rust/) succeeds cleanly with 0 errors --
+  the compiler would have refused to build if any match site touching the removed
+  WorkersEarly/TechLevelsEarly/HandValueEarly variants were left unhandled.
+  `eval::non_positive_gates()`/`non_negative_gates()` (the load-time repair gate sets)
+  and `bin/climb.rs`'s mutation guard (lines ~1426/1458) both iterate these functions
+  DYNAMICALLY (`for (k, _) in eval::non_positive_gates() {...}`), not a hand-copied
+  list -- confirmed by reading both call sites. `NET_NONNEG_PHASE` is `&[]` (phasecut's
+  Section 5 change, HandValue moved to a plain NonNegative gate), confirmed present.
+
+PROOF 2 -- no leftover conflict markers
+  $ grep -rn "^<<<<<<<\|^=======\|^>>>>>>>" --include="*.rs" rust/
+    (no output)
+  $ grep -rln "<<<<<<<\|>>>>>>>" --exclude-dir=.git . | grep -v "MERGEFIX.txt\|PHASECUT.txt\|STRGATE.txt"
+    (no output -- checked BEFORE committing)
+
+PROOF 3 -- full suite green; every parent's headline tests present and passing
+  $ export PATH="$HOME/.cargo/bin:$PATH"; cd rust && cargo test --profile difftest -- --test-threads 2
+  RESULT: 1514 passed; 0 failed (summed across all 33 "test result:" blocks -- lib,
+  every bin target, and the tests/suite integration binary).
+  Headline tests checked by name, individually, and confirmed passing in the log:
+    phasecut:  parse_weights_folds_a_legacy_phase_triple_into_the_same_curve_at_every_lateness -- ok
+    strgate:   evaluate_prices_strength_rel_with_the_old_always_on_base_once_combat_is_reachable -- ok
+               combat_unreachable_is_true_on_a_fresh_deal -- ok
+               combat_unreachable_flips_the_moment_any_one_player_has_a_military_card -- ok
+               a_resigned_players_military_hand_does_not_keep_the_gate_closed -- ok
+               combat_unreachable_does_not_depend_on_which_cards_are_in_a_hand_only_how_many -- ok
+               the_earliest_combat_round_floor_holds_even_if_a_hand_is_already_nonempty -- ok
+    signaudit: bots::weighted::weights::tests::every_sign_intent_classification_agrees_with_its_own_authored_default -- ok
+               (CardBoardWonder/CardBoardGovernment/CardBoardAction variants confirmed
+               absent from weights.rs -- grep finds them only in retirement comments)
+    forceopen: opening_force::tests::* (13 tests, all ok, e.g.
+               mine_first_narrows_a_build_decision_down_to_mine_kind_cards_only,
+               leader_by_round_three_narrows_a_take_decision_to_a_leader_slot_when_one_is_affordable)
+               bin/forceopen.rs's own 5 CLI tests -- all ok
+
+PROOF 4 -- every weight file on disk loads and plays
+  Command pattern: `./target/difftest/arena --a <f> --b <f> --games 20 --players 2 --seed 1 --threads 2`
+  NOTE: `experiments/rust_champion_{2,3,4}p.json` do NOT exist in this clone's snapshot
+  (same pre-existing gap PHASECUT.txt itself documented: this clone was `cp -Rc`'d from
+  a state mid the "Merge remote reorganization" commit visible in this repo's own git
+  log). Substituted `champ_backup/rust_champion_{2,3,4}p.json` -- the same trainer-format
+  files (gen/players/weights wrapper) PHASECUT.txt itself used for this exact reason,
+  and which were ALREADY present as untracked files in the /private/tmp/strgate clone
+  this scratch clone was copied from (not created by this task).
+    rust_champion_2p.json (champ_backup):  players=2, games=20 -> loaded, mean moves 215.9, verdict inconclusive (mirror match, as expected)
+    rust_champion_3p.json (champ_backup):  players=3, games=18 (20 rounds down to 6 deals x 3) -> loaded, mean moves 350.8
+    rust_champion_4p.json (champ_backup):  players=4, games=20 -> loaded, mean moves 654.2
+    analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json: players=2, games=20 -> loaded, mean moves 246.3, culture A 34.4
+      (matches PHASECUT.txt's own reported "after" numbers for this exact file at n=20 exactly)
+    analysis/frozen/human_weights.json: players=2, games=20 -> loaded, mean moves 229.0, culture A 25.1
+      (matches PHASECUT.txt's own reported "after" numbers for this exact file at n=20 exactly)
+  `git status --short analysis/frozen/` -> empty (frozen dir untouched, confirmed).
+
+PROOF 5 -- first-build-is-military rate near zero at 2p/3p/4p
+  Command: `./target/difftest/behavcensus --games 300 --players N --weights /private/tmp/rowdig/frozen_champion_2p.json --seed 500 --threads 2`
+  (that weights path is STRGATE.txt's own instrument/seed/weights choice, read-only source file)
+  RESULT ("First build/develop/upgrade kind by round 3"):
+    2p: Farm 596/600 (99.3%)   [remainder 4/600, 0.7%, no Military line printed]
+    3p: Farm 890/900 (98.9%), Mine 1/900 (0.1%)   [remainder 9/900, 1.0%, no Military line]
+    4p: Farm 1186/1200 (98.8%), Mine 10/1200 (0.8%)   [remainder 4/1200, 0.3%, no Military line]
+  These numbers are IDENTICAL, to the digit, to STRGATE.txt's own reported "THIS PASS
+  (combat_unreachable)" row (Section 7b) -- exactly what should happen, since the merge
+  did not touch StrengthRel's code path at all, and the merge's fold is (proven, Section
+  4) a no-op-equivalent for the champion weights this instrument was already using.
+  Compare to STRGATE.txt's own documented pre-fix baseline: 96.5-96.9% MILITARY-first at
+  every player count. The military-first bug is confirmed still fixed after the merge --
+  near-zero, exactly the parents' own measured rate, no regression.
+
+PROOF 6 -- paired 2p A/B vs /private/tmp/strgate's tip (ADAPTED; see caveat)
+  CAVEAT, stated up front: this codebase's `arena`/`kindmatch` tools compile ONE
+  `evaluate()` implementation into the binary and only vary WEIGHT FILES between the
+  A and B sides -- there is no tool here that lets two DIFFERENT COMPILED BINARIES
+  (merged code vs strgate-tip code) play moves against each other inside the same game.
+  A true interactive head-to-head would require either (a) new plumbing (e.g. an
+  external-process move protocol, which does not exist), or (b) a closed-form
+  in-binary comparator reproducing the OTHER binary's exact formula (the technique
+  STRGATE.txt's own `strengthrelab --opponent roundgated/legacy` used for ITS
+  comparison) -- writing a new comparator for the phasecut mechanism specifically was
+  judged out of scope/budget for this merge task (risk of introducing a NEW bug into
+  the very proof meant to catch merge bugs, and the coordinator's own instruction to
+  prioritize the deployment manifest over this proof if budget is tight).
+  ADAPTED METHOD (same technique PHASECUT.txt itself used for its own cross-code
+  comparison, Section 7b, just at 25x the scale: n=500 instead of n=20): ran the SAME
+  weight file, SAME seed, as an A=B self-play mirror through BOTH binaries independently
+  -- this clone's own newly-built `mergefix/rust/target/difftest/arena`, and
+  `/private/tmp/strgate/rust/target/difftest/arena` (that clone's OWN prebuilt binary,
+  run read-only -- not rebuilt, not modified).
+    mergefix binary: `--a champ_backup/rust_champion_2p.json --b <same> --games 500 --players 2 --seed 42 --threads 2`
+      -> mean moves 216.5, culture A 35.1
+    strgate binary (same file, same seed, same game count):
+      -> mean moves 216.7, culture A 35.5
+  Both are effectively a coin flip in the ONLY sense a mirror match can measure (each
+  reports win rate 50.0% +/- 0.0 by construction, since A and B are literally the same
+  weight vector -- not informative on its own). The INFORMATIVE number is the near-
+  equality of the two INDEPENDENT runs' aggregate stats: mean moves differ by 0.2 (0.1%),
+  culture by 0.4 (1.1%) at n=500 -- small, and consistent with the SAME bounded,
+  non-systematic floating-point divergence PHASECUT.txt's own Section 7c already
+  root-caused and measured (worst-case absolute eval-score gap ~4.5e-13, occasionally
+  flipping an exact tie between two candidate moves, cascading into one different-but-
+  still-fully-deterministic game trajectory). No sign of a LARGE, systematic gap that
+  would indicate the merge broke something beyond the sum of its parts.
+  "Seats rotated, identical shuffles": satisfied by construction -- `arena` itself
+  reports "500 games (250 deals x 2 seats)", i.e. every deal is already played from
+  both seat assignments within each binary's own run, and both binaries used the
+  identical `--seed 42` so both saw the identical 250 deals.
+
+
+(6) MERGED COMMIT SHA
+-----------------------------------------------------------------------------
+097ff436e7187d6c69d6eb9b27ce3bdaa95c6b43
+
+  Merge: f0df90a 7697c73
+  "Merge phasecut's phase-triple collapse into the strgate/earlymil/forceopen/signaudit line"
+
+  Committed with `git -c commit.gpgsign=false commit -F <msgfile>`. Git refuses a
+  pathspec-restricted commit during an active merge ("fatal: cannot do a partial
+  commit during a merge") -- the merge commit necessarily captures the full staged
+  index. The index itself was curated by explicit `git add --` calls only (never
+  `git add -A`): `PHASECUT.txt` (new file phasecut's own commit added) plus the four
+  touched rust files (eval.rs added by hand after conflict resolution;
+  registry.rs/rivals.rs/weights.rs auto-staged by git's own conflict-free merge).
+  Confirmed via `git show --stat HEAD` that only these 5 files are in the merge commit
+  -- none of the many pre-existing untracked scratch files in this clone (FINDINGS.txt,
+  OPENINGS.txt, champ_backup/, scratch/, variants/, etc. -- leftovers already present
+  before this task started) were swept in.
+
+
+(7) DEPLOYMENT MANIFEST -- rust/ files differing from live-tree-equivalent 0484319
+-----------------------------------------------------------------------------
+  $ git diff --name-status 0484319 HEAD -- rust/
+
+M	rust/src/bin/behavcensus.rs
+M	rust/src/bin/climb.rs
+A	rust/src/bin/dumpweights.rs
+A	rust/src/bin/forceopen.rs
+A	rust/src/bin/humanopenings.rs
+M	rust/src/bin/humanwinners.rs
+M	rust/src/bin/leadersign.rs
+A	rust/src/bin/strengthrelab.rs
+M	rust/src/bots/greedy.rs
+M	rust/src/bots/weighted/cards.rs
+M	rust/src/bots/weighted/eval.rs
+M	rust/src/bots/weighted/horizon.rs
+M	rust/src/bots/weighted/mod.rs
+M	rust/src/bots/weighted/registry.rs
+M	rust/src/bots/weighted/rivals.rs
+M	rust/src/bots/weighted/row.rs
+M	rust/src/bots/weighted/weights.rs
+M	rust/src/corpus.rs
+M	rust/src/lib.rs
+A	rust/src/opening_force.rs
+
+  19 files total: 5 NEW (dumpweights.rs, forceopen.rs, humanopenings.rs,
+  strengthrelab.rs, opening_force.rs), 14 MODIFIED. 11 commits ahead of 0484319.
+  The 5 new files are all measurement/harness tools (forceopen's own harness +
+  binary, strengthrelab's lab comparator, humanopenings' corpus comparator,
+  dumpweights' inspection tool) plus opening_force.rs (the forcing module
+  forceopen.rs depends on) -- none are new BOT-BEHAVIOUR code paths beyond what
+  eval.rs/horizon.rs/weights.rs/rivals.rs/registry.rs already carry.
+
+
+(8) OPEN QUESTIONS / UNCERTAINTY
+-----------------------------------------------------------------------------
+  * Proof 6 is an ADAPTED methodology, not a literal head-to-head win rate, because
+    the available tooling cannot pit two different compiled binaries against each
+    other in one game (see Section 5, Proof 6's caveat in full). The divergence-at-
+    scale numbers obtained (0.1-1.1% relative difference at n=500) are evidence
+    AGAINST a large behavioural gap, but are not the same statistical object as
+    STRGATE.txt's own strengthrelab-based win-rate comparisons for its OWN mechanism.
+    If the coordinator needs a literal win-rate number here, the honest path is to
+    port STRGATE.txt's `--opponent roundgated`-style closed-form comparator technique
+    to a new lab tool reproducing phasecut's PRE-collapse 3-parameter formula for
+    Workers/TechLevels/HandValue -- not attempted here, flagged instead of guessed at.
+  * `experiments/rust_champion_{2,3,4}p.json` do not exist in this clone's snapshot
+    (a pre-existing gap from the repo's own reorg, not something this merge caused);
+    `champ_backup/rust_champion_{2,3,4}p.json` were used as the documented substitute,
+    matching PHASECUT.txt's own precedent for the identical problem.
+  * All arena/behavcensus/build commands were capped at `--threads 2` / no `--release`
+    (used `cargo build --profile difftest`) throughout, per instruction, to share the
+    box with another worker.
+  * Numerous untracked scratch files (FINDINGS.txt, OPENINGS.txt, POOL.txt,
+    champ_backup/, scratch/, variants/, various .txt/.err/.log files) were already
+    present in this clone before any work started (inherited via `cp -Rc` from
+    /private/tmp/strgate's own prior work) and were left untouched/uncommitted --
+    not part of this merge's deliverable.

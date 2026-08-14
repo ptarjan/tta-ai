@@ -1,0 +1,12 @@
+games        200
+players      2
+weights      ../champion_2p_now.json
+elapsed      8.5s
+
+## Civil-action allocation per player-turn (n=200 games, 400 player-games, 8372 player-turns)
+
+Aggregate share of every civil action across the sample: taking 33.5%, other spending 21.6%, left unspent 45.0%
+Per player-turn -- taking: min=0 p25=0 median=1 p75=3 max=7 mean=1.40 n=8372
+Per player-turn -- other:  min=0 p25=0 median=1 p75=1 max=7 mean=0.90 n=8372
+Per player-turn -- unspent:min=0 p25=0 median=1 p75=4 max=7 mean=1.88 n=8372
+Player-turns with ZERO civil actions spent taking: 3957/8372 (47.3%)

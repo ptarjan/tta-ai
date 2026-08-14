@@ -1,0 +1,500 @@
+EFFECTSCOPE.txt
+================
+Read-only design investigation: "price a card by its effect decomposition,
+not a per-card weight." Working copy: /private/tmp/effectscope (cp -Rc of
+/private/tmp/hascolony). No rust/src edits, no commits, no git state changes
+were made. All line numbers are from this copy at the time of writing.
+
+Every claim is tagged MEASURED (ran something and observed output),
+READ-FROM-CODE (cited source, not executed), or HYPOTHESISED (my inference,
+not verified).
+
+
+===========================================================================
+Q1. What already exists?
+===========================================================================
+
+READ-FROM-CODE: the effect decomposition the owner is asking for is not a
+hypothesis to build from scratch. It already EXISTS, in two complementary
+forms, both already wired to the SAME shared weight vocabulary the rest of
+the evaluator uses:
+
+(A) Static per-card decomposition: `card_yields`
+    rust/src/bots/weighted/cards.rs:221 (`pub fn card_yields`)
+    Reads one card's static `CardEffects`/`Production`/`ImmediateEffects`
+    (defined rust/src/cards.rs:184-257, 25 flat i16 fields — culture,
+    science, strength, happy, civil_actions, military_actions, food,
+    resources, colonize_bonus, blue_tokens, yellow_tokens, hand limits,
+    build discounts, etc.) and turns them into a list of
+    `(WeightKey, amount, YieldKind)` triples — cards.rs:186
+    (`pub type CardYield = (WeightKey, f64, YieldKind)`). Every triple
+    lands in the SAME `WeightKey` namespace `evaluate` itself indexes
+    (cards.rs:180-185's own comment makes this explicit: "the same weight
+    vector namespace `evaluate` itself indexes, not the narrower swap-diff
+    vocabulary `board_yields.rs` emits").
+    - Production block -> CultureRate/ScienceRate/FoodRate/ResourceRate/
+      HappyMargin/Strength (cards.rs:230-235).
+    - Territory (Colony) cards get a DEDICATED branch, cards.rs:246-277:
+      immediate one-shot effects -> FoodStock/ResourceStock/Culture/
+      Science/FreeWorkers/HandMilitary; permanent effects -> Strength/
+      HappyMargin/CivilActions/MilitaryActions/YellowBank/BlueFree. This
+      already exists for exactly the card type ("colony") the owner's
+      quote singles out as "a special colony thing."
+    - Priced via `WeightKey::TerritoryCredit`, default weight 1.0
+      (weights.rs:650) — i.e. LIVE by default, not a dormant knob.
+    This is called from `hand_total`/`hand_mil_potential` to price cards
+    still in hand, i.e. it answers "what is this specific card worth,"
+    per card, using ~15 shared coordinates, with zero free parameters
+    per card.
+
+(B) Dynamic swap-diff decomposition: `board_yields`
+    rust/src/bots/board_yields.rs:778 (`pub fn board_yields`), gated to
+    `CardType::Leader | Government | Wonder` (`is_swap_type`,
+    board_yields.rs:240-243). Clones the player, mutates the clone
+    (`pl.completed_wonders.push(name)` for a Wonder, board_yields.rs:792),
+    calls the REAL engine function `effects::compute` on the clone
+    (`swap_stats`, board_yields.rs:303), and diffs before/after Stats
+    field-by-field into `Feature` triples (`delta_triples`,
+    board_yields.rs:353-420: CultureRate, ScienceRate, FoodRate,
+    ResourceRate, Strength, HappyMargin, CivilActions, MilitaryActions,
+    ColonizeBonus, UrbanLimit, WonderStagesPerAction, HandLimit,
+    BuildDiscount, PopCost, NoAggression, ...). The module doc
+    (board_yields.rs:1-11) states the rationale outright: "a card whose
+    value is written in prose... is priced by SWAPPING it into the
+    player's board and diffing `effects::compute` before/after, rather
+    than by a hand-written table that drifts from the rules... this
+    module never reimplements a rating, only reads the delta." This is
+    literally the proposal in the task prompt, already implemented,
+    already using `effects::compute` (the same rules the evaluator's
+    other 150+ coordinates trust) as ground truth.
+    Special/riders NOT captured by the flat swap alone are added
+    explicitly: `wonder_rider_delta` (board_yields.rs:688-701) detects
+    `Special::OnBuildCulture*` and `Special::FreePopIncreasePerTurn` on
+    the specific card and adds their contribution; `wonder_cost`
+    (board_yields.rs:708-715) charges the stage-cost. So a card's
+    Special-driven behaviour is not ignored by this path — it is read
+    per-card, by name, and added to the delta — but only for the
+    handful of Special variants an explicit `if` branch here recognizes.
+
+CRITICAL FINDING — the exact Pyramids-vs-Hanging-Gardens case is already
+built AND tested, but is currently INERT in real play:
+    `wonder_promise`/`wonder_potential` (cards.rs:2039-2133,
+    `wonder_value_scaled`) price an in-progress/just-taken wonder by
+    summing `board_yields`' per-card delta triples through the shared
+    weight vector (cards.rs:2066-2074's doc comment, verbatim: "Pyramids
+    outscores Hanging Gardens because `w[civil_actions] * 1` outscores a
+    happy face, with no free parameter attached to either card... A flat
+    per-card weight cannot do that"). Two tests exist and pass:
+    `two_wonders_with_different_powers_score_identically_at_the_moment_
+    they_are_taken` (cards.rs:3305) and
+    `pricing_wonder_promise_is_what_lets_the_evaluator_tell_pyramids_
+    from_hanging_gardens` (cards.rs:3353).
+    MEASURED (from the test's own assertions, read not re-run): with
+    `Weights::defaults()` AND with the real frozen 2p champion
+    (analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json),
+    Pyramids and Hanging Gardens score BIT-IDENTICAL at the moment of
+    being taken. Only an explicitly hand-set vector
+    (`WonderPotential=40, CardBoardCredit=1`) makes them differ.
+    Why: `WeightKey::WonderPromise`, `WonderPotential`, and
+    `CardBoardCredit` all default to 0.0 (weights.rs:599, 606, 619), and
+    weights.rs:600-605's comment explains why the frozen champion has 0.0
+    too: these are BRAND-NEW keys — "a champion JSON written before these
+    keys existed keeps its default for them... any other seed would
+    silently move every frozen gauntlet member." So this is not a case of
+    a hill-climb trying the mechanism and rejecting it — no league run has
+    ever had these coordinates active. The wiring is in place, the tests
+    prove the mechanism works, and it has simply never been exercised in
+    a real climb yet.
+
+GAPS in the existing representation:
+    - `board_yields` is gated to `is_swap_type` (Leader/Government/Wonder)
+      only — Territory/SpecialTech/Pact/Tactic ownership deltas use only
+      the STATIC `card_yields` path (A), which cannot see tableau-wide
+      conditional effects (see Q4).
+    - `apply_special`, effects.rs:980, is NOT purely a function of one
+      card: several arms read the whole tableau (`BestTheaterDoubleCulture`
+      scans all techs, effects.rs:988-992; `CulturePerLabEqualToLevel`
+      sums every lab, effects.rs:1008-1014; `army_strength` counts the
+      whole unit multiset, effects.rs:635). A single card's "contribution"
+      through this path is not a stored value you can read off the card —
+      it is a function of (card, rest of tableau), so an isolated
+      per-card vector for these needs a before/after diff (as board_yields
+      already does for its own handful of riders), not a table lookup.
+    - Two whole blocks of `Special` variants are explicit no-ops in
+      `apply_special`, deferred elsewhere entirely: effects.rs:1235-1268
+      "belongs to combat.rs" (StealColony, DestroyUrbanBuildings,
+      TakeFromOpponent, OnAttackBetweenParties, ...) and effects.rs:
+      1270-1295 "belongs to events.rs" (AllPlayers/Gain/Lose/FinalScoring
+      event payloads). `effects::compute` — the function both (A) and (B)
+      ultimately lean on — literally does not know what these do.
+
+
+===========================================================================
+Q2. Which current coordinates are per-card-TYPE counts?
+===========================================================================
+
+READ-FROM-CODE, enumerated from weights.rs/features.rs:
+
+1. `WeightKey::Colonies` — weights.rs:142, default weight 2.0
+   (weights.rs:561/574 area). Computed features.rs:557:
+   `p.colonies.len() as f64` — raw count of Territory cards owned.
+   RESIDUAL: its own doc comment (weights.rs:562-572) states the
+   colonies' actual production/culture/science/strength is ALREADY
+   priced through the ordinary rate/stock coordinates (because
+   `effects::compute` sums every owned card's `CardEffects` into Stats
+   regardless of card identity — see Q3). `Colonies` is a flat top-up,
+   not the primary channel.
+
+2. `WeightKey::Wonders` — weights.rs:160, default 3.0. Computed
+   features.rs:583: `p.completed_wonders.len() as f64` — raw count.
+   RESIDUAL for the SAME reason: a completed wonder's flat CardEffects
+   (Pyramids' civil_actions:1, Hanging Gardens' culture:1/happy:2) are
+   already summed into Stats by `effects::compute` the instant the
+   wonder completes, and read by the ordinary CivilActions/CultureRate/
+   HappyMargin coordinates — see Q3, this differentiation is NOT
+   collapsed for the flat-field part. `Wonders` is layered on top; per
+   board_yields.rs:709 it is even pushed as one of the ROW pricing
+   triples itself (`Feature::Wonders, 1.0, Kind::Gain`) alongside the
+   real per-card delta — i.e. the codebase already treats "wonder-ness"
+   as a separate small bonus ADDED TO, not substituting for, the
+   decomposed value.
+
+3. `WeightKey::NumTechs` — weights.rs:158, default 0.3. Computed
+   features.rs:579: `p.techs.len() as f64` — count of ALL tech-tableau
+   cards (farms/mines/labs/temples/theaters/libraries/arenas/units/
+   special techs combined — everything, not one type).
+   PARTIAL RESIDUAL against `WeightKey::TechLevels` (level-weighted sum,
+   weights.rs:590 area) — prices "developed but not yet staffed," which
+   `Workers`/`Best*` level-ceiling coordinates don't reach on their own.
+
+4. `WeightKey::SpecialTechs` — weights.rs:159, default 0.8. Computed
+   features.rs:580 (tallied in `sweep_tableau`, features.rs:173,217-219):
+   count of `CardType::SpecialTech` cards specifically.
+   CLOSER TO INDEPENDENT than Colonies/Wonders: two Age III scoring
+   events price culture directly off "level of SpecialTechs" (events.rs:
+   360-362, 428, 444), reachable only through `EventScoringMargin`, and
+   each SpecialTech's actual passive rule is a `Special` variant applied
+   once via `effects.rs:1349`, which for many special techs is exactly
+   the "tableau-wide, not a stored per-card value" case flagged in Q1 —
+   so `SpecialTechs` is currently pricing the ONE thing that has no other
+   channel (having built N distinct special techs, for events) more than
+   it is a lazy stand-in for card content.
+
+5. `WeightKey::Pacts` — weights.rs:144, default 0.5. Computed
+   features.rs:563: raw count of Pact-type cards + pending-offer credit.
+   RESIDUAL against `WeightKey::PactBlocksAttack` (weights.rs:145),
+   which already isolates the subset of pacts carrying
+   `Special::NoAttacksBetweenParties`; each pact's other terms land in
+   ordinary rate/stock coordinates the same way a colony's do.
+
+Legality-cliff check (explicitly out of scope per the task, verifying the
+framing and checking for others):
+   - `WeightKey::HasUnit` (weights.rs:141, doc weights.rs:550-559) cites
+     RULES_SPEC 11.3 directly: colonizing requires sacrificing >=1
+     military unit even if other bonuses would cover the bid — a step
+     function, confirmed genuinely a legality cliff, not a value count.
+   - `WeightKey::HasColony` (weights.rs:143, doc weights.rs:562-572)
+     cites RULES_SPEC 5.4 and `legal.rs`'s `aggression_target_qualifies`
+     gating Annex on `q.colonies.is_empty()`. Confirmed genuinely a
+     legality cliff.
+   - ANOTHER unpriced/awkward cliff of the same shape:
+     `WeightKey::NoAggression` (weights.rs:215, default 0.0, computed
+     features.rs:616 from `s.no_aggression`) mirrors
+     `Special::CannotPlayAggressionOrWar` (effects.rs:1150) and is read
+     by `legal.rs:301,339` to outright block Aggression/War moves — a
+     binary legality gate, same shape as HasUnit/HasColony. Unlike those
+     two it has NO dedicated rationale comment of its own; weights.rs:
+     1179-1185 lumps it in with generic "board-state indicator" features
+     and flags it (per that comment) as a SIGNAUDIT.txt follow-up
+     candidate, not yet audited. This is a genuine gap in the same
+     family as HasUnit/HasColony, currently under-supported, but it is
+     NOT part of this proposal's scope — flagging only as requested.
+
+
+===========================================================================
+Q3. Does the decomposition actually separate cards that differ?
+===========================================================================
+
+MEASURED (read raw table entries directly, card_table.rs):
+
+Pyramids vs Hanging Gardens (Wonder, Age A) — card_table.rs:1210-1247:
+   Pyramids:         CardEffects{ civil_actions: 1, else 0 }, stages [3,2,1]
+   Hanging Gardens:  CardEffects{ culture: 1, happy: 2, else 0 }, stages [2,2,2]
+   Under `card_yields`/`board_yields`: Pyramids -> CivilActions:1.
+   Hanging Gardens -> Culture(rate):1, HappyMargin:2. Genuinely different
+   vectors on genuinely different shared dimensions. CONFIRMED by the
+   codebase's own test suite (Q1) that this pair is the intended proof
+   case and DOES differentiate once WonderPromise/CardBoardCredit are
+   nonzero.
+
+Colossus vs Library of Alexandria (Wonder, Age A) — card_table.rs:
+1248-1284: Colossus{ strength:2, colonize_bonus:1 } vs Library{ culture:1,
+science:1, civil_hand_limit:1, military_hand_limit:1 }. Different vectors
+on Strength/ColonizeBonus vs Culture/Science/HandLimit — differentiates.
+
+Vast Territory (I) vs Wealthy Territory (I) (Territory/Colony, same age)
+— card_table.rs:2768-2804:
+   Vast Territory:    permanent yellow_tokens:3, blue_tokens:-1; immediate
+                       food:3
+   Wealthy Territory:  permanent blue_tokens:3; immediate resources:5
+   Under the Territory branch of `card_yields` (cards.rs:246-277) these
+   land on YellowBank/BlueFree/FoodStock vs BlueFree/ResourceStock —
+   different vectors, differentiates. (Nb.: these two are cheap
+   colonies with modest, mostly-token effects — a fair "boring" pair,
+   not cherry-picked for drama.)
+
+WHERE IT COLLAPSES (the valuable negative finding, per the task's own
+framing):
+
+   "Development of Settlement" vs "Development of Science" (Event, Age A)
+   — card_table.rs:2996-3033. Both have ALL-ZERO `CardEffects` (every
+   field 0) — their entire content is `Special::AllPlayers(EventBlock{...})`:
+   the first sets `increase_population: 1`, the second sets `science: 2`.
+   Per Q1's finding, `Special::AllPlayers` is in the explicit "belongs to
+   events.rs" no-op block (effects.rs:1270-1295) — `apply_special`
+   does NOT compute it, so neither `card_yields` (which only reads
+   `CardEffects`/`Production`/`ImmediateEffects`, never `Special`
+   payloads generically) nor `board_yields` (gated to Wonder/Leader/
+   Government, and even for those only recognizes two named Special
+   variants as riders) produces ANY vector for these two cards. Under the
+   proposed effect-dimension pricing AS IT EXISTS TODAY, these two
+   Events are IDENTICAL — both the zero vector — despite doing
+   completely different things. This is a real, current collapse, not a
+   hypothetical one; it just happens to be a card type (Event) the task's
+   named examples (Pyramids/Hanging Gardens) don't touch.
+
+   Great Wall (Wonder, card_table.rs:1287-1304): CardEffects{ culture:1,
+   happy:1 }, `special: &[Special::StrengthPerInfantry(1),
+   Special::StrengthPerArtillery(1)]`. The flat part (culture, happy)
+   decomposes fine. The Special part does NOT decompose into a static
+   per-card number at all — its value is `player's infantry+artillery
+   count * 1`, i.e. genuinely proportional to a DIFFERENT quantity the
+   player controls elsewhere. `board_yields`'s wonder-rider list
+   (board_yields.rs:690-700) does not recognize `StrengthPerInfantry`/
+   `StrengthPerArtillery` as a rider it adds — so today Great Wall's
+   entire military-scaling clause is invisible to both card-valuation
+   paths; only the flat culture/happy shows up. (It IS priced correctly
+   once built, because `effects::compute`'s `apply_special` on the whole
+   tableau, effects.rs:980, does handle these two variants for the
+   OWNED-and-evaluate case — it is specifically the "what is this card
+   worth before I take it" channel that misses it.)
+
+
+===========================================================================
+Q4. What effects don't decompose cleanly?
+===========================================================================
+
+READ-FROM-CODE, concrete cards/mechanisms that break a clean per-card
+effect-dimension vector:
+
+1. Conditional/scaling effects tied to a DIFFERENT quantity on the same
+   player's board. Great Wall (`StrengthPerInfantry`/`StrengthPerArtillery`,
+   card_table.rs:1299) — value is a function of unit count, not a
+   constant. `CulturePerLabEqualToLevel` (effects.rs:1008-1014, sums
+   every lab in `p.techs`) is the same shape for a different card. These
+   are computable via a before/after diff (exactly what `board_yields`
+   already does for its two recognized riders) but NOT via a static
+   table read — the value literally does not exist until you know the
+   rest of the board.
+
+2. One-shot vs per-turn conflated on the same struct. `CardEffects`
+   itself mixes `food`/`resources` (one-shot? see cards.rs comments) with
+   `culture`/`science` (per-turn rate) in the SAME flat-field struct;
+   `card_yields` already has to hand-split this with `YieldKind::Gain`
+   vs `YieldKind::Rate` (cards.rs:299-306) and a separate `credit`
+   multiplier just to keep them from being priced as if fungible. Any
+   new effect-dimension scheme inherits this same one-shot/rate
+   ambiguity and has to re-solve it, not get it for free from the table
+   shape.
+
+3. Effects deferred to unwritten/other-module resolution entirely, not
+   computed by `effects::compute` at all: combat.rs's block
+   (effects.rs:1235-1268 — `StealColony`, `DestroyUrbanBuildings`,
+   `TakeFromOpponent`, `VictorTakesCulture`, `OnAttackBetweenParties`) and
+   events.rs's block (effects.rs:1270-1295 — the Event mechanism, Q3's
+   Development-of-X collapse). A card whose whole value is one of these
+   is currently priced as if it does NOTHING, by every existing channel.
+   This is the single largest concrete gap for "decompose by effect,"
+   because there is no vector to decompose YET — the engine itself
+   doesn't compute these as facts.
+
+4. Effects that constrain an OPPONENT rather than benefit the owner:
+   `Special::CannotPlayAggressionOrWar` / `no_aggression` (a pact term,
+   effects.rs:1150) and the whole Pact family (`PactBlock`,
+   `TakeFromOpponentBlock`, cards.rs:293-339) are two-sided by
+   construction — a "your effect vector" framing has to decide whether a
+   Pact's value belongs to the caster, the target, or gets split, and
+   the current code (`apply_pacts`, referenced effects.rs:26-29) already
+   threads this as a special, non-generic path rather than a flat sum.
+
+5. Timing/tempo effects that are not a "stat" at all: `free_civil_action`
+   (cards.rs:227, a CardEffects field) and things like `wonder_stages_
+   per_action` are already flat fields (decompose fine numerically) but
+   their VALUE is highly state-dependent (an extra action is worth more
+   early than late, per horizon.rs's lateness scaling elsewhere in this
+   codebase) — the decomposition can hand you the right coordinate, but
+   getting the coordinate's WEIGHT right still needs the same
+   state-dependent handling the evaluator already does for CaLeft/
+   TakeCostShare (weights.rs:380-406, the CivilActions/CaLeft
+   quotient-vs-level discussion) — i.e. some of these dimensions are
+   already known to need MORE than a flat weight, and the existing code
+   has already had to invent quotient features to fix exactly that for
+   civil actions.
+
+6. Government cards: `card_yields` explicitly EXCLUDES civil_actions/
+   military_actions from the generic branch for `CardType::Government`
+   (cards.rs:294, "a genuine per-card grant on every type EXCEPT a
+   government... never read by `_card_yields`... `gov_value`'s board-
+   aware job") — i.e. even the existing, working decomposition has a
+   hand-carved exception for one whole card type, priced by yet another
+   bespoke function (`gov_value`) rather than the general path. This is
+   evidence that "a small set of shared effect dimensions, uniformly
+   applied" is aspirational even in the code that already exists —
+   there are already multiple bespoke escape hatches (`gov_value`,
+   `tactic_value` via `tactic_gain`/`tactic_short`, `action_value`) sitting
+   next to the generic `card_yields` path, one per card TYPE, because the
+   generic path did not fit them cleanly either.
+
+
+===========================================================================
+Q5. A staged plan
+===========================================================================
+
+READ-FROM-CODE + HYPOTHESISED recommendations:
+
+The cheapest possible falsification test is ALREADY BUILT AND MERGED,
+just never run for real: `WeightKey::WonderPromise`/`WonderPotential`/
+`CardBoardCredit` (weights.rs:599,606,619) sit at their 0.0 seed in
+`Weights::defaults()` and in every existing frozen champion, because
+they are new keys no league run has ever trained with active
+(weights.rs:600-605's comment). The mechanism (board_yields swap-diff,
+Q1) is coded, unit-tested (cards.rs:3305,3353), and does exactly what
+the task describes for Wonders specifically.
+
+Stage 0 (cost: zero — already done, needs only a league cycle):
+   Run/continue the normal training climb with these three keys
+   ungated (they appear to already be un-seeded rather than clamped —
+   confirm no hard-coded 0.0 clamp exists outside the default-seed
+   table before assuming this; I did not verify the climb's key-mask
+   config). Read the resulting champion: does WonderPromise/
+   CardBoardCredit climb away from 0? If yes and win-rate improves
+   against the current frozen champion, this is direct, in-production
+   validation that the "price by decomposition, not a per-card weight"
+   idea WORKS for at least one card type, with the actual game outcome
+   as the measure the task asked for ("measurable by match play").
+   If the climb pins it back to ~0 or win-rate does not improve, that is
+   equally decisive evidence the idea (at least for the "moment of
+   taking a wonder" decision) does not pay for itself against the
+   existing rate/stock coordinates that already absorb most of a card's
+   value once it's built — a cheap, real falsification, not a guess.
+   This costs nothing to build; it costs a league run's compute and,
+   per repo convention, must be validated in prod-style runs
+   (docs/analysis conventions in this repo), not offline.
+
+Stage 1 (small, if Stage 0 is positive): extend `board_yields`'s rider
+   list (board_yields.rs:688-701, currently just OnBuildCulture* and
+   FreePopIncreasePerTurn) to cover the next-most-common Special
+   variants seen on Wonders/Leaders/Governments that currently vanish
+   from the pre-take valuation (Great Wall's StrengthPerInfantry/
+   StrengthPerArtillery, Q3's collapse example, is a good first target
+   since it's a NAMED example already in this codebase's own doc
+   comments about wonders). This is engine work (reading a rulebook
+   fact, per the standing rule) — no new fitted parameter, reuses
+   existing Strength weight.
+
+Stage 2 (medium): extend the is_swap_type gate in board_yields.rs:
+   240-243 to also cover Territory-on-annex (colonizing is already a
+   "push onto a list, diff Stats" operation mechanically identical to
+   `pl.completed_wonders.push(name)`) so a Colony's OWN Special-driven
+   permanent effects (not just its flat CardEffects, already handled by
+   the static Territory branch in card_yields) get the same rider
+   treatment Wonders get. This directly answers "why is this a special
+   colony thing" for the deeper case the flat static branch doesn't
+   reach.
+
+Stage 3 (the actually hard, currently-unbuilt part): give
+   `effects::compute` real handling for the "belongs to combat.rs"/
+   "belongs to events.rs" no-op blocks (effects.rs:1235-1268, 1270-1295)
+   so Event/Aggression/War cards produce ANY vector at all before being
+   taken — right now `card_yields` cannot decompose what the engine
+   itself does not compute. This is squarely "the engine computes
+   rulebook facts" work per the standing rule, is the single biggest
+   remaining gap (Q3, Q4), and is a much larger lift than Stage 0-2 —
+   it is a second `effects.rs`-sized undertaking, not a small first
+   step, and should NOT be the first thing built.
+
+What has to be re-tuned / what invalidates existing weight files:
+   - Stage 0 costs nothing extra: the 0.0-seeded keys are DESIGNED to be
+     safely absent from old champion JSON (weights.rs:600-605) — no
+     existing frozen file needs touching, they simply keep loading at
+     0.0 until a NEW climb assigns them something else. This is the
+     textbook "smallest first change."
+   - Stage 1/2 add new coordinates or new rider recognition on existing
+     0.0-or-near-0.0 keys; by the same "champion JSON missing a key
+     loads at its default" mechanism (tests::a_champion_file_saved_
+     before_these_keys_existed_still_loads_with_them_at_zero,
+     referenced weights.rs:604), OLD frozen champions remain loadable
+     and comparable without migration — this repo has already built the
+     safety net for exactly this kind of incremental key addition.
+   - The one thing that WOULD need re-tuning, if Stage 0/1/2 prove out
+     and get deployed as the DEFAULT (not just an experiment): the
+     existing `WeightKey::Wonders`/`Colonies`/`NumTechs`/`SpecialTechs`
+     residual counts (Q2) would need to be re-fit from scratch alongside
+     the new coordinates, since their current fitted values implicitly
+     compensate for the wonder-identity blindness this closes (the
+     TakeCostShare doc comment at weights.rs:390-406 is explicit that
+     the current champion's civil-action pricing is ALREADY a workaround
+     for wonder-identity blindness: "it is choosing a PRICE, not a card
+     — which it can only do because the two wonders score bit-identical
+     at take time" — i.e. some existing coordinate's fitted value is
+     KNOWN to be partly absorbing this exact gap today, so turning the
+     gap-closer on will shift that coordinate's optimal value too).
+
+
+===========================================================================
+RECOMMENDATION
+===========================================================================
+
+This is not a proposal to build something new — it is a proposal to
+FINISH TURNING ON something that already exists. `card_yields`
+(rust/src/bots/weighted/cards.rs:221) and `board_yields`
+(rust/src/bots/board_yields.rs:778) already decompose a card into
+`(WeightKey, amount, kind)` triples on a small, shared, ~15-coordinate
+vocabulary (culture/science/food/resource rate, strength, happy,
+civil/military actions, hand limits, colonize bonus, ...), read
+directly off the engine's own rulebook-fact structures (`CardEffects`,
+`Production`, `ImmediateEffects`, and for Wonders/Leaders/Governments a
+real before/after diff of `effects::compute`) — with zero new fitted
+parameters per card, exactly the shape the task asked for. It already
+demonstrably separates Pyramids from Hanging Gardens (Q3) and Colossus
+from Library of Alexandria, and it already covers Territory/Colony cards
+specifically, contradicting the "special colony thing" framing at the
+mechanism level (a colony already gets the SAME generic treatment a
+wonder does — cards.rs:246-277).
+
+The catch, and the reason the owner's complaint is still true in
+practice today: the coordinates that would ACTIVATE this for wonders
+(`WonderPromise`, `WonderPotential`, `CardBoardCredit`) are new,
+un-exercised, and sit at their 0.0 seed in every trained weight file
+that exists, including the current frozen champion. Nobody has yet run
+the league with them live. That is the entire gap between "this
+mechanism exists" and "this mechanism works in production" — and it is
+a single, cheap, already-fully-specified experiment (Stage 0 above), not
+a design or implementation task.
+
+Where the idea is genuinely incomplete, not just unexercised: Event/
+Aggression/War cards (Q3's Development-of-Settlement-vs-Science
+collapse, Q4 item 3) have NO vector at all today, because
+`effects::compute` itself has explicit no-op blocks for them
+(effects.rs:1235-1268, 1270-1295) — that is real engine work, is the
+correct place to spend effort AFTER Stage 0 validates the pattern on
+Wonders, and should not be conflated with "does the decomposition idea
+work" (it does, where the engine has already been taught to compute the
+facts) versus "has the engine been taught the facts yet" (no, for a
+meaningful chunk of the card pool).
+
+Recommendation: do Stage 0 first — it costs nothing but a league run and
+directly measures, in match play, whether the exact mechanism the task
+describes pays for itself once real games are allowed to fit it. Do not
+start by building new machinery; start by running the machinery that
+was already merged and has been sitting at zero.

@@ -1,0 +1,174 @@
+SCORE-DIVERGENCE INVESTIGATION -- IN PROGRESS (written early per instructions; keep reading past
+"CURRENT STATUS" for the latest state -- this file is being updated as work continues)
+
+============================================================================
+SETUP
+============================================================================
+cp -Rc /private/tmp/base0814 /private/tmp/scorediv
+cd /private/tmp/scorediv/rust
+export PATH=$HOME/.cargo/bin:$PATH
+Journals: /private/tmp/bgo-journals/journals (already extracted, 1011 files)
+Index: /private/tmp/scorediv/sources/bgo/index.tsv (1011 games, 1012 lines incl header)
+Tree measured at git commit e373f25974adbc48161e6b9a7760a0c5cff0d8a3 (base0814 snapshot).
+
+NOTE ON A CONFLICTING PRIOR MEASUREMENT: the coordinator surfaced a recovered transcript
+(/Users/pt/tta-ai/analysis/recovered_2026-08-13/agent_6d619809.txt) from an EARLIER session
+(2026-08-07/08) showing near-zero exact-match rates (0-1 out of up to 112 checked) and strongly
+negative mean deltas (-3 to -10). That data is STALE -- it predates whatever fixed the systematic
+bug it was seeing. On the CURRENT base0814 tree, the full corpus gives 261/289 exact matches
+(90.3%) with mean delta -0.54 and small integer deltas, not the -3..-10 range that old transcript
+reported. I am treating my own fresh, full-corpus, this-session measurement as authoritative since
+it is reproducible right now against the current code and is a much larger, cleaner sample.
+
+============================================================================
+STEP 1 -- MEASURE (baseline, BEFORE any fix)
+============================================================================
+Command: cd rust && SCOREDIV_DUMP_IDS=1 cargo run --profile difftest --bin replaystats -- \
+         ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+Persisted at: analysis/replaystats_2026-08-13.txt (full raw report)
+             analysis/score_divergence_2026-08-13.txt (diverging-ID list + per-game diagnostics)
+Regeneration script: experiments/measure_replaystats.sh (one command, writes both dated files)
+
+Corpus: 1011 games sampled, 289 completed to state.game_over.
+n_score_checked = 289 (= n_completed; the "n_completed - n_score_checked" gap the task asked me to
+  check is 0 -- every completed game that reaches the journal's "End of game" marker DOES flip
+  engine's own state.game_over too, on this corpus. Nothing to diagnose there.)
+n_score_exact (BEFORE) = 261 / 289 (90.3%)
+Diverging games (BEFORE) = 28, listed by ID in analysis/score_divergence_2026-08-13.txt:
+  7522625 7523081 7521815 7522277 7522838 7522822 7522906 7522075 7521790 7521789 7523367
+  7521882 7521899 7522417 7523528 7522722 7522974 7523172 7522009 7523233 7523256 7522768
+  7522813 7522590 7521985 7521666 7523149 7523102
+delta distribution (engine - index, 63 non-matching player-scores, sorted): mean -0.54, range
+  [-16..12], mostly small (|delta| <= 5 for the bulk). This is NOT the systematic one-sided
+  signature the stale old transcript saw -- consistent with "several distinct small causes",
+  matching what the ranking below finds.
+
+Of the 28 diverging games, 4 have their PRE-final-scoring culture verified bit-exact against the
+journal's own "(now M)" running total at EVERY "End turn" checkpoint (culture_oracle_divergence
+is None for these) -- meaning their entire score error is confined to Sec.12.5.2 final scoring
+(events::evaluate_final_events / game::end_of_game_bonus), not general in-play culture drift:
+  7522625, 7522277, 7522906, 7522075
+The other 24 have at least one in-play culture checkpoint mismatch BEFORE final scoring even
+starts -- their score error is entangled with whatever caused that earlier drift (a separate,
+larger, more diffuse investigation already partly tracked by replaystats' own "Culture oracle"
+section -- 78/1011 games corpus-wide have a culture-oracle divergence, ranked by preceding
+ActionClass. I did NOT expand into that bucket; see REMAINING.txt).
+
+============================================================================
+STEP 2 -- RANK THE CAUSES (final-scoring-only, via a NEW oracle)
+============================================================================
+Built `parse_final_event_journal_amounts` + `GameResult::final_event_award_divergences`
+(rust/src/replay_common.rs) and a new "## Final-scoring award oracle" report section
+(rust/src/bin/replaystats.rs): for every completed game, parses BGO's own per-card
+"Impact of X ...; Colour scores N culture; Colour2 loses M culture" announcement lines
+DIRECTLY (ground truth, independent of the "End of game" summary line and independent of
+grounding-order timing issues -- see the function's own doc for why), and diffs against this
+binary's own `events::scoring_culture` recompute for that exact (card, seat). This is a
+corpus-wide, compute-driven ranking, not per-game hand tracing.
+
+First run (see analysis/replaystats_2026-08-13.txt for the full corpus text once re-persisted --
+this run's raw numbers, captured before an unrelated disk-space outage interrupted the session):
+
+  | (game,seat) pairs | card                  | example |
+  |---|---|---|
+  | 4 | Impact of Happiness    | 7522625 seat 0: journal says 16, engine computes 14 (delta -2) |
+  | 2 | Impact of Population   | 7523528 seat 0: journal says 12, engine computes 4 (delta -8) |
+  | 1 | Impact of Architecture | 7521666 seat 3: journal says 5, engine computes 6 (delta 1) |
+  | 1 | Impact of Competition  | 7522075 seat 1: journal says 3, engine computes 6 (delta 3) |
+  (7 games total had >=1 divergence)
+
+RANKED CAUSES (by (game,seat) pairs explained):
+  1. Impact of Happiness (culturePerHappyFace/culturePerDiscontentWorker) -- 4 pairs.
+     Root-caused (see below): `s.happy` (effects::state_stats) is off by exactly 1 happy face
+     for the affected seat, in EITHER direction (sometimes 7-vs-true-8, sometimes 7-vs-true-6) --
+     not a single-direction constant, so likely a real per-card/tableau edge case in the happy-face
+     aggregation (effects.rs `happy_from`/`happy_source_count`, esp. the St. Peter's Basilica
+     ExtraHappyPerHappySource interaction or a similar conditional source), NOT a scoring-formula
+     bug in events.rs itself. Confirmed via games 7522625 (seat 0 Orange, engine s.happy=7,
+     needs 8), 7522277 (seat 1 Purple, engine s.happy=7, needs 6), 7522906 (seat 1 Purple, engine
+     s.happy=7, needs 8). STILL OPEN -- see REMAINING.txt; ran out of investigation time before
+     pinning the exact card/condition due to the disk-space interruption.
+  2. Impact of Population (culturePerContentWorkerAbove10) -- 2 pairs, LARGE per-pair delta (-8).
+     RULES_SPEC-relevant code: rust/src/events.rs:359-367.
+        let workers = techs_workers_sum + p.workers_free;
+        let content = (workers - economy::discontent(state, p)).max(0);
+     SUSPECTED double-subtraction of discontent: the surrounding comment says workers_free is
+     "on-card workers PLUS workers_free" and then ALSO subtracts discontent again. If
+     `workers_free` (rust/src/state.rs) already excludes discontent workers (RULES_SPEC 6.3:
+     "a discontent worker is physically an unused worker moved onto the happiness track" -- i.e.
+     discontent tokens are a subset carved OUT of the free/idle pool, not a separate deduction on
+     top of it), this formula double-counts the discontent penalty. NOT YET CONFIRMED -- next
+     step is to read `workers_free`'s own field doc in state.rs and whichever function
+     increments/decrements it around a discontent transition, then add the same kind of debug
+     probe used for Happiness. See REMAINING.txt.
+  3. Impact of Architecture -- 1 pair, small delta (+1). Not yet investigated.
+  4. Impact of Competition (culturePerLevelOfMilitaryUnitsAndArenas) -- 1 pair, delta +3.
+     Confirmed via game 7522075 (seat 1 Purple: engine=6, journal=3). Not yet root-caused --
+     likely counting an extra unit/arena level or double-counting a slot's workers. See
+     rust/src/events.rs:337-344. Next step: same debug-probe approach as Happiness/Population.
+
+NONE OF THESE FOUR IS YET FIXED as of this checkpoint -- see "CURRENT STATUS" below for exactly
+where the session was interrupted and REMAINING.txt for the pickup plan.
+
+============================================================================
+IMPORTANT SIDE FINDING: the grounding-order "recovery" mechanism WORKS CORRECTLY
+============================================================================
+I initially suspected a structural bug: `finish_game`'s embedded `events::evaluate_final_events`
+call can fire while `state.current_events`/`future_events` still hold the FICTIONAL simulated
+pile, when BGO's journal logs the true final "End turn" line (which triggers
+`game::advance_turn`'s round-wrap -> `finish_game`) BEFORE its own "End of game" marker line (the
+line `ground_final_events` reads to correct the pile) -- confirmed this ordering for 8/28
+diverging games (7522822, 7522906, 7521790, 7521789, 7522768, 7522813, 7523149, 7523102) via:
+  eog_lineno=$(grep -n "End of game" journal | tail -1 | cut -d: -f1)
+  lastend_lineno=$(awk -F'\t' '$5 ~ /^End turn/ {print NR}' journal | tail -1)
+  # "BEFORE(suspect)" when lastend > eog is false
+
+BUT: rust/src/replay_common.rs's existing `if r.state.game_over { if !completed { ... } }` recovery
+block (around line 5355-5410, see its own doc and the
+`replay_game_completes_a_journal_whose_duplicated_end_turn_pair_is_logged_before_its_own_end_of_
+game_marker` test) is SPECIFICALLY DESIGNED for exactly this case and, on direct trace of game
+7522906 (added temporary eprintln! probes, now removed), DOES correctly: (1) undo the wrong
+fictional-pile award via a direct `final_event_awards` diff-and-subtract, (2) ground the piles from
+the journal's real "End of game" line, (3) re-run `evaluate_final_events` against the corrected
+pile. Hand-verified game 7522906's arithmetic end to end: baseline(98) + Bill Gates(+9, applied
+once, correctly, during the premature finish_game since it does not depend on the event pile) +
+[undo wrong Industry/Agriculture/Competition award] + [redo correct Colonies/Happiness/Balance
+award] reproduces the engine's actual output (138) exactly, and the ONLY remaining gap from the
+true index value (140) is the SAME "Impact of Happiness" formula bug named above (engine's
+Colonies/Happiness/Balance redo computes Happiness as 14 instead of the journal's 16 for that
+seat) -- not a grounding-order defect. CONCLUSION: the grounding-order mechanism is not a live bug
+and should NOT be touched; my initial hypothesis was wrong and is recorded here so nobody
+re-investigates it.
+
+============================================================================
+NEW PERMANENT TOOLING ADDED (not yet committed -- see hunk list below once landed)
+============================================================================
+1. rust/src/replay_common.rs:
+   - `FinalEventAwardDivergence` struct (new, near `ground_final_events`)
+   - `parse_final_event_journal_amounts` (new function, near `ground_final_events`): parses
+     every "Impact of X ...; Colour scores/loses N culture" line anywhere in a game's journal
+     into per-(card,seat) ground-truth awards.
+   - `GameResult::final_event_award_divergences: Vec<FinalEventAwardDivergence>` (new field) +
+     wiring in `replay_game`'s post-completion block (sums a ranked card's multi-step award per
+     seat before comparing, since a card with a ranking table prints 2 steps per seat but the
+     journal states one combined total).
+2. rust/src/bin/replaystats.rs: new "## Final-scoring award oracle" report section, ranked by
+   (game,seat)-pair count, mirroring the existing culture-oracle/discard-oracle table format.
+3. experiments/measure_replaystats.sh (new): one-command regeneration of both dated analysis
+   artifacts (raw report + diverging-ID list), so this measurement never needs re-deriving by
+   hand again. Run: `bash experiments/measure_replaystats.sh` from the repo root.
+4. analysis/replaystats_2026-08-13.txt, analysis/score_divergence_2026-08-13.txt (committed
+   dated artifacts, see header of each for the exact command/commit/date/corpus-size).
+
+============================================================================
+CURRENT STATUS / WHERE THE SESSION WAS INTERRUPTED
+============================================================================
+The machine's disk backing Claude's own tool-output tmp dir (/Users/pt/.claude/tmp, NOT
+/private/tmp/scorediv) filled up (ENOSPC), and every Bash tool call started failing immediately
+(even `echo hi`), blocking cargo/git entirely. This happened right after the final-event award
+oracle's first successful corpus run (numbers above are real, captured before the outage) and
+before any of the 4 root-caused-but-unfixed formula bugs could be patched, tested, or committed.
+Read/Write/Edit tools still work; this file and REMAINING.txt are being kept current by hand
+through the outage per instructions. Retrying Bash periodically without sleep-looping.
+
+See REMAINING.txt for the exact pickup plan, file:line pointers, and what is already ruled out.

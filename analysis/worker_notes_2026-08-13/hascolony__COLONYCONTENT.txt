@@ -1,0 +1,229 @@
+COLONYCONTENT -- what actually scales with colony COUNT, and is `Colonies`'s
+-2.09 a residual, an independent quantity, or a mix?
+==============================================================================
+BOTTOM LINE UP FRONT: Colonies is a MIX. Two of the three count-scaling
+mechanics found (James Cook's culture bonus, the colony's own printed
+per-card effects) already flow into OTHER priced features (CultureRate,
+Strength, ScienceRate, etc. via effects.rs's phase-2 colony loop) and a
+THIRD (exposure to "Impact of Colonies") is separately priced by
+EventScoringMargin. But a FOURTH mechanism -- Annex's "opponent owns >=1
+colony" legal-target gate -- is a genuine rules-imposed EXPOSURE cost that
+is priced NOWHERE in the current feature set, and it is a CLIFF (>=1), not a
+slope, which a linear count cannot express correctly anyway. See (4) for the
+recommendation this implies.
+==============================================================================
+
+PART A -- WHAT SCALES WITH COLONY COUNT (2015 base game only)
+------------------------------------------------------------------------------
+Searched: docs/RULES_SPEC.md (all "colon" hits), sources/
+bga_throughtheages_material.inc.php (all Territory/Colonization/Colonies
+hits), rust/src/card_table.rs, rust/src/effects.rs, rust/src/legal.rs,
+rust/src/cards.rs (FinalScoringStat enum, CardEffects fields). Found exactly
+FOUR mechanisms whose magnitude or legality depends on colony COUNT, as
+opposed to a single colony's own printed effect:
+
+1. "Impact of Colonies" (Age III event, base game, 1 copy per player count
+   2p/3p/4p) [sources/bga_throughtheages_material.inc.php:3770-3778;
+   card_table.rs:3869-3881; RULES_SPEC has no separate citation beyond the
+   general Age III event machinery at §5.2]. Text: "Each civilization scores
+   3 culture per colony" -- `culture_per_colony: 3` on a
+   `Special::FinalScoring` block, applied to EVERY player (not just the
+   holder) via `total += block.culture_per_colony as i32 * p.colonies.len()
+   as i32` (rust/src/events.rs:383-384). SYMMETRIC: benefits whoever holds
+   more colonies at resolution time relative to rivals, exactly like a
+   culture-margin race, not an exclusive holder benefit or a rival
+   punishment. Confirmed this is the ONLY final-scoring formula gated on
+   colony count -- `FinalScoringStat` (cards.rs:349-356) only has
+   Strength/Science/CultureRate/Food/Resources variants, no Colonies, so no
+   "strongest civilization" ranked event uses colony count either.
+   Cross-checked two secondary sources that DISAGREE on magnitude (vassal
+   module says "4 Culture for each Territory", bga_card_counts.tsv and the
+   BGA PHP implementation agree on "3 culture per colony") -- the engine's
+   card_table.rs matches the BGA PHP source (3), which is the higher-priority
+   source per this task's instructions, so 3 is authoritative and the vassal
+   figure is presumably a transcription error or a different digital
+   balance pass; flagging as UNVERIFIED which of the two is the printed
+   physical-card truth, though irrelevant to the engine since it already
+   implements 3.
+
+2. James Cook (Age II Leader, base game) [sources/bga_throughtheages_
+   material.inc.php:2494; card_table.rs:1743-1760]. Text: "Your first colony
+   an additional 2 culture. Every colony after that produces an additional 1
+   culture." Two `Special`s: `CultureFirstColony(2)` (fires once
+   `!p.colonies.is_empty()`) and `CulturePerAdditionalColony(1)` (fires `*
+   (p.colonies.len() - 1).max(0)`) -- rust/src/effects.rs:1138-1147. HOLDER
+   ONLY (conditional on having drafted this specific leader). Applied every
+   turn into `stats.culture`, i.e. this is a per-turn RATE bonus, not a
+   final-scoring bonus, despite the "impact of colonies" event above also
+   existing -- these are two independently-triggered mechanisms that happen
+   to both key off colony count.
+
+3. A colony's OWN printed permanent effect (RULES_SPEC 11.5, docs/
+   RULES_SPEC.md:287) is NOT count-scaling by itself -- it is a fixed
+   per-card bonus applied once when that specific colony is held. But
+   because every held colony contributes its own effect independently, the
+   SUM across colonies held is mechanically proportional to colony count in
+   practice (more colonies -> more additive strength/production/culture/
+   science/happy, per rust/src/effects.rs:1411-1425's per-colony loop over
+   `p.colonies.as_slice()`). This is not a distinct "scales with count" RULE
+   the way (1) and (2) are explicit formulas over count -- it is just N
+   independent additions -- but it is the mechanism Part B is about, so
+   listed here for completeness.
+
+4. Aggression: Annex (Age II, base game) legal-target restriction
+   [rust/src/legal.rs:149, "Annex: 'one opponent who owns at least one
+   colony'"; RULES_SPEC L123 confirms the same clause; digital-edition
+   `target` field cited as the primary source]. This is a CLIFF, not a
+   slope: a rival becomes a LEGAL Annex target the instant their colony
+   count crosses from 0 to 1, and staying above 0 changes nothing further.
+   Effect on success: attacker steals ONE colony (attacker's choice) --
+   "take a rival's colony: gain its permanent effects, not its one-time
+   effect" (RULES_SPEC L123) -- gain does not scale with how MANY colonies
+   the victim holds beyond making the aggression legal at all. PUNISHES the
+   colony-holder (rivals only, and only if the rival is also
+   strength-eligible to attack, per the general aggression-target strength
+   clause at RULES_SPEC L123). Confirmed via rust/src/legal.rs:171,318-324
+   and the two legality tests at legal.rs:1409-1430 (colonyless target =
+   illegal Annex; target with >=1 colony = legal).
+
+No other base-game mechanism found to key off colony COUNT: checked "War
+over Territory" (name suggests it, but RULES_SPEC:142/card_table.rs:2465 --
+it pays yellow tokens off STRENGTH advantage, unrelated to Colonies despite
+the name), and there is no wonder, tech, or other event with a colony-count
+term (`grep`'d card_table.rs's `CardEffects`/`Special`/`FinalScoringBlock`
+definitions for any other colony-keyed field -- `culture_per_colony` is the
+only one that exists in the whole struct).
+
+PART B -- IS THE DOUBLE-COUNTING REAL?
+------------------------------------------------------------------------------
+Read rust/src/bots/weighted/features.rs end to end for every `WeightKey::`
+write (grep at lines 451-725) and traced each colony-adjacent mechanism from
+Part A to the feature(s) it lands on:
+
+- Mechanism 3 (a colony's own printed effect, applied via `add_flat`/
+  `apply_special` in effects.rs:1411-1425 into `Stats`) DOES flow into
+  OTHER priced features: `Stats.culture`/`Stats.science`/`Stats.strength`/
+  production rates feed `WeightKey::CultureRate` (features.rs:452),
+  `ScienceRate` (454), `Strength` (547)/`StrengthRel`/`StrengthLead`, and the
+  various `Best*` production-slot features, depending on which tokens/
+  ratings/bonuses a specific colony prints. CONFIRMED: the reverted commit's
+  premise here was correct on this one mechanism -- a colony's OWN benefit
+  is priced elsewhere, so a raw count of colonies held is, for THIS
+  mechanism alone, redundant with what CultureRate/ScienceRate/Strength
+  already capture.
+
+- Mechanism 2 (James Cook's colony-count culture bonus) ALSO flows into
+  `WeightKey::CultureRate` -- confirmed by the doc-comment on
+  `apply_special`'s test table (rust/src/bots/weighted/cards.rs:2838-2847):
+  "board_yields's generic swap diff -> Feature::CultureRate" for both
+  `cultureFirstColony` and `culturePerAdditionalColony`. So this mechanism,
+  too, is already priced elsewhere -- CONDITIONAL on holding James Cook, but
+  when it fires, it is not an unpriced quantity `Colonies` needs to carry.
+
+- Mechanism 1 ("Impact of Colonies" final-scoring exposure) is priced by a
+  DIFFERENT, DEDICATED coordinate: `WeightKey::EventScoringMargin`
+  (features.rs:637-640), which calls `events::event_scoring_margin`
+  (rust/src/bots/weighted/events.rs:159-198). That function clones state,
+  swaps in the candidate Age-III events (self-seeded at certainty, else
+  probability-weighted by `crate::bots::counting::event_pool`), and calls
+  the REAL `events::final_event_awards` -- which for "Impact of Colonies"
+  computes `culture_per_colony * p.colonies.len()` per player AT THAT
+  CLONE'S CURRENT colony counts (events.rs:383-384), then takes (my payout -
+  best rival's payout). So EventScoringMargin already prices the
+  differential future exposure to this specific event, using the SAME
+  `p.colonies.len()` quantity `WeightKey::Colonies` also reads -- just
+  converted into an expected margin instead of a raw stock. CAVEAT
+  (UNVERIFIED as a precision claim, verified as a mechanism claim): this
+  margin is computed off CURRENT colony counts as a proxy for counts AT
+  EVENT RESOLUTION time (which may be turns away and could change) -- so it
+  is an approximation, not a perfect hedge, but it is a real, dedicated,
+  differential price on exactly this mechanism, not an absence of one.
+
+- Mechanism 4 (Annex's >=1-colony legal-target cliff) is priced NOWHERE.
+  Grepped every `WeightKey` write in features.rs (451-725) for anything
+  keyed on being a legal Annex target, being annexable, or colony-holding
+  EXPOSURE/vulnerability -- none exists. `AttackTargetLead`/
+  `AttackTargetWeakness` (features.rs:658-659) are strength/culture/
+  happy/discontent RANKING comparisons for `my_event_threat`'s six
+  targeting keys (Age III "strongest civilization" events), unrelated to
+  Annex. `RivalColonies` (features.rs:668) records a RIVAL's colony count
+  (useful for deciding whether *I* can Annex *them*) but there is no
+  symmetric "my colony count exposes me to being Annexed" feature reading
+  the PLAYER'S OWN side of that same threshold. CONFIRMED GAP.
+
+VERDICT ON PART B: Colonies is a MIX, not purely a residual and not purely
+independent. ~75% of what a rules-literate person might expect "value of
+holding more colonies" to mean (mechanisms 1-3) is ALREADY priced on other
+coordinates (CultureRate, ScienceRate, Strength, EventScoringMargin) --
+so treating raw `Colonies` count as an independent positive-benefit
+coordinate on top of those would genuinely double-count. But mechanism 4
+(Annex exposure) is real, negative for the holder, rules-grounded, and
+UNPRICED anywhere else. A negative fitted weight on `Colonies` is therefore
+NOT provably wrong the way the reverted commit assumed -- it could
+legitimately be doing double duty as (a) a correction pulling back on
+double-counted benefit from mechanisms 1-3, and/or (b) the only extant price
+on mechanism 4's exposure cost. Both readings are consistent with -2.09;
+this investigation cannot separate which, and neither can a hand
+derivation -- only mechanism 4's SHAPE (see below) is unambiguous.
+
+PART C -- IS A RAW COUNT THE RIGHT SHAPE?
+------------------------------------------------------------------------------
+No, not for mechanism 4, and mechanism 4 is the one thing actually missing
+from the priced feature set. Annex's gate is `p.colonies.len() >= 1`, a
+CLIFF, not a slope -- going from 1 colony to 4 does not increase Annex
+exposure at all (still just "one legal target", one colony stolen per
+successful Annex, attacker's choice of which). This is EXACTLY the shape
+`WeightKey::HasUnit` already exists to handle for a different RULES_SPEC
+cliff (11.3's unit-count threshold for colonization-force legality) --
+`features.rs:551-556`'s own comment: "RULES_SPEC 11.3 cliff, not a slope --
+see WeightKey::HasUnit's own doc comment." A linear `Colonies` count can
+only express this cliff by accident (its nonzero-ness correlates with the
+cliff being crossed, but its MAGNITUDE beyond 1 carries no rules meaning for
+Annex exposure, and would misprice a 1-colony position identically to a
+4-colony position if the true cost were linear-in-count, which it is not).
+
+This matches the project's standing finding that one scalar per card TYPE
+is too coarse: `Colonies` conflates (i) a stock whose benefit-side is
+already priced elsewhere (mechanisms 1-3) with (ii) a binary
+rules-exposure fact that ISN'T priced anywhere (mechanism 4) and whose
+correct functional form is a step function, not a count.
+
+PART D -- RECOMMENDATION
+------------------------------------------------------------------------------
+NOT "declare Colonies NonNegative" (that was the reverted move, and Part B
+shows it is not grounded -- mechanism 4 gives the negative sign a real
+rules-based justification it does not deserve to be gated out).
+
+NOT "leave it alone" either -- that leaves a genuinely mixed signal on one
+coordinate (partial double-count of 1-3, mixed with the only-ever price on
+4) with no way for the climb to disentangle them, which is exactly the
+"model it properly" failure this project's own standing rules warn about.
+
+RECOMMENDATION (a new feature, not a hardcoded value, not a sign
+declaration): add a distinct `WeightKey::HasColony` boolean coordinate
+(`if !p.colonies.is_empty() { 1.0 } else { 0.0 }`), mirroring `HasUnit`'s
+existing pattern exactly, to let the fitted weights separate "I am a legal
+Annex target" (a cliff, should be free to be priced negative on its own)
+from "I hold N colonies" (whose benefit-side, per Part B, is already mostly
+captured elsewhere and arguably SHOULD be pulled toward less relevance once
+`HasColony` exists to carry the exposure cost). This is additive and
+structural: it does not touch `Colonies`'s current classification or
+fitted value, does not hardcode any magnitude, and gives the climb a
+correctly-shaped coordinate to route the Annex-exposure signal onto instead
+of forcing it through a linearly-scaled stock that can only express it by
+accident. Whether `Colonies` itself should eventually be reclassified
+(NonNegative, Free, or removed as redundant with CultureRate/ScienceRate/
+Strength/EventScoringMargin) is a question for AFTER `HasColony` exists and
+the climb has had a chance to separate the two signals -- doing it before
+that, on the current single conflated coordinate, is exactly the mistake
+the reverted commit made in the other direction.
+
+Everything in this file is grounded in file/line citations given inline;
+nowhere does this file assert a sign from "colonies are good" alone. The one
+place this file goes beyond directly-observed code is the EventScoringMargin
+precision caveat in Part B (marked UNVERIFIED there), and the implicit
+claim that mechanism 4's rules-cost is large enough to matter in practice --
+NOT measured here (no arena run was performed for this pass; COLONYSIGN.txt's
+existing measurement, colonies clamped to 0 or nudged +0.5 in 2p self-play,
+was inconclusive at n=640 either way and says nothing about `HasColony`,
+which does not exist yet to measure).

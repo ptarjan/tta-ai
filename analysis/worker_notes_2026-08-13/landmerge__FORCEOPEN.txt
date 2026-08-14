@@ -1,0 +1,317 @@
+FORCED OPENINGS: does forcing the human opening win more? (payoff pass)
+==========================================================================
+Working clone: /private/tmp/forceopen (copied from /private/tmp/openings
+with `cp -Rc`, so it carries the mining worker's committed code and the
+prebuilt rust/target). All work below is in this clone only. Champion
+vector used throughout, BOTH seats, every arm:
+/private/tmp/rowdig/frozen_champion_2p.json (the frozen, NOT-still-climbing
+vector -- never experiments/rust_champion_*).
+
+STATUS: complete.
+
+
+0. HEADLINE
+-------------------------------------------------------------------------
+YES -- forcing the mined human openings onto the champion wins it more
+games, for all three arms tested, and the win is NOT explained by a
+biased harness (the mandatory control landed exactly on the null):
+
+  arm                    n     win rate    95% CI          p (vs 50%)
+  ---------------------------------------------------------------------
+  MilitaryFirst (control) 1000  50.1%       [49.8, 50.4]    0.56  (null, as required)
+  MineFirst               3000  55.2%       [53.5, 56.9]    <0.0001  SIGNIFICANT
+  LeaderByRoundThree      3000  52.0%       [50.3, 53.7]    0.019    SIGNIFICANT
+  MineFirstAndLeader      3000  53.7%       [52.0, 55.4]    <0.0001  SIGNIFICANT
+
+Detection limit: at n=3000 paired games the half-width is ~1.7pp (tighter
+than the ~5-6pp the brief estimates for n=300, because these runs are 10x
+larger -- see §3 for why that extra scale was worth spending). All three
+real-arm point estimates clear their own interval; none of this is a
+sub-detection-limit 2-3pp read being over-interpreted.
+
+
+1. THE MECHANISM (built once, reused across all four arms)
+-------------------------------------------------------------------------
+New module `rust/src/opening_force.rs` (`OpeningPolicy`, `OpeningTracker`,
+`pick_with_optional_force`), plus one small surgical seam in the existing
+engine: `rust/src/bots/greedy.rs`'s `Bot::pick` was split into `Bot::pick`
+(unchanged) and a new `Bot::pick_from(&mut self, state, moves: &[Move])`
+that runs the SAME per-kind dispatch over a caller-supplied move list
+instead of generating one internally.
+
+`OpeningTracker::restrict` narrows the REAL legal-move list down to
+whichever human-opening category is under test -- ALWAYS a subset of the
+real legal moves, so this can never manufacture an illegal move -- and
+hands that subset to `pick_from`, which lets the champion's own
+UNMODIFIED evaluator/search pick among the narrowed candidates exactly as
+it always picks among the full list. `bots::weighted::eval` itself is
+never touched. If nothing in the narrowed subset is legal this decision,
+`restrict` returns the list COMPLETELY UNCHANGED and records a
+fallthrough (see below for exactly when that counts).
+
+Policies (`OpeningPolicy`, exhaustively matched, no wildcard on the enum):
+  - Unforced             -- the control seat's own unconstrained choice.
+  - MineFirst            -- force first build/develop/upgrade to be
+                             Mine-kind (in practice this is Bronze, the
+                             only Mine-kind card affordable this early).
+  - LeaderByRoundThree   -- force a leader taken-then-played by round 3:
+                             a two-step pursuit (Take a Leader-kind row
+                             card if none in hand yet, else PlayLeader the
+                             moment it's legal -- `PlayLeader` is checked
+                             FIRST so a seat holding a leader plays it
+                             rather than hoarding a second one).
+  - MineFirstAndLeader   -- both goals pursued independently; when a
+                             single decision offers legal moves toward
+                             BOTH at once, their forced candidate sets are
+                             UNIONED, never intersected (two disjoint move
+                             families intersect to nothing, which would
+                             silently un-force everything).
+  - MilitaryFirst        -- force first build to be a military unit: the
+                             bot's OWN current habit (97.8% unforced, per
+                             OPENINGS.txt), made explicit as the mandatory
+                             control.
+
+Categories match /private/tmp/openings/rust/src/bin/humanopenings.rs's
+`build_kind` exactly (Mine -> CardType::Mine; Military -> Infantry/
+Cavalry/Artillery/Air; `Upgrade{to,..}` keys on `to`, never `from`,
+matching that file's own extraction) and its `took_leader` field (driven
+by `Move::PlayLeader`).
+
+Fallthrough semantics, precisely (per the brief: "if the preferred move is
+not legal or not affordable this turn, fall through ... and record that
+it fell through"): at each decision in the forced window (round <= 3,
+goal unmet), if the legal list has NOTHING in the goal's move family at
+all (e.g. every legal move is Take/Pop/EndTurn for a build goal), that is
+NOT a fallthrough -- it's simply not this goal's moment, no counter
+moves, list passes through untouched. If the decision DOES offer moves in
+the goal's family but NONE hits the target category, THAT is a
+fallthrough: the counter increments and the entire original legal list is
+handed back, unrestricted, for this one decision. This keeps the
+fallthrough rate a small, meaningful signal rather than being swamped by
+the majority of a turn's decisions that were never relevant to the goal.
+
+"Achieved" caveat, stated precisely (so the number isn't over-read): it
+means "a move in the target category was actually played by round <= 3",
+via `OpeningTracker::observe` (which is hard-gated to `state.round <= 3`
+-- confirmed by a dedicated regression test, see next section, after a
+real bug where an unforced late-game build was silently counting). It is
+NOT strictly "this was the literal first build of the game" -- if an
+earlier fallthrough let a different build happen first and the target was
+only reached on a later round<=3 decision, "achieved" is still true. For
+every arm actually forcing that goal this pass, the fallthrough rate was
+low (0-7.4%, see §2), so in practice "achieved" and "was first" coincide
+almost always; this is flagged for precision, not because it changed a
+conclusion.
+
+Once a goal is satisfied, `OpeningTracker::opening_complete()`
+short-circuits `restrict` to a pure pass-through for the rest of the
+game -- forcing is a one-shot nudge at the start of the opening, never a
+standing constraint.
+
+
+2. TESTS -- confirmed RED, then GREEN (13 in opening_force.rs, 5 in
+   bin/forceopen.rs; full suite 1498 passed / 0 failed after landing)
+-------------------------------------------------------------------------
+First run (before a round-1-vs-round-2 fixture fix) failed 4 of 12 for a
+real reason, not a typo -- verbatim:
+
+    running 12 tests
+    test opening_force::tests::each_policy_wants_exactly_the_goals_its_own_doc_comment_promises ... ok
+    test opening_force::tests::bronze_buckets_as_mine_and_warriors_buckets_as_military ... ok
+    test opening_force::tests::forcing_lifts_after_round_3_even_when_the_goal_was_never_met ... ok
+    test opening_force::tests::leader_by_round_three_narrows_a_take_decision_to_a_leader_slot_when_one_is_affordable ... FAILED
+    test opening_force::tests::leader_by_round_three_prefers_playing_an_already_held_leader_over_taking_another ... FAILED
+    test opening_force::tests::mine_first_does_not_count_a_non_build_decision_as_a_fallthrough ... ok
+    test opening_force::tests::mine_first_and_leader_unions_both_goals_forced_subsets_on_the_same_decision ... FAILED
+    test opening_force::tests::mine_first_falls_through_when_only_a_non_mine_build_is_legal ... ok
+    test opening_force::tests::mine_first_narrows_a_build_decision_down_to_mine_kind_cards_only ... FAILED
+    test opening_force::tests::mine_first_stops_forcing_the_instant_a_mine_is_actually_built ... ok
+    test opening_force::tests::unforced_never_narrows_the_legal_list ... ok
+    test opening_force::tests::pick_with_optional_force_plays_ten_real_decisions_without_producing_an_illegal_move ... ok
+    test result: FAILED. 8 passed; 4 failed; 0 ignored; 0 measured; 1293 filtered out
+
+    ---- leader_by_round_three_narrows_a_take_decision_to_a_leader_slot_when_one_is_affordable ----
+    panicked: assertion `left == right` failed
+      left: [Take { slot: 0 }, Take { slot: 1 }]
+     right: [Take { slot: 0 }]
+    ---- leader_by_round_three_prefers_playing_an_already_held_leader_over_taking_another ----
+    panicked: fixture assumption broke: PlayLeader must be legal once a leader is in hand
+    ---- mine_first_and_leader_unions_both_goals_forced_subsets_on_the_same_decision ----
+    panicked: fixture assumption broke: need both legal at once
+    ---- mine_first_narrows_a_build_decision_down_to_mine_kind_cards_only ----
+    panicked: fixture assumption broke: round 1 seat 0 has no build-like move at all
+
+Root cause: `legal::action_moves` has a hard §1.9 rule -- round 1 offers
+ONLY Take/EndTurn, no Build/Develop/Upgrade/PlayLeader is ever legal there
+-- so these fixtures needed `state.round = 2`, and the leader-take
+assertion needed relaxing from exact-equality (the deal at that seed
+happened to also drop a second leader at slot 1). Fixed; re-run green
+(12/12, then 13/13 once the round-3 `observe` gate regression test below
+was added).
+
+A second real bug was caught the same way, AFTER the first 12 were green:
+a smoke run showed `leader achieved 60%`/`military achieved 100%` under
+the MineFirst arm even though neither goal was being forced -- `observe`
+was being called for a seat's WHOLE game (every round, not just the
+forced window), so a mine/leader/military that happened to show up in
+round 6 of ordinary play was silently counting as "the human opening was
+achieved". Added `observe_ignores_a_mine_build_that_happens_after_round_3`
+(confirmed it would have caught the bug: without the `state.round > 3`
+guard added to `OpeningTracker::observe`, `achieved_mine()` comes back
+`true` for a round-4 build) and gated `observe` on `state.round <= 3`.
+Re-run: 13/13 green. Final smoke check after the fix (n=20,
+`--policy mine-first`) showed sane, non-inflated numbers: mine achieved
+100/20 (forced, as expected), leader 12/20, military 13/20 -- consistent
+with ordinary round<=3 bot behaviour, not "eventually true for every long
+game".
+
+`bin/forceopen.rs`'s own 5 tests cover argument parsing (`--policy`
+required, `--games` rounds to whole 2p deals, every documented policy
+name round-trips through `parse_policy`) and the `GoalTally::
+fallthrough_rate` zero-division guard.
+
+Full suite after landing: `cargo test --profile difftest` -- 1498 passed,
+0 failed, across every binary in the clone (not just the new files).
+
+
+3. THE RUNS
+-------------------------------------------------------------------------
+All four use `--seed 0 --threads 2`, the same champion vector both seats,
+2p only (the corpus's largest bucket and the only one with a champion
+self-play comparison point, per OPENINGS.txt). `--threads 2` throughput
+was ~23-29 games/s -- 1000 games took ~42s, 3000 took ~105-120s, so
+scaling past the brief's 300-game floor to 3000 (10x) for MineFirst,
+LeaderByRoundThree and MineFirstAndLeader cost about 6 minutes total wall
+time and meaningfully sharpened the read (half-width ~1.7pp instead of
+~5-6pp) -- worth it since the first-pass n=1000 numbers were suggestive
+but inconclusive (MineFirst n=1000: 52.4% +/- 2.8%, p=0.0955) and the
+question the owner actually asked deserves a real answer, not a shrug.
+
+### MilitaryFirst (mandatory control) -- n=1000
+    win rate     50.1%  +/- 0.3   (null 50.0%)   p = 0.5640
+                 [naive +/- 3.1, rho -0.99, deff 0.01, 500 deals]
+    mine      achieved  14.2%  (142/1000)  forced 0     fallthrough 0    rate 0.0%
+    leader    achieved  47.1%  (471/1000)  forced 0     fallthrough 0    rate 0.0%
+    military  achieved 100.0% (1000/1000)  forced 1000  fallthrough 0    rate 0.0%
+    verdict: inconclusive (exactly as required -- landed on the null)
+Gate PASSED: forcing the bot to do what it already does 97.8%+ of the
+time lands it, cleanly, on 50%. The near-zero half-width (+/-0.3pp,
+rho=-0.99) is itself a sanity signal, not a bug: forcing barely changes
+behaviour from the unforced default, so the seat-paired rotation cancels
+almost perfectly. The harness is not biased; the three real-arm results
+below are trustworthy.
+
+### MineFirst -- n=3000 (n=1000 first pass: 52.4% +/- 2.8%, p=0.0955)
+    win rate     55.2%  +/- 1.7   (null 50.0%)   p = 0.0000
+                 [naive +/- 1.8, rho -0.11, deff 0.89, 1500 deals]
+    mine      achieved 100.0% (3000/3000)  forced 3000  fallthrough 0    rate 0.0%
+    leader    achieved  48.1% (1443/3000)  forced 0     fallthrough 0    rate 0.0%
+    military  achieved  58.0% (1740/3000)  forced 0     fallthrough 0    rate 0.0%
+    verdict: the forced seat wins MORE (interval clear above 50%)
+Largest, cleanest effect of the three: +5.2pp over the champion's own
+unforced self, 100% achieved, 0% fallthrough -- Bronze (the Mine-kind
+starting tech) was affordable and legal essentially every time the
+opening called for it, so this is a clean, uncontaminated measurement of
+"first build = Mine" specifically, not diluted by games where forcing
+couldn't take hold.
+
+### LeaderByRoundThree -- n=3000 (n=1000 first pass: 51.1% +/- 3.0%, p=0.4467)
+    win rate     52.0%  +/- 1.7   (null 50.0%)   p = 0.0193
+                 [naive +/- 1.8, rho -0.09, deff 0.92, 1500 deals]
+    mine      achieved  12.5%  (376/3000)  forced 0     fallthrough 0    rate 0.0%
+    leader    achieved 100.0% (3000/3000)  forced 6000  fallthrough 480  rate 7.4%
+    military  achieved  98.3% (2948/3000)  forced 0     fallthrough 0    rate 0.0%
+    verdict: the forced seat wins MORE (interval clear above 50%, barely: CI [50.3, 53.7])
+Real but smaller effect: +2.0pp, statistically significant (p=0.019) but
+the smallest and least comfortable margin of the three -- the 95% CI
+lower bound is 50.3%, a hair above the null. 100% of games achieved a
+leader by round 3 as intended; the 7.4% fallthrough rate (a real, low
+number -- not the "measured nothing" 70% the brief warns about) means
+forcing had teeth almost every time it tried.
+
+### MineFirstAndLeader -- n=3000 (n=1000 first pass: 51.5% +/- 3.1%, p=0.3183)
+    win rate     53.7%  +/- 1.7   (null 50.0%)   p = 0.0000
+                 [naive +/- 1.8, rho -0.06, deff 0.95, 1500 deals]
+    mine      achieved 100.0% (3000/3000)  forced 3034  fallthrough 0    rate 0.0%
+    leader    achieved 100.0% (3000/3000)  forced 8966  fallthrough 480  rate 5.1%
+    military  achieved  66.3% (1990/3000)  forced 0     fallthrough 0    rate 0.0%
+    verdict: the forced seat wins MORE (interval clear above 50%)
+Both sub-goals fully achieved (100%/100%), fallthrough low on both. The
+combined effect (+3.7pp) sits BETWEEN LeaderByRoundThree alone (+2.0pp)
+and MineFirst alone (+5.2pp) -- notably LESS than MineFirst alone, not
+more. The two forced habits do not simply add. Read: forcing a leader
+election on top of the mine-first line likely competes for the same early
+civil actions/resources that would otherwise go toward compounding the
+Mine's economic lead, so the combination trades away some of MineFirst's
+own edge in exchange for the smaller, independent Leader edge. This is a
+real, interesting interaction, not noise -- both CIs are tight (+/-1.7pp)
+and clearly separated in direction (combined 53.7% sits comfortably below
+MineFirst's 55.2% and its own lower CI bound of 53.5%... actually
+overlaps at the boundary, so "combined is a bit lower than Mine alone" is
+the honest, not over-claimed, read here -- not "combined is worse than
+Mine alone with full confidence", since [52.0,55.4] and [53.5,56.9]
+overlap. Directionally suggestive, not itself a proven ordering.)
+
+
+4. INTERPRETATION -- which of the two stories is this?
+-------------------------------------------------------------------------
+The brief poses two possible readings for a forced-opening result:
+(a) the evaluator misprices the early game and this is a concrete,
+    landable target, or
+(b) the human convention is just convention (or the champion's own later
+    play is co-adapted to ITS OWN opening and gets stranded by a foreign
+    one), so forcing it shouldn't be expected to help.
+
+This pass's result is (a), for all three arms, and it lines up exactly
+with the mechanisms OPENINGS.txt already traced in the bot's own weight
+vector -- this experiment did not need to invent a new explanation, it
+confirmed the ones already on file actually cost real games:
+  - MineFirst's effect (the largest, +5.2pp) matches OPENINGS.txt finding
+    #1: `strength_marginal` prices ANY move that raises the player's own
+    military strength positively even at lateness~=0 (the literal
+    opening), while Farm/Mine production yields get no comparable
+    amplification -- so the champion's default "build military first"
+    habit was measurably leaving equity on the table, not merely
+    differing from human convention by taste.
+  - LeaderByRoundThree's effect (smaller but real, +2.0pp) matches finding
+    #2: leaders get no dedicated `card_potential_core` pricing gate the
+    way techs/governments/actions/wonders do, and land at ~0 board value
+    through the generic fallback even after `dominance_repair` -- so the
+    champion under-values leaders relative to their real worth, and
+    forcing one in gains a little.
+  - The combined arm being LESS than MineFirst alone (not more) is the
+    one place this pass earns a genuine caveat rather than a clean
+    confirmation: the two mispricings are not independent contributions
+    to add up -- pursuing both spends some of the same early civil-action
+    budget, so this is not "force everything human and win the most",
+    it's "MineFirst is the strongest single lever measured here".
+
+No claim is made here about human-like play being strong in general
+(that is a separate, already-measured fact: the searchless human-
+imitation bot wins only ~2% of its games -- imitation accuracy measures
+the DATA, never playing strength). What this pass measured is narrower
+and sharper: specifically forcing the champion's OWN evaluator to spend
+its OWN search/choice on the mine-kind and leader-kind moves it already
+undervalues wins more, because the mispricing was already sitting in the
+weight vector, independently confirmed by direct code reads in the mining
+pass and now confirmed IN PLAY here.
+
+
+5. WHAT WAS NOT CHASED
+-------------------------------------------------------------------------
+- The third mined divergence (bot over-takes Wonder first, 72.75% vs
+  humans' 32.9%) was not run as a forced arm -- the brief's mandatory set
+  is MineFirst, LeaderByRoundThree, MineFirstAndLeader plus the
+  MilitaryFirst control; a WonderFirst/AvoidWonder arm was out of scope
+  for this pass to stay inside budget, and is a natural next experiment
+  given MineFirst's result here (the row-scarcity double-count mechanism
+  OPENINGS.txt traced for Wonders is architecturally similar to the
+  Mine/Military mispricing this pass just confirmed costs real games).
+- 3p/4p and any non-2p corpus were not touched, matching the mining
+  pass's own scope note (2p is the only bucket with a champion self-play
+  comparison point).
+- The MineFirstAndLeader-vs-MineFirst-alone ordering (§3's caveat) is
+  flagged, not formally tested head-to-head with its own paired
+  comparison -- both are independently significant against the 50% null,
+  and their CIs overlap, so "combined is worse than Mine alone" is a
+  directional read from this pass's numbers, not itself a p-valued claim.

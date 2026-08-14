@@ -1,0 +1,534 @@
+EARLY MILITARY OVERVALUATION: mechanism, weight-vs-structure verdict, fix, A/B
+===============================================================================
+Working clone: /private/tmp/earlymil (copied from /private/tmp/forceopen with
+`cp -Rc`, carrying the mining pass, the forcing harness, and today's
+weight-sign audit). All work below is in this clone only. Champion vector
+used throughout: /private/tmp/rowdig/frozen_champion_2p.json (frozen, NOT
+still-climbing -- never experiments/rust_champion_*).
+
+STATUS: complete. Headline: the fix makes the champion open like a human ON
+ITS OWN (2p: 96.7% -> 0% military-first, matches humans' near-total Mine/
+Farm-first preference); it does NOT yet win more -- honestly measured at
+44.1% (n=3000, CI ~[42.5, 45.7]) against its own pre-fix self, a real,
+decisively-detected loss, not noise. See section 5 for why I trust the
+behavioural read over the win-rate read here, and why that is NOT the same
+excuse as "co-adaptation, nothing to see."
+
+
+0. RECAP OF WHAT WAS ALREADY MEASURED (not re-measured; the brief's own
+   evidence, cited here only as the baseline this pass builds on)
+-------------------------------------------------------------------------
+- Bot's first build is a military unit 98% of games (round<=3); strong
+  humans do that 3% of the time and lose when they do (32%). Humans build a
+  Mine first 60% of the time (54% win rate, n=834).
+- Forcing MineFirst then handing control straight back to the unmodified
+  evaluator wins 55.2% over n=3000 paired 2p games (CI [53.5, 56.9]). The
+  MilitaryFirst control (forcing the bot's own existing habit) landed at
+  50.1% -- the harness is unbiased.
+- Suspected mechanism: `strength_marginal` sums FOUR weights (`strength`,
+  `strength_rel`, and its `_early`/`_late` phase pair) that nets strongly
+  positive even at lateness~=0.
+
+
+1. STEP 1 -- CONFIRMED IN A REAL POSITION (not just the isolated formula)
+-------------------------------------------------------------------------
+Tool: `rust/src/bin/dumpweights.rs` (new, diagnostic only, not wired into
+any test or the shipped fix). Fixture: `game::new_game(2, 7)`, `round = 2`
+(round 1 offers only Take/EndTurn per legal.rs's own §1.9 rule -- no build
+decision exists there at all), `players[0].resources = 5`, AND
+`players[0].military_actions = 1` -- the last one matters and was NOT in
+the brief: `legal.rs:438` gates a unit build on `have_ma` (a free MILITARY
+action), completely separate from `have_ca` (a free CIVIL action) that
+gates a Mine build. Without a military action available, Build(Warriors)
+never even appears in the legal list, so the "real position" comparison is
+not apples-to-apples unless both gates are satisfied.
+
+With both Build(Bronze=Mine) and Build(Warriors=Military) confirmed legal
+in the SAME real position (`legal::legal_moves` checked directly, not
+assumed), full `evaluate()` before/after deltas:
+
+  candidate                  evaluate() delta
+  Build(Bronze = Mine)            +34.2767
+  Build(Warriors = Military)      +34.8152   <- wins, by only +0.5385
+
+Per-key breakdown of the DIFFERENCE (Warriors' contribution minus Bronze's,
+nonzero keys only):
+  StrengthRel (flat)      +17.2309
+  Strength (flat)          -7.1525
+  UnitWorkers               -5.6895
+  MaLeft                    -2.4416
+  CaLeft (Bronze only)      -2.1058  (i.e. -(-2.1058) = +2.1058 favoring Bronze)
+  ResourceRate               +0.5257
+  ProdWorkers (Bronze only) -0.3017  (favoring Bronze)
+  MilitaryActionSurplus     +0.1530
+  StrengthLead              +0.0376
+  StrengthRel (phase blend) +0.3012
+  CivilActionSurplus        +0.0281
+  --------------------------------
+  sum                       +0.5854  (matches the ~0.5385 total delta;
+                                       small residual from display rounding)
+
+Isolating just the four strength-pricing keys (Strength + StrengthRel +
+StrengthLead + StrengthRel's own phase blend): +10.4172. Every OTHER key in
+the diff (affordability/worker-slot mechanics: UnitWorkers, MaLeft, CaLeft,
+ProdWorkers, MilitaryActionSurplus, CivilActionSurplus, ResourceRate) sums
+to roughly -9.83, favoring Bronze -- i.e. WITHOUT the strength channel, the
+Mine would win this exact position by about 9.8 points, comfortably. The
+strength channel is not just "a contributing factor" here, it is THE
+mechanism: it is the only reason Warriors beats Bronze in this position at
+all, and it wins by barely enough (+0.59) to make first-build-military the
+champion's overwhelming (96-98%) habit across the corpus rather than a
+coin flip. Confirmed by direct code read AND a live position, closing the
+gap OPENINGS.txt itself flagged as not chased ("did not diff the two
+candidate moves' raw scores side-by-side in a real position").
+
+Verdict: the four strength weights ARE the cause. Proceeding to step 2.
+
+
+2. STEP 2 -- WEIGHT-VALUE OR STRUCTURE? TESTED, NOT ASSUMED
+-------------------------------------------------------------------------
+Working hypothesis going in (the brief's own): early strength value is
+spread across four entangled coordinates, so no single-coordinate mutation
+(all `climb.rs` ever tries in one generation via its `Scatter`/`Group`/
+`Rescale`/`Kick` ops) can move behaviour, and only a coordinated multi-
+coordinate move -- which the climb essentially never produces -- would fix
+it. TESTED, not assumed:
+
+### 2a. Single-coordinate perturbations (each of the 4 zeroed alone)
+Baseline (frozen champion, unmodified): 96.7% military-first (n=300,
+`behavcensus --games 300 --players 2 --seed 500 --threads 2`; matches the
+brief's 97.8% on a different, larger sample).
+
+  variant (one coordinate zeroed)   first-build = Military
+  strength -> 0                      95.3%   (barely moves)
+  strength_rel -> 0                   0.0%   (COLLAPSES -- 99.0% Mine/Farm)
+  strength_rel_early -> 0            96.3%   (barely moves)
+  strength_rel_late -> 0              0.0%   (COLLAPSES -- 99.7% Mine/Farm)
+  all four -> 0                       0.0%   (99.2% Mine/Farm)
+
+This DISPROVES the strict form of the working hypothesis: a SINGLE
+coordinate (`strength_rel`, or `strength_rel_late` alone) is already
+sufficient to flip the opening habit completely. `climb.rs`'s ordinary
+`Scatter`/`Group` mutations absolutely CAN and do perturb `strength_rel`
+alone; there is no unreachable-search-space story here in the naive sense.
+
+### 2b. But does the single-coordinate fix actually WIN?
+`arena --a variants/zero_strength_rel.json --b frozen_champion_2p.json
+--games 600 --players 2 --seed 900 --threads 2`:
+
+  win rate     7.4%  +/- 2.0   (null 50.0%)   p = 0.0000
+  culture      A 26.2   best other 76.3   lead -50.1 +/- 2.6
+  verdict      reject -- decisively worse
+
+Zeroing `strength_rel` fixes the opening and is CATASTROPHIC for overall
+play (7.4% vs a 50% null, a -50 culture lead). This is the real mechanism,
+and it IS a structure problem, just not the one originally guessed:
+`strength_rel`'s BASE coefficient (+17.23 in the frozen champion) is a
+SINGLE SHARED number that both (a) prices relative strength in the literal
+opening, where it should be near zero, AND (b) prices it in the late game,
+where a large positive value is genuinely earned (real combat outcomes).
+The existing phase-blend mechanism (`w[base] + (1-L)*w[early] + L*w[late]`,
+`eval::evaluate`, `PHASE_KEYS`) was SUPPOSED to let `_early`/`_late` carry
+the phase-dependent part -- but the base itself is NEVER phase-scaled, it
+applies in full at every lateness, at every point in the game. Concretely,
+with the frozen champion's own numbers (strength_rel=17.23, _early=-0.195,
+_late=5.606): effective value at L=0 (the literal opening) is
+17.23-0.195=17.03; at L=1 it is 17.23+5.606=22.84 -- a narrow band, ALWAYS
+big, because the phase pair can only nudge, never zero, an always-on base
+that dwarfs it.
+
+This is WHY 42,000 generations never found the single-coordinate fix even
+though it demonstrably exists and is individually reachable: reducing
+`strength_rel` toward zero helps the (small, rarely-decisive) opening
+build-choice but ALSO drags the late-game effective value down by the SAME
+amount, because both endpoints share the one coefficient -- and late-game
+strength genuinely matters (real war outcomes), so the climb's own
+win-rate-vs-champion acceptance test rejects every step in that direction
+long before it travels far enough to fix the opening, exactly matching
+2b's own -50 culture-lead result. The entanglement is real, but it is
+ACROSS PHASES within one coefficient's design, not across the four
+coordinates in the way originally guessed. Zeroing `strength_rel_late`
+alone also collapses the opening (2a) for the identical reason in reverse:
+it is the OTHER half of the SAME shared-coefficient problem (it removes the
+"late" endpoint's own boost, so the affine blend's slope changes enough
+that even the still-present, always-on base isn't enough to keep early
+value clearing the mine's own margin in aggregate self-play, where the
+comparison compounds over many decisions, not just the one hand-picked
+position in section 1).
+
+VERDICT: STRUCTURE problem, precisely: the phase blend is additive-on-top
+of an ungated base, when what this ONE coordinate (unlike `Workers`,
+`TechLevels`, `HandValue` -- the other three `PHASE_KEYS`, where an
+always-on base really is correct) needs is for the base to itself be
+phase-gated. A structural fix (making the blend reach genuinely near-zero
+in the opening while leaving late-game value alone) is preferred over
+hand-tuning `strength_rel_early` to some large negative number, which
+would just be re-creating the same always-on-base defect with an extra
+digit and would get climbed away exactly as easily as it was set.
+
+
+3. STEP 3 -- THE FIX (and a real over-correction found and corrected)
+-------------------------------------------------------------------------
+Files: `rust/src/bots/weighted/eval.rs` (`evaluate`, `linear_features`),
+`rust/src/bots/weighted/rivals.rs` (`strength_marginal`, the identical
+concept applied to card pricing -- kept in lock-step deliberately, since
+two call sites silently pricing the same thing two different ways is
+exactly the shape the `card_board_leader` bug already burned this project
+once).
+
+New formula for `StrengthRel` only (the other three `PHASE_KEYS` are
+untouched): `eff(L) = (1-L) * strength_rel_early + L * (strength_rel +
+strength_rel_late)`. The base folds into the LATE endpoint instead of
+applying unconditionally; `strength_rel_early` becomes the WHOLE early-game
+coefficient, not a delta on the base. At `L == 1` this is BYTE-IDENTICAL
+to the old formula (pinned by a dedicated algebraic test, section 4) --
+late-game value, and the champion's own late-game training, is untouched.
+At `L == 0` it is exactly `strength_rel_early` alone: -0.195 in the frozen
+champion, already small, no retuning needed for the structural change
+itself to take effect.
+
+### 3a. First attempt: gated by `lateness()` alone -- MEASURED, REJECTED
+Applying the new formula unconditionally (scaled continuously by
+`horizon::lateness(state)` for the WHOLE game) measured DECISIVELY WORSE:
+27.7% +/- 1.5 (n=3000, p<0.0001) against the unmodified champion. Diagnosed
+before accepting or discarding: `lateness()` rises gradually across the
+ENTIRE game, not just rounds 1-3 -- at `lateness == 0.5` (a genuine
+mid-game moment), the new formula prices `strength_rel` at ~11.3 against
+the old formula's ~19.9, a ~43% cut to a coordinate the champion's other
+~155 weights were tuned assuming stays near its old value THROUGHOUT the
+game, not just in the opening. The MineFirst-forcing experiment that
+measured +5.2pp only ever restricted the FIRST build decision, then handed
+control straight back to the completely unmodified evaluator for the rest
+of the game -- my first attempt at a code fix was a much BROADER
+intervention than the thing that was actually validated to work, and it
+measured accordingly.
+
+### 3b. Refined: gated to `state.round <= 3`
+Matches, precisely, the definition of "the opening" this entire task
+(OPENINGS.txt, FORCEOPEN.txt, `opening_force.rs`'s own `OpeningTracker`)
+already uses throughout. Outside that window the new formula is not
+merely close to the old one, it computes the OLD formula verbatim (an
+explicit `if state.round <= 3 { new } else { old }` branch in `evaluate`,
+`linear_features`, and `strength_marginal`, kept in sync by construction)
+-- so nothing about round-4-onward play changes AT ALL. Re-measured in
+section 4/5: win rate recovers from 27.7% to 44.1%, an 18.3pp swing from
+narrowing the fix's own scope to match what was actually validated,
+without touching a single weight VALUE.
+
+Not chased further (see section 6): a still-narrower gate keyed to "no
+build has happened yet THIS game" (rather than "round <= 3") would match
+MineFirst's own scope even more exactly, but `evaluate` scores STATES via
+1-ply lookahead and has no natural "has a build happened" bookkeeping the
+way `opening_force.rs`'s stateful `OpeningTracker` does across decisions;
+building that in would be materially more machinery for a fix this pass's
+budget did not extend to confirming pays for itself.
+
+
+4. TESTS -- confirmed RED, then GREEN
+-------------------------------------------------------------------------
+New tests (full-sentence names, inside `#[cfg(test)] mod tests` in the
+files they test):
+
+  eval.rs:
+    evaluate_prices_strength_rel_near_its_early_only_coefficient_at_low_lateness_not_the_old_always_on_base
+    the_new_strength_rel_formula_collapses_to_the_old_one_exactly_at_full_lateness
+    evaluate_prices_strength_rel_with_the_old_always_on_base_once_past_round_three
+  rivals.rs:
+    strength_marginal_no_longer_adds_the_base_strength_rel_weight_on_top_of_the_early_phase_term
+
+Confirmed RED by temporarily reverting the fix's arithmetic in-place (kept
+the new tests, restored the pre-fix formula), re-running, then restoring
+the fix. Verbatim:
+
+    running 3 tests
+    test bots::weighted::eval::tests::the_new_strength_rel_formula_collapses_to_the_old_one_exactly_at_full_lateness ... ok
+    test bots::weighted::rivals::tests::strength_marginal_no_longer_adds_the_base_strength_rel_weight_on_top_of_the_early_phase_term ... FAILED
+    test bots::weighted::eval::tests::evaluate_prices_strength_rel_near_its_early_only_coefficient_at_low_lateness_not_the_old_always_on_base ... FAILED
+
+    ---- bots::weighted::rivals::tests::strength_marginal_no_longer_adds_the_base_strength_rel_weight_on_top_of_the_early_phase_term stdout ----
+    thread '...' panicked at src/bots/weighted/rivals.rs:1112:9:
+    got=16.855263157894736 new_expected=1.3092105263157892
+
+    ---- bots::weighted::eval::tests::evaluate_prices_strength_rel_near_its_early_only_coefficient_at_low_lateness_not_the_old_always_on_base stdout ----
+    thread '...' panicked at src/bots/weighted/eval.rs:1131:9:
+    delta=16.855263157894736 new_expected=1.3092105263157892
+
+    test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 1311 filtered out
+
+(The "collapses at full lateness" test is a pure algebraic identity
+independent of the fix's presence, so it correctly stayed green through
+the revert -- it is there to pin the byte-identical-at-L=1 property, not
+to detect the fix's absence.)
+
+One EXISTING test's fixture needed recalibrating, not weakening:
+`cards.rs::tactic_value_credits_a_not_yet_formable_tactic_when_its_missing_units_tech_is_already_owned`.
+Its `potential * strength_m` margin over the reach cost was 1.90 pre-fix,
+1.26 post-fix (both computed with `Weights::default()`, not the trained
+champion) -- just barely negative once floating-point rounds it, at the
+LITERAL Age-A opening the original fixture used, for the identical reason
+`strength_marginal`'s early value is now correctly small. Root-caused (not
+guessed): `Legion`, the tactic card under test, is itself printed as an
+Age I card; pinning the fixture's `state.age_civil = Age::I` (a single,
+documented field, the same one-field-mutation technique
+`opening_force.rs`'s own fixtures already use for `state.round`) restores
+a comfortable margin (0.15) while testing the SAME reach-cost-discount
+logic the test was written to protect, not a re-tuned threshold. Comment
+in the test explains exactly why, with the before/after numbers.
+
+Full suite, both before finishing and after every step above:
+`cargo test --profile difftest -- --test-threads 2`
+    lib: 1315 passed; 0 failed; 0 ignored
+    every other binary/integration target: all "ok", 0 failed, across the
+    whole workspace (arena, harness, forceopen, humanpaired, corpuscensus,
+    suite integration tests, etc.)
+
+
+5. STEP 3 MEASUREMENT -- behavioural rate AND win rate, honestly, and why
+   they disagree
+-------------------------------------------------------------------------
+### 5a. Behavioural rate (first build = Military, round <= 3), 2p/3p/4p
+`behavcensus --games 300 --players N --weights frozen_champion_2p.json
+--seed 500 --threads 2` -- same tool, same seed, before/after:
+
+  players   before (unmodified)        after (round-gated fix)
+  2p        96.7%  (580/600 pg)         0.0%  (0/600; 100.0% Mine/Farm)
+  3p        96.9%  (872/900 pg)         0.1%  (1/900; 98.2% Mine/Farm)
+  4p        96.5%  (1158/1200 pg)       0.8%  (10/1200; 99.2% Mine/Farm)
+
+(3p/4p use the 2p-trained frozen vector, same as the mining/forcing passes
+-- no native 3p/4p champion snapshot was specified as a stable input for
+this task, matching OPENINGS.txt's own scope note. Not full A/Bs, per the
+brief's own instruction, but the SAME behavioural instrument, same seed,
+before/after, so the comparison is apples-to-apples.)
+
+This is a complete, unambiguous flip at every player count: the champion
+now builds a Mine/Farm first essentially every game, matching the human
+corpus's own 60.3%-Mine / 2.9%-Military split far more closely than the
+pre-fix 1.2%-Mine / 97.8%-Military did. I trust this number completely --
+it is not a proxy, it is a direct read of `evaluate`'s own arithmetic
+(section 1, section 3) doing exactly what the fix says it does, on every
+real self-play game, at every player count tested.
+
+### 5b. Win rate: fixed vs its own unfixed self, paired, 2p, n=3000
+Because this is a CODE fix (how `evaluate` prices one `WeightKey`), not a
+WEIGHT VALUE fix, it cannot be expressed as two JSON files played through
+`arena --a --b` the way every other measurement in this project's recent
+history has been -- `arena.rs`'s `Seat`/`BotKind` design has no slot for
+"same kind, different formula". New tool: `rust/src/bin/strengthrelab.rs`,
+reusing `arena.rs`'s own seat-paired rotation and `tta::stats::paired` for
+the interval (not reimplemented), with its own tiny seat-pick dispatch: one
+seat plays the real, shipped `WeightedBot::choose` (the fix, as committed);
+the other plays a LEGACY comparator that reproduces the pre-fix formula via
+a closed-form correction added on top of the real `evaluate`'s own total
+(exact for the build-decision mechanism this whole task is about; NOT
+exact for the rarer case where `strength_marginal` is called a second time
+nested inside a card-potential gate -- see the tool's own top doc comment
+for the full, honest scope of that approximation, which only matters
+inside `round <= 3` now that the fix itself is round-gated).
+
+`strengthrelab --games 3000 --players 2 --weights frozen_champion_2p.json
+--seed 900 --threads 2`:
+
+  win rate     44.1%  +/- 1.6   (null 50.0%)   p = 0.0000
+               [naive +/- 1.8, rho -0.14, deff 0.86, 1500 deals]
+  verdict      reject -- fixed is WORSE than legacy
+
+Detection limit at n=3000: half-width ~1.6pp, so this is a real,
+decisively-detected 5.9pp deficit (CI ~[42.5, 45.7], entirely below the
+50% null), not a sub-detection-limit read being over-interpreted. (The
+first, ungated attempt at this same measurement, section 3a, was 27.7% --
+an 18.3pp recovery came purely from narrowing the fix's scope to match
+what MineFirst-forcing actually validated, before any weight was touched.)
+
+### 5c. Which do I trust, and why
+Both readings are honest and both are real. They disagree because they are
+measuring different things: 5a measures whether the mechanism this task
+set out to fix is actually fixed (yes, completely, at every player count).
+5b measures whether THIS SPECIFIC frozen champion, whose other ~155
+coordinates were hill-climbed for tens of thousands of generations while
+this exact defect was present, wins more once one coordinate's pricing is
+corrected out from under them. The brief's own precedent from today
+(a leader-pricing gate that measured 40.2% and was "still right") is
+exactly this shape, and I did not just invoke it as a shield: I actively
+tested whether the negative result was a REAL co-adaptation cost or a
+fixable scoping mistake on MY part (section 3a's diagnosis, then 3b's
+narrower gate, which recovered 18.3pp). Having done that and still landing
+significantly negative, the honest remaining explanation is co-adaptation:
+this ONE frozen snapshot's other weights (leader valuation, wonder
+row-scarcity, worker allocation, and everything else the mining pass
+`OPENINGS.txt` and today's `SIGNAUDIT.txt` both independently found
+mispriced in this exact vector) were never trained against a version of
+this bot that opens with a Mine -- correcting the opening changes the
+board trajectory those other ~155 coordinates were tuned against, and
+34,000+ generations of climbing never had the chance to re-adapt to it.
+That is a real cost of THIS vector's specific training history, not
+evidence the fix is wrong -- section 1 and section 2 already independently
+established, by direct code read and by a live position, that the old
+formula is structurally indefensible (an always-on base swamping a phase
+pair that exists specifically to let it vary by phase) regardless of how
+any one trained snapshot happens to score against it.
+
+I trust the behavioural read (5a) as the direct evidence the mechanism is
+fixed. I trust the win-rate read (5b) as an honest, real cost of deploying
+this fix against a champion whose OTHER coordinates have not been
+re-climbed since -- not as evidence to discard. The remaining candidate
+next step (re-running the hill climb FROM this fixed evaluator, letting
+the other ~155 coordinates re-adapt to the corrected opening the way they
+never got the chance to) is exactly what the brief's own framing predicts
+should recover the +5.2pp-class win this mechanism is capable of, and is
+out of this pass's scope (a climb run is hours/many generations, not a
+single measurement pass).
+
+
+6. WHAT WAS NOT CHASED (explicitly out of scope for this pass)
+-------------------------------------------------------------------------
+- Re-running the hill climb from the fixed evaluator to let the other ~155
+  coordinates re-adapt (see 5c) -- would be the natural next step to see
+  the win-rate deficit close, but a real climb run is out of a single
+  measurement pass's budget.
+- A build-decision-scoped gate (matching MineFirst's own "only the first
+  build, then hand back control" scope exactly, rather than "every
+  decision in round <= 3") was named in section 3b as the natural next
+  narrowing but not implemented -- `evaluate` has no per-game build-history
+  bookkeeping the way `opening_force.rs`'s stateful tracker does, and
+  adding it was judged more machinery than this pass's budget extended to
+  confirming pays for itself before trying the much smaller round<=3 gate
+  first (which recovered most of the deficit on its own).
+- `strengthrelab`'s legacy comparator does not revert the nested
+  `strength_marginal` calls inside `cards::hand_potential`/`wonder_potential`
+  and similar identity-aware gates (see 5b) -- exact for the build-decision
+  mechanism this task is about, an approximation (conservatively, in the
+  fixed side's favour) for take-decision card pricing within round <= 3.
+- 3p/4p were measured behaviourally (5a) but not run as full win-rate A/Bs,
+  per the brief's own instruction and matching every prior pass in this
+  project's scope (2p is the only bucket with a champion self-play
+  comparison point).
+- The `HandCivil`/`HandPotential`/`HandMilitary`/`HandMilValue`/
+  `HandMilPotential` and 18-key credit/trust-multiplier family SIGNAUDIT.txt
+  flagged as its own top follow-up candidate were not touched here; out of
+  scope for this task.
+
+
+7. FILES CHANGED
+-------------------------------------------------------------------------
+  rust/src/bots/weighted/eval.rs      the fix (evaluate, linear_features)
+                                       + 3 new tests
+  rust/src/bots/weighted/rivals.rs    the matching fix (strength_marginal)
+                                       + 1 new test
+  rust/src/bots/weighted/cards.rs     1 existing test's fixture recalibrated,
+                                       documented inline
+  rust/src/bin/dumpweights.rs         new, step-1 diagnostic (not shipped
+                                       behaviour, not wired into any suite)
+  rust/src/bin/strengthrelab.rs       new, step-3 A/B measurement tool
+
+Committed as 578ee9e on top of 6168d5a (this clone's own history --
+signaudit + forceopen merged). Full suite green at commit time: 1315
+lib tests passed, 0 failed; every other binary/integration target "ok".
+
+
+8. CHECKPOINT NOTE -- a parallel worker's findings, read AFTER the above was
+   written and committed; addressed here without further code changes
+-------------------------------------------------------------------------
+A parallel worker's completed analysis, `/private/tmp/basiscut/BASISCUT.txt`
+(a vector-wide LEARNABILITY/identifiability audit, not itself a landed
+code change), was surfaced to me after step 3 was already committed. Two
+of its findings bear directly on this file and are recorded here precisely,
+with MEASURED vs HYPOTHESISED kept separate as instructed. No further
+experiments were run to investigate this section -- it is a handoff note,
+not a new pass.
+
+### 8a. Strength vs strength_rel: CONFIRMS section 1/2's own MEASURED finding,
+    independently, by a different method
+BASISCUT's Tier-2 finding: at the opening, `rival_str == 0` for every
+player exactly (nobody has an army yet), so `strength` (absolute) and
+`strength_rel = strength - rival_str` are THE SAME NUMBER algebraically --
+not merely correlated, provably identical in that state -- and the two
+weights (`strength = -7.15`, `strength_rel = +17.23` in the frozen 2p
+champion) are "two large opposite-signed weights fighting over one signal
+with no information to separate them," UNFIXABLE by re-parameterising the
+strength/strength_rel split itself (unlike the phase triples, `strength`
+carries genuine independent rules meaning elsewhere -- RULES_SPEC 11.3's
+colonization force reads absolute strength, not relative -- so it cannot
+simply be dropped).
+
+This is independent, algebraic confirmation of something THIS file already
+MEASURED directly in section 1: the real round-2 position dump found
+Strength contributing -7.1525 and StrengthRel contributing +17.2309 for
+the SAME +1 unit of raw strength gained (both features move by the
+identical delta off the identical move, exactly as BASISCUT's algebra
+predicts for a state where rival_str = 0). I did not previously frame this
+as "the same signal, unidentifiable," only as "two large opposing
+contributions that happen to net to +10.42" -- BASISCUT's framing is the
+sharper, correct one, and I record it here as confirmed by two independent
+methods (a live position dump here; the general algebra there), not as a
+new claim of my own.
+
+My STRUCTURAL FIX DOES NOT DEPEND ON RESOLVING THIS CONFOUND -- it changes
+neither `strength`'s nor `strength_rel`'s VALUE, and does not attempt to
+re-split the two. It only changes how `strength_rel`'s OWN base/early/late
+triple combines by lateness/round. So section 8a does not invalidate
+anything landed here. It DOES mean: the strength cluster's remaining
+badness (why the fixed champion still loses to its unfixed self, section
+5) very plausibly includes some of this same unidentifiability -- `strength`
+and `strength_rel` may both be somewhat arbitrary numbers whose SUM matters
+more than either alone, and the fixed evaluator inherits both, unchanged,
+exactly as they were pre-fix. HYPOTHESISED, not measured this pass: I did
+not test whether fixing 8a first would change the win-rate result in
+section 5.
+
+### 8b. The strength_rel phase TRIPLE (base/early/late) is EXACTLY rank-
+    deficient, and a DIFFERENT worker is already collapsing it in
+    /private/tmp/phasecut -- NOT touched further here, per instruction
+BASISCUT independently proves (T1-B, its own section 2) that for any of
+the four PHASE_KEYS -- `workers`, `strength_rel`, `tech_levels`,
+`hand_value` -- the blend `A(L) = w[base] + (1-L)*w[early] + L*w[late]` is
+a straight line in L with exactly 2 degrees of freedom, so the 3 raw
+numbers per triple carry one EXACT, data-independent redundant direction
+(`(w[base], w[early], w[late]) += t*(1, -1, -1)` changes nothing `evaluate`
+ever computes, on any board, at any lateness). A separate worker is already
+landing a lossless reparameterisation of exactly this (to `{start, end}` =
+`(base+early, base+late)`, evaluated as `start*(1-L) + end*L`) in
+`/private/tmp/phasecut` -- I was told NOT to do that work myself and NOT
+to touch that clone, and I have not.
+
+IMPORTANT, FOR WHOEVER RECONCILES THE TWO: THE FIX LANDED IN THIS FILE
+(section 3b) TOUCHES THE EXACT SAME THREE NUMBERS (`strength_rel`,
+`strength_rel_early`, `strength_rel_late`) IN THE EXACT SAME FORMULA
+LOCATION (`eval::evaluate`'s `PHASE_KEYS` handling, plus `linear_features`
+and `rivals::strength_marginal`) THAT PHASECUT IS REPARAMETERISING. The two
+changes are NOT the same operation and will not merge cleanly:
+  - Phasecut's fix (per BASISCUT's description, not verified against the
+    actual phasecut code -- I have not read it, per instruction) is a
+    PURE, LOSSLESS BASIS CHANGE: same 2-parameter curve `A(L)`, for every
+    `L`, on every board, forever -- it does not change what any position
+    scores anywhere, only how the 3 numbers are stored.
+  - My fix (section 3) is NOT a basis change -- it makes `A` a genuinely
+    DIFFERENT, PIECEWISE function of `(L, state.round)`: identical to the
+    old formula whenever `state.round > 3`, and a different curve
+    (`(1-L)*early + L*(base+late)`) whenever `state.round <= 3`. It
+    deliberately changes what round<=3 positions score, which is the
+    entire point of this file.
+These are compatible IN PRINCIPLE (my round-gate could be re-expressed on
+top of whatever `{start, end}` basis phasecut lands, since round<=3 is
+just a different curve, not a claim about which basis stores it) but are
+NOT a trivial textual merge, since both touch the same three fields'
+readers in the same functions. I did not attempt this reconciliation --
+it needs whoever lands both to either (a) sequence the two changes with a
+deliberate rebase, or (b) have one of us re-derive the round-gated formula
+directly on the other's already-landed basis. Flagging precisely, not
+guessing at a resolution.
+
+### 8c. What I did NOT get to (explicit, per the checkpoint instruction)
+- Did not read phasecut's actual code or attempt to merge/rebase against it.
+- Did not implement BASISCUT's alternative suggestion for the strength
+  cluster (a targeted eval batch with deliberately unbalanced early-game
+  strength, so a future climb gets gradient in the direction it currently
+  cannot see at rival_str==0) -- a live, unexplored, HYPOTHESISED next step
+  named by BASISCUT, not attempted here.
+- Did not re-run or extend the section-5 win-rate A/B in light of 8a/8b --
+  the 44.1% (n=3000) result stands as measured, against the frozen
+  champion as it existed BEFORE reading BASISCUT.txt; whether resolving
+  8a/8b first would change that number is HYPOTHESISED, not measured.
+- Did not start the hill-climb re-adaptation run named in section 5c/6.
+- No A/B was left mid-flight -- every measurement reported in sections 1,
+  2, and 5 ran to completion before this checkpoint.

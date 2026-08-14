@@ -1,0 +1,280 @@
+POLICYLOOP.txt -- data generation for the policy-improvement learning loop
+Status: IN PROGRESS, written early per instructions, updated as work lands.
+
+===========================================================================
+0. WHAT THIS PHASE DELIVERS (and does not)
+===========================================================================
+A binary (`policyloop_gen`, in rust/src/bin/, plus its logic in the new
+library module rust/src/bots/policyloop.rs) that:
+  1. plays hybrid self-play games (human_policy shortlist -> plan::pick beam,
+     the SAME hybrid `Seat::search == HumanShortlistBeam` construct already
+     reachable via `kindmatch --a-search`/`climb --gauntlet-search`), with
+     EXPLORATION added to the shortlist so the search sees candidates the
+     policy would not have offered on its own (section 2),
+  2. writes a training dataset where the label is the SEARCH's root choice,
+     not the policy's own top-1,
+  3. records, per decision, the full legal set, the shortlist actually
+     offered, the policy's own full ranking, and (once the game ends) the
+     acting seat's result share,
+  4. records provenance (which champion/eval weights file, which policy
+     weights file, which exploration config, which seed) for every dataset
+     it writes.
+
+NOT built here: no value head, no training loop, no change to the state
+encoder. This is data generation only.
+
+===========================================================================
+1. DATASET SCHEMA -- REUSED, not invented
+===========================================================================
+Primary file (*.tpd): unchanged `tta::bots::neural::dump` format (the same
+one `dump_selfplay`/`policytrain` already use) -- `DecisionRecord`:
+  players, actor, game_id, state (encode::encode(state, actor), f32,
+  ENCODING_DIM wide), legal (compact Move list), chosen (index into legal),
+  result (backfilled win share).
+
+The ONLY behavioural difference from `dump_selfplay`'s existing corpus:
+`chosen` here is the SEARCH's root pick (plan::pick's beam winner among the
+shortlist), not a plain WeightedBot/GreedyBot one-ply argmax. This is
+intentionally a drop-in-compatible corpus for `policytrain` -- verified
+`policytrain` reads `DecisionRecord`s via `read_dump` and needs nothing else
+(state/legal/chosen/result). Confirmed sane; reused unchanged, no dump.rs
+edits.
+
+Sidecar file (*.meta.tsv), new, one line per decision, SAME order as the
+.tpd's records for that run (both are written from the same in-memory
+per-game result, one write pass, at the same call site -- see
+`policyloop.rs::run_generation`, so there is no independent read-back/re-sync
+step that could drift):
+  game_id  actor  legal_count  chosen_idx  chosen_policy_rank
+  shortlist_indices (comma list, indices into `legal`)
+  policy_order (comma list, ALL indices into `legal`, best-to-worst under the
+                policy -- independent of shortlist width)
+`chosen_idx` is redundant with the .tpd's `chosen` field on purpose: a
+consumer can spot-check the two files agree without trusting positional
+alignment blindly.
+
+Provenance file (*.provenance.txt), new, one per run, written fresh (never
+appended -- see section 4):
+  champion_path, champion_fingerprint (FNV-1a64 of file bytes -- no crypto
+    dependency in this crate; not a security hash, a corpus-identity check)
+  human_weights_path, human_weights_fingerprint (same)
+  shortlist_width, explore_random (the exploration config, section 2)
+  seed, players, games, plan_width, plan_max_nodes
+
+===========================================================================
+2. EXPLORATION DESIGN -- the design point that matters most
+===========================================================================
+Problem: `bots::human::choose_with_search`'s existing shortlist
+(`ROOT_SHORTLIST = 8`, hard-coded const) is the policy's own strict top-8.
+If data generation reused that unmodified, the search could NEVER pick
+anything the policy did not already like -- training on the search's pick
+would only sharpen the policy's existing preferences among moves it already
+ranks highly, never surface a good move it currently ranks 9th or worse.
+That is the same shape of blindness as mirror self-play.
+
+Chosen design: `ExplorationConfig { shortlist_width: usize, explore_random:
+usize }`, both CLI flags (`--shortlist-width`, `--explore-random`), not
+consts:
+  - top-K (`shortlist_width`) by the policy's own ranking, exactly as
+    `root_shortlist` does today, PLUS
+  - R (`explore_random`) further legal moves sampled UNIFORMLY AT RANDOM
+    from whatever is left over (outside the top-K), deterministically via
+    the seat's own seeded PyRandom stream.
+  - All K+R candidates go to `plan::pick`'s beam unmodified.
+
+Why this over the alternatives listed in the brief:
+  - Softmax sampling from the policy distribution instead of top-K would
+    still concentrate almost all probability mass near the top of a
+    confident linear ranker -- it degrades gracefully toward "top-K anyway"
+    rather than guaranteeing a low-ranked move is ever considered.
+  - Temperature/noise on the ranking reorders the WHOLE list stochastically,
+    which is harder to reason about and to report (no clean "K" or "R" to
+    cite) and does not guarantee coverage of the tail either.
+  - Uniformly-random additions guarantee, by construction and independent of
+    how confident the policy is, that some fraction of decisions offer the
+    search a candidate from OUTSIDE the policy's comfort zone -- the exact
+    property the brief asks for -- and the rate is directly legible (R out
+    of K+R candidates, always).
+`shortlist_width`/`explore_random` are both left wide open as flags (not
+baked in) so a later worker can dial exploration up or down without a code
+change, and so the same binary can also reproduce plain (non-exploring)
+generation with `--explore-random 0`.
+
+Defaults used for the measurement run below: shortlist_width=8 (matches
+`ROOT_SHORTLIST`, so exploration is an ADDITION on top of the exact
+shortlist width the champion-beating hybrid already plays with, not a
+different baseline), explore_random=4.
+
+MEASURED DISAGREEMENT RATE: see section 5, filled in after the run.
+
+===========================================================================
+3. LEGALITY -- public information only
+===========================================================================
+Two encoders are on this generator's path:
+  - `bots::neural::encode::encode` -- the .tpd `state` field. Unchanged;
+    already has `rival_military_hand_contents_are_hidden_but_mine_are_not`
+    guarding this exact property.
+  - `human_policy::candidate_features` -> `weighted::features::features` --
+    used to build the policy shortlist/ranking. Only reads a rival's hand
+    SIZE (`hand_size_civil`), never contents; had no dedicated test before
+    this task.
+New test added in this task: `human_policy.rs`, proving `candidate_features`
+returns byte-identical output for two states that differ ONLY in a rival's
+hidden hand card identities (same counts, same public state). RED
+confirmation and verbatim failure text: see section 6.
+
+===========================================================================
+4. DETERMINISM
+===========================================================================
+Same `--seed`/`--games`/`--players`/weights/exploration config must produce
+a byte-identical dataset. Enforced by: per-seat PyRandom seeded off
+`seed * 131 + seat_index` (matching `build_bots`'s own formula), no other
+source of randomness on the generation path, and worker threads (if
+`--threads` > 1) write nothing themselves -- they return `(game_index,
+records, meta)` and the main thread writes strictly in game-index order
+after all workers join, so wall-clock thread scheduling cannot perturb file
+bytes. Test: `policyloop.rs`, generate the same tiny corpus twice, assert
+equal. Provenance files are never appended to (fresh write every run) so a
+dataset's provenance can never silently drift from what actually produced
+it.
+
+===========================================================================
+5. MEASURED RESULTS
+===========================================================================
+50-game 2p run, default config (shortlist_width=8, explore_random=4,
+plan_width=8, plan_max_nodes=4000 -- i.e. exactly `kindmatch --a-search`'s
+own search shape, with exploration added on top), seed=1, --threads 2:
+
+  policyloop_gen --games 50 --players 2 --seed 1 \
+      --champion /private/tmp/rowdig/frozen_champion_2p.json \
+      --human-weights ../analysis/frozen/human_weights.json \
+      --shortlist-width 8 --explore-random 4 --threads 2 \
+      --out policyloop_data/policyloop_2p_seed1_g50.tpd \
+      --meta-out policyloop_data/policyloop_2p_seed1_g50.meta.tsv \
+      --provenance-out policyloop_data/policyloop_2p_seed1_g50.provenance.json
+
+Wall clock: 53.4s (0.94 games/s, --threads 2, difftest profile).
+11,242 total decision records; 11,057 non-trivial (>1 legal move) decisions
+the disagreement measurement is computed over.
+
+HEADLINE NUMBER: the search disagreed with the policy's own top-1 pick on
+60.84% of non-trivial decisions (4,330/11,057 agreed = 39.16%; the rest,
+6,727, did not). This is very far from "near zero" -- there is a large,
+real learning signal here, not a rounding artifact.
+
+Rank distribution of the search's actual choice, under the policy's own
+full ranking (rank 0 = policy's favourite; POLICYLOOP.txt's shortlist_width
+is 8, so ranks 0-7 are "inside the plain top-8 the non-exploring hybrid
+would also have offered", ranks 8+ exist ONLY because of the
+`explore_random` top-up):
+
+  rank 0:  4330  (39.16%)      rank 8:   165  (1.49%)
+  rank 1:  1902  (17.20%)      rank 9:   119  (1.08%)
+  rank 2:  1316  (11.90%)      rank 10:   81  (0.73%)
+  rank 3:  1199  (10.84%)      rank 11:   70  (0.63%)
+  rank 4:   642  (5.81%)       rank 12:   49  (0.44%)
+  rank 5:   440  (3.98%)       rank 13-19: 92  (0.83% combined)
+  rank 6:   329  (2.98%)       rank 24:     1  (0.01%)
+  rank 7:   322  (2.91%)
+
+~4.9% of all non-trivial decisions (543/11,057) landed at rank 8 or beyond
+-- i.e. the search chose a move that PLAIN `choose_with_search`/
+`root_shortlist` (no exploration) would never even have offered it. That is
+the concrete evidence the exploration design in section 2 is doing its job:
+without `explore_random > 0`, none of those 543 examples could exist in a
+policy-improvement dataset at all, and the search picking rank 24 out of
+what was very likely a 20-30-move legal set is a real instance of "the
+search found a good move the policy currently ranks near the bottom."
+
+CONCLUSION: this generator produces a strong, non-degenerate training
+signal. The disagreement rate is not being reported quietly -- it is loud,
+real, and the majority case, not the exception.
+
+===========================================================================
+6. TEST RED CONFIRMATIONS
+===========================================================================
+
+6a. Rival-hand-privacy test (the hard-rule one)
+------------------------------------------------
+Test: `human_policy.rs::tests::
+candidate_features_does_not_depend_on_a_rivals_hidden_hand_card_identity`.
+
+First attempt was accidentally vacuous: `GameState::new_game` deals NO
+civil/military hand at all (both start empty, drawn only as the game
+proceeds), so mutating an already-empty `hand_civil`/`hand_military` slice
+in place never actually varied anything and the test passed for the wrong
+reason. Fixed by `.push()`-ing real, DIFFERENT cards into the rival's hand
+in each of the two states being compared (same technique `dump.rs`'s own
+`rival_military_hand_contents_are_hidden_but_mine_are_not` fixture uses),
+with an explicit `assert_eq!(..., 2, "test fixture must actually give the
+rival a nonempty hand")` guard so this cannot silently regress to vacuous
+again.
+
+RED confirmation: temporarily edited `candidate_features` (src/human_policy.rs)
+to sum a rival's `hand_civil` card ids into the acting player's own
+`resources` field before scoring each candidate -- a deliberate, obvious
+privacy break. Re-ran just this test. It failed immediately:
+
+    thread '...candidate_features_does_not_depend_on_a_rivals_hidden_hand_card_identity' panicked at src/human_policy.rs:936:9:
+    assertion `left == right` failed: candidate_features must not depend on a rival's hidden hand card identity
+      left: [Features([0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 0.0, 2.0, 4.0, 10.0, 4.0, ...
+     right: [Features([0.0, 0.0, 0.0, 1.0, 1.0, 2.0, -2.0, 2.0, 10.0, 4.0, 3.0, ...
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; ...
+
+(coordinate index 9, the resource-stock slot the injected leak targeted,
+visibly differs: 10.0 vs 4.0 -- exactly the leaked, hand-identity-dependent
+value). The leak was then reverted in full; `cargo test --lib human_policy::`
+is green again (12/12) with the fix in place.
+
+6b. Determinism
+----------------
+`policyloop.rs::tests::generate_game_with_the_same_seed_produces_an_identical_dataset`
+passed on first write (the design already threads all randomness through
+seeded, caller-owned `PyRandom` instances -- no wall-clock or thread-order
+source exists on this path to accidentally introduce). Confirmed it is a
+REAL test, not vacuously true, with a companion test asserting a DIFFERENT
+seed produces a different dataset
+(`generate_game_with_a_different_seed_produces_a_different_dataset`) --
+this would fail if a future change accidentally stopped threading the seed
+through.
+
+6c. Exploration is not a no-op
+--------------------------------
+`build_shortlist_with_nonzero_explore_random_adds_candidates_outside_the_top_k`
+asserts the widened shortlist contains candidates outside the policy's own
+top-K -- this is the test that would fail if `sample_without_replacement`
+sampled from the wrong pool (e.g. the top-K itself, silently degenerating to
+plain `root_shortlist` behaviour even with `explore_random > 0`). Passed on
+first write; not separately broken-and-fixed since it is not one of the two
+hard-rule tests the calling task named explicitly (privacy, determinism) --
+noted here for completeness.
+
+===========================================================================
+7. OPEN ITEMS / BLOCKERS FOR THE NEXT WORKER
+===========================================================================
+- Storage cost at scale: the 50-game/11,242-decision run above is 86.6 MB
+  for the primary `.tpd` alone (~7.9 KB/decision -- `ENCODING_DIM` is large;
+  this is the SAME per-record cost `dump_selfplay`'s corpus already has,
+  nothing new introduced here). A 500-game run extrapolates to roughly
+  850 MB-1 GB. Fine for the "at most 500 games" ceiling this task set: worth
+  flagging before anyone reaches for a much bigger run on this box.
+- Only 2p was generated (the only champion/human-weights pair confirmed
+  present at the paths this task named). `--players 3`/`--players 4` work
+  unchanged in the code (self-play is symmetric per seat), but would need
+  their own `--champion`/`--human-weights` files, which were not part of
+  this task's setup, before generating a 3p/4p corpus.
+- Not addressed here (explicitly out of scope per the task): no value head,
+  no training run, no wiring of the `.tpd`+`.meta.tsv` pair into
+  `policytrain`/`neuraltrain` end to end. `policytrain` reads the `.tpd`
+  file unmodified and needs no changes; the `.meta.tsv` sidecar (policy
+  ranking + shortlist + provenance) is new and has no reader yet -- a later
+  worker who wants to filter/weight by disagreement rank, or audit the
+  provenance fingerprints against a specific run, will need to write one
+  (the format is documented in section 1 and is plain TSV, dependency-free
+  to parse).
+- `--shortlist-width`/`--explore-random` were left at the same values used
+  for the one measurement run in section 5. Nothing here recommends a
+  DIFFERENT setting for the eventual larger run -- that judgement (trading
+  off "more tail coverage" against "more search time spent on moves that
+  will almost never be chosen") belongs to whoever is looking at training
+  results, not to data generation alone.

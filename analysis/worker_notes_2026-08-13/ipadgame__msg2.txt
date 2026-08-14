@@ -1,0 +1,22 @@
+Document the two protocol gaps the first live game exposed
+
+Two things the doc got wrong, both found within three rounds of the
+first game against the app AI.
+
+The reported row is now applied AFTER the turn is handed back, so what
+the doc calls "the row" is unambiguously the row Paul is looking at when
+he is about to act. Record that, and record the reconstruction shortcut
+(2p sweeps 3 leftmost, survivors slide, gaps deal on the right) with the
+arithmetic check that makes it safe: new cards reported must equal gaps
+opened, or ask for the whole row.
+
+And add a fourth reported observable: the military cards Paul draws.
+The "five observables, everything else is inert" measurement was about
+what moves the EVALUATION, and it was taken over self-play, where the
+engine deals its own cards and can never notice. The advisor plays
+Paul's civil cards so it tracks that hand exactly, but military cards are
+drawn at end of turn and the mirror invents them -- it recommended
+preparing an event card he did not hold. That failure does not degrade
+gracefully the way a stale rival strength does.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

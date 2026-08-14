@@ -1,0 +1,218 @@
+Why is the champion's take-cost distribution so much more expensive than
+humans'? Investigation into the "buys on sight, doesn't wait for cards to
+drift cheap" hypothesis.
+
+Tooling: rust/src/bin/dwellcensus.rs (self-play, bot) and
+rust/src/bin/dwellcorpus.rs (BGO 2p journal corpus, human), both built on top
+of the existing rust/src/bin/behavcensus.rs / corpuscensus.rs take-cost
+census. See each file's module doc for the exact method.
+
+=============================================================================
+(A) CARD DWELL TIME -- how many of the taking player's own PRIOR turns had
+    the card already been sitting in the row, unbought, before this take.
+=============================================================================
+
+Method (bot): dwellcensus.rs drives real self-play through tta::game::step
+and maintains a parallel per-slot "turn dealt" mirror that replicates
+game::replenish's discard/compact/deal exactly (same sweep_count/live_count
+the engine itself uses), reconciled against the REAL state.card_row after
+every single step. The self-heal/mismatch rate was 0.228% of takes (16 of
+7031) -- the mirror is a faithful reconstruction, not an approximation, in
+practice.
+
+Method (human): BGO's journal never prints which of the 13 row slots a take
+came from, only the cost paid ("uses N civil action"), so dwellcorpus.rs
+simulates the SAME row-age mirror driven only by journal-observable facts
+(EndTurn boundaries + take cost bands), resolving "which slot within the
+cost band" by taking the oldest (leftmost) occupied slot -- not arbitrary:
+replenish's compaction always preserves left-to-right arrival order, so the
+leftmost occupied slot in any band IS the oldest one present, by
+construction. Remaining uncertainty is bounded to within one band's width
+(<=~2 turns at 3 slots/turn) and is reported, not hidden. Band-empty
+fallback rate: 0.090% (45 of 49826) -- negligible.
+
+RESULTS (2-player only, matching the established comparison; n=7031 bot
+takes over 200 games / 400 player-games, n=49826 human takes over 692
+2p BGO games):
+
+                    BOT                         HUMAN
+ALL takes    min=-1 p25=0 med=0 p75=1    min=-1 p25=1 med=1 p75=1
+             p90=1 max=2 mean=0.26       p90=1 max=2 mean=0.81
+cost band 1  med=1 mean=0.77 (n=1821)    med=1 mean=0.98 (n=34895)
+cost band 2  med=0 mean=0.24 (n=1803)    med=1 mean=0.51 (n=11821)
+cost band 3  med=0 mean=-0.00 (n=3407)   med=0 mean=0.00 (n=3110)
+             max=0 (ALL <=0)             max=0 (ALL <=0)
+
+dwell<=0 ("bought at first opportunity"): bot 69.4% vs human 21.8%.
+
+VERDICT ON THE DWELL-TIME HYPOTHESIS: PARTIAL, and the interesting part is
+WHERE it fails.
+
+The direction matches the hypothesis (bot dwells measurably less than
+humans overall: mean 0.26 vs 0.81 turns, roughly 3x), but the magnitude is
+far short of "waits several turns" -- humans' own median dwell is 1 turn,
+not "several." The hypothesis as stated does NOT survive band 3 (the
+pathological band, 48.5% of the bot's takes vs 6.0% of humans'): dwell there
+is ~0 for BOTH the bot and humans (max=0 in both samples -- literally every
+single band-3 take in both corpora happened the very first turn it was
+possible). This is not a behavioral finding, it is MECHANICAL: cards are
+always dealt into band 3 (row slots 9-12; replenish always refills the
+freed trailing slots there), so a card can only ever BE in band 3 if it
+hasn't drifted yet -- waiting one replenish moves any surviving card out of
+band 3 entirely. There is structurally no such thing as a human "waiting"
+while a card sits in band 3; band-3 dwell is a mechanical floor, not a
+patience signal, for anyone.
+
+So the 48.5%-vs-6.0% band-3 SHARE gap cannot be explained by "the bot is
+failing to let a specific card it wants drift cheaper before buying it" --
+by the numbers here, neither bot nor human ever does that for band-3 cards;
+everyone takes band-3 cards on sight when they take them at all. The gap
+must instead be in WHICH takes each player chooses to make in the first
+place (how often "take a band-3 card right now" is chosen over some other
+action) -- band 1 and 2 do show a real, if modest, patience gap (band 1:
+human mean 0.98 vs bot 0.77; band 2: human mean 0.51 vs bot 0.24, and human
+median 1 vs bot median 0), consistent with humans holding cheaper-band
+cards a bit longer before buying, but this is a secondary effect next to
+the band-3 share gap, not its explanation.
+
+Next: (B) tests the sharper, band-3-relevant question directly -- for the
+bot's actual band-2/3 takes, would the SAME card still have been in the row
+next turn for strictly fewer actions? That measures forgone savings on the
+bot's own take sequence, sidestepping the "band-3 dwell is mechanically
+zero for everyone" confound entirely.
+
+=============================================================================
+(B) COST OF IMPATIENCE -- for the bot's own expensive (cost 2/3) takes, was
+    the slot outside the sweep zone, i.e. would waiting exactly one of the
+    ACTOR's own turns have gotten the same card for strictly fewer actions?
+=============================================================================
+
+Method (dwellcensus.rs, impatience_check): purely positional, no
+counterfactual re-simulation. Between a take on turn T and the same actor's
+own next turn, exactly `live` replenishes occur (one per other active
+seat's turn, plus the actor's own next turn-start), each discarding the
+leftmost sweep_count(live) slots. A card survives all of them,
+UNCONDITIONALLY, iff its slot index is >= live * sweep_count(live) -- 6 for
+2p (2 replenishes x 3 slots/replenish). This is an upper-bound estimate on
+two fronts, both stated plainly: it ignores that other players' own takes
+at lower slots can compact the row and shift a surviving card left FASTER
+than this guaranteed minimum (biases toward slightly UNDERcounting the free
+lunch, not inventing one), and it ignores the real risk that the opponent
+takes the same card first (the task's own framing -- "was it outside the
+sweep zone" -- asks for the mechanical availability question, not a full
+strategic counterfactual, so that risk is deliberately not priced in here).
+
+RESULTS (200 games, 2p, same champion):
+
+Expensive takes (cost 2 or 3): 5210.
+Outside the sweep zone (would still have been there, cheaper, on the
+actor's own next turn): 4607 (88.4%).
+Savings among the free-lunch takes: min=1 p25=1 median=1 p75=2 p90=2 max=2
+mean=1.36 civil actions.
+
+  cost-2 takes: 1803 total, 1200 (66.6%) had a free lunch available
+  cost-3 takes: 3407 total, 3407 (100.0%) had a free lunch available
+
+VERDICT: this is the clean, decisive number the dwell-time hypothesis
+predicted, and it holds without qualification. Literally every single
+cost-3 take the champion makes (100.0%, 3407/3407) was, at the moment it
+was taken, mechanically guaranteed to still be sitting in the row -- at a
+strictly lower cost -- on the champion's own very next turn. Two-thirds of
+its cost-2 takes were the same. Overall, 88.4% of the bot's 5210 expensive
+takes across 200 games were needless: the champion paid more, EVERY SINGLE
+TIME for cost-3 cards, for no reason the row's own mechanics required.
+This is the size of the free lunch: on average 1.36 civil actions saved per
+avoidable expensive take, available on ~4600 of ~7031 total takes in this
+sample.
+
+Read together with (A): (A) showed the champion's PER-CARD dwell time is
+short but not literally always zero (median 0, mean 0.26 turns) and that
+band-3 dwell is mechanically forced to ~0 for everyone, bot and human
+alike -- so (A) alone left the mechanism underdetermined. (B) resolves it:
+this is not humans exploiting a subtle multi-turn drift strategy the bot
+merely executes less patiently -- it is that on the SPECIFIC cost-3 takes
+that make up nearly half the champion's take budget, waiting exactly one
+turn was ALWAYS a strict improvement, and the champion never does it. The
+bot has no representation of "this card will still be here, cheaper, next
+turn" -- exactly the gap `row_urgency`, `row_bargain_forgone` and
+`row_last_copy` were named to fill (see the task brief); this data confirms
+that gap is real and that its size is large (88.4% of expensive takes, not
+an edge case).
+
+=============================================================================
+(C) WHERE ITS ACTIONS ACTUALLY GO -- civil actions per player-turn spent on
+    takes vs. everything else vs. left unspent, bot only.
+=============================================================================
+
+Tooling: rust/src/bin/actioncensus.rs (new). Reads `PlayerState::
+ca_spent_taking` (civil actions spent on Take this turn) and a per-turn
+`civil_actions` baseline/leftover.
+
+BUG FOUND AND FIXED while building this: the first version read "leftover
+unspent CA" from `state.players[idx].civil_actions` AFTER `game::step`
+returned for the move that ended idx's turn -- but `economy::end_of_turn`
+(called synchronously inside that same `game::step`, as part of ending the
+turn) OVERWRITES `civil_actions` with idx's NEXT turn's freshly assigned
+pool, not idx's leftover from the turn that just ended. Reading it post-hoc
+therefore compared "this turn's baseline" against "next turn's baseline"
+(usually near-identical under the same government), collapsing "other
+spending" to ~0.0% and inflating "unspent" to 66.8% -- a measurement
+artefact, not a real finding (worth flagging: this was checked against
+behavcensus's own established "wonders completed"/"first develop round"
+figures, which already prove the bot does spend civil actions on
+Develop/Build/WonderStep regularly, so a near-zero "other" figure could not
+have been right). Fixed by capturing `civil_actions` BEFORE the move that
+ends the turn instead of after -- every normal turn transition is triggered
+by an explicit `Move::EndTurn` (`apply.rs:312`, the sole dispatch site for
+it), which itself costs 0 civil actions, so the pre-move read is exact for
+the ordinary case. A regression test
+(`end_turn_overwrites_civil_actions_with_next_turns_baseline_not_zero`)
+pins the underlying engine behaviour so this cannot silently reappear.
+
+RESULTS (200 games, 2p, same champion; 8028 player-turns):
+
+Aggregate share of every civil action across the sample:
+  taking:        50.6%
+  other spending: 29.0%
+  left unspent:   20.3%
+
+Per player-turn: taking min=0 p25=0 median=3 p75=3 max=8 mean=2.07
+                 other  min=0 p25=0 median=1 p75=2 max=9 mean=1.19
+                 unspent min=0 p25=0 median=0 p75=1 max=8 mean=0.83
+
+Player-turns with ZERO civil actions spent taking: 2245/8028 (28.0%).
+
+READING: the champion is NOT simply sitting on idle civil actions instead
+of taking cards -- "unspent" is a real but minority share (20.3%), not the
+dominant one. It is genuinely investing a substantial share of its civil
+actions (29.0%, more than it spends unspent) into Develop/Build/WonderStep
+and other non-Take civil actions. Combined with (A)/(B): the champion's low
+take rate (17.58/player-game vs humans' 37.26) is not chiefly "actions
+wasted doing nothing" -- it is a mix of (i) a real amount of unspent
+capacity (20.3%, itself worth investigating separately -- is legal-move
+generation failing to offer a marginal Take/Develop it should, or is the
+weighted policy genuinely choosing to pass with actions in hand?) and (ii)
+competing investment in other civil-action spending that this task's scope
+does not adjudicate as correctly or incorrectly prioritized against taking
+more cards. The clear, decisive, ACTIONABLE finding from this whole
+investigation remains (B): of the civil actions the champion DOES spend
+taking expensive cards, 88.4% of them (100% of cost-3 takes) were spent for
+strictly more than necessary, for a mechanical reason the reward/weights
+model has no representation of.
+
+=============================================================================
+SUMMARY / WHERE TO LOOK NEXT
+=============================================================================
+
+Dwell-time hypothesis: PARTIAL as originally framed ("bot buys on sight,
+humans wait several turns" over-predicts the per-card dwell gap and
+mis-locates cost-3's mechanical dwell floor as if it were a behavioral
+signal) but CONFIRMED in the form that matters: (B)'s 88.4%/100% free-lunch
+figures are the real, decisive, and large effect size. The champion's
+reward/weights model has no term that prices "will this card still be
+affordable next turn" -- `row_urgency`, `row_bargain_forgone`, and
+`row_last_copy` (named in the task brief as the coordinates meant to encode
+exactly this) are the weight coordinates to inspect first; whatever they
+are doing today, they are not stopping the champion from paying full price
+for a card that would have been free money to leave for one more turn, on
+literally every single cost-3 take measured.
