@@ -1,7 +1,35 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-15 (thirteenth update)
-    base commit ....... a64a18e  (LIVE tree /Users/pt/tta-ai)
+    updated 2026-08-15 (fourteenth update)
+    base commit ....... d4130c1  (LIVE tree /Users/pt/tta-ai)
+      TWO LANDINGS TOOK 734/707 TO 748/721, regressions EMPTY, 14 wins:
+        d164f25  The per-denomination TokenBank, finally unblocked. Blue
+          tokens are GENERIC -- a token's value is the printed value of the
+          card it sits on -- and the supply is LIMITED, so production you
+          cannot place is LOST. The cap was right all along; the ORDER was
+          wrong. end_of_turn credited the mandatory per-worker production
+          BEFORE flat wonder bonuses (Transcontinental Railroad's
+          DoubleBestMine), both drawing on the same shrinking pool, so on a
+          tight round the whole bonus was silently dropped. 734/707 -> 739/712.
+          RESOURCE_ORACLE 96.8% -> 99.2%, diverging games 299 -> 111.
+          Wins 7520999 7522236 7522673 7523203 7523634.
+          The three blockers 7521459 7522402 7522796 now complete AND match.
+        d4130c1  The colonize-sacrifice queue is popped at the COMPLETING BID,
+          not at the confirmation line. A "not open" Pending::Colonize was read
+          as "already auto-resolved", but it equally means "this auction has
+          not settled yet" (same-timestamp WinAuction/forced-BidPass). The
+          premature pop stole the entry, drain_colonize fed the NEXT
+          territory's clauses against the wrong pending, failed, and fell back
+          to approximate_colonize -- losing a Swordsmen sacrifice that fed the
+          Population, Competition AND Variety awards at once. 739/712 ->
+          748/721. Fixing this only at the confirmation line caused 6
+          regressions (7521853 7522034 7522051 7522219 7522621 7522979),
+          because some colonizes complete AFTER their own confirmation line
+          with no second line to catch them; hooking apply_move cleared them.
+      RULED OUT ALONG THE WAY, do not re-attempt: largest-denomination-first
+      for non-production gains (already implemented and verified correct); the
+      worker-relocation/upgrade hypothesis (Grey's Bronze->Iron->Oil mine line
+      hand-traced against the journal, 1-for-1 with do_upgrade/do_build).
       a64a18e snapshots hand_military length BEFORE the grounding push in
       resolve_political_decision. It is a correctness-only landing: 734/707
       unchanged, regressions EMPTY, wins EMPTY. It kills a PERMANENT phantom
@@ -9,10 +37,10 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
       the rest of the replay -- so it flips no game today but unblocks traces.
       Everything below measured on a7e7f90 remains valid: a64a18e is
       replayer-only and changes no game's outcome.
-    completing games .. 734 of 1011   (707 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_734.txt)
-    committed copy .... analysis/guard_ids_734.txt
-                        (731 and 732 survive under their own names)
+    completing games .. 748 of 1011   (721 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_748.txt)
+    committed copy .... analysis/guard_ids_748.txt
+                        (731, 732 and 734 survive under their own names)
 
     WARNING ABOUT /private/tmp/base0815: that warm template stops at 898f552
     and is now THREE commits behind. Two separate workers independently
