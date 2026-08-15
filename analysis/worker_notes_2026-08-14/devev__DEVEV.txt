@@ -1,0 +1,217 @@
+DEVEV -- Development of Agriculture/Civil Life/Crafts/Markets/Politics/Religion/
+Science/Settlement/Trade Routes/Warfare -- zero-exposure family in cardblame
+
+VERDICT: (a) Structurally invisible, engine correct -- but NOT for the reason
+guessed in the task brief ("resolved during new_game's initial deal, before
+the journal's first line"). That guess is wrong: these ten cards are drawn
+and resolved THROUGHOUT the game (not just at setup), and I can show it
+directly in the corpus text. The real reason cardblame reports zero exposure
+is a gap in cardblame's OWN attribution plumbing (`move_card_args`), not
+anything wrong with the engine or with when these cards fire.
+
+===========================================================================
+1. WHAT THE TEN CARDS ARE (card_table.rs, confirmed against RULES_SPEC.md
+   and BGA's material file)
+===========================================================================
+
+card_table.rs has exactly 10 entries named "Development of *", all
+`kind: CardType::Event`, `age: Age::A`, `count: [1,1,1]`, each with a real,
+fully-priced `Special::AllPlayers(EventBlock{...})` payload -- not a
+placeholder/unpriced special. E.g.:
+  - Development of Settlement: increase_population: 1
+  - Development of Science:    science: 2
+  - Development of Crafts:     resources: 2
+  - Development of Agriculture: food: 2
+  - Development of Warfare:    free_build_card: CardId(24) (Warriors)
+  - Development of Religion:   free_build_age/kind: Age::A Temple
+  - Development of Politics:   draw_military_cards: 3
+  - Development of Markets:    choose_food: 2, choose_resources: 2
+  - Development of Trade Routes: science:1, food:1, resources:1
+  - Development of Civil Life: one_time_discount_{build_resources,
+    develop_science, pop_food}: 1 each
+
+/Users/pt/tta-ai/docs/RULES_SPEC.md item 8 (search "current events
+composition"): "The deck itself is always the same 10 cards, one copy
+each ... Development of Agriculture, Crafts, Civil Life, Markets, Politics,
+Religion, Science, Settlement, Trade Routes, Warfare -- matching
+throughtheages.fandom.com ... and the 10-card Age A military deck total."
+RULES_SPEC.md §1.6: "shuffle Age A military deck; place top (players + 2)
+cards face down as the current events deck ... return the rest to the box
+unseen." /Users/pt/tta-ai/sources/bga_throughtheages_material.inc.php lines
+204-511 list all 10 under the same names (BGA spells the tenth
+"Development of Civilization" -- see the alias note below). So: these ARE,
+by rules, the entire Age A "military deck" / event pool, and only
+`players+2` of the 10 are seeded into `current_events` per game; the other
+`10 - (players+2)` are shuffled OUT and "simply not in the game" that game.
+
+===========================================================================
+2. THE ENGINE DEALS AND RESOLVES THEM CORRECTLY
+===========================================================================
+
+game.rs `new_game` (around line 433-441):
+
+    // §1.6: no military DECK in Age A -- the ten Age A military cards are
+    // shuffled and the top `num_players + 2` become the starting current
+    // events. The rest are simply not in the game.
+    let mut age_a = build_deck(Age::A, false, n);
+    shuffle_cards(rng, age_a.as_mut_slice());
+    for &card in &age_a.as_slice()[..(n + 2).min(age_a.len())] {
+        state.current_events.push(card);
+    }
+
+This matches RULES_SPEC exactly: build_deck(Age::A, false, n) returns
+exactly these 10 cards; n+2 of them get seeded as `state.current_events`.
+
+Consumption is NOT at setup -- it happens progressively, one card per
+`Move::PrepareEvent` for the whole rest of the game. apply.rs
+`h_prepare_event` (line 1506):
+
+    fn h_prepare_event(state: &mut GameState, idx: u8, card: CardId) {
+        state.players[idx as usize].hand_military.remove_first(card);
+        state.players[idx as usize].culture += card.level() as u16;
+        state.future_events.push(card);
+        state.seeded_by[card.0 as usize] = idx;
+        events::reveal_current_event(state);   // <-- pops top of
+        end_politics(state, idx, PoliticalAction::Played);   //     current_events and
+    }                                                          //     resolves it
+
+`events::reveal_current_event` -> `resolve_event` applies the popped
+card's `Special::AllPlayers(EventBlock{...})` for real -- production
+deltas, free builds, card draws, etc.
+
+EMPIRICAL PROOF this fires in real games (grepped
+/private/tmp/bgo-journals/journals, 1011 games):
+
+    Agriculture:   451 files    Politics:      497 files
+    Civil Life:      0 files*   Religion:      442 files
+    Crafts:        456 files    Science:       445 files
+    Markets:       444 files    Settlement:    434 files
+    Trade Routes:  467 files    Warfare:       433 files
+
+*"Civil Life" is 0 under that exact string ONLY because BGO's own printed
+name for this one card differs from the engine's internal name -- BGO
+calls it "Development of Civilization" (bga_throughtheages_material.inc.php
+line 510-511), and corpus.rs's ALIASES table already maps
+`("Development of Civilization", "Development of Civil Life")` with a long
+comment explaining this was found and fixed once already (2026-08,
+"the single largest confirmed cause of the event-timing collapse mismatch
+category"). Under the alias name, "Development of Civilization" appears in
+471/1011 files -- in the same 400-500 range as the other nine.
+
+Sample real journal lines (not synthetic):
+
+  Orange plays event Orange scores 1 culture; Current event:; A /
+  Development of Crafts; Each civilization gains 2 resources.; Orange
+  produces 2 resources; Purple produces 2 resources
+
+  Orange plays event Orange scores 2 culture; Future events are now
+  current events.; Current event:; A / Development of Politics; Each
+  player draws 3 military cards.; Orange draws 3 military cards; Purple
+  draws 3 military cards
+
+These are real, per-card production/draw deltas following the reveal --
+proof the engine's resolve_event path executes the actual effect, not just
+prints text. So this rules out (b) (never dealt -- disproved by the
+`new_game` seeding code AND by hundreds of "Current event:" reveals per
+card) and (c) (dealt but inert -- disproved by the observed resource/
+population/draw deltas immediately following each reveal).
+
+===========================================================================
+3. WHY cardblame STILL SHOWS ZERO -- THE REAL MECHANISM
+===========================================================================
+
+cardblame's two attribution sets:
+  - narrow (`cards_in_play`): end-of-game tableau snapshot. Event cards
+    never sit in a tableau (cardblame's own module doc says so explicitly)
+    -- narrow zero exposure for this whole family is EXPECTED and correct
+    by cardblame's own design, not a bug.
+  - widened (`ever_cards_in_play`, replay_common.rs ~5734): union of (1)
+    narrow, (2) every `CardId` `move_card_args(mv)` names for every Move
+    applied, (3) each player's `colonies`, (4) each player's final
+    `wonder`/`government`.
+
+The gap is in source (2). `move_card_args` (replay_common.rs line 5665):
+
+    PrepareEvent { card } => [Some(card), None],
+
+`card` here is the card field on `Move::PrepareEvent` -- i.e. the card
+being PREPARED (moved from hand to `future_events`). It is NEVER the card
+that gets revealed and resolved by the SAME move's internal call to
+`events::reveal_current_event`. Those are structurally two different
+`CardId`s within one `h_prepare_event` call. The revealed/resolved
+"Development of X" card's id is applied purely inside `resolve_event`'s
+state mutations -- it is never the argument of ANY `Move` variant, so no
+per-Move attribution scheme (which is what `move_card_args` is) can ever
+see it. It also isn't a colony, wonder, or government, so sources (3)/(4)
+don't catch it either -- unlike those cases (which the module doc says
+were separately special-cased after cardblame's own first real run turned
+up exactly this kind of gap), there is currently no fifth source in
+`game_ever_cards_in_play` for "cards resolved via `current_events`/
+`future_events` reveal."
+
+So all 10 "Development of X" cards fall through every one of cardblame's
+four widened sources, and none sit in a tableau for the narrow set --
+hence zero-exposure in BOTH sets, for every one of the 10, exactly as
+observed, DESPITE being dealt and resolved with real effects in ~45% of
+games each (the family average: (players+2)/10 fraction of the 10-card
+pool seeded per game, times how many of the seeded ones get popped before
+the game ends).
+
+===========================================================================
+4. RELATIONSHIP TO THE TASK'S OPTION (a)
+===========================================================================
+
+The task's option (a) framed this as "resolved during new_game's initial
+deal, before the journal's first line." That specific claim is FALSE: the
+corpus lines above show these events resolving at round 3, round 6, round
+9, etc, well into real games, each with an actor and a "Current event:"
+clause. What IS true, and what makes this the same VERDICT as (a) ("the
+engine is correct, the diagnostic simply cannot see it"), is that these
+cards are never the SUBJECT of any player Move -- they're a passive
+side-effect of resolving a DIFFERENT card's PrepareEvent move -- and
+cardblame's widened-set construction is Move-argument-shaped. That is a
+structural blind spot in cardblame, not in the engine. The engine's
+`new_game` seeding, `h_prepare_event`, and `resolve_event` all behave
+exactly as RULES_SPEC.md and BGA's own material describe.
+
+===========================================================================
+5. WHAT I DID NOT CHECK / DID NOT DO
+===========================================================================
+
+- I did not fix cardblame's `move_card_args`/`game_ever_cards_in_play` to
+  add a fifth source (e.g. threading the CardId `reveal_current_event`
+  pops, or unioning `state.current_events`/`future_events`/a "past events"
+  list if the engine keeps one, into ever_cards_in_play). That is a real,
+  scoped, low-risk fix (diagnostic-only, zero engine/gameplay behavior
+  change, so the replaystats guard is irrelevant to it) but the task's own
+  instructions say a clean negative (a) should be published as-is, not
+  further engineered, so I left cardblame.rs and replay_common.rs
+  untouched. Patch file is empty.
+- I did not run a throwaway unit test/dbg binary to force-resolve one of
+  the ten cards in a scripted game; I used the actual 1011-game corpus
+  text as the empirical proof instead, since it is stronger evidence (real
+  BGO-driven games, hundreds of independent firings per card, with visible
+  production deltas) than a single synthetic scenario would be, and it
+  cost fewer tool calls than a build+run cycle.
+- I did not check whether cardblame prints these 10 in a distinct
+  "not attributable" section already (the module doc mentions such a
+  section exists for other structurally-invisible cases like starting
+  government) -- worth a look before anyone decides whether a cardblame
+  fix is warranted, but out of scope for this task.
+- I did not investigate whether any OTHER card families share this same
+  "revealed via reveal_current_event, never a Move argument" blind spot
+  (Age I/II/III/IV events prepared normally still hit the SAME
+  move_card_args gap for the REVEALED card, only the PREPARER's card gets
+  credited -- but those events aren't all zero because they can also
+  reach `cards_in_play`/colonies via other paths, or because a later
+  prepare's OWN card argument happens to be the same card id in some
+  other slot). This ten-card family is simply the cleanest, purest case
+  because Age A events can never be "prepared" (score 0 culture never
+  observed) and never sit in any hand/tableau at all.
+
+CONCLUSION: no engine change needed or made. This is a clean negative for
+the family; do not re-investigate these 10 card IDs as an engine bug. If
+anyone wants zero-exposure noise reduced in cardblame's widened set, the
+fix is a 5th source in `game_ever_cards_in_play` (replay_common.rs) that
+records revealed/resolved current-event CardIds, not a change to
+game.rs/apply.rs/events.rs/card_table.rs.

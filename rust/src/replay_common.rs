@@ -5536,22 +5536,38 @@ fn prescan_colonize_sacrifices(
 /// "unpaired PutBack" mismatch that stopped replay outright -- 3/24 games in
 /// the initial sample (`docs/REPLAY.md`).
 ///
-/// Since every row/hand card is a unique instance in the table (the same
-/// name never denotes two different physical cards within one game -- the
-/// same assumption `ground_row_slot`/`card_index` already rely on), a
-/// `PutBack` can only ever refer to a still-open take of that exact card by
-/// that exact actor, so matching is done with a per-card stack of
-/// not-yet-resolved takes rather than a single "last take" slot: any
-/// `TakeCard` pushes onto its card's stack, any `PutBack` pops the most
-/// recent entry for the same actor, and (defensively, since it should never
-/// happen with unique card instances) any OTHER classified line naming that
-/// same card by the same actor -- i.e. the take was committed some other way
-/// (built, developed, played, elected, ...) -- removes it from the stack so
-/// a later same-named "put back" (which cannot legitimately exist once a
-/// card is committed) can never wrongly erase this now-real action.
+/// Row/hand cards are USUALLY a unique instance in the table (the same name
+/// never denotes two different physical cards within one game -- the same
+/// assumption `ground_row_slot`/`card_index` rely on), so a `PutBack` can
+/// almost always only refer to a still-open take of that exact card by that
+/// exact actor -- matching is done with a per-card stack of not-yet-resolved
+/// takes rather than a single "last take" slot: any `TakeCard` pushes onto
+/// its card's stack, any `PutBack` pops an entry for the same actor, and
+/// (defensively, since it should never happen with unique card instances)
+/// any OTHER classified line naming that same card by the same actor -- i.e.
+/// the take was committed some other way (built, developed, played, elected,
+/// ...) -- removes it from the stack so a later same-named "put back" (which
+/// cannot legitimately exist once a card is committed) can never wrongly
+/// erase this now-real action.
+///
+/// The "unique instance" premise breaks for a multi-copy yellow ACTION card
+/// (`count` other than `[1,1,1]`, e.g. Frugality (A) at `[2,2,2]` --
+/// `can_take_gated`'s own doc: action cards are exempt from the one-per-name
+/// rule precisely because several copies can sit in the row at once). Game
+/// `7522905` line 17-19: Grey takes Frugality for 2 CA, takes a SECOND
+/// physical Frugality (a different row slot) for 1 CA, then puts one back
+/// for a refund of 2 CA. Popping the MOST RECENT open take (the old
+/// behaviour) skips the 1-CA take instead of the 2-CA one the refund
+/// actually matches, so the "kept" take silently becomes the 2-CA card --
+/// overcounting this turn's true civil-action spend by 1 and manufacturing a
+/// `IllegalMove: Take` `Budget` rejection on this same turn's later, actually
+/// affordable, take. The refund clause is direct evidence of which take it
+/// undoes: prefer whichever open entry's own recorded cost equals the
+/// putback's refund, falling back to "most recent" (the single-copy-safe
+/// behaviour) only when no cost match exists.
 fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> std::collections::HashSet<usize> {
     let mut skip = std::collections::HashSet::new();
-    let mut open: HashMap<CardId, Vec<(usize, Color)>> = HashMap::new();
+    let mut open: HashMap<CardId, Vec<(usize, Color, i32)>> = HashMap::new();
     for (i, line) in lines.iter().enumerate() {
         let LineOutcome::Action(Classified { class, card }) = classify(card_index, line.text) else {
             continue; // bookkeeping: never references a card, nothing to do
@@ -5559,11 +5575,18 @@ fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, Card
         let Some((actor, _)) = actor_and_rest(line.text) else { continue };
         let Some(c) = card else { continue };
         match class {
-            ActionClass::TakeCard => open.entry(c).or_default().push((i, actor)),
+            ActionClass::TakeCard => {
+                let cost = civil_and_military_uses(line.text).0.unwrap_or(0);
+                open.entry(c).or_default().push((i, actor, cost));
+            }
             ActionClass::PutBack => {
                 if let Some(stack) = open.get_mut(&c) {
-                    if let Some(pos) = stack.iter().rposition(|&(_, a)| a == actor) {
-                        let (take_i, _) = stack.remove(pos);
+                    let refund = trailing_gets_civil_action(line.text);
+                    let pos = refund
+                        .and_then(|r| stack.iter().rposition(|&(_, a, cost)| a == actor && cost == r))
+                        .or_else(|| stack.iter().rposition(|&(_, a, _)| a == actor));
+                    if let Some(pos) = pos {
+                        let (take_i, _, _) = stack.remove(pos);
                         skip.insert(take_i);
                         skip.insert(i);
                     }
@@ -5571,7 +5594,7 @@ fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, Card
             }
             ActionClass::BuildBuilding | ActionClass::BuildUnit | ActionClass::BuildWonderStage | ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::DevelopTechnology | ActionClass::ElectLeader | ActionClass::ChangeGovernment | ActionClass::PlayTactic | ActionClass::DeclareWar | ActionClass::WinWar | ActionClass::PlayAggression | ActionClass::ProposePact | ActionClass::AcceptPact | ActionClass::Colonize | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PlayActionCard | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => {
                 if let Some(stack) = open.get_mut(&c) {
-                    stack.retain(|&(_, a)| a != actor);
+                    stack.retain(|&(_, a, _)| a != actor);
                 }
             }
         }
@@ -9010,6 +9033,54 @@ mod tests {
         ];
         let last = last_real_decision_line_for_age(&journal, &card_index);
         assert_eq!(last[crate::cards::Age::A as usize], Some(2));
+    }
+
+    /// The `IllegalMove: Take` `Budget` bug this pass fixed (game `7522905`
+    /// line 17-19): Frugality (A) has TWO physical copies in the Age A deck
+    /// (`count: [2, 2, 2]`, `costs::can_take_gated`'s own doc -- action
+    /// cards are exempt from the one-per-name rule so several copies can sit
+    /// in the row and be held at once), so a player can genuinely have two
+    /// OPEN takes of the identically-named "Frugality" at once, at two
+    /// different row costs. The putback here refunds 2 civil actions,
+    /// matching the FIRST take's cost, not the second (most recent) one --
+    /// popping "most recent" would wrongly skip the 1-CA take and leave the
+    /// 2-CA take as the "real" one, overcounting this turn's true spend by 1
+    /// CA and manufacturing a Budget rejection on a later, actually
+    /// affordable, take this same turn.
+    #[test]
+    fn prescan_putback_skips_matches_a_putback_to_the_take_its_refund_actually_costs_not_the_most_recent_one() {
+        let card_index = build_card_index();
+        let journal = [
+            line(16, "A", "Grey takes Rich Land in hand Grey uses 1 civil action"),
+            line(17, "A", "Grey takes Frugality in hand Grey uses 2 civil action"),
+            line(18, "A", "Grey takes Frugality in hand Grey uses 1 civil action"),
+            line(19, "A", "Grey puts Frugality back in the row Grey gets 2 civil action"),
+            line(20, "A", "Grey takes Urban Growth in hand Grey uses 2 civil action"),
+        ];
+        let skip = prescan_putback_skips(&journal, &card_index);
+        assert!(
+            skip.contains(&1) && skip.contains(&3),
+            "the 2-CA take (index 1) and the putback (index 3) are the pair the refund names -- got {skip:?}"
+        );
+        assert!(
+            !skip.contains(&2),
+            "the 1-CA take (index 2) must survive as Grey's real, kept Frugality -- got {skip:?}"
+        );
+    }
+
+    /// With only ONE open take of a given card, the refund-matching above
+    /// must be a no-op over the original "most recent" behaviour --
+    /// confirms the fix does not regress the overwhelmingly common,
+    /// single-copy case.
+    #[test]
+    fn prescan_putback_skips_still_pairs_a_lone_take_regardless_of_its_own_refund_amount() {
+        let card_index = build_card_index();
+        let journal = [
+            line(1, "A", "Purple takes Pyramids in hand Purple uses 3 civil action"),
+            line(2, "A", "Purple puts Pyramids back in the row Purple gets 3 civil action"),
+        ];
+        let skip = prescan_putback_skips(&journal, &card_index);
+        assert_eq!(skip, [0, 1].into_iter().collect(), "the only open take pairs with the putback even with one candidate");
     }
 
     /// The `IllegalMove: Pop` bug this pass fixed (game `7522648` round 7,
