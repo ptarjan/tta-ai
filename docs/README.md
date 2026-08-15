@@ -1,5 +1,13 @@
 # docs/ — what is here and which document answers which question
 
+> **Read every doc dated before 2026-08-15 as history.** The Python
+> implementation — `engine/`, `harness/`, `advisor/`, `tests/` and the scripts
+> importing them — was deleted on that date, having been superseded by the Rust
+> port weeks earlier. Where a document names an `engine/…` path, a `python3 -m …`
+> command or a `.py` module, the behaviour it describes still exists in
+> `rust/src`, but the path does not. The rules content is unaffected: **
+> `RULES_SPEC.md` is implementation-independent and remains the oracle.**
+
 This index exists so the tree does not grow back to sixty files.  **Before
 writing a new document, check whether the answer belongs in one of these.**
 Investigation write-ups whose question has been answered and whose fix has

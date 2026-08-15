@@ -11,6 +11,23 @@ renumber them.**  New hazards go in the later sections, which are unnumbered.
 
 Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 
+**Two entries below are now wrong, and are left only because they are cited by
+number.** (a) *"Do not run any git command while league arms are running"* — that
+was true of the Python league, which executed the working tree directly. The Rust
+arms run a compiled `rust/target/release/climb`, so ordinary git operations do not
+disturb them; commit and push freely. What still holds is that a rebuild plus a
+restart is what makes a change live. (b) The *fingerprint gate* (`tools/gate.sh`,
+eight NARROW/WIDE arms) was Python-only and has been deleted; the equivalent
+guarantee now comes from `cargo test`, `cargo clippy -D warnings` and — for
+anything touching the rules — the corpus sweep in `analysis/GUARD_METHOD.txt`.
+
+**The hazard that replaced them, 2026-08-15:** this repo was for weeks a stale
+branch with the entire live engine sitting UNTRACKED on top of it. An agent tidied
+up with `git reset --hard origin/master` and destroyed a day of work; the tree
+still compiled and all tests still passed. It is a normal checkout now. **Keep it
+that way — never leave live code untracked — and prove any rules change with the
+corpus sweep, never with a green build.**
+
 ---
 
 ## 1. Training-loop traps (the original `UNATTENDED.md` numbering)

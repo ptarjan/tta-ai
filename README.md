@@ -13,117 +13,101 @@ protocol by which the engine can tell a human what to play next.
 
 ---
 
-## Start here
+## Everything is Rust
 
-Everything is documented under [`docs/`](docs/README.md), which has its own
-index explaining which document answers which question. The three to read
-first, in order:
+The project began in Python and was ported to Rust. On **2026-08-15** the
+Python implementation was deleted — `engine/`, `harness/`, `advisor/`,
+`tests/` and the ~85 scripts that imported them. It had been superseded for
+weeks and was run by nothing, but it was still on disk, and an agent spent an
+entire session fixing bugs in it without changing a single measured result.
 
-| doc | answers |
-|---|---|
-| [`docs/OPEN_ITEMS.md`](docs/OPEN_ITEMS.md) | *What is still open?* The single register of unfinished work, deferred decisions and unanswered questions. |
-| [`docs/HAZARDS.md`](docs/HAZARDS.md) | *What will bite me?* Standing traps, every one of which has already cost a real bug. Read before touching the training loop. |
-| [`docs/SYSTEM_COVERAGE.md`](docs/SYSTEM_COVERAGE.md) | *How good is the bot right now, and what does it never do?* The current whole-system census against the 1,011-game human corpus. |
-
-Then, by area:
-
-- **The game** — [`RULES_SPEC.md`](docs/RULES_SPEC.md) (the only copy of the
-  rules in this repo, every claim cited), [`SOURCES.md`](docs/SOURCES.md)
-  (card-data provenance), [`EXPERT_STRATEGY.md`](docs/EXPERT_STRATEGY.md)
-  (published human consensus, gathered independently of our bots).
-- **The bot** — [`BOT_ARCHITECTURE.md`](docs/BOT_ARCHITECTURE.md),
-  [`BOT_ROSTER.md`](docs/BOT_ROSTER.md),
-  [`DEEPER_SEARCH.md`](docs/DEEPER_SEARCH.md),
-  [`INFORMATION_AUDIT.md`](docs/INFORMATION_AUDIT.md).
-- **Training** — [`LEAGUE_TRAINING.md`](docs/LEAGUE_TRAINING.md),
-  [`LEAGUE_OBJECTIVE.md`](docs/LEAGUE_OBJECTIVE.md),
-  [`NEURAL_SEARCH_LOOP.md`](docs/NEURAL_SEARCH_LOOP.md),
-  [`MODEL_CONSTANTS.md`](docs/MODEL_CONSTANTS.md).
-- **Human-facing output** — [`HEURISTICS.md`](docs/HEURISTICS.md) (carries a
-  staleness caveat; read the evidence grades).
+**Docs written before that date describe the Python tree.** Where a document
+names `engine/…`, a `python3 -m …` command or a `.py` module, read it as
+history: the behaviour it describes has an equivalent in `rust/src`, but the
+path does not exist. The surviving Python under `tools/`, `analysis/` and
+`experiments/` is standalone scripts only.
 
 ---
 
 ## Layout
 
 ```
-engine/       rules engine and the bot family (engine/bots/)
-harness/      play against the app, or drive a game interactively
-experiments/  the self-play league, hill climb and neural search loop
-tools/        one-off measurement scripts, censuses, A/B harnesses, the gate
-tests/        the unit suite (~1130 tests)
-data/         card data, derived from the sources in docs/SOURCES.md
-docs/         see docs/README.md
-analysis/     corpus analysis output
+rust/src/          the engine: rules, economy, combat, events, scoring
+rust/src/bots/     the bot family, incl. bots/weighted (the linear evaluator)
+rust/src/advisor/  the human-facing advisor
+rust/src/bin/      ~30 analysis and training binaries (see below)
+rust/tests/        integration tests; unit tests live beside the code
+experiments/       the live league scripts and their measurement output
+data/              card data, derived from the sources in docs/SOURCES.md
+sources/           BGA's card text and the BGO human-game corpus index
+analysis/          corpus analysis output and the worker measurement record
+docs/              see docs/README.md
 ```
 
-The bots live in `engine/bots/`: `GreedyBot` (`__init__.py`), `WeightedBot`
-(`weighted.py`, the linear evaluator), `QuiescentBot` (`quiescent.py`),
-`PlanBot` (`plan.py`, the beam search), the book bots (`book.py`) and the
-neural family (`neural_*.py`). [`docs/BOT_ROSTER.md`](docs/BOT_ROSTER.md) says what each is for.
+Useful binaries: `replaystats` (the corpus sweep — the project's headline
+metric), `climb` and `selfplay` (the league), `advisor`, `replay`, `arena`,
+`cardblame`, and the census family.
 
 ---
 
 ## Running things
 
-Verify a change before committing — static checks, the unit suite, and the
-eight-arm fingerprint digests:
+`cargo` must be run from `rust/`, and `$HOME/.cargo/bin` is not on the default
+PATH.
 
 ```bash
-bash tools/gate.sh            # full: tests + both fingerprints, plain and paranoid
-bash tools/gate.sh --fast     # tests + narrow fingerprint only (inner loop)
+cd rust
+cargo test --profile fasttest --lib          # ~22s, 1452 tests
+cargo clippy --all-targets -- -D warnings    # ~25s; CI runs both
+cargo build --release                        # ~6m; only for the live league
 ```
 
-Just the tests:
+The league runs from a compiled release binary and is kept alive by cron every
+ten minutes:
 
 ```bash
-python3 -m unittest discover -s tests
-```
-
-Play a game through the app harness:
-
-```bash
-python3 -m harness.play --players 3
-```
-
-Evaluate one bot against another, seat-balanced:
-
-```bash
-python3 -m experiments.evaluate --a champion_4p.json --b greedy --games 120 --players 4
-```
-
-Run the self-play league (normally kept alive from cron by the watchdog, which
-launches all three player counts):
-
-```bash
-bash experiments/watchdog.sh
+/bin/bash experiments/rust_league.sh         # start/resume all three arms
+touch experiments/logs/stop_rust_league_2p   # then run the script again to stop 2p
+pgrep -f 'selfplay|climb' | wc -l            # how many arms are actually up
 ```
 
 ---
 
-## Two rules that have each already cost real work
+## The only metric that counts
 
-**The fingerprint gate is not optional.** Eight arms — NARROW/WIDE
-(GreedyBot), WNARROW/WWIDE (WeightedBot), QNARROW/QWIDE (QuiescentBot),
-PNARROW/PWIDE (PlanBot) — hash a fixed batch of games per bot. A digest that
-moves means behaviour changed; a digest that moves *unexpectedly* is a bug the
-logs cannot show you after the fact. **Never re-derive a failing digest to make
-the gate pass.** Explain why it moved first, on a clean clone, attributing each
-moved arm to a specific cause. The derivation discipline is written down in
-[`docs/PYPY.md`](docs/PYPY.md#90-a-trap-found-before-any-code-was-written-the-fingerprint-files-are-stale) §9.0.
+The **1011 replayed human games** from Board Gaming Online, swept by
+`replaystats`. Current: **748 replay to completion, 721 of those score exactly
+right.** A green build and a green test suite say nothing about whether the
+rules are correct — only the sweep does.
 
-**Do not run any git command in a working checkout while league arms are
-running** — not `pull`, not `checkout`, not `stash`, not even `status`. It
-kills them. Stop the arms first by writing the sentinels
-`experiments/logs/stop_league_{2,3,4}p.json` and running
-`bash experiments/watchdog.sh` to reap, or work from a clone under `/tmp`.
+Judge every change by **ID sets**, never by a mean: freeze the completed-game
+IDs before, sweep after, and `comm` both directions so regressions and wins are
+counted separately. The full procedure, and the traps it exists to avoid, are
+in [`analysis/GUARD_METHOD.txt`](analysis/GUARD_METHOD.txt).
+
+---
+
+## Start here
+
+| doc | answers |
+|---|---|
+| [`CLAUDE.md`](CLAUDE.md) | *What will confuse me in the first ten minutes?* |
+| [`docs/RULES_SPEC.md`](docs/RULES_SPEC.md) | *What are the rules?* The oracle. Every claim cited. |
+| [`docs/OPEN_ITEMS.md`](docs/OPEN_ITEMS.md) | *What is still open?* |
+| [`docs/HAZARDS.md`](docs/HAZARDS.md) | *What will bite me?* Traps that each already cost a real bug. |
+| [`docs/SYSTEM_COVERAGE.md`](docs/SYSTEM_COVERAGE.md) | *How good is the bot, and what does it never do?* |
+
+Then by area: the bot in [`BOT_ARCHITECTURE.md`](docs/BOT_ARCHITECTURE.md) and
+[`BOT_ROSTER.md`](docs/BOT_ROSTER.md); training in
+[`LEAGUE_TRAINING.md`](docs/LEAGUE_TRAINING.md) and
+[`LEAGUE_OBJECTIVE.md`](docs/LEAGUE_OBJECTIVE.md); human-facing output in
+[`HEURISTICS.md`](docs/HEURISTICS.md).
 
 ---
 
 ## Housekeeping
 
-`docs/README.md` exists so the tree does not grow back to sixty files. Before
-adding a document, check whether the answer belongs in an existing one. An
-investigation write-up whose question has been answered and whose fix has
-landed should be folded into the relevant topic doc and deleted, not left
-lying around.
+Keep the working tree tracked and push regularly. `docs/README.md` exists so
+the tree does not grow back to sixty files — before adding a document, check
+whether the answer belongs in an existing one, and fold a finished
+investigation into its topic doc rather than leaving it lying around.
