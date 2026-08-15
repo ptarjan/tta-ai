@@ -650,9 +650,31 @@ fn antiquate_leader_wonder_and_pacts(state: &mut GameState, ended: Age) {
     for idx in 0..state.num_players as usize {
         let leader = state.players[idx].leader;
         if !leader.is_none() && (leader.get().age as u8) < cutoff {
+            // Snapshot/carry-over exactly like `apply::h_play_leader`'s own
+            // replacement -- antiquation is a total DECREASE (the leader's
+            // own flat CA/MA bonus drops out) exactly like §8.2's "if
+            // decreased, return tokens (spent first)", so a flat subtract
+            // (this file's `on_leave_play` alone) would wrongly claw back
+            // actions the player had already spent from OTHER sources this
+            // same turn once the antiquating leader's bonus is smaller than
+            // what is left of it -- see `apply::carry_over_action_pool`'s
+            // own doc comment for the citation and the leader-replacement
+            // precedent (game `7522520`) this mirrors.
+            let old_total_c = effects::state_stats(state, &state.players[idx]).civil_actions;
+            let old_total_m = effects::state_stats(state, &state.players[idx]).military_actions;
+            let old_remaining_c = state.players[idx].civil_actions as i32;
+            let old_remaining_m = state.players[idx].military_actions as i32;
+            let spent_c = old_total_c - old_remaining_c;
+            let spent_m = old_total_m - old_remaining_m;
             on_leave_play(&mut state.players[idx], leader);
             economy::discard_civil(state, leader);
             state.players[idx].leader = CardId::NONE;
+            let new_total_c = effects::state_stats(state, &state.players[idx]).civil_actions;
+            let new_total_m = effects::state_stats(state, &state.players[idx]).military_actions;
+            state.players[idx].civil_actions =
+                crate::apply::carry_over_action_pool(old_total_c, new_total_c, spent_c, old_remaining_c);
+            state.players[idx].military_actions =
+                crate::apply::carry_over_action_pool(old_total_m, new_total_m, spent_m, old_remaining_m);
         }
 
         let wonder = state.players[idx].wonder;
@@ -726,13 +748,38 @@ pub(crate) fn antiquate_leader_wonder_pacts_up_to(state: &mut GameState, target:
 /// Duplicated from `apply.rs`'s private `on_leave_play` rather than shared,
 /// exactly as `legal.rs`/`costs.rs`/`apply.rs` each keep their own four-line
 /// `leader_is`: making it `pub(crate)` is an edit to a module this port does
-/// not own. It is the whole of Python's `effects.on_leave_play` for the
-/// non-`Special` half, PLUS the one `Special` this port models here too:
+/// not own. PLUS the one `Special` this port models here too:
 /// `CultureOnLeaveEqualToLabResourceProduction` (Bill Gates) now fires on
 /// THIS path as well (antiquation -- a leader too old for the current age is
 /// discarded exactly like any other leave-play, so a Bill Gates who ages out
 /// rather than being Iconoclasm'd owes the same culture; `apply.rs`'s own
 /// twin carries the full citation/trace for the mechanism itself).
+///
+/// ENGINE BUG FIX (`IllegalMove: Revolution` bucket, game `7522515` round
+/// 12): this duplicate used to stop at blue/yellow tokens, silently dropping
+/// the `civil_actions`/`military_actions` giveback `apply.rs`'s own
+/// `on_leave_play` already has (its own doc comment: "a leader carrying a
+/// ... bonus leaving play mid-turn ... must give back the headroom it
+/// added"). A leader antiquated out of play (RULES_SPEC line 244, CoL p.3/RB
+/// p.21: "an Age I leader dies when Age II ends") is a leave-play exactly
+/// like a replacement or Iconoclasm -- there is no rules basis for exempting
+/// it from the same symmetric give-back `on_enter_play` grants on the way
+/// in. Without this, a flat MA/CA bonus a since-antiquated leader printed
+/// (Joan of Arc: +1 MA) survived as a ghost in the player's LIVE per-turn
+/// pool forever; the next leader elected into the now-empty slot then had
+/// `apply.rs::on_enter_play`'s own `p.military_actions += ma` ADD its bonus
+/// ON TOP of that ghost (that branch assumes an empty slot means nothing to
+/// net against), overcounting the total by exactly the antiquated leader's
+/// bonus. `legal::revolt_pool_ok` requires the live pool to equal a FRESH
+/// `effects::state_stats` recompute (which correctly excludes the
+/// long-gone leader) before a revolution is legal, so the ghosted extra
+/// action permanently failed that check for the rest of the game -- 7522515
+/// round 12: Joan of Arc (Age I, +1 MA) antiquates when Age II ends,
+/// leaving `military_actions` at a stale 3 instead of 2; Robespierre (+1
+/// MA) is elected into the empty slot afterward and `on_enter_play` adds
+/// its own +1 on top, landing on 4 where a fresh recompute says 3 -- the
+/// exact mismatch this binary's own `try_apply` debug trace showed at the
+/// human's real, BGA-accepted "Purple revolutions ... Republic" line.
 fn on_leave_play(p: &mut PlayerState, id: CardId) {
     if id.get().special.contains(&Special::CultureOnLeaveEqualToLabResourceProduction) {
         let gained = effects::lab_level_workers(&p.techs);
@@ -745,6 +792,14 @@ fn on_leave_play(p: &mut PlayerState, id: CardId) {
     }
     if eff.yellow_tokens != 0 {
         p.yellow_bank = (p.yellow_bank as i32 - eff.yellow_tokens as i32).max(0) as u8;
+    }
+    let ca = eff.civil_actions as i32;
+    if ca != 0 {
+        p.civil_actions = (p.civil_actions as i32 - ca).max(0) as i8;
+    }
+    let ma = eff.military_actions as i32;
+    if ma != 0 {
+        p.military_actions = (p.military_actions as i32 - ma).max(0) as i8;
     }
 }
 
@@ -1195,6 +1250,26 @@ pub fn step(state: &mut GameState, mv: Move) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ENGINE BUG FIX regression (see `on_leave_play`'s own doc comment for
+    /// the full BGO trace, game `7522515` round 12): a leader antiquated out
+    /// of play must give back any flat `military_actions`/`civil_actions`
+    /// bonus it printed, the same way a mid-turn leader REPLACEMENT already
+    /// does (`apply.rs::on_leave_play`) -- there is no rules basis for
+    /// exempting antiquation from that symmetric give-back. RULES_SPEC line
+    /// 244 (CoL p.3/RB p.21): "an Age I leader dies when Age II ends."
+    /// Before this fix, `on_leave_play`'s antiquation-only duplicate in this
+    /// file stopped at blue/yellow tokens, so Joan of Arc's printed +1 MA
+    /// survived in the live per-turn pool as a permanent ghost.
+    #[test]
+    fn on_leave_play_gives_back_a_military_action_when_a_leader_antiquates() {
+        let mut state = new_game(2, 1);
+        state.players[0].leader = named("Joan of Arc"); // Age I, +1 MA
+        state.players[0].military_actions = 3; // Despotism's 2 + Joan's +1, unspent
+        antiquate(&mut state, Age::II); // Age II just ended -> Age I leaders die
+        assert!(state.players[0].leader.is_none(), "Joan of Arc is Age I and must antiquate when Age II ends");
+        assert_eq!(state.players[0].military_actions, 2, "her +1 MA must be given back, not left as a ghost");
+    }
 
     /// The overflow that killed a live `climb` run for real: `climb.rs`
     /// folds its generation counter into `state.seed` (a `u64`) via
