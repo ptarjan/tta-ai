@@ -1067,7 +1067,37 @@ impl<'a> Replayer<'a> {
     fn apply_move(&mut self, mv: Move) {
         self.moves_applied.push(mv);
         let before: Vec<CardId> = self.state.current_events.as_slice().to_vec();
+        // A `Bid`/`BidPass` is the ONLY move that can settle an auction
+        // (`interact::auction_move`'s own match: every other `Move` panics
+        // against a live `Pending::Auction`), and settling one can run
+        // `interact::colonize`'s own `colonize_auto` all the way to
+        // completion with no branching step at all, inside this SAME call --
+        // see `a_fully_forced_colonize_pops_its_own_queue_entry_...`'s doc.
+        // When that happens, `colonize_sacrifices`' front entry (this file's
+        // own replay bookkeeping, not engine state) must be popped HERE, at
+        // the exact move that actually completed it -- not inferred later at
+        // this territory's own confirmation line, which may already be
+        // behind us, or may not be reached until several journal lines
+        // later, if the auction itself did not resolve until AFTER that
+        // line (a same-timestamp `WinAuction`/forced-`BidPass` collision;
+        // `worker FINALINPUT`, game `7522866`'s own "Developed Territory" --
+        // `analysis/worker_notes_2026-08-14/finalinput__FINALINPUT.txt`).
+        // Comparing the TOTAL colony count across all seats before and after
+        // is a purely structural signal that needs no territory-age or
+        // actor-identity guessing: `interact::gain_colony` is the only place
+        // that ever grows a `p.colonies`, and only one `Pending::Colonize`
+        // can ever be open (and therefore completing) at a time, so a growth
+        // of exactly one colony during this move can only be the queue's own
+        // front entry.
+        let colonies_before = matches!(mv, Move::Bid { .. } | Move::BidPass)
+            .then(|| self.state.players.iter().map(|p| p.colonies.len()).sum::<usize>());
         apply::apply(&mut self.state, mv);
+        if let Some(before_count) = colonies_before {
+            let after_count: usize = self.state.players.iter().map(|p| p.colonies.len()).sum();
+            if after_count > before_count {
+                self.colonize_sacrifices.pop_front();
+            }
+        }
         let mut after: Vec<CardId> = self.state.current_events.as_slice().to_vec();
         for card in before {
             match after.iter().position(|&c| c == card) {
@@ -8995,12 +9025,66 @@ fn apply_one(
             // ever sees it, so pop now or leak it forever); still open means
             // a later `resolve_intervening` iteration owns popping it via
             // `drain_colonize`, same as before this fix existed.
-            if !matches!(r.state.pending.top(), Some(Pending::Colonize(_)))
+            //
+            // NOT ENOUGH ON ITS OWN, though (`worker FINALINPUT`, chasing
+            // game `7522866`'s three-way final-award divergence on
+            // Population/Competition/Variety, all seat0/Orange -- `analysis/
+            // worker_notes_2026-08-14/finalinput__FINALINPUT.txt`):
+            // `Pending::Colonize` reads "not open" in a SECOND, different
+            // shape too -- the auction for THIS SAME territory has not been
+            // settled YET, because `resolve_intervening`'s own auction-
+            // forced-`BidPass` block (this file's "A live `Pending::Auction`"
+            // comment, above) is what actually resolves a forced pass and
+            // calls `interact::colonize`, and it only runs ahead of a
+            // NON-confirmation line -- so for `is_pure_confirmation_line`
+            // lines it has not run yet either, same reason `drain_colonize`
+            // has not. That shape is indistinguishable from "already fully
+            // auto-resolved" by `state.pending.top()` alone: both read as
+            // "no `Pending::Colonize` right now". Traced on 7522866's own
+            // "Orange colonizes a Developed Territory" line (II age): this
+            // arm fired with `pending_open=false` and the queue's own front
+            // already equal to THIS line's `Developed Territory` entry, so
+            // the old check popped it -- but `interact::colonize` for this
+            // exact territory had not run yet at that point (it ran moments
+            // later, while `resolve_intervening` prepared the NEXT journal
+            // line, via the forced-`BidPass` path). The popped entry was
+            // real and still owed; `drain_colonize`, later, found the
+            // FOLLOWING territory's entry at the front instead and force-fed
+            // its clauses (`Unit(Knights)` first) against the wrong pending,
+            // failed the legal-move check, and fell back to
+            // `approximate_colonize` for BOTH this territory and the next
+            // one -- silently sacrificing a different unit mix than Orange's
+            // own journal-recorded choice for the rest of the game, one
+            // fewer Swordsmen worker fielded than actually happened. That
+            // permanently undercounts Orange's own worker/army-composition
+            // state for every final-scoring formula that reads it
+            // (`events.rs::scoring_culture`'s population/competition/variety
+            // terms all read `p.techs` directly), which is why three
+            // unrelated award FORMULAS all disagreed with the journal on the
+            // same seat in the same game -- one shared upstream state bug,
+            // not three formula bugs.
+            //
+            // The fix: gate the pop on a THIRD, purely structural signal
+            // that cannot be true in the "auction not settled yet" shape --
+            // `card` (this line's own territory) is already a completed
+            // colony. `interact::gain_colony` (`colonize_step`'s `SendDone`
+            // arm) is the ONLY place that pushes onto `p.colonies`, and it
+            // runs at the very end of a `Pending::Colonize`'s resolution --
+            // so `colonies.contains(card)` is true if and only if THIS
+            // territory's own colonize, whether fully forced by
+            // `colonize_auto` or manually driven by `drain_colonize`, has
+            // already run to completion. In the "not settled yet" shape the
+            // auction (and therefore the colonize) has not even started, so
+            // this is always false there, correctly skipping the pop and
+            // leaving the entry for `drain_colonize` to consume normally
+            // once the real `Pending::Colonize` opens.
+            let already_completed = card.is_some_and(|c| r.state.players[actor as usize].colonies.contains(c));
+            if already_completed
+                && !matches!(r.state.pending.top(), Some(Pending::Colonize(_)))
                 && r.colonize_sacrifices.front().is_some_and(|s| s.lineno == r.current_lineno)
             {
                 r.colonize_sacrifices.pop_front();
             }
-            let _ = card;
             Ok(())
         }
         ActionClass::Bid => {
@@ -14459,6 +14543,63 @@ mod tests {
             "the Warriors (the weakest-first fallback's pick) were kept -- this used the journal's real list, not approximation"
         );
         assert!(!r.colonize_approximated, "player 1's colonization was replayed exactly, not approximated");
+    }
+
+    /// REGRESSION (`worker FINALINPUT`, chasing game `7522866`'s three-way
+    /// final-award divergence on Population/Competition/Variety, all
+    /// seat0/Orange -- `analysis/worker_notes_2026-08-14/
+    /// finalinput__FINALINPUT.txt`): the fix above
+    /// (`a_fully_forced_colonize_pops_its_own_queue_entry_...`) pops a
+    /// colonize's queue entry at its own confirmation line whenever
+    /// `Pending::Colonize` reads "not open". That is also EXACTLY what "the
+    /// auction for this territory has not resolved yet" looks like when this
+    /// confirmation line is reached before `resolve_intervening`'s own
+    /// forced-`BidPass` has settled the auction (traced on 7522866's own
+    /// "Orange colonizes a Developed Territory" line: `interact::colonize`
+    /// for that exact territory had not been called yet at the moment this
+    /// dispatch ran). Popping there steals the real, still-owed entry;
+    /// `drain_colonize`, later, finds the FOLLOWING territory's entry at the
+    /// front instead and force-feeds its clauses against the wrong pending,
+    /// falling back to `approximate_colonize` -- which can sacrifice a
+    /// different unit than the human actually did, permanently undercounting
+    /// that player's own worker/army state for every later final-scoring
+    /// formula that reads `p.techs` directly.
+    ///
+    /// The fix gates the pop on a third, purely structural signal that is
+    /// false in this shape and true only once `interact::gain_colony` has
+    /// actually run: `card` (the confirmation line's own territory) is
+    /// already in `p.colonies`.
+    #[test]
+    fn a_colonize_confirmation_line_reached_before_its_own_auction_has_resolved_does_not_steal_the_queue_entry() {
+        let card_index = build_card_index();
+        let territory0 = card_index["Vast Territory (I)"];
+        let mut sacrifices = VecDeque::new();
+        sacrifices.push_back(ColonizeSacrifice {
+            lineno: 50,
+            actor: 0,
+            territory: "Vast Territory".to_string(),
+            clauses: vec![SacrificeClause::Unit(card_index["Warriors"])],
+        });
+        let mut r =
+            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
+        r.current_lineno = 50;
+
+        // No `interact::colonize` call at all -- unlike the fully-forced
+        // case above, `Pending::Colonize` has never existed for this
+        // territory: the auction has not resolved yet, exactly the "same-
+        // timestamp `WinAuction`/forced-`BidPass`" ordering 7522866 hit.
+        assert!(r.state.pending.is_empty(), "the auction has not even resolved yet");
+        assert!(!r.state.players[0].colonies.contains(territory0), "and the colony is not won yet either");
+
+        let out = apply_one(&mut r, 0, ActionClass::Colonize, Some(territory0), "colonizes a Vast Territory", "Orange colonizes a Vast Territory Sacrificed Units:; 1 Warrior; Total force: 1", None);
+        assert!(out.is_ok(), "{out:?}");
+        assert_eq!(
+            r.colonize_sacrifices.len(),
+            1,
+            "the entry must still be here for drain_colonize to consume once the real \
+             Pending::Colonize actually opens -- popping it now (the pre-fix behaviour) \
+             would misattribute the NEXT territory's clauses to this one once it opens"
+        );
     }
 
     /// REGRESSION: the winner's hidden bonus cards must be grounded while
