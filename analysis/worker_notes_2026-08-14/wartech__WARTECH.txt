@@ -1,0 +1,181 @@
+WARTECH -- War over Technology split-spoils pending
+=====================================================
+
+VERDICT: REPLAYER bug, not an engine/model bug. The engine already models
+the split correctly. The rule genuinely permits splitting spoils between a
+stolen tech card and science. FIXED (committed in the clone). Zero
+regressions. 24 games flip from stuck to completed-and-score-matching,
+including both named games (7522455, 7522967).
+
+THE CHEAP CHECK (card_table.rs vs BGA source): NOT the answer this time.
+War over Technology's baked constants (id 179 in
+sources/bga_throughtheages_material.inc.php) are correct:
+  'winner' => "Produces same amount; Special (blue) technologies can be
+  stolen instead of science equal to their cost"
+Our engine's card_table.rs / interact.rs already implement exactly this.
+No constant was wrong.
+
+THE RULE (established before touching code):
+- docs/RULES_SPEC.md line 143: "War over Technology (II, 2 MA) | science
+  points equal to advantage; may take known blue special techs instead at
+  their science cost (not ones you have in hand/play; higher-level steals
+  replace yours); capped by loser's science + eligible special-tech value"
+- interact.rs's own doc comment (war_tech_options / war_tech_spoils) cites
+  Code of Laws p.3 ("victor takes the card from the defeated civilization's
+  PLAY AREA... cannot steal a special technology that is the same as one
+  he or she already has in play or in hand") and FAQ p.8 ("some or all" --
+  mixing steals and science IS explicitly legal, not a BGO invention).
+So: NOT undecidable. The split is a real, printed rule. The victor may take
+one or more stealable blue specials (paid out of the strength advantage at
+each card's PRINTED cost) and convert whatever advantage remains into
+science, in any order, repeatedly.
+
+THE ENGINE SIDE WAS ALREADY RIGHT:
+- interact.rs: war_tech_spoils -> offer_war_tech pushes a
+  Pending::Choice(WarTech { victim, budget }) whenever the loser holds a
+  stealable special tech; picking a Card re-offers with budget reduced by
+  that card's cost (the re-offer loop IS the mixing mechanism); picking
+  Science calls take_war_science and stops. combat.rs already had a test
+  proving this: apply_war_spoils_technology_the_victor_may_mix_cards_and_
+  science.
+- The bug was entirely on the REPLAY side: replay_common.rs's
+  resolve_intervening had ChoiceKind::WarTech grouped into a no-op
+  fallthrough arm, with its own comment: "`Annex`/`WarTech` have not been
+  needed by any corpus game sampled so far." That was true when written;
+  it is no longer true -- 85 corpus games win a War over Technology, 36 of
+  them include a real steal.
+
+JOURNAL GRAMMAR (read directly, both named games):
+7522455.tsv line 198 (WinWar confirmation, auto bookkeeping, no
+  continuation):
+  "Orange wins War over Technology Attacker's strength: 27; Defender's
+  strength: 14; Orange takes spoils of war"
+7522455.tsv line 201 (separate line, the steal pick):
+  "Orange takes spoils of war Orange steals Navigation from Purple"
+7522455.tsv line 202 (separate line, the science-remainder pick):
+  "Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"
+
+7522967.tsv line 418 (confirmation), 420 (steal Masonry from Green), 421
+  (gets 4 science) -- identical shape, different game.
+
+So BGO logs ONE "takes spoils of war" line PER PICK, in the exact order
+the picks were made -- which lines up 1:1 with offer_war_tech's re-offer
+loop. Confirmed via grep: this "<Color> steals <Card> from <Color>" and
+"<Color> gets N science; <Color> loses N science" shape appears with no
+other variant anywhere in the corpus (checked all occurrences).
+
+CORPUS-WIDE COUNT:
+- 85 journal files contain a "wins War over Technology" line at all.
+- 36 of those include at least one "steals" resolution line (i.e.
+  genuinely mixed or all-steal spoils).
+- 82 of the 85 have >=2 "takes spoils of war" occurrences per file (i.e. a
+  real resolution beyond the bare WinWar confirmation) -- meaning the vast
+  majority of War-over-Technology wins open a real Pending::Choice(WarTech)
+  that the old replayer could never resolve.
+These are all candidates for the bug (any corpus game reaching a real,
+multi-option WarTech choice was structurally unable to complete before this
+fix, regardless of whether the human ultimately picked all-science,
+all-steal, or a mix).
+
+THE FIX (rust/src/replay_common.rs):
+1. New enum WarSpoil { Steal(CardId), Science }.
+2. New Replayer field war_tech_spoils: HashMap<u8, VecDeque<WarSpoil>>, set
+   post-construction by replay_game (same pattern as produces_grants /
+   discard_phase_oracle -- avoids threading a new parameter through the
+   ~85 positional Replayer::new test call sites).
+3. parse_war_tech_steal_line / parse_war_tech_science_line: pure text
+   parsers for the two journal shapes above (the confirmation-line
+   "...takes spoils of war" with no continuation correctly fails to match
+   either).
+4. prescan_war_tech_spoils: one global pass building the per-actor FIFO in
+   journal order.
+5. resolve_intervening gained a real ChoiceKind::WarTech arm (pulled out of
+   the no-op fallthrough, doc comment on that fallthrough updated to drop
+   the stale "WarTech has not been needed" claim -- Annex is still
+   genuinely unneeded and stays there): pops the front WarSpoil, resolves a
+   Steal to whichever ChoiceOption::Card matches (StuckPending/ParserGap if
+   it doesn't -- same failure style as every other FIFO-backed choice in
+   this file), resolves Science to interact::WAR_TECH_SCIENCE_IDX, and lets
+   the loop's own `continue` naturally drain a multi-pick split within one
+   resolve_intervening call (each apply_move may reopen a fresh
+   Pending::Choice(WarTech) via offer_war_tech's re-offer, which the same
+   arm picks up again next iteration).
+
+TESTS ADDED (rust/src/replay_common.rs, inside #[cfg(test)] mod, full-
+sentence names):
+- parse_war_tech_steal_line_reads_the_stolen_card_and_ignores_the_winwar_confirmation
+- parse_war_tech_science_line_reads_the_actor_regardless_of_amount_width
+- prescan_war_tech_spoils_orders_a_steal_then_science_split_in_journal_order
+- resolve_intervening_drains_a_war_tech_pending_split_between_a_steal_and_the_science_remainder
+  (drives the REAL interact::war_tech_spoils entry point, not a hand-built
+  Pending, and asserts both the steal and the science remainder land
+  correctly after a SINGLE resolve_intervening call)
+RED CONFIRMED: reverted the resolve_intervening arm to the old no-op body,
+reran `cargo test --profile fasttest --lib war_tech` -- the integration
+test failed with "both picks must be resolved, not just the first" (the
+three pure-parser tests still passed, as expected -- they test the new
+parse functions directly, not the wiring). Restored the fix; all 7 WarTech-
+related tests pass again.
+
+BAR RESULTS:
+- cargo build --profile difftest --bin replaystats: clean.
+- SCOREDIV_DUMP_COMPLETED=1 sweep header:
+  "# replaystats: 1011 games sampled, 722 completed to state.game_over"
+  "722/722 completed games actually flipped state.game_over ... 695/722 of
+  those matched index.tsv exactly"
+  (baseline guard: 698 completed / 671 exact matches)
+- comm -23 /private/tmp/guard_ids_698.txt /tmp/wartech_ids.txt (REGRESSIONS):
+  <empty>
+- comm -13 /private/tmp/guard_ids_698.txt /tmp/wartech_ids.txt (WINS, 24
+  games):
+  7521515
+  7521868
+  7522092
+  7522151
+  7522175
+  7522304
+  7522321
+  7522333
+  7522390
+  7522455
+  7522540
+  7522567
+  7522571
+  7522764
+  7522841
+  7522946
+  7522962
+  7522967
+  7522993
+  7523001
+  7523280
+  7523393
+  7523471
+  7523568
+- cargo test --profile fasttest --lib: 1426 passed; 0 failed (baseline
+  1422 + 4 new tests).
+- cargo clippy --all-targets -- -D warnings: 0 warnings.
+
+ON THE OTHER TWO NAMED GAMES (7523633, 7522941): NOT fixed by this change,
+and not expected to be -- they were blocked by unrelated bugs the whole
+time (confirmed by re-running the sweep and grepping their IDs in the
+output):
+  7523633 line 97: a military-discard-phase hand-size oracle disagreement
+    (unrelated: "journal's cross-validated excess 0, this binary computes 1
+    (hand_military_len 3 limit 2)").
+  7522941 line 183: an UnrecoverableHiddenInfo build-cost mismatch for
+    Drama (unrelated: an unmodeled resource discount source).
+Whatever earlier work flagged these two for "stale WarTech spoils" was
+either an earlier symptom that this fix also happened to clear before
+these games hit their REAL remaining blocker, or a mis-attribution --
+either way, this pass's own evidence (the sweep, run twice, before/after)
+shows their current blockers are these two unrelated issues, not WarTech.
+
+FILES:
+- Clone: /private/tmp/wartech (removed after writing this patch).
+- Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/wartech.patch
+  (git diff e642c90 HEAD -- e642c90 is the base0815 commit this clone
+  started from).
+- This file: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/wartech__WARTECH.txt
+- Only rust/src/replay_common.rs is touched (1 file, +273/-10 lines
+  including tests and doc comments).

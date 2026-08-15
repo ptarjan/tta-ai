@@ -1763,6 +1763,8 @@ mod tests {
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+            last_end_of_turn_science: [None; MAX_PLAYERS],
+            last_end_of_turn_resources: [None; MAX_PLAYERS],
         }
     }
 

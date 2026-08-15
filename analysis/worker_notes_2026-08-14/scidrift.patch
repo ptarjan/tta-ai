@@ -1,0 +1,758 @@
+diff --git a/rust/src/advisor/state_io.rs b/rust/src/advisor/state_io.rs
+index 39034e7..5d7e2ad 100644
+--- a/rust/src/advisor/state_io.rs
++++ b/rust/src/advisor/state_io.rs
+@@ -858,6 +858,8 @@ fn blank_state(n: u8, seed: u64) -> GameState {
+         pending: PendingStack::new(),
+         queue: Queue::new(),
+         last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++        last_end_of_turn_science: [None; MAX_PLAYERS],
++        last_end_of_turn_resources: [None; MAX_PLAYERS],
+     }
+ }
+ 
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index 90a7443..d1d0a48 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -1780,6 +1780,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/bin/replaystats.rs b/rust/src/bin/replaystats.rs
+index 0f518b1..b8608d3 100644
+--- a/rust/src/bin/replaystats.rs
++++ b/rust/src/bin/replaystats.rs
+@@ -211,6 +211,17 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+     // matters as much as the discard-phase oracle's own.
+     let mut culture_oracle_checked_total = 0u64;
+     let mut culture_oracle_agreed_total = 0u64;
++    // `GameResult::science_oracle_checked`/`_agreed`'s twin -- SCIDRIFT
++    // 2026-08-14 pass, `SCIENCE_ORACLE`-gated (see `debugflags::
++    // science_oracle`'s own doc): both stay 0 unless that env var is set for
++    // this run, guaranteeing a plain `replaystats` invocation is unaffected.
++    let mut science_oracle_checked_total = 0u64;
++    let mut science_oracle_agreed_total = 0u64;
++    let mut n_science_diverging_games = 0u32;
++    // `GameResult::resource_oracle_checked`/`_agreed`'s twin, `RESOURCE_ORACLE`-gated.
++    let mut resource_oracle_checked_total = 0u64;
++    let mut resource_oracle_agreed_total = 0u64;
++    let mut n_resource_diverging_games = 0u32;
+     // The task's own deliverable: FIRST-divergence-per-game, ranked by the
+     // `ActionClass` of whatever the last classified action line was
+     // strictly before the diverging checkpoint. `None` keys (no prior
+@@ -299,6 +310,49 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             let entry = culture_cause_buckets.entry(key).or_insert_with(|| (0, example.clone()));
+             entry.0 += 1;
+         }
++        // Science/resource oracle twins of the culture block just above --
++        // SCIDRIFT 2026-08-14 pass. Printed unconditionally whenever `Some`
++        // (which itself only happens when `SCIENCE_ORACLE`/`RESOURCE_ORACLE`
++        // was set for this run -- the caller already opted into the
++        // diagnostic, unlike `SCOREDIV_DUMP_IDS`, which gates an
++        // always-computed culture check that would otherwise flood every
++        // ordinary run).
++        science_oracle_checked_total += result.science_oracle_checked as u64;
++        science_oracle_agreed_total += result.science_oracle_agreed as u64;
++        if let Some(d) = &result.science_oracle_divergence {
++            n_science_diverging_games += 1;
++            println!("SCIENCE_DIVERGING_ID {}", meta.id);
++            println!(
++                "SCIENCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
++                 reconstructed={} delta={}",
++                meta.id,
++                d.lineno,
++                d.round,
++                d.actor,
++                d.last_action_class,
++                d.journal_now,
++                d.reconstructed,
++                d.reconstructed - d.journal_now
++            );
++        }
++        resource_oracle_checked_total += result.resource_oracle_checked as u64;
++        resource_oracle_agreed_total += result.resource_oracle_agreed as u64;
++        if let Some(d) = &result.resource_oracle_divergence {
++            n_resource_diverging_games += 1;
++            println!("RESOURCE_DIVERGING_ID {}", meta.id);
++            println!(
++                "RESOURCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
++                 reconstructed={} delta={}",
++                meta.id,
++                d.lineno,
++                d.round,
++                d.actor,
++                d.last_action_class,
++                d.journal_now,
++                d.reconstructed,
++                d.reconstructed - d.journal_now
++            );
++        }
+         if let Some(p) = &result.civil_deck_premature_advance {
+             n_premature += 1;
+             if premature_examples.len() < 10 {
+@@ -567,6 +621,30 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+     }
+     println!();
+ 
++    // `GameResult::science_oracle_divergence`/`resource_oracle_divergence` --
++    // SCIDRIFT 2026-08-14 pass, `docs/REPLAY.md` never had a SCIENCE or
++    // RESOURCE cross-check before this: this whole section reads 0/0 (NaN%
++    // guarded to 0.0% by the `.max(1)` below) unless `SCIENCE_ORACLE`/
++    // `RESOURCE_ORACLE` was set for this run -- see `debugflags::
++    // science_oracle`/`resource_oracle`'s own docs for why that is the point,
++    // not a bug.
++    println!("## Science oracle (SCIENCE_ORACLE=1 to populate; 0/0 otherwise)\n");
++    println!(
++        "{science_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` science running total to \
++         check this binary's own reconstructed `state.players[_].science` against; {science_oracle_agreed_total} \
++         ({:.1}%) matched exactly. {n_science_diverging_games}/{n_games} games sampled had at least one checkpoint \
++         disagree (FIRST divergence only; see SCIENCE_DETAIL lines above).\n",
++        100.0 * science_oracle_agreed_total as f64 / science_oracle_checked_total.max(1) as f64
++    );
++    println!("## Resource oracle (RESOURCE_ORACLE=1 to populate; 0/0 otherwise)\n");
++    println!(
++        "{resource_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` resources running total to \
++         check this binary's own reconstructed `state.players[_].resources` against; {resource_oracle_agreed_total} \
++         ({:.1}%) matched exactly. {n_resource_diverging_games}/{n_games} games sampled had at least one checkpoint \
++         disagree (FIRST divergence only; see RESOURCE_DETAIL lines above).\n",
++        100.0 * resource_oracle_agreed_total as f64 / resource_oracle_checked_total.max(1) as f64
++    );
++
+     // `GameResult::civil_deck_premature_advance` -- docs/REPLAY.md's "civil
+     // deck model" handoff. Zero here is the invariant `top_up_civil_deck`
+     // is meant to guarantee; a nonzero count is this instrument catching a
+diff --git a/rust/src/bots/weighted/events.rs b/rust/src/bots/weighted/events.rs
+index e632d80..efc1c66 100644
+--- a/rust/src/bots/weighted/events.rs
++++ b/rust/src/bots/weighted/events.rs
+@@ -675,6 +675,8 @@ mod tests {
+             pending: PendingStack::new(),
+             queue: Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/combat.rs b/rust/src/combat.rs
+index 5fe1551..7a325b5 100644
+--- a/rust/src/combat.rs
++++ b/rust/src/combat.rs
+@@ -631,6 +631,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/costs.rs b/rust/src/costs.rs
+index 1ca4ca6..0314111 100644
+--- a/rust/src/costs.rs
++++ b/rust/src/costs.rs
+@@ -884,6 +884,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/debugflags.rs b/rust/src/debugflags.rs
+index 1ce5bc8..3d76555 100644
+--- a/rust/src/debugflags.rs
++++ b/rust/src/debugflags.rs
+@@ -38,6 +38,8 @@ static REPLAY_DEBUG_ALL: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_AL
+ static REPLAY_DEBUG_TECHS: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_TECHS"));
+ static COLONIZE_FALLBACK_DUMP: LazyLock<bool> = LazyLock::new(|| flag("COLONIZE_FALLBACK_DUMP"));
+ static TIE_CENSUS: LazyLock<bool> = LazyLock::new(|| flag("TIE_CENSUS"));
++static SCIENCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("SCIENCE_ORACLE"));
++static RESOURCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("RESOURCE_ORACLE"));
+ 
+ /// `REPLAY_DEBUG`: per-game replay tracing.
+ pub fn replay_debug() -> bool {
+@@ -76,6 +78,24 @@ pub fn tie_census() -> bool {
+     *TIE_CENSUS
+ }
+ 
++/// `SCIENCE_ORACLE`: the science twin of the always-on culture-oracle
++/// checkpoint (`replay_common.rs`'s `CultureOracleDivergence`), gated behind
++/// its own env var per this pass's own task ("DIAGNOSTIC-ONLY code: it must
++/// not change any replay outcome") -- unlike culture, never on by default, so
++/// a plain `replaystats` run's output and every replay decision it makes stay
++/// byte-identical whether or not this module exists. Measurement-only; inert
++/// (one static bool read) otherwise.
++pub fn science_oracle() -> bool {
++    *SCIENCE_ORACLE
++}
++
++/// [`science_oracle`]'s resources twin -- same checkpoint shape, same
++/// env-var gate, `state.players[_].resources` /
++/// `GameState::last_end_of_turn_resources` in place of science's.
++pub fn resource_oracle() -> bool {
++    *RESOURCE_ORACLE
++}
++
+ // ============================================================== tests ====
+ 
+ #[cfg(test)]
+diff --git a/rust/src/economy.rs b/rust/src/economy.rs
+index 8bf12b6..5dcb3a8 100644
+--- a/rust/src/economy.rs
++++ b/rust/src/economy.rs
+@@ -1159,6 +1159,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index 28f49e7..0a48fdf 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -1822,6 +1822,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/events.rs b/rust/src/events.rs
+index 8237776..4d3527e 100644
+--- a/rust/src/events.rs
++++ b/rust/src/events.rs
+@@ -1763,6 +1763,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/game.rs b/rust/src/game.rs
+index 1a52feb..1d5f572 100644
+--- a/rust/src/game.rs
++++ b/rust/src/game.rs
+@@ -413,6 +413,8 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
+         pending: PendingStack::new(),
+         queue: Queue::new(),
+         last_end_of_turn_culture: [None; MAX_PLAYERS],
++        last_end_of_turn_science: [None; MAX_PLAYERS],
++        last_end_of_turn_resources: [None; MAX_PLAYERS],
+     };
+ 
+     // The thirteen row slots, dealt from the shuffled Age A civil deck. That
+@@ -1005,6 +1007,13 @@ pub fn resume_end_turn(state: &mut GameState, idx: u8) {
+     // before anything gets a chance to read it as "idx's total right after
+     // idx's own turn ended".
+     state.last_end_of_turn_culture[idx as usize] = Some(state.players[idx as usize].culture);
++    // Same snapshot-before-`advance_turn` timing, science and resources twins
++    // -- see `GameState::last_end_of_turn_science`/`last_end_of_turn_
++    // resources`'s own docs. Consumed by `replay_common.rs`'s
++    // `SCIENCE_ORACLE`/`RESOURCE_ORACLE`-gated oracles, mirroring the
++    // always-on culture oracle exactly.
++    state.last_end_of_turn_science[idx as usize] = Some(state.players[idx as usize].science);
++    state.last_end_of_turn_resources[idx as usize] = Some(state.players[idx as usize].resources);
+     advance_turn(state, &mut rng);
+ }
+ 
+diff --git a/rust/src/interact.rs b/rust/src/interact.rs
+index c98332b..1437125 100644
+--- a/rust/src/interact.rs
++++ b/rust/src/interact.rs
+@@ -1819,6 +1819,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/legal.rs b/rust/src/legal.rs
+index 1216e0e..548aa19 100644
+--- a/rust/src/legal.rs
++++ b/rust/src/legal.rs
+@@ -1220,6 +1220,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index b9b120e..8d5501a 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -677,6 +677,29 @@ struct Replayer<'a> {
+     /// case: an ordinary `EndTurn` compares immediately, never touching this
+     /// field at all).
+     pending_culture_check: Option<PendingCultureCheck>,
++    /// [`Replayer::culture_oracle_divergence`]'s science twin -- see
++    /// [`ScienceOracleDivergence`]. `SCIENCE_ORACLE`-gated (unlike culture's
++    /// always-on checkpoint): `None` for every game unless
++    /// `debugflags::science_oracle()` is set, by construction, since
++    /// `record_science_check` is the only writer and it is never called
++    /// otherwise.
++    science_oracle_divergence: Option<ScienceOracleDivergence>,
++    /// [`Replayer::culture_oracle_checked`]/[`Replayer::culture_oracle_
++    /// agreed`]'s science twin.
++    science_oracle_checked: u32,
++    science_oracle_agreed: u32,
++    /// [`Replayer::pending_culture_check`]'s science twin -- see
++    /// [`PendingScienceCheck`].
++    pending_science_check: Option<PendingScienceCheck>,
++    /// [`Replayer::culture_oracle_divergence`]'s resources twin -- see
++    /// [`ResourceOracleDivergence`]. `RESOURCE_ORACLE`-gated, same
++    /// never-written-unless-flagged guarantee as `science_oracle_divergence`.
++    resource_oracle_divergence: Option<ResourceOracleDivergence>,
++    resource_oracle_checked: u32,
++    resource_oracle_agreed: u32,
++    /// [`Replayer::pending_culture_check`]'s resources twin -- see
++    /// [`PendingResourceCheck`].
++    pending_resource_check: Option<PendingResourceCheck>,
+     /// A `"GAME DATA UPDATED"` culture clause (`parse_game_data_updated_
+     /// culture`'s own doc) not yet applied because its stated `old` did not
+     /// match this reconstruction's live value the moment the line was read.
+@@ -965,6 +988,14 @@ impl<'a> Replayer<'a> {
+             culture_oracle_checked: 0,
+             culture_oracle_agreed: 0,
+             pending_culture_check: None,
++            science_oracle_divergence: None,
++            science_oracle_checked: 0,
++            science_oracle_agreed: 0,
++            pending_science_check: None,
++            resource_oracle_divergence: None,
++            resource_oracle_checked: 0,
++            resource_oracle_agreed: 0,
++            pending_resource_check: None,
+             pending_culture_corrections: Vec::new(),
+             pending_resource_corrections: Vec::new(),
+             politics_false_skips: 0,
+@@ -2862,6 +2893,104 @@ impl<'a> Replayer<'a> {
+         self.record_culture_check(pending.lineno, pending.actor_seat, pending.journal_now, pending.last_action_class);
+     }
+ 
++    /// [`Replayer::record_culture_check`]'s science twin -- see
++    /// [`ScienceOracleDivergence`]'s own doc. Only ever called when
++    /// `debugflags::science_oracle()` is set (the dispatch loop's own gate),
++    /// so `science_oracle_checked`/`_agreed`/`_divergence` stay at their
++    /// `Replayer::new` defaults for every ordinary run.
++    fn record_science_check(&mut self, lineno: usize, round: &str, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
++        let got = self.state.last_end_of_turn_science[actor_seat as usize]
++            .take()
++            .unwrap_or_else(|| {
++                panic!(
++                    "record_science_check called for actor {actor_seat} at line {lineno} but \
++                     resume_end_turn never snapshotted this turn's post-production science -- \
++                     a caller reached this checkpoint before economy::end_of_turn actually ran"
++                )
++            }) as i32;
++        self.science_oracle_checked += 1;
++        if journal_now == got {
++            self.science_oracle_agreed += 1;
++            return;
++        }
++        if crate::debugflags::replay_debug() {
++            eprintln!(
++                "DEBUG end-turn science drift (SCIENCE_ORACLE): actor={actor_seat} journal says (now {journal_now}), \
++                 this binary computes {got} (delta {}) at line {lineno}",
++                got - journal_now,
++            );
++        }
++        if self.science_oracle_divergence.is_none() {
++            self.science_oracle_divergence = Some(ScienceOracleDivergence {
++                lineno,
++                round: round.to_string(),
++                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
++                journal_now,
++                reconstructed: got,
++                last_action_class,
++            });
++        }
++    }
++
++    /// [`Replayer::flush_pending_culture_check`]'s science twin.
++    fn flush_pending_science_check(&mut self) {
++        let Some(pending) = self.pending_science_check.take() else { return };
++        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
++        {
++            self.pending_science_check = Some(pending); // still blocked -- try again next line
++            return;
++        }
++        self.record_science_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
++    }
++
++    /// [`Replayer::record_culture_check`]'s resources twin -- see
++    /// [`ResourceOracleDivergence`]'s own doc. `RESOURCE_ORACLE`-gated, same
++    /// never-called-unless-flagged guarantee as `record_science_check`.
++    fn record_resource_check(&mut self, lineno: usize, round: &str, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
++        let got = self.state.last_end_of_turn_resources[actor_seat as usize]
++            .take()
++            .unwrap_or_else(|| {
++                panic!(
++                    "record_resource_check called for actor {actor_seat} at line {lineno} but \
++                     resume_end_turn never snapshotted this turn's post-production resources -- \
++                     a caller reached this checkpoint before economy::end_of_turn actually ran"
++                )
++            }) as i32;
++        self.resource_oracle_checked += 1;
++        if journal_now == got {
++            self.resource_oracle_agreed += 1;
++            return;
++        }
++        if crate::debugflags::replay_debug() {
++            eprintln!(
++                "DEBUG end-turn resources drift (RESOURCE_ORACLE): actor={actor_seat} journal says (now {journal_now}), \
++                 this binary computes {got} (delta {}) at line {lineno}",
++                got - journal_now,
++            );
++        }
++        if self.resource_oracle_divergence.is_none() {
++            self.resource_oracle_divergence = Some(ResourceOracleDivergence {
++                lineno,
++                round: round.to_string(),
++                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
++                journal_now,
++                reconstructed: got,
++                last_action_class,
++            });
++        }
++    }
++
++    /// [`Replayer::flush_pending_culture_check`]'s resources twin.
++    fn flush_pending_resource_check(&mut self) {
++        let Some(pending) = self.pending_resource_check.take() else { return };
++        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
++        {
++            self.pending_resource_check = Some(pending); // still blocked -- try again next line
++            return;
++        }
++        self.record_resource_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
++    }
++
+     /// Flushes every [`Replayer::pending_culture_corrections`] entry whose
+     /// stated `old` NOW matches this reconstruction's live culture for that
+     /// player -- see that field's own doc for why a `"GAME DATA UPDATED"`
+@@ -4490,6 +4619,60 @@ pub struct CultureOracleDivergence {
+     pub last_action_class: Option<ActionClass>,
+ }
+ 
++/// [`CultureOracleDivergence`]'s science twin -- see [`GameResult::
++/// science_oracle_divergence`]. `SCIENCE_ORACLE`-gated: BGO's own "End turn
++/// ... N science (now M) ..." clause sits right next to the culture clause
++/// on the exact same line, same running-total grammar, so this is a literal
++/// mirror, not a derived check. `round` (absent from `CultureOracleDivergence`,
++/// added here per this pass's own corpus-report deliverable -- "at what round
++/// do games first diverge") comes straight off the same `Line::round` column
++/// the checkpoint's own "End turn" line carries.
++pub struct ScienceOracleDivergence {
++    pub lineno: usize,
++    pub round: String,
++    pub actor: &'static str,
++    /// BGO's own "(now M)" running total -- ground truth.
++    pub journal_now: i32,
++    /// This binary's own reconstructed total at the same checkpoint --
++    /// `state.last_end_of_turn_science[actor]`'s snapshot, same
++    /// snapshot-before-`advance_turn` timing as `CultureOracleDivergence::
++    /// reconstructed`.
++    pub reconstructed: i32,
++    pub last_action_class: Option<ActionClass>,
++}
++
++/// [`PendingCultureCheck`]'s science twin -- same self-deferring shape for a
++/// checkpoint captured on an `EndTurn` line still blocked on an open
++/// `DiscardMilitary` decision.
++struct PendingScienceCheck {
++    lineno: usize,
++    round: String,
++    actor_seat: u8,
++    journal_now: i32,
++    last_action_class: Option<ActionClass>,
++}
++
++/// [`ScienceOracleDivergence`]'s resources twin -- same BGO "(now M)"
++/// running-total grammar, `"N resources (now M)"` in place of `"N science
++/// (now M)"`, `state.last_end_of_turn_resources` in place of `_science`.
++pub struct ResourceOracleDivergence {
++    pub lineno: usize,
++    pub round: String,
++    pub actor: &'static str,
++    pub journal_now: i32,
++    pub reconstructed: i32,
++    pub last_action_class: Option<ActionClass>,
++}
++
++/// [`PendingScienceCheck`]'s resources twin.
++struct PendingResourceCheck {
++    lineno: usize,
++    round: String,
++    actor_seat: u8,
++    journal_now: i32,
++    last_action_class: Option<ActionClass>,
++}
++
+ /// A culture-oracle comparison captured on an `EndTurn` line whose own
+ /// `economy::end_of_turn` stopped early at `discard_excess_military`
+ /// (leaving a `Pending::Choice(DiscardMilitary)` open) -- BGO's own
+@@ -5895,6 +6078,17 @@ pub struct GameResult {
+     /// own reconstruction matched exactly.
+     pub culture_oracle_checked: u32,
+     pub culture_oracle_agreed: u32,
++    /// [`Replayer::science_oracle_divergence`]'s twin here -- see
++    /// [`ScienceOracleDivergence`]. `SCIENCE_ORACLE`-gated: always `None`
++    /// unless `debugflags::science_oracle()` was set for this run.
++    pub science_oracle_divergence: Option<ScienceOracleDivergence>,
++    pub science_oracle_checked: u32,
++    pub science_oracle_agreed: u32,
++    /// [`Replayer::resource_oracle_divergence`]'s twin here -- see
++    /// [`ResourceOracleDivergence`]. `RESOURCE_ORACLE`-gated.
++    pub resource_oracle_divergence: Option<ResourceOracleDivergence>,
++    pub resource_oracle_checked: u32,
++    pub resource_oracle_agreed: u32,
+     /// The FIRST line, if any, where this reconstruction's own
+     /// `state.age_civil` read strictly ahead of what the journal's `Line::
+     /// age` column proves the real game had reached -- see
+@@ -6711,6 +6905,12 @@ pub fn replay_game(
+         // checkpoint is still waiting on a discard decision to resolve --
+         // see `PendingCultureCheck`'s own doc.
+         r.flush_pending_culture_check();
++        // Science/resources oracle twins -- no-ops (an `Option::take` on
++        // `None`) unless `SCIENCE_ORACLE`/`RESOURCE_ORACLE` is set, since
++        // `pending_science_check`/`pending_resource_check` are only ever
++        // populated by the gated capture sites below.
++        r.flush_pending_science_check();
++        r.flush_pending_resource_check();
+         // Self-deferring the same way: a no-op unless an earlier `"GAME
+         // DATA UPDATED"` culture clause is still waiting for this
+         // reconstruction's own live value to catch up -- see `Replayer::
+@@ -6892,6 +7092,45 @@ pub fn replay_game(
+                         r.record_culture_check(line.lineno, actor, want, previous_action_class);
+                     }
+                 }
++                // Science/resources oracle twins of the culture checkpoint
++                // just above -- SAME "(now M)" running-total grammar, SAME
++                // line, SAME discard-blocked-turn deferral shape, but gated
++                // behind their own `SCIENCE_ORACLE`/`RESOURCE_ORACLE` env
++                // vars (2026-08-14 pass: "DIAGNOSTIC-ONLY code: it must not
++                // change any replay outcome" -- unlike culture's always-on
++                // checkpoint, these must default to fully inert). See
++                // `ScienceOracleDivergence`/`ResourceOracleDivergence`'s own
++                // docs.
++                if crate::debugflags::science_oracle() {
++                    if let Some(want) = trailing_now_science(line.text) {
++                        if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary) {
++                            r.pending_science_check = Some(PendingScienceCheck {
++                                lineno: line.lineno,
++                                round: line.round.to_string(),
++                                actor_seat: actor,
++                                journal_now: want,
++                                last_action_class: previous_action_class,
++                            });
++                        } else {
++                            r.record_science_check(line.lineno, line.round, actor, want, previous_action_class);
++                        }
++                    }
++                }
++                if crate::debugflags::resource_oracle() {
++                    if let Some(want) = trailing_now_resources(line.text) {
++                        if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary) {
++                            r.pending_resource_check = Some(PendingResourceCheck {
++                                lineno: line.lineno,
++                                round: line.round.to_string(),
++                                actor_seat: actor,
++                                journal_now: want,
++                                last_action_class: previous_action_class,
++                            });
++                        } else {
++                            r.record_resource_check(line.lineno, line.round, actor, want, previous_action_class);
++                        }
++                    }
++                }
+                 r.actions_consumed += 1;
+                 continue;
+             }
+@@ -7500,6 +7739,12 @@ pub fn replay_game(
+         culture_oracle_divergence: r.culture_oracle_divergence,
+         culture_oracle_checked: r.culture_oracle_checked,
+         culture_oracle_agreed: r.culture_oracle_agreed,
++        science_oracle_divergence: r.science_oracle_divergence,
++        science_oracle_checked: r.science_oracle_checked,
++        science_oracle_agreed: r.science_oracle_agreed,
++        resource_oracle_divergence: r.resource_oracle_divergence,
++        resource_oracle_checked: r.resource_oracle_checked,
++        resource_oracle_agreed: r.resource_oracle_agreed,
+         civil_deck_premature_advance,
+         politics_false_skips: r.politics_false_skips,
+         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
+@@ -8860,6 +9105,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+@@ -9440,6 +9687,122 @@ mod tests {
+         assert!(r.state.last_end_of_turn_culture[0].is_none(), "the snapshot must be consumed, not left to leak into a later checkpoint");
+     }
+ 
++    /// [`flush_pending_culture_check_defers_while_the_actors_own_discard_choice_is_still_open`]'s
++    /// science twin -- SCIDRIFT 2026-08-14 pass. Same false-positive shape:
++    /// production has not run yet, so the pre-production live `science` must
++    /// not be compared against BGO's post-production `"(now M)"`.
++    #[test]
++    fn flush_pending_science_check_defers_while_the_actors_own_discard_choice_is_still_open() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        let mut options = crate::state::OptionList::new();
++        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
++        options.push(ChoiceOption::Card(legion));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
++        r.state.players[0].science = 2; // pre-production, must not be compared yet
++        r.pending_science_check = Some(PendingScienceCheck {
++            lineno: 64,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_science_check();
++
++        assert_eq!(r.science_oracle_checked, 0, "must not count a checkpoint whose production has not run yet");
++        assert!(r.science_oracle_divergence.is_none(), "must not flag a false divergence while still blocked");
++        assert!(r.pending_science_check.is_some(), "the check must be put back, not dropped, while still blocked");
++    }
++
++    /// [`flush_pending_culture_check_compares_once_the_discard_resolves`]'s
++    /// science twin.
++    #[test]
++    fn flush_pending_science_check_compares_once_the_discard_resolves() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        assert!(r.state.pending.is_empty(), "fixture assumption: the discard already resolved, nothing left open");
++        r.state.last_end_of_turn_science[0] = Some(6); // resume_end_turn's own snapshot, matching BGO's own "(now 6)"
++        r.pending_science_check = Some(PendingScienceCheck {
++            lineno: 296,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_science_check();
++
++        assert_eq!(r.science_oracle_checked, 1, "the deferred checkpoint must be counted once resolved");
++        assert_eq!(r.science_oracle_agreed, 1, "6 == 6: this binary's reconstruction agrees with the journal");
++        assert!(r.science_oracle_divergence.is_none());
++        assert!(r.pending_science_check.is_none(), "consumed, not left pending forever");
++        assert!(r.state.last_end_of_turn_science[0].is_none(), "the snapshot must be consumed, not left to leak into a later checkpoint");
++    }
++
++    /// A real divergence must be recorded, not silently swallowed --
++    /// reproduces the exact shape PACTS's writeup found in game `7523162`
++    /// (Grey's tracked science silently drops 2 points with no journal
++    /// cause): `record_science_check` must set `science_oracle_divergence`
++    /// with the right sign (`reconstructed - journal_now`) when the
++    /// snapshot disagrees with BGO's own running total.
++    #[test]
++    fn record_science_check_flags_a_real_divergence_with_the_correct_sign() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.last_end_of_turn_science[0] = Some(4); // this binary's own reconstruction: 4
++        r.record_science_check(301, "10", 0, 6, Some(ActionClass::TakeCard)); // BGO says 6
++
++        assert_eq!(r.science_oracle_checked, 1);
++        assert_eq!(r.science_oracle_agreed, 0);
++        let d = r.science_oracle_divergence.expect("a real 4 vs 6 mismatch must be flagged");
++        assert_eq!(d.lineno, 301);
++        assert_eq!(d.round, "10");
++        assert_eq!(d.journal_now, 6);
++        assert_eq!(d.reconstructed, 4);
++        assert_eq!(d.reconstructed - d.journal_now, -2, "this binary under-counts by 2, matching the known 7523162 repro");
++    }
++
++    /// The resources oracle's own parity tests -- same shape as science's
++    /// pair just above, `resources`/`RESOURCE_ORACLE` in place of
++    /// `science`/`SCIENCE_ORACLE`.
++    #[test]
++    fn flush_pending_resource_check_defers_while_the_actors_own_discard_choice_is_still_open() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        let mut options = crate::state::OptionList::new();
++        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
++        options.push(ChoiceOption::Card(legion));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
++        r.state.players[0].resources = 2; // pre-production, must not be compared yet
++        r.pending_resource_check = Some(PendingResourceCheck {
++            lineno: 64,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_resource_check();
++
++        assert_eq!(r.resource_oracle_checked, 0, "must not count a checkpoint whose production has not run yet");
++        assert!(r.resource_oracle_divergence.is_none(), "must not flag a false divergence while still blocked");
++        assert!(r.pending_resource_check.is_some(), "the check must be put back, not dropped, while still blocked");
++    }
++
++    #[test]
++    fn record_resource_check_flags_a_real_divergence_with_the_correct_sign() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.last_end_of_turn_resources[0] = Some(9); // this binary's own reconstruction: 9
++        r.record_resource_check(240, "7", 0, 4, Some(ActionClass::BuildWonderStage)); // BGO says 4
++
++        assert_eq!(r.resource_oracle_checked, 1);
++        assert_eq!(r.resource_oracle_agreed, 0);
++        let d = r.resource_oracle_divergence.expect("a real 9 vs 4 mismatch must be flagged");
++        assert_eq!(d.reconstructed - d.journal_now, 5, "this binary over-counts by 5");
++    }
++
+     /// Real game `7523612` round 14 (`docs/REPLAY.md`'s "Culture oracle"
+     /// section, `WinWar`-bucket trace): Purple's own `EndTurn` opens a
+     /// `DiscardMilitary` pending exactly as the test above, but resolving it
+diff --git a/rust/src/state.rs b/rust/src/state.rs
+index dd0bfe6..d0609ca 100644
+--- a/rust/src/state.rs
++++ b/rust/src/state.rs
+@@ -1488,6 +1488,18 @@ pub struct GameState {
+     /// after `resume_end_turn` returns can read a value that has already
+     /// been through a DIFFERENT player's entire start-of-turn sequence.
+     pub last_end_of_turn_culture: [Option<u16>; MAX_PLAYERS],
++
++    /// [`GameState::last_end_of_turn_culture`]'s twin for science -- same
++    /// snapshot-before-`advance_turn` timing, same consumer
++    /// (`replay_common.rs`'s science oracle, `SCIENCE_ORACLE`-gated, mirrors
++    /// the culture oracle exactly). Instrumentation only.
++    pub last_end_of_turn_science: [Option<u16>; MAX_PLAYERS],
++
++    /// [`GameState::last_end_of_turn_culture`]'s twin for resources -- same
++    /// snapshot-before-`advance_turn` timing, same consumer
++    /// (`replay_common.rs`'s resource oracle, `RESOURCE_ORACLE`-gated).
++    /// Instrumentation only.
++    pub last_end_of_turn_resources: [Option<u16>; MAX_PLAYERS],
+ }
+ 
+ impl GameState {

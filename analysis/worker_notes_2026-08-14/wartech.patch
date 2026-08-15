@@ -1,0 +1,354 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index b9b120e..689db6d 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -168,6 +168,21 @@ use crate::state::{
+ };
+ use crate::{apply, costs, economy, effects, game, legal, CardId, CardType, Move};
+ 
++/// One journal-observed resolution of a single War over Technology spoils
++/// pick -- see `Replayer::war_tech_spoils`'s doc for the journal shape each
++/// variant comes from.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum WarSpoil {
++    /// `"<Color> steals <Card> from <Color>"`.
++    Steal(CardId),
++    /// `"<Color> gets N science; <Color> loses N science"` -- the amount
++    /// itself is not needed here: `interact::take_war_science` recomputes it
++    /// deterministically from the live `budget`/loser's science, exactly like
++    /// every other amount-bearing spoils line this file resolves by SHAPE,
++    /// not by re-deriving the engine's own arithmetic from journal text.
++    Science,
++}
++
+ // ---------------------------------------------------------------------
+ // Journal line
+ // ---------------------------------------------------------------------
+@@ -600,6 +615,22 @@ struct Replayer<'a> {
+     /// -- see `prescan_flip_wonders`'s doc and `resolve_intervening`'s
+     /// `ChoiceKind::FlipWonder` handling, which drains it.
+     flip_wonders: HashMap<u8, VecDeque<CardId>>,
++    /// Per-actor FIFO of [`WarSpoil`]s pulled off every journal-observed
++    /// `"<Color> takes spoils of war <Color> steals <Card> from <Color>"` /
++    /// `"<Color> takes spoils of war <Color> gets N science; <Color> loses N
++    /// science"` line -- the resolution of a `Pending::Choice(WarTech)`. War
++    /// over Technology's spoils are explicitly MIXABLE (FAQ p.8, "some or
++    /// all"): `interact::offer_war_tech` re-offers the choice with the
++    /// advantage reduced by whatever was just stolen, so BGO logs one
++    /// `"takes spoils of war"` line PER PICK, in the same order the choices
++    /// were made -- e.g. `7522455` line 201 (`"steals Navigation"`) then line
++    /// 202 (`"gets 6 science"`), a steal-then-remainder-as-science split. Set
++    /// directly by `replay_game` after construction (like `produces_grants`),
++    /// not threaded through `Replayer::new`'s own parameter list, for the
++    /// same reason that field gives -- see `prescan_war_tech_spoils`'s doc
++    /// and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
++    /// drains it.
++    war_tech_spoils: HashMap<u8, VecDeque<WarSpoil>>,
+     /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
+     /// over the rest of the journal -- see `discard_solver`'s module doc and
+     /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
+@@ -950,6 +981,7 @@ impl<'a> Replayer<'a> {
+             raid_destroys,
+             lose_colonies,
+             flip_wonders,
++            war_tech_spoils: HashMap::new(),
+             claimed_destroy_lines: std::collections::HashSet::new(),
+             discard_solver: DiscardSolver::new(future_military_needs),
+             record_decisions: false,
+@@ -1799,6 +1831,49 @@ impl<'a> Replayer<'a> {
+                         self.apply_move(Move::Choose { n: n as u8 });
+                         continue;
+                     }
++                    // A `Pending::Choice(WarTech)` (War over Technology's
++                    // "science, or steal a blue special technology instead,
++                    // repeat until the advantage runs out" -- FAQ p.8's
++                    // "some or all" mixing) is opened for the VICTOR only,
++                    // and only when the loser actually holds something
++                    // stealable (`interact::offer_war_tech`'s own `opts.
++                    // is_empty()` short-circuit means an unstealable war
++                    // never creates a `Pending` at all, so this arm is only
++                    // ever reached with a real decision to resolve). Each
++                    // pick resolves to its OWN journal line (`"takes spoils
++                    // of war ... steals <Card> ..."` or `"... gets N science
++                    // ..."`) rather than one line per war, because `offer_
++                    // war_tech` re-offers with the advantage reduced after
++                    // every steal -- see `Replayer::war_tech_spoils`'s doc.
++                    // Drained here in journal order, no validate-and-skip
++                    // loop needed (unlike `Raid`/`LoseColony`/`FlipWonder`
++                    // above): `prescan_war_tech_spoils`'s own doc explains
++                    // why an orphaned earlier entry can't happen for this
++                    // particular choice.
++                    ChoiceKind::WarTech { .. } => {
++                        let picked = self.war_tech_spoils.entry(decider).or_default().pop_front().ok_or_else(|| {
++                            MismatchKind::StuckPending(format!(
++                                "WarTech choice open for player {decider} but no journal-observed \
++                                 \"takes spoils of war\" line left to resolve it with"
++                            ))
++                        })?;
++                        let n = match picked {
++                            WarSpoil::Steal(card) => c
++                                .options
++                                .as_slice()
++                                .iter()
++                                .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
++                                .ok_or_else(|| {
++                                    MismatchKind::ParserGap(format!(
++                                        "WarTech options {:?} do not offer the journal-observed steal of {card:?}",
++                                        c.options.as_slice()
++                                    ))
++                                })?,
++                            WarSpoil::Science => crate::interact::WAR_TECH_SCIENCE_IDX as usize,
++                        };
++                        self.apply_move(Move::Choose { n: n as u8 });
++                        continue;
++                    }
+                     // Every other `ChoiceKind` is left alone HERE, on
+                     // purpose -- listed individually rather than behind a
+                     // `_` wildcard, so a future `ChoiceKind` variant fails
+@@ -1811,20 +1886,18 @@ impl<'a> Replayer<'a> {
+                     // player's OWN voluntary in-turn choice and fall through
+                     // to the `decider == expected_actor` shortcut a few
+                     // lines below, exactly like `DestroyOwn` always has;
+-                    // `Annex`/`WarTech` have not been needed by any corpus
+-                    // game sampled so far; `PactOffer` is handled by the
+-                    // bottom match's own explicit arm (auto-`Refuse`) for
+-                    // the `decider != expected_actor` case. Falling through
+-                    // here for all six is IDENTICAL to this match's
+-                    // predecessor (a chain of `if` statements that simply
+-                    // didn't mention them) -- no behaviour changed, only
+-                    // exhaustiveness was added.
++                    // `Annex` has not been needed by any corpus game sampled
++                    // so far; `PactOffer` is handled by the bottom match's
++                    // own explicit arm (auto-`Refuse`) for the `decider !=
++                    // expected_actor` case. Falling through here for all
++                    // five is IDENTICAL to this match's predecessor (a chain
++                    // of `if` statements that simply didn't mention them) --
++                    // no behaviour changed, only exhaustiveness was added.
+                     ChoiceKind::FreeCivil { .. }
+                     | ChoiceKind::FoodOrRes { .. }
+                     | ChoiceKind::DestroyOwn
+                     | ChoiceKind::Annex { .. }
+-                    | ChoiceKind::PactOffer { .. }
+-                    | ChoiceKind::WarTech { .. } => {}
++                    | ChoiceKind::PactOffer { .. } => {}
+                 }
+             }
+             // A live `Pending::Colonize` has no real `Move` anywhere in the
+@@ -5383,6 +5456,77 @@ fn prescan_flip_wonders(lines: &[Line], card_index: &HashMap<&'static str, CardI
+     out
+ }
+ 
++/// `"<Color> takes spoils of war <Color> steals <Card> from <Color>"` -- the
++/// journal's per-pick resolution of a War over Technology steal (see
++/// `Replayer::war_tech_spoils`'s doc for why BGO logs one such line per
++/// PICK, not one per war -- `interact::offer_war_tech` re-offers after every
++/// steal, and mixing is legal, FAQ p.8). The actor prints TWICE (confirmed
++/// across the corpus, e.g. `7522455` line 201: `"Orange takes spoils of war
++/// Orange steals Navigation from Purple"`) -- `actor_and_rest` strips the
++/// first, the second is checked to actually match rather than assumed to,
++/// since a mismatch would mean this shape was misidentified. The victim
++/// after `"from "` is not returned: it is already redundant with the live
++/// choice's own `victim` field, exactly like Terrorism's destroy line never
++/// needing an attacker.
++fn parse_war_tech_steal_line(index: &HashMap<&'static str, CardId>, text: &str) -> Option<(Color, CardId)> {
++    let (actor, rest) = actor_and_rest(text)?;
++    let rest = rest.strip_prefix("takes spoils of war ")?;
++    let (actor2, rest) = actor_and_rest(rest)?;
++    if actor2 != actor {
++        return None;
++    }
++    let rest = rest.strip_prefix("steals ")?;
++    let (id, rest) = longest_known_card_prefix(index, rest)?;
++    rest.strip_prefix(" from ")?;
++    Some((actor, id))
++}
++
++/// `"<Color> takes spoils of war <Color> gets N science; <Color> loses N
++/// science"` -- the journal's per-pick resolution of a War over Technology
++/// spoils pick landing on science (either the whole advantage, when the
++/// loser has nothing stealable, or the remainder after a steal). Only the
++/// SHAPE is checked, not the amount `N` -- see [`WarSpoil::Science`]'s own
++/// doc for why re-deriving it here would duplicate arithmetic `interact::
++/// take_war_science` already does deterministically from the live state.
++fn parse_war_tech_science_line(text: &str) -> Option<Color> {
++    let (actor, rest) = actor_and_rest(text)?;
++    let rest = rest.strip_prefix("takes spoils of war ")?;
++    let (actor2, rest) = actor_and_rest(rest)?;
++    if actor2 != actor {
++        return None;
++    }
++    let rest = rest.strip_prefix("gets ")?;
++    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
++    if digits_end == 0 {
++        return None;
++    }
++    rest[digits_end..].strip_prefix(" science")?;
++    Some(actor)
++}
++
++/// Pre-scans the whole journal once for every [`parse_war_tech_steal_line`] /
++/// [`parse_war_tech_science_line`] match into a per-actor FIFO, in journal
++/// order -- the exact sequence `interact::offer_war_tech`'s own re-offer
++/// loop produces the picks in, so no validate-and-skip is needed the way
++/// `raid_destroys`/`lose_colonies` need it (those FIFOs can also collect
++/// entries from an EARLIER, already-auto-resolved single-option choice;
++/// `offer_war_tech` never auto-resolves once a real `Pending::Choice` is
++/// open -- `push_choice`'s len-1 rule only fires before the choice exists at
++/// all, when `war_tech_options` is empty). See `Replayer::war_tech_spoils`'s
++/// doc and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
++/// drains this per-actor.
++fn prescan_war_tech_spoils(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<WarSpoil>> {
++    let mut out: HashMap<u8, VecDeque<WarSpoil>> = HashMap::new();
++    for line in lines {
++        if let Some((actor, id)) = parse_war_tech_steal_line(card_index, line.text) {
++            out.entry(actor.seat()).or_default().push_back(WarSpoil::Steal(id));
++        } else if let Some(actor) = parse_war_tech_science_line(line.text) {
++            out.entry(actor.seat()).or_default().push_back(WarSpoil::Science);
++        }
++    }
++    out
++}
++
+ /// Pre-scans the whole journal once for every point where a player is
+ /// observed playing a NAMED card out of their own military hand --
+ /// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
+@@ -6478,6 +6622,7 @@ pub fn replay_game(
+     );
+     r.record_decisions = record_decisions;
+     r.produces_grants = prescan_produces_grants(&lines);
++    r.war_tech_spoils = prescan_war_tech_spoils(&lines, card_index);
+     r.discard_phase_oracle = prescan_discard_phase_oracle(&lines);
+     r.military_hand_ledger = prescan_military_hand_ledger(&lines, card_index);
+     r.spends_grants = prescan_spends_grants(&lines);
+@@ -12154,6 +12299,60 @@ mod tests {
+         );
+     }
+ 
++    /// `WarTech` (War over Technology): the ENGINE BUG this whole pass
++    /// fixes -- games `7522455`/`7522967` (real BGA journals, `docs/
++    /// REPLAY.md`) both got stuck forever on this exact `Pending`, because
++    /// `resolve_intervening` used to leave `ChoiceKind::WarTech` alone
++    /// unconditionally (the fallthrough arm's own former comment: "`Annex`/
++    /// `WarTech` have not been needed by any corpus game sampled so far").
++    /// `interact::war_tech_spoils` itself already modelled mixing correctly
++    /// (`combat.rs`'s own `apply_war_spoils_technology_the_victor_may_mix_
++    /// cards_and_science` test) -- the gap was purely on this file's side:
++    /// nothing ever translated the journal's per-pick `"takes spoils of
++    /// war"` lines into the `Move::Choose`s that mixing needs. This drives
++    /// the real war_tech_spoils entry point exactly like production does
++    /// (not a hand-built `Pending::Choice`), so it also exercises `interact::
++    /// offer_war_tech`'s re-offer-after-a-steal loop: after the steal
++    /// resolves, budget 8 minus Navigation's cost 6 leaves 2, and with no
++    /// second stealable special tech in play, `offer_war_tech` auto-resolves
++    /// that remainder as science with NO second `Pending` -- so ONE `resolve_
++    /// intervening` call must drain the whole two-pick FIFO and leave
++    /// `state.pending` empty, not just the first pick.
++    #[test]
++    fn resolve_intervening_drains_a_war_tech_pending_split_between_a_steal_and_the_science_remainder() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known special technology");
++        r.state.players[1].techs.insert(navigation, crate::state::TechSlot { workers: 0, stored: 0 });
++        r.state.players[1].science = 20;
++        // The real production entry point (`combat::apply_war_spoils`'s own
++        // caller) -- opens the live `Pending::Choice(WarTech)` exactly like
++        // an actual resolved war does, budget 8 = Navigation's cost (6) plus
++        // a 2-science remainder, matching the split this test's own doc
++        // describes.
++        crate::interact::war_tech_spoils(&mut r.state, 0, 1, 8);
++        assert!(r.state.pending.top().is_some(), "war_tech_spoils must open a real choice when a steal is on offer");
++        r.war_tech_spoils.insert(0, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
++
++        // `expected_actor: 0`, matching the victor: once both picks drain
++        // and `state.pending` empties, `resolve_intervening`'s own "whose
++        // turn is it really" fallback must agree with whoever is genuinely
++        // up next in a freshly `Replayer::new`-constructed game (player 0),
++        // exactly like the `LoseColony`/`FlipWonder` tests above use `0` for
++        // the same reason -- an `expected_actor` that does not match would
++        // report an unrelated `StuckPending` AFTER this choice already
++        // resolved correctly, not a failure of the fix under test here.
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
++
++        assert!(result.is_ok(), "{result:?}");
++        assert!(r.state.pending.is_empty(), "both picks must be resolved, not just the first");
++        assert!(r.state.players[0].techs.has(navigation), "the stolen technology must move to the victor's play area");
++        assert!(!r.state.players[1].techs.has(navigation), "and leave the loser's");
++        assert_eq!(r.state.players[1].science, 18, "the loser pays the 2-science remainder after the 6-cost steal");
++        assert_eq!(r.state.players[0].science, 2, "the victor gains exactly the remainder, not the whole budget");
++    }
++
+     /// `FlipWonder` (Ravages of Time, the last of the seven kinds): a still-
+     /// open multi-wonder `Pending::Choice(FlipWonder)` used to fall through
+     /// to the generic catch-all, even though the real choice's own
+@@ -12222,6 +12421,70 @@ mod tests {
+         );
+     }
+ 
++    /// [`parse_war_tech_steal_line`]: the doubled-actor BGO shape from real
++    /// game `7522455` line 201, and the confirming `"wins War over
++    /// Technology ... takes spoils of war"` line right before it (`7522455`
++    /// line 198) -- which ends at "war" with no continuation -- must NOT be
++    /// mistaken for a steal.
++    #[test]
++    fn parse_war_tech_steal_line_reads_the_stolen_card_and_ignores_the_winwar_confirmation() {
++        let card_index = build_card_index();
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known card");
++        assert_eq!(
++            parse_war_tech_steal_line(&card_index, "Orange takes spoils of war Orange steals Navigation from Purple"),
++            Some((Color::Orange, navigation))
++        );
++        assert_eq!(
++            parse_war_tech_steal_line(
++                &card_index,
++                "Orange wins War over Technology Attacker's strength: 27; Defender's strength: 14; Orange takes spoils of war"
++            ),
++            None
++        );
++    }
++
++    /// [`parse_war_tech_science_line`]: real game `7522455` line 202 --
++    /// the remainder-as-science half of the same split whose steal half
++    /// [`parse_war_tech_steal_line_reads_the_stolen_card_and_ignores_the_winwar_confirmation`]
++    /// covers. Only the shape is checked, not the amount (see [`WarSpoil::
++    /// Science`]'s own doc), so a double-digit amount must parse identically
++    /// to a single-digit one.
++    #[test]
++    fn parse_war_tech_science_line_reads_the_actor_regardless_of_amount_width() {
++        assert_eq!(
++            parse_war_tech_science_line("Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"),
++            Some(Color::Orange)
++        );
++        assert_eq!(
++            parse_war_tech_science_line("Orange takes spoils of war Orange gets 11 science; Purple loses 11 science"),
++            Some(Color::Orange)
++        );
++        assert_eq!(parse_war_tech_science_line("Orange takes spoils of war Orange steals Navigation from Purple"), None);
++    }
++
++    /// [`prescan_war_tech_spoils`]: the exact two-line split real game
++    /// `7522455` logs (steal, then the remainder as science) must land in
++    /// that same order in the per-actor FIFO -- `resolve_intervening`'s
++    /// `ChoiceKind::WarTech` arm pops front-first, so a reversed order would
++    /// silently offer the science pick before the steal one.
++    #[test]
++    fn prescan_war_tech_spoils_orders_a_steal_then_science_split_in_journal_order() {
++        let card_index = build_card_index();
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known card");
++        let journal = [
++            line(
++                198,
++                "II",
++                "Orange wins War over Technology Attacker's strength: 27; Defender's strength: 14; Orange takes spoils of war",
++            ),
++            line(201, "II", "Orange takes spoils of war Orange steals Navigation from Purple"),
++            line(202, "II", "Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"),
++        ];
++        let mut out = prescan_war_tech_spoils(&journal, &card_index);
++        let q = out.remove(&Color::Orange.seat()).expect("Orange has two spoils picks");
++        assert_eq!(q, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
++    }
++
+     /// [`parse_ravages_of_time_line`]: the actor comes from `Line::color`
+     /// (column 2), not the text itself -- and a leading "The " in the
+     /// flavour text (present for some wonders, absent for others, e.g. "St.

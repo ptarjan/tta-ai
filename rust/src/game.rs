@@ -413,6 +413,8 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
         pending: PendingStack::new(),
         queue: Queue::new(),
         last_end_of_turn_culture: [None; MAX_PLAYERS],
+        last_end_of_turn_science: [None; MAX_PLAYERS],
+        last_end_of_turn_resources: [None; MAX_PLAYERS],
     };
 
     // The thirteen row slots, dealt from the shuffled Age A civil deck. That
@@ -1005,6 +1007,13 @@ pub fn resume_end_turn(state: &mut GameState, idx: u8) {
     // before anything gets a chance to read it as "idx's total right after
     // idx's own turn ended".
     state.last_end_of_turn_culture[idx as usize] = Some(state.players[idx as usize].culture);
+    // Same snapshot-before-`advance_turn` timing, science and resources twins
+    // -- see `GameState::last_end_of_turn_science`/`last_end_of_turn_
+    // resources`'s own docs. Consumed by `replay_common.rs`'s
+    // `SCIENCE_ORACLE`/`RESOURCE_ORACLE`-gated oracles, mirroring the
+    // always-on culture oracle exactly.
+    state.last_end_of_turn_science[idx as usize] = Some(state.players[idx as usize].science);
+    state.last_end_of_turn_resources[idx as usize] = Some(state.players[idx as usize].resources);
     advance_turn(state, &mut rng);
 }
 

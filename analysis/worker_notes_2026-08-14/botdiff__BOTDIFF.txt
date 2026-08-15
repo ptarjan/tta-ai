@@ -1,0 +1,213 @@
+BOTDIFF -- does today's (2026-08-14) engine-correctness work move the bot's
+ACTUAL PLAY at all, with weights held fixed? Worker: botdiff.
+
+SCOPE / METHOD
+--------------
+"Before" = /private/tmp/botbase_old/{humanopenings,agreement,advisor,arena}
+  (release binaries, built 2026-08-14 16:35-16:38, pre today's rules fixes).
+"After"  = /private/tmp/botdiff/rust (cp -Rc of /private/tmp/base0815, which
+  carries today's rules fixes) built with:
+    export PATH=$HOME/.cargo/bin:$PATH
+    cd /private/tmp/botdiff/rust
+    cargo build --release --bin humanopenings --bin agreement --bin advisor --bin arena
+  (completed, exit 0, ~2 min this run).
+Both sides used ONLY the frozen champion weights copied out before any run:
+    /private/tmp/botdiff_champs/rust_champion_{2,3,4}p.json
+  (copied from /Users/pt/tta-ai/experiments/rust_champion_*p.json before
+  touching anything else, so a live climb promotion could not rewrite them
+  mid-experiment). No weight file was ever touched otherwise; this whole
+  report isolates the ENGINE change with identical weights on both sides.
+Corpus: /Users/pt/tta-ai/sources/bgo/index.tsv (1011 games, 692 2p) +
+  /private/tmp/bgo-journals/journals. The holdout at /private/tmp/bgoholdout/
+  was never read or touched.
+
+
+TASK 1a -- HUMANOPENINGS (full 2p corpus, all 692 games / 1384 player-games)
+-----------------------------------------------------------------------------
+humanopenings does NOT consult the bot/weights at all -- it is a pure
+replay-and-extract over `replay_common::replay_game`, reporting each
+player's own real moves (round <= 3) the way a human would describe them.
+So this run isolates the ENGINE/rules-fix effect on replay reconstruction
+itself, nothing about bot choices.
+
+Commands (identical args both sides):
+    <bin>/humanopenings /Users/pt/tta-ai/sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals > openings_{old,new}.tsv
+
+Old: 1384 lines. New: 1384 lines. `diff` of the two files: ONE line differs,
+out of 1384:
+
+  old: 7521806  seat1  Engineering Genius (I)  cost=2  Mine  Bronze  true true  ca_unused=3  win
+  new: 7521806  seat1  Engineering Genius (I)  cost=3  Mine  Bronze  true true  ca_unused=2  win
+
+One card's take-COST for one seat in one game moved from 2 to 3 civil
+actions (and ca_unused correspondingly drops by 1, since one more CA got
+spent) -- a real pricing/legality correction firing exactly once in the
+whole human corpus. Did not track down the exact single patch responsible
+(budget); it is consistent with the take-cost-band fixes bundled in
+today's takeupgrade/buildbucket-family work. Every other of the 1383
+opening rows -- first take, first build, leader/pop flags, all outcomes --
+is byte-identical.
+
+VERDICT (1a): today's fixes touch opening-phase (round<=3) replay
+reconstruction in almost no observed human game. The "OPENINGS" statistical
+picture in analysis/worker_notes_2026-08-13/openings__OPENINGS.txt is not
+materially disturbed by today's work.
+
+
+TASK 1b -- AGREEMENT (30-game 2p sample, weighted-bot ranking, DOES use the
+frozen champion)
+-----------------------------------------------------------------------------
+agreement.rs replays each game and, at every human decision point, asks
+WeightedBot (frozen champion, same file both sides) to rank_moves the
+IDENTICAL legal-move list the human faced -- so this isolates whether
+TODAY'S engine fixes move the bot's own move ranking, holding weights fixed.
+
+Sample: first 30 2p game_ids in index.tsv order (7523818, 7523809, 7523355,
+7523354, 7523353, 7523350, 7523335, 7523330, 7522612, 7522645, 7522648,
+7522625, 7522647, 7522665, 7522650, 7522663, 7522639, 7522618, 7522633,
+7522649, 7522630, 7522623, 7522621, 7522634, 7522629, 7522669, 7522661,
+7522638, 7522614, 7520718) -- one deal each, table composition N/A (this is
+solitaire replay-and-rank against a fixed human trajectory, not a
+head-to-head; no win-rate claim is made here).
+
+Command (identical both sides):
+    <bin>/agreement /Users/pt/tta-ai/sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals /private/tmp/botdiff_champs \
+        <30 ids> > agree_{old,new}.tsv 2> agree_{old,new}.err
+
+RESULTS:
+  old: 22/30 games reached COMPLETE, 8 STOPPED early on an illegal-move
+       replay wall. 7666 decision points total. 1847/7666 = 24.09% top-1
+       agreement with the human.
+  new: 24/30 games COMPLETE, 6 STOPPED. 7729 decision points total (+63).
+       1876/7729 = 24.27% top-1 agreement.
+
+Two games flipped from STOPPED to COMPLETE outright:
+  7523818: 235 -> 290 decision points (STOPPED -> COMPLETE), 57/235 -> 80/290
+  7523809: 278 -> 286 decision points (STOPPED -> COMPLETE), 78/278 -> 79/286
+Today's rules fixes let the replayer walk further into (or all the way
+through) these two games' real move sequences than it could yesterday --
+this is a real, positive replay-correctness gain, visible even in a small
+sample; it means the bot is now asked to judge MORE real human positions
+than before, not just the same ones differently.
+
+Three already-complete games' totals also shifted (decision COUNT
+unchanged, agreed count changed):
+  7522612: 53/266 -> 55/266   7522645: 50/261 -> 51/261   7522623: 65/286 -> 67/286
+
+Per-decision diff on those three (diffed row-for-row on game 7522612, the
+clearest case): from round 3 onward, EVERY `political_action` decision
+gained exactly +1 to its `legal_count` column (e.g. 2->3, 3->4, 5->6, 2->4->5,
+3->4->5) with the human's own rank in the list usually UNCHANGED (the new
+option just slots in below the human's move) -- i.e. today's fixes added
+one previously-missing legal political-action option, consistently, from
+round 3 on, in this game. That is a real legality change, not a scoring
+change. Separately, starting mid-game (round 13, game 7522612) the
+`bot_top_move`/scores diverge more substantially at MATCHING linenos
+(different top-ranked move, different score) -- once one decision's legal
+list differs, the whole downstream ranking trajectory can drift even where
+the human's real recorded move (which the replay always forces regardless
+of the bot's opinion) stays the anchor.
+
+VERDICT (1b): the bot's own move RANKINGS did change under today's fixes --
+not cosmetically. Aggregate top-1 human-agreement moved only marginally
+(+0.19pp on this sample), which per this project's own established finding
+(agreement is anti-correlated with strength, never a target) says nothing
+about whether the bot got BETTER -- only that its opinions measurably moved,
+and that more of the human corpus is now reachable at all for this kind of
+diagnostic (2 fewer STOPPED-early replays out of 30, extrapolate cautiously
+to the full 692).
+
+
+TASK 2 -- PAUL'S 2026-08-12 APP-HARNESS GAME (turn-4 revolution-to-Theocracy,
+"ranked #2 at -24")
+-----------------------------------------------------------------------------
+NO raw harness JSONL replay exists for this game. `docs/APP_HARNESS.md`'s
+"one JSONL file per game" record format (`games/*.jsonl`, produced by
+`harness.play`/`rust/src/harness/{play,record}.rs`) was never written for
+this game -- `games/` is gitignored and no such file exists anywhere under
+/Users/pt/tta-ai or /private/tmp. This game was played through the plain
+`advisor` console (--load/--save), not the JSONL-logging harness pipeline,
+confirmed by /Users/pt/tta-ai/analysis/worker_notes_2026-08-13/ipadgame__msg.txt
+and ipadgame__msg2.txt ("Caught in the first live game against the app AI").
+
+The writeup with the exact "-24" checkpoint IS found, at:
+  /Users/pt/tta-ai/analysis/worker_notes_2026-08-13/replay4__FINDINGS.txt
+Exact quoted passage (its own section "THE TURN-4 'REVOLUTION TO THEOCRACY'
+BLUNDER"):
+  "It does NOT happen under (b). It also does NOT happen under (a). On the
+  corrected board it is the #2 candidate at move 2 in both runs, never the
+  pick:
+      (a) REVOLUTION to 'Theocracy' [1 science, all civil actions]   -24.1
+      (b) REVOLUTION to 'Theocracy' [1 science, all civil actions]   -22.9"
+(a)/(b) there are two WEIGHT vectors -- frozen champion vs. a hand
+sign-repaired copy -- NOT an old-engine/new-engine split, and the doc's own
+conclusion is that fixing the BOARD (not the weights) is what suppressed
+the blunder on the corrected reconstruction.
+
+I did NOT re-run this exact test today, and I am saying so plainly rather
+than reconstructing one. Reasons, checked in order:
+1. The scratch clone that produced the -24.1/-22.9 numbers,
+   /private/tmp/replay4 (and its /states/ subdir holding the exact
+   hand-corrected turn-3/turn-4 board JSON), is already deleted -- ordinary
+   worker cleanup, gone before this task started. A byte-identical re-run
+   is not possible.
+2. The surviving raw snapshots from the actual live game,
+   /private/tmp/ipadgame/state_t1.json..state_t4.json, are all POST-decision
+   saves (state_t3.json is end-of-Paul's-turn-3, cur=1 i.e. about to be the
+   RIVAL's turn; state_t4.json is end-of-Paul's-turn-4). Neither is the
+   pre-decision snapshot the turn-4 ranking was computed from, and bridging
+   state_t3.json to the turn-4 decision point requires knowing exactly what
+   the rival played on their intervening turn, which is not recorded
+   anywhere in the surviving artifacts in reproducible per-action detail --
+   filling that in myself would be inventing a transcript, which this task
+   explicitly forbids.
+3. A confirming check: a freshly-seeded (--seed 0) 2p game's opening row
+   does NOT match Paul's real documented T1 row at all (real row starts
+   Engineering Genius (A)/Rich Land (A)/Hammurabi/...; seed=0 gives Urban
+   Growth (A)/Urban Growth (A)/Hanging Gardens/...) -- confirming the real
+   game's deal is NOT reproducible from any engine seed, only from the
+   hand-typed update-line protocol, which for the rival's moves is the
+   exact missing data from point 2.
+4. A second, independently-produced writeup of the SAME turn-4 decision
+   exists at /private/tmp/ipadreplay/REPLAY.md (section "B1", "Theocracy |
+   Uncertain Borders" hand, using a DIFFERENT board-reconstruction pass and
+   a different scratch binary than replay4's), and it reaches the OPPOSITE
+   conclusion on that pass: "all three [search] modes throw the turn away
+   on a revolution" (i.e. Theocracy WAS the top pick there, not #2). Both
+   of these are from 2026-08-13, i.e. both predate today's (08-14) engine
+   fixes -- neither is usable as either side of today's before/after split,
+   and the fact that two careful same-day passes already disagreed with
+   each other on board-reconstruction details is itself a reason not to
+   attempt a third, hastier reconstruction under this task's budget.
+
+INDIRECT evidence on the same question, from Task 1b above (which IS a
+clean same-weights old-engine-vs-new-engine test, just not on this specific
+game): today's fixes DO move the bot's own move rankings on real human
+positions in general (legal-move-count changes, score changes, ranking
+changes, 2/30 games newly reaching COMPLETE) -- so the general claim "today's
+engine fixes can change what the bot recommends, with identical weights" is
+independently confirmed elsewhere in this report, even though this
+particular historical checkpoint (the "-24" Theocracy line) could not be
+safely re-tested with what survives on disk.
+
+
+BOTTOM LINE
+-----------
+- Opening-phase (round<=3) replay reconstruction across the full 692-game
+  2p corpus: essentially unchanged (1 line out of 1384 differs -- one
+  card's take-cost band, +1 CA, in one game).
+- Mid/late-game per-decision bot rankings (agreement, 30-game/7666-7729-
+  decision sample, frozen champion both sides): DID change -- more games
+  now replay to completion, a legality gap (+1 legal political-action
+  option from round 3 on) was closed, and downstream scores/top-picks shift
+  once that happens. Aggregate human-agreement barely moved (+0.19pp) --
+  read that as "the bot's opinions moved," NOT as "the bot got better";
+  agreement is a diagnostic here, never a target, per this project's
+  standing finding that agreement is anti-correlated with strength.
+- Paul's own example game: the writeup with the exact "-24" checkpoint
+  exists and is quoted above; no raw replay/JSONL of that game exists; the
+  specific board that produced "-24" is gone and was not safely
+  reconstructable within this task's scope, so that one specific number was
+  not re-verified today -- reported as a gap, not guessed at.

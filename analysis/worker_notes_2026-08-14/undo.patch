@@ -1,0 +1,101 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index b9b120e..25387f0 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -5631,8 +5631,34 @@ fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, Card
+                 }
+             }
+             ActionClass::BuildBuilding | ActionClass::BuildUnit | ActionClass::BuildWonderStage | ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::DevelopTechnology | ActionClass::ElectLeader | ActionClass::ChangeGovernment | ActionClass::PlayTactic | ActionClass::DeclareWar | ActionClass::WinWar | ActionClass::PlayAggression | ActionClass::ProposePact | ActionClass::AcceptPact | ActionClass::Colonize | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PlayActionCard | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => {
++                // This actor committed ONE physical card by this OTHER
++                // route (built/played/developed/...), so at most ONE open
++                // take can be the card just committed -- `stack.retain`
++                // used to drop EVERY still-open take of this actor's for
++                // this card name, which is right for the overwhelmingly
++                // common single-copy case (nothing else there to wrongly
++                // keep) but wrong the moment a multi-copy card (`count`
++                // other than `[1,1,1]`) has TWO takes open for the same
++                // actor at once, e.g. one held over from an earlier turn
++                // plus one just taken this turn. Game `7522613` line
++                // 177/216/217/219: Green takes Reserves (I) for 2 CA
++                // (round 6), takes a SECOND Reserves (I) for 1 CA (round
++                // 7), then PLAYS Reserves (round 7) and puts one back for
++                // a 1 CA refund. `retain` wiped BOTH open takes on the
++                // `plays` line, so the later putback found nothing open at
++                // all -- `UnrecoverableHiddenInfo: unpaired BGO
++                // client-side undo`, not merely a wrong pairing. The
++                // putback's own refund (1 CA) is direct evidence only the
++                // round-7 take (also 1 CA) survived to be put back, so the
++                // round-6 take must be the one this commit consumed --
++                // i.e. commits drain the OLDEST open take first (FIFO),
++                // mirroring the order the physical cards were actually
++                // picked up in, and leaving any newer take(s) open for a
++                // later putback to still find and pair against.
+                 if let Some(stack) = open.get_mut(&c) {
+-                    stack.retain(|&(_, a, _)| a != actor);
++                    if let Some(pos) = stack.iter().position(|&(_, a, _)| a == actor) {
++                        stack.remove(pos);
++                    }
+                 }
+             }
+         }
+@@ -9130,6 +9156,60 @@ mod tests {
+         assert_eq!(skip, [0, 1].into_iter().collect(), "the only open take pairs with the putback even with one candidate");
+     }
+ 
++    /// The `UnrecoverableHiddenInfo: unpaired BGO client-side undo` bug this
++    /// pass fixed (game `7522613` line 177/216/217/219): Green takes
++    /// Reserves (I) (`count [2,2,2]`) for 2 CA in round 6, takes a SECOND
++    /// Reserves (I) for 1 CA in round 7, PLAYS a Reserves (round 7,
++    /// resolving its one-time effect), then puts one back for a 1 CA
++    /// refund. The old `stack.retain(|a| a != actor)` on the `plays` line
++    /// dropped BOTH still-open takes (right for the single-copy case,
++    /// where there is only ever one to drop; wrong here, where a second,
++    /// unrelated take from an earlier turn was sitting in the same
++    /// per-card stack) -- so the later putback found an EMPTY stack and
++    /// reported unpaired outright, not merely a wrong pairing. The
++    /// putback's own 1 CA refund is direct evidence the round-7 take (also
++    /// 1 CA) is the one that survived to be put back, so the commit must
++    /// have consumed the OLDER round-6 take -- i.e. a commit should pop
++    /// only the OLDEST open take (FIFO), not wipe every open take.
++    #[test]
++    fn prescan_putback_skips_lets_a_commit_consume_only_the_oldest_open_take_not_every_open_take() {
++        let card_index = build_card_index();
++        let journal = [
++            line(177, "I", "Green takes Reserves in hand Green uses 2 civil action"),
++            line(216, "I", "Green takes Reserves in hand Green uses 1 civil action"),
++            line(217, "I", "Green plays Reserves Green produces 2 resources"),
++            line(219, "I", "Green puts Reserves back in the row Green gets 1 civil action"),
++        ];
++        let skip = prescan_putback_skips(&journal, &card_index);
++        assert!(
++            skip.contains(&1) && skip.contains(&3),
++            "the round-7 take (index 1) and the putback (index 3) are the pair the refund names -- got {skip:?}"
++        );
++        assert!(
++            !skip.contains(&0),
++            "the round-6 take (index 0) was consumed by the `plays` line, not put back, and must stay a real applied move -- got {skip:?}"
++        );
++    }
++
++    /// Companion to the above with only ONE open take at the time of the
++    /// commit: popping "the oldest" must degrade to the original
++    /// behaviour (removing that single entry), confirming the fix does
++    /// not regress the overwhelmingly common single-copy case.
++    #[test]
++    fn prescan_putback_skips_still_drops_a_lone_take_on_commit() {
++        let card_index = build_card_index();
++        let journal = [
++            line(1, "A", "Orange takes Frugality in hand Orange uses 1 civil action"),
++            line(2, "A", "Orange plays Frugality Orange increases population; Orange spends 2 food; Orange produces 1 food"),
++            line(3, "A", "Orange puts Frugality back in the row Orange gets 1 civil action"),
++        ];
++        let skip = prescan_putback_skips(&journal, &card_index);
++        assert!(
++            skip.is_empty(),
++            "the take was consumed by the `plays` line, so the later, unrelated putback has nothing open to pair with -- got {skip:?}"
++        );
++    }
++
+     /// The `IllegalMove: Pop` bug this pass fixed (game `7522648` round 7,
+     /// `docs/REPLAY.md`'s handoff): a player's own `End turn` line can leave
+     /// a `DiscardMilitary` choice open (`economy::end_of_turn` interrupted
