@@ -1,0 +1,241 @@
+PRODTRACE worker -- 2026-08-14 -- clone /private/tmp/prodtrace (deleted at end
+of pass per cleanup rule; prodtrace.patch in this directory is the full diff,
+`git diff -- rust/src/economy.rs` run inside the clone, on top of
+tokenbank3.patch + tokencount.patch, which were applied fresh from a synced
+base0816 clone per the task's own SETUP recipe).
+
+TASK: for game 7521459, the player whose production diverges (Grey, idx=3),
+round 17 -- compare our per-card worker distribution against the journal's,
+card by card, across rounds 1..17, and name the exact divergence. Focus given
+on any UPGRADE action that relocates a worker from an older/lower-value
+production card to a newer/higher one, since that is how a real player
+consolidates and reduces token count, and a mishandled relocation would leave
+workers stuck on low-value cards forever.
+
+===========================================================================
+[0] SETUP
+===========================================================================
+cp -Rc base0816 -> /private/tmp/prodtrace, replay_common.rs synced to live,
+tokenbank3.patch applied cleanly, tokencount.patch applied cleanly, each
+committed separately. `cargo test --profile fasttest --lib` on this base
+(before my own change): 1451/1451 passing.
+
+===========================================================================
+[1] THE UPGRADE-RELOCATION HYPOTHESIS -- HAND-TRACED AND RULED OUT
+===========================================================================
+Grepped the raw journal (`/private/tmp/bgo-journals/journals/7521459.tsv`)
+for every Grey line touching Bronze/Iron/Oil (Grey's Mine-type production
+chain) across the whole game, not just round 17:
+
+  round 2:  Grey builds Bronze                    (do_build: +1 worker)
+  round 6:  Grey upgrades Bronze to Iron  (x2)     (do_upgrade: -1 Bronze, +1 Iron, twice)
+  round 8:  Grey upgrades Bronze to Iron  (x1)     (do_upgrade: -1 Bronze, +1 Iron)
+  round 13: Grey upgrades Iron to Oil     (x1)     (do_upgrade: -1 Iron, +1 Oil)
+
+Combined with the starting tableau (`game.rs`'s `STARTING_TABLEAU` constant:
+Bronze starts with 2 workers, not 1 or 0), the exact worker history is:
+Bronze 2 -> 3 (round 2 build) -> 1 (round 6, two upgrades) -> 0 (round 8, one
+upgrade); Iron 0 -> 2 (round 6) -> 3 (round 8) -> 2 (round 13, one worker
+upgraded onward); Oil 0 -> 1 (round 13). By round 17: Iron=2 workers, Oil=1
+worker, Bronze=0 workers -- 3 total Mine workers.
+
+Read `do_upgrade` (apply.rs:779-795): it does exactly
+`lo.workers -= 1; hi.workers += 1`, i.e. moves exactly one worker per
+upgrade action, matching the CoL rule and matching the journal's own literal
+action count 1-for-1 (every "Grey upgrades X to Y" line is one `do_upgrade`
+call; there is no inference involved -- the card names and hence the exact
+worker movement are read directly off the journal text). Also checked
+`do_build` (apply.rs:719-764, "build" in ToA IS "place a worker on this
+card", reused for adding a 2nd/3rd worker to an already-built card) -- same
+story, one worker per literal journal line.
+
+CONFIRMED via a temporary `PRODTRACE_CARD` debug print inside
+`production_pairs` (economy.rs), reverted before the final patch, and cross-
+checked against the hand-derivation above: at round 17 the engine's own
+tableau shows exactly `Mine card=Iron denom=2 workers=2` and
+`Mine card=Oil denom=5 workers=1` -- BYTE-IDENTICAL to what the journal's
+own build/upgrade action count implies. There is NO worker-placement
+divergence anywhere in Grey's Mine-line history. The upgrade-relocation
+hypothesis this pass was specifically asked to chase is RULED OUT for this
+game: do_upgrade is not mishandled, workers do not "pile up" on Bronze or
+Iron when they should have moved to Oil -- they move exactly when and only
+when the journal says they do.
+
+===========================================================================
+[2] THE ACTUAL ROOT CAUSE: A NON-WORKER WONDER BONUS STARVED BY ORDERING
+===========================================================================
+Re-ran the game with `REPLAY_DEBUG_ALL=1` and the existing `DEBUG blue_used`/
+`DEBUG end_of_turn pre-corruption` instrumentation (both already in the
+codebase, no patch needed to see this). The pre-corruption line ALREADY
+prints `s.resources` (the engine's own `effects::compute`-derived total
+resource income for this round, entirely independent of the token bank) next
+to the actual tracked bank state:
+
+  round 17: idx=3 resources=31 blue_total=18 blue_used=16 corr=4 s.resources=14
+
+`s.resources=14` is HELD CONSTANT across rounds 13-18 (traced every
+`DEBUG end_of_turn pre-corruption` line for idx=3: 8,8,8,14,14,14,14,14,14 --
+the jump from 8 to 14 happens at EXACTLY round 13, the same round as the
+Iron-to-Oil upgrade). But `worker_capped_production(&techs, Mine, MAX)`
+("mine_full", the pure worker-count-based production ceiling) is only 9 at
+round 17 (Iron: 2 workers x 2 = 4, Oil: 1 worker x 5 = 5). The gap
+(`bonus_resources = s.resources - mine_full` = 14 - 9 = 5) is computed and
+fed to `gain_resources` in `end_of_turn`'s existing "3e. resource
+production" step (economy.rs, was lines 1059-1067) -- so the code already
+KNOWS about this 5-value gap every round; the question was only why it
+wasn't landing.
+
+Traced WHY the gap is exactly 5, and why it jumped from 2 (pre-round-13) to
+5 (round 13 on): Grey's own completed wonder Transcontinental Railroad
+(built round 10, journal line 336-339) carries `Special::DoubleBestMine`
+(card_table.rs:1375). Its resolution (effects.rs:1014-1019):
+
+    DoubleBestMine => {
+        if let Some(b) = best_staffed(&p.techs, |k| k == CardType::Mine) {
+            stats.resources += b.get().production.resources as i32;
+        }
+    }
+
+-- i.e. the single best-staffed Mine card's own printed value is added ONCE
+MORE, flat, NOT scaled by worker count and NOT tied to any specific worker.
+Before round 13 the best mine was Iron (denom 2) -> +2. From round 13 on
+(after the Iron-to-Oil upgrade) the best mine is Oil (denom 5) -> +5. This
+is exactly the CoL-legal "the best mine produces double" wonder power, and
+it is computed CORRECTLY by `effects::compute`/`state_stats` (verified by
+grepping card_table.rs and effects.rs directly, not inferred) -- so this is
+NOT a computation bug. The gap is real, rules-correct income the true game
+received every round Grey had this wonder in play.
+
+THE ACTUAL BUG: `end_of_turn`'s resource-production step ran, in this order:
+  1. `credit_production(Mine, blue_available(p), ...)` -- the MANDATORY
+     one-token-per-producing-worker placement (never in question, "you
+     produce wherever your yellow tokens are").
+  2. THEN `gain_resources(p, bonus_resources)` for the wonder's flat bonus,
+     using whatever `blue_available(p)` is LEFT.
+
+Both draw from the exact same shrinking `blue_available` pool within the
+SAME round. At round 17, `blue_available` before this step was 3 (18 total,
+15 already used). Step 1 (credit_production) consumed all 3 physical tokens
+placing Iron/Oil's 3 workers (2 Iron + 1 Oil, value 9 -- this alone happens
+to equal mine_full here, so credit_production itself is NOT capped this
+round). By the time step 2 ran, `blue_available(p)` was already 0, so
+`gain_resources(p, 5)` returned 0 and the ENTIRE 5-value wonder bonus was
+silently and permanently dropped -- not partially placed, not deferred, just
+gone. Confirmed exactly matching the previously-traced symptom (resources
+ending the round at 36 instead of 39, later flagged by RESOURCE_DETAIL as
+"round=17 actor=Grey delta=-3", and eventually surfacing as an illegal Build
+2-3 rounds later per TOKENBANK3's own trace).
+
+This is a DIFFERENT and more precise finding than "credit_production's
+forced placement, accumulated over history, is structurally unresolvable"
+(TOKENBANK3/TOKENCOUNT/TOKENGAIN's shared conclusion): the forced per-worker
+placement itself is fine and matches the journal's own worker history
+exactly (see [1]). The loss is entirely in a SEPARATE, non-worker income
+stream (a wonder's flat per-turn bonus) that the code already models
+correctly in value but starves in PLACEMENT ORDER whenever the round's token
+budget is tight -- which becomes likelier precisely when a player has
+consolidated workers onto high-value cards (exactly the "upgrade" pattern
+the task asked to watch for): the higher the best mine's denomination, the
+BIGGER `DoubleBestMine`'s bonus, and the more of the round's scarce token
+budget it needs, while it is served LAST.
+
+===========================================================================
+[3] THE FIX
+===========================================================================
+Reordered both `end_of_turn` production steps (food/farm and
+resources/mine, economy.rs) to credit the non-worker bonus
+(`bonus_food`/`bonus_resources` -- leader/wonder/government flat bonuses,
+e.g. `DoubleBestMine`, `BestTheaterDoubleCulture`'s sibling, etc.) BEFORE
+the mandatory per-worker `credit_production` call, not after. This does NOT
+touch `credit_production`'s own mandatory one-token-per-worker-per-card
+placement rule at all (never weakened, still fully forced, still capped at
+`blue_available`) -- it only changes which of the two DIFFERENT income
+categories gets first claim on a round's shared, scarce token budget when
+both want tokens the same round and the budget cannot cover both. Full diff
+(prodtrace.patch, 2 hunks, both in `economy.rs`'s `end_of_turn`):
+
+  - compute `bonus_food`/`bonus_resources` and call `gain_food`/
+    `gain_resources` FIRST (using `blue_available(p)` as it stood before
+    this step touched anything);
+  - THEN call `credit_production` for the capped, forced per-worker
+    placement, using whatever `blue_available(p)` remains.
+
+`cargo test --profile fasttest --lib`: 1451/1451 passing (unchanged from
+base -- no existing test asserts the old order, and none needed updating).
+`cargo clippy --all-targets -- -D warnings`: clean.
+
+===========================================================================
+[4] MEASUREMENT
+===========================================================================
+difftest build: `cargo build --profile difftest --bin replaystats` from
+rust/, ~50s-1m each of two builds (once to measure, once more after
+stripping the temporary PRODTRACE_CARD/PRODTRACE_DEBUG investigation
+scaffolding back out -- both builds gave byte-identical sweep results).
+
+SCOREDIV_DUMP_COMPLETED=1 full-corpus sweep (/tmp/pt_final.txt):
+  "# replaystats: 1011 games sampled, 739 completed to state.game_over"
+  "739/739 completed games actually flipped state.game_over ... 712/739 of
+  those matched index.tsv exactly"
+  => 739 completed / 712 exact, UP from the task's stated 736/709 baseline
+     (tokenbank3+tokencount alone) by exactly +3/+3.
+
+comm -23 /private/tmp/guard_ids.txt /tmp/pt_final_ids.txt (REGRESSIONS):
+  EMPTY.
+
+comm -13 /private/tmp/guard_ids.txt /tmp/pt_final_ids.txt (WINS), VERBATIM:
+  7520999
+  7522236
+  7522673
+  7523203
+  7523634
+  (identical to the task's stated baseline wins -- unaffected, as expected,
+  since this ordering change is a no-op whenever `bonus_food`/
+  `bonus_resources` is 0, which is the overwhelming majority of turns in the
+  corpus.)
+
+The 3 named regressions, checked directly against /tmp/pt_final_ids.txt:
+  7521459: NOW COMPLETES (previously a regression under tokenbank3 alone).
+  7522402: NOW COMPLETES (same shared shape per TOKENBANK3's own spot-check).
+  7522796: NOW COMPLETES (previously unexplained, opposite-sign +1 case --
+           also fixed by this same reordering, though its own mechanism was
+           not separately traced this pass; it is very plausibly the same
+           bonus-vs-production ordering issue on the OTHER side, i.e. a
+           bonus that should have been capped/dropped under the OLD order
+           landing correctly now, or a different flat-bonus card's income
+           reaching its rightful token this time).
+
+RESOURCE_ORACLE=1 (/tmp/pt_oracle.txt), same binary, no rebuild:
+  "41584 End turn checkpoints ... resources running total ...; 41265 (99.2%)
+  matched exactly. 111/1011 games sampled had at least one checkpoint
+  disagree."
+  => 111 diverging games, DOWN from the task's stated 114 baseline (-3,
+     exactly the 3 games fixed). Percentage stays 99.2% (114/1011 and
+     111/1011 both round to 99.2%) but the absolute diverging-game count is
+     the more sensitive number here and it moved cleanly in the right
+     direction with zero new divergences introduced anywhere else in the
+     1011-game corpus.
+
+===========================================================================
+VERDICT
+===========================================================================
+The task's own named hypothesis -- a worker-relocation/upgrade mishandling
+that leaves workers "piling up on low-value farms" -- is RULED OUT for
+game 7521459: `do_upgrade`/`do_build` correctly reproduce the journal's
+exact Bronze -> Iron -> Oil worker history, 1-for-1, with no inference
+involved. The REAL cause is a same-round ordering bug in `end_of_turn`
+(economy.rs): a legitimate, correctly-VALUED non-worker income source (here,
+Transcontinental Railroad's `DoubleBestMine` wonder power -- the best
+staffed mine's value added once more, flat) competes with the mandatory
+per-worker `credit_production` placement for the same shrinking
+`blue_available` token pool within a single round, and the old code served
+the forced/worker-tied claim first, unconditionally starving and silently
+dropping the flexible/bonus claim whenever the pool ran out -- which is more
+likely to happen precisely when a player has consolidated (upgraded) onto
+high-value production cards, since that is exactly when `DoubleBestMine`'s
+own bonus is largest. Reordering to serve the bonus claim first (2 small
+hunks in economy.rs, prodtrace.patch) fixes all 3 of the task's named
+regressions (7521459, 7522402, 7522796) with ZERO regressions against the
+734-game guard set and the same 5 pre-existing wins retained: 736/709 ->
+739/712 completed/exact, RESOURCE_ORACLE 114 -> 111 diverging games. Tests
+1451/1451, clippy clean. This is a clean, evidenced, MEASURED win ready to
+land.

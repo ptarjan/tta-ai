@@ -1,0 +1,260 @@
+FINALINPUT worker notes -- 2026-08-14
+=======================================
+Base: /private/tmp/base0816, synced to live commit a64a18e (replay_common.rs
+refresh), sync commit e2de347. scorediv5's diagnostic hooks applied on top,
+commit b41b0aa. My own fix: commit d8afa03. Clone: /private/tmp/finalinput.
+
+RESULT: LANDED. A real state-error root cause found and fixed for the
+PRIMARY target (game 7522866's three-way final-scoring award divergence).
+Exact-match count: 707 -> 716 (+9). Completed-game count: 734 -> 743 (+9).
+Zero completion regressions, zero exact-match regressions (both diffed
+against the frozen guard_ids.txt / a freshly rebuilt baseline of the
+pre-fix exact-match ID set -- see MEASUREMENT below).
+
+
+7522866 -- THE SHARED STATE ERROR
+====================================
+Three "Impact of ..." final-scoring award formulas all disagreed with the
+journal on the SAME seat (seat0/Orange) in the same game:
+  Impact of Population   journal 12, engine 10 (delta -2)
+  Impact of Competition  journal  7, engine  6 (delta -1)
+  Impact of Variety      journal 16, engine 14 (delta -2)
+
+All three formulas (`events.rs::scoring_culture`) read `p.techs` /
+`p.workers_free` directly (culture_per_content_worker_above_10,
+culture_per_level_of_military_units_and_arenas,
+culture_per_distinct_type_of_unit_urban_building_and_special_tech) -- three
+different linear combinations of the SAME underlying "how many workers on
+which unit cards does Orange have" fact. Adding a debug dump
+(`SCOREDIV_POPULATION`, already landed by `scorediv5`) showed Orange's
+reconstructed state: 15 total workers (14 on tech cards + 1 free), 0
+Swordsmen fielded. The journal-consistent value needed is 16 total workers,
+with exactly 1 Swordsmen (a level-1 Infantry unit) -- a SINGLE missing
+worker on a SINGLE unit card explains all three deltas simultaneously:
+  Population:  (16-10)*2=12 vs (15-10)*2=10   -- delta matches -2
+  Competition: +1 level*1 worker*multiplier(1) -- delta matches -1
+  Variety:     +1 newly-distinct unit KIND (Infantry, not otherwise present)
+               * multiplier(2) -- delta matches -2
+
+Hand-tallying Orange's own "builds"/"colonizes ... Sacrificed Units"
+journal lines for Swordsmen (3 built, 1 free-Warrior->Swordsmen upgrade,
+3 sacrificed across three colonizations) gives a net of exactly 1 Swordsmen
+remaining -- confirming the journal's OWN army history, not just the
+arithmetic, wants that worker present.
+
+ROOT CAUSE (structural, in the replayer's own bookkeeping, not engine
+state -- `rust/src/replay_common.rs`): a colonize-sacrifice reconstruction
+queue (`Replayer::colonize_sacrifices`, one `ColonizeSacrifice` per
+"<Color> colonizes a <Territory> Sacrificed Units:; ..." journal line, in
+journal order) desyncs against the ACTUAL sequence of `Pending::Colonize`
+opens during replay.
+
+`apply_one`'s `ActionClass::Colonize` dispatch arm (the confirmation line's
+own "pure validation checkpoint") had a special case, landed by a PRIOR
+session chasing game 7522152: pop this territory's own queue entry right
+here whenever `Pending::Colonize` reads "not open" at this exact dispatch
+moment, because `interact::colonize`'s own `colonize_auto` can walk a
+force ALL the way to completion with no branching step (a small unit pool,
+no bonus cards), entirely inside the earlier `Bid`/`BidPass` line that won
+the auction -- so by the time the confirmation line is reached,
+`drain_colonize` (the only OTHER place that pops this queue) never got a
+chance to see it, and would otherwise leak the entry forever, misattributing
+every LATER colonize in the game to the wrong queue front.
+
+The bug: "`Pending::Colonize` not open right now" is ALSO exactly what "the
+auction for THIS territory has not resolved yet" looks like. Traced on
+7522866's own "Orange colonizes a Developed Territory" line (age II,
+journal line 270): at the moment this confirmation line's own dispatch ran,
+`state.pending.top()` was `Some(Pending::Auction(_))` -- NOT gone because
+`colonize_auto` already finished it, but because the auction itself had not
+yet resolved. (`resolve_intervening`'s own forced-`BidPass` block --
+"BGO's UI auto-passes a decider with no click to log" -- is what actually
+settles this specific auction and calls `interact::colonize`, and it only
+runs ahead of a NON-confirmation line, so it had not run yet either, for
+the same reason `drain_colonize` had not.) The old check popped the
+"Developed Territory" entry anyway (its front-of-queue lineno matched the
+current line). Moments later, once the auction genuinely resolved (during
+`resolve_intervening`'s prep for the NEXT journal line), the real
+`Pending::Colonize` opened and needed the entry that had already been
+stolen. `drain_colonize`, later, found the FOLLOWING territory's entry
+("Inhabited Territory") at the front instead, force-fed its clauses
+(`Unit(Knights)` first) against the wrong, still-open pending, failed the
+legal-move check, and fell back to `approximate_colonize` -- which greedily
+picks the engine's first-offered move rather than the journal's real
+sacrifice list, for BOTH this colonize and the next one. That is exactly
+where Orange's Swordsmen worker went missing.
+
+Confirmed exact mechanism with temporary instrumentation (removed before
+landing): `COLONIZE_FALLBACK_DUMP=1` showed
+`reason=illegal-move actor=0 line=435 clause=Some(Unit(Knights))` fired
+while resolving what should have been the "Developed Territory" pending,
+and a temporary per-call trace showed the queue's own front already equal
+to "Inhabited Territory" (435) before "Developed Territory" (270) had ever
+been popped by anyone.
+
+
+THE FIX
+=========
+Two changes, both purely in replayer bookkeeping (`rust/src/
+replay_common.rs`), neither touches engine state or weakens any check:
+
+1. `apply_one`'s `ActionClass::Colonize` arm (~line 8859): the existing
+   "pop only when not open" check now ALSO requires
+   `card.is_some_and(|c| state.players[actor].colonies.contains(c))` --
+   i.e. this exact territory card is ALREADY a completed colony. That is
+   true if and only if `interact::gain_colony` (the only place that ever
+   pushes onto `p.colonies`) has actually run for it -- true in the
+   original 7522152 shape (fully-forced, already done), false in the new
+   7522866 shape (auction not even resolved yet). This keeps the pre-
+   existing `a_fully_forced_colonize_pops_its_own_queue_entry_...` test
+   passing (it drives a colonize via a direct `interact::colonize` call,
+   bypassing move application entirely, so it needs this confirmation-line
+   path to still work).
+
+2. `Replayer::apply_move` (~line 1067), the SINGLE chokepoint every `Move`
+   in the whole replayer goes through (`try_apply`, `drain_colonize`,
+   `resolve_intervening`'s forced pass, all of it): whenever the move is
+   `Move::Bid`/`Move::BidPass` -- the only moves that can ever settle an
+   auction (`interact::auction_move`'s own match panics on anything else)
+   -- snapshot the TOTAL colony count across all seats before and after.
+   If it grew by one, some colonize completed (fully auto-resolved) inside
+   this exact move, and `colonize_sacrifices`' own front entry is popped
+   right here, at the true moment of completion -- not inferred later,
+   possibly after the one confirmation-line dispatch that could have
+   caught it has already come and gone. This is the general fix: it
+   handles BOTH the original 7522152 shape and the new 7522866 shape
+   uniformly, and needs no territory-age or actor-identity guessing (a
+   colony-count DELTA is age-blind and name-blind by construction; only
+   one `Pending::Colonize` can ever be resolving at a time, so a growth of
+   exactly one can only be the queue's own front entry).
+
+Both checks are kept (not just #2) because the existing regression test for
+7522152 exercises `interact::colonize` directly, bypassing `apply_move`
+entirely -- #1 is what makes that test (and the real, rare case a caller
+uses the same shape) still correct.
+
+
+A GENUINE ITERATION: first fix attempt (#1 alone) caused NEW completion
+regressions
+============================================================================
+Landing #1 alone (gating the confirmation-line pop on
+`colonies.contains(card)`) fixed 7522866's three-way divergence, but a full
+corpus sweep showed 6 NEW completion regressions (7521853, 7522034,
+7522051, 7522219, 7522621, 7522979) alongside 9 new completions elsewhere.
+Traced 7521853: its own FIRST colonize ("Purple colonizes a Developed
+Territory", line 154) hits the SAME "auction not yet resolved" shape at its
+own confirmation line (`pending_top_kind=Auction`, `colonies=[]`,
+`already_completed=false` -- correctly not popped by fix #1) -- but Purple's
+own auction resolves and colonize_auto fully closes it LATER, at a line
+with NO "colonizes a ..." confirmation text of its own to re-check (the
+journal only ever prints that line ONCE, at its OWN chronological position;
+there is no second chance for a line-anchored check to catch a completion
+that happens after that line has already been dispatched). Fix #1 alone
+left the entry stuck forever for this shape -- reproducing the exact
+"never popped, corrupts every later colonize" failure 7522152's original
+fix existed to prevent, just for a different trigger. Fix #2 (the
+`apply_move` hook, keyed to the actual completing MOVE rather than a
+specific journal line) has no such blind spot and cleared all 6
+regressions while keeping all 9 new completions. Full corpus sweep after
+landing BOTH fixes: zero regressions, zero new failures, same 9 net wins.
+
+Kept per this task's ANTI-STALL/HARD RULES: this whole trace-fix-measure-
+fix cycle stayed inside the corpus/replayer's own machinery, no game ID was
+special-cased, no tolerance was weakened -- the second iteration replaced a
+narrower structural check with a more general one, in the same file, same
+mechanism.
+
+
+SECONDARY TARGET -- 7521849 (Impact of Progress) -- NOT fixed, out of scope
+this session's own primary work
+==============================================================================
+Not independently re-chased. `SCOREDIV5_PROGRESS_DEBUG` (already landed by
+`scorediv5`) still shows Purple's own Code of Laws (Law icon, level 1)
+present with no journal-visible removal mechanism -- unrelated to the
+colonize-sacrifice bug fixed above (no colonize appears anywhere near
+Purple's own Code-of-Laws history in that game's journal). Left for a
+future pass exactly as `scorediv5` left it.
+
+
+MEASUREMENT
+=============
+  cd /private/tmp/finalinput/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  SCOREDIV_DUMP_COMPLETED=1 SCOREDIV_DUMP_IDS=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+      > /tmp/fi_final.txt 2>&1
+  grep -E '^# replaystats|actually flipped' /tmp/fi_final.txt
+    -> "1011 games sampled, 743 completed to state.game_over"
+    -> "743/743 ... ; 716/743 of those matched index.tsv exactly"
+       (base: 734 completed, 707 exact)
+
+  Completion-regression guard (frozen /private/tmp/guard_ids.txt, 734 IDs):
+    comm -23 /private/tmp/guard_ids.txt <(grep COMPLETED_ID ... | sort)
+    -> EMPTY (no completion regressions)
+
+  Exact-match regression check (own rebuilt baseline via `git stash` at the
+  scorediv5-hooks commit b41b0aa, same SCOREDIV_DUMP_IDS derivation both
+  sides -- `comm -23 <completed> <diverging>` = exact-match ID set):
+    baseline exact:  707 IDs (/tmp/fi_exact_before.txt)
+    final exact:     716 IDs (/tmp/fi_exact_final.txt)
+    comm -23 fi_exact_before.txt fi_exact_final.txt  -> EMPTY (no regressions)
+    comm -13 fi_exact_before.txt fi_exact_final.txt  -> the 9 games below
+
+  GAMES WHOSE EXACT-MATCH STATUS CHANGED (all 9 in one direction, wrong/
+  incomplete -> exact; none in the other direction):
+    7521757 7521802 7521933 7522006 7522203 7522539 7522614 7523177 7523347
+
+  7522866 itself: still NOT an exact match (two other, already-documented,
+  compounding bugs in this same game -- Green's own BuildBuilding-adjacent
+  culture drift and Purple's discard-phase hand-size divergence -- both
+  independently noted by two PRIOR sessions and this task's own worker
+  prompt as "not pursued further"/"deep-dived without a landed fix"; not
+  re-opened here). Its own three-way FINAL-AWARD divergence (the actual
+  target) is gone: `## Final-scoring award oracle` now reports "0 games had
+  at least one (card, seat)" disagreement for this game, down from 3 pairs
+  (Population/Competition/Variety, all seat0) before the fix.
+
+  cargo test --profile fasttest --lib
+    -> 1446 passed; 0 failed (base 1445 + 1 new test)
+
+  cargo clippy --profile fasttest --all-targets -- -D warnings
+    -> clean, no warnings
+
+
+TEST ADDED
+============
+`rust/src/replay_common.rs`, `#[cfg(test)] mod tests`:
+  a_colonize_confirmation_line_reached_before_its_own_auction_has_resolved_does_not_steal_the_queue_entry
+
+Constructs a `Replayer` with one queued `ColonizeSacrifice`, then dispatches
+`apply_one(..., ActionClass::Colonize, ...)` for its own confirmation line
+WITHOUT ever calling `interact::colonize` first (`Pending::Colonize` has
+never existed, `p.colonies` is empty) -- exactly 7522866's own "Developed
+Territory" shape. Asserts the queue entry is still there afterward (len 1,
+not 0). CONFIRMED RED: temporarily replaced `already_completed` with a
+hardcoded `true` (reverting fix #1's own gate) and reran just this test --
+failed with `left: 0, right: 1`, i.e. the entry got wrongly popped, exactly
+the corruption this test exists to catch. Restored the real fix
+immediately after confirming.
+
+(Fix #2, the `apply_move` hook, is exercised implicitly by every existing
+colonize-driving test that goes through `Move::Bid`/`Move::BidPass` via
+`try_apply`/`resolve_intervening` -- e.g.
+`a_colonization_sacrifices_exactly_the_units_the_journal_names_and_no_others`
+-- and by the full corpus sweep's own 6-game regression/fix cycle above,
+which is the strongest evidence available for a fix whose whole point is
+"work correctly across the full space of same-timestamp auction-resolution
+orderings," not reproducible as a single small fixture without duplicating
+a large slice of real journal timing.)
+
+
+FILES CHANGED
+===============
+  rust/src/replay_common.rs
+    - apply_one's ActionClass::Colonize arm: added `already_completed` gate
+    - Replayer::apply_move: added the Bid/BidPass colony-count-delta hook
+    - new regression test (above)
+
+No other file touched. No card special-cased. No game ID special-cased. No
+tolerance weakened -- both changes are stricter/more-precise gates on an
+existing pop, not new leniency.
