@@ -55,3 +55,6 @@ archive/
 
 # Agent scratch: transcripts and ephemeral worktrees, never part of the project.
 .claude/
+rust/logs/
+rust/pgo/
+*.ckpt

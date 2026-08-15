@@ -1,0 +1,328 @@
+TARGET: remainder of the IllegalMove: Build bucket, human-replay corpus (BGO),
+rust engine at /Users/pt/tta-ai (worked in a warm clone at /private/tmp/build2,
+base commit 791150f on branch base0814 -- this already includes the econcap
+patch and the buildbkt patch (Trade-Routes-as-food + Raid-bracket fixes) from
+the prior two passes).
+
+RESULT: NO FIX LANDED THIS PASS. build2.patch is empty (0 lines) by design --
+git diff 791150f -- rust is empty; no commits were made. This is a measured
+negative with a partially-traced, unproven lead, written up below for the next
+worker. Guard confirms the tree is unchanged: 671 completed / same ID set as
+/private/tmp/guard_ids_671.txt (comm -23 and comm -13 both empty -- see
+MEASUREMENT below).
+
+============================================================
+STEP 1: fresh census of the Build bucket (base 791150f, NOT trusted from the
+handoff's pre-landing counts)
+============================================================
+
+cd /private/tmp/build2/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 REPLAY_DUMP_BUCKET="IllegalMove: Build" \
+    ./target/difftest/replaystats /Users/pt/tta-ai/sources/bgo/index.tsv \
+    /private/tmp/bgo-journals/journals > /tmp/out.txt 2>/tmp/dump.txt
+
+671 completed / 630 exact -- matches guard_ids_671.txt exactly (671 lines).
+36 distinct games in the Build bucket, matching the handoff's post-3.2 count
+(49 -> 46 -> 36). The handoff's OWN sub-split ("~8 workers_free==0 / ~28
+resource-shortfall") was explicitly flagged as untrusted and taken before this
+pass, so it was re-derived structurally rather than trusted:
+
+For every one of the 36 games, ran the SAME replaystats binary with a
+temporary eprintln of `m.kind`'s full Debug (`TMPDEBUG_KIND`, gated behind the
+existing `REPLAY_DUMP_BUCKET` env check, REVERTED before this file was
+written -- confirmed by `git diff --stat` against 791150f being empty) to read
+each mismatch's own `legal_moves` list directly, instead of re-running
+`REPLAY_DEBUG=1 replay` per game (which turned out to be UNRELIABLE for this
+purpose -- see STEP 1a below).
+
+Split by "does `legal_moves` contain ANY `Build { card: ... }` entry at all":
+
+| sub-shape | count | signature |
+|---|---|---|
+| no `Build{}` at all in `legal_moves` | 16 | strong workers_free==0 signal: EVERY building type is currently illegal, not just the attempted card |
+| `legal_moves` contains OTHER `Build{card:X}` entries, just not the attempted one | 20 | cost-short for the SPECIFIC attempted card only (other, cheaper builds remain legal) |
+
+The "no Build{} at all" 16 is the larger, more mechanistically homogeneous
+group (a uniform "no free worker" signature, vs. 20 different specific-card
+cost failures with no obvious single shared cause) and is the shape the task
+brief's own handoff pointed at, so this pass chased it.
+
+The 16: 7523355 7523082 7521544 7521791 7523640 7520999 7522113 7523383
+7523420 7523438 7522673 7522024 7523283 7522608 7521657 7523132
+
+STEP 1a -- an early false start, recorded so the next worker doesn't repeat
+it: running `REPLAY_DEBUG=1 ./target/difftest/replay <id>` PER GAME and
+grepping its OWN `try_apply fail` lines does NOT reliably reproduce the same
+mismatch `replaystats`'s single full-corpus sweep recorded for that game
+(`replaystats` prints `SCOREDIV_COMPLETED_ID`/bucket keys from ONE canonical
+run; a second, separate single-game `replay` invocation is NOT guaranteed to
+diverge at the same line -- `discard_solver`'s own "chosen arbitrarily among
+valid candidates" tie-breaking is exactly the kind of run-to-run nondeterminism
+that can shift a later, cascading divergence point). Confirmed directly: game
+`7521377`'s `replaystats` dump said the mismatch was on line 551 ("Grey builds
+Movies"), but a fresh single-game `replay` run diverged first on line 446 (a
+completely different move, `PlayAction { card: Efficient Upgrade (II) }`).
+Trust the SAME replaystats run's own dump only -- don't re-run `replay`
+per-game and assume the divergence point matches.
+
+============================================================
+STEP 2: hand-traced game 7523082 (Purple, round 10, "Purple builds Knights
+Purple spends 3 resources", line 245) byte-for-byte against the journal
+============================================================
+
+`legal_moves` at the failure: `[EndTurn, Destroy { card: Knights }, Destroy
+{ card: Warriors }, CopyTactic {...} x3]` -- zero `Build`/`Upgrade`/
+`WonderStep` options at all, confirming `workers_free == 0` at the point of
+failure (not a resource-cost issue: `resources=6 >= cost 3` for Knights,
+confirmed independently, and every OTHER build/upgrade is also absent from
+`legal_moves`, which a mere cost shortfall on one card would not cause).
+
+Reconstructed Purple's FULL worker ledger by hand from the journal (every
+`builds`/`upgrades`/`increases population` line for Purple, all 3 players'
+"each civilization ..." AllPlayers events, and the RULES_SPEC §1.1 starting
+tableau: Warriors=1 worker, Agriculture=2, Bronze=2, Philosophy=1, Religion=0,
+6 used + 1 free = 7 total at game start -- confirmed this matches
+`game::START_TECHS`/`game::blank_player` in `src/game.rs` EXACTLY, byte for
+byte; the engine's own setup is correct, not a lead).
+
+The hand ledger tracks every consuming action (BuildBuilding/BuildUnit, -1)
+and every granting action (IncreasePopulation, +1; `Upgrade` and
+`BuildWonderStage` are worker-NEUTRAL and confirmed as such directly against
+`apply.rs::do_upgrade`/`do_wonder_step`, which move/preserve a worker rather
+than consuming or freeing one) through round 9's end, INCLUDING "Development
+of Settlement" (round 3, revealed by Green, "Each civilization gains 1
+population" -- an `AllPlayers` grant, confirmed it fires for Purple too, not
+just the revealer, both by reading `events::resolve_event`'s `order_from`/
+`apply_player_block` loop -- which iterates every non-resigned player in
+`order`, not just the revealer -- and by a temporary `TMPDEBUG` eprintln
+inside `economy::increase_population` (reverted before this file was written,
+confirmed by `git diff --stat` empty) that showed exactly 5
+`increase_population` calls for Purple (idx=1) over the whole game before the
+failure, with `cost=0` on exactly the ONE call matching the Development-of-
+Settlement grant's position in the sequence -- i.e. this mechanism DOES fire
+correctly for Purple; it is NOT a repeat of the "IllegalMove: Pop"-bucket
+food-billing bug documented at `events.rs`'s `free_increase_population`,
+which is already fixed).
+
+By hand, using every one of these confirmed-correct primitives, Purple's
+ledger balances to `workers_free == 1` at the end of round 9 (1 start + 5
+grants - 5 consuming builds = 1). The ENGINE's OWN internal state
+(`REPLAY_DEBUG_ALL=1`, the `uprising check: idx=1 ... workers_free=N` trace
+line printed once per end-of-turn) instead shows `workers_free == 0` at that
+SAME checkpoint -- a 1-worker discrepancy between the hand ledger (built from
+the SAME primitives the engine itself uses, independently reconstructed) and
+the engine's own live state.
+
+Tracing where the extra consumption happens: round 9 contains a `Special::
+WeakestPlayer` event, "Reign of Terror" ("The weakest civilization loses 1
+population"), which the journal resolves against ORANGE ("...Orange loses 1
+population" -- explicit, named, in the raw journal text). The engine's own
+`events::apply_single_target` call for this (`RankStat::Strength, best=false`)
+computed, via a second temporary `TMPDEBUG_KIND`-adjacent trace (the EXISTING
+`REPLAY_DEBUG_ALL`-gated `apply_single_target` eprintln, already in the
+codebase, not new): `values=[7, 8, 6]` for `order=[Orange, Green, Purple]`
+(after `protect_current_from_bad_tie`'s reordering) -- i.e. the engine's OWN
+computed "strength rating" ranks PURPLE (6) as the weakest, not Orange (7),
+and so applied the population LOSS to Purple instead of Orange. This is
+EXACTLY Purple's missing worker: if Orange (not Purple) had lost it, Purple's
+ledger would read `workers_free == 1` at round 9's end, matching the hand
+trace, and the round-10 Knights build (needing exactly 1 free worker) would
+have been legal.
+
+============================================================
+STEP 3: why this was NOT shipped as a fix -- the "weakest" mismatch itself is
+unresolved, not confirmed wrong
+============================================================
+
+Chased whether the engine's strength-rating ARITHMETIC is buggy (which would
+have been the fix) and could not confirm it is:
+
+- RULES_SPEC.md 5.3: "Statistic comparisons (\"strongest/weakest\" = strength
+  rating [FAQ p.11])".
+- RULES_SPEC.md 10.3: "Each army adds the card's tactical strength to your
+  strength rating, ON TOP OF the units' own strength" -- i.e. tactic/army
+  bonuses ARE part of "strength rating" by the rules text itself, not a
+  combat-only side calculation excluded from stat comparisons.
+- Orange's +4-over-raw-units bonus traces to a REAL, correctly-firing
+  synergy: Orange elected Genghis Khan at round 8 ("Special::
+  InfantryCountsAsCavalryForTactics", RULES_SPEC 10.6 confirms this is the
+  actual printed rule) immediately after setting up a Heavy Cavalry tactic
+  (round 8), letting Orange's 3 plain Warriors (Infantry) count as Cavalry
+  and form actual armies for tactical-strength purposes -- exactly the
+  well-known Genghis-Khan-plus-cavalry-tactic combo real TTA players use.
+- Purple's +3-over-raw-units bonus ALSO traces to a real, correctly-firing
+  ability: Purple's leader Joan of Arc carries `Special::
+  StrengthPerTempleOrGovernmentHappy(1)` (confirmed against
+  `src/card_table.rs`), and Purple has a Religion temple + Theocracy
+  government in play, both potential happy-face sources.
+- `apply_single_target`'s own ranking logic, given those computed VALUES, is
+  arithmetically self-consistent (ascending sort, first = weakest, matches
+  the printed `values`/`ranked` debug pair exactly) -- the bug, if it exists,
+  is not in the ranking/tie-break code, only (possibly) in one of the two
+  underlying VALUES.
+
+In other words: both Orange's and Purple's individual strength contributions
+trace to correctly-implemented, real special-card abilities, and the "weakest
+= strength rating, INCLUDING tactic bonuses" reading is directly supported by
+RULES_SPEC's own quoted text. I could not find, inside this pass's budget, a
+concrete, provably-wrong rule being applied -- which is the bar this task sets
+before touching engine code ("fix the engine... find what we have wrong").
+Shipping a change to `apply_single_target`/`state_stats`/`army_strength`
+without being sure which of the two values (if either) is actually wrong
+would risk exactly the "manufactured win" this task explicitly forbids. This
+is reported as an unresolved, partially-traced lead, not a confirmed bug.
+
+One live possibility not yet checked (handoff item below): BGA's own actual
+"weakest civilization" comparison for scripted events MAY use a simpler,
+non-combat "strength rating" track (a running total independent of the
+CURRENT tactic's army-formation state) rather than the live combat-strength
+recomputation `state_stats`/`army_strength` were built for -- i.e. two
+DIFFERENT numbers that happen to share the name "strength rating" in
+RULES_SPEC's prose. `sources/` (BGA's own implementation) was not checked for
+this distinction this pass; that is the concrete next step.
+
+============================================================
+STEP 4: how strong is this lead across the rest of the 16-game sub-bucket
+============================================================
+
+Cheap structural check (not full hand-traces) -- grepped each of the 16
+games' own journals for a population-loss/WeakestPlayer-shaped event
+("loses 1 population" / "Reign of Terror" / "Barbarians") ANYWHERE in the
+journal (not necessarily immediately before the failing Build line):
+
+  7523355: 2   7523082: 1   7521544: 1   7521791: 0   7523640: 0
+  7520999: 1   7522113: 2   7523383: 2   7523420: 2   7523438: 1
+  7522673: 2   7522024: 1   7523283: 2   7522608: 1   7521657: 1
+  7523132: 3
+
+14 of 16 (87.5%) have at least one such event somewhere in their journal --
+the single most concentrated shared signature found in this sub-bucket, and
+the reason this pass spent its whole budget on game 7523082 rather than
+switching games. This is a CORRELATION, not a per-game confirmation: it does
+not by itself prove all 14 have a WeakestPlayer-targeting mismatch (an event
+merely being present doesn't mean it targeted the wrong player), and the two
+games WITHOUT any such event (7521791, 7523640) are proof this mechanism
+cannot be the only cause even if confirmed for the other 14.
+
+============================================================
+STEP 5: explicitly RULED OUT this pass, with how it was measured
+============================================================
+
+- Blue-token production cap (econcap patch) -- already ruled out by the prior
+  worker; not re-touched, not re-checked (per this task's own instruction).
+- Trade-Routes-as-food and Raid-bracket eligibility (buildbkt patch) --
+  already landed in this base commit (791150f); not reverted or re-edited.
+  Confirmed no diff to `replay_common.rs`'s `stated_build_payment`/
+  `resolve_intervening`'s `ChoiceKind::Raid` arm this pass (`git diff --stat`
+  against 791150f, rust/ subtree, is empty).
+- RULES_SPEC §7.5 urban-building limit -- not re-checked; the prior pass's
+  finding (0 games in this bucket ever reach that gate) has no reason to have
+  changed since no build-cost or urban-count code changed between passes.
+- `game::START_TECHS`/`game::blank_player`'s starting-worker setup -- CHECKED
+  DIRECTLY this pass (see STEP 2): matches RULES_SPEC §1.1 exactly, workers
+  1/2/2/1/0 for Warriors/Agriculture/Bronze/Philosophy/Religion,
+  `workers_free: 1` at blank-player construction matching "1 in worker pool"
+  -- confirmed correct, not a lead.
+- `events::free_increase_population`'s AllPlayers population-grant mechanism
+  ("Development of Settlement"/Immigration/Refugees) -- CHECKED DIRECTLY this
+  pass (see STEP 2): fires for every player in `order`, not just the
+  revealer; confirmed by a reverted temporary debug trace showing the grant
+  landing on Purple with the expected `cost=0` shape. Not the fix's own
+  earlier `docs/REPLAY.md` "IllegalMove: Pop" food-billing bug repeating --
+  that fix (`free_increase_population`'s own doc comment) is already in this
+  base commit and still correct.
+- happiness/discontent (`economy::uprising()`/`Special::
+  PlayersWithMostDiscontentWorkers`) -- NOT TOUCHED, per this task's explicit
+  instruction that a separate worker owns that function concurrently. Game
+  7523082's own trace shows `uprising=false` at every checkpoint reached, so
+  this specific game's shortfall does not trace to a skipped production
+  phase from uprising -- confirmed by reading the `uprising check: ...
+  uprising=false` line at every one of Purple's end-of-turn checkpoints
+  through round 9.
+
+============================================================
+MEASUREMENT (verbatim)
+============================================================
+
+No functional source change was made this pass (two temporary debug
+eprintln's, in `src/bin/replaystats.rs` and `src/economy.rs`, both reverted
+via `git checkout --` before this file was written -- confirmed by `git diff
+--stat` being empty).
+
+cd /private/tmp/build2/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/build2_after.txt 2>&1
+grep '^SCOREDIV_COMPLETED_ID' /tmp/build2_after.txt | awk '{print $2}' | sort \
+    > /tmp/build2_ids.txt
+
+Before: 671 completed / 630 exact (guard_ids_671.txt, 671 lines).
+After:  671 completed / 630 exact (identical -- no source change, expected).
+
+comm -23 /private/tmp/guard_ids_671.txt /tmp/build2_ids.txt   (REGRESSIONS):
+<empty>
+
+comm -13 /private/tmp/guard_ids_671.txt /tmp/build2_ids.txt   (WINS):
+<empty>
+
+cargo clippy --all-targets --profile fasttest -- -D warnings: clean (no
+source changes to lint; run anyway per the task's instructions).
+
+`IllegalMove: Build` bucket size: still 36 (unchanged -- no fix landed).
+
+============================================================
+CONCRETE HANDOFF for whoever picks this bucket up next
+============================================================
+
+1. The single most promising next step: check `sources/` (BGA's own
+   implementation) for how it computes "weakest civilization" for scripted
+   events like Reign of Terror -- specifically, whether it uses the SAME
+   live combat-strength calculation (`army_strength`, tactic-dependent,
+   recomputed fresh each time) this engine's `state_stats`/
+   `apply_single_target` use, or a simpler, separately-tracked "strength
+   rating" number that does NOT reflect the player's CURRENT tactic
+   assignment. RULES_SPEC's own §10.3 text ("Each army adds... to your
+   strength rating") reads as though these are the same number, but that is
+   a rulebook-prose reading, not a verified cross-check against BGA's actual
+   digital-implementation source -- and this pass's own hand-trace shows a
+   real corpus game (7523082) where the two readings would have picked
+   DIFFERENT players as "weakest" (Orange, journal-confirmed, vs. Purple,
+   this engine's own live combat-strength computation).
+2. If BGA's source confirms the two readings differ, the fix belongs in
+   `events.rs`'s `apply_single_target`/`RankStat::Strength` (or a NEW
+   `RankStat` variant computing a tactic-independent strength number) -- NOT
+   in `effects::army_strength`/`state_stats` themselves, which are also used
+   for real combat resolution and must keep including tactics there.
+3. If BGA's source confirms the SAME calculation is used, this lead is dead
+   for game 7523082 specifically, and its true root cause is still
+   unexplained -- re-trace it from scratch with a different hypothesis
+   (start from `REPLAY_DEBUG_ALL=1`'s full trace already captured in this
+   investigation's method, look for a build/worker-consuming action this
+   pass's hand ledger may have mis-modeled instead of a WeakestPlayer
+   mismatch).
+4. The 16-game "no Build{} at all in legal_moves" sub-bucket (workers_free==0
+   candidates): 7523355 7523082 7521544 7521791 7523640 7520999 7522113
+   7523383 7523420 7523438 7522673 7522024 7523283 7522608 7521657 7523132.
+   14 of these 16 have a population-loss-shaped event somewhere in their
+   journal (STEP 4) -- the WeakestPlayer lead, if confirmed, is a strong
+   candidate to explain MOST but likely not ALL of this sub-bucket (7521791
+   and 7523640 have no such event at all and need a different explanation).
+5. The 20-game "cost-short for one specific card" sub-bucket was NOT chased
+   this pass at all (7523818 7522648 7521377 7521850 7521832 7521819 7522520
+   7522505 7523608 7522845 7522914 7521912 7523543 7523566 7522315 7522347
+   7522358 7522818 7522587 7523124) -- no hypothesis formed, genuinely
+   untouched.
+6. Re-run the STEP 1 census fresh before trusting either sub-bucket's
+   membership: this bucket has shifted after every prior pass, and whichever
+   mechanism (if any) gets fixed next will likely shift it again.
+
+============================================================
+FILES CHANGED
+============================================================
+None. build2.patch (git diff 791150f -- rust) is empty by design -- no
+functional change was made or landed this pass. Two temporary debug
+eprintln's (`src/bin/replaystats.rs`, `src/economy.rs`) were added, used, and
+reverted (`git checkout --`) before this file was written; confirmed clean by
+`git diff --stat` being empty for the whole `rust/` subtree.

@@ -1,0 +1,62 @@
+# command: cd rust && SCOREDIV_DUMP_IDS=1 cargo run --profile difftest --bin replaystats -- ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+# git commit measured: 11d4d53c5e174ec7aa96cdf5b256a6b0e3ede369
+# date: 2026-08-14
+# one SCOREDIV_DIVERGING_ID line + one SCOREDIV_DETAIL line per game whose sorted
+# game::scores multiset did not exactly match index.tsv's own recorded scores
+
+SCOREDIV_DIVERGING_ID 7522625
+SCOREDIV_DETAIL 7522625 engine=[165, 175] index=[165, 177] culture_drifted_in_play=false final_event_cards=Some(["Impact of Balance", "Impact of Progress", "Impact of Happiness", "Impact of Architecture"]) first_culture_divergence=None
+SCOREDIV_DIVERGING_ID 7523081
+SCOREDIV_DETAIL 7523081 engine=[58, 96] index=[62, 92] culture_drifted_in_play=true final_event_cards=Some(["Impact of Architecture", "Impact of Balance"]) first_culture_divergence=Some("lineno=269 actor=Purple last_action_class=Some(BuildUnit) delta=2")
+SCOREDIV_DIVERGING_ID 7521815
+SCOREDIV_DETAIL 7521815 engine=[205, 214] index=[206, 214] culture_drifted_in_play=true final_event_cards=Some(["Impact of Government", "Impact of Happiness", "Impact of Progress", "Impact of Technology"]) first_culture_divergence=Some("lineno=199 actor=Purple last_action_class=Some(TakeCard) delta=-1")
+SCOREDIV_DIVERGING_ID 7522277
+SCOREDIV_DETAIL 7522277 engine=[114, 213] index=[112, 213] culture_drifted_in_play=false final_event_cards=Some(["Impact of Science", "Impact of Progress", "Impact of Happiness", "Impact of Population"]) first_culture_divergence=None
+SCOREDIV_DIVERGING_ID 7522838
+SCOREDIV_DETAIL 7522838 engine=[147, 169] index=[146, 169] culture_drifted_in_play=true final_event_cards=Some(["Impact of Happiness"]) first_culture_divergence=Some("lineno=369 actor=Purple last_action_class=Some(BuildBuilding) delta=1")
+SCOREDIV_DIVERGING_ID 7522822
+SCOREDIV_DETAIL 7522822 engine=[216, 223, 241] index=[216, 224, 241] culture_drifted_in_play=true final_event_cards=Some(["Impact of Colonies", "Impact of Government", "Impact of Happiness", "Impact of Industry", "Impact of Wonders"]) first_culture_divergence=Some("lineno=315 actor=Purple last_action_class=Some(BuildUnit) delta=-1")
+SCOREDIV_DIVERGING_ID 7522906
+SCOREDIV_DETAIL 7522906 engine=[93, 138] index=[93, 140] culture_drifted_in_play=false final_event_cards=Some(["Impact of Colonies", "Impact of Happiness", "Impact of Balance"]) first_culture_divergence=None
+SCOREDIV_DIVERGING_ID 7522075
+SCOREDIV_DETAIL 7522075 engine=[84, 172] index=[81, 172] culture_drifted_in_play=false final_event_cards=Some(["Impact of Agriculture", "Impact of Competition", "Impact of Wonders", "Impact of Balance"]) first_culture_divergence=None
+SCOREDIV_DIVERGING_ID 7521790
+SCOREDIV_DETAIL 7521790 engine=[140, 174, 196, 296] index=[135, 175, 196, 301] culture_drifted_in_play=true final_event_cards=Some(["Impact of Agriculture", "Impact of Colonies", "Impact of Industry", "Impact of Science", "Impact of Wonders", "Impact of Variety"]) first_culture_divergence=Some("lineno=725 actor=Grey last_action_class=Some(TakeCard) delta=-1")
+SCOREDIV_DIVERGING_ID 7521789
+SCOREDIV_DETAIL 7521789 engine=[86, 102] index=[88, 102] culture_drifted_in_play=true final_event_cards=Some(["Impact of Government", "Impact of Architecture"]) first_culture_divergence=Some("lineno=325 actor=Orange last_action_class=Some(BuildBuilding) delta=-2")
+SCOREDIV_DIVERGING_ID 7523367
+SCOREDIV_DETAIL 7523367 engine=[84, 183] index=[81, 183] culture_drifted_in_play=true final_event_cards=Some(["Impact of Balance", "Impact of Technology", "Impact of Agriculture"]) first_culture_divergence=Some("lineno=181 actor=Orange last_action_class=Some(PlayTactic) delta=3")
+SCOREDIV_DIVERGING_ID 7521882
+SCOREDIV_DETAIL 7521882 engine=[143, 173, 250] index=[146, 173, 250] culture_drifted_in_play=true final_event_cards=Some(["Impact of Colonies", "Impact of Competition", "Impact of Happiness", "Impact of Progress", "Impact of Science"]) first_culture_divergence=Some("lineno=417 actor=Orange last_action_class=Some(BuildUnit) delta=-3")
+SCOREDIV_DIVERGING_ID 7521899
+SCOREDIV_DETAIL 7521899 engine=[227, 319] index=[227, 320] culture_drifted_in_play=true final_event_cards=Some(["Impact of Technology", "Impact of Industry", "Impact of Happiness", "Impact of Architecture"]) first_culture_divergence=Some("lineno=215 actor=Purple last_action_class=Some(TakeCard) delta=-1")
+SCOREDIV_DIVERGING_ID 7522417
+SCOREDIV_DETAIL 7522417 engine=[160, 176, 208] index=[160, 180, 204] culture_drifted_in_play=true final_event_cards=Some(["Impact of Strength", "Impact of Technology", "Impact of Balance"]) first_culture_divergence=Some("lineno=428 actor=Purple last_action_class=Some(TakeCard) delta=-4")
+SCOREDIV_DIVERGING_ID 7523528
+SCOREDIV_DETAIL 7523528 engine=[117, 151] index=[133, 143] culture_drifted_in_play=true final_event_cards=Some(["Impact of Colonies", "Impact of Happiness", "Impact of Industry", "Impact of Population"]) first_culture_divergence=Some("lineno=352 actor=Orange last_action_class=Some(BuildBuilding) delta=-8")
+SCOREDIV_DIVERGING_ID 7522722
+SCOREDIV_DETAIL 7522722 engine=[139, 183] index=[146, 183] culture_drifted_in_play=true final_event_cards=Some(["Impact of Population", "Impact of Wonders", "Impact of Strength", "Impact of Science"]) first_culture_divergence=Some("lineno=367 actor=Purple last_action_class=Some(EndTurn) delta=-5")
+SCOREDIV_DIVERGING_ID 7522974
+SCOREDIV_DETAIL 7522974 engine=[115, 130] index=[117, 130] culture_drifted_in_play=true final_event_cards=Some(["Impact of Happiness", "Impact of Agriculture", "Impact of Balance", "Impact of Government"]) first_culture_divergence=Some("lineno=339 actor=Purple last_action_class=Some(BuildWonderStage) delta=-2")
+SCOREDIV_DIVERGING_ID 7523172
+SCOREDIV_DETAIL 7523172 engine=[102, 142] index=[102, 144] culture_drifted_in_play=true final_event_cards=Some(["Impact of Population", "Impact of Science", "Impact of Strength", "Impact of Variety"]) first_culture_divergence=Some("lineno=194 actor=Purple last_action_class=Some(TakeCard) delta=-1")
+SCOREDIV_DIVERGING_ID 7522009
+SCOREDIV_DETAIL 7522009 engine=[146, 156] index=[137, 165] culture_drifted_in_play=true final_event_cards=Some(["Impact of Progress", "Impact of Technology", "Impact of Wonders"]) first_culture_divergence=Some("lineno=323 actor=Purple last_action_class=Some(Discard) delta=9")
+SCOREDIV_DIVERGING_ID 7523233
+SCOREDIV_DETAIL 7523233 engine=[138, 140] index=[138, 146] culture_drifted_in_play=true final_event_cards=Some(["Impact of Architecture", "Impact of Happiness", "Impact of Population", "Impact of Wonders"]) first_culture_divergence=Some("lineno=346 actor=Orange last_action_class=Some(UpgradeProduction) delta=-6")
+SCOREDIV_DIVERGING_ID 7523256
+SCOREDIV_DETAIL 7523256 engine=[140, 157] index=[140, 165] culture_drifted_in_play=true final_event_cards=Some(["Impact of Architecture", "Impact of Competition", "Impact of Happiness"]) first_culture_divergence=Some("lineno=381 actor=Purple last_action_class=Some(BuildWonderStage) delta=-8")
+SCOREDIV_DIVERGING_ID 7522768
+SCOREDIV_DETAIL 7522768 engine=[174, 193] index=[174, 195] culture_drifted_in_play=true final_event_cards=Some(["Impact of Variety", "Impact of Balance", "Impact of Progress"]) first_culture_divergence=Some("lineno=351 actor=Purple last_action_class=Some(EndTurn) delta=-2")
+SCOREDIV_DIVERGING_ID 7522813
+SCOREDIV_DETAIL 7522813 engine=[119, 194] index=[117, 196] culture_drifted_in_play=true final_event_cards=Some(["Impact of Agriculture", "Impact of Competition", "Impact of Industry"]) first_culture_divergence=Some("lineno=235 actor=Purple last_action_class=Some(TakeCard) delta=4")
+SCOREDIV_DIVERGING_ID 7522590
+SCOREDIV_DETAIL 7522590 engine=[75, 123] index=[81, 117] culture_drifted_in_play=true final_event_cards=Some(["Impact of Architecture", "Impact of Colonies", "Impact of Industry"]) first_culture_divergence=Some("lineno=330 actor=Purple last_action_class=Some(TakeCard) delta=6")
+SCOREDIV_DIVERGING_ID 7521985
+SCOREDIV_DETAIL 7521985 engine=[176, 180] index=[173, 185] culture_drifted_in_play=true final_event_cards=Some(["Impact of Government", "Impact of Progress", "Impact of Strength", "Impact of Variety"]) first_culture_divergence=Some("lineno=331 actor=Purple last_action_class=Some(Discard) delta=-5")
+SCOREDIV_DIVERGING_ID 7521666
+SCOREDIV_DETAIL 7521666 engine=[253, 268, 319, 328] index=[241, 268, 319, 328] culture_drifted_in_play=true final_event_cards=Some(["Impact of Architecture", "Impact of Colonies", "Impact of Government", "Impact of Happiness", "Impact of Progress", "Impact of Technology"]) first_culture_divergence=Some("lineno=778 actor=Grey last_action_class=Some(IncreasePopulation) delta=1")
+SCOREDIV_DIVERGING_ID 7523149
+SCOREDIV_DETAIL 7523149 engine=[237, 278] index=[240, 278] culture_drifted_in_play=true final_event_cards=Some(["Impact of Agriculture", "Impact of Strength", "Impact of Variety", "Impact of Balance"]) first_culture_divergence=Some("lineno=215 actor=Purple last_action_class=Some(BuildBuilding) delta=-1")
+SCOREDIV_DIVERGING_ID 7523102
+SCOREDIV_DETAIL 7523102 engine=[177, 196] index=[179, 196] culture_drifted_in_play=true final_event_cards=Some(["Impact of Government", "Impact of Happiness", "Impact of Industry", "Impact of Progress"]) first_culture_divergence=Some("lineno=361 actor=Orange last_action_class=Some(BuildWonderStage) delta=-2")

@@ -81,6 +81,20 @@ GAUNTLET_4P_LATE=analysis/frozen/gauntlet/champion_4p_gen4034_140key_2026-08-08.
 # repair) and seated as that kind -- see rust/src/arena.rs's `loader_for`.
 GAUNTLET_HUMAN=analysis/frozen/human_weights.json
 
+# A FIFTH member: the same human-imitation fit, but ordering the root moves
+# for a real beam search instead of playing its own top pick blind.  The
+# searchless HumanBot above wins about 2% of its games, so as a veto it
+# rubber-stamps every mutant -- an opponent you beat 98% of the time cannot
+# punish a blind spot.  The hybrid beat the 2p champion 65.6% +/- 4.2 over
+# 480 games (2026-08-08) and is the only bot in the 13-kind census that
+# clears its baseline anywhere.  Measured 2026-08-13 on 15 real mutants it
+# vetoes 1 of 15 -- the same rate, and the same candidate, as the anchor --
+# so it does not freeze the climb.  `--gauntlet-search` takes the EVAL
+# weights the beam scores leaves with (the same LATE champion this arm's
+# table size already reports against) and, like `--gauntlet-kind`, applies
+# to the NEXT `--gauntlet` flag only.  Keep the searchless member too: they
+# measure different things.
+
 for PLAYERS in 2 3 4; do
     SENTINEL=$LOGDIR/stop_rust_league_${PLAYERS}p
     # `-f` matches the whole command line, so `--players N` is what
@@ -100,6 +114,11 @@ for PLAYERS in 2 3 4; do
     fi
 
     OUT=experiments/rust_champion_${PLAYERS}p.json
+    case $PLAYERS in
+        2) HYBRID_EVAL=$GAUNTLET_2P_LATE ;;
+        3) HYBRID_EVAL=$GAUNTLET_3P_LATE ;;
+        4) HYBRID_EVAL=$GAUNTLET_4P_LATE ;;
+    esac
     log "[${PLAYERS}p] launching (champion $OUT)"
     # --hours 6 rather than forever: a process that re-executes periodically
     # picks up a rebuilt binary without anyone having to remember to restart
@@ -119,5 +138,7 @@ for PLAYERS in 2 3 4; do
         --gauntlet "$GAUNTLET_3P_LATE" \
         --gauntlet "$GAUNTLET_4P_LATE" \
         --gauntlet-kind human --gauntlet "$GAUNTLET_HUMAN" \
+        --gauntlet-kind human --gauntlet-search "$HYBRID_EVAL" \
+            --gauntlet "$GAUNTLET_HUMAN" \
         >>"$LOGDIR/rust_league_${PLAYERS}p.log" 2>&1 &
 done

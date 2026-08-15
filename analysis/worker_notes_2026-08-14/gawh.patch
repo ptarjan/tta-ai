@@ -1,0 +1,125 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 1f370cf..b57eaf6 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -2140,8 +2140,21 @@ impl<'a> Replayer<'a> {
+         // `DiscardSolver::needed_after` says this player is later observed
+         // playing by name, the same rule `ground_bid_ceiling`/
+         // `ground_for_consumption` already use) so each phantom lands on
+-        // N -> N-1, not N -> N. Leaves the old net-zero behaviour alone when
+-        // no disposable filler exists.
++        // N -> N-1, not N -> N.
++        //
++        // FIX: when no disposable filler exists -- every card in hand is
++        // either something this same sacrifice still needs or something
++        // `needed_later` has already proven is played by name -- there is
++        // nothing to evict, and this used to just `push` anyway with no
++        // compensating decrement recorded anywhere. `Move::SendBonus` still
++        // removes the pushed identity for real right after, so the pair
++        // nets to zero instead of the -1 an auction winner who genuinely
++        // held and sacrificed the card would leave behind: a PERMANENT
++        // phantom card, not the transient wash the comment above describes.
++        // Record the same `military_hand_deficit` fallback
++        // `ground_for_consumption` records for its own no-filler case, so
++        // `repay_military_hand_deficit` settles this debt too on the actor's
++        // next genuine draw instead of it staying owed forever.
+         let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+         for (&card, &count) in &needed {
+             let have = self.state.players[actor as usize]
+@@ -2157,11 +2170,12 @@ impl<'a> Replayer<'a> {
+                     .iter()
+                     .copied()
+                     .find(|id| !needed.contains_key(id) && !needed_later.contains(id.get().base_name));
+-                let hand = &mut self.state.players[actor as usize].hand_military;
+                 if let Some(victim) = victim {
+-                    hand.remove_first(victim);
++                    self.state.players[actor as usize].hand_military.remove_first(victim);
++                } else {
++                    self.military_hand_deficit[actor as usize] += 1;
+                 }
+-                hand.push(card);
++                self.state.players[actor as usize].hand_military.push(card);
+             }
+         }
+     }
+@@ -11430,6 +11444,80 @@ mod tests {
+         );
+     }
+ 
++    /// FIX (same audit, same shape, a third call site -- see `ground_for_
++    /// consumption`'s own `consuming_a_named_military_card_with_no_
++    /// disposable_filler_records_a_deficit_that_a_later_draw_repays`,
++    /// above, which this mirrors exactly): the test just above pins the
++    /// ordinary case, where a disposable filler exists to evict. When NO
++    /// filler exists -- here, the winner's hand holds nothing at all, the
++    /// simplest instance of "nothing evictable" -- `ground_auction_winner_
++    /// hand` used to `push` the phantom bonus card anyway with no
++    /// compensating eviction and no debt recorded anywhere, so `drain_
++    /// colonize`'s own `Move::SendBonus` right after nets the pair to zero
++    /// PERMANENTLY instead of the real -1 a genuine sacrifice leaves
++    /// behind.
++    #[test]
++    fn sacrificing_a_grounded_auction_bonus_card_with_no_disposable_filler_records_a_deficit_that_a_later_draw_repays()
++    {
++        let card_index = build_card_index();
++        let warriors = card_index["Warriors"];
++        let bonus3 = colonization_bonus_card(3).unwrap();
++        let territory = card_index["Vast Territory (I)"];
++        let mut sacrifices = VecDeque::new();
++        sacrifices.push_back(ColonizeSacrifice {
++            lineno: 107,
++            actor: 1,
++            territory: "Vast Territory".to_string(),
++            clauses: vec![SacrificeClause::Unit(warriors), SacrificeClause::Bonus(bonus3)],
++        });
++        let mut r =
++            Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), sacrifices);
++        // No filler at all -- the emptiest possible "nothing to evict" hand.
++        r.state.players[1].hand_military = CardList::new();
++        r.state.players[1].techs.get_mut(warriors).expect("every player starts with Warriors").workers = 2;
++        r.state.pending.push(Pending::Auction(crate::state::Auction::restore(territory, &[1, 0], 1, 3, Some(1), 0)));
++
++        r.ground_auction_winner_hand();
++        assert_eq!(
++            r.state.players[1].hand_military.len(),
++            1,
++            "no filler to evict, so the phantom bonus card just lands: 0 -> 1, not the usual net-zero 0 -> 0"
++        );
++        assert!(r.state.players[1].hand_military.contains(bonus3));
++        assert_eq!(
++            r.military_hand_deficit[1], 1,
++            "the dropped eviction must be recorded as an owed debt, not silently lost"
++        );
++
++        crate::interact::colonize(&mut r.state, 1, territory, 4);
++        r.drain_colonize().expect("the journal's own list is legal here");
++        assert_eq!(
++            r.state.players[1].hand_military.len(),
++            0,
++            "sacrificing the (previously phantom) bonus card nets the pair to zero, same as before this fix -- \
++             the fix is that a debt now exists to be repaid, not that this net changes"
++        );
++        assert_eq!(
++            r.military_hand_deficit[1], 1,
++            "drain_colonize does not itself repay the debt -- only a later genuine draw does"
++        );
++
++        // A later real draw of two cards arrives (mirrors `try_apply`'s own
++        // per-seat growth detection around `apply::apply`).
++        let drawn_a = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::War).expect("a War card exists");
++        let drawn_b = (0..crate::CARDS.len() as u16).map(CardId).find(|id| id.kind() == CardType::Pact).expect("a Pact card exists");
++        r.state.players[1].hand_military.push(drawn_a);
++        r.state.players[1].hand_military.push(drawn_b);
++        r.repay_military_hand_deficit(1, 2);
++
++        assert_eq!(
++            r.state.players[1].hand_military.len(),
++            1,
++            "two cards drawn, one immediately repays the earlier wash: net +1, not +2"
++        );
++        assert_eq!(r.military_hand_deficit[1], 0, "the debt is now fully repaid");
++    }
++
+     /// REGRESSION (found chasing the Build/Upgrade/WonderStep cost-mismatch
+     /// cluster, 135 games / 425 lines corpus-wide): `"Barbarossa enlists a
+     /// <Unit>; ..."` used to classify as `Bookkeeping` (`corpus.rs`) and was

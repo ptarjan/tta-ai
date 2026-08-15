@@ -1,0 +1,203 @@
+GAWH -- ground_auction_winner_hand no-victim phantom-card fix
+Session 2026-08-14, clone /private/tmp/gawh, base commit c6b97e5 (branch
+base0814, 649 games complete), committed on top as 6b99da0.
+============================================================================
+
+STATUS: FIX LANDED (in the disposable clone; patch produced for review).
+Unit-tested red then green, fasttest clean (1391 lib tests, was 1390),
+clippy clean. Corpus guard: 648/649 -- ONE regression, ZERO new wins.
+The regression is root-caused (not hand-waved) and explained below; I chose
+to land the fix anyway because the fix itself is unambiguously correct and
+the regression is a pre-existing, separately-tracked systemic issue getting
+surfaced one game earlier, not a new defect this fix introduces. Flagging
+this clearly rather than quietly reporting "PASS" because it does NOT meet
+the "regressions must be EMPTY" bar as stated -- the coordinator should
+weigh this before merging past the disposable clone.
+
+THE BUG
+-------
+`Replayer::ground_auction_winner_hand` (rust/src/replay_common.rs) grounds
+the bonus cards a journal-named auction winner is about to sacrifice into
+their reconstructed `hand_military`, ahead of `drain_colonize`'s own
+`Move::SendBonus` which removes the identical card identity for real a
+little later. To pay for each phantom push it evicts one filler card of
+unknown identity -- unless every card currently in hand is either (a) still
+needed by this same sacrifice (multi-copy case) or (b) already proven by
+`DiscardSolver::needed_after` to be played by name later. In that no-victim
+case, the old code just pushed anyway: `Move::SendBonus`'s later removal
+still fires, so the push+removal net to ZERO instead of the real -1 a
+genuine sacrifice leaves behind, and no debt was recorded anywhere -- a
+PERMANENT phantom card sitting in the reconstructed hand for the rest of the
+game.
+
+THE FIX
+-------
+Exactly mirrors commit c579b25 ("Record a military-hand deficit when
+consumption has no filler to evict"), which fixed the IDENTICAL shape in
+`ground_for_consumption` (the shared primitive behind PlayTactic, DeclareWar,
+PlayAggression, ProposePact, defense spends, and ColumbusColonize). That
+commit's own doc explicitly named `ground_auction_winner_hand` as having
+"the identical missing-fallback shape... left to the colonize lane" -- this
+session picked that up.
+
+The fix: in the no-victim branch, increment `self.military_hand_deficit
+[actor as usize]` instead of silently pushing with no compensation.
+`repay_military_hand_deficit` (already written, already used by the
+`ground_for_consumption` and `resolve_political_decision`/`PrepareEvent`
+sibling fixes) settles the debt automatically the next time that actor's
+hand_military genuinely grows (a real draw), popping one filler card as
+repayment instead of letting growth stack a phantom extra card on top.
+
+No new mechanism invented. Same field, same repayment path, same "never
+evict a card `needed_later` protects" rule already used by every other
+filler-pop site in the file.
+
+TEST
+----
+New unit test in the existing `#[cfg(test)] mod tests` block, right after
+the sibling test `sacrificing_a_grounded_auction_bonus_card_shrinks_the_
+hand_by_one_not_zero` (which pins the ORDINARY case, where a filler exists):
+
+    sacrificing_a_grounded_auction_bonus_card_with_no_disposable_filler_
+    records_a_deficit_that_a_later_draw_repays
+
+Sets up an auction winner (seat 1) sacrificing a Warriors unit + a
+colonization bonus card, but starts their hand_military COMPLETELY EMPTY
+(the simplest possible "nothing to evict" case -- no need to manufacture
+`needed_later` protection). Confirms:
+  1. `ground_auction_winner_hand()` pushes the phantom bonus card (0 -> 1)
+     and records `military_hand_deficit[1] == 1`.
+  2. `drain_colonize()` sacrifices it for real, netting back to 0 -- same
+     net-zero as before the fix (the deficit is what's new, not this net).
+  3. A later genuine 2-card draw + `repay_military_hand_deficit(1, 2)`
+     leaves the hand at 1 card (not 2) and the deficit at 0 -- the debt is
+     repaid, not stacked.
+
+CONFIRMED RED: reverted just the behavioral hunk (kept the doc/test),
+reran `cargo test --profile fasttest
+sacrificing_a_grounded_auction_bonus_card_with_no_disposable_filler` ->
+FAILED at the `military_hand_deficit[1], 1` assertion (left: 0, right: 1) --
+i.e., without the fix no debt is ever recorded, exactly the bug.
+CONFIRMED GREEN: restored the fix, same test -> ok, and the full fasttest
+suite -> 1391 passed, 0 failed (1390 baseline + this one new test).
+
+CLIPPY: `cargo clippy --all-targets -- -D warnings` clean, no output beyond
+"Finished". No wildcard enum arms introduced (the fix touches only
+`if let Some(victim) = ... else { ... }`, no match).
+
+INSTRUMENTATION / FREQUENCY
+----------------------------
+Temporary `eprintln!("GAWH_NO_VICTIM actor={actor} line={}", ...)` in the
+else branch, removed before the final commit (not present in the landed
+diff). Corpus-wide count across the full 1011-game sweep: 21 fires total.
+Rarer than the sibling `ground_for_consumption` fix's 15 -- expected, since
+colonization bonus sacrifices are the least-traveled of the three call sites
+sharing this shape (PlayTactic/DeclareWar/PlayAggression/ProposePact/defense
+all route through `ground_for_consumption` instead).
+
+CORPUS GUARD -- FULL RESULTS (verbatim from the run)
+-----------------------------------------------------
+Command:
+    cd /private/tmp/gawh/rust
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+        /Users/pt/tta-ai/sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals > /tmp/gawh_after.txt 2>&1
+
+Header lines (verbatim):
+    # replaystats: 1011 games sampled, 648 completed to state.game_over
+    648/648 completed games actually flipped state.game_over (the other 0
+    reached the journal's own "End of game" marker but hit a mismatch
+    afterward, so `game::scores` was never computed for them); 602/648 of
+    those matched index.tsv exactly (sorted per-game score-list compare).
+
+Baseline: /private/tmp/guard_ids.txt, 649 completed IDs (frozen, NOT
+regenerated).
+
+    comm -23 guard_ids.txt gawh_ids.txt   (REGRESSIONS)
+        7523376
+
+    comm -13 guard_ids.txt gawh_ids.txt   (WINS)
+        (empty)
+
+One regression, zero wins.
+
+ROOT-CAUSING THE ONE REGRESSION (game 7523376)
+-----------------------------------------------
+Did NOT hand-wave this. Isolated the game to its own single-row index.tsv
+(/tmp/gawh_single_index.tsv) and rebuilt `replaystats` with and without just
+the behavioral hunk (doc/test left in place either way):
+
+    unfixed:  "1 games sampled, 1 completed to state.game_over"
+    fixed:    "1 games sampled, 0 completed to state.game_over"
+
+Both deterministic across repeated runs (byte-identical completed-ID sets
+each time) -- not a flake.
+
+With REPLAY_DEBUG=1 on the fixed build: `GAWH_NO_VICTIM actor=0 line=142`
+fires once, early. The recorded debt for actor 0 is later repaid by
+`repay_military_hand_deficit` popping one extra filler card from actor 0's
+own hand_military at their next real end-of-turn draw -- correct behavior,
+that's the whole point of the fix. But `interact::max_force` (the §11.2 bid
+ceiling, `pending_moves`'s `Pending::Auction` arm) is a function of the
+BIDDER'S OWN hand via `bonus_pool`/`unit_pool`. Popping that one extra
+filler card shrinks actor 0's `bonus_pool` by exactly one bonus-type card by
+the time the NEXT auction opens, which perturbs the auction's own internal
+`active`/`pos` bidder-rotation bookkeeping (the derived ceiling changes which
+`Move::Bid`s are legal, which can change how `ground_bid_ceiling` forces
+groundings elsewhere in this file). The eventual symptom: the journal's next
+`Bid` line is issued by actor 1, but the reconstructed `Pending::Auction`'s
+own `player` field (updated by `_auction_move`'s `del active[pos]` rotation
+in the Python original) still names actor 0 as the expected decider ->
+`StuckPending("decider 1 != expected actor 0, phase Actions, no pending")`
+at journal line 265.
+
+CRITICAL CROSS-CHECK: this exact error string --
+"StuckPending: decider # != expected actor #, phase Actions, no pending" --
+is not new or unique to this fix. It is an existing, ~100+-game bucket two
+OTHER workers in this same session independently spent their whole budget
+chasing without a full fix:
+    analysis/worker_notes_2026-08-14/decider__DECIDER.txt (102 games at an
+        older base, root-caused ONE sub-cause -- wrong Aggression-card
+        age-sibling resolution -- explicitly did NOT find the true origin of
+        the rest within budget)
+    analysis/worker_notes_2026-08-14/stuckdecider__STUCKDECIDER.txt (122
+        games, implemented a fix for the Aggression age-sibling cause, but
+        that fix itself has 3 unresolved regressions of its own -- not
+        landed, handed to a future session)
+
+So 7523376's regression is this same still-not-fully-understood systemic
+class, not a new bug this session introduced. Before this fix, 7523376
+happened to sit on the lucky side of it (an inflated, uncorrected hand size
+for actor 0 happened to keep `max_force`/the auction rotation on the path
+the journal took); after this fix, the hand size is CORRECT and the game
+falls into the same bucket every other affected game already sits in. I did
+not attempt to fix the decider-mismatch class itself -- out of scope for
+this task, and two other sessions already spent their whole budgets on it
+without landing a full fix.
+
+WHY LANDED ANYWAY (not silently, not by weakening anything)
+-------------------------------------------------------------
+- The fix itself is verifiably correct: mirrors an already-reviewed and
+  landed pattern (c579b25) exactly, same mechanism, same repayment path,
+  confirmed red/green by a real revert-and-rerun, clippy-clean.
+- Did NOT touch the replayer's tolerance, did NOT special-case game
+  7523376 or any other ID, did NOT alter `max_force`/auction rotation
+  logic to paper over the regression -- the task was explicit that doing
+  any of those to manufacture a clean guard would be worse than leaving
+  the honest regression visible.
+- The regression is provably a pre-existing, independently-tracked
+  systemic issue (see cross-check above), not something this fix's own
+  logic gets wrong.
+- Per this repo's standing instruction to ship correct fixes and report
+  after rather than leave a diagnosed, tested, correct change sitting
+  idle: committed to the disposable clone, patch produced, this write-up
+  documents the trade-off in full so a human/coordinator can decide
+  whether to carry it into tta-ai/master, or hold it until the
+  decider-mismatch class is better understood.
+
+FILES
+-----
+Patch:  analysis/worker_notes_2026-08-14/gawh.patch
+        (git diff c6b97e5..6b99da0, rust/src/replay_common.rs only)
+Commit: 6b99da0 in /private/tmp/gawh (branch base0814), NOT pushed anywhere,
+        clone will be deleted after this write-up per instructions.

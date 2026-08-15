@@ -1,0 +1,1205 @@
+diff --git i/rust/src/advisor/state_io.rs w/rust/src/advisor/state_io.rs
+index 39034e7..5d7e2ad 100644
+--- i/rust/src/advisor/state_io.rs
++++ w/rust/src/advisor/state_io.rs
+@@ -858,6 +858,8 @@ fn blank_state(n: u8, seed: u64) -> GameState {
+         pending: PendingStack::new(),
+         queue: Queue::new(),
+         last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++        last_end_of_turn_science: [None; MAX_PLAYERS],
++        last_end_of_turn_resources: [None; MAX_PLAYERS],
+     }
+ }
+ 
+diff --git i/rust/src/apply.rs w/rust/src/apply.rs
+index 90a7443..d1d0a48 100644
+--- i/rust/src/apply.rs
++++ w/rust/src/apply.rs
+@@ -1780,6 +1780,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/bin/replaystats.rs w/rust/src/bin/replaystats.rs
+index 0f518b1..b8608d3 100644
+--- i/rust/src/bin/replaystats.rs
++++ w/rust/src/bin/replaystats.rs
+@@ -211,6 +211,17 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+     // matters as much as the discard-phase oracle's own.
+     let mut culture_oracle_checked_total = 0u64;
+     let mut culture_oracle_agreed_total = 0u64;
++    // `GameResult::science_oracle_checked`/`_agreed`'s twin -- SCIDRIFT
++    // 2026-08-14 pass, `SCIENCE_ORACLE`-gated (see `debugflags::
++    // science_oracle`'s own doc): both stay 0 unless that env var is set for
++    // this run, guaranteeing a plain `replaystats` invocation is unaffected.
++    let mut science_oracle_checked_total = 0u64;
++    let mut science_oracle_agreed_total = 0u64;
++    let mut n_science_diverging_games = 0u32;
++    // `GameResult::resource_oracle_checked`/`_agreed`'s twin, `RESOURCE_ORACLE`-gated.
++    let mut resource_oracle_checked_total = 0u64;
++    let mut resource_oracle_agreed_total = 0u64;
++    let mut n_resource_diverging_games = 0u32;
+     // The task's own deliverable: FIRST-divergence-per-game, ranked by the
+     // `ActionClass` of whatever the last classified action line was
+     // strictly before the diverging checkpoint. `None` keys (no prior
+@@ -299,6 +310,49 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             let entry = culture_cause_buckets.entry(key).or_insert_with(|| (0, example.clone()));
+             entry.0 += 1;
+         }
++        // Science/resource oracle twins of the culture block just above --
++        // SCIDRIFT 2026-08-14 pass. Printed unconditionally whenever `Some`
++        // (which itself only happens when `SCIENCE_ORACLE`/`RESOURCE_ORACLE`
++        // was set for this run -- the caller already opted into the
++        // diagnostic, unlike `SCOREDIV_DUMP_IDS`, which gates an
++        // always-computed culture check that would otherwise flood every
++        // ordinary run).
++        science_oracle_checked_total += result.science_oracle_checked as u64;
++        science_oracle_agreed_total += result.science_oracle_agreed as u64;
++        if let Some(d) = &result.science_oracle_divergence {
++            n_science_diverging_games += 1;
++            println!("SCIENCE_DIVERGING_ID {}", meta.id);
++            println!(
++                "SCIENCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
++                 reconstructed={} delta={}",
++                meta.id,
++                d.lineno,
++                d.round,
++                d.actor,
++                d.last_action_class,
++                d.journal_now,
++                d.reconstructed,
++                d.reconstructed - d.journal_now
++            );
++        }
++        resource_oracle_checked_total += result.resource_oracle_checked as u64;
++        resource_oracle_agreed_total += result.resource_oracle_agreed as u64;
++        if let Some(d) = &result.resource_oracle_divergence {
++            n_resource_diverging_games += 1;
++            println!("RESOURCE_DIVERGING_ID {}", meta.id);
++            println!(
++                "RESOURCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
++                 reconstructed={} delta={}",
++                meta.id,
++                d.lineno,
++                d.round,
++                d.actor,
++                d.last_action_class,
++                d.journal_now,
++                d.reconstructed,
++                d.reconstructed - d.journal_now
++            );
++        }
+         if let Some(p) = &result.civil_deck_premature_advance {
+             n_premature += 1;
+             if premature_examples.len() < 10 {
+@@ -567,6 +621,30 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+     }
+     println!();
+ 
++    // `GameResult::science_oracle_divergence`/`resource_oracle_divergence` --
++    // SCIDRIFT 2026-08-14 pass, `docs/REPLAY.md` never had a SCIENCE or
++    // RESOURCE cross-check before this: this whole section reads 0/0 (NaN%
++    // guarded to 0.0% by the `.max(1)` below) unless `SCIENCE_ORACLE`/
++    // `RESOURCE_ORACLE` was set for this run -- see `debugflags::
++    // science_oracle`/`resource_oracle`'s own docs for why that is the point,
++    // not a bug.
++    println!("## Science oracle (SCIENCE_ORACLE=1 to populate; 0/0 otherwise)\n");
++    println!(
++        "{science_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` science running total to \
++         check this binary's own reconstructed `state.players[_].science` against; {science_oracle_agreed_total} \
++         ({:.1}%) matched exactly. {n_science_diverging_games}/{n_games} games sampled had at least one checkpoint \
++         disagree (FIRST divergence only; see SCIENCE_DETAIL lines above).\n",
++        100.0 * science_oracle_agreed_total as f64 / science_oracle_checked_total.max(1) as f64
++    );
++    println!("## Resource oracle (RESOURCE_ORACLE=1 to populate; 0/0 otherwise)\n");
++    println!(
++        "{resource_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` resources running total to \
++         check this binary's own reconstructed `state.players[_].resources` against; {resource_oracle_agreed_total} \
++         ({:.1}%) matched exactly. {n_resource_diverging_games}/{n_games} games sampled had at least one checkpoint \
++         disagree (FIRST divergence only; see RESOURCE_DETAIL lines above).\n",
++        100.0 * resource_oracle_agreed_total as f64 / resource_oracle_checked_total.max(1) as f64
++    );
++
+     // `GameResult::civil_deck_premature_advance` -- docs/REPLAY.md's "civil
+     // deck model" handoff. Zero here is the invariant `top_up_civil_deck`
+     // is meant to guarantee; a nonzero count is this instrument catching a
+diff --git i/rust/src/bots/weighted/events.rs w/rust/src/bots/weighted/events.rs
+index e632d80..efc1c66 100644
+--- i/rust/src/bots/weighted/events.rs
++++ w/rust/src/bots/weighted/events.rs
+@@ -675,6 +675,8 @@ mod tests {
+             pending: PendingStack::new(),
+             queue: Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/combat.rs w/rust/src/combat.rs
+index 5fe1551..7a325b5 100644
+--- i/rust/src/combat.rs
++++ w/rust/src/combat.rs
+@@ -631,6 +631,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/costs.rs w/rust/src/costs.rs
+index 1ca4ca6..0314111 100644
+--- i/rust/src/costs.rs
++++ w/rust/src/costs.rs
+@@ -884,6 +884,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/debugflags.rs w/rust/src/debugflags.rs
+index 1ce5bc8..3d76555 100644
+--- i/rust/src/debugflags.rs
++++ w/rust/src/debugflags.rs
+@@ -38,6 +38,8 @@ static REPLAY_DEBUG_ALL: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_AL
+ static REPLAY_DEBUG_TECHS: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_TECHS"));
+ static COLONIZE_FALLBACK_DUMP: LazyLock<bool> = LazyLock::new(|| flag("COLONIZE_FALLBACK_DUMP"));
+ static TIE_CENSUS: LazyLock<bool> = LazyLock::new(|| flag("TIE_CENSUS"));
++static SCIENCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("SCIENCE_ORACLE"));
++static RESOURCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("RESOURCE_ORACLE"));
+ 
+ /// `REPLAY_DEBUG`: per-game replay tracing.
+ pub fn replay_debug() -> bool {
+@@ -76,6 +78,24 @@ pub fn tie_census() -> bool {
+     *TIE_CENSUS
+ }
+ 
++/// `SCIENCE_ORACLE`: the science twin of the always-on culture-oracle
++/// checkpoint (`replay_common.rs`'s `CultureOracleDivergence`), gated behind
++/// its own env var per this pass's own task ("DIAGNOSTIC-ONLY code: it must
++/// not change any replay outcome") -- unlike culture, never on by default, so
++/// a plain `replaystats` run's output and every replay decision it makes stay
++/// byte-identical whether or not this module exists. Measurement-only; inert
++/// (one static bool read) otherwise.
++pub fn science_oracle() -> bool {
++    *SCIENCE_ORACLE
++}
++
++/// [`science_oracle`]'s resources twin -- same checkpoint shape, same
++/// env-var gate, `state.players[_].resources` /
++/// `GameState::last_end_of_turn_resources` in place of science's.
++pub fn resource_oracle() -> bool {
++    *RESOURCE_ORACLE
++}
++
+ // ============================================================== tests ====
+ 
+ #[cfg(test)]
+diff --git i/rust/src/economy.rs w/rust/src/economy.rs
+index 8bf12b6..5dcb3a8 100644
+--- i/rust/src/economy.rs
++++ w/rust/src/economy.rs
+@@ -1159,6 +1159,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/effects.rs w/rust/src/effects.rs
+index 28f49e7..0a48fdf 100644
+--- i/rust/src/effects.rs
++++ w/rust/src/effects.rs
+@@ -1822,6 +1822,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/events.rs w/rust/src/events.rs
+index 8237776..4d3527e 100644
+--- i/rust/src/events.rs
++++ w/rust/src/events.rs
+@@ -1763,6 +1763,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/game.rs w/rust/src/game.rs
+index 1a52feb..1d5f572 100644
+--- i/rust/src/game.rs
++++ w/rust/src/game.rs
+@@ -413,6 +413,8 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
+         pending: PendingStack::new(),
+         queue: Queue::new(),
+         last_end_of_turn_culture: [None; MAX_PLAYERS],
++        last_end_of_turn_science: [None; MAX_PLAYERS],
++        last_end_of_turn_resources: [None; MAX_PLAYERS],
+     };
+ 
+     // The thirteen row slots, dealt from the shuffled Age A civil deck. That
+@@ -1005,6 +1007,13 @@ pub fn resume_end_turn(state: &mut GameState, idx: u8) {
+     // before anything gets a chance to read it as "idx's total right after
+     // idx's own turn ended".
+     state.last_end_of_turn_culture[idx as usize] = Some(state.players[idx as usize].culture);
++    // Same snapshot-before-`advance_turn` timing, science and resources twins
++    // -- see `GameState::last_end_of_turn_science`/`last_end_of_turn_
++    // resources`'s own docs. Consumed by `replay_common.rs`'s
++    // `SCIENCE_ORACLE`/`RESOURCE_ORACLE`-gated oracles, mirroring the
++    // always-on culture oracle exactly.
++    state.last_end_of_turn_science[idx as usize] = Some(state.players[idx as usize].science);
++    state.last_end_of_turn_resources[idx as usize] = Some(state.players[idx as usize].resources);
+     advance_turn(state, &mut rng);
+ }
+ 
+diff --git i/rust/src/interact.rs w/rust/src/interact.rs
+index c98332b..1437125 100644
+--- i/rust/src/interact.rs
++++ w/rust/src/interact.rs
+@@ -1819,6 +1819,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/legal.rs w/rust/src/legal.rs
+index 1216e0e..548aa19 100644
+--- i/rust/src/legal.rs
++++ w/rust/src/legal.rs
+@@ -1220,6 +1220,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/replay_common.rs w/rust/src/replay_common.rs
+index b9b120e..e116941 100644
+--- i/rust/src/replay_common.rs
++++ w/rust/src/replay_common.rs
+@@ -168,6 +168,21 @@ use crate::state::{
+ };
+ use crate::{apply, costs, economy, effects, game, legal, CardId, CardType, Move};
+ 
++/// One journal-observed resolution of a single War over Technology spoils
++/// pick -- see `Replayer::war_tech_spoils`'s doc for the journal shape each
++/// variant comes from.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum WarSpoil {
++    /// `"<Color> steals <Card> from <Color>"`.
++    Steal(CardId),
++    /// `"<Color> gets N science; <Color> loses N science"` -- the amount
++    /// itself is not needed here: `interact::take_war_science` recomputes it
++    /// deterministically from the live `budget`/loser's science, exactly like
++    /// every other amount-bearing spoils line this file resolves by SHAPE,
++    /// not by re-deriving the engine's own arithmetic from journal text.
++    Science,
++}
++
+ // ---------------------------------------------------------------------
+ // Journal line
+ // ---------------------------------------------------------------------
+@@ -600,6 +615,22 @@ struct Replayer<'a> {
+     /// -- see `prescan_flip_wonders`'s doc and `resolve_intervening`'s
+     /// `ChoiceKind::FlipWonder` handling, which drains it.
+     flip_wonders: HashMap<u8, VecDeque<CardId>>,
++    /// Per-actor FIFO of [`WarSpoil`]s pulled off every journal-observed
++    /// `"<Color> takes spoils of war <Color> steals <Card> from <Color>"` /
++    /// `"<Color> takes spoils of war <Color> gets N science; <Color> loses N
++    /// science"` line -- the resolution of a `Pending::Choice(WarTech)`. War
++    /// over Technology's spoils are explicitly MIXABLE (FAQ p.8, "some or
++    /// all"): `interact::offer_war_tech` re-offers the choice with the
++    /// advantage reduced by whatever was just stolen, so BGO logs one
++    /// `"takes spoils of war"` line PER PICK, in the same order the choices
++    /// were made -- e.g. `7522455` line 201 (`"steals Navigation"`) then line
++    /// 202 (`"gets 6 science"`), a steal-then-remainder-as-science split. Set
++    /// directly by `replay_game` after construction (like `produces_grants`),
++    /// not threaded through `Replayer::new`'s own parameter list, for the
++    /// same reason that field gives -- see `prescan_war_tech_spoils`'s doc
++    /// and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
++    /// drains it.
++    war_tech_spoils: HashMap<u8, VecDeque<WarSpoil>>,
+     /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
+     /// over the rest of the journal -- see `discard_solver`'s module doc and
+     /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
+@@ -677,6 +708,29 @@ struct Replayer<'a> {
+     /// case: an ordinary `EndTurn` compares immediately, never touching this
+     /// field at all).
+     pending_culture_check: Option<PendingCultureCheck>,
++    /// [`Replayer::culture_oracle_divergence`]'s science twin -- see
++    /// [`ScienceOracleDivergence`]. `SCIENCE_ORACLE`-gated (unlike culture's
++    /// always-on checkpoint): `None` for every game unless
++    /// `debugflags::science_oracle()` is set, by construction, since
++    /// `record_science_check` is the only writer and it is never called
++    /// otherwise.
++    science_oracle_divergence: Option<ScienceOracleDivergence>,
++    /// [`Replayer::culture_oracle_checked`]/[`Replayer::culture_oracle_
++    /// agreed`]'s science twin.
++    science_oracle_checked: u32,
++    science_oracle_agreed: u32,
++    /// [`Replayer::pending_culture_check`]'s science twin -- see
++    /// [`PendingScienceCheck`].
++    pending_science_check: Option<PendingScienceCheck>,
++    /// [`Replayer::culture_oracle_divergence`]'s resources twin -- see
++    /// [`ResourceOracleDivergence`]. `RESOURCE_ORACLE`-gated, same
++    /// never-written-unless-flagged guarantee as `science_oracle_divergence`.
++    resource_oracle_divergence: Option<ResourceOracleDivergence>,
++    resource_oracle_checked: u32,
++    resource_oracle_agreed: u32,
++    /// [`Replayer::pending_culture_check`]'s resources twin -- see
++    /// [`PendingResourceCheck`].
++    pending_resource_check: Option<PendingResourceCheck>,
+     /// A `"GAME DATA UPDATED"` culture clause (`parse_game_data_updated_
+     /// culture`'s own doc) not yet applied because its stated `old` did not
+     /// match this reconstruction's live value the moment the line was read.
+@@ -950,6 +1004,7 @@ impl<'a> Replayer<'a> {
+             raid_destroys,
+             lose_colonies,
+             flip_wonders,
++            war_tech_spoils: HashMap::new(),
+             claimed_destroy_lines: std::collections::HashSet::new(),
+             discard_solver: DiscardSolver::new(future_military_needs),
+             record_decisions: false,
+@@ -965,6 +1020,14 @@ impl<'a> Replayer<'a> {
+             culture_oracle_checked: 0,
+             culture_oracle_agreed: 0,
+             pending_culture_check: None,
++            science_oracle_divergence: None,
++            science_oracle_checked: 0,
++            science_oracle_agreed: 0,
++            pending_science_check: None,
++            resource_oracle_divergence: None,
++            resource_oracle_checked: 0,
++            resource_oracle_agreed: 0,
++            pending_resource_check: None,
+             pending_culture_corrections: Vec::new(),
+             pending_resource_corrections: Vec::new(),
+             politics_false_skips: 0,
+@@ -1799,6 +1862,49 @@ impl<'a> Replayer<'a> {
+                         self.apply_move(Move::Choose { n: n as u8 });
+                         continue;
+                     }
++                    // A `Pending::Choice(WarTech)` (War over Technology's
++                    // "science, or steal a blue special technology instead,
++                    // repeat until the advantage runs out" -- FAQ p.8's
++                    // "some or all" mixing) is opened for the VICTOR only,
++                    // and only when the loser actually holds something
++                    // stealable (`interact::offer_war_tech`'s own `opts.
++                    // is_empty()` short-circuit means an unstealable war
++                    // never creates a `Pending` at all, so this arm is only
++                    // ever reached with a real decision to resolve). Each
++                    // pick resolves to its OWN journal line (`"takes spoils
++                    // of war ... steals <Card> ..."` or `"... gets N science
++                    // ..."`) rather than one line per war, because `offer_
++                    // war_tech` re-offers with the advantage reduced after
++                    // every steal -- see `Replayer::war_tech_spoils`'s doc.
++                    // Drained here in journal order, no validate-and-skip
++                    // loop needed (unlike `Raid`/`LoseColony`/`FlipWonder`
++                    // above): `prescan_war_tech_spoils`'s own doc explains
++                    // why an orphaned earlier entry can't happen for this
++                    // particular choice.
++                    ChoiceKind::WarTech { .. } => {
++                        let picked = self.war_tech_spoils.entry(decider).or_default().pop_front().ok_or_else(|| {
++                            MismatchKind::StuckPending(format!(
++                                "WarTech choice open for player {decider} but no journal-observed \
++                                 \"takes spoils of war\" line left to resolve it with"
++                            ))
++                        })?;
++                        let n = match picked {
++                            WarSpoil::Steal(card) => c
++                                .options
++                                .as_slice()
++                                .iter()
++                                .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
++                                .ok_or_else(|| {
++                                    MismatchKind::ParserGap(format!(
++                                        "WarTech options {:?} do not offer the journal-observed steal of {card:?}",
++                                        c.options.as_slice()
++                                    ))
++                                })?,
++                            WarSpoil::Science => crate::interact::WAR_TECH_SCIENCE_IDX as usize,
++                        };
++                        self.apply_move(Move::Choose { n: n as u8 });
++                        continue;
++                    }
+                     // Every other `ChoiceKind` is left alone HERE, on
+                     // purpose -- listed individually rather than behind a
+                     // `_` wildcard, so a future `ChoiceKind` variant fails
+@@ -1811,20 +1917,18 @@ impl<'a> Replayer<'a> {
+                     // player's OWN voluntary in-turn choice and fall through
+                     // to the `decider == expected_actor` shortcut a few
+                     // lines below, exactly like `DestroyOwn` always has;
+-                    // `Annex`/`WarTech` have not been needed by any corpus
+-                    // game sampled so far; `PactOffer` is handled by the
+-                    // bottom match's own explicit arm (auto-`Refuse`) for
+-                    // the `decider != expected_actor` case. Falling through
+-                    // here for all six is IDENTICAL to this match's
+-                    // predecessor (a chain of `if` statements that simply
+-                    // didn't mention them) -- no behaviour changed, only
+-                    // exhaustiveness was added.
++                    // `Annex` has not been needed by any corpus game sampled
++                    // so far; `PactOffer` is handled by the bottom match's
++                    // own explicit arm (auto-`Refuse`) for the `decider !=
++                    // expected_actor` case. Falling through here for all
++                    // five is IDENTICAL to this match's predecessor (a chain
++                    // of `if` statements that simply didn't mention them) --
++                    // no behaviour changed, only exhaustiveness was added.
+                     ChoiceKind::FreeCivil { .. }
+                     | ChoiceKind::FoodOrRes { .. }
+                     | ChoiceKind::DestroyOwn
+                     | ChoiceKind::Annex { .. }
+-                    | ChoiceKind::PactOffer { .. }
+-                    | ChoiceKind::WarTech { .. } => {}
++                    | ChoiceKind::PactOffer { .. } => {}
+                 }
+             }
+             // A live `Pending::Colonize` has no real `Move` anywhere in the
+@@ -2862,6 +2966,104 @@ impl<'a> Replayer<'a> {
+         self.record_culture_check(pending.lineno, pending.actor_seat, pending.journal_now, pending.last_action_class);
+     }
+ 
++    /// [`Replayer::record_culture_check`]'s science twin -- see
++    /// [`ScienceOracleDivergence`]'s own doc. Only ever called when
++    /// `debugflags::science_oracle()` is set (the dispatch loop's own gate),
++    /// so `science_oracle_checked`/`_agreed`/`_divergence` stay at their
++    /// `Replayer::new` defaults for every ordinary run.
++    fn record_science_check(&mut self, lineno: usize, round: &str, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
++        let got = self.state.last_end_of_turn_science[actor_seat as usize]
++            .take()
++            .unwrap_or_else(|| {
++                panic!(
++                    "record_science_check called for actor {actor_seat} at line {lineno} but \
++                     resume_end_turn never snapshotted this turn's post-production science -- \
++                     a caller reached this checkpoint before economy::end_of_turn actually ran"
++                )
++            }) as i32;
++        self.science_oracle_checked += 1;
++        if journal_now == got {
++            self.science_oracle_agreed += 1;
++            return;
++        }
++        if crate::debugflags::replay_debug() {
++            eprintln!(
++                "DEBUG end-turn science drift (SCIENCE_ORACLE): actor={actor_seat} journal says (now {journal_now}), \
++                 this binary computes {got} (delta {}) at line {lineno}",
++                got - journal_now,
++            );
++        }
++        if self.science_oracle_divergence.is_none() {
++            self.science_oracle_divergence = Some(ScienceOracleDivergence {
++                lineno,
++                round: round.to_string(),
++                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
++                journal_now,
++                reconstructed: got,
++                last_action_class,
++            });
++        }
++    }
++
++    /// [`Replayer::flush_pending_culture_check`]'s science twin.
++    fn flush_pending_science_check(&mut self) {
++        let Some(pending) = self.pending_science_check.take() else { return };
++        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
++        {
++            self.pending_science_check = Some(pending); // still blocked -- try again next line
++            return;
++        }
++        self.record_science_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
++    }
++
++    /// [`Replayer::record_culture_check`]'s resources twin -- see
++    /// [`ResourceOracleDivergence`]'s own doc. `RESOURCE_ORACLE`-gated, same
++    /// never-called-unless-flagged guarantee as `record_science_check`.
++    fn record_resource_check(&mut self, lineno: usize, round: &str, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
++        let got = self.state.last_end_of_turn_resources[actor_seat as usize]
++            .take()
++            .unwrap_or_else(|| {
++                panic!(
++                    "record_resource_check called for actor {actor_seat} at line {lineno} but \
++                     resume_end_turn never snapshotted this turn's post-production resources -- \
++                     a caller reached this checkpoint before economy::end_of_turn actually ran"
++                )
++            }) as i32;
++        self.resource_oracle_checked += 1;
++        if journal_now == got {
++            self.resource_oracle_agreed += 1;
++            return;
++        }
++        if crate::debugflags::replay_debug() {
++            eprintln!(
++                "DEBUG end-turn resources drift (RESOURCE_ORACLE): actor={actor_seat} journal says (now {journal_now}), \
++                 this binary computes {got} (delta {}) at line {lineno}",
++                got - journal_now,
++            );
++        }
++        if self.resource_oracle_divergence.is_none() {
++            self.resource_oracle_divergence = Some(ResourceOracleDivergence {
++                lineno,
++                round: round.to_string(),
++                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
++                journal_now,
++                reconstructed: got,
++                last_action_class,
++            });
++        }
++    }
++
++    /// [`Replayer::flush_pending_culture_check`]'s resources twin.
++    fn flush_pending_resource_check(&mut self) {
++        let Some(pending) = self.pending_resource_check.take() else { return };
++        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
++        {
++            self.pending_resource_check = Some(pending); // still blocked -- try again next line
++            return;
++        }
++        self.record_resource_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
++    }
++
+     /// Flushes every [`Replayer::pending_culture_corrections`] entry whose
+     /// stated `old` NOW matches this reconstruction's live culture for that
+     /// player -- see that field's own doc for why a `"GAME DATA UPDATED"`
+@@ -4490,6 +4692,60 @@ pub struct CultureOracleDivergence {
+     pub last_action_class: Option<ActionClass>,
+ }
+ 
++/// [`CultureOracleDivergence`]'s science twin -- see [`GameResult::
++/// science_oracle_divergence`]. `SCIENCE_ORACLE`-gated: BGO's own "End turn
++/// ... N science (now M) ..." clause sits right next to the culture clause
++/// on the exact same line, same running-total grammar, so this is a literal
++/// mirror, not a derived check. `round` (absent from `CultureOracleDivergence`,
++/// added here per this pass's own corpus-report deliverable -- "at what round
++/// do games first diverge") comes straight off the same `Line::round` column
++/// the checkpoint's own "End turn" line carries.
++pub struct ScienceOracleDivergence {
++    pub lineno: usize,
++    pub round: String,
++    pub actor: &'static str,
++    /// BGO's own "(now M)" running total -- ground truth.
++    pub journal_now: i32,
++    /// This binary's own reconstructed total at the same checkpoint --
++    /// `state.last_end_of_turn_science[actor]`'s snapshot, same
++    /// snapshot-before-`advance_turn` timing as `CultureOracleDivergence::
++    /// reconstructed`.
++    pub reconstructed: i32,
++    pub last_action_class: Option<ActionClass>,
++}
++
++/// [`PendingCultureCheck`]'s science twin -- same self-deferring shape for a
++/// checkpoint captured on an `EndTurn` line still blocked on an open
++/// `DiscardMilitary` decision.
++struct PendingScienceCheck {
++    lineno: usize,
++    round: String,
++    actor_seat: u8,
++    journal_now: i32,
++    last_action_class: Option<ActionClass>,
++}
++
++/// [`ScienceOracleDivergence`]'s resources twin -- same BGO "(now M)"
++/// running-total grammar, `"N resources (now M)"` in place of `"N science
++/// (now M)"`, `state.last_end_of_turn_resources` in place of `_science`.
++pub struct ResourceOracleDivergence {
++    pub lineno: usize,
++    pub round: String,
++    pub actor: &'static str,
++    pub journal_now: i32,
++    pub reconstructed: i32,
++    pub last_action_class: Option<ActionClass>,
++}
++
++/// [`PendingScienceCheck`]'s resources twin.
++struct PendingResourceCheck {
++    lineno: usize,
++    round: String,
++    actor_seat: u8,
++    journal_now: i32,
++    last_action_class: Option<ActionClass>,
++}
++
+ /// A culture-oracle comparison captured on an `EndTurn` line whose own
+ /// `economy::end_of_turn` stopped early at `discard_excess_military`
+ /// (leaving a `Pending::Choice(DiscardMilitary)` open) -- BGO's own
+@@ -5383,6 +5639,77 @@ fn prescan_flip_wonders(lines: &[Line], card_index: &HashMap<&'static str, CardI
+     out
+ }
+ 
++/// `"<Color> takes spoils of war <Color> steals <Card> from <Color>"` -- the
++/// journal's per-pick resolution of a War over Technology steal (see
++/// `Replayer::war_tech_spoils`'s doc for why BGO logs one such line per
++/// PICK, not one per war -- `interact::offer_war_tech` re-offers after every
++/// steal, and mixing is legal, FAQ p.8). The actor prints TWICE (confirmed
++/// across the corpus, e.g. `7522455` line 201: `"Orange takes spoils of war
++/// Orange steals Navigation from Purple"`) -- `actor_and_rest` strips the
++/// first, the second is checked to actually match rather than assumed to,
++/// since a mismatch would mean this shape was misidentified. The victim
++/// after `"from "` is not returned: it is already redundant with the live
++/// choice's own `victim` field, exactly like Terrorism's destroy line never
++/// needing an attacker.
++fn parse_war_tech_steal_line(index: &HashMap<&'static str, CardId>, text: &str) -> Option<(Color, CardId)> {
++    let (actor, rest) = actor_and_rest(text)?;
++    let rest = rest.strip_prefix("takes spoils of war ")?;
++    let (actor2, rest) = actor_and_rest(rest)?;
++    if actor2 != actor {
++        return None;
++    }
++    let rest = rest.strip_prefix("steals ")?;
++    let (id, rest) = longest_known_card_prefix(index, rest)?;
++    rest.strip_prefix(" from ")?;
++    Some((actor, id))
++}
++
++/// `"<Color> takes spoils of war <Color> gets N science; <Color> loses N
++/// science"` -- the journal's per-pick resolution of a War over Technology
++/// spoils pick landing on science (either the whole advantage, when the
++/// loser has nothing stealable, or the remainder after a steal). Only the
++/// SHAPE is checked, not the amount `N` -- see [`WarSpoil::Science`]'s own
++/// doc for why re-deriving it here would duplicate arithmetic `interact::
++/// take_war_science` already does deterministically from the live state.
++fn parse_war_tech_science_line(text: &str) -> Option<Color> {
++    let (actor, rest) = actor_and_rest(text)?;
++    let rest = rest.strip_prefix("takes spoils of war ")?;
++    let (actor2, rest) = actor_and_rest(rest)?;
++    if actor2 != actor {
++        return None;
++    }
++    let rest = rest.strip_prefix("gets ")?;
++    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
++    if digits_end == 0 {
++        return None;
++    }
++    rest[digits_end..].strip_prefix(" science")?;
++    Some(actor)
++}
++
++/// Pre-scans the whole journal once for every [`parse_war_tech_steal_line`] /
++/// [`parse_war_tech_science_line`] match into a per-actor FIFO, in journal
++/// order -- the exact sequence `interact::offer_war_tech`'s own re-offer
++/// loop produces the picks in, so no validate-and-skip is needed the way
++/// `raid_destroys`/`lose_colonies` need it (those FIFOs can also collect
++/// entries from an EARLIER, already-auto-resolved single-option choice;
++/// `offer_war_tech` never auto-resolves once a real `Pending::Choice` is
++/// open -- `push_choice`'s len-1 rule only fires before the choice exists at
++/// all, when `war_tech_options` is empty). See `Replayer::war_tech_spoils`'s
++/// doc and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
++/// drains this per-actor.
++fn prescan_war_tech_spoils(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<WarSpoil>> {
++    let mut out: HashMap<u8, VecDeque<WarSpoil>> = HashMap::new();
++    for line in lines {
++        if let Some((actor, id)) = parse_war_tech_steal_line(card_index, line.text) {
++            out.entry(actor.seat()).or_default().push_back(WarSpoil::Steal(id));
++        } else if let Some(actor) = parse_war_tech_science_line(line.text) {
++            out.entry(actor.seat()).or_default().push_back(WarSpoil::Science);
++        }
++    }
++    out
++}
++
+ /// Pre-scans the whole journal once for every point where a player is
+ /// observed playing a NAMED card out of their own military hand --
+ /// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
+@@ -5631,8 +5958,34 @@ fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, Card
+                 }
+             }
+             ActionClass::BuildBuilding | ActionClass::BuildUnit | ActionClass::BuildWonderStage | ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::DevelopTechnology | ActionClass::ElectLeader | ActionClass::ChangeGovernment | ActionClass::PlayTactic | ActionClass::DeclareWar | ActionClass::WinWar | ActionClass::PlayAggression | ActionClass::ProposePact | ActionClass::AcceptPact | ActionClass::Colonize | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PlayActionCard | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => {
++                // This actor committed ONE physical card by this OTHER
++                // route (built/played/developed/...), so at most ONE open
++                // take can be the card just committed -- `stack.retain`
++                // used to drop EVERY still-open take of this actor's for
++                // this card name, which is right for the overwhelmingly
++                // common single-copy case (nothing else there to wrongly
++                // keep) but wrong the moment a multi-copy card (`count`
++                // other than `[1,1,1]`) has TWO takes open for the same
++                // actor at once, e.g. one held over from an earlier turn
++                // plus one just taken this turn. Game `7522613` line
++                // 177/216/217/219: Green takes Reserves (I) for 2 CA
++                // (round 6), takes a SECOND Reserves (I) for 1 CA (round
++                // 7), then PLAYS Reserves (round 7) and puts one back for
++                // a 1 CA refund. `retain` wiped BOTH open takes on the
++                // `plays` line, so the later putback found nothing open at
++                // all -- `UnrecoverableHiddenInfo: unpaired BGO
++                // client-side undo`, not merely a wrong pairing. The
++                // putback's own refund (1 CA) is direct evidence only the
++                // round-7 take (also 1 CA) survived to be put back, so the
++                // round-6 take must be the one this commit consumed --
++                // i.e. commits drain the OLDEST open take first (FIFO),
++                // mirroring the order the physical cards were actually
++                // picked up in, and leaving any newer take(s) open for a
++                // later putback to still find and pair against.
+                 if let Some(stack) = open.get_mut(&c) {
+-                    stack.retain(|&(_, a, _)| a != actor);
++                    if let Some(pos) = stack.iter().position(|&(_, a, _)| a == actor) {
++                        stack.remove(pos);
++                    }
+                 }
+             }
+         }
+@@ -5895,6 +6248,17 @@ pub struct GameResult {
+     /// own reconstruction matched exactly.
+     pub culture_oracle_checked: u32,
+     pub culture_oracle_agreed: u32,
++    /// [`Replayer::science_oracle_divergence`]'s twin here -- see
++    /// [`ScienceOracleDivergence`]. `SCIENCE_ORACLE`-gated: always `None`
++    /// unless `debugflags::science_oracle()` was set for this run.
++    pub science_oracle_divergence: Option<ScienceOracleDivergence>,
++    pub science_oracle_checked: u32,
++    pub science_oracle_agreed: u32,
++    /// [`Replayer::resource_oracle_divergence`]'s twin here -- see
++    /// [`ResourceOracleDivergence`]. `RESOURCE_ORACLE`-gated.
++    pub resource_oracle_divergence: Option<ResourceOracleDivergence>,
++    pub resource_oracle_checked: u32,
++    pub resource_oracle_agreed: u32,
+     /// The FIRST line, if any, where this reconstruction's own
+     /// `state.age_civil` read strictly ahead of what the journal's `Line::
+     /// age` column proves the real game had reached -- see
+@@ -6478,6 +6842,7 @@ pub fn replay_game(
+     );
+     r.record_decisions = record_decisions;
+     r.produces_grants = prescan_produces_grants(&lines);
++    r.war_tech_spoils = prescan_war_tech_spoils(&lines, card_index);
+     r.discard_phase_oracle = prescan_discard_phase_oracle(&lines);
+     r.military_hand_ledger = prescan_military_hand_ledger(&lines, card_index);
+     r.spends_grants = prescan_spends_grants(&lines);
+@@ -6711,6 +7076,12 @@ pub fn replay_game(
+         // checkpoint is still waiting on a discard decision to resolve --
+         // see `PendingCultureCheck`'s own doc.
+         r.flush_pending_culture_check();
++        // Science/resources oracle twins -- no-ops (an `Option::take` on
++        // `None`) unless `SCIENCE_ORACLE`/`RESOURCE_ORACLE` is set, since
++        // `pending_science_check`/`pending_resource_check` are only ever
++        // populated by the gated capture sites below.
++        r.flush_pending_science_check();
++        r.flush_pending_resource_check();
+         // Self-deferring the same way: a no-op unless an earlier `"GAME
+         // DATA UPDATED"` culture clause is still waiting for this
+         // reconstruction's own live value to catch up -- see `Replayer::
+@@ -6892,6 +7263,45 @@ pub fn replay_game(
+                         r.record_culture_check(line.lineno, actor, want, previous_action_class);
+                     }
+                 }
++                // Science/resources oracle twins of the culture checkpoint
++                // just above -- SAME "(now M)" running-total grammar, SAME
++                // line, SAME discard-blocked-turn deferral shape, but gated
++                // behind their own `SCIENCE_ORACLE`/`RESOURCE_ORACLE` env
++                // vars (2026-08-14 pass: "DIAGNOSTIC-ONLY code: it must not
++                // change any replay outcome" -- unlike culture's always-on
++                // checkpoint, these must default to fully inert). See
++                // `ScienceOracleDivergence`/`ResourceOracleDivergence`'s own
++                // docs.
++                if crate::debugflags::science_oracle() {
++                    if let Some(want) = trailing_now_science(line.text) {
++                        if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary) {
++                            r.pending_science_check = Some(PendingScienceCheck {
++                                lineno: line.lineno,
++                                round: line.round.to_string(),
++                                actor_seat: actor,
++                                journal_now: want,
++                                last_action_class: previous_action_class,
++                            });
++                        } else {
++                            r.record_science_check(line.lineno, line.round, actor, want, previous_action_class);
++                        }
++                    }
++                }
++                if crate::debugflags::resource_oracle() {
++                    if let Some(want) = trailing_now_resources(line.text) {
++                        if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary) {
++                            r.pending_resource_check = Some(PendingResourceCheck {
++                                lineno: line.lineno,
++                                round: line.round.to_string(),
++                                actor_seat: actor,
++                                journal_now: want,
++                                last_action_class: previous_action_class,
++                            });
++                        } else {
++                            r.record_resource_check(line.lineno, line.round, actor, want, previous_action_class);
++                        }
++                    }
++                }
+                 r.actions_consumed += 1;
+                 continue;
+             }
+@@ -7500,6 +7910,12 @@ pub fn replay_game(
+         culture_oracle_divergence: r.culture_oracle_divergence,
+         culture_oracle_checked: r.culture_oracle_checked,
+         culture_oracle_agreed: r.culture_oracle_agreed,
++        science_oracle_divergence: r.science_oracle_divergence,
++        science_oracle_checked: r.science_oracle_checked,
++        science_oracle_agreed: r.science_oracle_agreed,
++        resource_oracle_divergence: r.resource_oracle_divergence,
++        resource_oracle_checked: r.resource_oracle_checked,
++        resource_oracle_agreed: r.resource_oracle_agreed,
+         civil_deck_premature_advance,
+         politics_false_skips: r.politics_false_skips,
+         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
+@@ -8860,6 +9276,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+@@ -9130,6 +9548,60 @@ mod tests {
+         assert_eq!(skip, [0, 1].into_iter().collect(), "the only open take pairs with the putback even with one candidate");
+     }
+ 
++    /// The `UnrecoverableHiddenInfo: unpaired BGO client-side undo` bug this
++    /// pass fixed (game `7522613` line 177/216/217/219): Green takes
++    /// Reserves (I) (`count [2,2,2]`) for 2 CA in round 6, takes a SECOND
++    /// Reserves (I) for 1 CA in round 7, PLAYS a Reserves (round 7,
++    /// resolving its one-time effect), then puts one back for a 1 CA
++    /// refund. The old `stack.retain(|a| a != actor)` on the `plays` line
++    /// dropped BOTH still-open takes (right for the single-copy case,
++    /// where there is only ever one to drop; wrong here, where a second,
++    /// unrelated take from an earlier turn was sitting in the same
++    /// per-card stack) -- so the later putback found an EMPTY stack and
++    /// reported unpaired outright, not merely a wrong pairing. The
++    /// putback's own 1 CA refund is direct evidence the round-7 take (also
++    /// 1 CA) is the one that survived to be put back, so the commit must
++    /// have consumed the OLDER round-6 take -- i.e. a commit should pop
++    /// only the OLDEST open take (FIFO), not wipe every open take.
++    #[test]
++    fn prescan_putback_skips_lets_a_commit_consume_only_the_oldest_open_take_not_every_open_take() {
++        let card_index = build_card_index();
++        let journal = [
++            line(177, "I", "Green takes Reserves in hand Green uses 2 civil action"),
++            line(216, "I", "Green takes Reserves in hand Green uses 1 civil action"),
++            line(217, "I", "Green plays Reserves Green produces 2 resources"),
++            line(219, "I", "Green puts Reserves back in the row Green gets 1 civil action"),
++        ];
++        let skip = prescan_putback_skips(&journal, &card_index);
++        assert!(
++            skip.contains(&1) && skip.contains(&3),
++            "the round-7 take (index 1) and the putback (index 3) are the pair the refund names -- got {skip:?}"
++        );
++        assert!(
++            !skip.contains(&0),
++            "the round-6 take (index 0) was consumed by the `plays` line, not put back, and must stay a real applied move -- got {skip:?}"
++        );
++    }
++
++    /// Companion to the above with only ONE open take at the time of the
++    /// commit: popping "the oldest" must degrade to the original
++    /// behaviour (removing that single entry), confirming the fix does
++    /// not regress the overwhelmingly common single-copy case.
++    #[test]
++    fn prescan_putback_skips_still_drops_a_lone_take_on_commit() {
++        let card_index = build_card_index();
++        let journal = [
++            line(1, "A", "Orange takes Frugality in hand Orange uses 1 civil action"),
++            line(2, "A", "Orange plays Frugality Orange increases population; Orange spends 2 food; Orange produces 1 food"),
++            line(3, "A", "Orange puts Frugality back in the row Orange gets 1 civil action"),
++        ];
++        let skip = prescan_putback_skips(&journal, &card_index);
++        assert!(
++            skip.is_empty(),
++            "the take was consumed by the `plays` line, so the later, unrelated putback has nothing open to pair with -- got {skip:?}"
++        );
++    }
++
+     /// The `IllegalMove: Pop` bug this pass fixed (game `7522648` round 7,
+     /// `docs/REPLAY.md`'s handoff): a player's own `End turn` line can leave
+     /// a `DiscardMilitary` choice open (`economy::end_of_turn` interrupted
+@@ -9440,6 +9912,122 @@ mod tests {
+         assert!(r.state.last_end_of_turn_culture[0].is_none(), "the snapshot must be consumed, not left to leak into a later checkpoint");
+     }
+ 
++    /// [`flush_pending_culture_check_defers_while_the_actors_own_discard_choice_is_still_open`]'s
++    /// science twin -- SCIDRIFT 2026-08-14 pass. Same false-positive shape:
++    /// production has not run yet, so the pre-production live `science` must
++    /// not be compared against BGO's post-production `"(now M)"`.
++    #[test]
++    fn flush_pending_science_check_defers_while_the_actors_own_discard_choice_is_still_open() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        let mut options = crate::state::OptionList::new();
++        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
++        options.push(ChoiceOption::Card(legion));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
++        r.state.players[0].science = 2; // pre-production, must not be compared yet
++        r.pending_science_check = Some(PendingScienceCheck {
++            lineno: 64,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_science_check();
++
++        assert_eq!(r.science_oracle_checked, 0, "must not count a checkpoint whose production has not run yet");
++        assert!(r.science_oracle_divergence.is_none(), "must not flag a false divergence while still blocked");
++        assert!(r.pending_science_check.is_some(), "the check must be put back, not dropped, while still blocked");
++    }
++
++    /// [`flush_pending_culture_check_compares_once_the_discard_resolves`]'s
++    /// science twin.
++    #[test]
++    fn flush_pending_science_check_compares_once_the_discard_resolves() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        assert!(r.state.pending.is_empty(), "fixture assumption: the discard already resolved, nothing left open");
++        r.state.last_end_of_turn_science[0] = Some(6); // resume_end_turn's own snapshot, matching BGO's own "(now 6)"
++        r.pending_science_check = Some(PendingScienceCheck {
++            lineno: 296,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_science_check();
++
++        assert_eq!(r.science_oracle_checked, 1, "the deferred checkpoint must be counted once resolved");
++        assert_eq!(r.science_oracle_agreed, 1, "6 == 6: this binary's reconstruction agrees with the journal");
++        assert!(r.science_oracle_divergence.is_none());
++        assert!(r.pending_science_check.is_none(), "consumed, not left pending forever");
++        assert!(r.state.last_end_of_turn_science[0].is_none(), "the snapshot must be consumed, not left to leak into a later checkpoint");
++    }
++
++    /// A real divergence must be recorded, not silently swallowed --
++    /// reproduces the exact shape PACTS's writeup found in game `7523162`
++    /// (Grey's tracked science silently drops 2 points with no journal
++    /// cause): `record_science_check` must set `science_oracle_divergence`
++    /// with the right sign (`reconstructed - journal_now`) when the
++    /// snapshot disagrees with BGO's own running total.
++    #[test]
++    fn record_science_check_flags_a_real_divergence_with_the_correct_sign() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.last_end_of_turn_science[0] = Some(4); // this binary's own reconstruction: 4
++        r.record_science_check(301, "10", 0, 6, Some(ActionClass::TakeCard)); // BGO says 6
++
++        assert_eq!(r.science_oracle_checked, 1);
++        assert_eq!(r.science_oracle_agreed, 0);
++        let d = r.science_oracle_divergence.expect("a real 4 vs 6 mismatch must be flagged");
++        assert_eq!(d.lineno, 301);
++        assert_eq!(d.round, "10");
++        assert_eq!(d.journal_now, 6);
++        assert_eq!(d.reconstructed, 4);
++        assert_eq!(d.reconstructed - d.journal_now, -2, "this binary under-counts by 2, matching the known 7523162 repro");
++    }
++
++    /// The resources oracle's own parity tests -- same shape as science's
++    /// pair just above, `resources`/`RESOURCE_ORACLE` in place of
++    /// `science`/`SCIENCE_ORACLE`.
++    #[test]
++    fn flush_pending_resource_check_defers_while_the_actors_own_discard_choice_is_still_open() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        let mut options = crate::state::OptionList::new();
++        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
++        options.push(ChoiceOption::Card(legion));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
++        r.state.players[0].resources = 2; // pre-production, must not be compared yet
++        r.pending_resource_check = Some(PendingResourceCheck {
++            lineno: 64,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_resource_check();
++
++        assert_eq!(r.resource_oracle_checked, 0, "must not count a checkpoint whose production has not run yet");
++        assert!(r.resource_oracle_divergence.is_none(), "must not flag a false divergence while still blocked");
++        assert!(r.pending_resource_check.is_some(), "the check must be put back, not dropped, while still blocked");
++    }
++
++    #[test]
++    fn record_resource_check_flags_a_real_divergence_with_the_correct_sign() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.last_end_of_turn_resources[0] = Some(9); // this binary's own reconstruction: 9
++        r.record_resource_check(240, "7", 0, 4, Some(ActionClass::BuildWonderStage)); // BGO says 4
++
++        assert_eq!(r.resource_oracle_checked, 1);
++        assert_eq!(r.resource_oracle_agreed, 0);
++        let d = r.resource_oracle_divergence.expect("a real 9 vs 4 mismatch must be flagged");
++        assert_eq!(d.reconstructed - d.journal_now, 5, "this binary over-counts by 5");
++    }
++
+     /// Real game `7523612` round 14 (`docs/REPLAY.md`'s "Culture oracle"
+     /// section, `WinWar`-bucket trace): Purple's own `EndTurn` opens a
+     /// `DiscardMilitary` pending exactly as the test above, but resolving it
+@@ -12154,6 +12742,60 @@ mod tests {
+         );
+     }
+ 
++    /// `WarTech` (War over Technology): the ENGINE BUG this whole pass
++    /// fixes -- games `7522455`/`7522967` (real BGA journals, `docs/
++    /// REPLAY.md`) both got stuck forever on this exact `Pending`, because
++    /// `resolve_intervening` used to leave `ChoiceKind::WarTech` alone
++    /// unconditionally (the fallthrough arm's own former comment: "`Annex`/
++    /// `WarTech` have not been needed by any corpus game sampled so far").
++    /// `interact::war_tech_spoils` itself already modelled mixing correctly
++    /// (`combat.rs`'s own `apply_war_spoils_technology_the_victor_may_mix_
++    /// cards_and_science` test) -- the gap was purely on this file's side:
++    /// nothing ever translated the journal's per-pick `"takes spoils of
++    /// war"` lines into the `Move::Choose`s that mixing needs. This drives
++    /// the real war_tech_spoils entry point exactly like production does
++    /// (not a hand-built `Pending::Choice`), so it also exercises `interact::
++    /// offer_war_tech`'s re-offer-after-a-steal loop: after the steal
++    /// resolves, budget 8 minus Navigation's cost 6 leaves 2, and with no
++    /// second stealable special tech in play, `offer_war_tech` auto-resolves
++    /// that remainder as science with NO second `Pending` -- so ONE `resolve_
++    /// intervening` call must drain the whole two-pick FIFO and leave
++    /// `state.pending` empty, not just the first pick.
++    #[test]
++    fn resolve_intervening_drains_a_war_tech_pending_split_between_a_steal_and_the_science_remainder() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known special technology");
++        r.state.players[1].techs.insert(navigation, crate::state::TechSlot { workers: 0, stored: 0 });
++        r.state.players[1].science = 20;
++        // The real production entry point (`combat::apply_war_spoils`'s own
++        // caller) -- opens the live `Pending::Choice(WarTech)` exactly like
++        // an actual resolved war does, budget 8 = Navigation's cost (6) plus
++        // a 2-science remainder, matching the split this test's own doc
++        // describes.
++        crate::interact::war_tech_spoils(&mut r.state, 0, 1, 8);
++        assert!(r.state.pending.top().is_some(), "war_tech_spoils must open a real choice when a steal is on offer");
++        r.war_tech_spoils.insert(0, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
++
++        // `expected_actor: 0`, matching the victor: once both picks drain
++        // and `state.pending` empties, `resolve_intervening`'s own "whose
++        // turn is it really" fallback must agree with whoever is genuinely
++        // up next in a freshly `Replayer::new`-constructed game (player 0),
++        // exactly like the `LoseColony`/`FlipWonder` tests above use `0` for
++        // the same reason -- an `expected_actor` that does not match would
++        // report an unrelated `StuckPending` AFTER this choice already
++        // resolved correctly, not a failure of the fix under test here.
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
++
++        assert!(result.is_ok(), "{result:?}");
++        assert!(r.state.pending.is_empty(), "both picks must be resolved, not just the first");
++        assert!(r.state.players[0].techs.has(navigation), "the stolen technology must move to the victor's play area");
++        assert!(!r.state.players[1].techs.has(navigation), "and leave the loser's");
++        assert_eq!(r.state.players[1].science, 18, "the loser pays the 2-science remainder after the 6-cost steal");
++        assert_eq!(r.state.players[0].science, 2, "the victor gains exactly the remainder, not the whole budget");
++    }
++
+     /// `FlipWonder` (Ravages of Time, the last of the seven kinds): a still-
+     /// open multi-wonder `Pending::Choice(FlipWonder)` used to fall through
+     /// to the generic catch-all, even though the real choice's own
+@@ -12222,6 +12864,70 @@ mod tests {
+         );
+     }
+ 
++    /// [`parse_war_tech_steal_line`]: the doubled-actor BGO shape from real
++    /// game `7522455` line 201, and the confirming `"wins War over
++    /// Technology ... takes spoils of war"` line right before it (`7522455`
++    /// line 198) -- which ends at "war" with no continuation -- must NOT be
++    /// mistaken for a steal.
++    #[test]
++    fn parse_war_tech_steal_line_reads_the_stolen_card_and_ignores_the_winwar_confirmation() {
++        let card_index = build_card_index();
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known card");
++        assert_eq!(
++            parse_war_tech_steal_line(&card_index, "Orange takes spoils of war Orange steals Navigation from Purple"),
++            Some((Color::Orange, navigation))
++        );
++        assert_eq!(
++            parse_war_tech_steal_line(
++                &card_index,
++                "Orange wins War over Technology Attacker's strength: 27; Defender's strength: 14; Orange takes spoils of war"
++            ),
++            None
++        );
++    }
++
++    /// [`parse_war_tech_science_line`]: real game `7522455` line 202 --
++    /// the remainder-as-science half of the same split whose steal half
++    /// [`parse_war_tech_steal_line_reads_the_stolen_card_and_ignores_the_winwar_confirmation`]
++    /// covers. Only the shape is checked, not the amount (see [`WarSpoil::
++    /// Science`]'s own doc), so a double-digit amount must parse identically
++    /// to a single-digit one.
++    #[test]
++    fn parse_war_tech_science_line_reads_the_actor_regardless_of_amount_width() {
++        assert_eq!(
++            parse_war_tech_science_line("Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"),
++            Some(Color::Orange)
++        );
++        assert_eq!(
++            parse_war_tech_science_line("Orange takes spoils of war Orange gets 11 science; Purple loses 11 science"),
++            Some(Color::Orange)
++        );
++        assert_eq!(parse_war_tech_science_line("Orange takes spoils of war Orange steals Navigation from Purple"), None);
++    }
++
++    /// [`prescan_war_tech_spoils`]: the exact two-line split real game
++    /// `7522455` logs (steal, then the remainder as science) must land in
++    /// that same order in the per-actor FIFO -- `resolve_intervening`'s
++    /// `ChoiceKind::WarTech` arm pops front-first, so a reversed order would
++    /// silently offer the science pick before the steal one.
++    #[test]
++    fn prescan_war_tech_spoils_orders_a_steal_then_science_split_in_journal_order() {
++        let card_index = build_card_index();
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known card");
++        let journal = [
++            line(
++                198,
++                "II",
++                "Orange wins War over Technology Attacker's strength: 27; Defender's strength: 14; Orange takes spoils of war",
++            ),
++            line(201, "II", "Orange takes spoils of war Orange steals Navigation from Purple"),
++            line(202, "II", "Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"),
++        ];
++        let mut out = prescan_war_tech_spoils(&journal, &card_index);
++        let q = out.remove(&Color::Orange.seat()).expect("Orange has two spoils picks");
++        assert_eq!(q, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
++    }
++
+     /// [`parse_ravages_of_time_line`]: the actor comes from `Line::color`
+     /// (column 2), not the text itself -- and a leading "The " in the
+     /// flavour text (present for some wonders, absent for others, e.g. "St.
+diff --git i/rust/src/state.rs w/rust/src/state.rs
+index dd0bfe6..d0609ca 100644
+--- i/rust/src/state.rs
++++ w/rust/src/state.rs
+@@ -1488,6 +1488,18 @@ pub struct GameState {
+     /// after `resume_end_turn` returns can read a value that has already
+     /// been through a DIFFERENT player's entire start-of-turn sequence.
+     pub last_end_of_turn_culture: [Option<u16>; MAX_PLAYERS],
++
++    /// [`GameState::last_end_of_turn_culture`]'s twin for science -- same
++    /// snapshot-before-`advance_turn` timing, same consumer
++    /// (`replay_common.rs`'s science oracle, `SCIENCE_ORACLE`-gated, mirrors
++    /// the culture oracle exactly). Instrumentation only.
++    pub last_end_of_turn_science: [Option<u16>; MAX_PLAYERS],
++
++    /// [`GameState::last_end_of_turn_culture`]'s twin for resources -- same
++    /// snapshot-before-`advance_turn` timing, same consumer
++    /// (`replay_common.rs`'s resource oracle, `RESOURCE_ORACLE`-gated).
++    /// Instrumentation only.
++    pub last_end_of_turn_resources: [Option<u16>; MAX_PLAYERS],
+ }
+ 
+ impl GameState {
