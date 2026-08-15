@@ -628,3 +628,23 @@ RULES
     A clean build and green tests prove nothing here.
   - The rsync-from-origin sync recipe with --delete has the same effect as a
     reset.  Establish the DIRECTION of every diff before copying anything in.
+
+--------------------------------------------------------------------------------
+SUPERSEDED, same day: the repo was normalized instead.
+--------------------------------------------------------------------------------
+The section above described a hazard, not a policy.  Rather than living with it,
+the tree was made a real checkout on 2026-08-15 (commit d1a9b93):
+
+  - `git reset --mixed origin/master` moved HEAD and the index while leaving the
+    working tree byte-untouched, so the live engine became a diff against origin
+    instead of an invisible untracked overlay.
+  - The dead Python implementation was deleted: engine/ advisor/ harness/ tests/
+    exp_quiesce/ and the 84 tools that import them.
+  - Everything else was committed and pushed.  748/721 re-proved afterwards with
+    identical guard ID sets.
+
+So ordinary git works here now.  Two things still hold:
+  - Only the corpus sweep proves the engine.  A green build proves nothing.
+  - `cp -Rc rust/src /private/tmp/live_src_backup_<date>` before anything that
+    rewrites the working tree.  It is free on APFS and it is the only reason the
+    2026-08-15 incident was recoverable.
