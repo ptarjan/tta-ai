@@ -1,0 +1,80 @@
+REDUEL — champion-vector head-to-head re-run on Mac mini CURRENT engine
+Binary: /Users/pt/tta-ai/rust/target/release/arena (not rebuilt)
+A = desktop vector (/private/tmp/desktop_harvest/rust_champion_Np.json)
+B = mini vector (/private/tmp/mini_champs_frozen/rust_champion_Np.json)
+
+=== 2 players ===
+cmd: /Users/pt/tta-ai/rust/target/release/arena --a /private/tmp/desktop_harvest/rust_champion_2p.json --b /private/tmp/mini_champs_frozen/rust_champion_2p.json --players 2 --games 720 --seed 42 --threads 5
+games: 720 (360 deals x 2 seats)
+win rate (A/desktop): 55.8% +/- 3.7 (null 50.0%), p = 0.0018
+[naive +/- 3.6, rho +0.03, deff 1.03, 360 deals]
+culture: A 90.2, best other 83.1, lead +7.1 +/- 4.2
+verdict line printed by arena: "accept -- rust_champion_2p beats rust_champion_2p (interval clear of the null)"
+DESKTOP APPEARS TO WIN -> reproducibility re-run at seed 999 required. [2p]
+
+--- 2p reproducibility re-run, seed 999 ---
+cmd: /Users/pt/tta-ai/rust/target/release/arena --a /private/tmp/desktop_harvest/rust_champion_2p.json --b /private/tmp/mini_champs_frozen/rust_champion_2p.json --players 2 --games 720 --seed 999 --threads 5
+games: 720 (360 deals x 2 seats)
+win rate (A/desktop): 56.4% +/- 3.7 (null 50.0%), p = 0.0006
+culture: A 91.7, best other 80.6, lead +11.1 +/- 4.3
+verdict: "accept" -- REPRODUCES (seed 42: 55.8%, seed 999: 56.4%, both p<0.005). 2p VERDICT: desktop vector beats mini vector -- YES.
+
+=== 3 players ===
+cmd: /Users/pt/tta-ai/rust/target/release/arena --a /private/tmp/desktop_harvest/rust_champion_3p.json --b /private/tmp/mini_champs_frozen/rust_champion_3p.json --players 3 --games 720 --seed 42 --threads 5
+games: 720 (240 deals x 3 seats)
+win rate (A/desktop): 56.2% +/- 3.7 (null 33.3%), p = 0.0000
+[naive +/- 3.6, rho +0.01, deff 1.03, 240 deals]
+culture: A 158.9, best other 148.1, lead +10.8 +/- 4.9
+verdict line printed by arena: "accept -- rust_champion_3p beats rust_champion_3p (interval clear of the null)"
+DESKTOP APPEARS TO WIN -> reproducibility re-run at seed 999 required. [3p]
+
+--- 3p reproducibility re-run, seed 999 ---
+cmd: /Users/pt/tta-ai/rust/target/release/arena --a /private/tmp/desktop_harvest/rust_champion_3p.json --b /private/tmp/mini_champs_frozen/rust_champion_3p.json --players 3 --games 720 --seed 999 --threads 5
+games: 720 (240 deals x 3 seats)
+win rate (A/desktop): 58.9% +/- 3.8 (null 33.3%), p = 0.0000
+culture: A 162.9, best other 148.5, lead +14.4 +/- 5.1
+verdict: "accept" -- REPRODUCES (seed 42: 56.2%, seed 999: 58.9%, both p<0.0001). 3p VERDICT: desktop vector beats mini vector -- YES.
+
+=== 4 players ===
+cmd: /Users/pt/tta-ai/rust/target/release/arena --a /private/tmp/desktop_harvest/rust_champion_4p.json --b /private/tmp/mini_champs_frozen/rust_champion_4p.json --players 4 --games 720 --seed 42 --threads 5
+games: 720 (180 deals x 4 seats)
+win rate (A/desktop): 28.3% +/- 3.1 (null 25.0%), p = 0.0370
+[naive +/- 3.3, rho -0.04, deff 0.88, 180 deals]
+culture: A 231.5, best other 274.0, lead -42.6 +/- 5.6  <-- NOTE: culture lead is NEGATIVE despite win-rate "accept"; marginal p-value (0.037). Flagged as weakest/most suspect result.
+verdict line printed by arena: "accept -- rust_champion_4p beats rust_champion_4p (interval clear of the null)"
+DESKTOP APPEARS TO WIN (marginally) -> reproducibility re-run at seed 999 required. [4p]
+
+--- 4p reproducibility re-run, seed 999 ---
+cmd: /Users/pt/tta-ai/rust/target/release/arena --a /private/tmp/desktop_harvest/rust_champion_4p.json --b /private/tmp/mini_champs_frozen/rust_champion_4p.json --players 4 --games 720 --seed 999 --threads 5
+games: 720 (180 deals x 4 seats)
+win rate (A/desktop): 27.4% +/- 3.1 (null 25.0%), p = 0.1179
+culture: A 225.4, best other 274.4, lead -49.0 +/- 5.8
+verdict line printed by arena: "inconclusive -- the interval still straddles the null"
+DOES NOT REPRODUCE. seed 42 gave a marginal "accept" (p=0.037) with a NEGATIVE culture lead already; seed 999 flips arena's own verdict to inconclusive (p=0.118), also negative culture lead. 4p VERDICT: INCONCLUSIVE -- do not treat as a desktop win.
+
+=================================================================
+SUMMARY / FINAL VERDICTS (engine: current mini build, not rebuilt)
+=================================================================
+2p: desktop vector beats mini vector.  YES.
+    seed42  win% 55.8 +/-3.7 (null 50.0) p=0.0018  culture lead +7.1 +/-4.2
+    seed999 win% 56.4 +/-3.7 (null 50.0) p=0.0006  culture lead +11.1 +/-4.3
+    Reproduces across seeds; culture lead consistent and positive. Safe to install.
+
+3p: desktop vector beats mini vector.  YES.
+    seed42  win% 56.2 +/-3.7 (null 33.3) p<0.0001  culture lead +10.8 +/-4.9
+    seed999 win% 58.9 +/-3.8 (null 33.3) p<0.0001  culture lead +14.4 +/-5.1
+    Reproduces strongly across seeds; culture lead consistent and positive. Safe to install.
+
+4p: desktop vector beats mini vector.  INCONCLUSIVE -- do NOT install.
+    seed42  win% 28.3 +/-3.1 (null 25.0) p=0.0370  culture lead -42.6 +/-5.6  (arena said "accept")
+    seed999 win% 27.4 +/-3.1 (null 25.0) p=0.1179  culture lead -49.0 +/-5.8  (arena said "inconclusive")
+    Marginal seed-42 result did not reproduce; culture lead is negative at BOTH seeds (A's own
+    culture score is lower than the best-other score even while nominally "winning" games), which
+    is inconsistent with a genuinely stronger vector. This is exactly the desktop-old-engine result
+    the task warned about -- it does not transfer to the mini's current engine at 4p.
+
+All runs used: --games 720 --threads 5 (mini is 6-core/no-HT, per instructions), --a = desktop
+vector, --b = mini vector, binary /Users/pt/tta-ai/rust/target/release/arena (not rebuilt).
+No files under /Users/pt/tta-ai/experiments/ were touched. No git commands were run. No source
+was edited. No champion files were installed -- this is a measurement/recommendation only.
+
