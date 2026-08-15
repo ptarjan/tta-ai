@@ -1,10 +1,53 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-14 (second update this day)
-    base commit ....... d68eeb3  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 674 of 1011   (632 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_674.txt)
-    committed copy .... analysis/guard_ids_674.txt
+    updated 2026-08-14 (fourth update this day)
+    base commit ....... 55bbca5  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 687 of 1011   (661 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_687.txt)
+    committed copy .... analysis/guard_ids_687.txt
+      55bbca5  combat::resolve_war_outcome fires synchronously inside
+               game::start_turn, as a side effect of applying the defender's
+               own last old-age EndTurn line -- BEFORE replay_common's loop
+               reaches the WinWar confirmation that triggers
+               catch_up_civil_age. A leader BGA had already antiquated was
+               still on the board, still contributing strength. game::antiquate
+               splits into antiquate_hands and
+               antiquate_leader_wonder_and_pacts; only the second half runs
+               early, via an upcoming_confirmed_winwar_age lookahead.
+               age_civil, civil_deck and the 12.2.4 deduction stay deferred.
+               651->661 exact, completions unchanged, zero regressions.
+               A "no older age immediately after WinWar" guard was tried and
+               DROPPED: two genuine transitions have the identical adjacency
+               shape as the false positive, so they are indistinguishable from
+               the journal text. What makes the early half safe is that
+               leader/wonder/pact removal touches ONE player and has no
+               cross-player blast radius -- not any property of the line order.
+      d6a9fa3  the Age II Fortifications tactic was baked 4/2; BGA's own card
+               data prints 5/3. 674->687, 632->651, zero regressions. When a
+               trace lands on a specific card, diff its constants against
+               sources/bga_throughtheages_material.inc.php BEFORE tracing the
+               mechanism.
+      a9aea83  rust/src/bin/cardblame.rs ranks cards by how much they enrich
+               replay failure. READ ITS round_with/round_without COLUMNS: an
+               early leader is definitionally absent from any full-length
+               completed game, so all ten top leaders scored a meaningless
+               100% failure. And re-derive after every landing -- the military
+               score cluster (war odds ratio 2.72x) survived in the ranking
+               after 55bbca5 removed its actual cause, but the census
+               collapsed to 1.14x.
+      TWO BUCKETS ARE NOW RETIRED AS SINGLE-FIX TARGETS:
+        - the 97-game "decider != expected actor" bucket. 268 genuine
+          discard-count disagreements exist corpus-wide (actual is ALWAYS
+          higher than announced; the resolution line is ground truth), but a
+          fix confined to exactly that self-flagged subset still measured
+          687->686 with 0 wins: those games each carry SEVERAL independent
+          small divergences stacked, so fixing one completes none of them.
+        - the 36 score-mismatch games as a "military card" cluster; it was
+          this same war antiquation-timing bug.
+      A MEASUREMENT TRAP, found the hard way: hand-size delta is NOT a valid
+      way to count discards. resolve_discard can resume the rest of
+      economy::end_of_turn -- including that turn's own military draw -- inside
+      the same call, so hand size can RISE across a discard. Count decisions.
       d68eeb3  Immigration ("all civilizations with the most happy faces gain
                1 population") must affect every tied civilization even when
                the tie is at ZERO. `events::apply_tied_targets` is shared with
