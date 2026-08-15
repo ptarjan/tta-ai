@@ -1,184 +1,239 @@
-AGE CATCH-UP WORKER (narrower PlayEvent predicate) -- 2026-08-14
-==================================================================
+NAPOLEON BONAPARTE / War-over-Culture (-6,+6) BUG -- FIXED -- WORKER NOTES
+===========================================================================
+Clone: /private/tmp/agecatch (branched from c772970), deleted at end of task.
+Outcome: FIX LANDED, committed in the clone. Guard bar met with margin
+(exact-match 651 -> 661, +10, not just the 5 diagnosed games -- see below).
+Patch: analysis/worker_notes_2026-08-14/agecatch.patch (non-empty,
+`git diff c772970 -- rust/`).
 
-DID NOT WORK. agecatch.patch is EMPTY (git diff 628c0dd HEAD has zero
-lines) because the fix was reverted after it regressed real game 7523021
-in the full sweep -- the exact same failure the previous scorediv worker
-hit with the blanket "trust every PlayEvent line" version, at the exact
-same line, for a reason explained below. Documented in full so nobody
-re-tries this specific predicate.
+STARTING POINT
+--------------
+Read napoleon__NAPOLEON.txt (previous worker, no fix landed but root cause
+fully confirmed): `combat::resolve_war_outcome` fires synchronously inside
+`game::start_turn`, itself triggered as a side effect of applying the
+DEFENDER's own last old-age `EndTurn`/`Discard` journal line -- there is no
+journal LINE boundary between that trailer and the attacker's synchronous
+start-of-turn cascade for `replay_common.rs`'s line-by-line loop to hook
+into. `catch_up_civil_age` is deliberately deferred past `EndTurn`/
+`Discard`/`WinWar` lines (protecting a DIFFERENT, already-fixed bug -- game
+`7523079`, see below), so by the time the loop would normally catch
+`state.age_civil` up, the war has already resolved off a stale age, and an
+Age II leader (Napoleon Bonaparte) that BGA's own game had already
+antiquated is still contributing his `StrengthPerUnitType` bonus.
 
-Before/after exact-match count: 532 -> 531 (regressed by one; also
-532 -> 531 completed-game count, since 7523021 stopped completing at all).
-Regression check (`comm -23 /tmp/tu_ids.txt /tmp/ac_ids.txt`) WITH the fix
-applied: NOT empty --
+Re-confirmed the previous worker's own instrumented finding directly (added
+and then reverted a temporary `eprintln!` in `game::start_turn`, run with
+`SCOREDIV_LINE_DEBUG=1`, game `7522590`): processing journal line 315 (index,
+lineno 317 -- Orange's `EndTurn`, tagged Age III) synchronously fires
+`start_turn` for Purple with `age_civil == III`, BEFORE the loop even reads
+line 316 (lineno 318, "No Discard Phase", still III) or line 317 (lineno
+319, "Purple wins War over Culture", tagged IV). BGA's own age had already
+turned over between Orange's `EndTurn` and Purple's very next action --
+same round (17), immediate next line.
 
-  7523021
+THE FIX
+-------
+Per the diagnosing worker's own suggested shape: decouple ANTIQUATION
+(leader/wonder/pact discard) from the rest of what an age transition does
+(§12.2.4's "-2 yellow_bank" deduction, civil_deck rebuild, `age_civil`
+itself), and let the replayer run JUST the antiquation half early, at
+exactly the moment it detects the synchronous cascade is about to use a
+stale age -- while leaving everything else on the EXACT same deferred
+schedule the ~10 existing `catch_up_civil_age`/`is_trustworthy_age_line`
+tests already pin.
 
--- confirmed on the final, fully-reverted tree that this is gone again
-(comm output empty, 582/582 completed, 532/582 exact, matching the
-documented baseline exactly).
+1. `rust/src/game.rs`: split `antiquate(state, ended)` into two private
+   halves -- `antiquate_hands` (unchanged, still called by `antiquate`) and
+   `antiquate_leader_wonder_and_pacts` (also still called by `antiquate`,
+   same order as before, so `antiquate`'s own external behaviour, and every
+   existing test of it via `advance_age`/`force_civil_age_at_least`, is
+   byte-for-byte unchanged). Hands were deliberately kept OUT of the new
+   early-antiquation path: they are what the discard-phase hand-size
+   machinery (`interact::discard_options`, `prescan_discard_phase_oracle`,
+   `apply_one`'s `Discard` arm -- explicitly off-limits, a different worker
+   owns that path right now) reasons about, and running their antiquation
+   ahead of the deferred, fully-timed `advance_age` call risked shifting a
+   discard-phase decision that split has no business touching. Leader/
+   wonder/pacts have no such entanglement -- `on_leave_play`'s token
+   bookkeeping is the only side effect, and it is idempotent the same way
+   the rest of `antiquate` already is (a card already gone when the LATER,
+   deferred, full `antiquate` call reaches the same `(state, ended)` pair is
+   simply not found, so that call is a no-op for it).
 
-/private/tmp/agecatch DELETED at the end of this pass: the patch is empty
-and the tree is confirmed byte-identical to 628c0dd (`git diff 628c0dd HEAD`
-zero lines both for `src/replay_common.rs` and overall), so there is
-nothing there worth preserving.
+   Added `pub(crate) fn antiquate_leader_wonder_pacts_up_to(state, target)`:
+   loops `antiquate_leader_wonder_and_pacts(state, ended)` for every age
+   from `state.age_civil` up to (not including) `target`, WITHOUT ever
+   bumping `state.age_civil`, touching `civil_deck`, or running the §12.2.4
+   deduction.
 
+2. `rust/src/replay_common.rs`: added `upcoming_confirmed_winwar_age(journal,
+   i, card_index)` -- scans forward from line `i`, skipping ONLY
+   `is_end_of_turn_bridge_line` lines (`Bookkeeping`, or `EndTurn`/`Discard`
+   action classes -- exactly the untrusted-for-catchup classes
+   `is_trustworthy_age_line` already excludes, minus `WinWar` itself, which
+   is what this function is looking FOR), and returns the first `WinWar`
+   line's own age if one is found before any real decision line. Wired into
+   `replay_game`'s main loop right after the existing
+   `is_trustworthy_age_line`-gated `catch_up_civil_age` call: when
+   `upcoming_confirmed_winwar_age` returns `Some(age)`,
+   `game::antiquate_leader_wonder_pacts_up_to(&mut r.state, age)` runs
+   immediately, before this line's own `try_apply` (and therefore before
+   whatever synchronous cascade that `try_apply` might trigger).
 
-THE PREDICATE ACTUALLY IMPLEMENTED
-====================================
-Per the previous worker's own "WHAT'S NEEDED" note (scorediv__SCOREDIV.txt,
-end of DEEP-DIVE 1): trust a `PlayEvent` line's own age tag for
-`catch_up_civil_age` ONLY when BOTH:
+THE DISCRIMINATOR I HAD TO WIDEN (this is the part worth reading closely)
+--------------------------------------------------------------------------
+My first version of `upcoming_confirmed_winwar_age` mirrored
+`is_trustworthy_age_line`'s own WinWar-exclusion reasoning defensively: it
+additionally required the line AFTER the `WinWar` confirmation to not be
+tagged an OLDER age, matching the exact shape documented as unsafe on real
+game `7523079` (a `WinWar` line's timestamp collides with, and exports one
+line before, a DIFFERENT player's own still-old-age `End turn` trailer;
+trusting it there ran the cross-player §12.2.4 deduction a turn early).
 
-  1. the line's own actor (via `corpus::actor_and_rest`, then
-     `Color::seat()`) equals `state.current` at the moment the line is
-     reached in the replay loop, AND
-  2. `state.pending`/`state.queue` are both empty.
+That extra check made the isolated cluster-game check pass for only 3 of the
+5 diagnosed games (7522509, 7523473, 7522590) -- 7523045 and 7523127 stayed
+broken. Traced why: both have the IDENTICAL "older age immediately after
+WinWar" shape as `7523079` (confirmed by reading the raw journal -- game
+`7523045` line 335 `"Purple wins War over Culture"` tagged IV is immediately
+followed by line 336, Orange's own still-Age-III `EndTurn`/discard trailer,
+all three lines sharing one timestamp, `01:29:32`), yet they are GENUINE
+transitions, not collisions -- the previous worker's own instrumentation
+already proved this shape's `WinWar` age tag is real ground truth.
 
-Implemented at `replay_common.rs`'s single `catch_up_civil_age` call site
-(~line 5521-5523 at 628c0dd, inside `replay_game`'s main loop), leaving
-`is_trustworthy_age_line` itself (and its OTHER call site,
-`last_real_decision_line_for_age`, the backward check) completely
-untouched -- i.e. this predicate is intentionally scoped narrower than
-even the task description's phrasing suggests: it does NOT change
-`is_trustworthy_age_line`'s answer for `PlayEvent` in general (still
-`false`, matching every other confirmation class), it only adds a SEPARATE
-OR-condition at the one call site that actually needs the exception:
+The two shapes are NOT mechanically distinguishable by "what tag trails the
+WinWar line" alone -- what differs is what the TRUSTING code then DOES.
+`is_trustworthy_age_line`'s caller (the untouched, pre-existing
+`catch_up_civil_age` call) forces `state.age_civil` itself, `civil_deck`'s
+rebuild, AND §12.2.4's CROSS-PLAYER "-2 yellow_bank" deduction -- real,
+shared, wide-blast-radius state a same-timestamp tie can genuinely corrupt
+for an unrelated bystander (`7523079`'s Purple). My new function's only
+caller, by contrast, calls ONLY `antiquate_leader_wonder_pacts_up_to`, which
+touches ONLY the specific player who owns the too-old leader/wonder/pact
+being removed -- no `age_civil`, no `civil_deck`, no cross-player
+`yellow_bank` deduction. There is no shared state left for the tie to
+corrupt. So I dropped the "no regression after WinWar" check entirely (see
+`upcoming_confirmed_winwar_age`'s own doc in replay_common.rs for the full
+argument, cross-referencing both real games). After dropping it, all 5
+cluster games matched exactly, and the FULL 687-game guard sweep still
+showed zero regressions (see bar below) -- the corpus itself is the actual
+proof this widening was safe, not just the local reasoning.
 
-    let outcome = classify(card_index, line.text);
-    let is_current_actors_own_play_event =
-        matches!(&outcome, LineOutcome::Action(Classified { class: ActionClass::PlayEvent, .. }))
-            && actor_and_rest(line.text).is_some_and(|(actor, _)| actor.seat() == r.state.current);
-    if is_trustworthy_age_line(outcome) || is_current_actors_own_play_event {
-        catch_up_civil_age(&mut r.state, line.age);
-    }
+TESTS ADDED (all confirmed RED by `git stash` + rebuild + rerun, then
+restored -- see "GUARD" section for the exact RED/GREEN cluster numbers)
+--------------------------------------------------------------------------
+rust/src/game.rs (mod tests):
+  - antiquate_leader_wonder_pacts_up_to_discards_a_too_old_leader_without_moving_the_age
+  - antiquate_leader_wonder_pacts_up_to_keeps_a_leader_still_within_one_age
+  - antiquate_leader_wonder_pacts_up_to_is_idempotent_with_the_later_deferred_antiquate
 
-Condition 2 (pending/queue empty) is NOT re-implemented here -- it is
-already `catch_up_civil_age`'s own unconditional internal guard (line
-5236: `if state.pending.is_empty() && state.queue.is_empty() { ... }`), so
-adding it again at the call site would be redundant; the OR-condition only
-needed to add condition 1.
+rust/src/replay_common.rs (mod tests):
+  - upcoming_confirmed_winwar_age_finds_the_bridge_across_a_no_discard_phase_trailer
+      (real game 7522590's own shape)
+  - upcoming_confirmed_winwar_age_is_none_when_a_real_decision_comes_before_any_winwar
+  - upcoming_confirmed_winwar_age_is_none_when_the_journal_ends_inside_the_bridge
+  - upcoming_confirmed_winwar_age_trusts_a_winwar_even_when_an_older_tagged_line_follows_it
+      (real game 7523045's own shape -- the widened case)
+  - the_call_site_antiquates_a_too_old_leader_off_an_upcoming_winwar_without_moving_the_age
+      (end-to-end: the exact call-site snippet, Napoleon-shaped fixture)
 
-This is deliberately narrower than blanket-trusting `PlayEvent`
-(`is_trustworthy_age_line`'s own doc explicitly documents the class as
-"BGO logs the confirmation BEFORE the real action that causes it" --
-generally untrustworthy) and deliberately does NOT touch
-`last_real_decision_line_for_age` (the "hidden twin" backward check,
-`is_trustworthy_age_line`'s own doc insists both call sites get an
-IDENTICAL answer to avoid a silently-diverging exception list) -- because
-that function is a static one-time prescan over the whole journal BEFORE
-any replay happens, with no `GameState` and therefore no notion of
-`state.current` at a given line index at all. There is no way to express
-"actor == state.current" there without actually replaying, so extending
-the SAME predicate to both sites, as the doc's own invariant asks for, is
-not mechanically possible for this specific carve-out. This is flagged
-here as a real, unresolved tension with that doc's stated design, not
-silently ignored -- but since the whole predicate turned out not to work
-anyway, it was moot in the end.
+None of the ~10 pre-existing `catch_up_civil_age`/`is_trustworthy_age_line`
+tests were touched -- they pin the UNCHANGED, still-fully-deferred
+age_civil/civil_deck/yellow_bank schedule; my fix only adds a second,
+narrower, independent trigger for the leader/wonder/pacts half.
 
-A pinning test was written, verified RED (temporarily reverting just the
-new OR-condition back to pre-fix `if is_trustworthy_age_line(outcome)`,
-which made the test's second assertion fail with
-`left: III, right: IV`), then GREEN again, then REMOVED along with the
-production change when the full sweep regressed -- consistent with this
-task's own "fix the engine, not the comparison" framing: a test pinning
-behaviour that regresses the corpus is not a fix worth keeping.
+GUARD (mandatory bar, quoted verbatim)
+------------------------------------------
+Build:
+  cd /private/tmp/agecatch/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  -> "Finished `difftest` profile [optimized] target(s) in ..." (clean)
 
+Isolated cluster check (5 diagnosed games, RED via `git stash` without the
+fix, GREEN with it restored):
+  RED  (git stash, rebuild): "5/5 completed ... 0/5 ... matched index.tsv
+        exactly ... delta distribution ... [-6, -6, -6, -6, -6, 6, 6, 6, 6, 6]"
+  GREEN (git stash pop, rebuild): "5/5 completed ... 5/5 ... matched index.tsv
+        exactly. No non-matching player-scores to report a delta
+        distribution over."
 
-WHY IT REGRESSES 7523021, TRACED
-===================================
-Game `7523021`'s journal, lines 233-241 (already Age III per the journal's
-own age column since line 217 -- no II->III transition is visible in this
-window):
+Full sweep (SCOREDIV_DUMP_COMPLETED=1), header lines quoted verbatim:
+  "# replaystats: 1011 games sampled, 687 completed to state.game_over
+  687/687 completed games actually flipped state.game_over (the other 0
+  reached the journal's own \"End of game\" marker but hit a mismatch
+  afterward, so `game::scores` was never computed for them); 661/687 of
+  those matched index.tsv exactly (sorted per-game score-list compare)."
 
-  233  Purple  III 14  No Discard Phase                  (Purple's turn ends)
-  234  Orange  III 15  Orange plays event ... II/Iconoclasm; ...
-  235  Orange  III 15  Orange discovers Justice System ...
-  236  Orange  III 15  Orange takes Computers in hand ...
-  237  Orange  III 15  Orange takes Movies in hand ...
-  238  Orange  III 15  Orange builds Printing Press ...
-  239  Orange  III 15  Discard Phase 1 military card must be discarded
-  240  Orange  III 15  End turn Orange scores: ...
-  241  Orange  III 15  Orange discards 1 card    <-- StuckPending fires here
+  651 -> 661 exact (+10; the previous worker's own instrument showed only 5
+  games hit exactly this symptom, but the same fix generalises to the whole
+  "leader/wonder holder wins a war that resolves one age after it was
+  declared" shape across the corpus, not just Napoleon Bonaparte).
+  687 completed, unchanged (no game gained or lost completion).
 
-Line 234 ("Orange plays event ... Iconoclasm") is a `PlayEvent` line whose
-own actor (Orange) IS `state.current` at that point in the replay: Purple's
-turn had just fully closed at line 233 ("No Discard Phase", a Bookkeeping
-trailer with nothing outstanding), so the turn had already legitimately
-passed to Orange before line 234 is even reached. `state.pending`/
-`state.queue` are both empty too (nothing is mid-resolution). This means
-BOTH of the new predicate's conditions are satisfied -- it is
-indistinguishable, for this exact line, from the blanket "trust every
-PlayEvent line" version the previous worker already tried and reverted.
-Forcing the age catch-up here (rather than deferring it to whatever line
-first triggers it under the OLD rule) is what desyncs some later
-hand-limit/antiquation timing enough that by line 241 `decider() !=
-expected_actor()` with nothing pending -- the identical `StuckPending:
-decider # != expected actor #, phase Actions, no pending` failure, at the
-identical line, confirmed by isolating just this one game
-(`/tmp/one_ac.tsv`, single-game `replaystats` run) and reading its own
-Stop-reason histogram entry directly:
+  comm -23 /private/tmp/guard_ids_687.txt /tmp/ac_ids_final.txt   (REGRESSIONS)
+  <empty>
+  comm -13 /private/tmp/guard_ids_687.txt /tmp/ac_ids_final.txt   (WINS, i.e.
+    newly-completed IDs not in the guard's own completed set)
+  <empty>  (both files list the SAME 687 IDs -- the exact-match gain is
+  entirely WITHIN the already-completed set, exactly as expected: this fix
+  only changes score correctness, never whether a game reaches game_over.)
+  wc -l: 687 /tmp/ac_ids_final.txt, 687 /private/tmp/guard_ids_687.txt
 
-  | 1 | 15.0 | StuckPending: decider # != expected actor #, phase Actions,
-    no pending | 7523021 line 241: Orange discards 1 card |
+cargo test --profile fasttest --lib:
+  "test result: ok. 1418 passed; 0 failed; 0 ignored; 0 measured; 0 filtered
+  out; finished in 13.75s"
+  (baseline was 1410; +8 = the 3 game.rs tests + 5 replay_common.rs tests
+  added above.)
 
-So the "acting player is `state.current`" half of the specified predicate
-does not actually discriminate between 7523021's bad case and 7523162's
-good case: both are the CURRENT player's own live `PlayEvent` line, with
-nothing pending. Whatever the real difference between the two games is
-(if any exists that keeps this safe), it is not "was this a same-timestamp
-collision with a different player's still-open turn" -- 7523021's line 234
-is not that shape at all; Purple's turn had genuinely, fully closed one
-line earlier. The regression is therefore NOT the "hidden twin" collision
-hazard `is_trustworthy_age_line`'s doc warns about (that hazard is about
-BGO's EXPORT ordering being unreliable across players at the same
-timestamp); it is a plain "forcing this specific age-catch-up strictly
-earlier than the old, deferred point changes downstream turn-timing state
-in a way this reconstruction's hand-limit/antiquation logic depends on,
-for reasons not further traced here" -- out of scope to chase per this
-task's own "if the predicate does not work, say so and stop" instruction.
+cargo clippy --all-targets --profile fasttest -- -D warnings:
+  "Finished `fasttest` profile [unoptimized] target(s) in 18.66s" (clean, no
+  warnings)
 
+SIDE-EFFECT CHECKS (things I verified were NOT disturbed)
+-------------------------------------------------------------
+- "civil-age premature advances" instrument (this reconstruction's own
+  `age_civil` ever reading AHEAD of the journal's own age column): 0 games,
+  both before and after -- expected, since this fix never touches
+  `age_civil` at all.
+- Discard-phase hand-size oracle (the OTHER worker's territory -- I never
+  edited `interact::discard_options`, `prescan_discard_phase_oracle`, or
+  `apply_one`'s `Discard` arm, and confirmed via `git diff` that
+  `rust/src/interact.rs` does not appear in my patch at all): the full-
+  corpus checkpoint-match rate shifted by 4 checkpoints out of 39,771
+  (38267 -> 38263) and one additional game (7522949) picked up a divergence
+  example. Traced it: game 7522949 is NOT in the completed-687 set in EITHER
+  version (it already diverges from an unrelated cause before reaching
+  `state.game_over`, in both the baseline and the fixed build) -- Purple
+  elects Napoleon Bonaparte there too (line 358) and my fix correctly
+  antiquates him one age later in that same already-diverging game
+  trajectory, which shifts WHERE the discard-phase instrument's diagnostic
+  reading lands inside a game that was never going to complete either way.
+  Zero effect on the guard bar (687 completed / regressions / exact count
+  are all about the COMPLETED set, which this game was never part of).
 
-VERBATIM COMMAND OUTPUT (with the fix applied, before revert)
-=================================================================
-$ comm -23 /tmp/tu_ids.txt /tmp/ac_ids.txt
-7523021
+COORDINATOR CROSS-CHECK (sibling worker's game 7523087, "Impact of
+Population" / Refugees-grant bug)
+------------------------------------------------------------------
+Checked as requested, without touching the discard-count path: game
+`7523087` is UNCHANGED by this fix (still shows the same "Impact of
+Population" §12.5.2 award mismatch, seat 0: journal 22 vs this binary 20,
+delta -2, both before and after). The two bugs are not the same defect --
+my fix's only externally observable effect is early leader/wonder/pact
+removal off a confirmed-safe `WinWar` lookahead; it does not touch
+`Refugees`, the discard-phase machinery, or `scoring_culture`'s award
+formulas. Reporting this rather than chasing it further -- that game's fix
+belongs to the sibling worker's own in-flight investigation.
 
-$ head -3 /tmp/ac_after.txt   (SCOREDIV_DUMP_COMPLETED id list head, not the
-                                 summary -- summary line pulled separately:)
-| 581/581 completed games actually flipped state.game_over (the other 0
-  reached the journal's own "End of game" marker but hit a mismatch
-  afterward, so `game::scores` was never computed for them); 531/581 of
-  those matched index.tsv exactly (sorted per-game score-list compare).
+WHAT I DID NOT TOUCH
+------------------------
+`interact::discard_options`, `prescan_discard_phase_oracle`, `apply_one`'s
+`ActionClass::Discard` arm -- confirmed via `git diff c772970 -- rust/`
+that `rust/src/interact.rs` and `rust/src/apply.rs` do not appear in the
+patch at all. Only `rust/src/game.rs` and `rust/src/replay_common.rs`
+changed.
 
-Isolated single-game run (`/tmp/one_ac.tsv`, just 7523021):
-  # replaystats: 1 games sampled, 0 completed to state.game_over
-  ...
-  | 1 | 15.0 | StuckPending: decider # != expected actor #, phase Actions,
-    no pending | 7523021 line 241: Orange discards 1 card |
-
-After reverting (`git checkout -- src/replay_common.rs`, confirmed
-`git diff 628c0dd HEAD -- src/replay_common.rs` is 0 lines):
-  582/582 completed games actually flipped state.game_over; 532/582 of
-  those matched index.tsv exactly (sorted per-game score-list compare).
-  comm -23 /tmp/tu_ids.txt /tmp/ac_baseline_ids.txt  ->  (empty)
-
-
-POINTERS
-=========
-`rust/src/replay_common.rs` fn `catch_up_civil_age` (~line 5235),
-`is_trustworthy_age_line` (~line 5319, untouched), its call site (~line
-5521-5523 at 628c0dd -- where the new OR-condition was added and then
-reverted), `last_real_decision_line_for_age` (~line 5334, untouched,
-structurally can't share this predicate -- see above); `rust/src/corpus.rs`
-`Color::seat` (~line 291), `actor_and_rest` (~line 641), `classify` (~line
-664), `Classified`/`LineOutcome` (~line 587/628, neither derives Copy/
-Clone, so `outcome` must be computed once and matched by reference, not
-passed to `is_trustworthy_age_line` twice).
-
-Real game `7523021` (regression, this pass and the previous one, line 234
-"Orange plays event ... Iconoclasm" then line 241 "Orange discards 1
-card"); real game `7523162` ("Impact of Population" off-by-one-worker,
-still unfixed, `scorediv__SCOREDIV.txt`'s DEEP-DIVE 1 for the full original
-trace).
+COMMIT
+------
+Committed in the clone (`/private/tmp/agecatch`, deleted after this task) by
+pathspec: `git -c commit.gpgsign=false commit -F <msgfile> -- rust/src/game.rs rust/src/replay_common.rs`.
+Patch emitted to analysis/worker_notes_2026-08-14/agecatch.patch
+(`git diff c772970 -- rust/`, non-empty, 375 lines).

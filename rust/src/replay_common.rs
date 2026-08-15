@@ -5989,6 +5989,83 @@ fn is_trustworthy_age_line(outcome: LineOutcome) -> bool {
     )
 }
 
+/// Whether `outcome` is a line this file's own turn-boundary machinery can
+/// print between the DEFENDER's last old-age line and a `WinWar`
+/// confirmation with no real business of its own -- BGO's "Action Phase
+/// begins"/"No Discard Phase"/"Discard Phase N cards must be discarded" +
+/// the resolving discard, or the `EndTurn` trailer itself. Every one of
+/// these is already excluded from [`is_trustworthy_age_line`]; named
+/// separately here because [`upcoming_confirmed_winwar_age`] needs to SKIP
+/// over them (not just refuse to trust them), to find the `WinWar`
+/// confirmation they can sit in front of.
+fn is_end_of_turn_bridge_line(outcome: LineOutcome) -> bool {
+    matches!(outcome, LineOutcome::Bookkeeping)
+        || matches!(outcome, LineOutcome::Action(Classified { class: ActionClass::EndTurn | ActionClass::Discard, .. }))
+}
+
+/// The Napoleon Bonaparte / War-over-Culture fix's own discriminator: does
+/// journal line `i` sit directly in front of a `WinWar` confirmation this
+/// reconstruction has genuinely not caught up to yet, with nothing left of
+/// the OLD age still to come?
+///
+/// `combat::resolve_war_outcome` fires SYNCHRONOUSLY inside
+/// `game::start_turn`, itself triggered as a side effect of applying the
+/// DEFENDER's own last old-age `EndTurn`/`Discard` line -- there is no
+/// journal line boundary between that trailer and the attacker's own
+/// synchronous start-of-turn cascade for this file to hook into, so by the
+/// time the loop reaches the `WinWar` line itself (already excluded from
+/// [`is_trustworthy_age_line`] for an unrelated reason -- see its own doc)
+/// the war has already resolved off whatever `state.age_civil` this
+/// reconstruction happened to hold. Confirmed directly on real game
+/// `7522590`: processing its line 317 (Orange's `EndTurn`, tagged Age III)
+/// synchronously resolves Purple's War over Culture while `state.age_civil`
+/// is still III, even though the very next two lines are `"No Discard
+/// Phase"` (still III) and then `"Purple wins War over Culture"` (tagged
+/// IV) -- BGA's own age genuinely turned over between the two.
+///
+/// This function scans forward from `i`, skipping [`is_end_of_turn_bridge_line`]
+/// lines only, and returns the first `WinWar` line's own age if one is found
+/// before anything else -- the age this reconstruction has not caught up to
+/// yet that the SAME synchronous cascade this bridge belongs to is about to
+/// use. Anything else (a real decision line reached before any `WinWar`, or
+/// the journal ending first) means there is nothing to trust here, so
+/// `None`.
+///
+/// Deliberately does NOT also require the line AFTER the `WinWar` to avoid
+/// an older age (the check `is_trustworthy_age_line`'s own WinWar exclusion
+/// needs for its OWN, much wider blast radius -- see that predicate's doc on
+/// game `7523079`): real game `7523045` line 335 has EXACTLY that shape --
+/// its `WinWar` (Purple, IV) is immediately followed by Orange's own
+/// still-Age-III `End turn`/discard trailer (lines 336-337), the identical
+/// same-timestamp export artifact `7523079` has -- yet it is a genuine,
+/// confirmed (instrumented) case of the age having truly turned over, not a
+/// collision to refuse. The two are indistinguishable by "what tag trails
+/// the WinWar line" alone; what actually differs is what each caller DOES
+/// with the trust. `is_trustworthy_age_line`'s caller forces `state.age_civil`
+/// itself plus §12.2.4's cross-player "-2 yellow_bank" deduction plus the
+/// deck rebuild off it -- exactly what corrupted `7523079`'s Purple, an
+/// unrelated bystander whose OWN not-yet-run production the premature
+/// deduction back-dated. This function's caller only ever calls
+/// [`game::antiquate_leader_wonder_pacts_up_to`], which touches ONLY the
+/// (attacker-or-defender) player who owns the too-old leader/wonder/pact
+/// being removed, never `age_civil`/`civil_deck`/`yellow_bank`'s §12.2.4
+/// deduction -- there is no shared, cross-player state left for a same-
+/// timestamp tie to corrupt.
+fn upcoming_confirmed_winwar_age(journal: &[Line], i: usize, card_index: &HashMap<&'static str, CardId>) -> Option<crate::cards::Age> {
+    let mut j = i;
+    loop {
+        let line = journal.get(j)?;
+        let outcome = classify(card_index, line.text);
+        if matches!(outcome, LineOutcome::Action(Classified { class: ActionClass::WinWar, .. })) {
+            return parse_age(line.age);
+        }
+        if !is_end_of_turn_bridge_line(outcome) {
+            return None;
+        }
+        j += 1;
+    }
+}
+
 /// The LAST journal line index still tagged each age -- ground truth for
 /// `civil_deck_premature_advance`'s "is there still more of the OLD age to
 /// come" check. Indexed by `Age as usize` (five ages, `A` through `IV`)
@@ -6185,6 +6262,16 @@ pub fn replay_game(
         // DIFFERENT, still-old-age player's own fully-synchronous `End turn`.
         if is_trustworthy_age_line(classify(card_index, line.text)) {
             catch_up_civil_age(&mut r.state, line.age);
+        }
+        // Napoleon Bonaparte / War-over-Culture fix: this line's own
+        // processing can synchronously trigger `game::start_turn`'s war
+        // resolution one age before the confirming `WinWar` line is ever
+        // reached (see `upcoming_confirmed_winwar_age`'s own doc). Run ONLY
+        // the leader/wonder/pact half of antiquation early when that is
+        // confirmed safe -- `age_civil`/`civil_deck`/§12.2.4 stay on the
+        // normal, deferred schedule above.
+        if let Some(age) = upcoming_confirmed_winwar_age(journal, i, card_index) {
+            game::antiquate_leader_wonder_pacts_up_to(&mut r.state, age);
         }
         // Keep `civil_deck` from ever running dry ON ITS OWN -- see
         // `top_up_civil_deck`'s own doc. Must run every line, not just when
@@ -8888,6 +8975,104 @@ mod tests {
             (yellow_before.0 - 2, yellow_before.1 - 2),
             "§12.2.4's deduction runs once the age is genuinely forced"
         );
+    }
+
+    /// The (-6,+6) War-over-Culture cluster's own real shape, real game
+    /// `7522590` lines 315-319: the DEFENDER's own `EndTurn` (still Age
+    /// III) is followed by a `"No Discard Phase"` bridge line (also III),
+    /// THEN the `WinWar` confirmation (tagged IV). Reverting the fix (no
+    /// call to `upcoming_confirmed_winwar_age` in `replay_game`'s main
+    /// loop) leaves `state.age_civil` at III when `resolve_war_outcome`
+    /// actually runs, one line before this function would ever see the
+    /// `WinWar` line at all -- exactly the bug.
+    #[test]
+    fn upcoming_confirmed_winwar_age_finds_the_bridge_across_a_no_discard_phase_trailer() {
+        let card_index = build_card_index();
+        let journal = [
+            line(317, "III", "End turn Orange scores:; ; 7 culture (now 78)"),
+            line(318, "III", "No Discard Phase"),
+            line(319, "IV", "Purple wins War over Culture Attacker's strength: 40; Defender's strength: 27"),
+            line(320, "IV", "Purple plays Armed Intervention against Orange"),
+        ];
+        assert_eq!(upcoming_confirmed_winwar_age(&journal, 0, &card_index), Some(crate::cards::Age::IV));
+        // Starting from the bridge line itself must find the identical
+        // answer -- `replay_game`'s loop calls this every line, not just
+        // the first one of the bridge.
+        assert_eq!(upcoming_confirmed_winwar_age(&journal, 1, &card_index), Some(crate::cards::Age::IV));
+    }
+
+    /// A genuine real decision (not a bridge line) between `i` and any
+    /// `WinWar` means there is nothing to trust -- this must not scan past
+    /// an unrelated player's own ordinary turn looking for some LATER,
+    /// unconnected war's confirmation.
+    #[test]
+    fn upcoming_confirmed_winwar_age_is_none_when_a_real_decision_comes_before_any_winwar() {
+        let card_index = build_card_index();
+        let journal = [
+            line(1, "III", "End turn Orange scores:; ; 7 culture (now 78)"),
+            line(2, "III", "Purple takes Pyramids in hand Purple uses 2 civil action"),
+            line(3, "IV", "Purple wins War over Culture Attacker's strength: 40; Defender's strength: 27"),
+        ];
+        assert_eq!(upcoming_confirmed_winwar_age(&journal, 0, &card_index), None);
+    }
+
+    /// The journal ending right after the bridge (no `WinWar` ever found)
+    /// is the same "nothing to trust" answer, not a panic.
+    #[test]
+    fn upcoming_confirmed_winwar_age_is_none_when_the_journal_ends_inside_the_bridge() {
+        let card_index = build_card_index();
+        let journal = [line(1, "III", "End turn Orange scores:; ; 7 culture (now 78)"), line(2, "III", "No Discard Phase")];
+        assert_eq!(upcoming_confirmed_winwar_age(&journal, 0, &card_index), None);
+    }
+
+    /// The discriminator this function deliberately does NOT apply, and
+    /// why: real game `7523045` line 335 has a `WinWar` (Purple, IV)
+    /// immediately followed by Orange's own still-Age-III `End turn`/
+    /// discard trailer -- the identical "older age immediately after
+    /// WinWar" shape `is_trustworthy_age_line`'s own WinWar exclusion
+    /// exists to refuse (game `7523079`). This function trusts it anyway --
+    /// see its own doc for why that is safe here specifically (its only
+    /// caller never touches cross-player state, unlike
+    /// `is_trustworthy_age_line`'s caller). Confirmed against the full
+    /// 687-game guard corpus with zero regressions.
+    #[test]
+    fn upcoming_confirmed_winwar_age_trusts_a_winwar_even_when_an_older_tagged_line_follows_it() {
+        let card_index = build_card_index();
+        let journal = [
+            line(334, "III", "Discard Phase 2 military cards must be discarded"),
+            line(335, "IV", "Purple wins War over Culture Attacker's strength: 41; Defender's strength: 27"),
+            line(336, "III", "End turn Orange scores:; ; 9 culture (now 106)"),
+            line(337, "III", "Orange discards 2 cards"),
+        ];
+        assert_eq!(upcoming_confirmed_winwar_age(&journal, 0, &card_index), Some(crate::cards::Age::IV));
+    }
+
+    /// End-to-end wiring: the exact call-site snippet in `replay_game`'s
+    /// main loop, using `upcoming_confirmed_winwar_age`'s own real-game-
+    /// shaped fixture above. Reverting the fix (deleting the call to
+    /// `game::antiquate_leader_wonder_pacts_up_to` at the call site) turns
+    /// this RED: Napoleon stays in play at the moment the war resolves.
+    #[test]
+    fn the_call_site_antiquates_a_too_old_leader_off_an_upcoming_winwar_without_moving_the_age() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.age_civil = crate::cards::Age::III;
+        r.state.players[0].leader = CardId::by_name("Napoleon Bonaparte").expect("known leader");
+        let yellow_before = r.state.players[0].yellow_bank;
+
+        let journal = [
+            line(317, "III", "End turn Orange scores:; ; 7 culture (now 78)"),
+            line(318, "III", "No Discard Phase"),
+            line(319, "IV", "Purple wins War over Culture Attacker's strength: 40; Defender's strength: 27"),
+        ];
+        // The exact call-site snippet in `replay_game`'s main loop.
+        if let Some(age) = upcoming_confirmed_winwar_age(&journal, 0, &card_index) {
+            crate::game::antiquate_leader_wonder_pacts_up_to(&mut r.state, age);
+        }
+
+        assert!(r.state.players[0].leader.is_none(), "Napoleon must be gone before the synchronous war resolution reads him");
+        assert_eq!(r.state.age_civil, crate::cards::Age::III, "the age itself stays on the normal, deferred schedule");
+        assert_eq!(r.state.players[0].yellow_bank, yellow_before, "§12.2.4's deduction must not fire early");
     }
 
     /// The SAME "`economy::end_of_turn` interrupted before production" shape
