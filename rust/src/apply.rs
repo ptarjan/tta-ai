@@ -755,7 +755,7 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
     }
     {
         let p = &mut state.players[idx as usize];
-        p.resources = p.resources.saturating_sub(cost.max(0) as u16);
+        economy::pay_resources(p, cost.max(0) as u16);
         p.techs
             .get_mut(id)
             .expect("do_build: card must already be developed (in the tableau)")
@@ -789,7 +789,7 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
         }
     }
     let p = &mut state.players[idx as usize];
-    p.resources = p.resources.saturating_sub(cost.max(0) as u16);
+    economy::pay_resources(p, cost.max(0) as u16);
     p.techs.get_mut(lo).expect("do_upgrade: lo not in tableau").workers -= 1;
     p.techs.get_mut(hi).expect("do_upgrade: hi not in tableau").workers += 1;
 }
@@ -804,7 +804,7 @@ pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, discount: i32, free
     }
     let wonder = {
         let p = &mut state.players[idx as usize];
-        p.resources = p.resources.saturating_sub(cost.max(0) as u16);
+        economy::pay_resources(p, cost.max(0) as u16);
         p.wonder_steps += k;
         p.wonder
     };
@@ -1594,7 +1594,7 @@ fn h_remove_leader_yellow(state: &mut GameState, idx: u8) {
 fn h_trade_food_as_resource(state: &mut GameState, idx: u8) {
     let p = &mut state.players[idx as usize];
     debug_assert!(p.food >= 1, "h_trade_food_as_resource: caller must ensure 1 food (legality check)");
-    p.food -= 1;
+    economy::pay_food(p, 1);
     economy::gain_resources(p, 1);
     p.trade_food_as_resource_used_this_turn += 1;
 }
@@ -1604,7 +1604,7 @@ fn h_trade_food_as_resource(state: &mut GameState, idx: u8) {
 fn h_trade_resource_as_food(state: &mut GameState, idx: u8) {
     let p = &mut state.players[idx as usize];
     debug_assert!(p.resources >= 1, "h_trade_resource_as_food: caller must ensure 1 resource (legality check)");
-    p.resources -= 1;
+    economy::pay_resources(p, 1);
     economy::gain_food(p, 1);
     p.trade_resource_as_food_used_this_turn += 1;
 }
@@ -1771,6 +1771,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
             war_target: 0,

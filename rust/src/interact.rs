@@ -614,8 +614,8 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
             // introduced by this fix.
             let (food, res) = (g.food.max(0) as u16, g.resources.max(0) as u16);
             let v = &mut state.players[victim as usize];
-            v.food = v.food.saturating_sub(food);
-            v.resources = v.resources.saturating_sub(res);
+            economy::pay_food(v, food);
+            economy::pay_resources(v, res);
             let pl = &mut state.players[p as usize];
             economy::gain_food(pl, food);
             economy::gain_resources(pl, res);
@@ -630,8 +630,8 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 // supply (`plunder_split_options`, reused), so a plain
                 // saturating subtraction is safe and matches Plunder's own
                 // victim-side arm above.
-                pl.food = pl.food.saturating_sub(food);
-                pl.resources = pl.resources.saturating_sub(res);
+                economy::pay_food(pl, food);
+                economy::pay_resources(pl, res);
             } else {
                 // A gain: blue-token limited per bank, exactly like
                 // Plunder's own attacker-side arm above -- see
@@ -1819,6 +1819,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
         }
     }
 

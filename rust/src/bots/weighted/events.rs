@@ -625,6 +625,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
         }
     }
 

@@ -664,6 +664,57 @@ pub struct PlayerState {
     pub trade_resource_as_food_used_this_turn: u8,
 
     pub resigned: bool,
+
+    /// Blue tokens actually placed on this player's Farm cards, grouped by
+    /// denomination (printed food value) -- see [`TokenBank`]'s own doc.
+    /// `economy::blue_used`/`gain_food`/`pay_food`/`credit_production`'s
+    /// shared body maintains this; nothing else should write it directly.
+    pub food_tokens: TokenBank,
+    /// The Mine-card twin of [`Self::food_tokens`] (printed resource value).
+    pub resource_tokens: TokenBank,
+}
+
+/// A player's blue tokens, bucketed by the denomination (printed farm food /
+/// mine resource value) of whatever card they are placed on -- see
+/// `economy.rs`'s module doc for the corpus bug this closes (RESOURCE_ORACLE
+/// Group A, `analysis/worker_notes_2026-08-14/corrskip__CORRSKIP.txt`/
+/// `corrskip2__CORRSKIP2.txt`).
+///
+/// RULES_SPEC §6.4 / Code of Laws p.11: a token is worth whatever card it is
+/// ACTUALLY sitting on; tokens may move to a LOWER-value card ("making
+/// change") but NEVER to a higher one. The engine used to derive `blue_used`
+/// fresh every call from the scalar `p.food`/`p.resources` total, greedily
+/// re-packed into whatever denominations exist RIGHT NOW -- which silently
+/// assumes every player has always achieved perfect consolidation onto their
+/// best available card, something the "never move up" rule makes impossible
+/// once a higher card enters play after older stock was already placed.
+/// `TokenBank` instead tracks the tokens actually placed, by value, so old
+/// stock stays exactly where a real player's tokens would sit.
+///
+/// Per-DENOMINATION counts, not per-card identity: two cards printing the
+/// same food/resource value are interchangeable for corruption purposes (only
+/// the total occupied-token COUNT feeds the bank, `economy::corruption`),
+/// and nothing in RULES_SPEC/Code of Laws/the FAQ caps how many tokens one
+/// card may hold -- see `corrskip2__CORRSKIP2.txt` for the citation search.
+/// Same fixed 8-slot capacity as `economy::Denoms` (DESIGN.md rule 3: no
+/// `Vec`) for the same reason -- at most four farm/mine levels exist today.
+///
+/// `_len == 0` (the `Default`) also doubles as "never tracked" -- a
+/// hand-built `PlayerState` in a unit test that sets `p.food`/`p.resources`
+/// directly and never calls a real gain/pay path. `economy::blue_used`
+/// reconciles that gap by treating any UNTRACKED amount (`p.food` above
+/// `bank_total_value`) as if it needed fresh greedy placement right now --
+/// i.e. exactly today's pre-fix formula -- so every test that never touches
+/// this field keeps its old, already-asserted behavior unchanged. Real
+/// gameplay (`replay`/self-play) always drives the full `gain_food`/
+/// `pay_food`/`credit_production` chokepoints, so for those the tracked
+/// total and `p.food` never drift apart and the reconciliation fallback is a
+/// no-op.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct TokenBank {
+    pub denoms: [u8; 8],
+    pub counts: [u8; 8],
+    pub len: u8,
 }
 
 /// The one-time cost discount `events::apply_extras` writes onto EVERY

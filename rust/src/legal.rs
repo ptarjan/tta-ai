@@ -1184,6 +1184,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
             war_target: 0,

@@ -176,7 +176,7 @@ fn apply_food_delta(state: &mut GameState, idx: u8, delta: i16, sign: i32) {
         economy::gain_food(&mut state.players[idx as usize], delta as u16);
     } else {
         let p = &mut state.players[idx as usize];
-        p.food = p.food.saturating_sub(delta as u16);
+        economy::pay_food(p, delta as u16);
     }
 }
 
@@ -190,7 +190,7 @@ fn apply_resources_delta(state: &mut GameState, idx: u8, delta: i16, sign: i32) 
         economy::gain_resources(&mut state.players[idx as usize], delta as u16);
     } else {
         let p = &mut state.players[idx as usize];
-        p.resources = p.resources.saturating_sub(delta as u16);
+        economy::pay_resources(p, delta as u16);
     }
 }
 
@@ -1265,7 +1265,7 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
         p.blue_total = (p.blue_total as i32 + sign * block.blue_tokens as i32).max(0) as u8;
     }
     if block.lose_all_stored_food {
-        state.players[idx as usize].food = 0;
+        economy::clear_food(&mut state.players[idx as usize]);
     }
     if block.draw_military_cards != 0 {
         draw_military(state, idx, block.draw_military_cards.max(0) as u32);
@@ -1524,16 +1524,16 @@ fn extra_production(state: &mut GameState, idx: u8, s: &effects::Stats) {
     }
     let corr = economy::corruption(economy::blue_available(&state.players[idx as usize]));
     let paid = economy::pay_resources(&mut state.players[idx as usize], corr);
-    state.players[idx as usize].food = state.players[idx as usize].food.saturating_sub(corr - paid);
+    economy::pay_food(&mut state.players[idx as usize], corr - paid);
     economy::gain_food(&mut state.players[idx as usize], s.food.max(0) as u16);
     let need = economy::consumption(state.players[idx as usize].yellow_bank) as u16;
     let p = &mut state.players[idx as usize];
     if p.food >= need {
-        p.food -= need;
+        economy::pay_food(p, need);
     } else {
         let short = need - p.food;
         p.culture = (p.culture as i32 - 4 * short as i32).max(0) as u16;
-        p.food = 0;
+        economy::clear_food(p);
     }
     economy::gain_resources(&mut state.players[idx as usize], s.resources.max(0) as u16);
     if crate::debugflags::replay_debug_all() {
@@ -1721,6 +1721,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
         }
     }
 
