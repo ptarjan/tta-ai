@@ -40,6 +40,29 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
                always after the previous bracket resolved, so a card already
                exhausted to workers == 0 is never re-offered.
 
+    THE TOKEN BANK IS BLOCKED ON A TOKEN *COUNT* BUG, NOT ON ITS OWN MODEL
+    (tokenbank3__TOKENBANK3.txt + tokenbank3.patch, measured on a7e7f90).
+    Re-applying the per-denomination TokenBank on the Raid-fixed base scores
+    736 completed / 709 exact -- wins 7520999 7522236 7522673 7523203 7523634,
+    regressions 7521459 7522402 7522796. RESOURCE_ORACLE 96.8% -> 99.2%,
+    diverging games 299 -> 114. Tests 1448, clippy clean.
+    TWO of the five regressions the FIRST pass reported (7523072, 7523510) were
+    fixed by the Raid correction underneath, with no change to the patch: the
+    ordering prediction held exactly.
+    THE REMAINING THREE ARE A DIFFERENT CAUSE. Round 17 of 7521459:
+    credit_production correctly caps new tokens at blue_total - blue_used, but
+    the reconstructed placement history had already consumed 15 of 18 physical
+    token slots, so production was capped 3 short of the journal's stated +12.
+    The reconstruction matches the real game in token VALUE but not in token
+    COUNT, and ONLY THE COUNT BINDS THE CEILING. Since tokens only ever move
+    DOWN and making change turns one token into several, an over-count means
+    change is being made where it need not be, or tokens are never removed on
+    some path. 7522796 is a smaller (+1) divergence, still unexplained.
+    Ruled out for 7521459: the Raid bug (fixed) and non-production gain
+    placement (no such event in its causal chain).
+    NOTE THE MEASUREMENT TRAP: 99.2% agreement reads as a clean win on any
+    averaged metric. The three-game ID set is what says no.
+
     BILL GATES IS A CONFOUND, NOT A CAUSE (gateslab__GATESLAB.txt). The census
     below found 31 Group C games where Bill Gates is in play and the resource
     delta is exactly -2, at 81.6% against a 30.6% base rate. His
