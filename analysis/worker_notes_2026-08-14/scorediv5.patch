@@ -1,0 +1,87 @@
+diff --git c/rust/src/combat.rs w/rust/src/combat.rs
+index 8eb06c0..e5de7a5 100644
+--- c/rust/src/combat.rs
++++ w/rust/src/combat.rs
+@@ -329,6 +329,17 @@ pub fn resolve_war_outcome(state: &mut GameState, attacker_idx: u8) -> Option<Wa
+         effects::state_stats(state, attacker).strength + pact_attack_bonus(state, attacker, defender)
+     };
+     let d = effects::state_stats(state, &state.players[target as usize]).strength;
++    // Diagnostic only, gated behind an env var so it is a no-op unless
++    // explicitly requested -- added while hand-tracing the `worker SCOREDIV5`
++    // WinWar score-mismatch cluster (`analysis/worker_notes_2026-08-14/
++    // scorediv5__SCOREDIV5.txt`): both this game's declared strengths
++    // matched the journal's own "Attacker's strength/Defender's strength"
++    // line exactly for every game traced, ruling `a`/`d` themselves out as
++    // the cause and pointing at spoils-application TIMING instead (see
++    // `SCOREDIV5_SPOILS_DEBUG` in `apply_war_spoils` below).
++    if std::env::var("SCOREDIV5_WAR_DEBUG").is_ok() {
++        eprintln!("SCOREDIV5_WAR attacker_idx={attacker_idx} target={target} a={a} d={d} card={}", card.get().name);
++    }
+     economy::discard_military(state, card);
+     if a == d {
+         return None;
+@@ -355,6 +366,30 @@ pub fn apply_war_spoils(state: &mut GameState, outcome: &WarOutcome) {
+         "War over Culture" => {
+             let loser_culture = state.players[outcome.loser as usize].culture as i32;
+             let take = (5 + outcome.advantage).min(loser_culture);
++            // Diagnostic only (see `SCOREDIV5_WAR_DEBUG` above, same
++            // no-op-unless-set gate). Printing `victor_culture_before` here
++            // let this session confirm that, on the three WinWar-first-
++            // divergence games traced, the checkpoint oracle's own
++            // first-mismatch value ALREADY equalled this "before spoils"
++            // reading -- i.e. the mismatch is present before this function
++            // even runs, so the spoils arithmetic itself (`take`) is not the
++            // suspect; the culprit is further up, in exactly when this whole
++            // war (declared several turns earlier) gets resolved relative to
++            // the checkpoint the journal exports for the same instant. Not
++            // chased to a landable fix this session -- see the WinWar
++            // section of `analysis/worker_notes_2026-08-14/
++            // scorediv5__SCOREDIV5.txt` for the full trace and why a fix
++            // here risks the `is_trustworthy_age_line`/`catch_up_civil_age`
++            // machinery this exact area has already been hardened around
++            // four times (`game.rs::antiquate_leader_wonder_pacts_up_to`'s
++            // own doc comment).
++            if std::env::var("SCOREDIV5_WAR_DEBUG").is_ok() {
++                eprintln!(
++                    "SCOREDIV5_SPOILS victor={} loser={} advantage={} take={} victor_culture_before={} loser_culture_before={}",
++                    outcome.victor, outcome.loser, outcome.advantage, take,
++                    state.players[outcome.victor as usize].culture, loser_culture
++                );
++            }
+             state.players[outcome.loser as usize].culture -= take as u16;
+             state.players[outcome.victor as usize].culture += take as u16;
+         }
+diff --git c/rust/src/events.rs w/rust/src/events.rs
+index ab1cb45..1b2b57f 100644
+--- c/rust/src/events.rs
++++ w/rust/src/events.rs
+@@ -345,8 +345,29 @@ fn scoring_culture(
+ 
+     // culturePerLevelOfSpecialTechsAndGovernment -- "Impact of Progress".
+     let mut tech_and_gov_levels = p.government.level() as i32;
++    // Diagnostic only, gated behind an env var (no-op unless set) -- added
++    // while hand-tracing game 7521849's Impact-of-Progress mismatch for
++    // `worker SCOREDIV5` (`analysis/worker_notes_2026-08-14/
++    // scorediv5__SCOREDIV5.txt`). Confirmed `develop_special`'s §7.6
++    // one-per-icon replacement (`apply.rs`) correctly drops a same-icon
++    // older SpecialTech (e.g. Architecture when Engineering, also
++    // Construction-icon, is later discovered) but found no journal-visible
++    // mechanism that should have ALSO dropped a different-icon tech
++    // (Code of Laws, Law icon, with no later Law-icon tech ever discovered)
++    // -- i.e. this dump ruled out the icon-replacement code as the cause
++    // without finding the real one. Left in place for whoever picks this
++    // back up rather than re-adding it from scratch.
++    if std::env::var("SCOREDIV5_PROGRESS_DEBUG").is_ok() {
++        eprintln!("SCOREDIV5_PROGRESS government={:?} government_level={}", p.government, p.government.level());
++        for (id, slot) in p.techs.iter() {
++            eprintln!("SCOREDIV5_PROGRESS_ALLTECH {id:?} kind={:?} workers={}", id.kind(), slot.workers);
++        }
++    }
+     for (id, _) in p.techs.of_type(CardType::SpecialTech) {
+         tech_and_gov_levels += id.level() as i32;
++        if std::env::var("SCOREDIV5_PROGRESS_DEBUG").is_ok() {
++            eprintln!("SCOREDIV5_PROGRESS special_tech={id:?} level={}", id.level());
++        }
+     }
+     total += block.culture_per_level_of_special_techs_and_government as i32 * tech_and_gov_levels;
+ 

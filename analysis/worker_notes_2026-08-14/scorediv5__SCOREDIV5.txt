@@ -1,0 +1,321 @@
+SCOREDIV5 worker notes -- 2026-08-14
+=====================================
+Base: /private/tmp/base0816, synced to live commit a64a18e (replay_common.rs
+refresh), sync commit 9231f7f. Clone: /private/tmp/scorediv5.
+
+STATUS: NO SCORE-FIXING CODE CHANGE LANDED. Before/after exact-match count:
+707 -> 707 (unchanged). Before/after completed-game count: 734 -> 734
+(unchanged, byte-identical ID set). This is a genuine, honestly-reported
+negative result on the "fix a group" goal, after real effort on three
+separate, independently-verified leads (below) -- every one either proved
+to require guessing genuinely hidden information, or touches delicate
+already-hardened turn-sequencing machinery this task's own SETTLED list
+warns is fragile, or has no journal-visible mechanism at all.
+
+What IS landed: three small, env-gated, read-only diagnostic hooks
+(SCOREDIV5_WAR_DEBUG in combat.rs, SCOREDIV5_PROGRESS_DEBUG in events.rs),
+following this task set's established SCOREDIV_*/REPLAY_DEBUG convention
+(same pattern as the prior scorefinal session's two hooks). Verified a true
+no-op: full 1011-game corpus sweep with the hooks compiled in but UNSET
+produces a completed-ID set BYTE-IDENTICAL to the pre-edit baseline (diff
+returns nothing), 734/734 completed, 707/734 exact, zero regressions, zero
+wins. cargo test --profile fasttest --lib: 1445 passed (base count,
+unchanged -- no fix means no new test, matching this task's own "tests for
+FIXES" rule). cargo clippy --profile fasttest --all-targets -- -D warnings:
+clean.
+
+
+THE 27 GAMES -- FULL GROUPING
+================================
+Reproduced fresh this session with:
+  SCOREDIV_DUMP_IDS=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+
+Full 27-ID list:
+7520722 7521141 7521695 7521833 7521849 7521985 7522212 7522239 7522277
+7522397 7522446 7522473 7522672 7522776 7522786 7522838 7522866 7523087
+7523115 7523154 7523159 7523162 7523167 7523253 7523341 7523367 7523474
+
+GROUP A -- seat-verified "final-scoring award oracle" divergence (8 games):
+replaystats' own `result.final_event_award_divergences` -- the CARD's own
+computed §12.5.2 award disagreed with the journal's own per-seat stated
+amount. This is the most trustworthy grouping available (seat-keyed, not a
+sorted-array-position guess):
+
+  Impact of Happiness   4 games: 7522277 seat1 (journal 12, engine 14, +2)
+                                  7522446 seat3 (journal 14, engine 12, -2)
+                                  7523253 seat2 (journal 10, engine 12, +2)
+                                  7522397 seat0 (journal 6,  engine 10, +4)
+  Impact of Population   3 games: 7523087 seat0 (journal 22, engine 20, -2)
+                                  7522866 seat0 (journal 12, engine 10, -2)
+                                  7523162 seat2 (journal 12, engine 14, +2)
+  Impact of Competition   1 game:  7522866 seat0 (journal 7, engine 6, -1)
+  Impact of Progress      1 game:  7521849 seat1 (journal 12, engine 14, +2)
+  Impact of Variety       1 game:  7522866 seat0 (journal 16, engine 14, -2)
+
+  (7522866 has THREE separate award divergences, all on seat0 -- see
+  "NOT PURSUED" below; this game alone was already deep-dived twice by
+  prior sessions [scoremis, scorefinal] without a landed fix, and this
+  session's own look at it, below, found its Impact-of-Happiness-adjacent
+  first_culture_divergence is on a DIFFERENT seat/actor than the award
+  divergences, so it is at least two compounding bugs in one game --
+  consistent with, not contradicting, prior sessions' own "residual +4
+  unpinned" conclusion. Not re-chased this session.)
+
+  Unique games in Group A: 7522277, 7522446, 7523253, 7522397, 7523087,
+  7522866, 7523162, 7521849 (8 total).
+
+GROUP B -- no final-event-award divergence detected (19 games): the
+divergence is upstream of `scoring_culture`/`apply_final_scoring_block_live`
+-- either a genuine mid-game state bug (`culture_drifted_in_play=true`,
+first divergence flagged at a specific line/actor/ActionClass) or a bug in
+some non-culture component the culture checkpoint can't see
+(`culture_drifted_in_play=false`, 8 of these: 7523087*, 7521849*, 7522277*,
+7522239, 7523162*, 7523253*, 7522397*, 7522786 -- the 5 starred ones are
+ALSO in Group A, i.e. their running culture tracked every BGO checkpoint
+perfectly and the bug is purely in the final-award formula's OWN inputs).
+
+  drift=true, bucketed by first_culture_divergence's ActionClass (19 games,
+  re-derived fresh this session -- DO NOT reuse any prior pass's TakeCard
+  count, it predates several since-landed fixes):
+    TakeCard            4  7523341(+4) 7522473(+1) 7522672(-4) 7521695(+1)
+    BuildBuilding        3  7520722(+4) 7522838(+1) 7522866(+4)
+    WinWar               3  7521833(-3) 7523474(+3) 7523115(-6)
+    Discard              3  7523167(+3) 7522776(+3) 7521985(-5)
+    BuildWonderStage     1  7522212(+2)
+    PlayTactic           1  7523367(+3)
+    BuildUnit            1  7521141(+3)
+    EndTurn              1  7522446(-7)  [also in Group A/Happiness]
+    UpgradeUnit          1  7523159(+1)
+    UpgradeProduction    1  7523154(+3)
+
+  drift=false, no award divergence, no final events at all: 7522239
+  (final_event_cards=[]; a small 2p game, engine=[14,54] index=[11,54],
+  Purple off by +3 -- Churchill's PerTurnChoice culture leader was already
+  ruled out as a double-apply by a PRIOR session's own trace, see that
+  session's notes; not re-opened here).
+
+  drift=false, no award divergence, HAD final events (formulas independently
+  verified correct against the journal's own per-category printed amounts,
+  by a PRIOR session): 7522786 (engine=[227,308] index=[230,299] -- the
+  "wrong final-event SET" theory is EXPLICITLY on this task's DO-NOT-RE-OPEN
+  list; not touched).
+
+
+LEAD 1 -- Impact of Happiness / Homer leader-tuck (Group A, 4 games): RULED
+OUT this session with a fresh, testable experiment
+================================================================================
+All 4 Group-A Happiness games share one pattern, confirmed by grepping every
+game's own journal: the player with the divergent seat elected HOMER, then
+almost immediately replaced him with a different leader ("X elects Homer"
+... "X elects <other leader> Homer dies"):
+  7522277 Purple: elects Homer (line45), Homer dies electing Genghis Khan (85)
+  7522446 Purple: elects Homer (line33), Homer dies electing ... (later)
+  7523253 Green:  elects Homer (line37), Homer dies electing Da Vinci (137)
+  7522397 Orange: elects Homer (line78), Homer dies electing Da Vinci (80)
+
+Homer's card text (bga_throughtheages_material.inc.php, verified against
+this codebase's own card source): "When you replace Homer, you may slide
+this card under ONE OF YOUR COMPLETED WONDERS to give it an extra 1 happy
+face." `apply.rs::h_play_leader` (~line 878-883) tucks Homer under
+`completed_wonders.as_slice()[0]` UNCONDITIONALLY -- i.e. whichever wonder
+was completed FIRST. This is a real player CHOICE the BGO journal text never
+records ("Homer dies", no wonder named) -- a prior session (scorefinal, see
+`analysis/worker_notes_2026-08-14/scorefinal__SCOREFINAL.txt`) hand-traced
+7522277 specifically and found the TRUE choice there was the wonder
+completed SECOND (St. Peter's Basilica), not first (Library of Alexandria),
+and called this a hidden-information limitation, out of scope.
+
+THIS SESSION TESTED WHETHER "tuck under the MOST RECENTLY completed wonder"
+is a safe, general fix (i.e. whether BGO's own UI defaults to the newest
+wonder, making this a real deterministic rule rather than arbitrary choice):
+  Edit: `rust/src/apply.rs` line ~882, `completed_wonders.as_slice()[0]` ->
+  `wonders[wonders.len() - 1]`.
+  Result: 734 -> 731 completed games (3 COMPLETION REGRESSIONS: 7522301,
+  7522796, 7522975 -- games that used to finish now get stuck elsewhere,
+  because `homer_wonder` feeds OTHER mechanics too, e.g. St. Peter's
+  Basilica's own bonus and possibly discard/legality checks downstream).
+  Of the diverging set, only 7522277 itself moved from wrong to exact; the
+  other 3 (7522446, 7523253, 7522397) STAYED wrong; and a previously-exact
+  game, 7523021, became newly wrong.
+  REVERTED (`git checkout -- rust/src/apply.rs`) immediately after
+  measuring -- this is NOT in the landed patch.
+
+CONCLUSION: "most recently completed" is not the rule either -- it fixes
+1/4 games at the cost of 3 completion regressions and 1 new score
+divergence elsewhere. This independently confirms the prior session's
+"genuine hidden information, no safe general rule" conclusion, this time
+with a concrete regression-tested counter-experiment rather than just a
+hand-trace of one game. NOT SAFE TO FIX per this task's hard rule against
+guessing; not attempted further.
+
+
+LEAD 2 -- WinWar cluster (Group B, 3 games): a genuine, narrower, NEW
+finding this session -- not landable within budget, explained why
+================================================================================
+7521833 (Orange defends, wins, advantage 1), 7523474 (Orange attacks, wins,
+advantage 28), 7523115 (Orange attacks, Green defends and wins, advantage
+5). Added a temporary (now landed as `SCOREDIV5_WAR_DEBUG`) print of both
+sides' `effects::state_stats(...).strength` at the exact moment
+`combat::resolve_war_outcome` computes them:
+  7521833: engine a=61 d=62   (journal: "Attacker's strength: 61;
+            Defender's strength: 62") -- EXACT MATCH.
+  7523474: engine a=67 d=39   (journal: "67; 39") -- EXACT MATCH.
+  7523115: engine a=26 d=31   (journal: "26; 31") -- EXACT MATCH.
+This RULES OUT `effects::state_stats`'s strength formula (and therefore any
+Napoleon/tactic/leader strength-bonus theory) as the cause for all three --
+the declared strengths are byte-for-byte correct in every case.
+
+Also added a print of the victor's OWN culture immediately BEFORE the
+spoils transfer (`apply_war_spoils`'s "War over Culture" arm, now landed as
+part of the same `SCOREDIV5_WAR_DEBUG` gate, printed as `SCOREDIV5_SPOILS`).
+For 7521833, `victor_culture_before` (Orange) printed as 151 -- but the
+checkpoint oracle's OWN first-divergence report for this exact game already
+says the reconstructed value AT THE VERY NEXT CHECKPOINT (Orange's End Turn,
+lineno=340, "(now 154)" in the journal) is 151 too (delta=-3, journal 154,
+reconstructed = 154-3 = 151). I.e. the -3 gap is ALREADY PRESENT before
+`apply_war_spoils` even runs -- the spoils arithmetic (`take`) is not the
+suspect; something upstream of it is.
+
+`game.rs`'s own doc comment on `antiquate_leader_wonder_pacts_up_to` (the
+already-landed fix for a related, but distinct, WinWar timing bug) states
+plainly: "`combat::resolve_war_outcome` fires synchronously inside
+`game::start_turn`, itself triggered as a side effect of applying the BGO
+journal's own DEFENDER-side EndTurn/Discard line for the OLD age -- there is
+no journal line boundary ... for the replayer to hook into," and separately
+(`replay_common.rs` ~6457) that a `WinWar` confirmation line's own timestamp
+"routinely collides (same second) with an unrelated OTHER player's own
+trailing `End turn` line" (cites real game 7523079 as precedent) -- i.e.
+this exact ambiguity (does the checkpoint validator see the state BEFORE or
+AFTER the deferred war resolution/spoils apply) is a KNOWN, already-hardened
+edge case, not a fresh discovery, and `is_trustworthy_age_line`'s own doc
+explicitly warns that a naive fix here has ALREADY caused a real regression
+once (game 7523021, per the scorediv predecessor session's own "Deep-dive 1"
+section).
+
+I did NOT find the exact line where the checkpoint's read happens relative
+to the deferred `resolve_war_outcome` call, and did NOT attempt a fix --
+correctly pinning that ordering would need its own multi-game trace with the
+same rigor `catch_up_civil_age`'s four prior citations required, which this
+session's remaining budget did not allow, and this task's SETTLED/DO-NOT-
+RE-OPEN list already flags this general area (WinWar age-catch-up timing)
+as previously fought-over. `SCOREDIV5_WAR_DEBUG` is left in place, landed,
+verified as a no-op when unset, for whoever picks this back up.
+
+Pointers: `rust/src/combat.rs` fn `resolve_war_outcome` (~line 309) and fn
+`apply_war_spoils`'s "War over Culture" arm (~line 349); `rust/src/game.rs`
+fn `antiquate_leader_wonder_pacts_up_to` (~line 705, doc comment has the
+full WHY); `rust/src/replay_common.rs` ~line 6440-6470 (`is_pure_
+confirmation_line`'s "hidden twin" doc, the WinWar same-timestamp-collision
+precedent).
+
+
+LEAD 3 -- Impact of Progress / Code of Laws, game 7521849 (Group A, single
+game): traced to the exact missing mechanism, but found NO journal evidence
+of it firing -- genuinely unresolved
+================================================================================
+2p game. `final_event_cards=["Impact of Progress"]` only. Journal (line344):
+"Impact of Progress Each civilization scores 2 culture per level of each of
+its government and special (blue) technologies.; Orange scores 12 culture;
+Purple scores 12 culture." Our engine: Orange 12 (MATCHES), Purple 14
+(WRONG, journal wants 12) -- isolates the bug entirely to Purple.
+
+Added `SCOREDIV5_PROGRESS_DEBUG` (landed, env-gated, no-op unless set) to
+dump `p.government`/level and every `p.techs` entry at this exact
+computation. Purple's actual reconstructed state: government=Despotism
+(level 0), SpecialTech holdings = Code of Laws (Law icon, level 1),
+Engineering (Construction icon, level 3), Satellites (Exploration icon,
+level 3). Sum = 0+1+3+3 = 7, *2 = 14 (our wrong answer). To reach the
+journal's 12, the true sum must be 6 -- i.e. exactly Code of Laws's own
+level-1 contribution must not count.
+
+Confirmed via the journal's full "Purple discovers ..." list (13 lines,
+exhaustively grepped) that Purple ALSO discovered Architecture (Construction
+icon, level 2) at line 243 -- but Architecture is CORRECTLY ABSENT from our
+engine's own reconstructed tech list, because `apply.rs::develop_special`
+(§7.6's "one per icon; a newer one replaces the older, which is removed" --
+RULES_SPEC.md line 86, RB p.12/CoL p.5) correctly removed it when Purple
+later discovered Engineering (also Construction icon, higher level). This
+formula and its icon-replacement machinery are independently proven correct
+by this exact removal.
+
+The mystery: Code of Laws is Law icon, and Purple never discovered any other
+Law-icon SpecialTech (Justice System, Civil Service) -- exhaustively
+confirmed absent from Purple's full discover list. §7.6's icon-replacement
+rule therefore does NOT explain why Code of Laws should be gone. No
+"Ravages of Time"/"Iconoclasm"/War-over-Technology-steal/other destroy event
+targeting Purple's techs appears anywhere in this game's journal (grepped
+the full file, not just Purple-prefixed lines). `develop_special`'s own code
+(apply.rs ~1034-1057) was read in full and correctly implements ONLY the
+same-icon-replacement rule described in RULES_SPEC -- no bug found there.
+
+CONCLUSION: Purple's TRUE Code-of-Laws-should-not-count mechanism is real
+(the arithmetic requires it) but this session found NO textual evidence in
+the journal of what removes it, and did not want to guess a destroy
+mechanism into apply.rs without evidence (this task's explicit hard rule).
+This is the single most well-isolated of the three leads (one card, one
+seat, one game, formula and icon-logic both independently verified correct)
+and the best candidate for a future pass with more budget to trace: worth
+re-reading the FULL 347-line journal for this game line-by-line (not just
+grep-filtered) in case the removal event is phrased in a way this session's
+keyword search missed (e.g. a pact or war-tech-steal targeting Orange that
+ALSO has a reciprocal effect on Purple not obviously flagged by "loses"/
+"destroys"/card-name keywords). `SCOREDIV5_PROGRESS_DEBUG` is landed for
+that next attempt.
+
+Pointers: `rust/src/events.rs` fn `scoring_culture`, the
+"culturePerLevelOfSpecialTechsAndGovernment" block (~line 346-360);
+`rust/src/apply.rs` fn `develop_special` (~line 1034); `rust/src/costs.rs`
+fn `special_icon` (~line 270); journal
+`/private/tmp/bgo-journals/journals/7521849.tsv`.
+
+
+WHAT WAS NOT PURSUED THIS SESSION
+====================================
+- The 4-game TakeCard bucket, 3-game BuildBuilding bucket (beyond 7522866,
+  which two PRIOR sessions already deep-dived without a landed fix -- not
+  re-opened), 3-game WinWar bucket (see Lead 2), and 3-game Discard bucket
+  (this task's own HARD RULES explicitly forbid touching
+  `interact::discard_options`'s ordering -- load-bearing for bot play --
+  so this bucket was deliberately not chased as a fix target, only noted).
+- The remaining 6 games with a unique ActionClass singleton
+  (BuildWonderStage/PlayTactic/BuildUnit/EndTurn/UpgradeUnit/
+  UpgradeProduction) were bucketed but not individually traced.
+- 7522866's own THREE-way award divergence (Population/Competition/Variety,
+  all seat0=Orange) was noted as compounding with a SEPARATE seat/actor
+  (Green) mid-game drift in the SAME game, matching two prior sessions'
+  own "residual unpinned" conclusions for this specific game; not
+  independently re-traced given the budget already spent on Leads 1-3.
+
+
+VERIFICATION (final, this session's landed diagnostic-only patch)
+=====================================================================
+  cd /private/tmp/scorediv5/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+  -> "1011 games sampled, 734 completed to state.game_over ... 707/734 of
+      those matched index.tsv exactly"  (UNCHANGED from the pre-session
+      baseline both counts)
+
+  comm -23 /private/tmp/guard_ids.txt /tmp/sd5_final_ids.txt   # REGRESSIONS
+  <empty>
+  comm -13 /private/tmp/guard_ids.txt /tmp/sd5_final_ids.txt   # WINS
+  <empty>
+  diff /tmp/sd5_ids.txt(pre-edit) /tmp/sd5_final_ids.txt(post-edit)
+  <empty -- byte-identical completed-ID sets>
+
+  cargo test --profile fasttest --lib
+  -> 1445 passed; 0 failed (base count, unchanged -- no fix, no new test)
+
+  cargo clippy --profile fasttest --all-targets -- -D warnings
+  -> clean, no warnings
+
+CLEANUP: /private/tmp/scorediv5 holds ONE commit beyond the sync commit
+(275921c, the diagnostic-hooks-only patch), already captured verbatim in
+`scorediv5.patch`. Per the task's own instruction ("NEVER delete a clone
+holding unlanded commits -- if in doubt leave it"): this commit is NOT
+landed anywhere else (it only exists in this local clone and in the
+`.patch` file copied out), so the clone is being LEFT IN PLACE rather than
+deleted, even though its content is fully captured elsewhere, out of an
+abundance of caution per that instruction's own wording.
