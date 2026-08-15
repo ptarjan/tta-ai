@@ -599,3 +599,32 @@ FOOD-VS-IRON IS A PLAYER CHOICE THE ENGINE DOES NOT OFFER  (2026-08-15, d4130c1)
     DO NOT BUILD THE DOMINANCE RULE, and do not hardcode any preference order.
     The real fix is a priced decision point; until then food-first stands as a
     known one-sided approximation worth at most 23 events in 1011 games.
+
+================================================================================
+2026-08-15 -- NEVER RESET THIS REPO AGAINST ORIGIN
+================================================================================
+/Users/pt/tta-ai is NOT a normal checkout. Its local master is deliberately
+unrelated to origin's tip, and the league runs the WORKING TREE, most of which
+is untracked.
+
+  origin/master tracks 112 files under rust/.  The local line tracks 19.
+
+So `git reset --hard origin/master` (a) reverts those 19 to origin's older
+parallel Rust port and (b) CLOBBERS ~93 untracked live source files.  A
+`git clean -fd` under origin's non-whitelist .gitignore additionally DELETED,
+permanently:  rust/tools/  rust/logs/  rust/pgo/
+              experiments/champ_backup_2026-08-14/
+
+This happened on 2026-08-15.  It cost the TokenBank landing and the
+colonize-queue fix -- the corpus went 748 -> 734 -- and NOTHING looked wrong:
+the tree compiled, all 1452 tests passed.  Only the guard sweep sees it.
+
+RULES
+  - NEVER reset/pull/rebase/clean this repo against origin.  Land by hand.
+  - Before any git op that can move HEAD or touch the working tree:
+        cp -Rc /Users/pt/tta-ai/rust/src /private/tmp/live_src_backup_<date>
+  - After any such op, prove the tree with the FULL guard sweep:
+        748 completed / 721 exact, and BOTH comm sides empty.
+    A clean build and green tests prove nothing here.
+  - The rsync-from-origin sync recipe with --delete has the same effect as a
+    reset.  Establish the DIRECTION of every diff before copying anything in.
