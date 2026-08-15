@@ -1,0 +1,210 @@
+TARGET: "IllegalMove: Build" bucket, 31 games, mean stop round 15.2.
+Worked in a warm clone at /private/tmp/buildbk. Started at base commit
+55bbca5. Mid-task the coordinator instructed a merge of two sibling fixes
+(antiquated-leader action-pool ghost bonus; Aggression no longer gated on
+attacker>=defender strength) via `git fetch /private/tmp/base0815 base0814
+&& git merge --no-edit FETCH_HEAD`, landing at 9860400 (698 completed / 671
+exact, per that commit's own message). Re-enumerated the bucket fresh after
+the merge, as instructed.
+
+RESULT: NO FIX LANDED. buildbk.patch is empty by design. This is a
+DEEP, EVIDENCED TRACE ending in a MEASURED NEGATIVE, not a shallow pass:
+game 7521544's root cause was isolated to a specific line inside
+`events::conditional_target` (the Barbarians card's own "two weakest
+civilizations" multi-target selection), and the divergence from BGO is very
+likely the SAME already-documented, unfixable-without-a-BGA-source
+strength-tie phenomenon `weakest__WEAKEST.txt` already measured and closed
+(98.8% corpus agreement, ~1.2% unexplained divergence rate) -- now
+confirmed to ALSO reach Barbarians' distinct multi-target cutoff code path,
+not just the singular `apply_single_target`/WeakestPlayer path that pass
+tested. Did not re-open or "fix" it, per that pass's own conclusion and this
+task's "settled, do not re-open" pattern for corruption/WeakestPlayer-class
+anomalies. My clone still exists at /private/tmp/buildbk (git-clean, HEAD
+9860400, no unlanded commits -- see CLEANUP note at the end).
+
+============================================================
+STEP 1: enumerate, exclude the 6 known dead-end games
+============================================================
+
+Pre-merge (base 55bbca5), REPLAY_DUMP_BUCKET="IllegalMove: Build" gave
+exactly 31 games. Excluded the six known affordability dead-end games per
+the task brief:
+    7520999  7521657  7521791  7522024  7522673  7523283
+Remaining 25:
+    7521377 7521544 7521819 7521832 7521850 7521912 7522113 7522315
+    7522347 7522358 7522505 7522587 7522608 7522648 7522818 7522845
+    7522914 7523082 7523124 7523383 7523420 7523543 7523566 7523608
+    7523640
+
+Post-merge (9860400): re-ran the sweep fresh, as instructed. The bucket did
+NOT shrink -- all 31 original games are STILL present, plus one new game
+(7521935, a Religion-build failure) that newly reaches this failure mode
+now that it plays further into the game. So neither sibling fix touched
+this bucket. New remaining-25-equivalent set (26 after excluding the same
+six) has the IDENTICAL 25 games above plus 7521935 -- re-split below.
+
+============================================================
+STEP 2: split by WHY, not by symptom location
+============================================================
+
+Grouped the 25 (post-merge: 26) remaining stop lines by the CARD being
+built, since "IllegalMove: Build" is a symptom location (the Build action),
+not a cause:
+
+    9  Cannon             (7521544 7522113 7522347 7522818 7523124 7523383
+                            7523420 7523566 7523640)
+    4  Religion            (was 3 pre-merge; +7521935 post-merge)
+    3  Knights             (7521850 7523082 + one more)
+    1 each: Swordsmen, Selective Breeding, Printing Press, Multimedia,
+            Movies, Mechanized Agriculture, Journalism, Drama, Alchemy,
+            Air Forces
+
+Cannon is by far the largest group (9/26), so it is the one I worked.
+
+============================================================
+STEP 3: the cheap check -- Cannon's baked constants vs BGA's own data
+============================================================
+
+rust/src/card_table.rs Cannon: science_cost=6, resource_cost=5, strength=3,
+count=[2,2,3] (2p,3p,4p).
+sources/bga_throughtheages_material.inc.php card id 116 "Cannon":
+techcost=6, resscost=5, strength=3, qt2=2, qt3=2, qt4=3.
+EXACT MATCH on every field. Cannon's constants are correct -- this group's
+cause is NOT a baked-data bug (unlike the "4/2 baked, BGA prints 5/3"
+tactic win mentioned in the task brief). Ruled out before tracing anything.
+
+============================================================
+STEP 4/5: trace game 7521544 (line 413: Purple builds Cannon, spends 5
+resources -- exactly Cannon's real cost) to root cause
+============================================================
+
+`REPLAY_DEBUG=1` on the isolated single-game replay dumps the engine's own
+`try_apply fail` diagnostic at the failing line:
+
+  mv=Build{Cannon} actor(current)=1 civil_actions=4 military_actions=3
+  government=Monarchy leader=Isaac Newton resources=10 food=8 science=5
+  workers_free=0 tableau=[Warriorsx0, Agriculturex1, Bronzex1,
+  Philosophyx0, Religionx1, Knightsx3, Ironx2, Scientific Methodx2,
+  Selective Breedingx1, Cannonx0, ...]
+  cost detail: build_cost_for("Cannon")=Some(5)
+
+Resources (10>=5), science, military_actions (3, plenty -- units are built
+with a MILITARY action per RULES_SPEC 97.1/legal.rs's own `is_unit` branch,
+already correctly wired), and cost all check out. The ONLY blocker is
+`workers_free=0`: `legal.rs`'s build loop requires `p.workers_free > 0`
+before generating ANY Build move for a card that "takes workers". So this
+is a genuine "engine thinks Purple has no free worker" case, not an
+affordability question -- matching the task brief's "8 of 15 had a free
+worker but 0-1 resources, the other 7 truly lacked a worker" split, and
+landing in the "truly lacked a worker" side.
+
+Full worker-accounting trace (temporary instrumentation in
+`economy::increase_population`, `apply::do_build/do_upgrade/h_destroy`,
+`interact::ChoiceKind::FreeBuild`, `interact::QueueItem::LosePop`; all
+REVERTED via `git checkout --` before any commit -- confirmed clean, see
+CLEANUP) reconstructs Purple's ENTIRE workers_free ledger from game start
+through the failing line, cross-checked line-for-line against every single
+Purple journal action (population increases, builds, upgrades, the round-10
+colonization sacrifice). Every single step matches the journal exactly
+EXCEPT ONE:
+
+  TRACE conditional_target card=Barbarians q=1 among=2
+        order=[2,3,0,1] culture_ranked=[1,0,3,2] num_players=4
+  TRACE conditional_target weakest_ranked=[1,0,2,3] cutoff=2
+        strengths=[11,12,11,11]   (order-indexed: idx2=11 idx3=12 idx0=11 idx1=11)
+  TRACE QueueItem::LosePop idx=1 n=1 workers_free_before=1   <- consumes the LAST free worker
+
+Journal (round 10): "Green plays event ... Current event:; I / Barbarians;
+If the civilization with the most culture points is one of the two weakest
+civilizations it loses 1 population.; No effect"
+
+The REAL game says explicitly "No effect" -- nobody lost a worker to
+Barbarians that turn. Our engine's `events::conditional_target` (the ONE
+function implementing Barbarians' printed condition) computes: Purple (idx
+1) has the most culture (independently verified against the journal's own
+"(now N)" culture totals: Purple 25, Orange 21, Grey 20, Green 14+2=16 at
+this exact point -- Purple genuinely IS highest, so that half is right) AND
+is in the "two weakest by strength" group -- our engine computes a 3-way
+strength TIE at 11 among Purple/Orange/Green (idx 1/0/2), with Grey (idx 3)
+alone at 12. `protect_current_from_bad_tie` (the existing, well-documented
+mechanism already fixed once for `WeakestPlayer`'s own 62/63-corpus-
+confirmed bug) protects ONLY the current/revealing player (Green, idx 2)
+from the tied group -- there is no protection mechanism for a SECOND
+non-current tied player, so with exactly 2 slots and exactly 2 remaining
+tied candidates (Purple, Orange) after protecting Green, BOTH are
+mathematically swept into the "weakest 2" regardless of any finer
+clockwise-proximity tie-break (the outcome does not depend on which of the
+two goes "first" when both fill the only two available slots). Purple
+lands in the group, has the most culture, and takes the population loss --
+one CA action-worth of "no worker" damage two rounds before the Cannon
+build that needs exactly that worker.
+
+WHY I DID NOT FIX THIS: the underlying quantity here -- "weakest
+civilization(s) by strength, ties broken in favor of the current player" --
+is EXACTLY the subject of a full, dedicated prior investigation
+(analysis/worker_notes_2026-08-14/weakest__WEAKEST.txt), which measured the
+engine's existing strength/tie-break definition against BOTH the FAQ/CoL
+sources AND a 1011-game corpus cross-check (320/324 = 98.8% agreement) and
+concluded it is CORRECT, with a small (~1.2%) rate of genuinely unexplained
+BGA divergences on strength ties that no available oracle can resolve
+(`sources/` has no BGA game-logic source, only card text/metadata). That
+pass explicitly named 7523420 and 7522113 -- BOTH also in my own Cannon
+group -- as instances of this exact phenomenon. A second worker
+(`noworker__NOWORKER.txt`) independently re-confirmed 7523420's own
+numbers (Orange=8, Purple=10, engine computes the ranking correctly per the
+sources, BGO's real resolution still disagreed) and explicitly handed off
+7521544 UNEXAMINED ("budget ran out before reaching these"). My trace of
+7521544 is new work, but it lands on the SAME species of anomaly (a strength
+tie feeding a "weakest" selection that BGO resolves differently than the
+sources say it should) -- just reached through Barbarians' own multi-target
+`conditional_target` cutoff logic (a genuinely DIFFERENT code path from the
+already-tested singular `apply_single_target`/WeakestPlayer selection,
+since Barbarians is the one base-game card using `Special::Condition` for a
+"top-N" weakest cutoff rather than a single target) rather than through
+`apply_single_target` itself. Given: (a) the underlying strength/tie-break
+arithmetic was independently, recently, and thoroughly validated correct on
+this exact quantity; (b) this task's own "SETTLED, do not re-open" pattern
+explicitly covers WeakestPlayer-class ties; (c) a wrong guess at "fixing"
+the multi-slot cutoff (e.g. changing how ties beyond the protected current
+player get ordered) risks regressing the hard-won 62/63 WeakestPlayer
+corpus fix for a case that is mathematically forced regardless of ordering
+(2 slots, 2 remaining tied candidates) -- inventing a fix here would be
+exactly the "invent a fix to have something to show" the task brief warns
+against. I recorded the trace instead.
+
+SANITY CHECK on scope: checked whether this same Barbarians pattern
+explains OTHER Cannon-group games. Of the 9 Cannon-group games, only 3
+even reveal a Barbarians event at all (7521544, 7522113, 7522818) --
+7522113 is independently already named in weakest__WEAKEST.txt's own
+4-mismatch list, consistent with this being the same phenomenon there too.
+Spot-checked 7523640 (also in the Cannon group, also left unexamined by
+noworker's handoff) and it has ZERO Barbarians mentions in its journal, so
+this specific root cause does NOT generalize across the whole Cannon group
+-- each Cannon-group game likely has its own idiosyncratic strength-
+ranking-tie source (Barbarians here, something else there), all funneling
+into the same "workers_free hit 0 right before a legal Cannon build"
+symptom. Did not individually trace the other 6 given the above conclusion
+that this whole CLASS of bug is a closed, unfixable-without-an-oracle
+question.
+
+============================================================
+STEP 6 (BAR): no code change, so no measurement to report
+============================================================
+
+No commits were made in this clone beyond the coordinator-instructed merge
+(55bbca5 -> 9860400, matching the sibling clone's own commit exactly, zero
+extra diff: `git diff 9860400..HEAD -- rust` is empty). All temporary
+tracing instrumentation was added and then reverted with `git checkout --`
+before finishing; `git status --short` shows no modified tracked files.
+Since the tree is byte-identical to 9860400, the guard comparison is
+trivially: 0 regressions, 0 wins, 698 completed / 671 exact unchanged.
+
+============================================================
+CLEANUP
+============================================================
+
+Clone /private/tmp/buildbk KEPT (not deleted): it holds no unlanded
+commits of my own (HEAD 9860400, identical to the merged sibling baseline),
+so there is nothing to lose by deleting it, but I am leaving it in place in
+case the coordinator wants to inspect the exact traced state without
+re-cloning. `git status --short` (tracked files only) is clean.
