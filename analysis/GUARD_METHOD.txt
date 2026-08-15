@@ -1,11 +1,39 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-15 (eleventh update)
-    base commit ....... 898f552  (LIVE tree /Users/pt/tta-ai; staging clone
-                                  /private/tmp/base0815 carries the same diff)
-    completing games .. 731 of 1011   (704 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_731.txt)
-    committed copy .... analysis/guard_ids_731.txt
+    updated 2026-08-15 (twelfth update)
+    base commit ....... f2dff03  (LIVE tree /Users/pt/tta-ai; the staging clone
+                                  /private/tmp/base0815 is one commit BEHIND
+                                  this -- it stops at 898f552)
+    completing games .. 732 of 1011   (705 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_732.txt)
+    committed copy .... analysis/guard_ids_732.txt
+                        (the previous list survives as guard_ids_731.txt; a
+                         clean check against 731 is still valid except for the
+                         single new ID 7521462)
+
+      f2dff03  apply::h_revolution charged the FULL printed Card::revolution_cost
+               with zero pact discount, while the peaceful h_develop path has
+               always read Stats::tech_discount through costs::tech_cost. Game
+               7523162 line 292: Grey revolutions to Constitutional Monarchy
+               under a Scientific Cooperation pact accepted at line 266 --
+               printed revolutionCost 6, the journal's own "4 science points
+               spent" proves the true cost is 4. A silent 2-science overcharge,
+               every violent revolution under a pact, since the pact code was
+               written. New costs::revolution_cost applies the same discount and
+               is wired into BOTH the charge (h_revolution) and legality
+               (legal::can_revolt plus the duplicate site in the Breakthrough
+               branch), so the two can no longer disagree. 731->732, 704->705,
+               regressions EMPTY, win 7521462.
+               THE SCIENTIFIC COOPERATION GATE LANDED IN THE SAME COMMIT and the
+               old "8 regressions / 0 wins, do not re-attempt" note below is
+               OBSOLETE. effects::science_pact_partners_can_pay (legality) and
+               apply::charge_science_pact_partners (the 1-science charge to the
+               other party) are now wired into h_develop, h_revolution and all
+               five real move-generation sites in legal.rs. It adds no wins on
+               its own -- it was never wrong, it was standing on a science total
+               the overcharge above had corrupted. Fix the foundation first, then
+               the gate: that ORDERING was the whole reason it landed.
+               14 tests, every one confirmed RED by reverting.
 
     898f552 is the biggest single jump this project has recorded: +33
     completions, +33 exact, zero regressions, from three workers verified
@@ -46,11 +74,33 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
     present at journal line 296, inside round 9's own production step, NOT at
     the round 9->10 boundary.
 
-    STILL BLOCKED ON THIS: the Scientific Cooperation gate (Stats::science_partners
-    has zero consumers outside tests). It is written and rules-correct but
-    measured 8 regressions / 0 wins, because it is the first code to gate on a
-    science total we track wrongly. Do not re-attempt it until science drift is
-    down.
+    NO LONGER BLOCKED: the Scientific Cooperation gate used to sit here as
+    "written, rules-correct, 8 regressions / 0 wins, do not re-attempt". It
+    landed clean in f2dff03 above once the revolution overcharge under it was
+    fixed. Stats::science_partners now has real consumers.
+
+    THE SCIENCE POPULATION IS *GROWING*, THE RESOURCE ONE IS FLAT -- they are
+    opposite bugs and must not be merged (scidrift2__SCIDRIFT2.txt). 70.4% of
+    diverging science games see the offset GROW: a recurring per-turn charge.
+    Resource offsets appear once and stay flat forever: one missed event per
+    game. In the growing-OVER subgroup a Scientific Cooperation pact is present
+    in 38 of 38 games against a 1.7% corpus base rate -- that is what f2dff03
+    acted on. Flat-OVER is 3/13 and UNDER is 7/18, so the pact explains the
+    growing arm and nothing else.
+
+    THE RESOURCE ARM'S BIGGEST GROUP IS A REPRESENTATION BUG, not an event bug.
+    PlayerState stores only the scalars p.food/p.resources, and economy::blue_used
+    re-derives the token count on every call with economy::tokens_for -- a greedy
+    minimal-token representation over the denominations available RIGHT NOW. That
+    assumes perfect consolidation onto the best cards currently in play, which no
+    real player can achieve: blue tokens are BOUND TO THE CARD they were placed
+    on and never move UP, by any mechanism. So blue_used undercounts,
+    blue_available overstates, and corruption is understated or skipped outright
+    in 166 of the 1011 games. There is NO Develop-vs-Upgrade distinction to
+    build; the rule is uniform (a worker inferred one from 6 regressions and it
+    was retracted). Production placement is not a choice either -- one token per
+    producing worker at that worker's own card's value. Only SPENDING is a
+    choice. See the tta-blue-tokens-are-placed-not-derived memory.
 
       89b41b6  TIE_CENSUS (rust/src/tie_context.rs, new): dumps the RAW
                per-player values behind every superlative-target selection
