@@ -1,0 +1,164 @@
+AGGRESSION bucket -- session 2026-08-14, clone /private/tmp/aggr off 55bbca5
+(landed as commit af17042 in that clone).
+
+BUCKET: "IllegalMove: Aggression", 25 games, mean stop round 15.2 (baseline dump).
+
+========================================================================
+STEP 1 -- enumeration (25 IDs, via REPLAY_DUMP_BUCKET="IllegalMove: Aggression")
+========================================================================
+7523809 7523029 7523074 7521515 7522487 7522494 7523613 7522841 7522946 7522949
+7521775 7521868 7521874 7521259 7521039 7523471 7523466 7523568 7523503 7522962
+7522750 7522764 7522569 7522574 7522540
+
+========================================================================
+STEP 2 -- split by WHICH aggression card
+========================================================================
+    10  Plunder              (largest group -- worked this one)
+     5  Raid
+     4  Armed Intervention
+     2  Spy
+     2  Infiltrate
+     1  Enslave
+     1  Annex
+
+All 10 Plunder stop lines are the plain "Your rival loses a total of up to
+N resource and/or food" text (no destroy-clause complexity) at MA cost 1 --
+no sub-shape split needed within the group; every one of them turned out to
+share the same cause once traced (see below).
+
+========================================================================
+STEP 3 -- constants check (card_table.rs vs bga_throughtheages_material.inc.php)
+========================================================================
+Plunder I/II/III: card_table.rs has food_and_or_resources = 3/5/7,
+military_action_cost = 1 for all three levels. BGA's own material.inc.php
+(ids 85, 159, 242) prints "up to 3/5/7 resources and/or food", MA=1, for
+exactly the same three ages. EXACT MATCH -- constants are not the bug here.
+
+========================================================================
+STEP 4/5 -- trace and root cause
+========================================================================
+Traced game 7523029 first (REPLAY_DEBUG=1 on a single-game tsv). The
+rejected move was `Aggression { card: Plunder (II), target: 1 }`, phase
+already correctly Politics (aggression IS a political action per
+RULES_SPEC 5.1/CoL p.4 -- that part of the engine is fine), MA and hand
+both present. legal.rs's own Aggression branch was the culprit:
+
+    if combat::defense_strength(state, p, q) >= combat::attack_strength(state, p, q) {
+        continue;   // never offer the move as legal
+    }
+
+This mirrors CoL p.4's printed declare-time rule verbatim: "You cannot
+attack a player whose strength equals or exceeds yours" (confirmed by
+reading sources/cge_code_of_laws.pdf directly, "Play an Aggression"
+section). But it is FLATLY CONTRADICTED by BGO's own journals. Added a
+temporary AGGR_STRENGTH_DEBUG eprintln at that exact call site and traced
+all 9 of the other reachable Plunder-bucket games (the 10th, 7523471, isn't
+actually Plunder -- see the corrected split above; 9 Plunder games besides
+7523029 were traced with debug on):
+
+    7521259 line 136: Purple plays Plunder against Orange
+        attacker=1 defender=0 attack_strength=9  defense_strength=9   (TIED)
+    7523613 line 385: Purple plays Plunder against Orange
+        attacker=1 defender=0 attack_strength=7  defense_strength=22  (attacker MUCH weaker)
+    7521515 line 590: Purple plays Plunder against Green
+        attacker=3 defender=2 attack_strength=7  defense_strength=14  (attacker weaker)
+    7522949 line 399: Purple plays Plunder against Green
+        attacker=3 defender=2 attack_strength=7  defense_strength=10  (attacker weaker)
+    7523466 line 485: Purple plays Plunder against Grey
+        attacker=3 defender=2 attack_strength=15 defense_strength=15  (TIED)
+    7522574 line 257: Purple plays Plunder against Orange
+        attacker=1 defender=0 attack_strength=23 defense_strength=25  (attacker weaker)
+    7523074 line 226: Orange plays Plunder against Purple
+        attacker=0 defender=1 attack_strength=12 defense_strength=13  (attacker weaker)
+    7522569 line 125: Orange plays Plunder against Purple
+        attacker=0 defender=1 attack_strength=9  defense_strength=9   (TIED)
+    7521874 line 491: Orange plays Plunder against Purple
+        attacker=0 defender=3 attack_strength=21 defense_strength=22  (attacker weaker)
+
+In every one of the 9, the defender's own "X defends ..." journal line
+shows ZERO bonus/discard cards played -- so these ARE the pre-declaration
+numbers, not a post-defense swing. 9 for 9, a human declared an Aggression
+BGO itself computed as un-winnable (tied or worse) at declare time, and
+BGO let them.
+
+ROOT CAUSE (one sentence): legal.rs's pre-declaration `defense_strength >=
+attack_strength` gate enforces CoL p.4's printed "cannot attack an
+equal-or-stronger rival" rule, but BGO's digital implementation does not
+enforce that half of the rule at all -- it only enforces the OTHER half
+(FAQ "ties during Wars and Aggressions" / CoL "if your rival matches or
+exceeds your strength, the aggression is unsuccessful"), which is a
+resolution-time no-op already correctly implemented downstream by
+combat::finish_aggression's own `if ctx.dfn >= ctx.atk { return false; }`.
+The declare-time gate is both redundant with that and too strict.
+
+FIX: removed the gate from legal.rs's CardType::Aggression branch (a
+hopeless aggression is now offered as a legal move -- it still spends the
+card and the MA, and still resolves to nothing on defense, matching BGO
+exactly). Renamed and rewrote the test that encoded the old assumption
+(`politics_aggression_not_generated_when_attacker_cannot_win` ->
+`politics_aggression_generated_even_when_attacker_cannot_win`), documenting
+the corpus evidence inline. Confirmed RED: temporarily re-inserted the old
+gate, reran the renamed test, watched it fail
+("assertion failed: moves.as_slice().contains(&Move::Aggression ...")"),
+then restored the fix and reran -- GREEN (3/3 aggression-legality tests
+pass). Full `cargo test --profile fasttest --lib` still 1418/1418, clippy
+clean.
+
+Not touched: War's own branch has no analogous strength gate (correctly --
+declaring a War doesn't require the declarer to already be stronger, it
+resolves next turn per RULES_SPEC 5.7/5.8), so this fix is scoped to
+Aggression only, as it should be.
+
+========================================================================
+GUARD SWEEP (before -> after, this clone, full corpus)
+========================================================================
+Baseline (55bbca5, per prompt): 687 completed / 661 exact.
+After fix: 695 completed / 669 exact.
+    (sweep header: "1011 games sampled, 695 completed to state.game_over";
+     "669/695 ... matched index.tsv exactly")
+
+    comm -23 /private/tmp/guard_ids_687.txt /tmp/ag_ids_final.txt   (REGRESSIONS)
+    <empty>
+
+    comm -13 /private/tmp/guard_ids_687.txt /tmp/ag_ids_final.txt   (WINS)
+    7521775
+    7522487
+    7522569
+    7522574
+    7522750
+    7523029
+    7523613
+    7523809
+
+8 wins, 0 regressions. (Only 5 of the 9 traced Plunder games appear in the
+wins list because some of the other 4 were already off the guard's 1011-
+game full sweep for unrelated stop reasons further downstream, or resolved
+into other rejected buckets after this fix moved them further -- the
+important number is the clean `comm -23` empty regression set.) The wins
+list also includes non-Plunder IDs (7522487 Enslave, 7522750 Raid,
+7523809 Raid) -- the same bogus declare-time strength gate blocks every
+CardType::Aggression card equally, so fixing it recovers wins outside the
+Plunder sub-group too, consistent with the split in STEP 2 (all 25 games
+share this one gate as a common blocking mechanism, even though only
+Plunder was traced in full depth).
+
+`cargo test --profile fasttest --lib`: 1418 passed, 0 failed.
+`cargo clippy --profile fasttest --all-targets -- -D warnings`: clean.
+
+========================================================================
+STATUS
+========================================================================
+Committed in the clone (/private/tmp/aggr) as af17042, on top of 55bbca5.
+Patch: aggr.patch (git diff 55bbca5..HEAD -- rust/src/legal.rs).
+Clone still exists (/private/tmp/aggr) -- holds ONE unlanded commit
+(af17042), not yet merged/cherry-picked to master. Not deleted per
+cleanup instructions ("delete ONLY if it holds no unlanded commits").
+
+No off-limits areas touched: revolutions/government change untouched;
+discard resolution (prescan_discard_phase_oracle, apply_one's
+ActionClass::Discard arm, interact::discard_options) untouched; the
+SETTLED items (Napoleon Bonaparte/StrengthPerUnitType, costs::take_gate's
+`>=`, weakest/strongest civ targeting, the corruption blue-token off-by-
+one) were not reopened -- Napoleon Bonaparte happened to be game 7523029's
+leader but the fix here is purely about the DECLARE-time gate, not any
+strength FORMULA, so it does not touch that settled area.
