@@ -1,14 +1,56 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-14 (tenth update this day)
-    base commit ....... 89b41b6  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 698 of 1011   (671 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_698.txt)
-    committed copy .... analysis/guard_ids_698.txt
+    updated 2026-08-15 (eleventh update)
+    base commit ....... 898f552  (LIVE tree /Users/pt/tta-ai; staging clone
+                                  /private/tmp/base0815 carries the same diff)
+    completing games .. 731 of 1011   (704 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_731.txt)
+    committed copy .... analysis/guard_ids_731.txt
 
-    The four commits above 9860400 are all zero-delta on the headline metric --
-    two diagnostics and two correctness fixes that buy no completion. That is
-    deliberate, not a failure: see each entry for why it landed anyway.
+    898f552 is the biggest single jump this project has recorded: +33
+    completions, +33 exact, zero regressions, from three workers verified
+    TOGETHER before any of them landed. Both fixes were in the REPLAYER, and
+    both were pairing bugs in prescan/resolve over BGO's journal grammar --
+    not engine rules bugs. See the commit message for the full accounting.
+
+      898f552  WarTech split spoils (+24) and FIFO undo pairing (+8), both in
+               rust/src/replay_common.rs, plus the SCIENCE_ORACLE /
+               RESOURCE_ORACLE checkpoints (0 delta, inert by default).
+               THE STANDING LESSON: resolve_intervening's WarTech arm carried
+               a comment saying the case "ha[d] not been needed by any corpus
+               game sampled so far". That was true when written and false by
+               the time it was read -- 82 games needed it. A no-op fallthrough
+               justified by a past sample is a bug with a timer on it; re-run
+               the sample before trusting one.
+               THE OTHER STANDING LESSON: the undo fix is the SECOND instance
+               of the identical bug (5ed0f20 fixed the other arm of the same
+               function the same day). When a pairing bug is found in one arm
+               of a prescan, audit every sibling arm immediately.
+
+    NEW PERMANENT TOOLING: science and resource checkpoint oracles now exist
+    alongside the culture one (SCIENCE_ORACLE=1, RESOURCE_ORACLE=1), built the
+    same way (snapshot before advance_turn, discard-blocked turns deferred).
+    Until 2026-08-14 CULTURE WAS THE ONLY QUANTITY THE CORPUS EVER CHECKED,
+    which is why the drift below survived every sweep ever run.
+
+    THE LIVE LEAD, first reading (analysis/worker_notes_2026-08-14/scidrift__SCIDRIFT.txt):
+        science ..... 70 of 1011 games diverge, 98.4% of 40958 checkpoints
+                      agree, 53 over / 17 under, concentrated rounds 9-13
+        resources ... 312 of 1011 diverge (4.5x more), 96.7% agree,
+                      245 over / 67 under, spread rounds 3-19
+    Read this as TWO populations, not one bug. Only 35 games show both, and of
+    those just 31% share an actor at the first divergence -- so resources has
+    a large problem of its own with a smaller shared hazard layered on it.
+    Do NOT go looking for one shared cause (see the drift-is-a-long-tail rule).
+    Corrects the earlier PACTS trace of 7523162: the divergence is already
+    present at journal line 296, inside round 9's own production step, NOT at
+    the round 9->10 boundary.
+
+    STILL BLOCKED ON THIS: the Scientific Cooperation gate (Stats::science_partners
+    has zero consumers outside tests). It is written and rules-correct but
+    measured 8 regressions / 0 wins, because it is the first code to gate on a
+    science total we track wrongly. Do not re-attempt it until science drift is
+    down.
 
       89b41b6  TIE_CENSUS (rust/src/tie_context.rs, new): dumps the RAW
                per-player values behind every superlative-target selection
