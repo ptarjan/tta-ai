@@ -1,0 +1,249 @@
+POPBK worker notes -- IllegalMove: Pop bucket -- 2026-08-14
+
+VERDICT: clean negative. No code change landed. Full a/b/c split done,
+one game traced end-to-end, one lead identified but not safely fixable
+in this pass's budget, two games identified as blocked by OTHER bugs,
+one game confirmed as the already-documented open yellow_bank/corruption
+drift defect. Constants checked against RULES_SPEC and are correct.
+
+BACKGROUND (read before re-deriving anything)
+
+This exact bucket has an extensive history in docs/REPLAY.md (worked in
+this repo's base tree, /private/tmp/base0815, which this clone started
+from):
+  - "IllegalMove: Pop handoff: two fixes landed (184 -> 144)"
+  - "Second IllegalMove: Pop pass: two more root causes found and fixed
+    (144 -> 22)"
+Both passes explicitly documented a still-open "yellow_bank drifts by
+whole units mid-turn with no Pop/event/combat move firing" lead, seen
+across at least two of those passes and independently reconfirmed by me
+in this pass on fresh games (see below) -- this is the "already seen by
+three separate workers" defect referenced in this task's own brief.
+Given the corpus has continued to shrink since the 22-game handoff (this
+pass found only 15 games in the bucket), other concurrent workers
+plainly landed further fixes since that doc entry; I did not re-derive
+those, only picked up from the current live bucket.
+
+METHOD
+
+1. cargo build --profile difftest --bin replaystats (already built in the
+   base clone, 0.15s no-op).
+2. REPLAY_DUMP_BUCKET="Pop" ./target/difftest/replaystats ... >
+   /tmp/popbk_bucket.txt -- NOTE: REPLAY_DUMP_BUCKET does SUBSTRING
+   matching against bucket keys, and "Pop" also matches the unrelated
+   "Impact of Population" final-scoring-award-oracle bucket. Of the 18
+   raw DUMP lines this produced, 3 were that oracle's own noise (games
+   7523087, 7522866, 7523162 -- cross-checked against the oracle table's
+   own printed rows) and were discarded. The other 15 are the real
+   "IllegalMove: Pop" bucket.
+3. REPLAY_DEBUG=1 replaystats over exactly those 15 game IDs dumped the
+   engine's own food/yellow_bank/civil_actions/pop_cost/pending state at
+   the rejected move for 14 of them (see replay_common.rs's existing
+   "DEBUG Pop fail" print, ActionClass::IncreasePopulation handler,
+   already landed by an earlier pass -- no new instrumentation needed).
+4. Matched each DEBUG line back to its game by (lineno, raw_text) pair
+   against the DUMP output. All 14 matched uniquely.
+5. Cheap check (per task step 2): compared economy.rs's pop_cost_base /
+   consumption tables against docs/RULES_SPEC.md section 6.1's own
+   yellow-bank table (18-17:2/0, 16-13:3/1, 12-9:4/2, 8-5:5/3, 4-1:7/4,
+   0:impossible/6). EXACT MATCH, both boundaries and values. This rules
+   out a baked-constant bug for the tier-mismatch games below -- the
+   TABLE is right, only the yellow_bank COUNT feeding it is sometimes
+   wrong.
+6. Traced game 7522368 round 6 (Green, idx=2, 3p) end-to-end against the
+   journal, backward from its own "(now N)" anchors per the established
+   safe method (docs/REPLAY.md's "food-text-vs-stock-delta trap" --
+   never trust a reveal line's printed production text, only recorded
+   spend/produce clauses and "(now N)" stock totals).
+
+THE SPLIT (15 games total)
+
+(a) 11 games -- pure food-total shortfall, cost TIER matches the
+    journal's own stated total exactly (i.e. the yellow_bank-driven
+    pop_cost computation is right, only the food number feeding the
+    p.food >= cost check is short):
+      7522658 (short 2), 7522242 (short 2), 7522099 (short 1),
+      7521758 (short 1, ALSO civil_actions=0 -- see caveat below),
+      7522368 (short 2, traced in detail -- see below).
+    Six more of these have a Trade Routes Agreement resource-conversion
+    clause on the same line ("<Color> spends N food; <Color> spends 1
+    resource"): 7522233, 7522432, 7522698, 7523183, 7523242, 7521658.
+    All six show an IDENTICAL, striking signature: the journal's own
+    resource-conversion count is always exactly 1, and the food-clause-
+    minus-engine-food gap is always exactly 1 too. The replayer's own
+    existing conversion gate (replay_common.rs ActionClass::
+    IncreasePopulation, the `shortfall = cost - p.food` computation
+    around line 7935) computes a shortfall of 2 for these games (using
+    the FULL cost-to-food gap, not the food-clause-only gap), which
+    exceeds what a single real Trade Routes grant allows per turn, so
+    the conversion path never fires and Pop stays illegal. I looked
+    hard at whether this is a genuine replayer bug in that formula, but
+    tracing 7522368 (a same-shape, non-resource sibling in this same
+    category) end-to-end showed the deeper problem is upstream: the
+    player's own food total is already short by the time this line is
+    reached, for reasons rooted several turns earlier -- fixing the
+    conversion-count formula alone would not make these games replay
+    correctly, it would just convert a different (wrong) number of
+    resources while still failing legality, OR silently paper over a
+    real total-food bug with a fabricated conversion. Per this task's
+    own standing rule (never loosen a check to make a mismatch
+    disappear), I did not touch this formula.
+
+    7522368 DETAILED TRACE (game 7522368, round 6, Green/idx=2, 3p):
+    Anchoring on the journal's own "(now N)" values only (never the
+    printed production text, per the established method):
+      - end of round 5 (line 114): "(now 3)" -> entering round 6, food=3.
+      - end of round 6 (line 143): "1 food - consumption: 1 (now 1)"
+        -> food immediately after ALL of round 6's turn actions
+        (before that turn's own production/consumption) = 1.
+    Walking that second anchor BACKWARD through round 6's own recorded
+    clauses (event +2 at line 135, Pop -2 at line 139, Pop -3 at line
+    141 -- the one that actually fails) requires food entering round 6
+    to have been 4, not 3. That is a genuine, already-present 1-unit
+    drift dating from BEFORE round 6 even starts -- i.e. this is not a
+    round-6-local bug in the event/Pop handling I could find (the event
+    itself, Special::AllPlayers food:2 on "Development of Agriculture",
+    DOES apply correctly and identically to all three players --
+    confirmed directly via the existing `DEBUG apply_gains_block`
+    print, food 2->4 for idx=2 exactly as expected). The engine's own
+    round-6 arithmetic is internally consistent; the seed value it
+    starts round 6 with is already 1 short of what the journal implies.
+    This is the "accumulated production/consumption drift from many
+    turns earlier" shape the task brief itself calls out as possibility
+    (a), now with a concrete, small, reproducible repro. NOT root-
+    caused further within budget -- the drift's origin is somewhere in
+    round 1-5's own production/consumption/event handling for this
+    player, i.e. exactly the same open, cross-cutting, previously-
+    documented "food-short-by-1" cluster this bucket's own prior passes
+    spent the most effort on and only partially resolved. I recommend
+    whoever picks this up next start from round 1 of 7522368 for Green
+    specifically and walk every "(now N)" anchor forward, since this is
+    now a small (6-round), fully isolated repro of the SAME long-running
+    open cluster, not a fresh, unexplored one.
+
+    CAVEAT on 7521758: this game's Pop is ALSO illegal because
+    civil_actions=0 at the failure point (independent of the food
+    shortfall -- either condition alone already makes Move::Pop
+    illegal). This matches the pre-existing, separately-documented
+    "civil_actions == 0" sub-bucket from earlier passes, tied to the
+    Take/Bid handoff's own open civil-action-budget question. Not
+    investigated further here per that handoff's own note that it is
+    likely the same root cause, not Pop-specific.
+
+(b) 0 games -- no case in this bucket showed the cost TABLE itself
+    (economy::pop_cost_base) computing the wrong value for a CORRECT
+    yellow_bank. See the cheap-check result above: the table is right.
+
+(c) 2 games -- yellow_bank COUNT off by exactly 1 at a tier boundary
+    (the table is applied correctly to a wrong input):
+      7523177: engine yellow_bank=16 (cost tier 3), journal's own stated
+        cost implies yellow_bank should be >=17 (cost tier 2) -- short
+        by exactly 1 token in the bank.
+      7523229: engine yellow_bank=8 (cost tier 5), journal implies
+        yellow_bank should be >=9 (cost tier 4) -- short by exactly 1
+        token in the bank.
+    THIS IS THE KNOWN, ALREADY-DOCUMENTED "yellow_bank drifts by whole
+    units mid-turn with no Pop/event/combat move firing" defect from
+    docs/REPLAY.md's own prior-pass handoffs (see BACKGROUND above) --
+    I am reporting this as a fresh, independent confirmation on new game
+    IDs, not re-deriving the mechanism. Both prior passes that chased it
+    left it not fully root-caused; every yellow_bank-mutating call site
+    was previously enumerated and individually distrusted, without a
+    conclusive single culprit found. I did not re-attempt that trace
+    given the budget already spent on (a)'s detailed trace above, and
+    because the task explicitly says to characterise rather than
+    re-derive this one.
+
+OTHER (2 games) -- blocked by unrelated, pre-existing bugs, not really
+"ours" per this bucket:
+
+  7522967: food=5, cost=Some(5), civil_actions=4 -- food and cost tier
+    are BOTH already correct (5 >= 5), and civil actions are available.
+    Move::Pop should legally apply. The ACTUAL blocker is an unresolved
+    `Pending::Choice(WarTech { victim: 2, budget: 7 })` sitting open on
+    a DIFFERENT player (seat 3) at this point -- legal_moves() returns
+    nothing while any pending choice sits open, so Pop is rejected for a
+    reason that has nothing to do with population/food/tokens at all.
+    This is a stuck-pending bug in the WarTech resolution path, not a
+    Pop-cost bug; flagging for whoever owns that pending-choice class,
+    not fixing here (out of this bucket's scope per the task's own "off
+    limits" list intent, and I have no evidence yet this is Pop-specific
+    at all).
+
+  7522211: the bucket's raw_text at the recorded mismatch line is
+    "Purple disbands Warrior" (a Disband action, not a Pop action) --
+    the bucket KEY was "IllegalMove: Pop" purely because
+    MismatchKind::IllegalMove's `attempted` field happened to start with
+    the token "Pop" (bucket_key groups by the move's own leading word).
+    Re-running this SAME game in isolation (REPLAY_DEBUG_ALL=1
+    ./target/difftest/replay ... 7522211) produced a DIFFERENT final
+    error entirely: `ParserGap("observed destroy card not among LosePop
+    options")` at the same line 157 -- not an IllegalMove at all. The
+    replay run's own tail shows "1 chosen arbitrarily among valid
+    candidates" in its discard-solver summary, i.e. this game's replay
+    has a genuine non-deterministic branch point (an arbitrary choice
+    among tied candidates) upstream of this failure, and the two tool
+    invocations (replaystats' corpus sweep vs. the single-game `replay`
+    binary) evidently landed on different branches of it. This game is
+    NOT a Pop-cost bug in any of the (a)/(b)/(c) senses -- it is a
+    LosePop/Disband-options parser gap, possibly entangled with
+    replayer non-determinism. Flagging for whoever owns the LosePop/
+    Disband path and/or the discard-solver's "chosen arbitrarily"
+    non-determinism; did not chase further, it is unrelated to
+    population economics.
+
+WHAT WAS RULED OUT THIS PASS
+  - A baked-constant bug in economy.rs's pop_cost_base/consumption
+    tables: checked directly against docs/RULES_SPEC.md 6.1, exact
+    match.
+  - The tier-mismatch (yellow_bank count) theory as dominant: only 2/15
+    (13%) -- consistent with the prior two passes' own finding that this
+    is real but a minority cause, not the majority.
+  - A quick, safe fix to the Trade-Routes-conversion shortfall formula
+    (replay_common.rs ~line 7935): traced and understood, but any fix
+    there would either still fail (correct formula) or paper over the
+    real upstream food-total bug (loosened formula) -- not landed,
+    per the standing "never loosen a check to make a mismatch disappear"
+    rule.
+  - Development of Agriculture's (and by extension, Special::AllPlayers
+    food-gain events generally) OWN application mechanism as a bug: read
+    events::resolve_event/apply_player_block/apply_gains_block in full,
+    confirmed via the existing DEBUG apply_gains_block print that the
+    +2-food grant DOES apply correctly and identically to all 3 players
+    in 7522368's round 6. The drift predates round 6 entirely.
+
+NO CODE CHANGES LANDED THIS PASS. No test added (nothing to pin -- no
+fix). Verified the crate is unchanged and healthy:
+  - cargo test --profile fasttest --lib: 1422 passed, 0 failed (matches
+    the stated baseline exactly).
+  - cargo clippy --all-targets -- -D warnings: 0 warnings.
+  - SCOREDIV_DUMP_COMPLETED sweep: "1011 games sampled, 698 completed to
+    state.game_over"; "671/698 of those matched index.tsv exactly" --
+    identical to the stated baseline (expected, since nothing changed).
+  - comm -23 guard_ids_698.txt popbk_ids.txt (regressions): EMPTY.
+  - comm -13 guard_ids_698.txt popbk_ids.txt (wins): EMPTY.
+  (Both comm outputs empty is exactly expected for a no-op patch.)
+
+FILES
+  - This file: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/popbk__POPBK.txt
+  - Patch (empty, no-op): /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/popbk.patch
+  - Raw bucket dump: /tmp/popbk_bucket.txt (in this worker's own /tmp, not
+    committed anywhere persistent)
+  - REPLAY_DEBUG dump for the 15 games: /tmp/popbk_debug.txt
+  - 7522368 full REPLAY_DEBUG_ALL trace: /tmp/g7522368.txt
+  - 7522211 full REPLAY_DEBUG_ALL trace: /tmp/g7522211.txt
+
+CONCRETE NEXT STEPS FOR WHOEVER PICKS THIS UP
+  1. The single most promising thread is still the cross-pass "yellow_bank
+     drifts with no attributable move" defect (2 tier-mismatch games here,
+     7523177 and 7523229) -- see docs/REPLAY.md's own two prior handoffs
+     for the enumerated call-site list already ruled out; don't re-walk
+     that list, extend it.
+  2. For the food-short cluster (11 games, 73% of this bucket), 7522368
+     is now a small, fully isolated 6-round repro for Green/idx=2 in a 3p
+     game -- walk rounds 1-5 for that exact player forward from each
+     round's own "(now N)" end-of-turn anchor to find where the 1-unit
+     drift actually enters, rather than starting from a fresh game.
+  3. 7522967 (stuck WarTech pending) and 7522211 (LosePop/Disband parser
+     gap + apparent solver non-determinism) are not Pop bugs; route them
+     to whoever owns those paths.
