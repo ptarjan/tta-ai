@@ -26,6 +26,15 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
           regressions (7521853 7522034 7522051 7522219 7522621 7522979),
           because some colonizes complete AFTER their own confirmation line
           with no second line to catch them; hooking apply_move cleared them.
+      WHEN THE SUPPLY CANNOT COVER A ROUND, WHICH PRODUCTION YOU DROP IS THE
+      PLAYER'S CHOICE (owner, 2026-08-14): "you choose which things to produce
+      and not. But you can't move existing tokens." No rearranging to make
+      room. This is ALREADY CORRECT and must not be "fixed": production_pairs
+      sorts descending by printed value, so credit_production fills the
+      highest-value cards first and forgoes the cheapest, which is the
+      value-maximising choice because every token yields its card's printed
+      value; and flat non-worker bonuses are credited first and land greedily
+      on the top denomination, so they are weakly optimal too.
       RULED OUT ALONG THE WAY, do not re-attempt: largest-denomination-first
       for non-production gains (already implemented and verified correct); the
       worker-relocation/upgrade hypothesis (Grey's Bronze->Iron->Oil mine line
