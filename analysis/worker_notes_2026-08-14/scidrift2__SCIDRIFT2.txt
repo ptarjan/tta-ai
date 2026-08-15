@@ -1,0 +1,473 @@
+SCIDRIFT2 worker -- 2026-08-14 -- MEASUREMENT ONLY, no code touched.
+Binary used (prebuilt, not rebuilt): /private/tmp/base0815/rust/target/difftest/replaystats
+Sweep: SCIENCE_ORACLE=1 replaystats /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+Raw output: /private/tmp/scidrift2_raw.txt ; SCIENCE_DETAIL lines only: /private/tmp/scidrift2_details.txt
+
+TASK: turn the 70-ish-game science-divergence population (SCIDRIFT's first
+reading) into a named, sized, actionable defect list -- same shape as
+RESDRIFT did for resources. Science and resources are a SEPARATE population
+each (per task brief); this file does NOT merge them or hunt one shared
+cause.
+
+===========================================================================
+STEP 0: RE-RUN COUNT -- 74 GAMES, NOT 70
+===========================================================================
+On today's tree this sweep finds 74/1011 games diverging (SCIDRIFT's first
+reading, run earlier in the day on an earlier commit, found 70). Same kind
+of small drift RESDRIFT saw (312 -> 315) from intervening commits landing
+same-day. Using 74 throughout below -- close enough to be the same
+population, all analysis re-derived fresh from this run, not copied from
+SCIDRIFT's numbers.
+Checkpoint agreement this run: 41518 checked, 40845 matched (98.4%) --
+matches SCIDRIFT's 98.4% figure exactly.
+
+===========================================================================
+STEP 1: FIRST-DIVERGENCE DELTA HISTOGRAM (delta = reconstructed - journal_now)
+===========================================================================
+Signed:
+  -6:1  -3:6  -2:7  -1:4  +1:38  +2:14  +3:1  +5:2  +7:1
+
+Absolute-value buckets:
+  |delta|=1: 42  (56.8%)   <-- dominant bucket, but NOT as overwhelming as
+                                resources' |delta|=2 dominance (75.2%)
+  |delta|=2: 21  (28.4%)
+  |delta|=3: 7   (9.5%)
+  |delta|=5: 2   (2.7%)
+  |delta|=6: 1   (1.4%)
+  |delta|=7: 1   (1.4%)
+
+CONTRAST WITH RESOURCES: resources clustered hard on exactly 2 (75%,
+matching BGO's corruption penalty amounts of 2 or 4, /2 for the half-
+applied group). Science clusters on exactly 1 first (56.8%), then 2
+(28.4%) -- together |delta| in {1,2} is 63/74 = 85.1%, so still mostly
+small-integer, but the MODE is 1 not 2, and there's a longer tail (3,5,6,7)
+that resources barely has. This is consistent with science divergences
+having a different dominant mechanism than resources' corruption-skip
+(which always deducts an even BGO-stated amount, hence resources' pileup
+at 2/4).
+
+Sign split (all 74):
+  positive (OVER, engine gives too much science): 56/74 = 75.7%
+  negative (UNDER, engine gives too little):       18/74 = 24.3%
+Matches SCIDRIFT's first reading (53/70=75.7%, 17/70=24.3%) almost exactly
+-- the 74-vs-70 count drift did not change the sign ratio at all, a good
+sign this ratio is a stable property of the population, not noise.
+
+Round histogram (first divergence):
+  5:1 6:1 7:3 8:2 9:9 10:10 11:12 12:12 13:12 14:2 15:5 16:2 17:2 18:1
+Rounds 9-13: 9+10+12+12+12 = 55/74 = 74.3% (SCIDRIFT's first reading said
+76%; consistent).
+
+===========================================================================
+STEP 2: FLAT vs GROWING -- THE SINGLE MOST IMPORTANT QUESTION -- GROWING WINS
+===========================================================================
+Method: `record_science_check` in replay_common.rs prints an eprintln
+"DEBUG end-turn science drift (SCIENCE_ORACLE): actor=N journal says (now
+J), this binary computes G (delta D) at line L" on EVERY mismatched
+checkpoint (not just the first) when REPLAY_DEBUG=1 is combined with
+SCIENCE_ORACLE=1 -- confirmed by reading record_science_check's own source
+at /private/tmp/base0815/rust/src/replay_common.rs:2989-2995 first (the
+`replay` binary at target/difftest/replay is STALE, built Aug 13 before
+today's oracle landed, and only has the old pre-oracle noisy
+`trailing_now_science` eyeball check -- do NOT use it; replaystats itself,
+rebuilt today, has the real oracle and its debug print works fine when
+pointed at a filtered index.tsv or the full corpus).
+Ran one full-corpus REPLAY_DEBUG=1 SCIENCE_ORACLE=1 sweep (one sweep, not
+parallel, ~confirmed via `DEBUG game=N` markers to attribute each mismatch
+line to its game) and extracted all 673 SCIENCE_ORACLE-tagged mismatch
+lines across the 74 diverging games, grouped into 131 distinct (game,
+actor) offset sequences (confirming RESDRIFT's own finding that each actor
+in a game can carry an independent offset -- 131 sequences from 74 games).
+
+Classification of each (game,actor) sequence by the trend of |delta| across
+its observed checkpoints:
+  FLAT (constant |delta| throughout):              19/131  (14.5%)
+  GROWING (monotonically increasing |delta|):       76/131  (58.0%)
+  SHRINKING (monotonically decreasing |delta|):      1/131  (0.8%)
+  NON-MONOTONIC (mixed, but see below -- most trend
+    upward overall despite one dip):                12/131  (9.2%)
+  SINGLE occurrence (only one mismatched checkpoint
+    ever observed for that actor -- cannot classify):23/131  (17.6%)
+
+Restricting to the 108 sequences with >=2 observed checkpoints (i.e. where
+persistence can actually be judged): GROWING is 76/108 = 70.4%, FLAT is
+19/108 = 17.6%, NON-MONOTONIC 12/108 = 11.1%, SHRINKING 1/108 = 0.9%.
+
+ANSWER TO Q2: science drift is DOMINATED BY GROWTH, the opposite of
+RESOURCES. RESDRIFT found resources' offset is a one-time missed event
+that then stays perfectly flat forever once introduced (confirmed on 3
+traced games, 0 counterexamples). Science is the reverse: 70% of
+multi-checkpoint offset sequences keep growing in magnitude every time
+that actor's turn comes up again, most never plateauing before the game
+ends. This is a WRONG PER-TURN RATE / recurring mis-accounting, not a
+single missed/extra event -- the single biggest structural difference
+between the two defect populations found in this pass.
+
+Growth-rate shape (of the 76 growing sequences, all consecutive-checkpoint
+increments in |delta|, i.e. how much extra/missing science accrues each
+time that actor's own turn comes around again):
+  +0 (plateau step): 129/379 (34.0%)
+  +1:                187/379 (49.3%)
+  +2:                 56/379 (14.8%)
+  +3:                  6/379 (1.6%)
+  +4:                  1/379 (0.3%)
+mean increment 0.85/round. So it's not "every single round adds exactly 1"
+(only 49% of rounds do) -- roughly a third of rounds add nothing and the
+offset holds for that round, then resumes growing. This is more consistent
+with an effect that RE-FIRES on some but not all of that actor's turns
+(e.g. a per-round conditional bonus/leak tied to a building, pact, or
+leader effect that is only sometimes active) than with a flatly
+mis-configured constant production-rate field (which would add the exact
+same amount essentially every round).
+
+Examples (game, actor-seat-index, [(journal-lineno, delta), ...] in
+chronological order):
+  FLAT:     7522478 actor1(Purple) [(149,1),(185,1),(222,1),(252,1),
+              (294,1),(331,1),(370,1),(404,1),(454,1)] -- 9 checkpoints,
+              never moves off +1.
+            7522717 actor1(Purple), the WinWar UNDER-group repro, flat at
+              -1 across 8 checkpoints (227,244,265,280,297,316,341,371).
+  GROWING:  7522640 actor3(Grey) [(408,1),(446,2),(483,3),(520,4),(562,5),
+              (632,5)] and actor2(Green, independently) [(431,2),(474,4),
+              (511,4),(549,6),(605,7)] -- BOTH actors in the same game grow
+              independently, different rates.
+            7523162 (the PACTS repro) actor3(Grey) [(296,-1),(375,1),
+              (411,1),(450,3),(490,3),(530,4),(567,5),(606,7),(654,7)] and
+              actor0(Orange, independently) [(304,1),(344,2),(383,3),
+              (420,5),(460,6),(499,7),(545,8),(580,9),(621,9)] -- so
+              SCIDRIFT's own "round-9 production shortfall" framing for
+              this game is INCOMPLETE: the shortfall is not a one-off, it
+              recurs on both Grey's and Orange's turns for the rest of the
+              game, independently. NOTE Grey's own FIRST checkpoint here is
+              -1 (UNDER) but every checkpoint after it is positive and
+              growing -- this game is nominally counted in the UNDER
+              bucket (sign is decided by the FIRST checkpoint only, per
+              the task's own definition) but its true long-run behaviour
+              is the same growing-OVER shape as the dominant OVER
+              population. Checked corpus-wide: 6/131 (4.6%) (game,actor)
+              sequences cross sign at least once (5 of the 6 go
+              negative-then-positive, like this one; only one, 7521872,
+              oscillates both ways) -- a real but small edge case. Practical
+              consequence: the clean 56/18 OVER/UNDER split undercounts the
+              true size of the growing-OVER population by a handful of
+              games whose first checkpoint happened to land on the negative
+              side of a mechanism that turns positive moments later -- this
+              does not change the dominant-shape conclusion below, just
+              flags that the OVER/UNDER boundary is a little softer than
+              the raw sign count implies.
+  ANOMALY:  7522949 actor1(Purple) delta=+7 at line407, SAME TURN actor2
+              (Green) delta=-7 at line422 -- exactly opposite, same
+              magnitude, same round (12). Then actor1's +7 persists flat
+              at line460. Looks like a science TRANSFER between two
+              specific players getting misattributed (credited to the
+              wrong actor, or double-counted for one and dropped for the
+              other) rather than a pure production bug -- worth chasing
+              separately, see repro list below. ROOT CAUSE IDENTIFIED (see
+              Step 3): journal lines just before line407 read "Purple wins
+              War over Technology ... Purple takes spoils of war Purple
+              gets 6 science; Green loses 6 science" -- this IS the
+              WarTech spoils-of-war path the task brief flagged as
+              recently built and possibly mis-granting. The journal states
+              a 6-point transfer; the oracle measures a 7-point mismatch on
+              each side -- off by one from the stated transfer amount, not
+              simply "the whole transfer got dropped."
+
+===========================================================================
+STEP 3: CAUSE-SHAPED EVIDENCE FROM THE JOURNAL -- TWO NAMED, CONFIRMED
+MECHANISMS, PLUS ONE UNRESOLVED SUBGROUP
+===========================================================================
+
+CAUSE 1 (DOMINANT, CONFIRMED WITH A CLEAN NUMERATOR): the Scientific
+Cooperation pact's PARTNER CHARGE is not implemented -- this is the exact
+gap SCIDRIFT's own writeup already named on game 7523162
+("science_pact_partners_can_pay does not exist in this tree"), and this
+pass shows it is not a one-off, it is THE dominant mechanism behind the
+whole GROWING-OVER population.
+
+  The pact's own journal text states the rule outright when proposed, e.g.
+  (7522640, line 383): "Green proposes Scientific Cooperation to Grey
+  Green is A; Grey is B; Every time one of the civilizations plays a
+  technology, it pays 2 science less and the other civilization pays 1
+  science." Every subsequent "X discovers Y ... Z loses 1 science" line
+  (Z = the OTHER pact partner, not the developer) is one of these charges.
+  If the engine skips it, the OTHER partner's own science is over-counted
+  by exactly 1 every time -- and because EITHER partner can trigger a
+  charge to the other, BOTH partners typically end up with their own
+  independent growing offset in the same game (matches 7522640's own two
+  parallel growing sequences, Grey and Green, found in Step 2).
+
+  MEASURED: of the 38 games classified GROWING-OVER (the first-diverging
+  actor's own offset sequence, abs(delta) monotonically increasing, ends
+  higher than it started), 38/38 (100%) had a Scientific Cooperation pact
+  PROPOSED somewhere in the journal before that game's first divergence.
+  Base rate check (the obvious next question -- is this just a common
+  card everyone plays?): a random sample of 60 NON-diverging games (drawn
+  from the 936 games outside the 74-game diverging population) found the
+  phrase "Scientific Cooperation" in only 1/60 (1.7%). Also checked the
+  OTHER science-diverging subgroups for comparison: FLAT-OVER games have
+  the pact in only 3/13 (23%) of their whole journals, UNDER games in
+  7/18 (39%). The 100% figure for GROWING-OVER against a 1.7% general
+  base rate is not a coincidental correlation.
+  CAVEAT: did not have budget to single-step through economy's own
+  DevelopTechnology cost path to find the specific missing charge call
+  (that was already SCIDRIFT's own "next lead," still open) -- this pass
+  confirms the SIZE and SHAPE of the population this cause explains, not
+  a line-of-code fix.
+
+CAUSE 2 (SMALLER, CONFIRMED ON ONE CLEAN REPRO, LIKELY MORE): the WarTech
+"spoils of war" science transfer is off by a small amount from the
+journal's own stated transfer size. 7522949 (Purple beats Green in a War
+over Technology, round 12): journal states "Purple takes spoils of war
+Purple gets 6 science; Green loses 6 science" (line ~403) -- but the very
+next End Turn checkpoints show Purple's OWN reconstructed science over by
++7 (line407) and Green's under by -7 (line422), an exact mirror-image
+mismatch (one player's excess exactly equals the other's shortfall, so
+the TOTAL science in the game is conserved -- this is a misattribution/
+off-by-one in the SIZE of the transfer applied, not points created or
+destroyed from nowhere). This directly implicates the WarTech spoils path
+the task brief named as recently built and untested for over/under-grant.
+Only 1 other UNDER-group game (7522092) has an actual War-over-TECHNOLOGY
+event near its first divergence (see Step 4 -- the other two WinWar-
+labelled UNDER games turn out to be Wars over TERRITORY, a red herring,
+see below), so this pass has 2/74 clean WarTech-adjacent repros, not
+enough to size the population the way Cause 1's 38/38 could be sized --
+flagging as a real, confirmed-by-example, but not yet corpus-sized cause.
+
+UNRESOLVED SUBGROUP: FLAT-OVER (13/56 OVER games, offset appears once and
+never grows). No single dominant mechanism found. Checked "Leonardo Da
+Vinci" (the leader who refunds 1 resource on tech breakthroughs, visible
+in several of these games' journals) as a candidate common thread: present
+in 7/12 sampled flat-over games, absent in the other 5 -- not a clean
+enough split to call it the cause. CANNOT TELL from this data what
+produces the flat-OVER +1 or +2 one-time offsets; they may be a long tail
+of distinct small causes (a single missed card-cost adjustment, a single
+leader-effect rounding difference) rather than one shared mechanism, the
+same "divergence is a long tail" pattern this project's standing rule
+already warns about. Left open for a future pass.
+
+===========================================================================
+STEP 4: OVER (56) vs UNDER (18) -- DIFFERENT SHAPES, LIKELY DIFFERENT BUGS
+===========================================================================
+Classified each of the 74 games' FIRST-diverging actor's own offset
+sequence (not the whole game -- one sequence per game, the one the
+SCIENCE_DETAIL line itself reports):
+
+  OVER (56 games):
+    GROWING:    38/56  (67.9%)  <-- dominant shape, Cause 1 above
+    FLAT:       13/56  (23.2%)
+    NONMONO:     2/56  (3.6%)
+    SINGLE:      3/56  (5.4%)  (only one mismatched checkpoint observed)
+
+  UNDER (18 games):
+    SINGLE:      9/18  (50.0%)  <-- dominant shape
+    FLAT:        4/18  (22.2%)
+    GROWING:     2/18  (11.1%)
+    NONMONO:     2/18  (11.1%)
+    SHRINKING:   1/18  (5.6%)
+
+Checked what "SINGLE" actually means for the 9 UNDER cases by counting
+that same actor's remaining End Turn checkpoints later in the same game
+(a checkpoint that doesn't get logged as a mismatch means the engine WENT
+BACK to matching the journal exactly):
+    2/9  the game simply ends right after (0 more End Turns for that
+         actor) -- genuinely cannot tell if it would have persisted.
+    7/9  SELF-CORRECTS: 1, 2, 6, 6, 8, or 11 further End Turn checkpoints
+         for that same actor, ALL of them matching exactly. The offset
+         was a one-round blip that resolved itself by the very next turn.
+         (e.g. 7521829: WinWar-adjacent -6 blip at line 268, corrects to
+         an exact match one Purple turn later at line 295; 7522092: -1 at
+         line 213, corrects and stays correct across 8 more checkpoints.)
+
+READING: OVER and UNDER are NOT the same shape, and this pass's evidence
+points at (at least) two structurally different bugs, not one bug with
+two signs:
+  - OVER is dominated (68%) by a PERSISTENT, RECURRING, GROWING offset --
+    explained for essentially all of it by the Scientific-Cooperation
+    partner-charge gap (Cause 1, Step 3): a real charge that should apply
+    repeatedly across the game is skipped every time it should fire.
+  - UNDER is dominated (61% = 50% self-correcting-single + a chunk of the
+    22% flat) by a TRANSIENT, SELF-CORRECTING blip: the engine reads a
+    momentarily-wrong value at one specific checkpoint and is back in sync
+    one round later, with no compounding. This looks like a TIMING
+    artifact (something not fully applied yet at the instant the
+    end-of-turn snapshot is taken, but applied correctly by the time the
+    NEXT snapshot happens) rather than a wrong formula -- consistent with
+    the general "discard-blocked-turn" timing hazard class of bug this
+    project's oracle machinery was built to guard against for OTHER stats
+    (culture), but evidently not fully closed for science's own
+    checkpoint. CANNOT TELL from this data exactly which timing gap it is
+    -- would need single-stepping state right at one of these blips (e.g.
+    7522092 line 213) to confirm.
+  - The WinWar/WarTech investigation (Step 3, Cause 2) is a partial
+    exception to this UNDER=self-correcting story: only 1 of the 3
+    UNDER-group games whose LAST action before the checkpoint was WinWar
+    is an actual War over TECHNOLOGY (7522092, itself in the
+    self-correcting bucket); the other 2 (7521829, 7522717) are Wars over
+    TERRITORY -- ActionClass::WinWar evidently covers both war-types, so
+    "last_action_class=WinWar" is not by itself evidence of the WarTech
+    spoils bug. 7522717 is notably FLAT (not self-correcting) at -1 for 8
+    straight checkpoints despite being a Territory war, so it is NOT
+    explained by Cause 2 either -- another open, unexplained flat-UNDER
+    case.
+  - A genuine complication to the clean OVER/UNDER story: 6/131
+    (game,actor) sequences corpus-wide cross sign at least once (Step 2),
+    5 of them negative-then-positive -- so a small number of games counted
+    here as "UNDER" (because their FIRST checkpoint happened to be
+    negative) are, a few checkpoints later, indistinguishable from the
+    GROWING-OVER population (7523162 is the clearest example, already
+    flagged in Step 2). The 56/18 split is a reasonable first cut but the
+    boundary is softer than the raw count implies.
+
+===========================================================================
+STEP 5: REPRO GAMES FOR THE NEXT WORKER (journal lineno = first
+divergence, confirmed via full-corpus REPLAY_DEBUG=1 SCIENCE_ORACLE=1
+sweep, cross-checked against /private/tmp/scidrift2_details.txt)
+===========================================================================
+
+CAUSE 1 -- Scientific Cooperation partner-charge gap (GROWING-OVER, the
+highest-value target, 38/56 = 68% of the OVER population):
+  7522640 -- round 12, actor Grey, first divergence line 408 (delta +1,
+    grows to +5 by line 632). SAME game also has an independent second
+    growing offset for Green (line 431, +2 -> +7 by line 605). Pact
+    proposed at line 383 ("Green proposes Scientific Cooperation to Grey
+    ... Every time one of the civilizations plays a technology, it pays 2
+    science less and the other civilization pays 1 science"); partner-
+    charge lines to trace: 386, 398, 399, 425, 435, 439, 469 etc, each
+    "X discovers Y ... Z loses 1 science" with Z = the non-developing
+    partner.
+  7521850 -- round 9, actor Grey, first divergence line 323 (delta +2,
+    grows to +18 by line 719 -- the largest final magnitude found in the
+    whole population). Pact proposed line 273, partner-charge lines 277,
+    278, 316 -- BUT the pact is explicitly CANCELLED at line 324 (one line
+    after the first divergence) and Grey's own offset keeps growing for
+    390 more journal lines after that. This is the single best game to
+    prove or disprove whether cancelling a Scientific Cooperation pact
+    actually clears whatever internal state is driving the growth, or
+    whether the bug has a second, cancellation-independent component.
+  7523162 -- round 9, actor Grey, first divergence line 296 (delta -1,
+    flips positive at line 375 and grows to +7 by line 654; actor Orange
+    independently grows +1 at line 304 to +9 by line 621). This is the
+    SAME game SCIDRIFT's own writeup traced by hand and is also the
+    original PACTS repro (7523162) -- this pass's oracle now gives the
+    full-game persistence trace SCIDRIFT didn't have budget for.
+
+CAUSE 2 -- WarTech spoils-of-war transfer size (small population, only 2
+clean examples found this pass):
+  7522949 -- round 12, actor Purple, first divergence line 407 (delta
+    +7); actor Green's mirrored divergence at line 422 (delta -7). The
+    triggering lines are just above 407: "Purple wins War over Technology
+    ... Purple takes spoils of war Purple gets 6 science; Green loses 6
+    science" -- journal states a 6-point transfer, oracle measures a
+    7-point mismatch on each side. Best repro for this cause: small,
+    single event, exact opposite mirrored deltas, easy to isolate.
+  7522092 -- round 12, actor Purple, first divergence line 213 (delta -1,
+    SELF-CORRECTS -- no further mismatches for Purple across 8 more
+    checkpoints). "Orange wins War over Technology ... Orange takes
+    spoils of war" at line 212, actual spoils resolution "Orange takes
+    spoils of war Orange gets 8 science; Purple loses 8 science" at line
+    215-216 -- AFTER the checkpoint being compared, so this -1 may not
+    even be caused by the spoils transfer itself (the transfer's own
+    journal lines come later than the mismatch) -- flagged as a WEAKER,
+    unconfirmed WarTech repro, worth a look but don't assume it's the same
+    mechanism as 7522949 without checking.
+
+UNDER, self-correcting blip (61% of the UNDER population, mechanism not
+identified, likely a timing/snapshot-ordering artifact):
+  7521829 -- round 14, actor Purple, first divergence line 268 (delta -6,
+    the largest UNDER magnitude found), self-corrects to exact match at
+    line 295 (Purple's very next End Turn, one round later). Note this
+    game's WinWar context is a War over TERRITORY, not Technology -- do
+    NOT assume this is the WarTech bug.
+  7522092 -- see above (also serves as an UNDER self-correcting repro,
+    independent of whether it's WarTech-caused).
+  7523003 -- round 12, actor Grey, first divergence line 441 (delta -2),
+    self-corrects across 6 further checkpoints. No CORRUPTION, no WinWar,
+    no pact nearby -- cleanest "unexplained self-correcting blip" repro,
+    no confound to strip out first.
+
+UNDER, FLAT (persistent, not self-correcting -- a smaller, separate UNDER
+shape, 4/18 = 22%):
+  7522717 -- round 13, actor Purple, first divergence line 227 (delta -1,
+    flat across 8 checkpoints to line 371). Preceded by "Orange wins War
+    over Territory" at line 226 -- a Territory war, not Technology, so
+    despite the WinWar last-action label this is NOT the WarTech spoils
+    path; cause unidentified.
+  7521654 -- round 13, actor Grey, first divergence line 534 (delta -3,
+    flat across 3 checkpoints to line 637). No WinWar, no CORRUPTION
+    nearby -- worth checking for a missed one-time science-cost
+    subtraction (the RESOURCES-style "one missed event, then flat"
+    shape, just applied to science instead).
+
+===========================================================================
+SUMMARY TABLE
+===========================================================================
+  Population: 74/1011 games diverge on science (98.4% checkpoint
+  agreement corpus-wide, vs resources' separate 312-315/1011, 96.7%).
+
+  |delta| at first divergence: 1 (56.8%), 2 (28.4%), 3 (9.5%), 5-7 (4.1%).
+  Sign: 56 OVER (75.7%) / 18 UNDER (24.3%).
+  Round of first divergence: 74.3% land in rounds 9-13.
+
+  Persistence (Q2, the most important question): GROWING dominates, the
+  OPPOSITE of resources' flat/one-time-event shape. 70% of multi-
+  checkpoint offset sequences keep growing; only 18% stay flat.
+
+  OVER (56, 76%):
+    GROWING (38, 68% of OVER) -- CAUSE 1 CONFIRMED: Scientific
+      Cooperation pact partner-charge not implemented. 38/38 growing-OVER
+      games had the pact proposed before first divergence, vs 1.7% base
+      rate in random non-diverging games.
+    FLAT (13, 23% of OVER) -- cause unresolved, candidate long tail.
+    Small anomaly (1 game, 7522949) -- CAUSE 2: WarTech spoils transfer
+      off by ~1 from its own stated amount.
+
+  UNDER (18, 24%):
+    SELF-CORRECTING single blip (11/18, 61%: 9 SINGLE of which 7 verified
+      self-correcting + most of the 4 FLAT lean this direction too) --
+      cause unresolved, looks like a timing/snapshot artifact, NOT the
+      same shape as OVER's growing mechanism.
+    GROWING (2/18, 11%) -- likely mislabelled-by-first-checkpoint-sign
+      members of the SAME Cause-1 population (see the sign-crossing
+      caveat in Step 2/4).
+    WinWar last-action label present in 3/18 but only 1 of those 3 is an
+      actual War over Technology -- the other 2 are Wars over Territory, a
+      false lead if taken at face value from the action-class alone.
+
+CONCLUSION: science drift is NOT one bug. The two named, sized causes
+found this pass (Scientific Cooperation partner-charge, WarTech spoils
+transfer size) together explain roughly 39/74 (53%) of the population with
+real confidence (38 growing-OVER + 1 anomaly), both DIFFERENT in shape and
+size from resources' own dominant cause (corruption-deduction skip). The
+remaining ~35 games (13 flat-OVER, ~18 UNDER largely self-correcting, plus
+edge cases) are a genuine unresolved long tail -- per this project's own
+standing rule, do not spend more time hunting a single shared cause for
+them; the self-correcting UNDER blips in particular look like a
+qualitatively different (timing-related) bug class from the growing-OVER
+pact-charge bug and should be scoped as their own separate follow-up, not
+folded into the same fix.
+
+FILES: this file plus raw sweep outputs kept in /private/tmp/ (not
+committed, per instructions) for the next worker:
+  /private/tmp/scidrift2_raw.txt          -- SCIENCE_DETAIL, first-
+                                              divergence-only, full corpus
+  /private/tmp/scidrift2_details.txt      -- just the SCIENCE_DETAIL lines
+  /private/tmp/scidrift2_full_debug.txt   -- full REPLAY_DEBUG output,
+                                              EVERY mismatched checkpoint,
+                                              full corpus (100710 lines,
+                                              mostly noise from the OLD
+                                              pre-oracle eyeball check --
+                                              filter for "SCIENCE_ORACLE)"
+                                              to get the real oracle lines)
+  /private/tmp/scidrift2_oracle_by_game.txt -- the above, filtered and
+                                              attributed to game id via the
+                                              "DEBUG game=N" markers
+  /private/tmp/scidrift2_seq.txt          -- game/actor/delta/lineno,
+                                              parsed, one row per mismatch,
+                                              the source for all Step 2/4
+                                              numbers in this file
+NOTE for reproducing: the prebuilt `replay` binary at target/difftest/
+replay is STALE (built before today's SCIENCE_ORACLE oracle landed) and
+must NOT be used for single-game tracing -- use replaystats pointed at a
+1-or-few-row filtered copy of index.tsv instead (header line + the target
+game_id row(s), tab-separated, matches index.tsv's own columns).
+
