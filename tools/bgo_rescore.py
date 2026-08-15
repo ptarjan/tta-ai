@@ -85,6 +85,13 @@ RE_ELECT = re.compile(r"^(%s) elects (%s)\b"
                       % (_COL, "|".join(re.escape(n) for n in
                                         sorted(_ELECTABLE, key=len,
                                                reverse=True))))
+#: BGO prints `sets up new tactics` / `adopts existing tactics` followed by
+#: the tactic card name; the tactic stays in play until replaced.  Without it
+#: `effects.army_strength` is always 0 and every Impact of Strength /
+#: Science ranking is computed on a tableau missing up to ~14 strength.
+RE_TACTIC = re.compile(
+    r"^(%s) (?:sets up new tactics|adopts existing tactics) [AIV]+ / "
+    r"([A-Za-z' -]+?)(?:;|$)" % _COL)
 RE_POP = re.compile(r"(%s) increases population" % _COL)
 RE_GETPOP = re.compile(r"(%s) gets (\d+) population" % _COL)
 RE_LOSEPOP = re.compile(r"(%s) loses (\d+) population" % _COL)
@@ -130,6 +137,7 @@ class Seat:
         self.techs = dict(START_TECHS)
         self.government = "Despotism"
         self.leader = None
+        self.tactic = None
         self.wonder_stages = Counter()
         self.completed = []          # in completion order
         self.flipped = []
@@ -181,7 +189,7 @@ def _wonder_snapshot(s, wonder, printed):
     return {"wonder": wonder, "want": printed,
             "snap": (dict(s.techs), s.government, s.leader, list(s.completed),
                      list(s.flipped), list(s.colonies), s.bank, s.blue_extra,
-                     None),
+                     None, s.tactic),
             "bad": s.bad,
             #: the seat's own token audit at this instant, and the index of
             #: the last End-turn snapshot before it (whose five production
@@ -287,7 +295,7 @@ def _apply_line(seats, seat, text, warn, last_terr_age):
         s.cons_checks.append((s.bank, int(m.group(7))))
         s.snaps.append((dict(s.techs), s.government, s.leader,
                         list(s.completed), list(s.flipped), list(s.colonies),
-                        s.bank, s.blue_extra, s.last_rates))
+                        s.bank, s.blue_extra, s.last_rates, s.tactic))
         return
     # culture scored after this player's last End turn still counts (an event
     # revealed on a rival's turn, a wonder completed, Bill Gates)
@@ -392,6 +400,11 @@ def _apply_line(seats, seat, text, warn, last_terr_age):
     m = RE_ELECT.match(text)
     if m:
         seat(m.group(1)).leader = fix(m.group(2))
+
+    # --- tactic: set/replaced by name; stays until the next such line
+    m = RE_TACTIC.match(text)
+    if m:
+        seat(m.group(1)).tactic = m.group(2).strip()
 
     # --- population (also nested: "X plays Frugality X increases population")
     for colour in RE_POP.findall(text):
@@ -510,6 +523,7 @@ def build_state(seats, order):
         p.techs = {n: TechCard(name=n, workers=w) for n, w in s.techs.items()}
         p.government = s.government
         p.leader = s.leader if s.leader and s.leader in _DB.by_name else None
+        p.tactic = s.tactic if s.tactic and s.tactic in _DB.by_name else None
         p.completed_wonders = list(s.completed)
         p.flipped_wonders = list(s.flipped)
         p.colonies = [n for n in ("%s (%s)" % (t, a)
@@ -580,8 +594,10 @@ def check_game(path, verbose=False, age_loss=2):
         if s.last_rates is None:
             continue
         for i, snap in enumerate(s.snaps):
+            # snap is (techs, gov, leader, comp, flip, cols, bank, blue,
+            # last_rates, tactic) -- the printed five rates are element 8
             got_t = _rates_from_snap(snap, len(order), s.idx)
-            want_t = snap[-1]
+            want_t = snap[8]
             out["turns"]["n"] += 1
             out["turns"]["all5"] += int(got_t == want_t)
             for k, lbl in enumerate(LBL):
@@ -648,7 +664,7 @@ def check_game(path, verbose=False, age_loss=2):
             i = rec["prev_snap"]
             verified = (i >= 0
                         and _rates_from_snap(s.snaps[i], len(order), s.idx)
-                        == s.snaps[i][-1])
+                        == s.snaps[i][8])
             gs2, p2 = _state_from_snap(rec["snap"], len(order), s.idx)
             out["wonders"].append(
                 {"wonder": rec["wonder"], "want": rec["want"],
@@ -679,7 +695,11 @@ LBL = ("culture", "science", "food", "consumption", "resources")
 
 
 def _state_from_snap(snap, nplayers, idx):
-    (techs, gov, leader, comp, flip, cols, bank, blue, _want) = snap
+    # 10 elements when the snapshot carries a tactic (End-turn rows and the
+    # wonder records written after that change); 9 for anything older.
+    snap = tuple(snap)
+    snap = snap + (None,) * (10 - len(snap))
+    techs, gov, leader, comp, flip, cols, bank, blue, _want, tactic = snap
     gs = GameState(num_players=max(1, nplayers), seed=0)
     for i in range(max(1, nplayers)):
         gs.players.append(PlayerState(idx=i))
@@ -687,6 +707,7 @@ def _state_from_snap(snap, nplayers, idx):
     p.techs = {n: TechCard(name=n, workers=w) for n, w in techs.items()}
     p.government = gov
     p.leader = leader if leader and leader in _DB.by_name else None
+    p.tactic = tactic if tactic and tactic in _DB.by_name else None
     p.completed_wonders = list(comp)
     p.flipped_wonders = list(flip)
     p.colonies = [n for n in ("%s (%s)" % (t, a) for t, a in cols)

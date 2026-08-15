@@ -1173,6 +1173,7 @@ def stats_key(state, p):
             tuple(p.colonies),
             p.culture_rate_extra, p.science_rate_extra,
             p.strength_extra, p.happy_extra,
+            p.yellow_bank,
             tuple(pacts))
 
 
