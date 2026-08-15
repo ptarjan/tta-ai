@@ -575,3 +575,20 @@ wrong. Quote both `comm` outputs verbatim in your notes.
 
 `cargo test --profile fasttest` and `cargo clippy --all-targets -- -D warnings`
 still run as before -- those are fast and stay local.
+
+FOOD-VS-IRON IS A PLAYER CHOICE THE ENGINE DOES NOT OFFER  (2026-08-15, d4130c1)
+    Paul: "But you can choose food or iron."  One shared blue supply; when it is
+    short the choice spans the food/resource boundary, not just cards within a
+    kind.  economy::end_of_turn credits food bonus + food production BEFORE
+    resource bonus + resource production, all off the same blue_available pool,
+    so food can never be what gets dropped.
+    MEASURED over all 1011 games with a temporary PRODCAP probe (reverted):
+        farm production starved ....  0 events
+        mine production starved .... 23 events in 22 games
+    Entirely one-sided.  8 of the 22 do not complete today; base rate predicts
+    ~5.7, so that is NOT a significant enrichment -- do not sell this as 8 wins.
+    Full ID set with want=/got= per event:
+        analysis/worker_notes_2026-08-14/prodcap_mine_starved.txt
+    A chooser needs a single rules-motivated behaviour, not a policy knob, and
+    "match the journal" is banned (replayer coercion).  Question is out to Paul;
+    do not build one before the answer lands.  Do NOT weaken the cap itself.
