@@ -1,0 +1,169 @@
+WONDER worker -- IllegalMove: WonderStep bucket (~14 games)
+Verdict: CLEAN NEGATIVE. No code change made. This bucket is not a wonder
+rules bug; every game in it is blocked by an OTHER pre-existing, already
+partially-documented bug outside the wonder mechanism.
+
+METHOD
+
+1. Cheap check first (card_table.rs vs BGA material).
+   Pulled every wonder that appears in the bucket and diffed its baked
+   stage-cost array and any relevant special-tech constants against
+   sources/bga_throughtheages_material.inc.php:
+     - Kremlin: stages [4,4,4], culture 2, happy -1, CA 1, MA 1 -- matches.
+     - Internet: stages [2,3,4,3,2] -- matches BGA's 'resscost' array
+       exactly.
+     - First Space Flight / Great Wall / Transcontinental Railroad /
+       Hanging Gardens / St. Peter's Basilica / Fast Food Chains: stage
+       arrays all match BGA's own resscost arrays (spot-checked each).
+     - Masonry / Architecture / Engineering (the three "Construction"
+       techs that let you build multiple wonder stages in one civil
+       action): card_table.rs's wonder_stages_per_action is 2 / 3 / 4
+       respectively, matching BGA's card text verbatim ("You may build up
+       to 2/3/4 stages of wonder in 1 civil action"). No cost discount is
+       printed on any of these three cards for wonder stages (only for
+       urban buildings), and costs.rs's wonder_stage_cost applies none --
+       correct, RULES_SPEC.md 3.8 confirms no such discount exists.
+   Constants are clean across the board. This ruled out the "baked
+   constant is wrong" hypothesis (the one that has been the answer twice
+   this week elsewhere) for this bucket.
+
+2. Split the bucket before assigning a cause.
+   REPLAY_DUMP_BUCKET=WonderStep ./target/difftest/replaystats ... found
+   exactly 14 DUMP lines (matches the bucket's own reported count):
+
+     First Space Flight   4 games  (7522652, 7522047, 7522762, 7521689)
+     Fast Food Chains      3 games  (7522729, 7522350, 7522795)
+     Internet               2 games  (7522236, 7522348)
+     Great Wall             1 game   (7523583)
+     Transcontinental RR    1 game   (7522936)
+     Hanging Gardens        1 game   (7521783)
+     St. Peter's Basilica   1 game   (7522455)
+     Kremlin                1 game   (7523537)
+
+   8 different wonders across 14 games is itself a strong signal against
+   a single baked-constant bug (which would cluster on one wonder) --
+   confirmed by tracing every game with REPLAY_DEBUG=1 (the existing
+   try_apply-fail diagnostic already in replay_common.rs prints
+   wonder_stage_cost/wonder_steps/resources at the failure point).
+
+   Result: the 14 split into exactly TWO causes, neither of them a wonder
+   rules bug:
+
+   A) 13/14 games -- a plain resource shortfall at the moment of the
+      WonderStep, NOT a wonder-cost-model bug:
+
+        game      wonder                 k  cost  our resources  short by
+        7522652   First Space Flight     4  16    11              5
+        7521689   First Space Flight     4  16    11              5
+        7522047   First Space Flight     2  13    12              1
+        7522762   First Space Flight     1   1     0              1
+        7523583   Great Wall             2   4     3              1
+        7522236   Internet               2   5     4              1
+        7522348   Internet               2   5     0              5
+        7522936   Transcontinental RR    1   3     2              1
+        7521783   Hanging Gardens        1   2     1              1
+        7522729   Fast Food Chains       1   4     3              1
+        7522350   Fast Food Chains       1   4     2              2
+        7522795   Fast Food Chains       1   4     3              1
+        7523537   Kremlin                1   4     3              1
+
+      In every one of these, legal::legal_moves correctly offers
+      WonderStep for k values the player CAN afford, and correctly omits
+      the k the human actually played only because our reconstructed
+      p.resources is a few points below the true value. The wonder cost
+      model itself (costs::wonder_stage_cost, legal.rs's stages_left/
+      wonder_stages gating) is exactly right -- see costs.rs's own
+      wonder_stage_cost_sums_the_next_k_printed_stages /
+      wonder_stage_cost_reads_from_the_current_progress tests, both still
+      passing.
+
+      Traced one of these (7523537, Kremlin) end-to-end with
+      REPLAY_DEBUG=1. Long before the wonder build, the SAME game already
+      shows repeated "DEBUG end-turn science drift" and "DEBUG end-turn
+      resources drift" lines every couple of rounds from round 10 onward
+      (e.g. "journal says (now 12), this binary computes 8 (delta -4)" at
+      round 12; "(now 13), computes 12 (delta -1)" at round 13) -- i.e.
+      Orange's production/spending reconstruction has been silently
+      drifting low all game, completely independent of wonders. By round
+      14 the accumulated drift is exactly enough to make the true 3rd
+      Kremlin stage (cost 4) unaffordable in our reconstruction (we show
+      3 resources instead of 4).
+
+      This is the SAME cross-bucket mechanism docs/REPLAY.md already
+      documents as open and NOT wonder-specific: its "Pop bucket" section
+      describes a multi-mechanism food/resource/science production drift
+      (yellow_bank tier drift, `events::extra_production` computing one
+      higher than end-of-turn production, etc.), explicitly still open
+      after several passes, and explicitly warns "worth stating... a
+      large share of the remaining ... games at once" and "do not
+      re-chase this from the Pop bucket" for one of its sub-causes. The
+      IllegalMove: Build (32 games) and IllegalMove: Upgrade (15 games)
+      buckets show the identical "short by a small amount" affordability
+      shape and almost certainly share this same root cause -- flagging
+      here since fixing that shared root cause would likely clear WonderStep,
+      Build, and Upgrade buckets together (this is exactly the situation
+      the "broadcast cross-bucket causes" playbook describes: a shared
+      cause behind several buckets' symptoms, not 13 separate wonder
+      bugs). I did not attempt to fix it: it's explicitly out of scope
+      for this bucket, already flagged in docs/REPLAY.md as a deep,
+      still-open, multi-pass investigation, and not a wonder rule at all.
+
+   B) 1/14 games -- a stuck pending Choice, not a resource problem at all:
+
+        7522455, St. Peter's Basilica. REPLAY_DEBUG=1 shows the failure
+        point has phase=Politics with pending_top=Choice(WarTech{
+        victim:1, budget:13}) still open, so legal_moves is just
+        [Choose{0}, Choose{1}] -- the WonderStep move is never even
+        offered because an EARLIER decision was never resolved.
+
+        The journal explains why: at line 198 "Orange wins War over
+        Technology ... Orange takes spoils of war" is followed by TWO
+        separate resolution lines (204/205 by original numbering):
+          "Orange takes spoils of war Orange steals Navigation from
+           Purple"
+          "Orange takes spoils of war Orange gets 6 science; Purple
+           loses 6 science"
+        i.e. the human split a single War over Technology's spoils
+        budget between stealing ONE blue tech card AND converting the
+        remainder to science, as two separate takes. Our engine's
+        Pending::Choice(WarTech) modeling (the `Choice { player, kind:
+        WarTech{...}, options: OptionList{...} }` seen in the debug dump)
+        appears to only support taking ONE option, not a split
+        card-then-remainder-science sequence, so the choice is never
+        resolved and everything after it (including the wonder build 6
+        journal lines later) is blocked.
+        This is a War/combat spoils-of-war Choice bug, not a wonder bug
+        -- it just happens to manifest here because the blocked pending
+        choice sits between the war and this player's next wonder build.
+        Left for whoever owns the War/Combat or Choice-resolution bucket.
+
+3. No fix landed for this bucket. Both root causes live outside the
+   wonder mechanism (a general resource/science production drift, and a
+   WarTech multi-take Choice gap), and RULES_SPEC.md/BGA data confirm the
+   wonder cost model and multi-stage-per-CA gating (Masonry/Architecture/
+   Engineering) are already correct.
+
+THE BAR (run once, at the end, on the UNMODIFIED tree -- no source edits
+were made this pass, so this is expected to exactly reproduce the guard
+baseline, and it does):
+
+  # replaystats: 1011 games sampled, 698 completed to state.game_over
+  698/698 completed games actually flipped state.game_over (the other 0
+  reached the journal's own "End of game" marker but hit a mismatch
+  afterward, so `game::scores` was never computed for them); 671/698 of
+  those matched index.tsv exactly (sorted per-game score-list compare).
+
+  REGRESSIONS (comm -23 guard_ids_698.txt wonder_ids.txt): <empty>
+  WINS        (comm -13 guard_ids_698.txt wonder_ids.txt): <empty>
+
+  cargo test --profile fasttest --lib: 1422 passed; 0 failed; 0 ignored
+  cargo clippy --all-targets -- -D warnings: 0 warnings
+
+FILES
+  /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/wonder__WONDER.txt (this file)
+  /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/wonder.patch (empty -- no changes)
+
+Clone: /private/tmp/wonder (deleted after this file + patch were written,
+since the patch is empty and non-lossy -- nothing uncommitted or unlanded
+was in it; this pass made no commits, only ran replaystats/replay/test/
+clippy against the base tree).
