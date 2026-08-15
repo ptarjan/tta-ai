@@ -1,0 +1,300 @@
+IllegalMove: Upgrade BUCKET (15 games) -- investigation notes, NO FIX LANDED
+Worker: upgbk, clone /private/tmp/upgbk, base commit 9860400 (base0815, 698/671)
+Date: 2026-08-14
+
+OUTCOME: (c) -- clean negative, well-evidenced. `git diff 9860400..HEAD -- rust/`
+is EMPTY (confirmed: `git status --short` in the clone shows no tracked files
+touched under rust/, only untracked scratch/census artifacts that pre-existed
+in the base0815 template). upgbk.patch is therefore an empty file.
+
+===========================================================================
+0. HEADLINE
+===========================================================================
+`costs::upgrade_cost` (hi.build_cost - lo.build_cost, floored at 0) and every
+baked resource_cost/science_cost in `card_table.rs` for the cards this bucket
+touches are 100% CORRECT, cross-checked directly against
+`sources/bga_throughtheages_material.inc.php`. In all 15 games, the naive
+`hi.resource_cost - lo.resource_cost` formula matches the journal's own
+"spends N resources" number EXACTLY. The bucket is not an upgrade-pricing bug.
+
+It is a landing zone for (at least) THREE separate, PRE-EXISTING engine bugs,
+none of them in Upgrade code (`costs.rs`'s `upgrade_cost`/`upgrade_cost_net`,
+`apply.rs`'s `do_upgrade`, `legal.rs`'s Upgrade-move generation -- all read,
+none touched):
+
+  A. A resource/population ("yellow_bank") tracking drift that pushes the
+     §6.2 corruption band boundary the wrong way, silently charging 2
+     resources of corruption on turns the human's own journal shows none.
+     THIS IS THE SAME BUG two OTHER specialist workers today (`resdrift`,
+     `resshort`) independently traced while investigating the unrelated
+     "IllegalMove: Build" bucket -- see section 3 below. Both confirmed the
+     corruption formula and pop-cost formula are rules-correct on their own
+     terms; the true source is an earlier, currently uninstrumented
+     population count drift, explicitly flagged by `resdrift` as needing a
+     brand-new population/yellow_bank cross-validation oracle that does not
+     exist yet. NOT fixed by either of today's other passes, NOT fixed here.
+
+  B. A colonize-sacrifice hidden-information reconstruction gap: when a
+     journal's "Sacrificed Units:" clause names a bonus card only generically
+     ("1 Colonization card +2"), this binary's own translation of that phrase
+     into a specific `CardId` can pick a card that is not actually the one in
+     the (hidden) military hand, so `Move::SendBonus` is illegal and
+     `Replayer::drain_colonize` falls back to `approximate_colonize`, which
+     greedily takes whatever `legal_moves` offers first -- including
+     sacrificing a SECOND military unit the human never spent. This is a
+     narrower, colonize-specific gap in an area (`replay_common.rs`'s
+     colonize machinery) with documented regression history
+     (`colofix__COLOFIX.txt`, landed cleanly earlier today) and is not
+     re-attempted here given the risk/reward and the remaining budget.
+
+  C. A separate CULTURE-tracking drift (not resources), which explains the
+     "closely related" score-divergence signal named in the brief -- see
+     section 4. Already partially root-caused and fixed at an earlier base
+     by a THIRD specialist worker today (`culturedrift`, a Michelangelo/
+     Kremlin unhappy-face-cancels-happy-face bug) -- that fix IS present in
+     our base commit already, and is confirmed NOT the cause of either
+     score-divergence example game (neither actor has Michelangelo). The
+     residual culture drift these two example games show is a different,
+     still-unexplained instance of the same class of bug.
+
+ANSWER to "are illegal-move Upgrade and the UpgradeProduction/UpgradeUnit
+score divergence one bug": NO, not through Upgrade code. Both are downstream
+symptoms of pre-existing, cross-bucket state drift (A for the illegal-move
+side, C for the score-divergence side) that happen to surface on Upgrade
+actions because upgrades are frequent, resource-sensitive, mid-game moves --
+not because anything in Upgrade's own cost/legality/application code is wrong.
+
+===========================================================================
+1. THE SPLIT (method step 1, published as instructed even though no fix)
+===========================================================================
+Enumerated with:
+  REPLAY_DUMP_BUCKET="IllegalMove: Upgrade" ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+
+15 DUMP lines (one per bucket game), split by FROM-card -> TO-card:
+
+  Military UNIT upgrades (7 games):
+    Warriors  -> Riflemen    x3   7522614, 7522520, 7522695
+    Bronze    -> Iron        x1   7521361
+    Knights   -> Cavalrymen  x1   7523415
+    Iron      -> Oil         x1   7521920
+    Bronze    -> Coal        x1   7523017
+
+  Technology/production upgrades (8 games):
+    Agriculture -> Selective Breeding  x2   7522490, 7522232
+    Agriculture -> Irrigation          x1   7523203
+    Religion    -> Organized Religion  x1   7523634
+    Philosophy  -> Scientific Method   x1   7523609
+    Philosophy  -> Alchemy             x1   7522843
+    Scientific Method -> Computers     x2   7523520, 7522595
+
+Split by "the amount the journal says was spent vs. `hi.resource_cost -
+lo.resource_cost`": EVERY SINGLE ONE of the 15 matches exactly (verified by
+hand against `card_table.rs`'s printed `resource_cost` for both FROM and TO
+in each pair). No game in this bucket fails because the ENGINE's idea of the
+upgrade's price disagrees with the human's own stated spend.
+
+Split by resources-available-vs-needed at the moment of the `try_apply fail`
+(`REPLAY_DEBUG=1`, reads the `DEBUG try_apply fail: mv=Upgrade{...}` dump):
+  - 7522614 (Warriors->Riflemen): fails on `p.techs.workers(Warriors) == 0`
+    (the FROM card has zero units in this binary's reconstruction) -- an
+    ARMY-COUNT gate failure, not a resource-affordability failure.
+  - 7522490, 7523609, 7521920, 7523415 (and by inspection several others):
+    fail on plain resource shortfall (`res < cost`), short by 1-3 resources.
+  - Ages: I, II and IV are all represented among the failures; no single age
+    or government stands out.
+
+===========================================================================
+2. BAKED-CONSTANTS CHECK (method step 2 -- do this FIRST)
+===========================================================================
+Diffed every dominant card's `card_table.rs` entry against
+`sources/bga_throughtheages_material.inc.php` (`'resscost'`/`'techcost'`):
+
+  card                 ours (res/sci)   BGA (resscost/techcost)   match
+  Warriors                2 / 0            2 / 0                   yes
+  Riflemen                5 / 6            5 / 6                   yes
+  Bronze                  2 / 0            2 / 0                   yes
+  Iron                    5 / 5            5 / 5                   yes
+  Coal                    8 / 7            8 / 7                   yes
+  Knights                 3 / 5            3 / 5                   yes
+  Cavalrymen              5 / 6            5 / 6  ("Calvarymen",   yes
+                                            BGA's own typo)
+  Agriculture             2 / 0            2 / 0                   yes
+  Irrigation              4 / 3            4 / 3                   yes
+  Selective Breeding      6 / 5            6 / 5                   yes
+  Philosophy              3 / 0            3 / 0                   yes
+  Alchemy                 6 / 4            6 / 4                   yes
+  Scientific Method       8 / 6            8 / 6                   yes
+  Computers              11 / 8           11 / 8                   yes
+  Religion                3 / 0            3 / 0                   yes
+  Organized Religion      7 / 4            7 / 4                   yes
+
+CLEAN. No baked-constant fix available here -- unlike the earlier
+Fortifications (4/2 vs 5/3) win, every relevant card in this bucket already
+matches BGA's own data exactly. Do not re-check these cards again.
+
+===========================================================================
+3. TRACE A -- 7522614, Warriors -> Riflemen, army-count gate (mechanism B)
+===========================================================================
+`REPLAY_DEBUG=1` at the fail point shows `tableau=["Warriorsx0", ...]` --
+zero Warriors workers, so `legal.rs`'s `if p.techs.workers(lo) == 0 {
+continue; }` correctly refuses to offer the Upgrade.
+
+Hand-traced Purple's real Warriors count from the raw journal:
+  1 starting Warrior (`game.rs::START_TECHS`) + 1 built (line 105, "Purple
+  builds Warrior") - 1 sacrificed in a Historic Territory colonization
+  (line 127, "Sacrificed Units:; 1 Warrior") = 1 remaining -- matches the
+  journal's own later "Purple upgrades Warrior to Riflemen" at line 268
+  exactly. No further Warriors event for Purple anywhere in between
+  (grepped the full journal).
+
+`COLONIZE_FALLBACK_DUMP=1` on this game fires exactly once, at line 127
+itself: `COLONIZE_FALLBACK reason=illegal-move actor=1 line=127
+clause=Some(Bonus(Military Bonus (defense 4 / colonization 2)))
+mv=SendBonus{...}`. The journal's own text at that sacrifice is generic ("1
+Colonization card +2"), and this binary's translation of that phrase into a
+specific bonus-card identity picked a card the reconstructed hidden hand does
+not actually hold, so `Move::SendBonus` is illegal and `drain_colonize` falls
+back to `approximate_colonize` -- which then greedily grabs the FIRST legal
+continuation each step until `Pending::Colonize` clears, which (starting from
+a pool that still nominally has a second Warriors instance available) ends up
+sacrificing a SECOND Warriors the human never spent, zeroing the tracked army
+141 journal lines before the illegal Upgrade this bucket flags.
+
+This is a DIFFERENT bug from the one `colofix` fixed earlier today (that fix
+-- `ground_army_unit_for_consumption`, the unit-swap grounding -- is present
+in this base and DOES fire correctly for the UNIT half of this exact
+sacrifice; the failure here is on the BONUS half, an unmatched generic
+"+2" phrase, which `colofix`'s own notes name as future work: "the SAME
+reconstruction repair `ground_auction_winner_hand` already grounds a
+colonization's BONUS cards ahead of time" -- but evidently not for every
+shape). Colonize-sacrifice machinery has a two-strikes regression history
+this session (`colofix__COLOFIX.txt` section 1: a plausible-looking variant
+measured -1/+0). Given that history and the remaining budget, this was NOT
+attempted as a fix here; flagging it precisely for whoever owns colonize next.
+
+===========================================================================
+4. TRACE B -- 7523415, Knights -> Cavalrymen, resource shortfall (mechanism A)
+===========================================================================
+`REPLAY_DEBUG=1` at the fail point: `resources=1`, upgrade needs 2 (5-3, per
+the table above, CORRECT). Real journal math for this exact turn (round 19,
+lines 385-392) is internally consistent with the human having exactly 3
+resources before this Upgrade (Reserves +4, three Fast Food Chains stages at
+-4 each, net 3 before the upgrade) -- this binary is short by exactly 2.
+
+`REPLAY_DEBUG=1`'s own "end-turn resources drift" oracle (already in the
+tree, not added by this pass) fires TWICE for this game, first at round 16's
+own End Turn: "actor=1 journal says (now 10), this binary computes 8 (delta
+-2)" -- and stays pinned at exactly -2 through every later checkpoint (round
+17: -2 again), i.e. a ONE-TIME miscount at round 16 that never compounds and
+never self-corrects.
+
+Traced the -2 with `REPLAY_DEBUG_ALL=1` to round 16's own `end_of_turn` step
+3b (corruption): `pre-corruption: idx=1 resources=3 food=10 blue_total=19
+blue_used=9 corr=2 s.resources=7`. `blue_available = 19 - 9 = 10`, landing in
+the `6..=10` corruption band (`economy::corruption`, 2 resources) -- but the
+journal's own round-16 End Turn line for Purple has NO "CORRUPTION!" clause
+at all (compare the SAME game's round-11 Purple line, which DOES print
+"CORRUPTION! Purple loses 2 resources" when it actually applies), meaning the
+human's true `blue_available` was >= 11 that turn. Either `blue_total` needed
+to be 20 (not 19) or `blue_used` needed to be 8 (not 9) for the band to agree
+with the human's own recorded outcome.
+
+THIS IS THE EXACT SAME SIGNATURE `resdrift__RESDRIFT.txt` (hand-trace 1,
+game 7521791) and `resshort__RESSHORT.txt` (hand-trace 1, game 7523124)
+independently found TODAY while investigating the unrelated "IllegalMove:
+Build" bucket -- word for word: corruption band computed one step too harsh,
+journal shows zero corruption, `blue_total`/`blue_used` inputs both
+independently confirmed formula-correct, and the true cause traced back to
+an EARLIER, currently un-cross-validated population (`p.yellow_bank`) count
+drift with no existing oracle to pin down where it originates.
+`resdrift__RESDRIFT.txt`'s own "NEXT SUSPECT" section (a population/
+yellow_bank cross-validation oracle, structurally like the existing
+discard-phase hand-size oracle) is the correct next step for THIS game too --
+NOT re-investigated here, since two focused specialist sessions already spent
+significant effort on exactly this class of bug today without landing a fix,
+and building the missing oracle is bigger than this bucket's own scope.
+
+CORPUS-WIDE CHECK across the bucket: ran `REPLAY_DEBUG=1` over all 15 games
+at once. The "end-turn resources drift" line fires repeatedly across MOST of
+the 15 (21 total occurrences across the batch, spanning at least 7522490,
+7522520, 7523634, 7521920, 7523415, 7522843, 7523017/7523203/7522595-area
+games), almost always well before that game's own flagged illegal Upgrade
+line -- i.e. this is not one game's fluke, it is the dominant shape across
+the bucket. `costs::upgrade_cost`/`upgrade_cost_net` never appear anywhere in
+any of these traces; the shortfall is fully explained by resources the
+engine believes are lower than the journal says, for reasons that predate
+the Upgrade attempt by one to several rounds.
+
+===========================================================================
+5. THE SCORE-DIVERGENCE SIGNAL (UpgradeProduction/UpgradeUnit, mechanism C)
+===========================================================================
+Checked whether the "4 games diverge right after UpgradeProduction" / "3
+after UpgradeUnit" signal is the SAME bug as the illegal-move bucket.
+
+First: `COLONIZE_FALLBACK_DUMP=1` on the two named examples (7522703,
+7523159) fires ZERO times in both -- mechanism B is not involved.
+
+Second, and more importantly: "journal says (now 111), this binary computes
+106" (7522703) and "(now 128)/(now 129)" (7523159) are `end-turn CULTURE
+drift` lines, not resources -- confirmed by re-running with `REPLAY_DEBUG=1`
+and reading the actual debug tag (`DEBUG end-turn culture drift: ...`). The
+task brief's framing ("an upgrade priced wrong would produce both") does not
+hold: these are culture-production mismatches, and `costs::upgrade_cost`
+only ever touches `p.resources`. Confirmed the cited journal line numbers
+(327 for 7522703, 367 for 7523159) are each the End-Turn line immediately
+AFTER the named upgrade, not the upgrade's own line -- the divergence is
+first VISIBLE there because that is where the oracle checkpoints, not
+because the upgrade caused it.
+
+Checked whether this is the already-known Michelangelo/Kremlin
+`CulturePerHappyFromTemplesTheatersWonders` bug `culturedrift__CULTUREDRIFT.txt`
+found and fixed at an earlier base (13019ca): the fix
+(`happy += w.get().effects.happy.max(0) as i32;`, `effects.rs:1119`) IS
+already present in our base 9860400. Neither drifting actor has Michelangelo
+in play in either example game (7522703 Purple's leader is Leonardo Da
+Vinci; 7523159 Purple never elects Michelangelo -- only Orange does, and
+Orange is not the drifting actor). So this is a DIFFERENT, still-open
+instance of culture drift, not this already-fixed one.
+
+CONCLUSION: the illegal-move bucket (mechanism A, resource/population drift)
+and the score-divergence signal (mechanism C, culture drift) are TWO
+DIFFERENT pre-existing bugs, neither one caused by Upgrade pricing, and they
+are not "one bug" in any sense stronger than "both are engine-wide production
+drifts that happen to surface at Upgrade-adjacent checkpoints because
+Upgrades are common actions." Fixing Upgrade code cannot fix either.
+
+===========================================================================
+6. GUARD (no-op, since no fix landed)
+===========================================================================
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+        /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+        > /tmp/upgbk_after.txt
+    grep '^SCOREDIV_COMPLETED_ID' /tmp/upgbk_after.txt | awk '{print $2}' | sort \
+        > /tmp/upgbk_ids.txt
+
+Header: "# replaystats: 1011 games sampled, 698 completed to state.game_over"
+(matches baseline exactly -- 698 completed / 671 exact, unchanged).
+
+  REGRESSIONS (comm -23 guard_ids_698.txt upgbk_ids.txt): (empty)
+  WINS        (comm -13 guard_ids_698.txt upgbk_ids.txt): (empty)
+
+Both `wc -l` agree at 698/698. This is the expected no-op result for a
+session that changed no engine code.
+
+`cargo test --profile fasttest --lib`: 1419 passed; 0 failed (matches the
+stated baseline of 1419 exactly).
+`cargo clippy --all-targets`: clean, no warnings.
+No new test was added -- there is no fix to pin with a RED/GREEN test; the
+formulas this bucket's own code owns (`upgrade_cost`, `upgrade_cost_net`,
+`do_upgrade`, the Upgrade arm of `legal_moves`) are all independently
+verified correct in section 2/3/4 above and left untouched.
+
+===========================================================================
+FILES
+===========================================================================
+Clone: /private/tmp/upgbk -- left in place per instructions only if it holds
+       unlanded commits; it holds none (`git diff 9860400..HEAD -- rust/` is
+       empty), so it is safe to delete and will be deleted after this file
+       and the (empty) patch are written.
+Patch: analysis/worker_notes_2026-08-14/upgbk.patch -- empty file, no fix.

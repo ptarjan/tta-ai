@@ -737,6 +737,25 @@ struct Replayer<'a> {
     /// marker? See [`CorruptionCheck`]'s own doc for why this is safe to
     /// compute BEFORE `try_apply(Move::EndTurn, ..)` runs.
     corruption_checks: Vec<CorruptionCheck>,
+    /// `cardblame`'s widened-attribution hook (task 2026-08-14): every
+    /// `Move` this replayer actually applied to `self.state`, in order --
+    /// see [`Self::apply_move`]'s own doc for why this is the single choke
+    /// point rather than something bolted onto `try_apply` alone. Read by
+    /// [`game_ever_cards_in_play`] to build [`GameResult::
+    /// ever_cards_in_play`], and exposed directly as [`GameResult::
+    /// moves_applied`] for `cardblame`'s Move-keyed happenings cut.
+    moves_applied: Vec<Move>,
+    /// Every journal line's own [`ActionClass`] classification, in the
+    /// order `apply_one` saw them -- pushed once per `apply_one` call (see
+    /// that function's own first statement). `ActionClass` is BGO's own
+    /// line-shape classification (`corpus::classify`), independent of
+    /// `Move` -- several `ActionClass` variants (`WinAuction`, `WinWar`,
+    /// `PlayEvent`, `Discard`, ...) are pure confirmation lines with no
+    /// `Move` of their own (`apply_one`'s own `Ok(())` arms), so this is
+    /// the only place those happenings are visible at all. Exposed as
+    /// [`GameResult::line_classes`] for `cardblame`'s ActionClass-keyed
+    /// happenings cut.
+    line_classes: Vec<ActionClass>,
 }
 
 /// Overwrite the current-events pile with `reveal_order` -- the journal's
@@ -947,7 +966,25 @@ impl<'a> Replayer<'a> {
             false_skip_flagged_prep: None,
             politics_false_skips_unrecovered: 0,
             corruption_checks: Vec::new(),
+            moves_applied: Vec::new(),
+            line_classes: Vec::new(),
         }
+    }
+
+    /// The single choke point every `Move` this file actually applies to
+    /// `self.state` goes through -- called both from `try_apply`'s own
+    /// happy path and from every other direct `apply::apply(&mut
+    /// self.state, ..)` site in this file (internal `Move::Choose` replies
+    /// resolving a pending decision, `try_apply_take`'s hand-full bypass,
+    /// ...), none of which go through `try_apply`'s legality check because
+    /// the `Move` is already known-legal by construction at that point.
+    /// Records `mv` into `Self::moves_applied` first -- purely additive
+    /// bookkeeping; does not change what `apply::apply` does to
+    /// `self.state`, and every caller's control flow is unchanged (same
+    /// two statements it replaces, in the same order).
+    fn apply_move(&mut self, mv: Move) {
+        self.moves_applied.push(mv);
+        apply::apply(&mut self.state, mv);
     }
 
     /// `cardblame`'s corruption checkpoint -- called from the `EndTurn`
@@ -1168,7 +1205,7 @@ impl<'a> Replayer<'a> {
                                     if picked.0 { "resources" } else { "food" }
                                 ))
                             })?;
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // A `Pending::Choice(PlunderSplit)` (Aggression: Plunder's
@@ -1206,7 +1243,7 @@ impl<'a> Replayer<'a> {
                             // choice's answer, skip past it and keep looking.
                             q.pop_front();
                         };
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // A `Pending::Choice(FoodOrResSplit)` (Raiders'/Foray's §5.3
@@ -1258,7 +1295,7 @@ impl<'a> Replayer<'a> {
                             .iter()
                             .position(|o| matches!(o, ChoiceOption::Gain(g) if g.food == jf && g.resources == jr))
                             .expect("this exact (food, resources) pair matched the `position` search above");
-                        apply::apply(&mut self.state, Move::Choose { n: idx as u8 });
+                        self.apply_move(Move::Choose { n: idx as u8 });
                         continue;
                     }
                     // A `Pending::Choice(Infiltrate)` (Aggression: Infiltrate's
@@ -1297,7 +1334,7 @@ impl<'a> Replayer<'a> {
                             // answer, skip past it and keep looking.
                             q.pop_front();
                         };
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // A `Pending::Choice(FreeBuild)` (an event's "each player
@@ -1331,7 +1368,7 @@ impl<'a> Replayer<'a> {
                             .iter()
                             .position(|o| matches!(o, ChoiceOption::Word(Keyword::Skip)))
                             .ok_or_else(|| MismatchKind::StuckPending("FreeBuild choice has no Skip option".into()))?;
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // A `Pending::Choice(TakeRow { .. })` (International
@@ -1402,7 +1439,7 @@ impl<'a> Replayer<'a> {
                             .iter()
                             .position(|o| matches!(o, ChoiceOption::Word(Keyword::Stop)))
                             .ok_or_else(|| MismatchKind::StuckPending("TakeRow choice has no Stop option".into()))?;
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // A `Pending::Choice(DiscardMilitary)` (`interact::
@@ -1531,7 +1568,7 @@ impl<'a> Replayer<'a> {
                             // past it and keep looking.
                             q.pop_front();
                         };
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
 
@@ -1640,7 +1677,7 @@ impl<'a> Replayer<'a> {
                                  Raid/Terrorism destroy line left to resolve it with"
                             )));
                         };
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // A `Pending::Choice(LoseColony)` (Independence
@@ -1686,7 +1723,7 @@ impl<'a> Replayer<'a> {
                             }
                             q.pop_front();
                         };
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // A `Pending::Choice(FlipWonder)` (Ravages of Time:
@@ -1730,7 +1767,7 @@ impl<'a> Replayer<'a> {
                             }
                             q.pop_front();
                         };
-                        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                        self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
                     // Every other `ChoiceKind` is left alone HERE, on
@@ -1809,7 +1846,7 @@ impl<'a> Replayer<'a> {
                 if !real_response {
                     let legal = legal::legal_moves(&self.state);
                     if legal.as_slice() == [Move::BidPass] {
-                        apply::apply(&mut self.state, Move::BidPass);
+                        self.apply_move(Move::BidPass);
                         continue;
                     }
                     return Err(MismatchKind::StuckPending(format!(
@@ -1848,7 +1885,7 @@ impl<'a> Replayer<'a> {
                         .iter()
                         .position(|o| matches!(o, ChoiceOption::Word(Keyword::Refuse)))
                         .ok_or_else(|| MismatchKind::StuckPending("PactOffer choice has no Refuse option".into()))?;
-                    apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                    self.apply_move(Move::Choose { n: n as u8 });
                 }
                 // Handled unconditionally above, before the `decider ==
                 // expected_actor` check -- both `continue` or `return Err`
@@ -2045,7 +2082,7 @@ impl<'a> Replayer<'a> {
         // after it, mirroring `try_apply`'s own loop exactly.
         let hand_military_len_before: [usize; MAX_PLAYERS] =
             std::array::from_fn(|i| self.state.players[i].hand_military.len());
-        apply::apply(&mut self.state, mv);
+        self.apply_move(mv);
         for seat in 0..self.state.num_players {
             let before = hand_military_len_before[seat as usize];
             let after = self.state.players[seat as usize].hand_military.len();
@@ -2430,7 +2467,7 @@ impl<'a> Replayer<'a> {
                 }
                 return self.approximate_colonize();
             }
-            apply::apply(&mut self.state, mv);
+            self.apply_move(mv);
         }
         Err(MismatchKind::StuckPending(format!(
             "colonize sacrifice from line {} did not resolve in 64 steps",
@@ -2514,7 +2551,7 @@ impl<'a> Replayer<'a> {
             let Some(&mv) = legal.as_slice().first() else {
                 return Err(MismatchKind::StuckPending("Pending::Colonize offered zero moves".into()));
             };
-            apply::apply(&mut self.state, mv);
+            self.apply_move(mv);
         }
         Err(MismatchKind::StuckPending("colonize force did not resolve in 64 steps".into()))
     }
@@ -2870,7 +2907,7 @@ impl<'a> Replayer<'a> {
                 opts.len()
             );
         }
-        apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+        self.apply_move(Move::Choose { n: n as u8 });
     }
 
     /// Drain every currently open `Pending::Choice(DiscardMilitary)`
@@ -3064,7 +3101,7 @@ impl<'a> Replayer<'a> {
         let pending_top_before = self.state.pending.top().cloned();
         let hand_military_len_before: [usize; MAX_PLAYERS] =
             std::array::from_fn(|i| self.state.players[i].hand_military.len());
-        apply::apply(&mut self.state, mv);
+        self.apply_move(mv);
         for seat in 0..self.state.num_players {
             let before = hand_military_len_before[seat as usize];
             let after = self.state.players[seat as usize].hand_military.len();
@@ -3132,7 +3169,7 @@ impl<'a> Replayer<'a> {
                     after_arbitrary_discard,
                 });
             }
-            apply::apply(&mut self.state, mv);
+            self.apply_move(mv);
             return Ok(());
         }
         self.try_apply(mv, true)
@@ -5614,6 +5651,109 @@ fn game_cards_in_play(state: &crate::state::GameState) -> Vec<&'static str> {
     set.into_iter().collect()
 }
 
+/// Every `CardId` argument `mv` names, zero to two of them. Exhaustive over
+/// [`Move`] (no wildcard arm, matching this codebase's own lint gate) so a
+/// future variant added to `moves.rs` is a compile error here until someone
+/// decides what card(s), if any, it names -- the entire point of
+/// `game_ever_cards_in_play` being unable to silently miss a new move
+/// shape. Response moves that name a card the RESPONDING player played
+/// (`Defend`, `SendUnit`, `SendBonus`, `SendDiscard`) are included -- they
+/// are real cards leaving a hand, exactly the kind of "played or resolved"
+/// exposure task 2026-08-14 part (A) asks for, even though they are not the
+/// acting `Move::Aggression`/`Move::Colonize` (there is no such variant --
+/// see `Move`'s own module doc) player's own turn.
+fn move_card_args(mv: Move) -> [Option<CardId>; 2] {
+    use crate::moves::Move::*;
+    match mv {
+        Take { .. } => [None, None],
+        Build { card } => [Some(card), None],
+        Develop { card } => [Some(card), None],
+        Upgrade { from, to } => [Some(from), Some(to)],
+        WonderStep { .. } => [None, None],
+        Pop => [None, None],
+        PopFree => [None, None],
+        Revolution { card } => [Some(card), None],
+        PlayLeader { card } => [Some(card), None],
+        PlayAction { card } => [Some(card), None],
+        Destroy { card } => [Some(card), None],
+        PlayTactic { card } => [Some(card), None],
+        CopyTactic { card } => [Some(card), None],
+        Aggression { card, .. } => [Some(card), None],
+        War { card, .. } => [Some(card), None],
+        OfferPact { card, .. } => [Some(card), None],
+        CancelPact { .. } => [None, None],
+        PrepareEvent { card } => [Some(card), None],
+        RemoveLeaderYellow => [None, None],
+        ColumbusColonize { card } => [Some(card), None],
+        Barbarossa { card } => [Some(card), None],
+        BachTheater { from, to } => [Some(from), Some(to)],
+        TradeFoodAsResource => [None, None],
+        TradeResourceAsFood => [None, None],
+        Bid { .. } => [None, None],
+        BidPass => [None, None],
+        Defend { card } => [Some(card), None],
+        DefendDone => [None, None],
+        SendUnit { card } => [Some(card), None],
+        SendBonus { card } => [Some(card), None],
+        SendDiscard { card } => [Some(card), None],
+        SendDone => [None, None],
+        Choose { .. } => [None, None],
+        Churchill { .. } => [None, None],
+        EndTurn => [None, None],
+        PolPass => [None, None],
+        Resign => [None, None],
+    }
+}
+
+/// The WIDENED companion to [`game_cards_in_play`] -- see
+/// [`GameResult::ever_cards_in_play`]'s own doc for what this answers and
+/// why it is kept alongside, not instead of, the narrow snapshot set.
+/// Built from FOUR sources, unioned: (1) [`game_cards_in_play`] itself, so
+/// this is always a superset; (2) every `CardId` [`move_card_args`] finds
+/// across every `Move` this game ever applied (events, one-shot actions,
+/// aggressions/wars/pacts, and superseded leaders/tactics/governments a
+/// single snapshot cannot see); (3) every player's own `colonies` list
+/// directly (append-only, but colonization assigns the auction winner their
+/// territory without any `Move` naming that `CardId` at all, so (2) alone
+/// would miss it -- same reason [`player_cards_in_play`] adds it
+/// separately for the corruption cross-check); (4) each player's own FINAL
+/// `wonder`/`government` slot directly -- neither is EVER named as a
+/// `Move` argument: a wonder card enters `p.wonder` as a side effect of
+/// `Move::Take` (which only carries a row `slot`, not a `CardId`), and the
+/// starting government (`Despotism`) is part of `new_game`'s initial setup,
+/// never the result of applying any `Move` at all. Without this source,
+/// EVERY wonder and the starting government would read as zero exposure in
+/// this "widened" set despite appearing throughout the corpus -- caught by
+/// this task's own zero-exposure section (`cardblame`'s coverage summary)
+/// showing exactly that gap on the first real run against the corpus, not
+/// by inspection beforehand. `government` here is still single-slot (a
+/// LATER revolution/redevelopment supersedes it, same artifact as `leader`/
+/// `tactic`), so a superseded EARLIER government still needs (2) above
+/// (`Move::Revolution`/`Move::Develop`) to be seen; only the STARTING one
+/// is invisible to (2), which is exactly what this closes.
+fn game_ever_cards_in_play(state: &crate::state::GameState, moves_applied: &[Move]) -> Vec<&'static str> {
+    let mut set: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+    for name in game_cards_in_play(state) {
+        set.insert(name);
+    }
+    for &mv in moves_applied {
+        for card in move_card_args(mv).into_iter().flatten() {
+            set.insert(card.name());
+        }
+    }
+    for p in &state.players[..state.num_players as usize] {
+        for &id in p.colonies.as_slice() {
+            set.insert(id.name());
+        }
+        for id in [p.wonder, p.government] {
+            if !id.is_none() {
+                set.insert(id.name());
+            }
+        }
+    }
+    set.into_iter().collect()
+}
+
 pub struct GameResult {
     pub id: String,
     pub players: u8,
@@ -5770,6 +5910,45 @@ pub struct GameResult {
     /// lines at all (shouldn't happen in practice), never `None`, so a
     /// caller can iterate unconditionally.
     pub corruption_checks: Vec<CorruptionCheck>,
+    /// Task 2026-08-14 ("fix it to be everything"): the WIDENED companion to
+    /// [`cards_in_play`](Self::cards_in_play) -- every card this
+    /// reconstruction ever saw PLAYED or RESOLVED at any point in the game,
+    /// not merely present at the stop/end snapshot. See
+    /// [`game_ever_cards_in_play`]'s own doc for exactly what goes in: every
+    /// card named as a `Move` argument (covers one-shot events/actions/
+    /// aggressions/wars/pacts that resolve and leave play, and superseded
+    /// leaders/tactics/governments a single-slot snapshot cannot see), plus
+    /// every territory ever colonized (`PlayerState::colonies` has no `Move`
+    /// of its own), UNIONED with [`cards_in_play`](Self::cards_in_play)
+    /// itself so this is always a superset, never a disjoint or narrower
+    /// view. Kept SEPARATE from `cards_in_play`, not a replacement for it --
+    /// they answer different questions (a "still present" card vs a "was
+    /// exercised" card) and `cardblame` prints both, clearly labelled.
+    ///
+    /// **The confound this set has that `cards_in_play` does not**
+    /// (`cardblame`'s own module doc has the parallel note for the narrow
+    /// set's single-slot artifact): a card played in round 3 stays in this
+    /// set for the rest of the game, so a LONGER game accumulates strictly
+    /// more of these by construction -- unlike `cards_in_play`, where a
+    /// long completed game's leader/tactic slot has usually been
+    /// SUPERSEDED, biasing it the other way. `cardblame` prints the mean
+    /// round reached for games with/without each card here as it does for
+    /// the narrow set, so this confound is visible the same way.
+    pub ever_cards_in_play: Vec<&'static str>,
+    /// Every `Move` this reconstruction actually applied, in order -- see
+    /// [`Replayer::moves_applied`]'s own doc. `cardblame`'s Move-keyed
+    /// happenings cut (task 2026-08-14 part 2) matches over this
+    /// exhaustively, one counter per `Move` variant, so a future variant
+    /// added to `moves.rs` fails that match at compile time until someone
+    /// classifies it, rather than silently going uncounted.
+    pub moves_applied: Vec<Move>,
+    /// Every journal line's own [`ActionClass`], in order -- see
+    /// [`Replayer::line_classes`]'s own doc. `cardblame`'s second,
+    /// independent happenings cut: several `ActionClass` variants
+    /// (`WinAuction`, `WinWar`, `PlayEvent`, `Discard`, ...) are pure
+    /// confirmation lines with no `Move` of their own, so this is the only
+    /// place those happenings are visible at all.
+    pub line_classes: Vec<ActionClass>,
 }
 
 /// Ground-truth evidence (never a rules reimplementation) that the PRIMARY,
@@ -7226,6 +7405,7 @@ pub fn replay_game(
         }
     };
 
+    let ever_cards_in_play = game_ever_cards_in_play(&r.state, &r.moves_applied);
     GameResult {
         id: meta.id.clone(),
         players: meta.players,
@@ -7255,6 +7435,9 @@ pub fn replay_game(
         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
         cards_in_play: game_cards_in_play(&r.state),
         corruption_checks: r.corruption_checks,
+        ever_cards_in_play,
+        moves_applied: r.moves_applied,
+        line_classes: r.line_classes,
     }
 }
 
@@ -7433,6 +7616,13 @@ fn apply_one(
     raw_text: &str,
     next_text: Option<&str>,
 ) -> Result<(), MismatchKind> {
+    // `cardblame`'s ActionClass-keyed happenings hook (task 2026-08-14):
+    // every journal line this file classifies, in order, whether or not
+    // its own dispatch arm below ends up applying a `Move` at all -- see
+    // `Replayer::line_classes`'s own doc for why several `ActionClass`
+    // variants (pure confirmation lines) have no `Move` of their own and so
+    // are ONLY visible via this push.
+    r.line_classes.push(class);
     if crate::debugflags::replay_debug_all() {
         let p = &r.state.players[actor as usize];
         eprintln!(
