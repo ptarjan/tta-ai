@@ -1,15 +1,57 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-15 (twelfth update)
-    base commit ....... f2dff03  (LIVE tree /Users/pt/tta-ai; the staging clone
-                                  /private/tmp/base0815 is one commit BEHIND
-                                  this -- it stops at 898f552)
-    completing games .. 732 of 1011   (705 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_732.txt)
-    committed copy .... analysis/guard_ids_732.txt
-                        (the previous list survives as guard_ids_731.txt; a
-                         clean check against 731 is still valid except for the
-                         single new ID 7521462)
+    updated 2026-08-15 (thirteenth update)
+    base commit ....... a7e7f90  (LIVE tree /Users/pt/tta-ai)
+    completing games .. 734 of 1011   (707 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_734.txt)
+    committed copy .... analysis/guard_ids_734.txt
+                        (731 and 732 survive under their own names)
+
+    WARNING ABOUT /private/tmp/base0815: that warm template stops at 898f552
+    and is now THREE commits behind. Two separate workers independently
+    reported game 7521462 as a "pre-existing baseline flake" because it does
+    not complete there. It is not a flake -- 7521462 is exactly the game
+    f2dff03 wins, and the template predates it. If you measure on a stale
+    template, every game the live tree has since won will read as a phantom
+    regression against the current guard list. Refresh the template's rust/src
+    from the live tree before trusting a guard comparison, or state plainly
+    which commit you measured on.
+
+      a7e7f90  interact.rs's ChoiceKind::Raid arm called economy::gain_resources
+               ONCE PER DESTROYED CARD with that card's own printed.div_ceil(2).
+               The BGO journal prints the card's own text on every play: "You
+               gain resources equal to half their TOTAL COST, rounded up." So
+               every raid destroying two odd-cost cards over-paid the raider by
+               one. Isolated by finding real games that destroy the SAME card
+               twice: Philosophy x2 (cost 3 each) -> journal says 3, old code
+               computed ceil(3/2)+ceil(3/2)=4; Organized Religion x2, 7 vs 8;
+               Theology x2, 5 vs 6. PlayerState.raid_loot_pending accumulates
+               printed cost across the nested casualty brackets and flushes with
+               ONE div_ceil(2) when the last resolves. 732->734, 705->707, wins
+               7522520 7522729 7523520.
+               ACCEPTED REGRESSION 7522967 -- it had been completing through a
+               compensating error between the raid over-payment and the
+               pre-existing SimulatorBug hand_military miscount the same sweep
+               already self-flags at its line 579. Same shape as 7521974.
+               Fixing hand_military should hand it back.
+               NOT REAL, do not re-attempt: the "duplicate same-card casualty
+               silently no-ops on a failed techs.get_mut" defect. Each bracket's
+               option list is recomputed from live tableau state when dequeued,
+               always after the previous bracket resolved, so a card already
+               exhausted to workers == 0 is never re-offered.
+
+    BILL GATES IS A CONFOUND, NOT A CAUSE (gateslab__GATESLAB.txt). The census
+    below found 31 Group C games where Bill Gates is in play and the resource
+    delta is exactly -2, at 81.6% against a 30.6% base rate. His
+    Special::ResourcesPerLabEqualToLevel is CORRECT: the level*workers formula
+    matches the FAQ's worked example for the identical Sid Meier mechanic, and
+    in all three repros (7521657, 7523101, 7523624) the engine's production
+    number matches BGO's stated production number exactly. The -2 is a
+    corruption OVER-charge at that checkpoint with no CORRUPTION! tag in the
+    journal, and it traces to economy::blue_used's derived token count -- the
+    same defect described below. Gates' players lean on labs over mines, which
+    shapes their blue-token profile and trips the bug more often. DO NOT CHASE
+    GATES AGAIN.
 
       f2dff03  apply::h_revolution charged the FULL printed Card::revolution_cost
                with zero pact discount, while the peaceful h_develop path has
