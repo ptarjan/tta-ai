@@ -1,0 +1,469 @@
+//! `cardblame` -- ranks cards by how much they ENRICH a game's chance of
+//! failing, instead of chasing failures bucket-by-bucket by symptom (the
+//! approach `replaystats` implements, and which keeps landing on shared,
+//! hard-to-fix mechanisms). The idea: a card whose implementation is simply
+//! WRONG should show up as a statistical outlier -- games it is in play for
+//! fail far more often than the corpus base rate -- even before anyone knows
+//! which mechanism is broken. This already worked once by accident: Age II
+//! `Fortifications` was baked into `card_table.rs` at the wrong strength
+//! (4/2 instead of BGA's printed 5/3), and fixing that one constant won 13
+//! games outright.
+//!
+//! ```text
+//! cargo run --profile difftest --bin cardblame -- \
+//!     sources/bgo/index.tsv /tmp/bgo-journals/journals [sample_size]
+//! ```
+//!
+//! Same corpus, same replay (`tta::replay_common::replay_game`), same
+//! sampling convention as `replaystats` (no shuffling, `sample_size` takes
+//! the first N games in `index.tsv` order). This binary is purely additive:
+//! it reads `GameResult::cards_in_play`/`GameResult::corruption_checks`
+//! (both new, always-on fields -- see their own doc in `replay_common.rs`)
+//! and never changes what any existing binary computes or prints.
+//!
+//! # Three cuts
+//!
+//! 1. **Completion failure enrichment.** For every card, of the games it
+//!    was in play for (tableau, leader or tactic, at the point the game
+//!    stopped OR ended -- see [`tta::replay_common::GameResult::
+//!    cards_in_play`]), what share failed to complete, against the corpus
+//!    base failure rate. `enrichment = card_rate / base_rate`.
+//! 2. **Score-mismatch enrichment**, the SAME cut restricted to games that
+//!    DID complete: of those, which cards are disproportionately present
+//!    when the final score is still wrong. A different failure mode, almost
+//!    certainly a different cause (a completing-but-wrong game has no
+//!    `Mismatch` to blame; a card-scoring formula error is a much likelier
+//!    culprit than an engine crash-stop).
+//! 3. **Corruption cross-check enrichment** -- a specific sub-question: for
+//!    every "End turn" line, does this reconstruction's own corruption
+//!    charge (`economy::corruption`, computed independently, see
+//!    `Replayer::record_corruption_check`'s own doc) agree with whether
+//!    BGO's journal line carries a `"CORRUPTION!"` marker? Enrichment here
+//!    is run over the ACTING PLAYER's own broader card set (tableau,
+//!    government, leader, wonder, tactic, AND territories -- see
+//!    [`tta::replay_common::CorruptionCheck::cards_in_play`]'s doc), because
+//!    the standing hypothesis under test is a territory card that
+//!    permanently adjusts blue-token capacity.
+//!
+//! # Statistics discipline (the whole point of this file)
+//!
+//! A raw count is useless -- common cards appear in nearly every game and
+//! top any raw list by construction. Every ranked row divides by the card's
+//! own exposure (`games_in_play`, printed alongside every rate) and compares
+//! against the corpus base rate. A minimum-exposure cutoff (`MIN_EXPOSURE`,
+//! 20 games) gates the ranked-by-enrichment list; cards below it are NOT
+//! silently dropped, they print in a separate low-exposure section so a
+//! reader can still see them without being misled by their noise into
+//! thinking they rank.
+//!
+//! # The late-game confound, and what this does NOT control for
+//!
+//! A game that reaches round 30 has both MORE cards in play and MORE
+//! chances to have failed by then than one that stops at round 10 -- so any
+//! late-game card looks "enriched for failure" partly because it is a proxy
+//! for game length, not because it is broken. This binary does not attempt
+//! a round-matched control group (that would cut the already-thin per-card
+//! sample sizes further). Instead, every ranked row prints the mean
+//! stop-round for games WITH the card against games WITHOUT it
+//! (`round_with`/`round_without`) so the confound is visible to the reader
+//! at the point they decide whether to chase a card: a large `enrichment`
+//! paired with `round_with` far above `round_without` is exactly the
+//! signature of "this is a proxy for reaching Age III/IV", not necessarily
+//! evidence the card itself is broken. It does NOT distinguish that shape
+//! from a genuinely broken late-game card (one that only breaks something
+//! once played) -- both look the same in this output; the cheap check
+//! (diffing baked constants against BGA's own card data) is what actually
+//! discriminates between them.
+
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::process::ExitCode;
+
+use tta::corpus;
+use tta::replay_common::{build_card_index, replay_game};
+
+/// Below this many games in play, a card's own failure/mismatch rate is
+/// noise (a card in 6 games with 6 failures says nothing) -- gates the
+/// ranked-by-enrichment tables, but every card below it still prints in a
+/// separate low-exposure section rather than being dropped outright.
+const MIN_EXPOSURE: u32 = 20;
+
+/// Running totals for one card's exposure to one binary outcome (did the
+/// game fail / did the score mismatch / did corruption disagree), plus the
+/// round-reached sums needed to report the late-game confound alongside the
+/// rate -- see the module doc's "late-game confound" section.
+#[derive(Default)]
+struct CardCounter {
+    games: u32,
+    failures: u32,
+    round_sum: u64,
+}
+
+impl CardCounter {
+    fn rate(&self) -> f64 {
+        self.failures as f64 / self.games.max(1) as f64
+    }
+
+    fn mean_round(&self) -> f64 {
+        self.round_sum as f64 / self.games.max(1) as f64
+    }
+}
+
+/// One ranked row: a card's own exposure/failure counts against the corpus
+/// base rate, plus the confound-visibility figures. Kept as a struct (not
+/// printed inline while iterating a `HashMap`) so it can be SORTED by
+/// enrichment before printing -- `HashMap` iteration order is not that
+/// order.
+struct Ranked<'a> {
+    card: &'a str,
+    games: u32,
+    failures: u32,
+    rate: f64,
+    enrichment: f64,
+    round_with: f64,
+    round_without: f64,
+}
+
+fn rank_cards<'a>(
+    counters: &'a HashMap<&'static str, CardCounter>,
+    base_rate: f64,
+    total_games: u32,
+    total_round_sum: u64,
+) -> (Vec<Ranked<'a>>, Vec<Ranked<'a>>) {
+    let mut ranked = Vec::new();
+    let mut low_exposure = Vec::new();
+    for (&card, c) in counters {
+        let round_without = if total_games > c.games {
+            (total_round_sum - c.round_sum) as f64 / (total_games - c.games) as f64
+        } else {
+            f64::NAN // every sampled game had this card in play -- no "without" group exists
+        };
+        let row = Ranked {
+            card,
+            games: c.games,
+            failures: c.failures,
+            rate: c.rate(),
+            enrichment: c.rate() / base_rate.max(f64::MIN_POSITIVE),
+            round_with: c.mean_round(),
+            round_without,
+        };
+        if c.games >= MIN_EXPOSURE {
+            ranked.push(row);
+        } else {
+            low_exposure.push(row);
+        }
+    }
+    ranked.sort_unstable_by(|a, b| b.enrichment.total_cmp(&a.enrichment));
+    low_exposure.sort_unstable_by_key(|b| std::cmp::Reverse(b.games));
+    (ranked, low_exposure)
+}
+
+fn print_ranked(title: &str, base_rate: f64, base_num: u32, base_den: u32, ranked: &[Ranked], low_exposure: &[Ranked], top_n: usize) {
+    println!("## {title}\n");
+    println!(
+        "corpus base rate: {base_num}/{base_den} = {:.1}% -- every card's own rate below is divided by this to get \
+         `enrichment` (1.0 = exactly base rate, no signal; a card that cannot fail differently from the field lands \
+         at 1.0 by construction, which is exactly why raw counts are not printed as the sort key)\n",
+        100.0 * base_rate
+    );
+    println!(
+        "top {top_n} by enrichment, minimum {MIN_EXPOSURE} games in play (`round_with`/`round_without` are the \
+         late-game confound check -- see this binary's own module doc; a big gap there means treat `enrichment` as \
+         partly a game-length proxy, not purely a card effect):\n"
+    );
+    println!("| enrichment | card | games | failures | rate | round_with | round_without |");
+    println!("|---|---|---|---|---|---|---|");
+    for row in ranked.iter().take(top_n) {
+        println!(
+            "| {:.2}x | {} | {} | {} | {:.1}% | {:.1} | {:.1} |",
+            row.enrichment,
+            row.card,
+            row.games,
+            row.failures,
+            100.0 * row.rate,
+            row.round_with,
+            row.round_without
+        );
+    }
+    println!(
+        "\n{} cards below the {MIN_EXPOSURE}-game exposure cutoff (listed, not hidden -- their rate is noise, but \
+         noise is not the same as nothing):\n",
+        low_exposure.len()
+    );
+    println!("| card | games | failures | rate |");
+    println!("|---|---|---|---|");
+    for row in low_exposure {
+        println!("| {} | {} | {} | {:.1}% |", row.card, row.games, row.failures, 100.0 * row.rate);
+    }
+    println!();
+}
+
+fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Result<(), String> {
+    let card_index = build_card_index();
+    let mut games = corpus::parse_index(index_path)?;
+    if let Some(n) = sample_size {
+        games.truncate(n);
+    }
+
+    let mut n_games = 0u32;
+    let mut n_completed = 0u32;
+    let mut n_score_checked = 0u32;
+    let mut n_score_exact = 0u32;
+    let mut total_round_sum = 0u64; // completion-failure cut's own denominator
+    let mut total_round_sum_completed = 0u64; // score-mismatch cut's own denominator (completed games only)
+
+    let mut completion_counters: HashMap<&'static str, CardCounter> = HashMap::new();
+    let mut mismatch_counters: HashMap<&'static str, CardCounter> = HashMap::new();
+
+    // The corruption cross-check's own totals -- see the module doc's cut
+    // #3. `checks` is every "End turn" line (agreements AND disagreements,
+    // per the task's own instruction to get "the full population"), not
+    // just the disagreements -- an enrichment ratio needs both to mean
+    // anything.
+    let mut corruption_checks_total = 0u64;
+    let mut corruption_disagreements_total = 0u64;
+    let mut corruption_counters: HashMap<&'static str, CardCounter> = HashMap::new();
+
+    for meta in &games {
+        let path = format!("{journals_dir}/{}.tsv", meta.id);
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue; // no journal file for this id -- skip, don't count, matches replaystats
+        };
+        n_games += 1;
+        let result = replay_game(meta, &text, &card_index, false);
+        // Eyeball aid for exactly the trap this file's own module doc warns
+        // about but cannot fully correct for: a SINGLE-SLOT card (a leader,
+        // government, or wonder-under-construction) is definitionally
+        // superseded by a later one in any long completed game, so it can
+        // show a spuriously huge "completion enrichment" purely from being
+        // structurally rare at a completed game's OWN final snapshot -- not
+        // from being broken. Confirmed this is exactly what happens to
+        // early leaders (Napoleon, Hammurabi, ...) in the 2026-08-14 run:
+        // every completed game's `cards_in_play` carries whichever leader
+        // was LAST taken, never an earlier superseded one, so an early
+        // leader reads as "0 completed games ever have it" by construction.
+        if std::env::var("CB_DEBUG").is_ok() && result.completed {
+            eprintln!("CB_DEBUG id={} completed={} cards_in_play={:?}", meta.id, result.completed, result.cards_in_play);
+        }
+
+        // Round reached at the stop/end point -- same convention as
+        // `replaystats`'s own `round_reached_sum`: a completed game's own
+        // recorded length; a stopped game's own mismatch round.
+        let round_reached: u32 = if result.completed {
+            meta.rounds
+        } else {
+            result.mismatch.as_ref().and_then(|m| m.round.parse().ok()).unwrap_or(0)
+        };
+        total_round_sum += round_reached as u64;
+
+        for &card in &result.cards_in_play {
+            let c = completion_counters.entry(card).or_default();
+            c.games += 1;
+            c.round_sum += round_reached as u64;
+            if !result.completed {
+                c.failures += 1;
+            }
+        }
+
+        if result.completed {
+            n_completed += 1;
+            total_round_sum_completed += round_reached as u64;
+            if let Some(engine) = &result.engine_scores {
+                n_score_checked += 1;
+                let mut a = engine.clone();
+                let mut b = result.index_scores.clone();
+                a.sort_unstable();
+                b.sort_unstable();
+                let exact = a == b;
+                if exact {
+                    n_score_exact += 1;
+                }
+                for &card in &result.cards_in_play {
+                    let c = mismatch_counters.entry(card).or_default();
+                    c.games += 1;
+                    c.round_sum += round_reached as u64;
+                    if !exact {
+                        c.failures += 1;
+                    }
+                }
+            }
+        }
+
+        for check in &result.corruption_checks {
+            corruption_checks_total += 1;
+            let disagrees = check.engine_charges != check.journal_charges;
+            if disagrees {
+                corruption_disagreements_total += 1;
+            }
+            for &card in &check.cards_in_play {
+                let c = corruption_counters.entry(card).or_default();
+                c.games += 1; // one "game" unit here is really one checkpoint -- see printed header
+                if disagrees {
+                    c.failures += 1;
+                }
+            }
+        }
+    }
+
+    println!("# cardblame: {n_games} games sampled, {n_completed} completed, {n_score_exact}/{n_score_checked} exact\n");
+
+    let base_failure_rate = (n_games - n_completed) as f64 / n_games.max(1) as f64;
+    let (ranked, low_exposure) = rank_cards(&completion_counters, base_failure_rate, n_games, total_round_sum);
+    print_ranked(
+        "Cut 1: completion-failure enrichment",
+        base_failure_rate,
+        n_games - n_completed,
+        n_games,
+        &ranked,
+        &low_exposure,
+        20,
+    );
+
+    let base_mismatch_rate = (n_score_checked - n_score_exact) as f64 / n_score_checked.max(1) as f64;
+    let (ranked, low_exposure) =
+        rank_cards(&mismatch_counters, base_mismatch_rate, n_completed, total_round_sum_completed);
+    print_ranked(
+        "Cut 2: score-mismatch enrichment (completing games only)",
+        base_mismatch_rate,
+        n_score_checked - n_score_exact,
+        n_score_checked,
+        &ranked,
+        &low_exposure,
+        20,
+    );
+
+    println!("## Cut 3: corruption charge vs journal `CORRUPTION!` marker\n");
+    println!(
+        "{corruption_disagreements_total}/{corruption_checks_total} \"End turn\" checkpoints disagree on whether \
+         corruption was charged this turn (both agreements AND disagreements counted here, per the task's own \
+         instruction to get the full population before ranking -- a card equally common on both sides is NOT a \
+         cause and this cut is built to say so, not just to find something).\n"
+    );
+    println!(
+        "each row's `games` is CHECKPOINTS (one per \"End turn\" line), not games -- a card in play for many turns \
+         of the same game is counted once per turn, on purpose: the hypothesis under test (a permanent -1 blue-token \
+         territory) is a per-turn effect, not a per-game one.\n"
+    );
+    let base_corruption_rate = corruption_disagreements_total as f64 / corruption_checks_total.max(1) as f64;
+    let (ranked, low_exposure) =
+        rank_cards(&corruption_counters, base_corruption_rate, corruption_checks_total as u32, 0);
+    println!(
+        "corpus base disagreement rate: {corruption_disagreements_total}/{corruption_checks_total} = {:.1}%\n",
+        100.0 * base_corruption_rate
+    );
+    println!("top 20 by enrichment, minimum {MIN_EXPOSURE} checkpoints (the round-reached confound columns from \
+              cuts 1/2 are omitted here -- this cut counts per-TURN checkpoints, not per-game, so a per-game \
+              round-reached figure would not mean the same thing; a reader chasing a hit here should instead check \
+              whether it is confined to late rounds by eye):\n");
+    println!("| enrichment | card | checkpoints | disagreements | rate |");
+    println!("|---|---|---|---|---|");
+    for row in ranked.iter().take(20) {
+        println!("| {:.2}x | {} | {} | {} | {:.1}% |", row.enrichment, row.card, row.games, row.failures, 100.0 * row.rate);
+    }
+    println!(
+        "\n{} cards below the {MIN_EXPOSURE}-checkpoint exposure cutoff:\n",
+        low_exposure.len()
+    );
+    println!("| card | checkpoints | disagreements | rate |");
+    println!("|---|---|---|---|");
+    for row in &low_exposure {
+        println!("| {} | {} | {} | {:.1}% |", row.card, row.games, row.failures, 100.0 * row.rate);
+    }
+
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    let argv: Vec<String> = env::args().skip(1).collect();
+    if argv.len() < 2 {
+        eprintln!("usage: cardblame <index.tsv> <journals_dir> [sample_size]");
+        return ExitCode::FAILURE;
+    }
+    let sample_size = argv.get(2).and_then(|s| s.parse().ok());
+    match run(&argv[0], &argv[1], sample_size) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn card_counter_rate_is_zero_for_a_card_with_no_recorded_games_rather_than_a_division_panic() {
+        let c = CardCounter::default();
+        assert_eq!(c.rate(), 0.0);
+    }
+
+    #[test]
+    fn card_counter_rate_is_the_plain_failures_over_games_ratio() {
+        let c = CardCounter { games: 4, failures: 1, round_sum: 40 };
+        assert_eq!(c.rate(), 0.25);
+    }
+
+    #[test]
+    fn card_counter_mean_round_divides_the_round_sum_by_games_not_failures() {
+        let c = CardCounter { games: 4, failures: 1, round_sum: 40 };
+        assert_eq!(c.mean_round(), 10.0);
+    }
+
+    #[test]
+    fn rank_cards_computes_enrichment_as_the_cards_own_rate_over_the_base_rate() {
+        let mut counters = HashMap::new();
+        // Card in play for 25 games (over MIN_EXPOSURE), fails in 10 of
+        // them -- a 40% rate against a 20% base is a clean 2x.
+        counters.insert("Suspect Card", CardCounter { games: 25, failures: 10, round_sum: 250 });
+        let (ranked, low_exposure) = rank_cards(&counters, 0.20, 100, 1000);
+        assert!(low_exposure.is_empty(), "25 games clears the 20-game MIN_EXPOSURE cutoff");
+        assert_eq!(ranked.len(), 1);
+        assert!((ranked[0].enrichment - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rank_cards_routes_a_card_below_the_exposure_cutoff_to_the_low_exposure_list_not_the_ranked_one() {
+        let mut counters = HashMap::new();
+        counters.insert("Rare Card", CardCounter { games: 6, failures: 6, round_sum: 60 });
+        let (ranked, low_exposure) = rank_cards(&counters, 0.20, 100, 1000);
+        assert!(ranked.is_empty(), "6 games in play must not clear a 20-game minimum");
+        assert_eq!(low_exposure.len(), 1);
+        assert_eq!(low_exposure[0].card, "Rare Card");
+    }
+
+    #[test]
+    fn rank_cards_sorts_the_ranked_list_by_enrichment_descending() {
+        let mut counters = HashMap::new();
+        counters.insert("Low", CardCounter { games: 25, failures: 5, round_sum: 250 }); // rate 0.20 -> 1.0x
+        counters.insert("High", CardCounter { games: 25, failures: 20, round_sum: 250 }); // rate 0.80 -> 4.0x
+        let (ranked, _) = rank_cards(&counters, 0.20, 100, 1000);
+        assert_eq!(ranked[0].card, "High", "the higher-enrichment card must sort first");
+        assert_eq!(ranked[1].card, "Low");
+    }
+
+    #[test]
+    fn rank_cards_reports_round_without_as_the_complement_of_the_cards_own_round_sum() {
+        // 100 games total, round_sum 1000 overall; this card is in 25 of
+        // them summing to 250 rounds (mean 10) -- the OTHER 75 games must
+        // then sum to 750 (mean 10 too, in this deliberately unconfounded
+        // fixture), proving round_without is derived from the complement,
+        // not from a second full pass over the corpus.
+        let mut counters = HashMap::new();
+        counters.insert("Card", CardCounter { games: 25, failures: 5, round_sum: 250 });
+        let (ranked, _) = rank_cards(&counters, 0.20, 100, 1000);
+        assert!((ranked[0].round_without - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rank_cards_reports_round_without_as_nan_when_the_card_is_in_every_sampled_game() {
+        // A basic Age A card with no "without" group at all -- must not
+        // divide by zero or silently print zero as if it were a real mean.
+        let mut counters = HashMap::new();
+        counters.insert("Universal Card", CardCounter { games: 100, failures: 10, round_sum: 1000 });
+        let (ranked, _) = rank_cards(&counters, 0.10, 100, 1000);
+        assert!(ranked[0].round_without.is_nan());
+    }
+}

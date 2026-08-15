@@ -1,0 +1,116 @@
+CA_TOTAL_UNDERCOUNT game=7522905 actor=3 lineno=20 age_civil=A round=1 take_spend_this_turn=5 ca_total=4 deficit=1
+# cardblame: 1011 games sampled, 687 completed, 651/687 exact
+
+## Cut 1: completion-failure enrichment
+
+corpus base rate: 324/1011 = 32.0% -- every card's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal; a card that cannot fail differently from the field lands at 1.0 by construction, which is exactly why raw counts are not printed as the sort key)
+
+top 20 by enrichment, minimum 20 games in play (`round_with`/`round_without` are the late-game confound check -- see this binary's own module doc; a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card effect):
+
+| enrichment | card | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|
+| 3.12x | Genghis Khan | 36 | 36 | 100.0% | 9.7 | 17.6 |
+| 3.12x | Hammurabi | 20 | 20 | 100.0% | 5.0 | 17.5 |
+| 3.12x | Napoleon Bonaparte | 125 | 125 | 100.0% | 14.0 | 17.7 |
+| 3.12x | Leonardo da Vinci | 37 | 37 | 100.0% | 8.7 | 17.6 |
+| 3.12x | James Cook | 32 | 32 | 100.0% | 13.4 | 17.4 |
+| 3.12x | William Shakespeare | 29 | 29 | 100.0% | 14.4 | 17.4 |
+| 3.12x | Maximilien Robespierre | 48 | 48 | 100.0% | 13.6 | 17.5 |
+| 3.12x | Isaac Newton | 82 | 82 | 100.0% | 13.7 | 17.6 |
+| 3.12x | Joan of Arc | 37 | 37 | 100.0% | 9.6 | 17.6 |
+| 3.12x | Michelangelo | 35 | 35 | 100.0% | 9.9 | 17.5 |
+| 1.88x | Phalanx | 98 | 59 | 60.2% | 14.7 | 17.6 |
+| 1.79x | Medieval Army | 187 | 107 | 57.2% | 15.3 | 17.7 |
+| 1.69x | Legion | 164 | 89 | 54.3% | 15.3 | 17.7 |
+| 1.59x | Heavy Cavalry | 57 | 29 | 50.9% | 15.5 | 17.4 |
+| 1.23x | Warfare | 224 | 88 | 39.3% | 16.7 | 17.4 |
+| 1.21x | Fighting Band | 201 | 78 | 38.8% | 16.3 | 17.5 |
+| 1.08x | Masonry | 259 | 90 | 34.7% | 17.2 | 17.3 |
+| 1.05x | Bread and Circuses | 200 | 67 | 33.5% | 17.5 | 17.2 |
+| 1.04x | Code of Laws | 437 | 146 | 33.4% | 17.3 | 17.3 |
+| 1.02x | Defensive Army | 98 | 32 | 32.7% | 17.8 | 17.2 |
+
+8 cards below the 20-game exposure cutoff (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| card | games | failures | rate |
+|---|---|---|---|
+| Aristotle | 16 | 16 | 100.0% |
+| Julius Caesar | 13 | 13 | 100.0% |
+| Frederick Barbarossa | 12 | 12 | 100.0% |
+| J. S. Bach | 11 | 11 | 100.0% |
+| Homer | 10 | 10 | 100.0% |
+| Christopher Columbus | 9 | 9 | 100.0% |
+| Moses | 9 | 9 | 100.0% |
+| Alexander the Great | 7 | 7 | 100.0% |
+
+## Cut 2: score-mismatch enrichment (completing games only)
+
+corpus base rate: 36/687 = 5.2% -- every card's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal; a card that cannot fail differently from the field lands at 1.0 by construction, which is exactly why raw counts are not printed as the sort key)
+
+top 20 by enrichment, minimum 20 games in play (`round_with`/`round_without` are the late-game confound check -- see this binary's own module doc; a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card effect):
+
+| enrichment | card | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|
+| 2.73x | Heavy Cavalry | 28 | 4 | 14.3% | 19.1 | 19.3 |
+| 2.31x | Defensive Army | 66 | 8 | 12.1% | 19.1 | 19.3 |
+| 1.81x | Winston Churchill | 232 | 22 | 9.5% | 19.2 | 19.3 |
+| 1.73x | Fortifications | 55 | 5 | 9.1% | 19.1 | 19.3 |
+| 1.65x | Shock Troops | 58 | 5 | 8.6% | 19.3 | 19.3 |
+| 1.64x | Code of Laws | 291 | 25 | 8.6% | 19.0 | 19.5 |
+| 1.44x | Entrenchments | 53 | 4 | 7.5% | 19.2 | 19.3 |
+| 1.43x | Air Forces | 400 | 30 | 7.5% | 19.3 | 19.2 |
+| 1.43x | Medieval Army | 80 | 6 | 7.5% | 19.3 | 19.3 |
+| 1.42x | Navigation | 296 | 22 | 7.4% | 19.2 | 19.3 |
+| 1.20x | Albert Einstein | 302 | 19 | 6.3% | 19.2 | 19.3 |
+| 1.20x | Napoleonic Army | 159 | 10 | 6.3% | 19.3 | 19.3 |
+| 1.19x | Rockets | 176 | 11 | 6.2% | 19.2 | 19.3 |
+| 1.19x | Team Sports | 128 | 8 | 6.2% | 19.4 | 19.3 |
+| 1.19x | Swordsmen | 483 | 30 | 6.2% | 19.3 | 19.2 |
+| 1.18x | Satellites | 306 | 19 | 6.2% | 19.2 | 19.3 |
+| 1.18x | Cavalrymen | 355 | 22 | 6.2% | 19.3 | 19.2 |
+| 1.17x | Engineering | 407 | 25 | 6.1% | 19.3 | 19.3 |
+| 1.17x | Mahatma Gandhi | 98 | 6 | 6.1% | 19.2 | 19.3 |
+| 1.16x | Modern Army | 148 | 9 | 6.1% | 19.4 | 19.2 |
+
+0 cards below the 20-game exposure cutoff (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| card | games | failures | rate |
+|---|---|---|---|
+
+## Cut 3: corruption charge vs journal `CORRUPTION!` marker
+
+357/40790 "End turn" checkpoints disagree on whether corruption was charged this turn (both agreements AND disagreements counted here, per the task's own instruction to get the full population before ranking -- a card equally common on both sides is NOT a cause and this cut is built to say so, not just to find something).
+
+each row's `games` is CHECKPOINTS (one per "End turn" line), not games -- a card in play for many turns of the same game is counted once per turn, on purpose: the hypothesis under test (a permanent -1 blue-token territory) is a per-turn effect, not a per-game one.
+
+corpus base disagreement rate: 357/40790 = 0.9%
+
+top 20 by enrichment, minimum 20 checkpoints (the round-reached confound columns from cuts 1/2 are omitted here -- this cut counts per-TURN checkpoints, not per-game, so a per-game round-reached figure would not mean the same thing; a reader chasing a hit here should instead check whether it is confined to late rounds by eye):
+
+| enrichment | card | checkpoints | disagreements | rate |
+|---|---|---|---|---|
+| 6.02x | Bill Gates | 987 | 52 | 5.3% |
+| 4.98x | Transcontinental Railroad | 734 | 32 | 4.4% |
+| 4.71x | Shock Troops | 194 | 8 | 4.1% |
+| 3.14x | Vast Territory (II) | 838 | 23 | 2.7% |
+| 2.97x | First Space Flight | 1001 | 26 | 2.6% |
+| 2.78x | Internet | 534 | 13 | 2.4% |
+| 2.75x | Historic Territory (II) | 664 | 16 | 2.4% |
+| 2.69x | James Cook | 764 | 18 | 2.4% |
+| 2.69x | Modern Army | 510 | 12 | 2.4% |
+| 2.67x | Computers | 2521 | 59 | 2.3% |
+| 2.48x | Fast Food Chains | 784 | 17 | 2.2% |
+| 2.24x | Air Forces | 1426 | 28 | 2.0% |
+| 2.13x | Mechanized Agriculture | 806 | 15 | 1.9% |
+| 2.11x | Cartography | 5101 | 94 | 1.8% |
+| 2.10x | Coal | 3040 | 56 | 1.8% |
+| 2.10x | Oil | 817 | 15 | 1.8% |
+| 2.09x | Napoleonic Army | 1203 | 22 | 1.8% |
+| 2.06x | Hollywood | 389 | 7 | 1.8% |
+| 1.97x | Engineering | 928 | 16 | 1.7% |
+| 1.94x | Constitutional Monarchy | 4838 | 82 | 1.7% |
+
+0 cards below the 20-checkpoint exposure cutoff:
+
+| card | checkpoints | disagreements | rate |
+|---|---|---|---|
