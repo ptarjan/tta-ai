@@ -581,6 +581,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 // hand to begin with).
                 if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.develop_science))
                     && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                    && effects::science_pact_partners_can_pay(state, p)
                 {
                     moves.push(Move::Develop { card: id });
                 }
@@ -602,6 +603,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
             k @ CardType::Farm | k @ CardType::Mine | k @ CardType::Lab | k @ CardType::Temple | k @ CardType::Library | k @ CardType::Arena | k @ CardType::Theater | k @ CardType::Infantry | k @ CardType::Cavalry | k @ CardType::Artillery | k @ CardType::Air | k @ CardType::SpecialTech | k @ CardType::Wonder | k @ CardType::Tactic | k @ CardType::Aggression | k @ CardType::War | k @ CardType::Pact | k @ CardType::Bonus | k @ CardType::Territory | k @ CardType::Event if k.takes_workers() || k == CardType::SpecialTech => {
                 if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.develop_science))
                     && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                    && effects::science_pact_partners_can_pay(state, p)
                 {
                     moves.push(Move::Develop { card: id });
                 }
@@ -784,8 +786,20 @@ fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, di
 /// print a `revolutionCost` prints a nonzero one, 1 through 9; only
 /// Despotism prints `null`).
 pub(crate) fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
-    let card = id.get();
-    if card.revolution_cost == 0 || (p.science as i32) < card.revolution_cost as i32 {
+    // `costs::revolution_cost` folds in the standing pact discount (`Stats::
+    // tech_discount`) -- a bare `card.revolution_cost` comparison here used
+    // to reject a revolution the player could actually afford once the
+    // discount is applied (`costs::revolution_cost`'s own doc has the
+    // confirmed case).
+    let Some(cost) = costs::revolution_cost(state, p, id) else { return false };
+    if (p.science as i32) < cost {
+        return false;
+    }
+    // BGA card text: "If the other cannot pay 1 science, then the
+    // technology cannot be developed" -- a revolution is the same
+    // "develops a technology" trigger (`costs::revolution_cost`'s own doc
+    // has the confirmed BGO case).
+    if !effects::science_pact_partners_can_pay(state, p) {
         return false;
     }
     revolt_pool_ok(state, p)
@@ -1009,7 +1023,9 @@ pub fn free_action_moves(
                 if !card.kind.is_developable() {
                     continue;
                 }
-                if p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0) {
+                if p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                    && effects::science_pact_partners_can_pay(state, p)
+                {
                     out.push(Move::Develop { card: id });
                 }
                 // RB p.15: Breakthrough may also pay for a revolution --
@@ -1023,9 +1039,12 @@ pub fn free_action_moves(
                 // part, matching Python's `_action_card_playable` passing
                 // `p.civil_actions == ca_total(state, p)` in as a bool.
                 if revolt_ok && card.kind == CardType::Government {
-                    let rc = card.revolution_cost as i32;
-                    if rc != 0 && p.science as i32 >= rc {
-                        out.push(Move::Revolution { card: id });
+                    // Same pact-discounted cost `can_revolt` now reads --
+                    // see `costs::revolution_cost`'s own doc.
+                    if let Some(rc) = costs::revolution_cost(state, p, id) {
+                        if p.science as i32 >= rc && effects::science_pact_partners_can_pay(state, p) {
+                            out.push(Move::Revolution { card: id });
+                        }
                     }
                 }
             }
@@ -2475,6 +2494,35 @@ mod tests {
         assert!(!can_revolt(&state, &state.players[0], card("Despotism")), "revolutionCost: null");
     }
 
+    /// ENGINE GAP closed: `action_moves` used to offer `Move::Develop` even
+    /// when Scientific Cooperation's own card text ("If the other cannot
+    /// pay 1 science, then the technology cannot be developed") makes that
+    /// develop illegal -- `Stats::science_partners` was computed but had no
+    /// legality consumer anywhere in the crate before this pass.
+    #[test]
+    fn action_moves_excludes_develop_when_the_pact_partner_cannot_pay_its_science() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 10;
+        p.hand_civil.push(card("Irrigation"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 0; // cannot pay its own 1
+        assert!(
+            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation") }),
+            "the partner cannot pay -- the develop is illegal"
+        );
+
+        state.players[1].science = 1; // now it can
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation") }));
+    }
+
     #[test]
     fn can_revolt_needs_enough_science_and_every_civil_action_unspent() {
         let mut p = blank_player(0, card("Despotism"));
@@ -2494,6 +2542,38 @@ mod tests {
         spent.science = 2;
         let state_spent = one_player_state(spent);
         assert!(!can_revolt(&state_spent, &state_spent.players[0], card("Monarchy")));
+    }
+
+    /// ENGINE BUG regression: `can_revolt` used to compare `p.science`
+    /// against the bare printed `Card::revolution_cost`, ignoring a
+    /// standing pact's science discount -- rejecting a revolution a real
+    /// BGO human could and did afford (journal `7523162`, Grey revolutions
+    /// to Constitutional Monarchy for the pact-discounted 4, not the
+    /// printed 6, while Scientific Cooperation is active).
+    #[test]
+    fn can_revolt_true_under_a_pact_discount_that_a_bare_printed_cost_would_reject() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 4; // short of the printed 6, exactly enough for the discounted 4
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 1; // the partner must also be able to pay its own 1
+        assert!(can_revolt(&state, &state.players[0], card("Constitutional Monarchy")));
+
+        // Without the pact, the same 4 science is NOT enough for the
+        // printed 6 -- the discount, not a general loosening, is what
+        // makes the difference above.
+        let mut under = blank_player(0, card("Despotism"));
+        under.civil_actions = 4;
+        under.science = 4;
+        let state_under = one_player_state(under);
+        assert!(!can_revolt(&state_under, &state_under.players[0], card("Constitutional Monarchy")));
     }
 
     #[test]

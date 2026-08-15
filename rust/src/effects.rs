@@ -1557,6 +1557,19 @@ pub fn state_stats(state: &GameState, p: &PlayerState) -> Stats {
     compute(state, p)
 }
 
+/// Scientific Cooperation's own printed text, verbatim (`sources/
+/// bga_throughtheages_material.inc.php`, card 170/1170): "Every time one of
+/// the civilizations develop a technology, it pays 2 science less and the
+/// other civilization pays 1 science. (If the other cannot pay 1 science,
+/// then the technology cannot be developed.)" -- a real LEGALITY gate, not
+/// just a charge: `p` may not develop/revolt AT ALL while any partner
+/// `Stats::science_partners` names cannot cover their own 1. Trivially true
+/// when the bitmask is empty (no such pact, or no pact at all).
+pub fn science_pact_partners_can_pay(state: &GameState, p: &PlayerState) -> bool {
+    let mask = state_stats(state, p).science_partners;
+    (0..state.num_players).all(|i| mask & (1 << i) == 0 || state.players[i as usize].science >= 1)
+}
+
 // ----------------------------------------------------------------- snapshot
 
 /// One player's [`compute`] result, carried together with the board it was
@@ -2314,6 +2327,37 @@ mod tests {
         let s2 = compute(&state, &state.players[2]);
         assert_eq!(s2.tech_discount, 0);
         assert_eq!(s2.science_partners, 0);
+    }
+
+    /// `science_pact_partners_can_pay` is the legality half of BGA's own
+    /// card text ("If the other cannot pay 1 science, then the technology
+    /// cannot be developed") -- `science_partners` alone (tested above) is
+    /// just the bitmask; this is what actually gates a develop/revolution.
+    #[test]
+    fn science_pact_partners_can_pay_reads_the_partners_own_science_stock() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.idx = 0;
+        p0.pacts.push(Pact { card: card("Scientific Cooperation"), owner: 0, partner: 1, a: 0, b: 1 });
+        let mut p1 = blank_player(1, card("Despotism"));
+        p1.science = 0; // cannot cover its own 1-science share
+        let state = two_player_state(p0.clone(), p1);
+        assert!(!science_pact_partners_can_pay(&state, &state.players[0]), "partner has 0 science");
+
+        p1 = blank_player(1, card("Despotism"));
+        p1.science = 1; // exactly enough
+        let state = two_player_state(p0, p1);
+        assert!(science_pact_partners_can_pay(&state, &state.players[0]));
+    }
+
+    /// No pact at all (or a pact with no `otherPartyPaysScience` block) means
+    /// an empty bitmask, which is trivially payable -- there is no partner to
+    /// ask.
+    #[test]
+    fn science_pact_partners_can_pay_is_true_with_no_pact_at_all() {
+        let p0 = blank_player(0, card("Despotism"));
+        let p1 = blank_player(1, card("Despotism"));
+        let state = two_player_state(p0, p1);
+        assert!(science_pact_partners_can_pay(&state, &state.players[0]));
     }
 
     #[test]

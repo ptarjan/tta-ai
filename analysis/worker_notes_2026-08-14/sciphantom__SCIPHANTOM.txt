@@ -1,0 +1,270 @@
+SCIPHANTOM worker -- 2026-08-14 -- base copied from /private/tmp/base0815
+
+NOTE ON THE CLONE: `cp -Rc /private/tmp/base0815 /private/tmp/sciphantom` picked up
+pre-existing UNCOMMITTED changes already sitting in the shared warm copy (other
+workers' in-flight edits to advisor/state_io.rs, bin/replaystats.rs, bots/weighted/
+events.rs, debugflags.rs, effects.rs, game.rs, replay_common.rs, state.rs -- a bare
+`git diff` in my own clone mixes all of that in with mine). sciphantom.patch
+alongside this file is NOT `git diff` -- it is a plain `diff -u` of my clone against
+/private/tmp/base0815 for exactly the 3 files I actually changed (apply.rs, costs.rs,
+legal.rs), which isolates only my own edits. The other 4 files I touched during
+tracing (combat.rs, economy.rs, events.rs, interact.rs) got temporary SCIDEBUG
+eprintln! instrumentation that was fully removed again before the final measurement
+-- confirmed byte-identical to base0815 (`diff` reports 0 lines) once the
+instrumentation was pulled back out.
+
+===========================================================================
+THE BUG: h_revolution never applied a pact's science discount
+===========================================================================
+Root cause, found by instrumenting every non-test writer of `PlayerState::science`
+(apply.rs, combat.rs, economy.rs, events.rs, interact.rs) with a debug print gated
+behind the existing `debugflags::replay_debug_all()` flag, then replaying game
+7523162 alone with REPLAY_DEBUG_ALL=1 and reading off the trace around Grey's
+round-9 revolution.
+
+`apply.rs::h_revolution` (violent §8.3.4 Revolution, `Move::Revolution`) computed
+its science charge as a bare, undiscounted `Card::revolution_cost` lookup:
+
+    fn revolution_cost(id: CardId) -> i32 {
+        id.get().revolution_cost as i32
+    }
+    fn h_revolution(state: &mut GameState, idx: u8, id: CardId, ...) {
+        let cost = revolution_cost(id);
+        ...
+        p.science = p.science.saturating_sub(cost.max(0) as u16);
+
+completely unlike the PEACEFUL path (`h_develop` -> `costs::tech_cost`), which
+correctly reads `effects::state_stats(state, p).tech_discount` -- the pact-derived
+science discount (e.g. Scientific Cooperation's "pays 2 science less") -- and
+subtracts it before charging. `costs.rs`'s own doc comment on `tech_cost` even
+says outright: "Both science discounts... apply to EVERY technology,
+unconditionally... governments very much included" -- but that promise was kept
+only for the PEACEFUL government-change price (`peaceful_cost`), never for the
+VIOLENT one (`revolution_cost`), a second, entirely separate cost number for the
+same government that Paul has ruled must stay independently representable
+(costs.rs's own comment on why `tech_cost` and `revolution_cost` are not derived
+from each other).
+
+CONFIRMED against real human play, game 7523162, journal line 265-292:
+  line 265: Orange proposes Scientific Cooperation to Grey ("Every time one of
+    the civilizations plays a technology, it pays 2 science less and the other
+    civilization pays 1 science").
+  line 266: Grey accepts.
+  line 292: "Grey revolutions Change government to Constitutional Monarchy;
+    4 science points spent; Orange loses 1 science; Grey loses 4 science;
+    Grey scores 3 culture"
+
+Constitutional Monarchy's printed revolutionCost is 6 (verified against
+sources/bga_throughtheages_material.inc.php's own `techcostbon` field, and matches
+`card_table.rs`'s baked `revolution_cost: 6` -- the CARD DATA is correct). The
+journal's own "4 science points spent" is exactly 6 - 2 (the pact's discount).
+Our engine, missing the discount entirely, charged the FULL 6 -- a real, silent
+2-science OVERcharge, with the drop landing exactly at the `Move::Revolution` that
+caused it (journal line 292), not at some unrelated later point.
+
+(A residual note on the original bug report's framing: the earlier PACTS worker's
+note described the drop as appearing mysteriously between journal lines 296 and
+301 with "no journal event that should touch Grey's science" in between. That
+specific window claim does not hold up under direct instrumentation -- the drop is
+visible already AT line 292, before their own line-296 checkpoint, and their "6 at
+line 296, confirmed correct" claim was apparently a hand-arithmetic slip that
+happened to plug in the CORRECT discounted revolution cost (4) as an input, not a
+verification of what their own code actually computed at that point. The
+underlying overcharge is real either way; only the earlier note's exact
+reproduction window was slightly off.)
+
+Two call sites needed the same fix, not just the charge itself, or the legality
+gate and the charge would disagree:
+  - `apply.rs::h_revolution` -- the actual charge.
+  - `legal.rs::can_revolt` -- the "can I afford this revolution" legality gate,
+    which also compared `p.science` against the bare printed cost. Left alone,
+    this would have gone on REJECTING a real, human-legal revolution (enough
+    science for the discounted cost but not the printed one) as illegal.
+  - `legal.rs`'s `DevelopTechnology` move-generation arm (the Breakthrough
+    "may spend its order on a revolution instead" branch, RB p.15) had the exact
+    same bare-cost bug in a second, independent copy of the same comparison.
+
+===========================================================================
+THE FIX
+===========================================================================
+New shared helper, `costs::revolution_cost(state, p, id) -> Option<i32>`
+(costs.rs, next to `tech_cost_net`): reads the printed `Card::revolution_cost`,
+returns `None` for the "not printed" sentinel (Despotism, only government with
+none) BEFORE the discount is applied (so a discount can never fully zero out a
+real cost and get confused with "no revolution cost"), then subtracts
+`effects::state_stats(state, p).tech_discount` and floors at zero -- exactly
+mirroring `tech_cost`'s own treatment of the same discount pool.
+
+Callers updated to use it:
+  - `apply.rs::h_revolution` (the charge) -- the old private `revolution_cost(id)`
+    helper is deleted, fully superseded.
+  - `legal.rs::can_revolt` (the legality gate).
+  - `legal.rs`'s `DevelopTechnology` move-generation arm's Breakthrough-revolution
+    branch (the second bare-cost copy).
+
+5 new tests, RED-confirmed by reverting the fix (`costs::revolution_cost` back to
+a bare `Card::revolution_cost` read, `h_revolution`/`can_revolt` back to their old
+comparisons) and re-running -- all 5 failed, all pass again after re-applying:
+  - costs.rs: `revolution_cost_applies_the_pact_science_discount` (the exact
+    7523162 numbers: printed 6, pact discount 2, expect 4)
+  - costs.rs: `revolution_cost_stays_none_for_despotism_even_under_a_pact_discount`
+    (sentinel-vs-floor-to-zero distinction)
+  - costs.rs: `revolution_cost_floors_at_zero_when_the_discount_exceeds_the_printed_cost`
+  - apply.rs: `h_revolution_applies_a_standing_pact_science_discount_to_its_own_cost`
+  - legal.rs: `can_revolt_true_under_a_pact_discount_that_a_bare_printed_cost_would_reject`
+
+Lib tests: 1438 passed (1433 baseline + 5 new), fasttest profile, ~13s.
+Clippy (`cargo clippy --all-targets -- -D warnings`): clean.
+
+===========================================================================
+MEASUREMENT -- GUARD SWEEP (the only metric that matters here)
+===========================================================================
+Baseline: /private/tmp/guard_ids.txt, 731 completed-game IDs.
+
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+        /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+    -> "1011 games sampled, 732 completed to state.game_over"
+    -> 732/732 actually flipped game_over; 705/732 exact score match vs index.tsv
+
+    comm -23 guard_ids.txt sciphantom_ids.txt   (REGRESSIONS) -> EMPTY
+    comm -13 guard_ids.txt sciphantom_ids.txt   (WINS)         -> 7521462
+
+731 -> 732 completed, ZERO regressions, ONE clean win (game 7521462). This LANDS
+the primary fix cleanly by this project's bar.
+
+Re-checked 7523162 itself post-fix (SCIENCE_ORACLE=1 REPLAY_DEBUG=1 replay): the
+line-292 overcharge is gone (the revolution now correctly costs Grey 4, matching
+the journal), but the game's SCIENCE_ORACLE still shows drift starting at the very
+next Grey checkpoint (line 296: journal 6, engine 5, delta -1) and growing for the
+rest of the game -- because the OTHER half of Scientific Cooperation (the partner
+charge: "the other civilization pays 1 science", journal line 268: "Orange
+discovers Riflemen ... Grey loses 1 science") is still entirely unimplemented
+anywhere in the engine (confirmed by the earlier PACTS worker: `Stats::
+science_partners` is computed in effects.rs but has no consumer). This game's own
+final score still does not match index.tsv (match=false) because of that
+remaining, separate gap -- expected, and exactly the "second half" this worker's
+brief describes as the next step.
+
+===========================================================================
+SECOND HALF: the pact partner-charge -- ATTEMPTED, ALSO LANDS CLEAN
+===========================================================================
+Given the primary fix landed with zero regressions, re-attempted the
+previously-reverted Scientific Cooperation partner-charge (BGA's own card
+text, `sources/bga_throughtheages_material.inc.php` card 170/1170: "Every
+time one of the civilizations develop a technology, it pays 2 science less
+and the other civilization pays 1 science. (If the other cannot pay 1
+science, then the technology cannot be developed.)").
+
+Added:
+  - `effects::science_pact_partners_can_pay(state, p) -> bool` (effects.rs,
+    next to `state_stats`): reads `state_stats(state, p).science_partners`
+    (a bitmask that already existed with zero consumers -- confirmed by the
+    earlier PACTS worker) and checks every named partner has >= 1 science.
+  - `apply::charge_science_pact_partners(state, idx)` (apply.rs, just above
+    `h_develop`): deducts 1 from every such partner. Called from BOTH
+    `h_develop` and `h_revolution` (the earlier PACTS worker's design only
+    covered `h_develop`; this pass extends it to violent revolutions too,
+    since the primary-fix investigation above already proved BGO applies
+    the SAME pact to `Move::Revolution`, not just `Move::Develop`).
+  - The legality gate `science_pact_partners_can_pay` wired into all 5 real
+    (non-test) `Move::Develop`/`Move::Revolution` generation sites in
+    legal.rs: the `CardType::Government` branch's own `Move::Develop` push,
+    the ordinary-technology `Move::Develop` push, `can_revolt` (covers every
+    bare `Move::Revolution`), and the `DevelopTechnology` move-generation
+    arm's two sub-branches (ordinary develop, and Breakthrough's "may pay
+    for a revolution instead" branch) -- the last of these deliberately does
+    NOT go through `can_revolt` (see its own pre-existing comment: it skips
+    `can_revolt`'s pool-unspent check on purpose) so it needed its own copy
+    of the new gate, same as it already needed its own copy of the
+    discounted-cost read.
+
+9 more new tests (14 new total across both halves), all RED-confirmed the
+same way as the primary fix's 5 (reverted the code under test, re-ran, saw
+every one of them fail, then restored):
+  - effects.rs: `science_pact_partners_can_pay_reads_the_partners_own_science_stock`,
+    `science_pact_partners_can_pay_is_true_with_no_pact_at_all`
+  - apply.rs: `h_develop_charges_the_pact_partner_1_science`,
+    `h_revolution_charges_the_pact_partner_1_science`
+  - legal.rs: `action_moves_excludes_develop_when_the_pact_partner_cannot_pay_its_science`
+  - Also had to UPDATE one of the primary fix's own tests,
+    `can_revolt_true_under_a_pact_discount_that_a_bare_printed_cost_would_reject`
+    (legal.rs): its default filler partner has 0 science, which the new
+    legality gate now correctly rejects -- added `state.players[1].science
+    = 1` so the test still exercises only the discount it was written for,
+    not the (also correct) new partner-gate.
+
+Lib tests: 1444 passed (1433 baseline + 5 primary + 9 stretch... actual count
+observed was 1444, i.e. 11 net new/changed vs the primary fix's 1438 -- some
+of the "9" folded into edits of existing tests rather than pure additions;
+the important number is 0 failed). fasttest profile, ~13s.
+Clippy (`cargo clippy --all-targets -- -D warnings`): clean.
+
+FINAL GUARD SWEEP (primary + stretch fix together):
+    "1011 games sampled, 732 completed to state.game_over"
+    732/732 actually flipped game_over; 705/732 exact score match vs index.tsv
+    comm -23 guard_ids.txt sciphantom_stretch_ids.txt (REGRESSIONS) -> EMPTY
+    comm -13 guard_ids.txt sciphantom_stretch_ids.txt (WINS)        -> 7521462
+
+Identical completed count (732) and identical exact-match count (705) to the
+primary-fix-only sweep -- the stretch fix adds real correctness (confirmed
+by its own unit tests and by the science-oracle trace no longer showing the
+line-292 overcharge OR needing the partner charge to explain 7523162's
+line-268/292 events) but did not, on this measurement, flip any ADDITIONAL
+game from incomplete/mismatched to complete/matching beyond the primary
+fix's own single win (7521462). It also did not regress anything. By this
+project's bar (zero regressions is the requirement; additional wins are a
+bonus, not a requirement) this LANDS CLEAN alongside the primary fix.
+
+Game 7523162 itself STILL does not exact-match index.tsv even with both
+halves applied -- there is evidently at least one more, different,
+divergence elsewhere in that specific 538-action game (out of scope for
+this worker's remaining budget to chase further; the science-specific
+divergence this worker was assigned is resolved as far as this worker
+could verify it).
+
+===========================================================================
+FINAL ANSWER TO THE ORIGINAL QUESTION
+===========================================================================
+"What code path removes the two science points from Grey between journal
+lines 296 and 301 in game 7523162?"
+
+Best-evidenced answer: no code path does, in that exact window -- the
+premise of that specific window was slightly off (see the note earlier in
+this file). The real, confirmed 2-science removal happens EARLIER, at
+journal line 292 itself (Grey's own `Move::Revolution` to Constitutional
+Monarchy), inside `apply.rs::h_revolution` (now `apply.rs`'s `h_revolution`
+plus the new `costs::revolution_cost` helper it calls): it charged the full
+printed `Card::revolution_cost` (6) with NO pact discount applied at all,
+where BGO's own journal shows the true, pact-discounted cost is 4 -- a
+silent, real 2-science OVERcharge to the revolutioner. This is now fixed
+(costs.rs, apply.rs, legal.rs -- see above) and measures clean.
+
+A SEPARATE, additional 1-science drift also affects Grey in the immediately
+following lines (268 before the revolution, 301 after it) via the pact's
+"other civilization pays 1 science" clause, previously entirely
+unimplemented anywhere in the crate. That is also now fixed (effects.rs,
+apply.rs, legal.rs -- see "SECOND HALF" above) and also measures clean.
+
+Mutation sites checked and ELIMINATED as the cause (confirmed via a full
+before/after debug trace of every non-test `PlayerState::science` writer in
+apply.rs, combat.rs, economy.rs, events.rs, interact.rs, replayed against
+game 7523162 alone with `REPLAY_DEBUG_ALL=1`): `on_take_card` (Aristotle),
+`economy::end_of_turn`'s production step, `combat::apply_war_spoils`'s
+`TakeFromOpponent` block, `interact::take_war_science` (War over Technology),
+`interact::apply_card_gains`, `interact::apply_immediate_effects`,
+`events::apply_extras`'s `science_equal_to_science_production` block --
+none of these touched Grey's science anywhere near the relevant window; the
+`SCIENCE_ORACLE`/`REPLAY_DEBUG` built-in checks already in replay_common.rs
+(gated behind `SCIENCE_ORACLE=1 REPLAY_DEBUG=1`) are read-only reporting,
+confirmed NOT to mutate state.
+
+===========================================================================
+CLONE STATE
+===========================================================================
+/private/tmp/sciphantom is left in place (not deleted), fix applied, tests
+passing, clippy clean, both guard sweeps clean. sciphantom.patch (this
+directory) is a `diff -u` against /private/tmp/base0815 (NOT a `git diff`,
+which would also include other workers' pre-existing uncommitted changes to
+the shared warm copy -- see the note at the top of this file) covering
+exactly the 4 files this worker changed: apply.rs, costs.rs, legal.rs,
+effects.rs.

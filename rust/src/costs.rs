@@ -706,6 +706,31 @@ pub fn tech_cost_net(state: &GameState, p: &PlayerState, id: CardId) -> Option<i
     }
 }
 
+/// Science cost to seize a government by VIOLENT revolution (§8.3.4,
+/// `Move::Revolution`), with the same standing pact discount (`Stats::
+/// tech_discount`, e.g. Scientific Cooperation's "pays 2 science less")
+/// [`tech_cost`] already applies to the PEACEFUL path -- `apply.rs::
+/// h_revolution` used to read `Card::revolution_cost` completely
+/// undiscounted, a real 2-science overcharge confirmed against BGO journal
+/// `7523162` (line 292: Grey revolutions to Constitutional Monarchy --
+/// printed `revolutionCost` 6, journal's own "4 science points spent" --
+/// while Scientific Cooperation's pact was active). The pact's own card
+/// text ("every time one of the civilizations plays a technology...") does
+/// not carve out violent revolutions, and this game is direct human-play
+/// proof that BGO doesn't either.
+///
+/// Returns `None`, exactly like `Card::revolution_cost == 0`, when the
+/// government prints no revolution cost at all (Despotism) -- the discount
+/// must never be applied to that sentinel, or a real-but-fully-discounted
+/// cost would be indistinguishable from "cannot revolt to this government".
+pub fn revolution_cost(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
+    let raw = id.get().revolution_cost as i32;
+    if raw == 0 {
+        return None;
+    }
+    Some((raw - effects::state_stats(state, p).tech_discount).max(0))
+}
+
 /// Consume as much of the military-tech science discount pool as this
 /// development uses; returns the science actually still owed. Mutates `p`
 /// -- unlike every cost function above, this is a SPEND, not a query, which
@@ -1564,6 +1589,41 @@ mod tests {
         p.one_time_discount.develop_science = 1;
         let state = one_player_state(p);
         assert_eq!(tech_cost(&state, &state.players[0], card("Monarchy")), Some(7));
+    }
+
+    /// ENGINE BUG regression: `revolution_cost` (the VIOLENT path,
+    /// `Move::Revolution`) is a completely separate cost number from
+    /// `tech_cost` (the peaceful path above), and used to be read as a bare
+    /// `Card::revolution_cost` with no pact discount at all -- confirmed
+    /// against BGO journal `7523162` (Grey revolutions to Constitutional
+    /// Monarchy under an active Scientific Cooperation pact: printed
+    /// `revolutionCost` 6, journal's own "4 science points spent").
+    #[test]
+    fn revolution_cost_applies_the_pact_science_discount() {
+        let state = state_with_science_pact();
+        // Constitutional Monarchy's printed revolutionCost is 6, minus the
+        // pact's 2.
+        assert_eq!(revolution_cost(&state, &state.players[0], card("Constitutional Monarchy")), Some(4));
+    }
+
+    /// `revolution_cost == 0` is the "not printed" sentinel (only Despotism
+    /// prints none) -- the discount must never turn a REAL, nonzero cost
+    /// into that same sentinel by flooring it to zero, so the `None` check
+    /// has to run on the RAW cost, before the discount is subtracted.
+    #[test]
+    fn revolution_cost_stays_none_for_despotism_even_under_a_pact_discount() {
+        let state = state_with_science_pact();
+        assert_eq!(revolution_cost(&state, &state.players[0], card("Despotism")), None);
+    }
+
+    /// A discount that meets or exceeds the printed cost floors at zero, the
+    /// same clamp `tech_cost` uses -- it does not go negative or carry a
+    /// credit anywhere else.
+    #[test]
+    fn revolution_cost_floors_at_zero_when_the_discount_exceeds_the_printed_cost() {
+        let state = state_with_science_pact();
+        // Monarchy's printed revolutionCost is 2, less than the pact's 2.
+        assert_eq!(revolution_cost(&state, &state.players[0], card("Monarchy")), Some(0));
     }
 
     /// The one-time develop discount is gated on NOTHING -- not a type set,

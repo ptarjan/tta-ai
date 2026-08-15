@@ -66,8 +66,10 @@
 //! ahead of `costs.rs` being updated to use them -- both are closed now:
 //! [`costs::wonder_stage_cost`] reads `Card::stages` (so [`do_wonder_step`]
 //! is fully ported; this module's own [`wonder_is_complete`] already read the
-//! field directly and was never a gap), and [`revolution_cost`] below reads
-//! `Card::revolution_cost` directly, so [`h_revolution`] is fully ported too.
+//! field directly and was never a gap), and [`costs::revolution_cost`] reads
+//! `Card::revolution_cost` (plus the same pact discount [`costs::tech_cost`]
+//! already applied to the peaceful path -- see that function's own doc), so
+//! [`h_revolution`] is fully ported too.
 //!
 //! - ~~**Per-player-count effect magnitudes.**~~ CLOSED 2026-08-05.
 //!   `Wave of Nationalism` / `Military Build-Up`
@@ -898,6 +900,27 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
     on_enter_play(&mut state.players[idx as usize], id);
 }
 
+/// Scientific Cooperation's own charge to the OTHER civilization (BGA's
+/// card text: "...the other civilization pays 1 science... If the other
+/// cannot pay 1 science, then the technology cannot be developed."): the
+/// legality half of that sentence is `effects::science_pact_partners_can_pay`,
+/// already checked by every caller of `h_develop`/`h_revolution` before
+/// either got this far (`legal.rs`'s `DevelopTechnology`/`Government`/
+/// `can_revolt` sites); this is just the charge itself, applied AFTER `p`'s
+/// own (already pact-discounted) payment. `p`'s pact-derived `Stats::
+/// science_partners` bitmask depends only on which pacts `p` holds, never on
+/// any player's science total, so reading it after `p`'s own charge already
+/// landed cannot change which partners owe.
+fn charge_science_pact_partners(state: &mut GameState, idx: u8) {
+    let mask = effects::state_stats(state, &state.players[idx as usize]).science_partners;
+    for i in 0..state.num_players {
+        if mask & (1 << i) != 0 {
+            let partner = &mut state.players[i as usize];
+            partner.science = partner.science.saturating_sub(1);
+        }
+    }
+}
+
 fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
     let card = id.get();
     // NOTE: for a Government card, `costs::tech_cost` always returns `None`
@@ -936,6 +959,7 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
         p.science = p.science.saturating_sub(cost.max(0) as u16);
         p.hand_civil.remove_first(id);
     }
+    charge_science_pact_partners(state, idx);
     if card.kind == CardType::Government {
         set_government(state, idx, id);
     } else if card.kind == CardType::SpecialTech {
@@ -1051,12 +1075,27 @@ pub fn put_special_in_play(state: &mut GameState, idx: u8, id: CardId) {
 /// PRE-Breakthrough pool. For a bare revolution `via_ordered_action` is
 /// always `false` and this changes nothing (see below).
 fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: bool) {
-    let cost = revolution_cost(id);
+    // `costs::revolution_cost` folds in the standing pact discount (`Stats::
+    // tech_discount`) that a bare `Card::revolution_cost` read misses -- see
+    // that function's own doc for the confirmed 2-science overcharge this
+    // closes. `unwrap_or(0)`: every caller of `h_revolution` has already
+    // gone through a `can_revolt`/`revolt_ok`-gated legality check, which
+    // itself now reads the same discounted cost, so a `None` here (no
+    // printed revolution cost at all) cannot actually happen -- the
+    // fallback only avoids a spurious panic if that invariant is ever
+    // violated.
+    let cost = costs::revolution_cost(state, &state.players[idx as usize], id).unwrap_or(0);
     {
         let p = &mut state.players[idx as usize];
         p.science = p.science.saturating_sub(cost.max(0) as u16);
         p.hand_civil.remove_first(id);
     }
+    // A violent revolution changes government via the SAME "develops a
+    // technology" trigger Scientific Cooperation's own text names -- BGO's
+    // own journal confirms it (game `7523162` line 292: Grey revolutions,
+    // "Orange loses 1 science" logged in the SAME line as Grey's own
+    // discounted charge).
+    charge_science_pact_partners(state, idx);
     let robespierre = leader_is(&state.players[idx as usize], "Maximilien Robespierre");
     // §8.3.4 (RB p.13): only the pool that PAYS for the revolution is
     // emptied; the other behaves exactly as in a peaceful change -- i.e. its
@@ -1138,11 +1177,6 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: 
     // the "single source of truth" reasoning `costs::build_cost_net`'s own
     // doc comment already established for this file.
     on_develop(state, idx);
-}
-
-/// §8.3.4: science cost to seize a government by violent revolution.
-fn revolution_cost(id: CardId) -> i32 {
-    id.get().revolution_cost as i32
 }
 
 fn h_churchill(state: &mut GameState, idx: u8, choice: ChurchillChoice) {
@@ -2309,6 +2343,32 @@ mod tests {
         assert!(!state.players[0].hand_civil.contains(card("Irrigation")));
     }
 
+    /// ENGINE GAP closed: Scientific Cooperation's own card text ("...the
+    /// other civilization pays 1 science...") had NO consumer anywhere in
+    /// the crate before this pass -- `effects::Stats::science_partners` was
+    /// computed but only ever read by its own unit tests. `h_develop` must
+    /// charge the partner too, not just discount the developer.
+    #[test]
+    fn h_develop_charges_the_pact_partner_1_science() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 10;
+        p.hand_civil.push(card("Irrigation"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 5;
+        h_develop(&mut state, 0, card("Irrigation"), false);
+        // Irrigation's printed techCost 3, minus the pact's 2 = 1.
+        assert_eq!(state.players[0].science, 10 - 1, "the developer pays the discounted cost");
+        assert_eq!(state.players[1].science, 5 - 1, "the partner pays its own 1 science");
+    }
+
     /// THE REGRESSION, fixed 2026-08-05: same bug as `h_pop`'s and
     /// `do_build`'s, for `develop`. Civil Life's `develop_science` discount
     /// is one technology; two DISTINCT technologies (Irrigation techCost 3,
@@ -3048,6 +3108,62 @@ mod tests {
         // the unspent-military-action count forward against Monarchy's total.
         assert_eq!(state.players[0].civil_actions, 0);
         assert_eq!(state.players[0].military_actions, 3); // Monarchy MA total, none spent yet
+    }
+
+    /// ENGINE BUG regression: `h_revolution` used to read `Card::
+    /// revolution_cost` completely undiscounted, ignoring a standing pact's
+    /// science discount (`Stats::tech_discount`) that `h_develop`'s own
+    /// `costs::tech_cost` already applied to the peaceful path. Confirmed
+    /// against BGO journal `7523162` (Grey revolutions to Constitutional
+    /// Monarchy at journal line 292 while Scientific Cooperation's pact is
+    /// active: printed `revolutionCost` 6, journal's own "4 science points
+    /// spent" -- a real, silent 2-science overcharge with no matching
+    /// journal event, exactly the phantom drop this fix closes).
+    #[test]
+    fn h_revolution_applies_a_standing_pact_science_discount_to_its_own_cost() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.science = 10;
+        p.civil_actions = 4;
+        p.military_actions = 2;
+        p.hand_civil.push(card("Constitutional Monarchy"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Constitutional Monarchy"), false);
+        // Constitutional Monarchy's printed revolutionCost is 6, minus the
+        // pact's 2 -- 4, matching the journal exactly.
+        assert_eq!(state.players[0].science, 10 - 4);
+    }
+
+    /// A violent revolution is the same "develops a technology" trigger the
+    /// pact's own text names -- confirmed against BGO journal `7523162`
+    /// line 292 ("Orange loses 1 science" logged in the SAME line as Grey's
+    /// own revolution). `h_revolution` must charge the partner too, exactly
+    /// like `h_develop` does.
+    #[test]
+    fn h_revolution_charges_the_pact_partner_1_science() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.science = 10;
+        p.civil_actions = 4;
+        p.military_actions = 2;
+        p.hand_civil.push(card("Constitutional Monarchy"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 5;
+        h_revolution(&mut state, 0, card("Constitutional Monarchy"), false);
+        assert_eq!(state.players[0].science, 10 - 4, "the revolutioner pays the discounted cost");
+        assert_eq!(state.players[1].science, 5 - 1, "the partner pays its own 1 science");
     }
 
     /// ENGINE BUG regression (docs/REPLAY.md, this pass): a Robespierre
