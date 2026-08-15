@@ -1,7 +1,14 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
     updated 2026-08-15 (thirteenth update)
-    base commit ....... a7e7f90  (LIVE tree /Users/pt/tta-ai)
+    base commit ....... a64a18e  (LIVE tree /Users/pt/tta-ai)
+      a64a18e snapshots hand_military length BEFORE the grounding push in
+      resolve_political_decision. It is a correctness-only landing: 734/707
+      unchanged, regressions EMPTY, wins EMPTY. It kills a PERMANENT phantom
+      card -- once the military-hand debt was stranded it stayed stranded for
+      the rest of the replay -- so it flips no game today but unblocks traces.
+      Everything below measured on a7e7f90 remains valid: a64a18e is
+      replayer-only and changes no game's outcome.
     completing games .. 734 of 1011   (707 of those match index.tsv exactly)
     frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_734.txt)
     committed copy .... analysis/guard_ids_734.txt
@@ -62,6 +69,17 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
     placement (no such event in its causal chain).
     NOTE THE MEASUREMENT TRAP: 99.2% agreement reads as a clean win on any
     averaged metric. The three-game ID set is what says no.
+
+    THE TWO OPEN RULES ARE NOW ANSWERED (user, 2026-08-14):
+      * The blue supply is LIMITED and production you cannot physically place
+        is simply LOST. The cap at blue_total - blue_used is CORRECT. Never
+        weaken it to manufacture a completion.
+      * NON-production gains ("gain 3 resources") ARE a free choice of both
+        denomination and target card, and "in practice you always want to take
+        the highest denomination". Largest-first, greedily, as the SINGLE
+        behaviour -- not a policy knob.
+    So the cap is not the bug; the over-count is. An earlier LOWEST-first
+    experiment degenerated to all denom-1 tokens and was the wrong direction.
 
     BILL GATES IS A CONFOUND, NOT A CAUSE (gateslab__GATESLAB.txt). The census
     below found 31 Group C games where Bill Gates is in play and the resource
