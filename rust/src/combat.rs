@@ -478,10 +478,22 @@ pub fn finish_aggression(state: &mut GameState, ctx: &crate::state::Defense) -> 
     if let Some(&Special::DestroyUrbanBuildings(ages)) =
         card.get().special.iter().find(|s| matches!(s, Special::DestroyUrbanBuildings(_)))
     {
-        for &age in ages {
+        // Raid I prints one age tier, Raid II/III two -- the card grants its
+        // loot ONCE for the whole use ("half the resources needed to build
+        // THEM, rounded up"), so only the LAST bracket's `ChoiceKind::Raid`
+        // resolution may convert `raid_loot_pending` into real resources
+        // (`interact.rs`'s `flush_raid_loot`).
+        let last = ages.len().saturating_sub(1);
+        for (i, &age) in ages.iter().enumerate() {
             interact::enqueue(
                 state,
-                QueueItem::Raid { player: attacker, victim: defender, max_age: age, no_loot: false },
+                QueueItem::Raid {
+                    player: attacker,
+                    victim: defender,
+                    max_age: age,
+                    no_loot: false,
+                    is_last: i == last,
+                },
             );
         }
     }
@@ -557,6 +569,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,

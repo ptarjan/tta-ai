@@ -1474,7 +1474,7 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
             if q != idx && !state.players[q as usize].resigned {
                 interact::enqueue(
                     state,
-                    QueueItem::Raid { player: idx, victim: q, max_age: Age::IV, no_loot: true },
+                    QueueItem::Raid { player: idx, victim: q, max_age: Age::IV, no_loot: true, is_last: true },
                 );
             }
         }
@@ -1686,6 +1686,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,

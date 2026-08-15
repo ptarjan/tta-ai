@@ -9198,6 +9198,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -12554,7 +12555,7 @@ mod tests {
         let alchemy = CardId::by_name("Alchemy").expect("Alchemy is a known urban building");
         let mut options = crate::state::OptionList::new();
         options.push(ChoiceOption::Card(alchemy));
-        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::Raid { victim: 1, loot: true }, options }));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::Raid { victim: 1, loot: true, is_last: true }, options }));
         r.raid_destroys = VecDeque::from([alchemy]);
 
         let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
@@ -12582,7 +12583,7 @@ mod tests {
         let iron = CardId::by_name("Iron").expect("Iron is in the table");
         let mut options = crate::state::OptionList::new();
         options.push(ChoiceOption::Card(alchemy));
-        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::Raid { victim: 1, loot: true }, options }));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::Raid { victim: 1, loot: true, is_last: true }, options }));
         r.raid_destroys = VecDeque::from([iron, alchemy]);
 
         let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
@@ -12629,7 +12630,7 @@ mod tests {
         wide_options.push(ChoiceOption::Card(alchemy));
         wide_options.push(ChoiceOption::Card(organized_religion));
         wide_options.push(ChoiceOption::Word(Keyword::Stop));
-        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::Raid { victim: 1, loot: false }, options: wide_options }));
+        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::Raid { victim: 1, loot: false, is_last: false }, options: wide_options }));
         // Journal order (alphabetical, not bracket order): Alchemy first.
         r.raid_destroys = VecDeque::from([alchemy, organized_religion]);
 

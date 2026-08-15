@@ -496,6 +496,15 @@ pub struct PlayerState {
     /// creates a token (§12.2.4).
     pub yellow_granted: u8,
     pub workers_free: u8,
+    /// Printed cost (unrounded) of the urban buildings THIS Raid aggression
+    /// has destroyed so far this use, accumulated across its per-age-tier
+    /// brackets (`QueueItem::Raid`/`ChoiceKind::Raid`'s `is_last`) so the
+    /// card's "half the resources needed to build THEM, rounded up" can
+    /// round the TOTAL once, not each casualty separately -- see
+    /// `interact.rs`'s `ChoiceKind::Raid` handler, which drains this back to
+    /// 0 the moment the last bracket resolves (destroyed, declined, or
+    /// invalid alike), so it never survives past the raid that filled it.
+    pub raid_loot_pending: u16,
     /// Total blue tokens owned, bank plus cards.
     pub blue_total: u8,
     pub food: u16,
@@ -948,8 +957,12 @@ pub enum ChoiceKind {
     FlipWonder,
     /// `_c_discard_military`: §6.6 step 1 / an event's discard.
     DiscardMilitary,
-    /// `_c_raid`: attacker picks the urban building to destroy.
-    Raid { victim: u8, loot: bool },
+    /// `_c_raid`: attacker picks the urban building to destroy. `is_last`
+    /// marks the final age-tier bracket of this raid use (Raid I has one,
+    /// Raid II/III two) -- the card grants "half the resources needed to
+    /// build THEM, rounded up" ONCE for the whole raid, so only the last
+    /// bracket flushes `PlayerState::raid_loot_pending` into real resources.
+    Raid { victim: u8, loot: bool, is_last: bool },
     /// `_c_annex`: attacker picks which colony changes hands.
     Annex { victim: u8 },
     /// `_c_infiltrate`: remove the rival's leader or unfinished wonder,
@@ -1267,7 +1280,8 @@ pub enum QueueItem {
     /// `_q_end_of_turn`: resume §6.6 after the discard decision.
     EndOfTurn { player: u8 },
     /// `_q_raid`: destroy one of `victim`'s urban buildings, up to `max_age`.
-    Raid { player: u8, victim: u8, max_age: Age, no_loot: bool },
+    /// `is_last` mirrors `ChoiceKind::Raid`'s own field -- see its doc.
+    Raid { player: u8, victim: u8, max_age: Age, no_loot: bool, is_last: bool },
     /// `_q_annex`.
     Annex { player: u8, victim: u8 },
     /// `_q_infiltrate`.

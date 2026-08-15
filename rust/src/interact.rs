@@ -444,13 +444,19 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 economy::discard_military(state, id);
             }
         }
-        ChoiceKind::Raid { victim, loot } => {
+        ChoiceKind::Raid { victim, loot, is_last } => {
             // Attacker picks the urban building to destroy, or declines this
             // bracket outright (`Keyword::Stop` -- see `QueueItem::Raid`'s own
             // doc on why "up to N" needs a real decline option; Terrorism's
             // mandatory destroy never offers `Stop`, so this arm never sees it
-            // for that case).
+            // for that case). Declining still has to flush whatever an
+            // EARLIER bracket already piled into `raid_loot_pending` if this
+            // is the last bracket -- a "destroy one, decline the other" raid
+            // must not lose the first casualty's loot.
             if matches!(opt, ChoiceOption::Word(Keyword::Stop)) {
+                if loot && is_last {
+                    flush_raid_loot(state, p);
+                }
                 return;
             }
             // Attacker picks the urban building to destroy.
@@ -463,13 +469,26 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 _ => false,
             };
             if !ok {
+                if loot && is_last {
+                    flush_raid_loot(state, p);
+                }
                 return;
             }
             state.players[victim as usize].workers_free += 1;
             if loot {
-                // PRINTED build cost, halved and rounded up.
+                // The card grants "half the resources needed to build THEM
+                // (rounded up)" -- ONE rounding over the printed cost of
+                // every building this raid destroys, not one rounding per
+                // casualty (confirmed against real games: two Philosophy
+                // casualties, cost 3 each, pay out 3 total, not
+                // ceil(3/2)+ceil(3/2)=4 -- see RAIDLOOT notes). So accumulate
+                // the printed cost here and only convert it to resources
+                // once the LAST bracket of this raid resolves.
                 let printed = id.get().resource_cost as u16;
-                economy::gain_resources(&mut state.players[p as usize], printed.div_ceil(2));
+                state.players[p as usize].raid_loot_pending += printed;
+                if is_last {
+                    flush_raid_loot(state, p);
+                }
             }
         }
         ChoiceKind::Annex { victim } => {
@@ -630,6 +649,20 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
 /// which is exactly the thing worth failing loudly on.
 fn wrong_option(kind: &ChoiceKind, opt: ChoiceOption) -> ! {
     panic!("{kind:?} cannot resolve option {opt:?} -- producer/resolver mismatch")
+}
+
+/// Converts a raid's accumulated `raid_loot_pending` (the summed PRINTED
+/// cost of every building this raid use has destroyed so far, across
+/// however many age-tier brackets it carries) into real resources with ONE
+/// rounding, per the card's own "gain half the resources needed to build
+/// THEM (rounded up)" -- see `ChoiceKind::Raid`'s doc. Called exactly once
+/// per raid use, when its last bracket resolves (destroy, decline, or an
+/// invalid pick alike), so it always drains whatever is there back to 0.
+fn flush_raid_loot(state: &mut GameState, attacker: u8) {
+    let total = std::mem::take(&mut state.players[attacker as usize].raid_loot_pending);
+    if total > 0 {
+        economy::gain_resources(&mut state.players[attacker as usize], total.div_ceil(2));
+    }
 }
 
 // ------------------------------------------- War over Technology spoils
@@ -1086,7 +1119,7 @@ fn run_item(state: &mut GameState, item: QueueItem) {
         // rather than an action, so the continuation rides the deferred queue
         // like any other sub-effect and the turn advances from there.
         QueueItem::EndOfTurn { player } => crate::game::resume_end_turn(state, player),
-        QueueItem::Raid { player, victim, max_age, no_loot } => {
+        QueueItem::Raid { player, victim, max_age, no_loot, is_last } => {
             let max_lv = max_age as u8;
             let mut buf = [CardId::NONE; MAX_TABLEAU];
             let mut n = 0;
@@ -1118,7 +1151,7 @@ fn run_item(state: &mut GameState, item: QueueItem) {
             if !no_loot {
                 opts.push(ChoiceOption::Word(Keyword::Stop));
             }
-            push_choice(state, player, ChoiceKind::Raid { victim, loot: !no_loot }, opts, true);
+            push_choice(state, player, ChoiceKind::Raid { victim, loot: !no_loot, is_last }, opts, true);
         }
         QueueItem::Annex { player, victim } => {
             let mut buf = [CardId::NONE; 8];
@@ -1751,6 +1784,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -2232,8 +2266,46 @@ mod tests {
         assert!(state.pending.is_empty(), "nothing to destroy -- no decision opened");
         assert_eq!(
             state.queue.iter().collect::<Vec<_>>(),
-            vec![QueueItem::Raid { player: 0, victim: 1, max_age: Age::I, no_loot: false }]
+            vec![QueueItem::Raid { player: 0, victim: 1, max_age: Age::I, no_loot: false, is_last: true }]
         );
+    }
+
+    /// Aggression: Raid's printed text is "gain half the resources needed
+    /// to build THEM (rounded up)" -- ONE rounding over the combined
+    /// printed cost of every building the raid destroys, confirmed against
+    /// real BGO games (e.g. journal `"Raid casualties 1 Philosophy; 1
+    /// Philosophy; Orange produces 3 resources"`, game 7523072 round 10;
+    /// also seen with Organized Religion and Theology pairs -- see
+    /// RAIDLOOT worker notes). Raid II carries two brackets (Age II-or-
+    /// older, then Age I-or-older); a victim with two Philosophy copies
+    /// (printed cost 3, Age A so eligible for both) satisfies both. The
+    /// combined cost is 3+3=6, so the loot must be `ceil(6/2)=3` -- NOT
+    /// `ceil(3/2)+ceil(3/2)=4`, which is what rounding each casualty
+    /// separately before summing would wrongly produce.
+    #[test]
+    fn raid_ii_rounds_the_combined_printed_cost_of_both_casualties_once_not_each_casualty_separately() {
+        let mut state = blank_state(2);
+        let philosophy = card("Philosophy");
+        state.players[1].techs.insert(philosophy, TechSlot { workers: 2, stored: 0 });
+        // The blank test player starts with `blue_total: 0`, which caps
+        // `gain_resources` at 0 regardless of the raid math -- give the
+        // attacker real storage so the assertion below actually exercises
+        // the rounding, not the unrelated storage cap.
+        state.players[0].blue_total = 16;
+        start_defense(&mut state, 0, 1, card("Aggression: Raid (II)"), 5);
+        run_queue(&mut state);
+        assert_eq!(
+            pending_moves(&state).as_slice(),
+            &[Move::Choose { n: 0 }, Move::Choose { n: 1 }],
+            "the wide bracket's only options are the lone eligible card and Stop"
+        );
+        // Wide bracket (Age II-or-older): destroy the first Philosophy.
+        apply_pending(&mut state, Move::Choose { n: 0 });
+        assert_eq!(state.players[0].resources, 0, "loot is not granted until the LAST bracket settles");
+        // Narrow bracket (Age I-or-older) opened automatically: destroy the second.
+        apply_pending(&mut state, Move::Choose { n: 0 });
+        assert_eq!(state.players[1].techs.workers(philosophy), 0, "both copies destroyed");
+        assert_eq!(state.players[0].resources, 3, "ceil((3+3)/2)=3, not ceil(3/2)+ceil(3/2)=4");
     }
 
     /// A failed aggression is fully resolvable, and it is the branch the

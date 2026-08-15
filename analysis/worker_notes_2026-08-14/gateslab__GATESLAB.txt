@@ -1,0 +1,336 @@
+GATESLAB worker -- 2026-08-14 -- clone /private/tmp/gateslab (base0815 commit
+898f552 + the warm template's own pre-existing, uncommitted SCIDRIFT
+RESOURCE_ORACLE/SCIENCE_ORACLE instrumentation -- confirmed identical to a
+fresh /private/tmp/base0815 copy, NOT authored by me; see "BASELINE NOTES"
+below). Clone is one commit behind live (missing f2dff03, an unrelated
+apply.rs/costs.rs/effects.rs/legal.rs science/pact fix -- not touched, not
+needed here).
+
+TASK: find and fix the arithmetic error behind the 31-game Bill-Gates/delta=-2
+Group-C sub-cluster the RESGROUPC census worker identified (resgroupc__RESGROUPC.txt).
+
+===========================================================================
+BOTTOM LINE
+===========================================================================
+NO FIX WAS MADE. Bill Gates' `Special::ResourcesPerLabEqualToLevel` arithmetic
+in rust/src/effects.rs is CORRECT, verified two independent ways (below). The
+actual -2 in all 3 named repros (7521657, 7523101, 7523624) is a CORRUPTION
+OVER-CHARGE: `economy::end_of_turn` deducts 2 resources for corruption at the
+exact checkpoint the oracle flags, but the BGO journal shows NO "CORRUPTION!"
+tag on that line (unlike two other places in the very same journal file where
+the tag IS present for an engine-agreed corr=2). Bill Gates is a CONFOUND, not
+a cause: his players lean on labs rather than building/upgrading extra mines,
+which plausibly shapes their blue-token profile in a way that trips this
+corruption bug more often, without his own bonus arithmetic being wrong at
+all -- exactly the "confound" shape the brief said was an excellent answer.
+
+The real defect lives in the blue-token/corruption REPRESENTATION
+(`economy::blue_used`'s scalar-repack-from-`tokens_for` model), which is
+explicitly out of my scope per this task's own hard constraints ("DO NOT
+touch the blue-token representation in state.rs/economy.rs -- a separate
+effort owns that, corrskip2__CORRSKIP2.txt / corrskip2.patch"). That effort's
+own numbers (134/1011 games with a divergent RESOURCE_ORACLE checkpoint, down
+from the 315 baseline -- see corrskip2__CORRSKIP2.txt line 21-22) are large
+enough to plausibly absorb this entire 31-game cluster, though it does not
+land yet (5 unrelated completion regressions). I did NOT force a parallel fix
+into economy.rs, and I did NOT invent a spurious effects.rs change to make
+one game pass -- effects.rs has nothing wrong to fix.
+
+===========================================================================
+1. PRINTED CARD TEXT (verbatim, sources/bga_throughtheages_material.inc.php:4234)
+===========================================================================
+Bill Gates (id 238, Leader, Age III):
+  "Each of you lab also produces resources equal to its level. When Bill
+  Gates leaves play or at the end of the game, score culture equal to this
+  additional production."
+(Grammar is BGA's own OCR/translation artifact -- "Each of you lab" reads as
+"Each of your labs".)
+
+RULES_SPEC.md 7.7: "Level = age as number (A=0, I=1, II=2, III=3); ... level
+of a unit/building is the level of the card it is on." `CardId::level()` in
+rust/src/cards.rs:47 (`self.get().age as u8`) matches this exactly -- no
+off-by-one, no "best lab" confusion (the ability sums EVERY lab, not "the
+best" one -- that's a different card, Leonardo/Newton/Einstein's
+SciencePerBestLabOrLibraryLevel).
+
+===========================================================================
+2. HYPOTHESES TESTED, AND WHICH WERE FALSIFIED
+===========================================================================
+(a) `id.level()` off-by-one for one Lab tier, or Age A/I labs mapping to 0.
+    FALSIFIED. `level()` is a direct `age as u8` read (A=0..IV=4), matches
+    RULES_SPEC 7.7 verbatim, and the repro's own lab (Scientific Method,
+    Age II) confirms level()=2 correctly via a live REPLAY_DEBUG_TECHS trace.
+
+(b) The set of cards counted as Labs is incomplete (a Lab excluded from the
+    CardType::Lab traversal).
+    FALSIFIED. card_table.rs tags Philosophy, Alchemy, Scientific Method,
+    Computers all `kind: CardType::Lab`; `apply_special`'s
+    `ResourcesPerLabEqualToLevel` arm and `output_modifier_value`'s twin both
+    filter on `id.kind() == CardType::Lab` with no additional exclusion.
+
+(c) Counting per WORKER when the rule is per CARD, or vice versa.
+    FALSIFIED (formula is per-worker, and per-worker IS correct). Cross-
+    checked two ways:
+      - RULES_SPEC's own unresolved-question log (line 347) cites
+        faq_v15.pdf's worked example for the IDENTICAL mechanic on the OTHER
+        lab-bonus leader, Sid Meier (`CulturePerLabEqualToLevel`, same
+        `lab_level_workers` = level*workers formula, shared code at
+        effects.rs:339): "two Age-III Computers Workers... produce a
+        combined 8 Science and 6 Culture per turn." Age III level=3, 2
+        workers: 3*2=6 culture, matching the FAQ's stated 6 exactly. A
+        per-CARD (not per-worker) reading would give 3, not 6 -- so
+        per-worker is the RULES-CONFIRMED reading, not a bug.
+      - In repro 7521657, Purple's ONLY staffed lab at the round-16
+        checkpoint is Scientific Method (level 2, 2 workers, confirmed via
+        REPLAY_DEBUG_TECHS). `s.resources` computed by `effects::compute`
+        (the "s.resources=7" pre-corruption debug line) = 3 (Coal's raw mine
+        production, 1 worker * level 3) + 4 (Bill Gates: level 2 * 2
+        workers) = 7 -- and BGO's OWN journal line states production of
+        EXACTLY "7 resources" for that turn. The engine's Bill-Gates
+        arithmetic reproduces BGO's own stated number exactly. This is
+        airtight: whatever is wrong, it is not this formula.
+
+(d) The yield applied to a stats recompute but not the actual banked
+    resource, or applied once per turn when it should be per production
+    phase.
+    FALSIFIED for THIS mechanism (the +4 for Bill Gates DOES reach `p.resources`
+    -- traced live: `bonus_resources = s.resources.saturating_sub(mine_full)`
+    = 7-3 = 4, and `gain_resources(p, 4)` returns the full 4, confirmed via
+    REPLAY_DEBUG_ALL/`blue_used` trace showing `p.resources` go 6->13, a full
+    +7 = +3 (mine) +4 (Bill Gates), no truncation). HOWEVER, see section 4 --
+    the SAME general area (the blue-token-gated "bonus" gain path
+    `gain_resources` routes through) is where a DIFFERENT, real bug lives,
+    just not on the Bill Gates payload itself; see "TRUE CAUSE" below.
+
+(e) An interaction with worker-capped production (a lab whose workers exceed
+    some cap).
+    FALSIFIED. Labs are not worker-capped by `worker_capped_production` at
+    all (that function only ever runs over `CardType::Mine`/`CardType::Farm`
+    for corruption/production bookkeeping); Bill Gates' bonus goes through
+    the ordinary `apply_special`/`compute` path with no cap logic touching
+    it.
+
+(f) NEW hypothesis I formed mid-investigation and DID confirm: the -2 is a
+    CORRUPTION over-charge, not a production under-charge. See below.
+
+===========================================================================
+3. TRACE OF REPRO 7521657 (Purple, round 16, journal line 432)
+===========================================================================
+RESOURCE_DETAIL 7521657 lineno=432 round=16 actor=Purple
+  last_action_class=Some(TakeCard) journal_now=15 reconstructed=13 delta=-2
+
+Journal (round 15 end, Purple): "...7 resources (now 11)"
+Journal (round 16, Purple): "Purple builds Drama Purple spends 3 resources"
+  (11 - 3 = 8, matches engine's pre-end-of-turn p.resources=8)
+Journal (round 16 end, Purple): "...7 resources (now 15)"
+  -> production THIS turn = 7 (15-8=7), and BGO explicitly states "7
+     resources" as the production figure -- EXACTLY matching the engine's
+     own `s.resources=7` (3 mine + 4 Bill Gates, see 2c above).
+  -> BGO's implied PRE-production baseline = 15-7 = 8 = the SAME 8 the
+     engine has BEFORE its corruption deduction.
+
+Engine's actual sequence (REPLAY_DEBUG_ALL/REPLAY_DEBUG_TECHS,
+idx=1=Purple, round 16):
+  DEBUG end_of_turn pre-corruption: idx=1 resources=8 food=9 blue_total=17
+    blue_used=7 corr=2 s.resources=7 s.food=4
+  ... pay_resources(p, 2) -> p.resources = 6
+  ... food production (+4, no cap hit) -> p.food = 13
+  ... mine production (Coal, 1 worker * level 3) -> p.resources = 9
+  ... gain_resources(p, 4) [Bill Gates' bonus, uncapped, full amount granted]
+    -> p.resources = 13
+  DEBUG end_of_turn POST: idx=1 resources=13 ...
+
+Engine charges 2 CORRUPTION resources that BGO's own journal does not show:
+the round-16 Purple "End turn" line has no "CORRUPTION!" substring, whereas
+TWO OTHER lines in this exact journal file (round 7 and round 9, both Green)
+DO show "CORRUPTION! Green loses 2 resources" when the engine agrees corr=2
+is owed. This asymmetry (corruption tagged when deserved, absent when not)
+is BGO's own consistent convention in this file, so its absence here is
+strong evidence real corruption was 0 for Purple this turn, not merely an
+unlogged formatting quirk.
+
+`blue_total`, `blue_used` sanity-checked by hand against the live debug
+output and found INTERNALLY CONSISTENT with the engine's own model:
+  - blue_total=17 = base 16 (RULES_SPEC 1.2/6.2, "16 blue in blue bank") + 1
+    from Purple's "Developed Territory (I)" colony (`effects.blue_tokens: 1`
+    in card_table.rs, correctly applied by `interact::gain_colony`).
+  - blue_used=7 = `tokens_for(9, food_denoms=[3,1])` (3, exact) +
+    `tokens_for(8, mine_denoms=[3,1])` (4, with 2 remainder units) = 7. This
+    is the PROVABLE MINIMUM token count representable for these totals given
+    the currently-owned card denominations -- no real (rules-legal, "never
+    move tokens up") placement history can use FEWER tokens than this. So
+    the engine's blue_available=10 (hence corr=2, matching RULES_SPEC's
+    16-11=0/10-6=2/5-1=4/0=6 bands, also verified byte-correct) is
+    mathematically the BEST CASE the current scalar-repack model can ever
+    produce for these totals -- and it STILL disagrees with BGO's implied
+    truth (blue_available >= 11). I could not identify a further scalar
+    input (blue_total, p.resources, p.food) that is simply wrong by hand;
+    every one I checked (Coal, Bronze, Scientific Method's own worker count,
+    Democracy's/Bill Gates'/Library of Alexandria's/Developed Territory's
+    own `blue_tokens` effect fields) matched the data files exactly.
+
+I take this as decisive evidence that the true defect is NOT a wrong scalar
+input, but the MODEL ITSELF: `blue_used` re-derives a "minimal token
+packing" from the scalar totals fresh on every call
+(`economy.rs::blue_used`, `tokens_for`), which is provably a LOWER BOUND on
+any real, rules-legal placement history and therefore can never overshoot in
+the direction that would explain BGO showing LESS corruption than this
+lower bound already implies -- UNLESS the true blue-token capacity/occupancy
+bookkeeping itself needs the full placement-history model (which card
+specifically holds each token, tracked over time) rather than a scalar
+re-derivation, which is EXACTLY the representation change
+corrskip2__CORRSKIP2.txt / corrskip2.patch already built (a real
+per-denomination `TokenBank` tracked in `PlayerState`, wired through every
+gain/pay/production call site). I was not able to get that patch to apply
+cleanly against this warm template (context conflicts with the template's
+own already-present SCIDRIFT oracle diff, unrelated to corrskip2) within
+budget, so I could NOT empirically confirm it fixes this exact repro -- see
+"WHAT I DID NOT ESTABLISH".
+
+===========================================================================
+4. CORROBORATION ACROSS THE OTHER 2 NAMED REPROS
+===========================================================================
+7523101 (Purple, round 16, journal line 315):
+  RESOURCE_DETAIL: journal_now=25 reconstructed=23 delta=-2
+  Journal line 315: "...15 resources (now 25)" -- NO "CORRUPTION!" tag.
+  Live trace (REPLAY_DEBUG_ALL): idx=1 resources=10 food=1 blue_total=16
+    blue_used=6 corr=2 s.resources=15 s.food=4 -- engine charges corr=2 at
+    the exact checkpoint the journal shows no corruption. s.resources=15
+    again matches BGO's own stated "15 resources" production exactly.
+
+7523624 (Orange, round 17, journal line 322):
+  RESOURCE_DETAIL: journal_now=13 reconstructed=11 delta=-2
+  Journal line 322: "...5 resources (now 13)" -- NO "CORRUPTION!" tag (this
+  journal has ZERO CORRUPTION! occurrences anywhere in the file, so this one
+  is not directly contrasted against a same-file positive example, but the
+  same production-matches / corruption-only-difference shape holds).
+
+Both additional repros show the IDENTICAL shape: BGO's stated production
+number for the turn matches the engine's `s.resources` exactly (so the
+Bill-Gates/mine arithmetic is right in all 3 cases), and the entire -2 is
+attributable to an engine-only corr=2 corruption deduction absent from the
+journal. 3/3 repros, same mechanism, same direction (engine OVER-charges).
+
+===========================================================================
+5. WHY THIS WAS NOT "MY" FIX (scope boundary, not laziness)
+===========================================================================
+The task's own hard constraints say: "DO NOT touch the blue-token
+representation in state.rs/economy.rs -- a separate effort owns that and its
+patch is in analysis/worker_notes_2026-08-14/corrskip2.patch." Section 3
+above traces the defect precisely into that representation (`blue_used`'s
+scalar-repack-from-`tokens_for`), not into effects.rs's Bill Gates code,
+which I verified correct two independent ways. Writing a parallel,
+duplicate fix into economy.rs would violate that constraint AND risk
+conflicting with corrskip2's own (already-written, not-yet-landed) fix.
+Inventing an effects.rs change anyway, to "do something," would violate
+"never hardcode a per-card constant to make one game pass" -- there is
+nothing wrong in effects.rs to change.
+
+No test was added and no RED-confirmation was performed, because there is no
+fix of mine to test: adding a new failing test to economy.rs (asserting
+corr should be 0 in the 7521657 shape) would violate the "tests all passing"
+landing bar without a real fix behind it, and would be exactly the kind of
+representation change I was told not to make.
+
+===========================================================================
+6. MEASUREMENTS (baseline only -- git diff is empty, no code changed)
+===========================================================================
+Tests: `cargo test --profile fasttest --lib` -> 1433 passed; 0 failed; 0
+  ignored. (NOTE: the task brief states a baseline of "1443 passing" --
+  the actual current base0815 warm template gives 1433, matching
+  corrskip2__CORRSKIP2.txt's own independently-stated baseline of "1433
+  baseline". This 10-test gap predates my involvement; see BASELINE NOTES.)
+Clippy: `cargo clippy --all-targets -- -D warnings` -> clean, 0 warnings.
+
+Guard sweep (SCOREDIV_DUMP_COMPLETED=1, full corpus):
+  # replaystats: 1011 games sampled, 731 completed to state.game_over
+  731/731 completed games actually flipped state.game_over; 704/731 matched
+  index.tsv exactly.
+  (Task brief states baseline 732 completed / 705 exact -- see BASELINE
+  NOTES: this 1-game gap is REPRODUCIBLE ON THE UNTOUCHED base0815 BINARY
+  ITSELF, not something I introduced.)
+
+comm -23 /tmp/gates_guard.txt /tmp/gates_ids.txt   (REGRESSIONS, guard minus mine)
+  7521462
+
+comm -13 /tmp/gates_guard.txt /tmp/gates_ids.txt   (WINS, mine minus guard)
+  (empty)
+
+RESOURCE_ORACLE (full corpus, before AND after are IDENTICAL -- no code
+changed):
+  41518 "End turn" checkpoints; 40123 (96.6%) matched exactly.
+  315/1011 games sampled had at least one diverging checkpoint.
+  (Matches RESGROUPC's stated ~315 baseline exactly.)
+
+===========================================================================
+BASELINE NOTES -- the 731-vs-732 and 1433-vs-1443 gaps are NOT mine
+===========================================================================
+`git status --short`/`git diff --stat` inside /private/tmp/gateslab show the
+SAME modified-file set immediately after `cp -Rc` from base0815, before I
+touched anything: advisor/state_io.rs, apply.rs, bin/replaystats.rs,
+bots/weighted/events.rs, combat.rs, costs.rs, debugflags.rs, economy.rs,
+effects.rs, events.rs, game.rs, interact.rs, legal.rs, replay_common.rs,
+state.rs -- this is the warm template's OWN pre-existing, uncommitted
+SCIDRIFT (RESOURCE_ORACLE/SCIENCE_ORACLE) instrumentation, already baked
+into base0815 before this pass started (confirmed by diffing a completely
+fresh `cp -Rc` of base0815 into a throwaway `/private/tmp/gateslab_valid`,
+which showed the identical modified-file set with zero further edits from
+me, then deleted).
+
+I additionally ran the specific game 7521462 directly against
+`/private/tmp/base0815/rust/target/difftest/replaystats` (the shared,
+read-only, prebuilt binary -- not rebuilt, not touched) three times and it
+reports "0 completed to state.game_over" every time, deterministically. This
+proves the 732-guard-vs-731-mine gap already exists in the untouched warm
+template itself, before any clone or edit of mine, and is not a regression I
+caused (git diff for my clone is empty -- no functional code was changed).
+Likely explanation (not confirmed): `guard_ids.txt`'s 732-ID snapshot was
+captured against a slightly different binary/commit than what is currently
+built into base0815 (e.g. before some other unrelated fix landed and
+altered game 7521462's outcome, or before some other regression was
+introduced upstream of this whole pass). Whoever lands work from this queue
+should re-baseline `guard_ids.txt` against the CURRENT base0815 build before
+trusting `comm` output at face value across workers.
+
+===========================================================================
+WHAT I DID NOT ESTABLISH
+===========================================================================
+- The EXACT micro-mechanism inside `blue_used`/`tokens_for` that makes the
+  engine's corruption reconstruction diverge from BGO's truth in the
+  OVER-charging direction. My own reasoning (section 3) shows the current
+  scalar-repack model computes the PROVABLE MINIMUM token count for the
+  given totals, which should make it a LOWER bound on true occupied tokens,
+  i.e. corr should if anything be UNDER-estimated (matching Group A/B's
+  known under-charge direction), not over-estimated as observed here. I
+  could not reconcile this apparent contradiction by hand-tracing scalars
+  (all of which checked out against the card data). This strongly suggests
+  the true mechanism needs the FULL placement-history model (which card each
+  token actually sits on, accumulated over the whole game) to resolve, not a
+  scalar argument -- i.e. it needs corrskip2's TokenBank, which I did not
+  get running against this exact repro (patch conflicts with the warm
+  template's own baked-in diff; did not attempt a manual reconciliation
+  within budget).
+- Whether corrskip2's patch, if it landed, would actually flip THIS specific
+  game/checkpoint (7521657 line 432) from diverging to matching. I only have
+  its own aggregate claim (315 -> 134 games with any RESOURCE_ORACLE
+  divergence) as circumstantial support, not a direct before/after
+  comparison on 7521657/7523101/7523624 specifically.
+- Whether ALL 31 games in the Bill-Gates/delta=-2 cluster share this exact
+  corruption-over-charge mechanism, vs. some smaller number sharing it with
+  a different cause making up the rest. I only traced 3/31 (all 3 named
+  repros from the census), all 3 showing the identical shape.
+- The remaining 93 non-Bill-Gates Group C games and the +1/+2-dominated
+  remainder the census explicitly flagged as unexplored -- out of scope for
+  this task's brief, not investigated here.
+
+===========================================================================
+FILES
+===========================================================================
+/private/tmp/gateslab.patch -- `git diff` output from /private/tmp/gateslab.
+  NOT my authored work -- it is byte-identical to base0815's own
+  pre-existing uncommitted SCIDRIFT instrumentation (confirmed via the
+  gateslab_valid diff comparison above). Emitted per the task's own
+  instructions; the coordinator should NOT treat this as a patch to land.
+/private/tmp/gateslab -- deleted after both files copied out (nothing
+  unique left in it; the only test/debug scratch files live in
+  /tmp/gateslab_scratch, also disposable).

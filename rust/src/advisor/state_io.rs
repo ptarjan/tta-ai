@@ -894,6 +894,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         yellow_bank: 18,
         yellow_granted: 0,
         workers_free: 1,
+        raid_loot_pending: 0,
         blue_total: 16,
         food: 0,
         resources: 0,
