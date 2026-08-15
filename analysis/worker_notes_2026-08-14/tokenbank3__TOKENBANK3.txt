@@ -1,0 +1,258 @@
+TOKENBANK3 worker -- 2026-08-14 -- clone /private/tmp/tokenbank3 (deleted at end
+of pass per cleanup rule; tokenbank3.patch in this directory is the full diff,
+`git diff` run inside the clone).
+
+TASK: re-measure corrskip2.patch (per-denomination TokenBank replacing
+economy::blue_used's scalar re-derivation) on top of commit a7e7f90, which
+lands the previously-confounding Raid-loot fix that corrskip2's own pass had
+traced into but not fixed (interact.rs's Raid handler now accumulates loot
+across ALL nested casualty brackets and flushes with a single div_ceil(2),
+instead of rounding each casualty separately and silently dropping the
+second casualty's loot).
+
+===========================================================================
+[1] PATCH APPLY
+===========================================================================
+`git apply --check corrskip2.patch` FAILED on all 15 touched files -- the
+base has moved (a7e7f90 landed since corrskip2.patch was generated,
+including the Raid fix itself, which touches interact.rs directly).
+`git apply --3way corrskip2.patch` succeeded CLEANLY on all 15 files -- git
+had a merge base to work from and resolved every hunk automatically,
+including the PlayerState struct-literal sites where the patch's new
+`food_tokens: TokenBank::default(), resource_tokens: TokenBank::default(),`
+fields had to interleave with the ALREADY-PRESENT `raid_loot_pending: 0,`
+field from the landed Raid fix. Grepped rust/src/ for `<<<<<<<` / `=======`
+/ `>>>>>>>` after the apply: ZERO hits, confirmed no leftover conflict
+markers anywhere.
+
+Two files named in the original patch stat (rust/src/bin/replaystats.rs,
+rust/src/debugflags.rs) ended up with ZERO net diff vs HEAD after the 3-way
+merge -- that content (debug env-var plumbing) was already present in
+base0816, apparently landed independently by another pass since corrskip2
+was written. Not a problem; just means less of the original patch was
+actually "new" against this base.
+
+Final `git diff HEAD --stat` (13 files, the real diff):
+ rust/src/advisor/state_io.rs     |   2 +
+ rust/src/apply.rs                |  12 +-
+ rust/src/bots/weighted/events.rs |   2 +
+ rust/src/combat.rs               |   2 +
+ rust/src/costs.rs                |   2 +
+ rust/src/economy.rs              | 468 +++++++++++++++++++++++++++++++++++----
+ rust/src/effects.rs              |   2 +
+ rust/src/events.rs               |  14 +-
+ rust/src/game.rs                 |   2 +
+ rust/src/interact.rs             |  10 +-
+ rust/src/legal.rs                |   2 +
+ rust/src/replay_common.rs        |   2 +
+ rust/src/state.rs                |  51 +++++
+ 13 files changed, 508 insertions(+), 63 deletions(-)
+
+No manual conflict resolution was needed at all -- git's 3-way merge handled
+the interact.rs Raid-fix overlap and every `blank_player()`-style test
+literal's `raid_loot_pending: 0,` insertion point cleanly on its own.
+
+===========================================================================
+[2] TESTS / CLIPPY
+===========================================================================
+`cargo test --profile fasttest --lib`: 1448 passed, 0 failed (base is 1444 +
+patch's 4 new tests = 1448, exactly as expected from the writeup).
+`cargo clippy --all-targets -- -D warnings`: clean, no warnings.
+
+===========================================================================
+[3] GUARD SWEEP (the landing bar)
+===========================================================================
+Guard file frozen: /tmp/tb3_guard.txt, 734 IDs (cp of /private/tmp/guard_ids.txt).
+
+Header line from the patched-tree sweep (/tmp/tb3_after.txt):
+"# replaystats: 1011 games sampled, 736 completed to state.game_over"
+"736/736 completed games actually flipped state.game_over ... 709/736 of
+those matched index.tsv exactly (sorted per-game score-list compare)."
+completed = 736, exact = 709 (baseline stated in task: 734 completed / 707
+exact -- this patched tree completes 2 MORE games and matches 2 more
+exactly than that stated baseline; see wins below).
+
+comm -23 /tmp/tb3_guard.txt /tmp/tb3_ids.txt   (REGRESSIONS) -- VERBATIM:
+7521459
+7522402
+7522796
+
+comm -13 /tmp/tb3_guard.txt /tmp/tb3_ids.txt   (WINS) -- VERBATIM:
+7520999
+7522236
+7522673
+7523203
+7523634
+
+NOT EMPTY. The guard bar is NOT met: 3 completion regressions remain.
+(For reference, this WINS set is identical to the wins corrskip2's own pass
+reported against the pre-move 731-baseline -- these 5 wins are apparently
+insensitive to the underlying Raid fix.)
+
+7522967 (the one known ACCEPTED regression that should not appear because
+it is already excluded from guard_ids.txt): confirmed NOT completed on this
+patched tree, and confirmed absent from /tmp/tb3_guard.txt itself. Does not
+show up in either comm output, as expected -- not a new/surprise regression.
+
+===========================================================================
+[4] THE FIVE NAMED REGRESSIONS -- PER-GAME VERDICT
+===========================================================================
+  7521459: REGRESSION REMAINS (not in /tmp/tb3_ids.txt)
+  7522402: REGRESSION REMAINS (not in /tmp/tb3_ids.txt)
+  7522796: REGRESSION REMAINS (not in /tmp/tb3_ids.txt)
+  7523072: FIXED -- now completes. The Raid-loot fix (commit a7e7f90) was
+           precisely this game's confound, exactly as the corrskip2 writeup
+           predicted in its "NEXT STEPS" item 1.
+  7523510: FIXED -- now completes, same mechanism.
+
+So the underlying Raid-loot fix resolved 2 of the 5 original regressions
+outright. 3 remain, and none of them are explained by the Raid bug (that
+bug is fixed and landed; these 3 games' journals contain no Raid at their
+divergence points -- checked for 7521459, see trace below).
+
+===========================================================================
+[5] RESOURCE_ORACLE, RE-DERIVED ON THIS BASE (not quoted from the old pass)
+===========================================================================
+Methodology: git-stash the patch, rebuild replaystats (unpatched base0816),
+run RESOURCE_ORACLE=1, restore stash, rebuild, run again. Both runs used the
+identical index.tsv/journals args.
+
+BEFORE (unpatched base0816, commit a7e7f90):
+"# replaystats: 1011 games sampled, 734 completed to state.game_over"
+"41576 \"End turn\" checkpoints had a ... resources running total ...;
+40260 (96.8%) matched exactly. 299/1011 games sampled had at least one
+checkpoint disagree"
+  => 96.8% agreement, 299 diverging games (task's stated baseline was
+     "near 315" -- 299 is the correct re-derived number ON THIS BASE,
+     already somewhat improved vs the pre-corrskip2 baseline purely from
+     the Raid fix, before any of corrskip2's own changes are applied).
+
+AFTER (patched, corrskip2 applied on top of a7e7f90):
+"# replaystats: 1011 games sampled, 736 completed to state.game_over"
+"41581 \"End turn\" checkpoints had a ... resources running total ...;
+41256 (99.2%) matched exactly. 114/1011 games sampled had at least one
+checkpoint disagree"
+  => 99.2% agreement, 114 diverging games.
+
+So on THIS base the patch still delivers essentially the same size of win
+it did before (96.8% -> 99.2%, 299 -> 114 diverging games) -- slightly
+BETTER than corrskip2's own reported 96.6%->99.0%/315->134, because the
+Raid fix independently helps the resource oracle too, on top of the token
+bank's own contribution.
+
+===========================================================================
+TRACE: 7521459, full hand-trace of the round-17 production shortfall
+===========================================================================
+Isolated via a one-row index.tsv (header + 7521459's row) and re-ran with
+REPLAY_DEBUG_ALL=1 for the full blue_used/end_of_turn instrumentation
+already built into economy.rs.
+
+Journal (Grey, Age III):
+  round 16 end: "CORRUPTION! Grey loses 2 resources; ... (now 31)"  (resources=31)
+  round 17: Grey revolutions (science only) + discards (no resource effect)
+            -- NO Raid, NO non-production gain event anywhere in this
+            player's round 17 turn.
+  round 17 end: "CORRUPTION! Grey loses 4 resources; ... (now 39)"  (resources=39)
+  => true production this turn = 39 - (31-4) = 12.
+
+Engine's own instrumented trace for actor idx=3 (Grey), round 17:
+  end_of_turn pre-corruption: resources=31 blue_total=18 blue_used=16 corr=4
+  [corruption debits 4 resources by removing 2 tokens of denom 2 each,
+   lowest-available-first: mine_tokens 8->6, resources 31->27 -- CORRECT,
+   matches the journal's stated "-4" corruption exactly]
+  [food production step credits 2 new denom-3 food tokens: food_tokens 8->10]
+  [food consumption (step 3d) pays food, dropping a token: food_tokens 10->9]
+  [resource production step (3e) via credit_production/production_pairs:
+   blue_used going in = food_tokens(9) + mine_tokens(6) = 15;
+   blue_total = 18 => free = 3 => AT MOST 3 new tokens can be credited
+   regardless of how many mine workers Grey actually has]
+  mine_tokens 6->9 (3 new tokens), resources 27->36 (+9, NOT +12)
+  end_of_turn POST: resources=36  (journal says 39; delta -3, matches
+  RESOURCE_DETAIL's own report exactly: "lineno=637 round=17 actor=Grey
+  journal_now=39 reconstructed=36 delta=-3")
+
+ROOT CAUSE (as best traced with remaining budget): `credit_production`
+correctly places one new token per producing worker at that worker's own
+denomination (per the owner's ruling, not in question), but it is bounded
+by `free = blue_total - blue_used` -- the player's OWN accumulated blue
+token bank capacity, which this game's engine-reconstructed history says
+is already 15/18 full at this point. If Grey in fact has 4 producing mine
+workers this turn (matching the true +12 gain), the engine's own
+`blue_used` count of 15 leaves room for only 3, capping production one
+worker short.
+
+This is NOT assumption #3 (non-production gain placement) -- there is no
+non-production gain anywhere in this turn's causal chain, and it is NOT
+the Raid bug (already fixed, not present in this game's round-17 turn).
+It looks structural: `blue_total` (max token capacity, driven by total
+worker/population count, pre-existing and untouched by this patch) is a
+hard ceiling: it is correct and shared with the true game. But `blue_used`
+-- the COUNT of physical tokens the engine's own reconstructed history has
+accumulated by round 17 -- can legitimately differ from the true game's
+physical token count even while both represent the exact same resource
+VALUE, because the exact card each worker's token landed on over 17 prior
+rounds is underdetermined by the journal (it only ever states running
+totals, never per-card breakdowns). The engine's own greedy choices inside
+`gain`/`pay_resources`/`credit_production` (search-downward-for-max-amount
+on gain, lowest-first-with-change on spend) are A plausible reconstruction
+consistent with the rules, but not necessarily THE SAME token-count history
+the real player actually had -- and when the two histories diverge in
+COUNT (not value), the fixed `blue_total` ceiling can bind sooner in the
+reconstruction than it did in the real game, silently capping production
+and compounding into a resource deficit that only becomes visible many
+turns later as an illegal Build.
+
+7522402 was spot-checked (not traced to this depth): identical shape,
+RESOURCE_DETAIL shows "round=17 actor=Purple delta=-3" and its own stop
+reason is also "IllegalMove: Build" at round 20 -- consistent with the same
+mechanism as 7521459.
+
+7522796 was spot-checked and does NOT obviously match: its RESOURCE_DETAIL
+shows "round=17 actor=Purple last_action_class=PlayTactic delta=+1" -- a
+small OVERcount, opposite sign and much smaller magnitude than the other
+two. Not traced further; flagged below as unresolved.
+
+===========================================================================
+WHAT I DID NOT ESTABLISH
+===========================================================================
+- Whether the token-count-drift mechanism above is really THE cause of the
+  eventual illegal Build 2-3 rounds later in 7521459/7522402 (I traced the
+  first divergent checkpoint, not the full causal chain all the way to the
+  Build itself -- the deficit could compound, partially self-correct, or be
+  joined by further drift in rounds 18-19 before the actual illegal move).
+- Whether the +1 overcount in 7522796 shares any mechanism with the other
+  two, or is an unrelated, independent cause -- not traced at all beyond
+  the single RESOURCE_DETAIL line.
+- Whether a different gain/pay ordering choice (e.g. spending from the
+  HIGHEST denomination first instead of lowest, or crediting production to
+  the LOWEST-value card first instead of highest) would produce a token
+  count closer to the true game's in these specific games -- I did not
+  experiment with alternative orderings, only diagnosed the existing one.
+  Per the task's own framing this is a "test it, don't reason about it"
+  question and I did not have budget left to build and re-measure a second
+  variant.
+- No citation search of sources/cge_code_of_laws.pdf / faq_v15.pdf was done
+  regarding exact-history reconstruction from aggregate totals; I don't
+  believe this is a rules question at all (the model itself -- one token
+  per worker, bound to its card, never moving up, lowest-first spend with
+  change -- is not in question here; the issue is that the ENGINE's guess
+  at 17 rounds of unrecorded history can legitimately diverge from the
+  TRUE unrecorded history in token count while matching it in value).
+- Did not attempt a fix. Per the task, this is a re-measurement pass; the
+  guard bar is not met (3/5 regressions remain), so nothing here is meant
+  to land as-is.
+
+===========================================================================
+VERDICT
+===========================================================================
+Tests: 1448/1448 passing. Clippy: clean. Guard: comm -23 NOT EMPTY (3
+regressions: 7521459, 7522402, 7522796). RESOURCE_ORACLE: 96.8%/299
+diverging -> 99.2%/114 diverging, a genuine and reproducible improvement,
+re-derived fresh on this base. 2 of the original 5 regressions
+(7523072, 7523510) are now fixed by the landed Raid-loot correction,
+confirming the corrskip2 writeup's own prediction. The remaining 3 do NOT
+land per the project's explicit bar (any completion regression blocks
+landing). The new lead -- a `blue_used`-driven production cap sensitive to
+the engine's own reconstructed token-count history, not to assumption #3 or
+the Raid bug -- is a harder, more structural problem than either of the two
+previously-identified culprits, and is the right next thing to investigate.
