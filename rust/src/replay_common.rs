@@ -745,6 +745,11 @@ struct Replayer<'a> {
     /// ever_cards_in_play`], and exposed directly as [`GameResult::
     /// moves_applied`] for `cardblame`'s Move-keyed happenings cut.
     moves_applied: Vec<Move>,
+    /// Every event card this replayer actually RESOLVED, in order -- see
+    /// [`Self::apply_move`]'s own doc for why a resolved event is not the
+    /// `CardId` argument of any `Move` and so cannot be recovered from
+    /// [`Self::moves_applied`].
+    events_resolved: Vec<CardId>,
     /// Every journal line's own [`ActionClass`] classification, in the
     /// order `apply_one` saw them -- pushed once per `apply_one` call (see
     /// that function's own first statement). `ActionClass` is BGO's own
@@ -967,6 +972,7 @@ impl<'a> Replayer<'a> {
             politics_false_skips_unrecovered: 0,
             corruption_checks: Vec::new(),
             moves_applied: Vec::new(),
+            events_resolved: Vec::new(),
             line_classes: Vec::new(),
         }
     }
@@ -982,9 +988,32 @@ impl<'a> Replayer<'a> {
     /// bookkeeping; does not change what `apply::apply` does to
     /// `self.state`, and every caller's control flow is unchanged (same
     /// two statements it replaces, in the same order).
+    ///
+    /// Also records any card that LEFT `current_events` while this move was
+    /// applied, into [`Self::events_resolved`]. `Move::PrepareEvent`'s own
+    /// `CardId` argument is the card being pushed onto `future_events`, NOT
+    /// the one `events::reveal_current_event` pops off `current_events` and
+    /// resolves inside that same call -- two different cards from one move.
+    /// Event cards never enter a tableau either, so without this the entire
+    /// Age A military deck ("Development of X") and every other resolved
+    /// event was invisible to all of `cardblame`'s attribution paths. The
+    /// diff is taken here rather than reading the pop directly because
+    /// `set_current_events` rebuilds the pile wholesale from the journal's
+    /// own reveal order AFTER the move returns; this window sees only what
+    /// `apply::apply` itself consumed.
     fn apply_move(&mut self, mv: Move) {
         self.moves_applied.push(mv);
+        let before: Vec<CardId> = self.state.current_events.as_slice().to_vec();
         apply::apply(&mut self.state, mv);
+        let mut after: Vec<CardId> = self.state.current_events.as_slice().to_vec();
+        for card in before {
+            match after.iter().position(|&c| c == card) {
+                Some(i) => {
+                    after.swap_remove(i);
+                }
+                None => self.events_resolved.push(card),
+            }
+        }
     }
 
     /// `cardblame`'s corruption checkpoint -- called from the `EndTurn`
@@ -2082,6 +2111,15 @@ impl<'a> Replayer<'a> {
         // after it, mirroring `try_apply`'s own loop exactly.
         let hand_military_len_before: [usize; MAX_PLAYERS] =
             std::array::from_fn(|i| self.state.players[i].hand_military.len());
+        // TIE_CENSUS labelling only: `current_lineno` tracks the outer
+        // per-journal-line loop, but THIS call (a political decision) is not
+        // driven from that loop at all -- it can run before that line's own
+        // journal row is reached. `prep.lineno` is the journal row this
+        // exact preparation/reveal was solved from (`event_plan::solve`),
+        // the one whose own "Current event:" clause names the real outcome
+        // if `events::reveal_current_event` resolves synchronously inside
+        // this same `apply::apply` call (see the big comment above).
+        crate::tie_context::set_lineno(prep.lineno);
         self.apply_move(mv);
         for seat in 0..self.state.num_players {
             let before = hand_military_len_before[seat as usize];
@@ -5754,10 +5792,17 @@ fn move_card_args(mv: Move) -> [Option<CardId>; 2] {
 /// `tactic`), so a superseded EARLIER government still needs (2) above
 /// (`Move::Revolution`/`Move::Develop`) to be seen; only the STARTING one
 /// is invisible to (2), which is exactly what this closes.
-fn game_ever_cards_in_play(state: &crate::state::GameState, moves_applied: &[Move]) -> Vec<&'static str> {
+fn game_ever_cards_in_play(
+    state: &crate::state::GameState,
+    moves_applied: &[Move],
+    events_resolved: &[CardId],
+) -> Vec<&'static str> {
     let mut set: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
     for name in game_cards_in_play(state) {
         set.insert(name);
+    }
+    for &card in events_resolved {
+        set.insert(card.name());
     }
     for &mv in moves_applied {
         for card in move_card_args(mv).into_iter().flatten() {
@@ -6380,6 +6425,7 @@ pub fn replay_game(
     card_index: &HashMap<&'static str, CardId>,
     record_decisions: bool,
 ) -> GameResult {
+    crate::tie_context::set_game(&meta.id);
     let lines = parse_lines(journal_text);
     let putback_skips = prescan_putback_skips(&lines, card_index);
     let gain_produces = prescan_gain_produces(&lines);
@@ -6660,6 +6706,7 @@ pub fn replay_game(
             continue;
         }
         r.current_lineno = line.lineno;
+        crate::tie_context::set_lineno(line.lineno);
         // Self-deferring: a no-op unless a prior `EndTurn` line's culture
         // checkpoint is still waiting on a discard decision to resolve --
         // see `PendingCultureCheck`'s own doc.
@@ -7428,7 +7475,7 @@ pub fn replay_game(
         }
     };
 
-    let ever_cards_in_play = game_ever_cards_in_play(&r.state, &r.moves_applied);
+    let ever_cards_in_play = game_ever_cards_in_play(&r.state, &r.moves_applied, &r.events_resolved);
     GameResult {
         id: meta.id.clone(),
         players: meta.players,
