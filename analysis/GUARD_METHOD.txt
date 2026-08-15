@@ -1,10 +1,48 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-14 (sixth update this day)
-    base commit ....... 9860400  (clone /private/tmp/base0815, branch base0814)
+    updated 2026-08-14 (tenth update this day)
+    base commit ....... 89b41b6  (clone /private/tmp/base0815, branch base0814)
     completing games .. 698 of 1011   (671 of those match index.tsv exactly)
     frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_698.txt)
     committed copy .... analysis/guard_ids_698.txt
+
+    The four commits above 9860400 are all zero-delta on the headline metric --
+    two diagnostics and two correctness fixes that buy no completion. That is
+    deliberate, not a failure: see each entry for why it landed anyway.
+
+      89b41b6  TIE_CENSUS (rust/src/tie_context.rs, new): dumps the RAW
+               per-player values behind every superlative-target selection
+               (events::apply_single_target, conditional_target,
+               resolve_count_targets) instead of a precomputed verdict, so a
+               candidate tie-break rule can be scored over the whole corpus
+               WITHOUT recompiling. It immediately falsified the coordinator's
+               own hypothesis -- see the tie-break entry under CLOSED QUESTIONS
+               below. No behaviour change.
+
+      ffa8a2f  replay_common::apply_move now records every card that LEFT
+               state.current_events while a move was applied, into
+               GameResult::events_resolved. Move::PrepareEvent's CardId argument
+               is the card being PUSHED onto future_events, not the one
+               reveal_current_event pops and resolves inside the same call --
+               two different cards from one move. Event cards never enter a
+               tableau either, so before this the entire Age A military deck and
+               every other resolved event was invisible to all of cardblame's
+               attribution paths. cardblame coverage 226 -> 236 of 236.
+
+      54a45fb  prescan_putback_skips paired a BGO client-side PutBack with the
+               MOST RECENTLY opened TakeCard of the same card+actor. Wrong for
+               multi-copy yellow action cards: Frugality has count [2,2,2], so a
+               player can hold two same-named copies taken at different civil
+               action costs. Game 7522905 took two (2 CA then 1 CA) and put one
+               back for a 2 CA refund; cancelling the wrong take overcounted
+               that turn's CA spend by 1 and manufactured a Budget rejection.
+               Now matched by refund AMOUNT, falling back to most-recent only
+               when no cost matches. Zero wins -- 7522905 goes round 1 -> round
+               6 and then stops on an unrelated Plunder choice -- landed because
+               the pairing rule was simply wrong.
+
+      570479a  cardblame rewritten for TOTAL structural coverage (see the
+               cardblame entry below, which replaces the old coverage-gap note).
 
       9860400  legal.rs's CardType::Aggression generation refused to emit a
                move when combat::defense_strength >= combat::attack_strength,
@@ -41,13 +79,26 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
                machinery -- it had been completing through a compensating
                error, not through correctness.
 
-    KNOWN COVERAGE GAP IN cardblame (being fixed as of 2026-08-14):
-      Cuts 1 and 2 attribute a failing game ONLY to each player's techs,
-      leader and tactic as of where the replay stopped. All 55 EVENT cards,
-      every one-shot Action/military card that was PLAYED, and wonders,
-      governments and colonies are invisible to them. There is also no
-      attribution by what HAPPENED (revolution, corruption, war, resign).
-      Do not read the old ranking as evidence about any of those.
+    cardblame's COVERAGE GAP IS CLOSED (570479a + ffa8a2f). It used to
+      attribute a failing game only to each player's techs, leader and tactic
+      as of where the replay STOPPED, which made all 55 event cards, every
+      one-shot Action/military card that was played, and wonders, governments
+      and colonies invisible. Attribution is now "ever exercised", from five
+      independent sources: cards in play at the stop, every CardId argument of
+      every applied Move (exhaustive move_card_args, no wildcard arm), every
+      resolved event (ffa8a2f), and two happenings cuts keyed on Move variant
+      and ActionClass. Every one of the 236 cards in tta::CARDS prints in every
+      cut; nothing is capped to a top-N. 236/236 observed, 223 clear the
+      20-game cutoff, 35/37 Move variants and 27/31 ActionClass variants fire.
+      DO NOT READ ANY PRE-570479a cardblame RANKING AS EVIDENCE: widening
+      attribution collapsed all ten "perfect 3.15x / 100% failure" leaders to
+      1.0-1.24x, which means trap 1 below was the entire signal. Same for
+      Despotism, which is simply the starting government.
+      Also settled by that run, do not re-open: the ten "Development of X"
+      cards are the real Age A military deck (RULES_SPEC item 8), seeded
+      players+2 at a time by game::new_game and resolved progressively; they
+      appear in 430-497 journals each and the engine handles them correctly.
+      They looked absent only because of the PrepareEvent argument mismatch.
       55bbca5  combat::resolve_war_outcome fires synchronously inside
                game::start_turn, as a side effect of applying the defender's
                own last old-age EndTurn line -- BEFORE replay_common's loop
@@ -107,6 +158,28 @@ CURRENT BASELINE  (supersedes every count and commit named further down)
       - Economic Progress corruption timing: evaluating against a ROUND-START
         snapshot instead of live state costs 14 completions and wins 0. Live
         state, which the engine already does, is correct.
+      - The TIE-BREAK ASYMMETRY in events::conditional_target. It looks wrong:
+        the culture rank uses the plain unreversed order (current player picked
+        FIRST) while the strength cutoff four lines below uses
+        protect_current_from_bad_tie (current player sorts LAST), and the whole
+        function's outcome is a penalty. TIE_CENSUS scored six candidate rules
+        over 281 clean Barbarians resolutions (73 tied at a boundary):
+            shipped asymmetric rule ...... 279/281 99.3%  (tied 72/73 98.6%)
+            also reverse the culture rank  266/281 94.7%  (tied 59/73 80.8%)
+            favour-current on both .......  83.3%          (tied 37.0%)
+            both reversed ................  81.5%          (tied 30.1%)
+            exclude current from both ....  47.7%
+            nobody picked on a cutoff tie   88.3%
+        Reversing the culture half breaks 14 more games than it fixes. A
+        penalty's OVERALL sign says nothing about the direction of an
+        intermediate ranked step: the culture rank picks a QUALIFYING target,
+        only the cutoff is the harm. Special::StrongestPlayers is printed by
+        exactly two base-game cards (Foray, Cold War), both paired with Gain and
+        never Lose, so resolve_count_targets' unreversed strongest path has no
+        failing case either. LIVE LEAD, not yet actionable:
+        PlayerWithLeastCulture (Terrorism, the only base-game card using that
+        key) is 0/3 on its own culture ties -- the same shape as the
+        WeakestPlayer fix, but n=3 needs more exposure before acting.
     Two earlier commits sit between 491c153 (651/613) and 791150f:
       613ff6c  production phase moves one blue token per WORKER on a farm/mine
                card (Code of Laws p.6), not one per unit of VALUE. Corrects an

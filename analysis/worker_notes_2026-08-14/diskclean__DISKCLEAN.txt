@@ -1,0 +1,59 @@
+DISKCLEAN worker report — 2026-08-14
+
+Starting free space: 47Gi (df -h /private/tmp)
+Ending free space:   48Gi (df -h /private/tmp)
+Reclaimed: ~8.0G (base0814 1.3G + aggr 3.3G + revol 3.4G)
+
+METHOD
+Enumerated all ~200 top-level dirs in /private/tmp. Only 5 contained
+rust/Cargo.toml with name = "tta": aggr, base0814, base0815, pacts, revol.
+Everything else in /private/tmp is NOT a TTA worker clone (unrelated
+scratch/cache/log dirs, discord-claude-test-*, rustbak-*, land_backup_*,
+livesrc_backup_*, etc.) — left untouched, not itemized individually since
+none matched the Cargo.toml probe.
+
+base0815 and pacts are on the protected list — never touched.
+
+VERDICTS FOR EVALUATED CLONES
+
+aggr (3.3G) — DELETED
+  - No uncommitted changes under rust/src/.
+  - Tip commit af17042 "Stop gating Aggression declarations on attacker
+    strength" has a subject line that does NOT literally match base0815's
+    history text-for-text (base0815's equivalent is 9860400 "...(698
+    complete, 671 exact)"). Investigated further: diffed the actual code
+    change (rust/src/ hunks) of af17042 against base0815's 9860400 — BYTE
+    IDENTICAL. Same fix, landed under a reworded/updated commit message.
+    Also confirmed aggr.patch in this notes dir matches af17042's diff
+    exactly (rule 3c). All commits below the tip are exact-hash matches
+    with base0815. No unlanded work remains.
+
+base0814 (1.3G) — DELETED
+  - No uncommitted changes under rust/src/.
+  - Tip commit e373f25 "Snapshot the live tree after landing pricing
+    coverage, legality cliffs and the units fixes" is an EXACT HASH match
+    present in base0815's own log (base0814 is a strict ancestor of
+    base0815). Fully landed.
+
+revol (3.4G) — DELETED
+  - No uncommitted changes under rust/src/.
+  - Tip commit 60143ac "Give back a leader's MA/CA bonus when it
+    antiquates out of play" does not appear (by hash or subject) in
+    base0815 or tta-ai history — base0815 has a related but differently-
+    worded/differently-scoped commit (b5b3d9a "Antiquated leader left a
+    ghost action bonus in the pool"). Rather than treat this as unlanded,
+    checked for a patch artifact: revol.patch exists in this notes dir.
+    Diffed revol.patch against `git show 60143ac -- rust/src/` — IDENTICAL.
+    The work was captured as a patch before the clone was slated for
+    cleanup, satisfying rule 3c. Safe to delete.
+  - All commits below the tip are exact-hash matches with base0815.
+
+base0815 (untouched, protected) — kept per hard rule, not evaluated.
+pacts (untouched, protected) — kept per hard rule, not evaluated.
+
+KEPT / UNSURE
+None. All three evaluated non-protected TTA clones were confirmed landed
+(either by exact commit-hash ancestry or byte-identical code diff against
+a landed commit / patch artifact) before deletion. Nothing was deleted on
+a subject-line match alone — every non-exact-hash case was verified against
+the actual rust/src/ diff content.
