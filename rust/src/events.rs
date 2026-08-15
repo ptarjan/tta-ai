@@ -653,6 +653,10 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
     if order.is_empty() {
         return;
     }
+    // TIE_CENSUS labelling only (see `tie_context`'s own doc) -- inert unless
+    // `TIE_CENSUS` is set. `card.get().name` is `&'static str` off the card
+    // table, so this is a plain reference store, not an allocation.
+    crate::tie_context::set_card(card.get().name);
 
     // Politics of Strength (§5.3, `events.py:228-229`): on the last round,
     // the WHOLE targeting set is swapped for the substitute's -- not merged
@@ -879,6 +883,36 @@ fn protect_current_from_bad_tie(order: &[u8]) -> Vec<u8> {
     order.iter().rev().copied().collect()
 }
 
+/// `TIE_CENSUS` (see `debugflags::tie_census`'s own doc): one row per
+/// superlative-target selection, naming every RAW input (every live seat's
+/// `stat` value, in `order` -- the UNMODIFIED clockwise-from-revealer order,
+/// never whatever protected/reversed order a caller actually ranked with)
+/// plus the engine's own picked seat(s). Deliberately dumps inputs, not a
+/// precomputed verdict: a separate script cross-references these rows
+/// against the BGO journal's own named outcome and can replay ANY candidate
+/// tie-break rule (seating direction, current-player-exclusion, "nobody
+/// selected on a cutoff tie", ...) without a recompile. `kind` is a free-form
+/// label distinguishing which of `resolve_event`'s targeting keys this row
+/// came from (the card name, from `tie_context::card_name`, is printed
+/// alongside and is usually enough to disambiguate on its own, since almost
+/// every key in the base game is used by exactly one or two named cards --
+/// see `apply_single_target`'s own doc comment).
+fn tie_census_row(state: &GameState, kind: &str, order: &[u8], stat: RankStat, selected: &[u8]) {
+    if !crate::debugflags::tie_census() {
+        return;
+    }
+    let seat_label = |q: u8| crate::corpus::Color::from_seat(q).map_or("?", crate::corpus::Color::as_str);
+    let colors: Vec<&str> = order.iter().map(|&q| seat_label(q)).collect();
+    let values: Vec<i32> = order.iter().map(|&q| rank_stat_value(state, q, stat)).collect();
+    let selected_colors: Vec<&str> = selected.iter().map(|&q| seat_label(q)).collect();
+    eprintln!(
+        "TIE_ROW game={} line={} card={} kind={kind} stat={stat:?} order={colors:?} values={values:?} selected={selected_colors:?}",
+        crate::tie_context::game_id(),
+        crate::tie_context::lineno(),
+        crate::tie_context::card_name(),
+    );
+}
+
 /// One of `resolve_event`'s four SINGULAR targeting keys (`strongestPlayer`/
 /// `weakestPlayer`/`playerWithMostCulture`/`playerWithLeastCulture`, plus
 /// the last-round substitute's own two): the single best-or-worst-`stat`
@@ -922,6 +956,7 @@ fn apply_single_target(
     favor_current: bool,
     block: EventBlock,
 ) {
+    let original_order = order;
     let reversed: Vec<u8>;
     let order = if favor_current {
         order
@@ -930,6 +965,23 @@ fn apply_single_target(
         &reversed
     };
     let ranked = rank_players(state, order, stat, best);
+    if block != EventBlock::EMPTY {
+        // Only census a selection the card actually PRINTS this key for --
+        // `resolve_event`'s own doc says every card gets all four singular
+        // keys' `apply_single_target` calls unconditionally (an absent key
+        // reads as `EventBlock::EMPTY`, a proven no-op), so without this
+        // gate every ordinary card with no `strongestPlayer`/etc. clause at
+        // all would still contribute four meaningless rows -- selecting a
+        // target for a block that changes nothing is not a real-world
+        // "who did BGA pick" question.
+        tie_census_row(
+            state,
+            &format!("single:{stat:?}:best={best}:favor_current={favor_current}"),
+            original_order,
+            stat,
+            &ranked[..ranked.len().min(1)],
+        );
+    }
     if crate::debugflags::replay_debug_all() {
         eprintln!(
             "DEBUG apply_single_target: order={order:?} stat={stat:?} best={best} favor_current={favor_current} ranked={ranked:?} values={:?}",
@@ -1003,6 +1055,7 @@ fn apply_tied_targets(state: &mut GameState, order: &[u8], stat: RankStat, requi
 /// Mirrors `engine/events.py::_conditional_target`.
 fn conditional_target(state: &mut GameState, order: &[u8], card: CardId, n: i16) {
     let ranked = rank_players(state, order, RankStat::Culture, true);
+    tie_census_row(state, "barbarians_culture", order, RankStat::Culture, &ranked[..ranked.len().min(1)]);
     let Some(&q) = ranked.first() else { return };
     let among = count_table(card, |sp| match sp {
         Special::Condition(t) => Some(t),
@@ -1019,9 +1072,14 @@ fn conditional_target(state: &mut GameState, order: &[u8], card: CardId, n: i16)
         let protected_order = protect_current_from_bad_tie(order);
         let weakest = rank_players(state, &protected_order, RankStat::Strength, false);
         let cutoff = (among.max(0) as usize).min(weakest.len());
+        tie_census_row(state, &format!("barbarians_strength:among={among}"), order, RankStat::Strength, &weakest[..cutoff]);
+        let outcome: &[u8] = if weakest[..cutoff].contains(&q) { std::slice::from_ref(&q) } else { &[] };
+        tie_census_row(state, "barbarians_outcome", order, RankStat::Culture, outcome);
         if !weakest[..cutoff].contains(&q) {
             return;
         }
+    } else {
+        tie_census_row(state, "barbarians_outcome", order, RankStat::Culture, std::slice::from_ref(&q));
     }
     interact::enqueue(state, QueueItem::LosePop { player: q, n: n.max(0) as u8 });
 }
@@ -1053,6 +1111,7 @@ fn resolve_count_targets(state: &mut GameState, order: &[u8], card: CardId) {
         let block = gain.unwrap_or(EventBlock::EMPTY);
         let targets = rank_players(state, order, RankStat::Strength, true);
         let selected = &targets[..strongest_count];
+        tie_census_row(state, &format!("strongest_count:{strongest_count}"), order, RankStat::Strength, selected);
         // SELECTION is by strength (`targets`, above); RESOLUTION order is
         // not -- RULES_SPEC.md §5.3 ("Multiple-player decisions resolve
         // clockwise from the revealing player") governs whatever decision
@@ -1088,6 +1147,7 @@ fn resolve_count_targets(state: &mut GameState, order: &[u8], card: CardId) {
         let protected_order = protect_current_from_bad_tie(order);
         let targets = rank_players(state, &protected_order, RankStat::Strength, false);
         let selected = &targets[..weakest_count];
+        tie_census_row(state, &format!("weakest_count:{weakest_count}"), order, RankStat::Strength, selected);
         // Same RESOLUTION-order fix as `strongestPlayers` above: `selected`
         // is the correct (tie-protected) SET, `order` gives the clockwise
         // sequence to walk it in for whatever per-player decision this

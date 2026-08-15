@@ -1,0 +1,283 @@
+diff --git a/rust/src/debugflags.rs b/rust/src/debugflags.rs
+index 35cdd94..1ce5bc8 100644
+--- a/rust/src/debugflags.rs
++++ b/rust/src/debugflags.rs
+@@ -37,6 +37,7 @@ static REPLAY_DEBUG: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG"));
+ static REPLAY_DEBUG_ALL: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_ALL"));
+ static REPLAY_DEBUG_TECHS: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_TECHS"));
+ static COLONIZE_FALLBACK_DUMP: LazyLock<bool> = LazyLock::new(|| flag("COLONIZE_FALLBACK_DUMP"));
++static TIE_CENSUS: LazyLock<bool> = LazyLock::new(|| flag("TIE_CENSUS"));
+ 
+ /// `REPLAY_DEBUG`: per-game replay tracing.
+ pub fn replay_debug() -> bool {
+@@ -64,6 +65,17 @@ pub fn colonize_fallback_dump() -> bool {
+     *COLONIZE_FALLBACK_DUMP
+ }
+ 
++/// `TIE_CENSUS`: one stderr row per superlative-target selection
++/// (`events.rs`'s `apply_single_target`/`conditional_target`/
++/// `resolve_count_targets`), naming every candidate's ranked value, whether
++/// a tie sat at the selection cutoff, and who the engine picked -- the
++/// oracle census for the "how does BGA break a tie" measurement (see
++/// `analysis/worker_notes_2026-08-14/ties__TIES.txt`). Measurement-only;
++/// inert (one static bool read) otherwise.
++pub fn tie_census() -> bool {
++    *TIE_CENSUS
++}
++
+ // ============================================================== tests ====
+ 
+ #[cfg(test)]
+diff --git a/rust/src/events.rs b/rust/src/events.rs
+index 099648b..8237776 100644
+--- a/rust/src/events.rs
++++ b/rust/src/events.rs
+@@ -653,6 +653,10 @@ pub fn resolve_event(state: &mut GameState, card: CardId, revealer_idx: u8) {
+     if order.is_empty() {
+         return;
+     }
++    // TIE_CENSUS labelling only (see `tie_context`'s own doc) -- inert unless
++    // `TIE_CENSUS` is set. `card.get().name` is `&'static str` off the card
++    // table, so this is a plain reference store, not an allocation.
++    crate::tie_context::set_card(card.get().name);
+ 
+     // Politics of Strength (§5.3, `events.py:228-229`): on the last round,
+     // the WHOLE targeting set is swapped for the substitute's -- not merged
+@@ -879,6 +883,36 @@ fn protect_current_from_bad_tie(order: &[u8]) -> Vec<u8> {
+     order.iter().rev().copied().collect()
+ }
+ 
++/// `TIE_CENSUS` (see `debugflags::tie_census`'s own doc): one row per
++/// superlative-target selection, naming every RAW input (every live seat's
++/// `stat` value, in `order` -- the UNMODIFIED clockwise-from-revealer order,
++/// never whatever protected/reversed order a caller actually ranked with)
++/// plus the engine's own picked seat(s). Deliberately dumps inputs, not a
++/// precomputed verdict: a separate script cross-references these rows
++/// against the BGO journal's own named outcome and can replay ANY candidate
++/// tie-break rule (seating direction, current-player-exclusion, "nobody
++/// selected on a cutoff tie", ...) without a recompile. `kind` is a free-form
++/// label distinguishing which of `resolve_event`'s targeting keys this row
++/// came from (the card name, from `tie_context::card_name`, is printed
++/// alongside and is usually enough to disambiguate on its own, since almost
++/// every key in the base game is used by exactly one or two named cards --
++/// see `apply_single_target`'s own doc comment).
++fn tie_census_row(state: &GameState, kind: &str, order: &[u8], stat: RankStat, selected: &[u8]) {
++    if !crate::debugflags::tie_census() {
++        return;
++    }
++    let seat_label = |q: u8| crate::corpus::Color::from_seat(q).map_or("?", crate::corpus::Color::as_str);
++    let colors: Vec<&str> = order.iter().map(|&q| seat_label(q)).collect();
++    let values: Vec<i32> = order.iter().map(|&q| rank_stat_value(state, q, stat)).collect();
++    let selected_colors: Vec<&str> = selected.iter().map(|&q| seat_label(q)).collect();
++    eprintln!(
++        "TIE_ROW game={} line={} card={} kind={kind} stat={stat:?} order={colors:?} values={values:?} selected={selected_colors:?}",
++        crate::tie_context::game_id(),
++        crate::tie_context::lineno(),
++        crate::tie_context::card_name(),
++    );
++}
++
+ /// One of `resolve_event`'s four SINGULAR targeting keys (`strongestPlayer`/
+ /// `weakestPlayer`/`playerWithMostCulture`/`playerWithLeastCulture`, plus
+ /// the last-round substitute's own two): the single best-or-worst-`stat`
+@@ -922,6 +956,7 @@ fn apply_single_target(
+     favor_current: bool,
+     block: EventBlock,
+ ) {
++    let original_order = order;
+     let reversed: Vec<u8>;
+     let order = if favor_current {
+         order
+@@ -930,6 +965,23 @@ fn apply_single_target(
+         &reversed
+     };
+     let ranked = rank_players(state, order, stat, best);
++    if block != EventBlock::EMPTY {
++        // Only census a selection the card actually PRINTS this key for --
++        // `resolve_event`'s own doc says every card gets all four singular
++        // keys' `apply_single_target` calls unconditionally (an absent key
++        // reads as `EventBlock::EMPTY`, a proven no-op), so without this
++        // gate every ordinary card with no `strongestPlayer`/etc. clause at
++        // all would still contribute four meaningless rows -- selecting a
++        // target for a block that changes nothing is not a real-world
++        // "who did BGA pick" question.
++        tie_census_row(
++            state,
++            &format!("single:{stat:?}:best={best}:favor_current={favor_current}"),
++            original_order,
++            stat,
++            &ranked[..ranked.len().min(1)],
++        );
++    }
+     if crate::debugflags::replay_debug_all() {
+         eprintln!(
+             "DEBUG apply_single_target: order={order:?} stat={stat:?} best={best} favor_current={favor_current} ranked={ranked:?} values={:?}",
+@@ -1003,6 +1055,7 @@ fn apply_tied_targets(state: &mut GameState, order: &[u8], stat: RankStat, requi
+ /// Mirrors `engine/events.py::_conditional_target`.
+ fn conditional_target(state: &mut GameState, order: &[u8], card: CardId, n: i16) {
+     let ranked = rank_players(state, order, RankStat::Culture, true);
++    tie_census_row(state, "barbarians_culture", order, RankStat::Culture, &ranked[..ranked.len().min(1)]);
+     let Some(&q) = ranked.first() else { return };
+     let among = count_table(card, |sp| match sp {
+         Special::Condition(t) => Some(t),
+@@ -1019,9 +1072,14 @@ fn conditional_target(state: &mut GameState, order: &[u8], card: CardId, n: i16)
+         let protected_order = protect_current_from_bad_tie(order);
+         let weakest = rank_players(state, &protected_order, RankStat::Strength, false);
+         let cutoff = (among.max(0) as usize).min(weakest.len());
++        tie_census_row(state, &format!("barbarians_strength:among={among}"), order, RankStat::Strength, &weakest[..cutoff]);
++        let outcome: &[u8] = if weakest[..cutoff].contains(&q) { std::slice::from_ref(&q) } else { &[] };
++        tie_census_row(state, "barbarians_outcome", order, RankStat::Culture, outcome);
+         if !weakest[..cutoff].contains(&q) {
+             return;
+         }
++    } else {
++        tie_census_row(state, "barbarians_outcome", order, RankStat::Culture, std::slice::from_ref(&q));
+     }
+     interact::enqueue(state, QueueItem::LosePop { player: q, n: n.max(0) as u8 });
+ }
+@@ -1053,6 +1111,7 @@ fn resolve_count_targets(state: &mut GameState, order: &[u8], card: CardId) {
+         let block = gain.unwrap_or(EventBlock::EMPTY);
+         let targets = rank_players(state, order, RankStat::Strength, true);
+         let selected = &targets[..strongest_count];
++        tie_census_row(state, &format!("strongest_count:{strongest_count}"), order, RankStat::Strength, selected);
+         // SELECTION is by strength (`targets`, above); RESOLUTION order is
+         // not -- RULES_SPEC.md §5.3 ("Multiple-player decisions resolve
+         // clockwise from the revealing player") governs whatever decision
+@@ -1088,6 +1147,7 @@ fn resolve_count_targets(state: &mut GameState, order: &[u8], card: CardId) {
+         let protected_order = protect_current_from_bad_tie(order);
+         let targets = rank_players(state, &protected_order, RankStat::Strength, false);
+         let selected = &targets[..weakest_count];
++        tie_census_row(state, &format!("weakest_count:{weakest_count}"), order, RankStat::Strength, selected);
+         // Same RESOLUTION-order fix as `strongestPlayers` above: `selected`
+         // is the correct (tie-protected) SET, `order` gives the clockwise
+         // sequence to walk it in for whatever per-player decision this
+diff --git a/rust/src/lib.rs b/rust/src/lib.rs
+index e00aa5c..04323e8 100644
+--- a/rust/src/lib.rs
++++ b/rust/src/lib.rs
+@@ -36,6 +36,7 @@ pub mod replay_common;
+ pub mod rng;
+ pub mod state;
+ pub mod stats;
++pub mod tie_context;
+ 
+ pub use cards::{
+     Age, Card, CardEffects, CardId, CardType, Composition, Production, Special, CARDS, NUM_CARDS,
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index d3dcacd..c5c9056 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -2045,6 +2045,15 @@ impl<'a> Replayer<'a> {
+         // after it, mirroring `try_apply`'s own loop exactly.
+         let hand_military_len_before: [usize; MAX_PLAYERS] =
+             std::array::from_fn(|i| self.state.players[i].hand_military.len());
++        // TIE_CENSUS labelling only: `current_lineno` tracks the outer
++        // per-journal-line loop, but THIS call (a political decision) is not
++        // driven from that loop at all -- it can run before that line's own
++        // journal row is reached. `prep.lineno` is the journal row this
++        // exact preparation/reveal was solved from (`event_plan::solve`),
++        // the one whose own "Current event:" clause names the real outcome
++        // if `events::reveal_current_event` resolves synchronously inside
++        // this same `apply::apply` call (see the big comment above).
++        crate::tie_context::set_lineno(prep.lineno);
+         apply::apply(&mut self.state, mv);
+         for seat in 0..self.state.num_players {
+             let before = hand_military_len_before[seat as usize];
+@@ -6178,6 +6187,7 @@ pub fn replay_game(
+     card_index: &HashMap<&'static str, CardId>,
+     record_decisions: bool,
+ ) -> GameResult {
++    crate::tie_context::set_game(&meta.id);
+     let lines = parse_lines(journal_text);
+     let putback_skips = prescan_putback_skips(&lines, card_index);
+     let gain_produces = prescan_gain_produces(&lines);
+@@ -6458,6 +6468,7 @@ pub fn replay_game(
+             continue;
+         }
+         r.current_lineno = line.lineno;
++        crate::tie_context::set_lineno(line.lineno);
+         // Self-deferring: a no-op unless a prior `EndTurn` line's culture
+         // checkpoint is still waiting on a discard decision to resolve --
+         // see `PendingCultureCheck`'s own doc.
+diff --git a/rust/src/tie_context.rs b/rust/src/tie_context.rs
+new file mode 100644
+index 0000000..27cd646
+--- /dev/null
++++ b/rust/src/tie_context.rs
+@@ -0,0 +1,76 @@
++//! Diagnostic-only thread-local `(game id, journal line)` label for the
++//! `TIE_CENSUS` superlative-selection dump (see `events.rs`'s
++//! `apply_single_target`/`conditional_target`/`resolve_count_targets`, and
++//! `debugflags::tie_census`). Replay is single-game, single-threaded per
++//! process (`replaystats`'s own `for meta in &games` loop, one `replay_game`
++//! call at a time), so a thread-local written once per game and once per
++//! journal line, and read back a few call-frames deeper inside `events.rs`
++//! (which has no journal/game-id of its own to thread through every
++//! function signature), is a label -- not a second source of truth for any
++//! engine decision. Nothing here is read by production/self-play code; only
++//! the `TIE_CENSUS`-gated print helpers consume it.
++
++use std::cell::{Cell, RefCell};
++
++thread_local! {
++    static GAME_ID: RefCell<String> = const { RefCell::new(String::new()) };
++    static LINENO: Cell<usize> = const { Cell::new(0) };
++    static CARD: RefCell<&'static str> = const { RefCell::new("") };
++}
++
++/// Set once per game, from `replay_common::replay_game`'s own `meta.id`.
++pub fn set_game(id: &str) {
++    GAME_ID.with(|g| {
++        let mut g = g.borrow_mut();
++        g.clear();
++        g.push_str(id);
++    });
++}
++
++/// Set once per journal line consumed, alongside `Replayer::current_lineno`.
++pub fn set_lineno(n: usize) {
++    LINENO.with(|l| l.set(n));
++}
++
++/// The game id most recently set by [`set_game`], or `""` before the first
++/// call this process (never happens under `replaystats`/`replay`, which set
++/// it before touching any journal line).
++pub fn game_id() -> String {
++    GAME_ID.with(|g| g.borrow().clone())
++}
++
++/// The journal line most recently set by [`set_lineno`].
++pub fn lineno() -> usize {
++    LINENO.with(|l| l.get())
++}
++
++/// Set once per `events::resolve_event` call, from that card's own `name`
++/// (`'static`, straight off the card table -- no allocation needed).
++pub fn set_card(name: &'static str) {
++    CARD.with(|c| *c.borrow_mut() = name);
++}
++
++/// The card name most recently set by [`set_card`].
++pub fn card_name() -> &'static str {
++    CARD.with(|c| *c.borrow())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// The whole point of this module: a value set from one call survives to
++    /// be read back by an unrelated later call, on the same thread -- the
++    /// exact relay `events.rs`'s census print depends on.
++    #[test]
++    fn a_value_set_here_is_read_back_by_a_later_unrelated_call() {
++        set_game("7521544");
++        set_lineno(339);
++        assert_eq!(game_id(), "7521544");
++        assert_eq!(lineno(), 339);
++        set_game("7522113");
++        set_lineno(42);
++        assert_eq!(game_id(), "7522113");
++        assert_eq!(lineno(), 42);
++    }
++}
