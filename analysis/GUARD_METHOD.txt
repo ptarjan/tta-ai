@@ -1,10 +1,53 @@
 =========================================================================
 CURRENT BASELINE  (supersedes every count and commit named further down)
-    updated 2026-08-14 (fourth update this day)
-    base commit ....... 55bbca5  (clone /private/tmp/base0815, branch base0814)
-    completing games .. 687 of 1011   (661 of those match index.tsv exactly)
-    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_687.txt)
-    committed copy .... analysis/guard_ids_687.txt
+    updated 2026-08-14 (sixth update this day)
+    base commit ....... 9860400  (clone /private/tmp/base0815, branch base0814)
+    completing games .. 698 of 1011   (671 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_698.txt)
+    committed copy .... analysis/guard_ids_698.txt
+
+      9860400  legal.rs's CardType::Aggression generation refused to emit a
+               move when combat::defense_strength >= combat::attack_strength,
+               enforcing CoL p.4's printed "you cannot attack a player whose
+               strength equals or exceeds yours". BGO does not enforce that
+               half of the rule. Nine of the ten Plunder games in the bucket
+               show the human declaring against a tied (7521259, 9 v 9) or
+               strictly stronger (7523613, 7 v 22) rival, with the defender's
+               "defends" line showing zero bonus cards played -- genuine
+               pre-declaration numbers, not post-defense swings. BGO enforces
+               only the resolution-time half, which combat::finish_aggression
+               already implements correctly. 690->698, 663->671, zero
+               regressions.
+               NOTE for bot work: legal.rs is shared with move generation, so
+               the bot can now generate a strictly losing aggression. The
+               evaluator is expected to price it out; do NOT reinstate the
+               gate as a hardcoded shortcut.
+
+      b5b3d9a  game::antiquate's own private copy of on_leave_play stopped at
+               blue/yellow token bookkeeping and never gave back a leader's
+               flat civil_actions/military_actions bonus when the leader
+               antiquated out at an age transition (RULES_SPEC:244). The bonus
+               survived as a permanent ghost in the live per-turn pool;
+               electing a later leader into the now-empty slot added its bonus
+               on top, and legal::revolt_pool_ok rejects a revolution whenever
+               the live pool disagrees with a fresh recompute -- so every
+               later revolution that turn was wrongly refused. on_leave_play
+               now returns the bonus, and antiquate's leader removal wraps it
+               in apply::carry_over_action_pool (now pub(crate)) exactly as
+               h_play_leader already does for mid-turn replacement, so
+               already-spent actions are not clawed back. 687->690, 661->663.
+               ACCEPTED regression 7521974: it now stops two rounds later on a
+               discard-phase StuckPending inside the off-limits discard
+               machinery -- it had been completing through a compensating
+               error, not through correctness.
+
+    KNOWN COVERAGE GAP IN cardblame (being fixed as of 2026-08-14):
+      Cuts 1 and 2 attribute a failing game ONLY to each player's techs,
+      leader and tactic as of where the replay stopped. All 55 EVENT cards,
+      every one-shot Action/military card that was PLAYED, and wonders,
+      governments and colonies are invisible to them. There is also no
+      attribution by what HAPPENED (revolution, corruption, war, resign).
+      Do not read the old ranking as evidence about any of those.
       55bbca5  combat::resolve_war_outcome fires synchronously inside
                game::start_turn, as a side effect of applying the defender's
                own last old-age EndTurn line -- BEFORE replay_common's loop
