@@ -77,3 +77,32 @@ DO NOT
     correct.  The defect, if any, is purely WHICH production the cap eats.
     Do not re-derive production_pairs' within-kind order -- descending printed
     value is already the value-maximising choice and is settled.
+
+FOLLOW-UP 2026-08-15: the one STRICT-DOMINANCE rule fires ZERO times
+    Paul, asked what he actually does when the supply is short: "It depends. If you
+    are out of yellow people to birth then only take what you can eat. If you have
+    too much production and need more people then take food. If you don't care for
+    more people then take only enough to eat then iron. Maybe take less this turn
+    and more next turn."
+
+    So the cross-kind split is a VALUE decision, not a rules fact -- it belongs to
+    the evaluator, not to a hardcoded order.  Exactly ONE clause is strict
+    dominance and needs no judgement: with an EMPTY population reserve, food beyond
+    consumption can never be spent, so taking it instead of iron is dominated.
+
+    Re-measured all 23 events with yellow_bank/food/need attached:
+        yellow_bank == 0 ....  0 of 23 events
+        minimum observed ....  2  (7522822, food=17 need=4)
+    The dominance rule would never fire on this corpus.  DO NOT BUILD IT.
+
+    What the numbers DO show is food hoarding while mines starve, e.g.
+        7521459 food=27 need=2 | 7522786 food=26 need=3 | 7522402 food=23 need=2
+        7522822 food=17 need=4 | 7522796 food=16 need=3 | 7523223 food=14 need=2
+    but "that food is surplus" is a judgement about future turns -- Paul explicitly
+    said "maybe take less this turn and more next turn" -- so it is a heuristic, not
+    a dominance bound, and must NOT be hardcoded.
+
+    CONCLUSION: the real fix is to make short-supply production an actual decision
+    point the evaluator prices, alongside the existing move choices.  That is a
+    design change, not a patch.  Until then the food-first order stands as a known,
+    measured, one-sided approximation costing at most 23 events in 1011 games.

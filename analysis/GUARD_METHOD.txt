@@ -592,3 +592,10 @@ FOOD-VS-IRON IS A PLAYER CHOICE THE ENGINE DOES NOT OFFER  (2026-08-15, d4130c1)
     A chooser needs a single rules-motivated behaviour, not a policy knob, and
     "match the journal" is banned (replayer coercion).  Question is out to Paul;
     do not build one before the answer lands.  Do NOT weaken the cap itself.
+    FOLLOW-UP: Paul says the food/iron split is situational ("it depends"), so it
+    is a VALUE decision for the evaluator, NOT a rule to hardcode.  The single
+    strict-dominance clause (empty population reserve => food beyond consumption is
+    dead) was measured and fires 0 of 23 times (min yellow_bank observed = 2).
+    DO NOT BUILD THE DOMINANCE RULE, and do not hardcode any preference order.
+    The real fix is a priced decision point; until then food-first stands as a
+    known one-sided approximation worth at most 23 events in 1011 games.
