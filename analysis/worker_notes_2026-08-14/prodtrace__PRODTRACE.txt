@@ -239,3 +239,82 @@ regressions (7521459, 7522402, 7522796) with ZERO regressions against the
 739/712 completed/exact, RESOURCE_ORACLE 114 -> 111 diverging games. Tests
 1451/1451, clippy clean. This is a clean, evidenced, MEASURED win ready to
 land.
+
+===========================================================================
+[5] ADDENDUM (2026-08-14, same pass): PRINTED-VALUE CONFIRMATION
+===========================================================================
+The coordinator relayed a sharpened token model directly from the owner
+while this pass was wrapping up: blue tokens are GENERIC -- a token carries
+no denomination of its own, its value is simply the printed value of
+whichever card it is currently attributed to; making change is physical
+(one token off a value-3 card becomes three tokens on value-1 cards, never
+the reverse); so an over-count at matched VALUE necessarily means our
+tokens are sitting on lower-value cards than the real player's. Directed to
+re-verify with an explicit per-card PRINTED VALUE + worker count + existing
+token count dump before calling this done, rather than trusting the
+denomination-count trace alone.
+
+Re-added the clone (tokenbank3.patch + tokencount.patch + this pass's own
+prodtrace.patch, all three applying cleanly via `git apply --3way`, zero
+conflict markers) and added a temporary `PRODTRACE_VALUEMIX` dump inside
+`credit_production` (economy.rs), printing, for every producing card each
+time production runs: `printed_value` (the card's own denom), `workers`,
+`tokens_on_this_value_before` (the bank's CURRENT count at that exact
+printed value, read directly off `TokenBank.denoms`/`.counts` -- i.e.
+literally "how many tokens are already sitting on a card of this value"),
+and `free_before` (blue_available at that instant). Re-ran the one-game
+repro with `REPLAY_DEBUG_ALL=1 PRODTRACE_VALUEMIX=1`. Round 17, Grey (idx=3),
+WITH THE FIX APPLIED:
+
+  PRODTRACE_VALUEMIX kind=Farm printed_value=3 workers=2 tokens_on_this_value_before=7 free_before=3
+  PRODTRACE_VALUEMIX kind=Mine printed_value=5 workers=1 tokens_on_this_value_before=6 free_before=2
+  PRODTRACE_VALUEMIX kind=Mine printed_value=2 workers=2 tokens_on_this_value_before=1 free_before=2
+
+This is the printed-value-annotated confirmation the model predicts: 2
+workers sitting on the printed-value-3 Farm (Selective Breeding), 1 worker
+on printed-value-5 Mine (Oil), 2 workers on printed-value-2 Mine (Iron), 0
+workers left on printed-value-1 Mine (Bronze) -- exactly the worker history
+independently hand-derived from the journal in [1] above, confirming again
+that the worker-to-card VALUE mix itself was never wrong. The bank's own
+existing value mix (6 tokens already sitting on value-5, only 1 on value-2,
+0 on value-1) is exactly what the "tokens never move up, corruption/spend
+drains lowest-first" model predicts after 17 rounds of Bronze -> Iron -> Oil
+consolidation: the early value-1 (Bronze) tokens were the FIRST to be
+drained by lowest-first corruption debits over the game's history and are
+long gone, while the more recently-placed value-5 (Oil) tokens accumulate
+because nothing ever drains the top of the stack. None of this is a bug --
+it is the correct, forced consequence of the physical model the owner just
+restated, and it is precisely what TOKENBANK3/TOKENCOUNT already found and
+labeled "not automatically a bug."
+
+MOST IMPORTANTLY, this re-run captured the full end-of-turn result for round
+17 WITH THE FIX, and it is now an EXACT match to the journal on BOTH
+tracked totals, not merely "closer":
+
+  Journal (line 637): "5 food - consumption: 2 (now 27); 12 resources (now 39)"
+  Engine (fixed):      "DEBUG end_of_turn POST: idx=3 resources=39 food=27 ..."
+
+Before the fix, the engine produced resources=36 (task's own -3 delta,
+matching TOKENBANK3's original trace). After the fix, it produces the exact
+journal value, 39, and food matches exactly too (27). This directly answers
+the coordinator's consequence #1 for THIS specific round: our tokens were
+never sitting on the wrong-VALUE cards relative to the real game (the
+worker/card-value mix in [1]/[5] above is proven, not assumed, to be
+identical to the journal's own build/upgrade history) -- the deficit was
+entirely the separate `DoubleBestMine` non-card-tied bonus in [2]/[3] being
+placed (or rather, NOT placed) out of order relative to the mandatory
+per-worker credit, which the fix corrects. Value-mix and card-placement
+fidelity were never the defect for 7521459; a same-round credit ORDERING
+defect for a specific non-worker income source was, and it is now fixed and
+measured (see [4]): 739/712 completed/exact (was 736/709), zero regressions
+against the 734-game guard set, RESOURCE_ORACLE 111 diverging games (was
+114).
+
+Reverted `PRODTRACE_VALUEMIX` and its debugflags.rs plumbing before final
+export (temporary investigation aid only, per the task's own convention);
+confirmed the resulting `git diff` of `economy.rs` between the
+tokencount-base commit and the fix commit is byte-identical (module the
+`a/b` vs `i/w` diff-prefix convention) to the already-exported
+`prodtrace.patch` -- no drift, nothing left uncommitted or unexplained.
+`cargo test --profile fasttest --lib`: 1451/1451 passing. `cargo clippy
+--all-targets -- -D warnings`: clean. Clone re-deleted per cleanup rule.
