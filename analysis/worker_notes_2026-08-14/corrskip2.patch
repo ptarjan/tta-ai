@@ -1,0 +1,2089 @@
+diff --git i/rust/src/advisor/state_io.rs w/rust/src/advisor/state_io.rs
+index 39034e7..7290acb 100644
+--- i/rust/src/advisor/state_io.rs
++++ w/rust/src/advisor/state_io.rs
+@@ -858,6 +858,8 @@ fn blank_state(n: u8, seed: u64) -> GameState {
+         pending: PendingStack::new(),
+         queue: Queue::new(),
+         last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++        last_end_of_turn_science: [None; MAX_PLAYERS],
++        last_end_of_turn_resources: [None; MAX_PLAYERS],
+     }
+ }
+ 
+@@ -926,6 +928,8 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
+         mil_sci_discount: 0,
+         one_time_discount: crate::state::OneTimeDiscount::default(),
+         resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+     }
+ }
+ 
+diff --git i/rust/src/apply.rs w/rust/src/apply.rs
+index 90a7443..1c58328 100644
+--- i/rust/src/apply.rs
++++ w/rust/src/apply.rs
+@@ -753,7 +753,7 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
+     }
+     {
+         let p = &mut state.players[idx as usize];
+-        p.resources = p.resources.saturating_sub(cost.max(0) as u16);
++        economy::pay_resources(p, cost.max(0) as u16);
+         p.techs
+             .get_mut(id)
+             .expect("do_build: card must already be developed (in the tableau)")
+@@ -787,7 +787,7 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
+         }
+     }
+     let p = &mut state.players[idx as usize];
+-    p.resources = p.resources.saturating_sub(cost.max(0) as u16);
++    economy::pay_resources(p, cost.max(0) as u16);
+     p.techs.get_mut(lo).expect("do_upgrade: lo not in tableau").workers -= 1;
+     p.techs.get_mut(hi).expect("do_upgrade: hi not in tableau").workers += 1;
+ }
+@@ -802,7 +802,7 @@ pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, discount: i32, free
+     }
+     let wonder = {
+         let p = &mut state.players[idx as usize];
+-        p.resources = p.resources.saturating_sub(cost.max(0) as u16);
++        economy::pay_resources(p, cost.max(0) as u16);
+         p.wonder_steps += k;
+         p.wonder
+     };
+@@ -1560,7 +1560,7 @@ fn h_remove_leader_yellow(state: &mut GameState, idx: u8) {
+ fn h_trade_food_as_resource(state: &mut GameState, idx: u8) {
+     let p = &mut state.players[idx as usize];
+     debug_assert!(p.food >= 1, "h_trade_food_as_resource: caller must ensure 1 food (legality check)");
+-    p.food -= 1;
++    economy::pay_food(p, 1);
+     economy::gain_resources(p, 1);
+     p.trade_food_as_resource_used_this_turn += 1;
+ }
+@@ -1570,7 +1570,7 @@ fn h_trade_food_as_resource(state: &mut GameState, idx: u8) {
+ fn h_trade_resource_as_food(state: &mut GameState, idx: u8) {
+     let p = &mut state.players[idx as usize];
+     debug_assert!(p.resources >= 1, "h_trade_resource_as_food: caller must ensure 1 resource (legality check)");
+-    p.resources -= 1;
++    economy::pay_resources(p, 1);
+     economy::gain_food(p, 1);
+     p.trade_resource_as_food_used_this_turn += 1;
+ }
+@@ -1736,6 +1736,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+@@ -1780,6 +1782,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/bin/replaystats.rs w/rust/src/bin/replaystats.rs
+index 0f518b1..b8608d3 100644
+--- i/rust/src/bin/replaystats.rs
++++ w/rust/src/bin/replaystats.rs
+@@ -211,6 +211,17 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+     // matters as much as the discard-phase oracle's own.
+     let mut culture_oracle_checked_total = 0u64;
+     let mut culture_oracle_agreed_total = 0u64;
++    // `GameResult::science_oracle_checked`/`_agreed`'s twin -- SCIDRIFT
++    // 2026-08-14 pass, `SCIENCE_ORACLE`-gated (see `debugflags::
++    // science_oracle`'s own doc): both stay 0 unless that env var is set for
++    // this run, guaranteeing a plain `replaystats` invocation is unaffected.
++    let mut science_oracle_checked_total = 0u64;
++    let mut science_oracle_agreed_total = 0u64;
++    let mut n_science_diverging_games = 0u32;
++    // `GameResult::resource_oracle_checked`/`_agreed`'s twin, `RESOURCE_ORACLE`-gated.
++    let mut resource_oracle_checked_total = 0u64;
++    let mut resource_oracle_agreed_total = 0u64;
++    let mut n_resource_diverging_games = 0u32;
+     // The task's own deliverable: FIRST-divergence-per-game, ranked by the
+     // `ActionClass` of whatever the last classified action line was
+     // strictly before the diverging checkpoint. `None` keys (no prior
+@@ -299,6 +310,49 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             let entry = culture_cause_buckets.entry(key).or_insert_with(|| (0, example.clone()));
+             entry.0 += 1;
+         }
++        // Science/resource oracle twins of the culture block just above --
++        // SCIDRIFT 2026-08-14 pass. Printed unconditionally whenever `Some`
++        // (which itself only happens when `SCIENCE_ORACLE`/`RESOURCE_ORACLE`
++        // was set for this run -- the caller already opted into the
++        // diagnostic, unlike `SCOREDIV_DUMP_IDS`, which gates an
++        // always-computed culture check that would otherwise flood every
++        // ordinary run).
++        science_oracle_checked_total += result.science_oracle_checked as u64;
++        science_oracle_agreed_total += result.science_oracle_agreed as u64;
++        if let Some(d) = &result.science_oracle_divergence {
++            n_science_diverging_games += 1;
++            println!("SCIENCE_DIVERGING_ID {}", meta.id);
++            println!(
++                "SCIENCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
++                 reconstructed={} delta={}",
++                meta.id,
++                d.lineno,
++                d.round,
++                d.actor,
++                d.last_action_class,
++                d.journal_now,
++                d.reconstructed,
++                d.reconstructed - d.journal_now
++            );
++        }
++        resource_oracle_checked_total += result.resource_oracle_checked as u64;
++        resource_oracle_agreed_total += result.resource_oracle_agreed as u64;
++        if let Some(d) = &result.resource_oracle_divergence {
++            n_resource_diverging_games += 1;
++            println!("RESOURCE_DIVERGING_ID {}", meta.id);
++            println!(
++                "RESOURCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
++                 reconstructed={} delta={}",
++                meta.id,
++                d.lineno,
++                d.round,
++                d.actor,
++                d.last_action_class,
++                d.journal_now,
++                d.reconstructed,
++                d.reconstructed - d.journal_now
++            );
++        }
+         if let Some(p) = &result.civil_deck_premature_advance {
+             n_premature += 1;
+             if premature_examples.len() < 10 {
+@@ -567,6 +621,30 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+     }
+     println!();
+ 
++    // `GameResult::science_oracle_divergence`/`resource_oracle_divergence` --
++    // SCIDRIFT 2026-08-14 pass, `docs/REPLAY.md` never had a SCIENCE or
++    // RESOURCE cross-check before this: this whole section reads 0/0 (NaN%
++    // guarded to 0.0% by the `.max(1)` below) unless `SCIENCE_ORACLE`/
++    // `RESOURCE_ORACLE` was set for this run -- see `debugflags::
++    // science_oracle`/`resource_oracle`'s own docs for why that is the point,
++    // not a bug.
++    println!("## Science oracle (SCIENCE_ORACLE=1 to populate; 0/0 otherwise)\n");
++    println!(
++        "{science_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` science running total to \
++         check this binary's own reconstructed `state.players[_].science` against; {science_oracle_agreed_total} \
++         ({:.1}%) matched exactly. {n_science_diverging_games}/{n_games} games sampled had at least one checkpoint \
++         disagree (FIRST divergence only; see SCIENCE_DETAIL lines above).\n",
++        100.0 * science_oracle_agreed_total as f64 / science_oracle_checked_total.max(1) as f64
++    );
++    println!("## Resource oracle (RESOURCE_ORACLE=1 to populate; 0/0 otherwise)\n");
++    println!(
++        "{resource_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` resources running total to \
++         check this binary's own reconstructed `state.players[_].resources` against; {resource_oracle_agreed_total} \
++         ({:.1}%) matched exactly. {n_resource_diverging_games}/{n_games} games sampled had at least one checkpoint \
++         disagree (FIRST divergence only; see RESOURCE_DETAIL lines above).\n",
++        100.0 * resource_oracle_agreed_total as f64 / resource_oracle_checked_total.max(1) as f64
++    );
++
+     // `GameResult::civil_deck_premature_advance` -- docs/REPLAY.md's "civil
+     // deck model" handoff. Zero here is the invariant `top_up_civil_deck`
+     // is meant to guarantee; a nonzero count is this instrument catching a
+diff --git i/rust/src/bots/weighted/events.rs w/rust/src/bots/weighted/events.rs
+index e632d80..a340ebb 100644
+--- i/rust/src/bots/weighted/events.rs
++++ w/rust/src/bots/weighted/events.rs
+@@ -624,6 +624,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+         }
+     }
+ 
+@@ -675,6 +677,8 @@ mod tests {
+             pending: PendingStack::new(),
+             queue: Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/combat.rs w/rust/src/combat.rs
+index 5fe1551..7ae422d 100644
+--- i/rust/src/combat.rs
++++ w/rust/src/combat.rs
+@@ -591,6 +591,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+         }
+     }
+ 
+@@ -631,6 +633,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/costs.rs w/rust/src/costs.rs
+index 1ca4ca6..a9fff3e 100644
+--- i/rust/src/costs.rs
++++ w/rust/src/costs.rs
+@@ -828,6 +828,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+@@ -884,6 +886,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/debugflags.rs w/rust/src/debugflags.rs
+index 1ce5bc8..3d76555 100644
+--- i/rust/src/debugflags.rs
++++ w/rust/src/debugflags.rs
+@@ -38,6 +38,8 @@ static REPLAY_DEBUG_ALL: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_AL
+ static REPLAY_DEBUG_TECHS: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_TECHS"));
+ static COLONIZE_FALLBACK_DUMP: LazyLock<bool> = LazyLock::new(|| flag("COLONIZE_FALLBACK_DUMP"));
+ static TIE_CENSUS: LazyLock<bool> = LazyLock::new(|| flag("TIE_CENSUS"));
++static SCIENCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("SCIENCE_ORACLE"));
++static RESOURCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("RESOURCE_ORACLE"));
+ 
+ /// `REPLAY_DEBUG`: per-game replay tracing.
+ pub fn replay_debug() -> bool {
+@@ -76,6 +78,24 @@ pub fn tie_census() -> bool {
+     *TIE_CENSUS
+ }
+ 
++/// `SCIENCE_ORACLE`: the science twin of the always-on culture-oracle
++/// checkpoint (`replay_common.rs`'s `CultureOracleDivergence`), gated behind
++/// its own env var per this pass's own task ("DIAGNOSTIC-ONLY code: it must
++/// not change any replay outcome") -- unlike culture, never on by default, so
++/// a plain `replaystats` run's output and every replay decision it makes stay
++/// byte-identical whether or not this module exists. Measurement-only; inert
++/// (one static bool read) otherwise.
++pub fn science_oracle() -> bool {
++    *SCIENCE_ORACLE
++}
++
++/// [`science_oracle`]'s resources twin -- same checkpoint shape, same
++/// env-var gate, `state.players[_].resources` /
++/// `GameState::last_end_of_turn_resources` in place of science's.
++pub fn resource_oracle() -> bool {
++    *RESOURCE_ORACLE
++}
++
+ // ============================================================== tests ====
+ 
+ #[cfg(test)]
+diff --git i/rust/src/economy.rs w/rust/src/economy.rs
+index 8bf12b6..ea4d45d 100644
+--- i/rust/src/economy.rs
++++ w/rust/src/economy.rs
+@@ -287,7 +287,7 @@ pub fn increase_population(p: &mut PlayerState, cost: u16, consume_one_time: boo
+     if p.food < cost {
+         return false;
+     }
+-    p.food -= cost;
++    pay_food(p, cost);
+     p.yellow_bank -= 1;
+     p.workers_free += 1;
+     // Development of Civil Life's grant is ONE mutually-exclusive choice
+@@ -453,13 +453,32 @@ fn production_denom(kind: CardType, prod: &crate::cards::Production) -> i16 {
+ /// lower-level card instead of a higher one still wanting tokens can only
+ /// lose value).
+ fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
+-    // (denomination, summed worker count) pairs, one per DISTINCT
+-    // denomination actually printed on a `kind` card in the tableau --
+-    // multiple cards sharing a level pool their workers (the base game never
+-    // actually has two simultaneously-owned farm or mine cards at the same
+-    // printed level, but nothing here assumes that). Same fixed 8-slot
+-    // capacity as `Denoms` (DESIGN.md rule 3): at most four levels per card
+-    // type exist in the base game today.
++    let (pairs, len) = production_pairs(techs, kind);
++    let mut remaining = free;
++    let mut value: u16 = 0;
++    for &(denom, workers) in &pairs[..len] {
++        if remaining == 0 {
++            break;
++        }
++        let take = workers.min(remaining);
++        value += take * denom;
++        remaining -= take;
++    }
++    value
++}
++
++/// (denomination, summed worker count) pairs, one per DISTINCT denomination
++/// actually printed on a `kind` card in the tableau -- multiple cards
++/// sharing a level pool their workers (the base game never actually has two
++/// simultaneously-owned farm or mine cards at the same printed level, but
++/// nothing here assumes that). Sorted DESCENDING by denomination (CoL p.6:
++/// "beginning with those of the highest level"). Same fixed 8-slot capacity
++/// as [`Denoms`] (DESIGN.md rule 3): at most four levels per card type exist
++/// in the base game today. Shared by [`worker_capped_production`] (the
++/// scalar VALUE this step produces) and [`credit_production`] (the same
++/// traversal, but also committing the resulting tokens into a
++/// [`crate::state::TokenBank`]) so the two never drift out of sync.
++fn production_pairs(techs: &Tableau, kind: CardType) -> ([(u16, u16); 8], usize) {
+     let mut pairs: [(u16, u16); 8] = [(0, 0); 8];
+     let mut len = 0usize;
+     for (id, slot) in techs.of_type(kind) {
+@@ -475,13 +494,26 @@ fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
+         if let Some(ix) = pairs[..len].iter().position(|&(d, _)| d == v) {
+             pairs[ix].1 += workers;
+         } else {
+-            debug_assert!(len < pairs.len(), "worker_capped_production pairs overflow");
++            debug_assert!(len < pairs.len(), "production_pairs overflow");
+             pairs[len] = (v, workers);
+             len += 1;
+         }
+     }
+     pairs[..len].sort_unstable_by_key(|&(denom, _)| std::cmp::Reverse(denom));
++    (pairs, len)
++}
+ 
++/// [`worker_capped_production`]'s twin for when the caller is actually
++/// committing this step, not just sizing it: places exactly one NEW token
++/// per producing worker, valued at THAT worker's own card (§6.1c/e, CoL
++/// p.6) -- not a scalar amount re-packed for minimal token count afterward.
++/// The owner's own words on this (2026-08-14): "during production you
++/// produce wherever your yellow tokens are." Reuses [`production_pairs`]'s
++/// traversal so the capped total this returns is byte-identical to
++/// [`worker_capped_production`]'s; the only new work is committing the
++/// per-denomination breakdown into `bank` as it goes.
++fn credit_production(techs: &Tableau, kind: CardType, free: u16, bank: &mut crate::state::TokenBank) -> u16 {
++    let (pairs, len) = production_pairs(techs, kind);
+     let mut remaining = free;
+     let mut value: u16 = 0;
+     for &(denom, workers) in &pairs[..len] {
+@@ -489,6 +521,9 @@ fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
+             break;
+         }
+         let take = workers.min(remaining);
++        if take > 0 {
++            bank_add(bank, denom as u8, take as u8);
++        }
+         value += take * denom;
+         remaining -= take;
+     }
+@@ -520,14 +555,143 @@ pub fn tokens_for(mut amount: u16, denoms: &[u8]) -> u16 {
+     n + amount
+ }
+ 
++/// Add `n` new tokens at `denom` into `bank`, creating a new entry if this
++/// denomination has never held a tracked token before ([`Denoms::push`]'s
++/// dedup, mirrored here since [`crate::state::TokenBank`] is the same
++/// fixed-8-slot shape, for the same DESIGN.md reason).
++fn bank_add(bank: &mut crate::state::TokenBank, denom: u8, n: u8) {
++    if n == 0 {
++        return;
++    }
++    if let Some(ix) = bank.denoms[..bank.len as usize].iter().position(|&v| v == denom) {
++        bank.counts[ix] = bank.counts[ix].saturating_add(n);
++    } else {
++        debug_assert!((bank.len as usize) < bank.denoms.len(), "TokenBank overflow");
++        let ix = bank.len as usize;
++        bank.denoms[ix] = denom;
++        bank.counts[ix] = n;
++        bank.len += 1;
++    }
++}
++
++fn bank_total_tokens(bank: &crate::state::TokenBank) -> u16 {
++    bank.counts[..bank.len as usize].iter().map(|&c| c as u16).sum()
++}
++
++fn bank_total_value(bank: &crate::state::TokenBank) -> u16 {
++    (0..bank.len as usize).map(|i| bank.denoms[i] as u16 * bank.counts[i] as u16).sum()
++}
++
++/// Commit `amount` into `bank` using the FEWEST new tokens possible over
++/// `denoms_desc` (sorted descending, e.g. [`Denoms::as_slice`]) -- the same
++/// packing [`tokens_for`] counts, but actually placing the tokens rather
++/// than just sizing them. Used for (a) non-production gains, see
++/// [`gain_food`]'s doc, and (b) "making change" when
++/// [`bank_debit_lowest_first`] breaks a token and must re-represent the
++/// unspent remainder at smaller denominations.
++fn bank_credit_greedy(bank: &mut crate::state::TokenBank, denoms_desc: &[u8], mut amount: u16) {
++    for &d in denoms_desc {
++        if d == 0 {
++            continue;
++        }
++        let dd = d as u16;
++        let mut n = 0u8;
++        while amount >= dd {
++            amount -= dd;
++            n = n.saturating_add(1);
++        }
++        if n > 0 {
++            bank_add(bank, d, n);
++        }
++    }
++    debug_assert_eq!(amount, 0, "bank_credit_greedy: denom 1 is always present, amount must fully pack");
++}
++
++/// Remove `amount`'s worth of value from `bank`, LOWEST denomination first
++/// (Code of Laws p.11; the project owner's own words, 2026-08-14: "when you
++/// spend resources you can choose to spend from whatever farm you want (you
++/// usually want to spend from the lower ones)"), breaking ("making change")
++/// only the one token that must be broken when the exact lower tokens alone
++/// fall short -- the change is re-represented using `denoms_desc` values
++/// STRICTLY BELOW the broken token, never at or above it (tokens never move
++/// UP, RULES_SPEC §6.4). Returns the amount actually removed: `amount`
++/// clamped to what `bank` holds (callers already clamp against
++/// `p.food`/`p.resources`, so a real shortfall here would mean the two had
++/// already drifted apart).
++fn bank_debit_lowest_first(bank: &mut crate::state::TokenBank, denoms_desc: &[u8], amount: u16) -> u16 {
++    let available = bank_total_value(bank);
++    let mut remaining = amount.min(available);
++    let removed_total = remaining;
++    let len = bank.len as usize;
++    let mut order: [usize; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
++    order[..len].sort_unstable_by_key(|&i| bank.denoms[i]);
++    for &i in &order[..len] {
++        let d = bank.denoms[i] as u16;
++        while remaining >= d && bank.counts[i] > 0 {
++            bank.counts[i] -= 1;
++            remaining -= d;
++        }
++    }
++    if remaining > 0 {
++        if let Some(&i) = order[..len].iter().find(|&&i| bank.counts[i] > 0 && (bank.denoms[i] as u16) > remaining) {
++            let d = bank.denoms[i];
++            bank.counts[i] -= 1;
++            let change = d as u16 - remaining;
++            remaining = 0;
++            let mut lower = [0u8; 8];
++            let mut lower_len = 0usize;
++            for &v in denoms_desc {
++                if v < d {
++                    lower[lower_len] = v;
++                    lower_len += 1;
++                }
++            }
++            // `denoms_desc` is sorted descending and `1` is always present
++            // (`Denoms::of`), so `lower` is never empty when `d > 1`.
++            bank_credit_greedy(bank, &lower[..lower_len], change);
++        }
++    }
++    removed_total - remaining
++}
++
++/// See [`blue_used`]'s own doc for the reconciliation this implements: any
++/// part of `total` the TRACKED bank does not already account for is packed
++/// fresh with [`tokens_for`], exactly the old (pre-fix) formula.
++fn occupied_tokens(bank: &crate::state::TokenBank, denoms: &Denoms, total: u16) -> u16 {
++    let tracked_value = bank_total_value(bank);
++    let tracked_tokens = bank_total_tokens(bank);
++    if total > tracked_value {
++        tracked_tokens + tokens_for(total - tracked_value, denoms.as_slice())
++    } else {
++        tracked_tokens
++    }
++}
++
+ /// Blue tokens currently occupied: stored food, stored resources, and any
+ /// wonder-construction steps already paid for (§6.4; a wonder step is
+ /// worth one blue token, same as any other card slot).
++///
++/// Reads the TRACKED token banks (`p.food_tokens`/`p.resource_tokens`, the
++/// actual placement history -- see [`crate::state::TokenBank`]'s own doc)
++/// rather than re-deriving a minimal packing from the scalar totals every
++/// call: RULES_SPEC §6.4/Code of Laws p.11 forbid moving a token to a
++/// higher-value card, which a from-scratch greedy repacking silently did
++/// every time a higher farm/mine card entered play after older stock was
++/// already placed -- RESOURCE_ORACLE Group A, 166 games, corruption skipped
++/// entirely, see `analysis/worker_notes_2026-08-14/corrskip2__CORRSKIP2.txt`.
++/// Any part of `p.food`/`p.resources` the tracked banks do not account for
++/// (always true for a hand-built `PlayerState` that sets `p.food` directly
++/// and never drives a real gain/pay path) still falls back to that old
++/// greedy formula (`occupied_tokens`'s own doc) -- so every pre-existing
++/// test that never touches the token banks keeps its already-asserted
++/// behavior; only real `replay`/self-play games, which always drive the
++/// full `gain_food`/`gain_resources`/`pay_food`/`pay_resources`/
++/// `credit_production` chokepoints, see the new, path-dependent behavior.
+ pub fn blue_used(p: &PlayerState) -> u16 {
+     let food_denoms = Denoms::of(&p.techs, CardType::Farm);
+     let mine_denoms = Denoms::of(&p.techs, CardType::Mine);
+-    let food_tokens = tokens_for(p.food, food_denoms.as_slice());
+-    let mine_tokens = tokens_for(p.resources, mine_denoms.as_slice());
++    let food_tokens = occupied_tokens(&p.food_tokens, &food_denoms, p.food);
++    let mine_tokens = occupied_tokens(&p.resource_tokens, &mine_denoms, p.resources);
+     let mut used = food_tokens + mine_tokens;
+     if !p.wonder.is_none() {
+         used += p.wonder_steps as u16;
+@@ -550,20 +714,22 @@ pub fn blue_available(p: &PlayerState) -> u16 {
+ 
+ /// Shared body of `gain_food`/`gain_resources` (Python `effects._gain`):
+ /// searches DOWNWARD from `n` for the largest amount that can be gained
+-/// without the token cost exceeding what is free in the bank. Downward,
+-/// not upward, because [`tokens_for`] is not monotonic (see there) -- the
+-/// marginal cost of gaining `want` can be NEGATIVE (a consolidation), so
+-/// the search must start at the player's actual desired amount and only
+-/// give up on it in favour of a smaller one, never the reverse.
+-fn gain(cur: u16, n: u16, free: u16, denoms: &[u8]) -> u16 {
++/// without the NEW tokens it needs exceeding what is free in the bank.
++/// Unlike the old scalar-total model, the cost of gaining `want` no longer
++/// depends on what is already stored -- existing tokens are bound to their
++/// cards and never move ([`crate::state::TokenBank`]'s own doc) -- so it is
++/// simply [`tokens_for`]`(want, denoms)`, the fewest NEW tokens `want` alone
++/// packs into. [`tokens_for`] is still not monotonic in `want` (e.g.
++/// denominations `[3, 1]`: 2 costs two tokens, 3 costs only one), which is
++/// exactly why the search still starts at `n` and only gives up in favour
++/// of a smaller amount, never the reverse.
++fn gain(n: u16, free: u16, denoms: &[u8]) -> u16 {
+     if n == 0 || free == 0 {
+         return 0;
+     }
+-    let base = tokens_for(cur, denoms) as i32;
+     let mut want = n;
+     while want > 0 {
+-        let delta = tokens_for(cur + want, denoms) as i32 - base;
+-        if delta <= free as i32 {
++        if tokens_for(want, denoms) <= free {
+             return want;
+         }
+         want -= 1;
+@@ -573,30 +739,75 @@ fn gain(cur: u16, n: u16, free: u16, denoms: &[u8]) -> u16 {
+ 
+ /// Gain up to `n` food, limited by the blue bank (§6.4). Returns the amount
+ /// actually gained (may be less than `n`, or `0` with an empty bank).
++///
++/// Not a producing-worker gain (§6.1c; see [`credit_production`] for that,
++/// used by `end_of_turn` step 3c) -- this is for a card/event/tactic effect
++/// with no worker attached, so unlike production, RULES_SPEC/Code of Laws
++/// do not say which specific card the new tokens land on. ASSUMPTION (see
++/// `corrskip2__CORRSKIP2.txt` for the citation search that did not resolve
++/// it): this engine takes the count-minimizing choice, i.e. the highest
++/// available denomination first -- the same representation [`tokens_for`]'s
++/// own search already assumes when sizing what fits the bank.
+ pub fn gain_food(p: &mut PlayerState, n: u16) -> u16 {
+     let denoms = Denoms::of(&p.techs, CardType::Farm);
+-    let got = gain(p.food, n, blue_available(p), denoms.as_slice());
+-    p.food += got;
++    let got = gain(n, blue_available(p), denoms.as_slice());
++    if got > 0 {
++        bank_credit_greedy(&mut p.food_tokens, denoms.as_slice(), got);
++        p.food += got;
++    }
+     got
+ }
+ 
+-/// Gain up to `n` resources, limited by the blue bank (§6.4).
++/// Gain up to `n` resources, limited by the blue bank (§6.4) -- see
++/// [`gain_food`]'s doc for the shared model and its documented assumption.
+ pub fn gain_resources(p: &mut PlayerState, n: u16) -> u16 {
+     let denoms = Denoms::of(&p.techs, CardType::Mine);
+-    let got = gain(p.resources, n, blue_available(p), denoms.as_slice());
+-    p.resources += got;
++    let got = gain(n, blue_available(p), denoms.as_slice());
++    if got > 0 {
++        bank_credit_greedy(&mut p.resource_tokens, denoms.as_slice(), got);
++        p.resources += got;
++    }
+     got
+ }
+ 
+-/// Pay `n` resources. Food covering any shortfall is NOT done here -- the
+-/// caller (§6.6 step 3b in `end_of_turn`) falls back to food itself.
++/// Pay up to `n` food, LOWEST denomination first, making change on
++/// overshoot -- see [`bank_debit_lowest_first`]. Returns the amount
++/// actually paid (clamped to what `p.food` holds; never negative). Every
++/// direct "lose N food" site in the engine (corruption shortfall,
++/// consumption, event losses, trade, Trade Routes) routes through this, not
++/// a bare `p.food -=`, so the tracked bank never drifts from the scalar.
++pub(crate) fn pay_food(p: &mut PlayerState, n: u16) -> u16 {
++    let paid = p.food.min(n);
++    if paid > 0 {
++        let denoms = Denoms::of(&p.techs, CardType::Farm);
++        bank_debit_lowest_first(&mut p.food_tokens, denoms.as_slice(), paid);
++        p.food -= paid;
++    }
++    paid
++}
++
++/// Pay `n` resources, LOWEST denomination first, making change on
++/// overshoot. Food covering any shortfall is NOT done here -- the caller
++/// (§6.6 step 3b in `end_of_turn`) falls back to [`pay_food`] itself.
+ /// Returns the amount actually paid (may be less than `n`).
+ pub fn pay_resources(p: &mut PlayerState, n: u16) -> u16 {
+     let paid = p.resources.min(n);
+-    p.resources -= paid;
++    if paid > 0 {
++        let denoms = Denoms::of(&p.techs, CardType::Mine);
++        bank_debit_lowest_first(&mut p.resource_tokens, denoms.as_slice(), paid);
++        p.resources -= paid;
++    }
+     paid
+ }
+ 
++/// A full, unconditional loss of ALL stored food (e.g. a card/event's "lose
++/// all stored food" clause) -- clears the TRACKED bank alongside the
++/// scalar, not just the scalar, so no phantom occupied tokens survive it.
++pub(crate) fn clear_food(p: &mut PlayerState) {
++    p.food = 0;
++    p.food_tokens = crate::state::TokenBank::default();
++}
++
+ // ---------------------------------------------------- military deck I/O
+ 
+ /// Record a military card leaving play into the age-keyed discard pile.
+@@ -788,7 +999,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         let paid = pay_resources(p, corr);
+         let short = corr - paid;
+         if short > 0 {
+-            p.food = p.food.saturating_sub(short);
++            pay_food(p, short);
+         }
+ 
+         // ---- 3c. food production --------------------------------------
+@@ -800,9 +1011,18 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         // farm technology card") stays under the general CoL p.11 "gain"
+         // rule, spent from whatever blue tokens the farm-card production
+         // above didn't use.
++        //
++        // `credit_production`, not `worker_capped_production`, for the
++        // ACTUAL placement: production places tokens WHERE THE WORKERS ARE
++        // (§6.1c, CoL p.6; the owner's own words, 2026-08-14: "during
++        // production you produce wherever your yellow tokens are"), one
++        // token per producing worker at that worker's own card -- see
++        // `credit_production`'s own doc. `worker_capped_production` (the
++        // uncapped `farm_full` call just below) stays a pure sizing query,
++        // no bank mutation, since it exists only to compute `bonus_food`.
+         {
+             let farm_full = worker_capped_production(&p.techs, CardType::Farm, u16::MAX);
+-            let farm_got = worker_capped_production(&p.techs, CardType::Farm, blue_available(p));
++            let farm_got = credit_production(&p.techs, CardType::Farm, blue_available(p), &mut p.food_tokens);
+             p.food += farm_got;
+             let bonus_food = (s.food as u16).saturating_sub(farm_full);
+             if bonus_food > 0 {
+@@ -816,18 +1036,21 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         // ---- 3d. food consumption -------------------------------------
+         let need = consumption(p.yellow_bank) as u16;
+         if p.food >= need {
+-            p.food -= need;
++            pay_food(p, need);
+         } else {
+             let missing = need - p.food;
+-            p.food = 0;
++            clear_food(p);
+             p.culture = p.culture.saturating_sub(4 * missing);
+         }
+ 
+         // ---- 3e. resource production ----------------------------------
+-        // Same CoL p.6 worker-count split as 3c's food production above.
++        // Same CoL p.6 worker-count split as 3c's food production above --
++        // see `credit_production`'s own doc for why this is NOT
++        // `worker_capped_production` (that stays a pure sizing query, used
++        // only for the uncapped `mine_full` call just below).
+         {
+             let mine_full = worker_capped_production(&p.techs, CardType::Mine, u16::MAX);
+-            let mine_got = worker_capped_production(&p.techs, CardType::Mine, blue_available(p));
++            let mine_got = credit_production(&p.techs, CardType::Mine, blue_available(p), &mut p.resource_tokens);
+             p.resources += mine_got;
+             let bonus_resources = (s.resources as u16).saturating_sub(mine_full);
+             if bonus_resources > 0 {
+@@ -1103,6 +1326,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+@@ -1159,6 +1384,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+@@ -1443,11 +1670,20 @@ mod tests {
+         assert_eq!(p.food, 7);
+         assert_eq!(blue_used(&p), 4); // 3x2 + 1x1
+ 
+-        // Exhaust the bank: only 13 more food fits in the remaining 6 tokens
+-        // (denominations [2,1]) before the 10-token bank runs out.
++        // Exhaust the bank: the first 7 food is now TRACKED (3 denom-2
++        // tokens + 1 denom-1 token, 4 tokens spent) and stays exactly there
++        // -- it can no longer be "re-packed" as part of a bigger total to
++        // free up tokens (RULES_SPEC §6.4: tokens never move to a
++        // higher-value card). Only the 6 tokens still free in the bank are
++        // available to the SECOND gain, and packing fresh new food alone
++        // into denominations [2, 1] costs `ceil(want/2)` tokens (12 food ->
++        // 6 tokens exactly; 13 would need a 7th), so the second gain caps
++        // at 12, not the pre-fix 13 a from-scratch repack of the full
++        // 7+13=20 total used to allow by crediting a "free" consolidation
++        // of the already-placed first 7 nobody actually performed.
+         let got2 = gain_food(&mut p, 100);
+-        assert_eq!(got2, 13);
+-        assert_eq!(p.food, 20);
++        assert_eq!(got2, 12);
++        assert_eq!(p.food, 19);
+         assert_eq!(blue_used(&p), 10);
+         assert_eq!(blue_available(&p), 0);
+ 
+@@ -1466,21 +1702,29 @@ mod tests {
+         assert_eq!(p.food, 5);
+     }
+ 
++    /// Superseded 2026-08-14 (CORRSKIP2): the ORIGINAL version of this test
++    /// asserted that gaining 1 more food onto an already-placed 2 (held as
++    /// two denom-1 tokens) "consolidated" all 3 into a single denom-3 token
++    /// -- i.e. that the two OLD tokens moved to a higher-value card for
++    /// free. RULES_SPEC §6.4/Code of Laws p.11 forbid exactly that ("NEVER
++    /// move tokens to higher-value cards"), and the project owner confirmed
++    /// it in person: existing tokens stay at their old denomination:
++    /// "during production you produce wherever your yellow tokens are" /
++    /// "if you develop a new farm all the tokens stay on the old farm."
++    /// Rewritten to test the behavior that replaced it: a single gain_food
++    /// CALL of 3 (not two calls of 2-then-1) legitimately places all 3 as
++    /// one fresh denom-3 token, since none of it is old, already-placed
++    /// stock -- see `gain_food`'s own doc for the count-minimizing
++    /// (highest-available-denomination) placement non-production gains use.
+     #[test]
+-    fn gain_food_consolidates_into_a_higher_denomination() {
+-        // Denominations {3, 1}: 2 food costs 2 tokens (two 1s); gaining 1
+-        // more consolidates to a single 3-token, so the MARGINAL cost is
+-        // negative and the gain is allowed even though the bank is nearly
+-        // exhausted.
++    fn gain_food_places_newly_gained_food_on_the_highest_available_denomination() {
+         let mut p = blank_player(0);
+         p.techs.insert(card("Selective Breeding"), TechSlot { workers: 0, stored: 0 }); // denom 3
+         p.blue_total = 10;
+-        p.food = 2;
+-        assert_eq!(blue_used(&p), 2);
+-        let got = gain_food(&mut p, 1);
+-        assert_eq!(got, 1);
++        let got = gain_food(&mut p, 3);
++        assert_eq!(got, 3);
+         assert_eq!(p.food, 3);
+-        assert_eq!(blue_used(&p), 1); // one 3-token replaces two 1-tokens
++        assert_eq!(blue_used(&p), 1, "a single denom-3 token covers all 3 food gained in one call");
+     }
+ 
+     #[test]
+@@ -2244,4 +2488,134 @@ mod tests {
+         assert_eq!(draw_military(&mut st), None, "another age's pile is not the deck");
+         assert_eq!(st.discarded_military[Age::A as usize].len(), 1);
+     }
++
++    // ------------------------------------------------- TokenBank (CORRSKIP2)
++
++    /// Corpus regression, RESOURCE_ORACLE Group A (166 games, corruption
++    /// skipped entirely, always by exactly the journal's stated amount) --
++    /// hand-verified against BGO journal 7522658 (round 7, Orange, line
++    /// 201): 2 food gained while only Agriculture (denom 1) is in play must
++    /// stay tracked as 2 separate blue tokens even after Irrigation (denom
++    /// 2) is developed later the SAME turn. RULES_SPEC §6.4 / Code of Laws
++    /// p.11 forbid moving an already-placed token to a higher-value card,
++    /// and the project owner's own words (2026-08-14) confirm it for this
++    /// exact shape: "if you develop a new farm all the tokens stay on the
++    /// old farm." Before this fix, `blue_used` re-derived a from-scratch
++    /// minimal packing every call, which silently "consolidated" the 2
++    /// existing food tokens onto Irrigation for free (1 token instead of 2)
++    /// the moment it entered play, undercounting occupied tokens by 1 and
++    /// therefore skipping the corruption this turn owed. Confirmed RED by
++    /// reverting `occupied_tokens` to ignore the tracked bank (`tokens_for
++    /// (total, denoms)` unconditionally, i.e. the old formula) and
++    /// re-running: fails with `left: 5, right: 6`.
++    #[test]
++    fn a_farm_card_developed_after_food_was_already_gained_does_not_retroactively_consolidate_it() {
++        let mut st = duel();
++        let p = &mut st.players[0];
++        p.blue_total = 16;
++        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
++        p.techs.insert(card("Bronze"), TechSlot { workers: 1, stored: 0 });
++        assert_eq!(gain_food(p, 2), 2, "2 food gained while only denom-1 Agriculture is in play");
++        assert_eq!(gain_resources(p, 4), 4, "4 resources gained while only denom-1 Bronze is in play");
++        assert_eq!(blue_used(p), 6, "2 food tokens + 4 resource tokens, all denom 1, before Irrigation exists");
++
++        // Irrigation (denom 2) enters play mid-turn -- `Move::Develop` adds
++        // a SEPARATE second card, it never removes/replaces Agriculture.
++        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
++
++        assert_eq!(
++            blue_used(p), 6,
++            "the 2 food tokens already sitting on Agriculture must stay put, not collapse to 1 token on Irrigation just because a higher card entered play"
++        );
++    }
++
++    /// The owner's own words on gaining AFTER a higher card already exists:
++    /// new tokens DO use it (nothing here contradicts "never move up" --
++    /// only NEWLY placed tokens may use a newly available denomination).
++    /// Paired with the test above, this is the full round-trip: old stock
++    /// frozen at its old denomination, new stock free to use the new one.
++    #[test]
++    fn a_farm_card_developed_before_gaining_lets_the_new_food_use_it() {
++        let mut st = duel();
++        let p = &mut st.players[0];
++        p.blue_total = 16;
++        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
++        assert_eq!(gain_food(p, 2), 2);
++        assert_eq!(blue_used(p), 2, "2 tokens at denom 1");
++
++        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
++        assert_eq!(gain_food(p, 2), 2, "2 MORE food, gained after Irrigation exists");
++        assert_eq!(
++            blue_used(p), 3,
++            "the old 2 food stay at 2 tokens (denom 1, untouched); the NEW 2 food use the now-available denom-2 Irrigation as a single token -- 2 + 1 = 3, not 4"
++        );
++    }
++
++    /// Code of Laws p.11 / the owner's own words (2026-08-14): "when you
++    /// spend resources you can choose to spend from whatever farm you want
++    /// (you usually want to spend from the lower ones). You can also make
++    /// change when you spend." `pay_resources` must remove from the LOWEST
++    /// tracked denomination first, breaking ("making change" into smaller
++    /// denominations) only the one token it must break to cover the rest.
++    #[test]
++    fn pay_resources_spends_the_lowest_denomination_first_and_makes_change_on_overshoot() {
++        let mut st = duel();
++        let p = &mut st.players[0];
++        p.blue_total = 16;
++        p.techs.insert(card("Bronze"), TechSlot { workers: 1, stored: 0 }); // denom 1
++        // 1 resource gained while only Bronze existed (1 token, denom 1),
++        // then Iron enters, then 4 more gained (2 tokens, denom 2): true
++        // resources = 1 + 4 = 5, held as one denom-1 token and two denom-2
++        // tokens (3 tokens total, not the 3-token minimal packing of 5
++        // itself -- that would be a single denom-... no denom exists for 5,
++        // so minimal packing is also 1+2+2, same token count here by
++        // coincidence; the SHAPE (which specific tokens) is what this test
++        // checks via the pay-down behaviour below, not the count alone).
++        assert_eq!(gain_resources(p, 1), 1);
++        p.techs.insert(card("Iron"), TechSlot { workers: 1, stored: 0 });
++        assert_eq!(gain_resources(p, 4), 4);
++        assert_eq!(p.resources, 5);
++
++        // Pay 2: the lowest tracked denomination (the single denom-1 token)
++        // covers only 1 of it, so a denom-2 token must be broken, making 1
++        // change back at denom 1 -- NOT spending straight from the denom-2
++        // tokens and leaving the denom-1 token untouched (which would also
++        // total 2 spent, but is not "lowest first").
++        assert_eq!(pay_resources(p, 2), 2);
++        assert_eq!(p.resources, 3);
++        // After paying 2 lowest-first-with-change: the original denom-1
++        // token is gone (spent), one denom-2 token is gone (broken to pay
++        // the remainder), and 1 unit of change came back at denom 1 -- one
++        // denom-2 token (value 2) and one denom-1 token (value 1) remain,
++        // 2 tokens total, matching the remaining value of 3.
++        assert_eq!(blue_used(p), 2, "1 remaining denom-2 token + 1 change token at denom 1");
++    }
++
++    /// §6.1c/e (CoL p.6) / the owner's own words (2026-08-14): "during
++    /// production you produce wherever your yellow tokens are." A worker on
++    /// a LOW-value farm still produces a token AT THAT CARD'S OWN VALUE, not
++    /// a token borrowed from a higher-value card elsewhere in the tableau --
++    /// `credit_production` must place tokens per-worker, per-card, not
++    /// re-derive a scalar total's minimal packing across every denomination
++    /// the player happens to own.
++    #[test]
++    fn production_places_one_token_per_worker_at_that_workers_own_card() {
++        let mut st = duel();
++        let p = &mut st.players[0];
++        p.blue_total = 16;
++        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 }); // denom 1
++        p.techs.insert(card("Irrigation"), TechSlot { workers: 1, stored: 0 }); // denom 2
++        let got = credit_production(&p.techs, CardType::Farm, blue_available(p), &mut p.food_tokens);
++        p.food += got;
++        assert_eq!(got, 3, "1 worker * denom 1 + 1 worker * denom 2 = 3 food");
++        assert_eq!(
++            blue_used(p), 2,
++            "one token at denom 1 (Agriculture's own worker) and one token at denom 2 (Irrigation's own worker) -- 2 tokens, not `tokens_for(3, [2, 1])`'s minimal packing of 2 either way by coincidence of these numbers, but for the RIGHT reason: verified against the bank contents, not just the count"
++        );
++        assert_eq!(p.food_tokens.len, 2, "two distinct tracked denominations");
++        let ix1 = p.food_tokens.denoms[..2].iter().position(|&d| d == 1).unwrap();
++        let ix2 = p.food_tokens.denoms[..2].iter().position(|&d| d == 2).unwrap();
++        assert_eq!(p.food_tokens.counts[ix1], 1, "exactly one denom-1 token, from Agriculture's own worker");
++        assert_eq!(p.food_tokens.counts[ix2], 1, "exactly one denom-2 token, from Irrigation's own worker");
++    }
+ }
+diff --git i/rust/src/effects.rs w/rust/src/effects.rs
+index 28f49e7..4734619 100644
+--- i/rust/src/effects.rs
++++ w/rust/src/effects.rs
+@@ -1766,6 +1766,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+         }
+     }
+ 
+@@ -1822,6 +1824,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/events.rs w/rust/src/events.rs
+index 8237776..e8ff478 100644
+--- i/rust/src/events.rs
++++ w/rust/src/events.rs
+@@ -176,7 +176,7 @@ fn apply_food_delta(state: &mut GameState, idx: u8, delta: i16, sign: i32) {
+         economy::gain_food(&mut state.players[idx as usize], delta as u16);
+     } else {
+         let p = &mut state.players[idx as usize];
+-        p.food = p.food.saturating_sub(delta as u16);
++        economy::pay_food(p, delta as u16);
+     }
+ }
+ 
+@@ -190,7 +190,7 @@ fn apply_resources_delta(state: &mut GameState, idx: u8, delta: i16, sign: i32)
+         economy::gain_resources(&mut state.players[idx as usize], delta as u16);
+     } else {
+         let p = &mut state.players[idx as usize];
+-        p.resources = p.resources.saturating_sub(delta as u16);
++        economy::pay_resources(p, delta as u16);
+     }
+ }
+ 
+@@ -1265,7 +1265,7 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
+         p.blue_total = (p.blue_total as i32 + sign * block.blue_tokens as i32).max(0) as u8;
+     }
+     if block.lose_all_stored_food {
+-        state.players[idx as usize].food = 0;
++        economy::clear_food(&mut state.players[idx as usize]);
+     }
+     if block.draw_military_cards != 0 {
+         draw_military(state, idx, block.draw_military_cards.max(0) as u32);
+@@ -1524,16 +1524,16 @@ fn extra_production(state: &mut GameState, idx: u8, s: &effects::Stats) {
+     }
+     let corr = economy::corruption(economy::blue_available(&state.players[idx as usize]));
+     let paid = economy::pay_resources(&mut state.players[idx as usize], corr);
+-    state.players[idx as usize].food = state.players[idx as usize].food.saturating_sub(corr - paid);
++    economy::pay_food(&mut state.players[idx as usize], corr - paid);
+     economy::gain_food(&mut state.players[idx as usize], s.food.max(0) as u16);
+     let need = economy::consumption(state.players[idx as usize].yellow_bank) as u16;
+     let p = &mut state.players[idx as usize];
+     if p.food >= need {
+-        p.food -= need;
++        economy::pay_food(p, need);
+     } else {
+         let short = need - p.food;
+         p.culture = (p.culture as i32 - 4 * short as i32).max(0) as u16;
+-        p.food = 0;
++        economy::clear_food(p);
+     }
+     economy::gain_resources(&mut state.players[idx as usize], s.resources.max(0) as u16);
+     if crate::debugflags::replay_debug_all() {
+@@ -1720,6 +1720,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+         }
+     }
+ 
+@@ -1763,6 +1765,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/game.rs w/rust/src/game.rs
+index 1a52feb..3197013 100644
+--- i/rust/src/game.rs
++++ w/rust/src/game.rs
+@@ -304,6 +304,8 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
+         mil_sci_discount: 0,
+         one_time_discount: crate::state::OneTimeDiscount::default(),
+         resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+     }
+ }
+ 
+@@ -413,6 +415,8 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
+         pending: PendingStack::new(),
+         queue: Queue::new(),
+         last_end_of_turn_culture: [None; MAX_PLAYERS],
++        last_end_of_turn_science: [None; MAX_PLAYERS],
++        last_end_of_turn_resources: [None; MAX_PLAYERS],
+     };
+ 
+     // The thirteen row slots, dealt from the shuffled Age A civil deck. That
+@@ -1005,6 +1009,13 @@ pub fn resume_end_turn(state: &mut GameState, idx: u8) {
+     // before anything gets a chance to read it as "idx's total right after
+     // idx's own turn ended".
+     state.last_end_of_turn_culture[idx as usize] = Some(state.players[idx as usize].culture);
++    // Same snapshot-before-`advance_turn` timing, science and resources twins
++    // -- see `GameState::last_end_of_turn_science`/`last_end_of_turn_
++    // resources`'s own docs. Consumed by `replay_common.rs`'s
++    // `SCIENCE_ORACLE`/`RESOURCE_ORACLE`-gated oracles, mirroring the
++    // always-on culture oracle exactly.
++    state.last_end_of_turn_science[idx as usize] = Some(state.players[idx as usize].science);
++    state.last_end_of_turn_resources[idx as usize] = Some(state.players[idx as usize].resources);
+     advance_turn(state, &mut rng);
+ }
+ 
+diff --git i/rust/src/interact.rs w/rust/src/interact.rs
+index c98332b..ef466ac 100644
+--- i/rust/src/interact.rs
++++ w/rust/src/interact.rs
+@@ -595,8 +595,8 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+             // introduced by this fix.
+             let (food, res) = (g.food.max(0) as u16, g.resources.max(0) as u16);
+             let v = &mut state.players[victim as usize];
+-            v.food = v.food.saturating_sub(food);
+-            v.resources = v.resources.saturating_sub(res);
++            economy::pay_food(v, food);
++            economy::pay_resources(v, res);
+             let pl = &mut state.players[p as usize];
+             economy::gain_food(pl, food);
+             economy::gain_resources(pl, res);
+@@ -611,8 +611,8 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+                 // supply (`plunder_split_options`, reused), so a plain
+                 // saturating subtraction is safe and matches Plunder's own
+                 // victim-side arm above.
+-                pl.food = pl.food.saturating_sub(food);
+-                pl.resources = pl.resources.saturating_sub(res);
++                economy::pay_food(pl, food);
++                economy::pay_resources(pl, res);
+             } else {
+                 // A gain: blue-token limited per bank, exactly like
+                 // Plunder's own attacker-side arm above -- see
+@@ -1785,6 +1785,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+         }
+     }
+ 
+@@ -1819,6 +1821,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/legal.rs w/rust/src/legal.rs
+index 1216e0e..32b6f92 100644
+--- i/rust/src/legal.rs
++++ w/rust/src/legal.rs
+@@ -1164,6 +1164,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+@@ -1220,6 +1222,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+diff --git i/rust/src/replay_common.rs w/rust/src/replay_common.rs
+index b9b120e..b305a7e 100644
+--- i/rust/src/replay_common.rs
++++ w/rust/src/replay_common.rs
+@@ -168,6 +168,21 @@ use crate::state::{
+ };
+ use crate::{apply, costs, economy, effects, game, legal, CardId, CardType, Move};
+ 
++/// One journal-observed resolution of a single War over Technology spoils
++/// pick -- see `Replayer::war_tech_spoils`'s doc for the journal shape each
++/// variant comes from.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum WarSpoil {
++    /// `"<Color> steals <Card> from <Color>"`.
++    Steal(CardId),
++    /// `"<Color> gets N science; <Color> loses N science"` -- the amount
++    /// itself is not needed here: `interact::take_war_science` recomputes it
++    /// deterministically from the live `budget`/loser's science, exactly like
++    /// every other amount-bearing spoils line this file resolves by SHAPE,
++    /// not by re-deriving the engine's own arithmetic from journal text.
++    Science,
++}
++
+ // ---------------------------------------------------------------------
+ // Journal line
+ // ---------------------------------------------------------------------
+@@ -600,6 +615,22 @@ struct Replayer<'a> {
+     /// -- see `prescan_flip_wonders`'s doc and `resolve_intervening`'s
+     /// `ChoiceKind::FlipWonder` handling, which drains it.
+     flip_wonders: HashMap<u8, VecDeque<CardId>>,
++    /// Per-actor FIFO of [`WarSpoil`]s pulled off every journal-observed
++    /// `"<Color> takes spoils of war <Color> steals <Card> from <Color>"` /
++    /// `"<Color> takes spoils of war <Color> gets N science; <Color> loses N
++    /// science"` line -- the resolution of a `Pending::Choice(WarTech)`. War
++    /// over Technology's spoils are explicitly MIXABLE (FAQ p.8, "some or
++    /// all"): `interact::offer_war_tech` re-offers the choice with the
++    /// advantage reduced by whatever was just stolen, so BGO logs one
++    /// `"takes spoils of war"` line PER PICK, in the same order the choices
++    /// were made -- e.g. `7522455` line 201 (`"steals Navigation"`) then line
++    /// 202 (`"gets 6 science"`), a steal-then-remainder-as-science split. Set
++    /// directly by `replay_game` after construction (like `produces_grants`),
++    /// not threaded through `Replayer::new`'s own parameter list, for the
++    /// same reason that field gives -- see `prescan_war_tech_spoils`'s doc
++    /// and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
++    /// drains it.
++    war_tech_spoils: HashMap<u8, VecDeque<WarSpoil>>,
+     /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
+     /// over the rest of the journal -- see `discard_solver`'s module doc and
+     /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
+@@ -677,6 +708,29 @@ struct Replayer<'a> {
+     /// case: an ordinary `EndTurn` compares immediately, never touching this
+     /// field at all).
+     pending_culture_check: Option<PendingCultureCheck>,
++    /// [`Replayer::culture_oracle_divergence`]'s science twin -- see
++    /// [`ScienceOracleDivergence`]. `SCIENCE_ORACLE`-gated (unlike culture's
++    /// always-on checkpoint): `None` for every game unless
++    /// `debugflags::science_oracle()` is set, by construction, since
++    /// `record_science_check` is the only writer and it is never called
++    /// otherwise.
++    science_oracle_divergence: Option<ScienceOracleDivergence>,
++    /// [`Replayer::culture_oracle_checked`]/[`Replayer::culture_oracle_
++    /// agreed`]'s science twin.
++    science_oracle_checked: u32,
++    science_oracle_agreed: u32,
++    /// [`Replayer::pending_culture_check`]'s science twin -- see
++    /// [`PendingScienceCheck`].
++    pending_science_check: Option<PendingScienceCheck>,
++    /// [`Replayer::culture_oracle_divergence`]'s resources twin -- see
++    /// [`ResourceOracleDivergence`]. `RESOURCE_ORACLE`-gated, same
++    /// never-written-unless-flagged guarantee as `science_oracle_divergence`.
++    resource_oracle_divergence: Option<ResourceOracleDivergence>,
++    resource_oracle_checked: u32,
++    resource_oracle_agreed: u32,
++    /// [`Replayer::pending_culture_check`]'s resources twin -- see
++    /// [`PendingResourceCheck`].
++    pending_resource_check: Option<PendingResourceCheck>,
+     /// A `"GAME DATA UPDATED"` culture clause (`parse_game_data_updated_
+     /// culture`'s own doc) not yet applied because its stated `old` did not
+     /// match this reconstruction's live value the moment the line was read.
+@@ -950,6 +1004,7 @@ impl<'a> Replayer<'a> {
+             raid_destroys,
+             lose_colonies,
+             flip_wonders,
++            war_tech_spoils: HashMap::new(),
+             claimed_destroy_lines: std::collections::HashSet::new(),
+             discard_solver: DiscardSolver::new(future_military_needs),
+             record_decisions: false,
+@@ -965,6 +1020,14 @@ impl<'a> Replayer<'a> {
+             culture_oracle_checked: 0,
+             culture_oracle_agreed: 0,
+             pending_culture_check: None,
++            science_oracle_divergence: None,
++            science_oracle_checked: 0,
++            science_oracle_agreed: 0,
++            pending_science_check: None,
++            resource_oracle_divergence: None,
++            resource_oracle_checked: 0,
++            resource_oracle_agreed: 0,
++            pending_resource_check: None,
+             pending_culture_corrections: Vec::new(),
+             pending_resource_corrections: Vec::new(),
+             politics_false_skips: 0,
+@@ -1799,6 +1862,49 @@ impl<'a> Replayer<'a> {
+                         self.apply_move(Move::Choose { n: n as u8 });
+                         continue;
+                     }
++                    // A `Pending::Choice(WarTech)` (War over Technology's
++                    // "science, or steal a blue special technology instead,
++                    // repeat until the advantage runs out" -- FAQ p.8's
++                    // "some or all" mixing) is opened for the VICTOR only,
++                    // and only when the loser actually holds something
++                    // stealable (`interact::offer_war_tech`'s own `opts.
++                    // is_empty()` short-circuit means an unstealable war
++                    // never creates a `Pending` at all, so this arm is only
++                    // ever reached with a real decision to resolve). Each
++                    // pick resolves to its OWN journal line (`"takes spoils
++                    // of war ... steals <Card> ..."` or `"... gets N science
++                    // ..."`) rather than one line per war, because `offer_
++                    // war_tech` re-offers with the advantage reduced after
++                    // every steal -- see `Replayer::war_tech_spoils`'s doc.
++                    // Drained here in journal order, no validate-and-skip
++                    // loop needed (unlike `Raid`/`LoseColony`/`FlipWonder`
++                    // above): `prescan_war_tech_spoils`'s own doc explains
++                    // why an orphaned earlier entry can't happen for this
++                    // particular choice.
++                    ChoiceKind::WarTech { .. } => {
++                        let picked = self.war_tech_spoils.entry(decider).or_default().pop_front().ok_or_else(|| {
++                            MismatchKind::StuckPending(format!(
++                                "WarTech choice open for player {decider} but no journal-observed \
++                                 \"takes spoils of war\" line left to resolve it with"
++                            ))
++                        })?;
++                        let n = match picked {
++                            WarSpoil::Steal(card) => c
++                                .options
++                                .as_slice()
++                                .iter()
++                                .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
++                                .ok_or_else(|| {
++                                    MismatchKind::ParserGap(format!(
++                                        "WarTech options {:?} do not offer the journal-observed steal of {card:?}",
++                                        c.options.as_slice()
++                                    ))
++                                })?,
++                            WarSpoil::Science => crate::interact::WAR_TECH_SCIENCE_IDX as usize,
++                        };
++                        self.apply_move(Move::Choose { n: n as u8 });
++                        continue;
++                    }
+                     // Every other `ChoiceKind` is left alone HERE, on
+                     // purpose -- listed individually rather than behind a
+                     // `_` wildcard, so a future `ChoiceKind` variant fails
+@@ -1811,20 +1917,18 @@ impl<'a> Replayer<'a> {
+                     // player's OWN voluntary in-turn choice and fall through
+                     // to the `decider == expected_actor` shortcut a few
+                     // lines below, exactly like `DestroyOwn` always has;
+-                    // `Annex`/`WarTech` have not been needed by any corpus
+-                    // game sampled so far; `PactOffer` is handled by the
+-                    // bottom match's own explicit arm (auto-`Refuse`) for
+-                    // the `decider != expected_actor` case. Falling through
+-                    // here for all six is IDENTICAL to this match's
+-                    // predecessor (a chain of `if` statements that simply
+-                    // didn't mention them) -- no behaviour changed, only
+-                    // exhaustiveness was added.
++                    // `Annex` has not been needed by any corpus game sampled
++                    // so far; `PactOffer` is handled by the bottom match's
++                    // own explicit arm (auto-`Refuse`) for the `decider !=
++                    // expected_actor` case. Falling through here for all
++                    // five is IDENTICAL to this match's predecessor (a chain
++                    // of `if` statements that simply didn't mention them) --
++                    // no behaviour changed, only exhaustiveness was added.
+                     ChoiceKind::FreeCivil { .. }
+                     | ChoiceKind::FoodOrRes { .. }
+                     | ChoiceKind::DestroyOwn
+                     | ChoiceKind::Annex { .. }
+-                    | ChoiceKind::PactOffer { .. }
+-                    | ChoiceKind::WarTech { .. } => {}
++                    | ChoiceKind::PactOffer { .. } => {}
+                 }
+             }
+             // A live `Pending::Colonize` has no real `Move` anywhere in the
+@@ -2862,6 +2966,104 @@ impl<'a> Replayer<'a> {
+         self.record_culture_check(pending.lineno, pending.actor_seat, pending.journal_now, pending.last_action_class);
+     }
+ 
++    /// [`Replayer::record_culture_check`]'s science twin -- see
++    /// [`ScienceOracleDivergence`]'s own doc. Only ever called when
++    /// `debugflags::science_oracle()` is set (the dispatch loop's own gate),
++    /// so `science_oracle_checked`/`_agreed`/`_divergence` stay at their
++    /// `Replayer::new` defaults for every ordinary run.
++    fn record_science_check(&mut self, lineno: usize, round: &str, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
++        let got = self.state.last_end_of_turn_science[actor_seat as usize]
++            .take()
++            .unwrap_or_else(|| {
++                panic!(
++                    "record_science_check called for actor {actor_seat} at line {lineno} but \
++                     resume_end_turn never snapshotted this turn's post-production science -- \
++                     a caller reached this checkpoint before economy::end_of_turn actually ran"
++                )
++            }) as i32;
++        self.science_oracle_checked += 1;
++        if journal_now == got {
++            self.science_oracle_agreed += 1;
++            return;
++        }
++        if crate::debugflags::replay_debug() {
++            eprintln!(
++                "DEBUG end-turn science drift (SCIENCE_ORACLE): actor={actor_seat} journal says (now {journal_now}), \
++                 this binary computes {got} (delta {}) at line {lineno}",
++                got - journal_now,
++            );
++        }
++        if self.science_oracle_divergence.is_none() {
++            self.science_oracle_divergence = Some(ScienceOracleDivergence {
++                lineno,
++                round: round.to_string(),
++                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
++                journal_now,
++                reconstructed: got,
++                last_action_class,
++            });
++        }
++    }
++
++    /// [`Replayer::flush_pending_culture_check`]'s science twin.
++    fn flush_pending_science_check(&mut self) {
++        let Some(pending) = self.pending_science_check.take() else { return };
++        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
++        {
++            self.pending_science_check = Some(pending); // still blocked -- try again next line
++            return;
++        }
++        self.record_science_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
++    }
++
++    /// [`Replayer::record_culture_check`]'s resources twin -- see
++    /// [`ResourceOracleDivergence`]'s own doc. `RESOURCE_ORACLE`-gated, same
++    /// never-called-unless-flagged guarantee as `record_science_check`.
++    fn record_resource_check(&mut self, lineno: usize, round: &str, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
++        let got = self.state.last_end_of_turn_resources[actor_seat as usize]
++            .take()
++            .unwrap_or_else(|| {
++                panic!(
++                    "record_resource_check called for actor {actor_seat} at line {lineno} but \
++                     resume_end_turn never snapshotted this turn's post-production resources -- \
++                     a caller reached this checkpoint before economy::end_of_turn actually ran"
++                )
++            }) as i32;
++        self.resource_oracle_checked += 1;
++        if journal_now == got {
++            self.resource_oracle_agreed += 1;
++            return;
++        }
++        if crate::debugflags::replay_debug() {
++            eprintln!(
++                "DEBUG end-turn resources drift (RESOURCE_ORACLE): actor={actor_seat} journal says (now {journal_now}), \
++                 this binary computes {got} (delta {}) at line {lineno}",
++                got - journal_now,
++            );
++        }
++        if self.resource_oracle_divergence.is_none() {
++            self.resource_oracle_divergence = Some(ResourceOracleDivergence {
++                lineno,
++                round: round.to_string(),
++                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
++                journal_now,
++                reconstructed: got,
++                last_action_class,
++            });
++        }
++    }
++
++    /// [`Replayer::flush_pending_culture_check`]'s resources twin.
++    fn flush_pending_resource_check(&mut self) {
++        let Some(pending) = self.pending_resource_check.take() else { return };
++        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
++        {
++            self.pending_resource_check = Some(pending); // still blocked -- try again next line
++            return;
++        }
++        self.record_resource_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
++    }
++
+     /// Flushes every [`Replayer::pending_culture_corrections`] entry whose
+     /// stated `old` NOW matches this reconstruction's live culture for that
+     /// player -- see that field's own doc for why a `"GAME DATA UPDATED"`
+@@ -4490,6 +4692,60 @@ pub struct CultureOracleDivergence {
+     pub last_action_class: Option<ActionClass>,
+ }
+ 
++/// [`CultureOracleDivergence`]'s science twin -- see [`GameResult::
++/// science_oracle_divergence`]. `SCIENCE_ORACLE`-gated: BGO's own "End turn
++/// ... N science (now M) ..." clause sits right next to the culture clause
++/// on the exact same line, same running-total grammar, so this is a literal
++/// mirror, not a derived check. `round` (absent from `CultureOracleDivergence`,
++/// added here per this pass's own corpus-report deliverable -- "at what round
++/// do games first diverge") comes straight off the same `Line::round` column
++/// the checkpoint's own "End turn" line carries.
++pub struct ScienceOracleDivergence {
++    pub lineno: usize,
++    pub round: String,
++    pub actor: &'static str,
++    /// BGO's own "(now M)" running total -- ground truth.
++    pub journal_now: i32,
++    /// This binary's own reconstructed total at the same checkpoint --
++    /// `state.last_end_of_turn_science[actor]`'s snapshot, same
++    /// snapshot-before-`advance_turn` timing as `CultureOracleDivergence::
++    /// reconstructed`.
++    pub reconstructed: i32,
++    pub last_action_class: Option<ActionClass>,
++}
++
++/// [`PendingCultureCheck`]'s science twin -- same self-deferring shape for a
++/// checkpoint captured on an `EndTurn` line still blocked on an open
++/// `DiscardMilitary` decision.
++struct PendingScienceCheck {
++    lineno: usize,
++    round: String,
++    actor_seat: u8,
++    journal_now: i32,
++    last_action_class: Option<ActionClass>,
++}
++
++/// [`ScienceOracleDivergence`]'s resources twin -- same BGO "(now M)"
++/// running-total grammar, `"N resources (now M)"` in place of `"N science
++/// (now M)"`, `state.last_end_of_turn_resources` in place of `_science`.
++pub struct ResourceOracleDivergence {
++    pub lineno: usize,
++    pub round: String,
++    pub actor: &'static str,
++    pub journal_now: i32,
++    pub reconstructed: i32,
++    pub last_action_class: Option<ActionClass>,
++}
++
++/// [`PendingScienceCheck`]'s resources twin.
++struct PendingResourceCheck {
++    lineno: usize,
++    round: String,
++    actor_seat: u8,
++    journal_now: i32,
++    last_action_class: Option<ActionClass>,
++}
++
+ /// A culture-oracle comparison captured on an `EndTurn` line whose own
+ /// `economy::end_of_turn` stopped early at `discard_excess_military`
+ /// (leaving a `Pending::Choice(DiscardMilitary)` open) -- BGO's own
+@@ -5383,6 +5639,77 @@ fn prescan_flip_wonders(lines: &[Line], card_index: &HashMap<&'static str, CardI
+     out
+ }
+ 
++/// `"<Color> takes spoils of war <Color> steals <Card> from <Color>"` -- the
++/// journal's per-pick resolution of a War over Technology steal (see
++/// `Replayer::war_tech_spoils`'s doc for why BGO logs one such line per
++/// PICK, not one per war -- `interact::offer_war_tech` re-offers after every
++/// steal, and mixing is legal, FAQ p.8). The actor prints TWICE (confirmed
++/// across the corpus, e.g. `7522455` line 201: `"Orange takes spoils of war
++/// Orange steals Navigation from Purple"`) -- `actor_and_rest` strips the
++/// first, the second is checked to actually match rather than assumed to,
++/// since a mismatch would mean this shape was misidentified. The victim
++/// after `"from "` is not returned: it is already redundant with the live
++/// choice's own `victim` field, exactly like Terrorism's destroy line never
++/// needing an attacker.
++fn parse_war_tech_steal_line(index: &HashMap<&'static str, CardId>, text: &str) -> Option<(Color, CardId)> {
++    let (actor, rest) = actor_and_rest(text)?;
++    let rest = rest.strip_prefix("takes spoils of war ")?;
++    let (actor2, rest) = actor_and_rest(rest)?;
++    if actor2 != actor {
++        return None;
++    }
++    let rest = rest.strip_prefix("steals ")?;
++    let (id, rest) = longest_known_card_prefix(index, rest)?;
++    rest.strip_prefix(" from ")?;
++    Some((actor, id))
++}
++
++/// `"<Color> takes spoils of war <Color> gets N science; <Color> loses N
++/// science"` -- the journal's per-pick resolution of a War over Technology
++/// spoils pick landing on science (either the whole advantage, when the
++/// loser has nothing stealable, or the remainder after a steal). Only the
++/// SHAPE is checked, not the amount `N` -- see [`WarSpoil::Science`]'s own
++/// doc for why re-deriving it here would duplicate arithmetic `interact::
++/// take_war_science` already does deterministically from the live state.
++fn parse_war_tech_science_line(text: &str) -> Option<Color> {
++    let (actor, rest) = actor_and_rest(text)?;
++    let rest = rest.strip_prefix("takes spoils of war ")?;
++    let (actor2, rest) = actor_and_rest(rest)?;
++    if actor2 != actor {
++        return None;
++    }
++    let rest = rest.strip_prefix("gets ")?;
++    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
++    if digits_end == 0 {
++        return None;
++    }
++    rest[digits_end..].strip_prefix(" science")?;
++    Some(actor)
++}
++
++/// Pre-scans the whole journal once for every [`parse_war_tech_steal_line`] /
++/// [`parse_war_tech_science_line`] match into a per-actor FIFO, in journal
++/// order -- the exact sequence `interact::offer_war_tech`'s own re-offer
++/// loop produces the picks in, so no validate-and-skip is needed the way
++/// `raid_destroys`/`lose_colonies` need it (those FIFOs can also collect
++/// entries from an EARLIER, already-auto-resolved single-option choice;
++/// `offer_war_tech` never auto-resolves once a real `Pending::Choice` is
++/// open -- `push_choice`'s len-1 rule only fires before the choice exists at
++/// all, when `war_tech_options` is empty). See `Replayer::war_tech_spoils`'s
++/// doc and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
++/// drains this per-actor.
++fn prescan_war_tech_spoils(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<WarSpoil>> {
++    let mut out: HashMap<u8, VecDeque<WarSpoil>> = HashMap::new();
++    for line in lines {
++        if let Some((actor, id)) = parse_war_tech_steal_line(card_index, line.text) {
++            out.entry(actor.seat()).or_default().push_back(WarSpoil::Steal(id));
++        } else if let Some(actor) = parse_war_tech_science_line(line.text) {
++            out.entry(actor.seat()).or_default().push_back(WarSpoil::Science);
++        }
++    }
++    out
++}
++
+ /// Pre-scans the whole journal once for every point where a player is
+ /// observed playing a NAMED card out of their own military hand --
+ /// `DeclareWar`, `PlayAggression`, `ProposePact`, or `PlayTactic` (excluding
+@@ -5631,8 +5958,34 @@ fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, Card
+                 }
+             }
+             ActionClass::BuildBuilding | ActionClass::BuildUnit | ActionClass::BuildWonderStage | ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::DevelopTechnology | ActionClass::ElectLeader | ActionClass::ChangeGovernment | ActionClass::PlayTactic | ActionClass::DeclareWar | ActionClass::WinWar | ActionClass::PlayAggression | ActionClass::ProposePact | ActionClass::AcceptPact | ActionClass::Colonize | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PlayActionCard | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => {
++                // This actor committed ONE physical card by this OTHER
++                // route (built/played/developed/...), so at most ONE open
++                // take can be the card just committed -- `stack.retain`
++                // used to drop EVERY still-open take of this actor's for
++                // this card name, which is right for the overwhelmingly
++                // common single-copy case (nothing else there to wrongly
++                // keep) but wrong the moment a multi-copy card (`count`
++                // other than `[1,1,1]`) has TWO takes open for the same
++                // actor at once, e.g. one held over from an earlier turn
++                // plus one just taken this turn. Game `7522613` line
++                // 177/216/217/219: Green takes Reserves (I) for 2 CA
++                // (round 6), takes a SECOND Reserves (I) for 1 CA (round
++                // 7), then PLAYS Reserves (round 7) and puts one back for
++                // a 1 CA refund. `retain` wiped BOTH open takes on the
++                // `plays` line, so the later putback found nothing open at
++                // all -- `UnrecoverableHiddenInfo: unpaired BGO
++                // client-side undo`, not merely a wrong pairing. The
++                // putback's own refund (1 CA) is direct evidence only the
++                // round-7 take (also 1 CA) survived to be put back, so the
++                // round-6 take must be the one this commit consumed --
++                // i.e. commits drain the OLDEST open take first (FIFO),
++                // mirroring the order the physical cards were actually
++                // picked up in, and leaving any newer take(s) open for a
++                // later putback to still find and pair against.
+                 if let Some(stack) = open.get_mut(&c) {
+-                    stack.retain(|&(_, a, _)| a != actor);
++                    if let Some(pos) = stack.iter().position(|&(_, a, _)| a == actor) {
++                        stack.remove(pos);
++                    }
+                 }
+             }
+         }
+@@ -5895,6 +6248,17 @@ pub struct GameResult {
+     /// own reconstruction matched exactly.
+     pub culture_oracle_checked: u32,
+     pub culture_oracle_agreed: u32,
++    /// [`Replayer::science_oracle_divergence`]'s twin here -- see
++    /// [`ScienceOracleDivergence`]. `SCIENCE_ORACLE`-gated: always `None`
++    /// unless `debugflags::science_oracle()` was set for this run.
++    pub science_oracle_divergence: Option<ScienceOracleDivergence>,
++    pub science_oracle_checked: u32,
++    pub science_oracle_agreed: u32,
++    /// [`Replayer::resource_oracle_divergence`]'s twin here -- see
++    /// [`ResourceOracleDivergence`]. `RESOURCE_ORACLE`-gated.
++    pub resource_oracle_divergence: Option<ResourceOracleDivergence>,
++    pub resource_oracle_checked: u32,
++    pub resource_oracle_agreed: u32,
+     /// The FIRST line, if any, where this reconstruction's own
+     /// `state.age_civil` read strictly ahead of what the journal's `Line::
+     /// age` column proves the real game had reached -- see
+@@ -6478,6 +6842,7 @@ pub fn replay_game(
+     );
+     r.record_decisions = record_decisions;
+     r.produces_grants = prescan_produces_grants(&lines);
++    r.war_tech_spoils = prescan_war_tech_spoils(&lines, card_index);
+     r.discard_phase_oracle = prescan_discard_phase_oracle(&lines);
+     r.military_hand_ledger = prescan_military_hand_ledger(&lines, card_index);
+     r.spends_grants = prescan_spends_grants(&lines);
+@@ -6711,6 +7076,12 @@ pub fn replay_game(
+         // checkpoint is still waiting on a discard decision to resolve --
+         // see `PendingCultureCheck`'s own doc.
+         r.flush_pending_culture_check();
++        // Science/resources oracle twins -- no-ops (an `Option::take` on
++        // `None`) unless `SCIENCE_ORACLE`/`RESOURCE_ORACLE` is set, since
++        // `pending_science_check`/`pending_resource_check` are only ever
++        // populated by the gated capture sites below.
++        r.flush_pending_science_check();
++        r.flush_pending_resource_check();
+         // Self-deferring the same way: a no-op unless an earlier `"GAME
+         // DATA UPDATED"` culture clause is still waiting for this
+         // reconstruction's own live value to catch up -- see `Replayer::
+@@ -6892,6 +7263,45 @@ pub fn replay_game(
+                         r.record_culture_check(line.lineno, actor, want, previous_action_class);
+                     }
+                 }
++                // Science/resources oracle twins of the culture checkpoint
++                // just above -- SAME "(now M)" running-total grammar, SAME
++                // line, SAME discard-blocked-turn deferral shape, but gated
++                // behind their own `SCIENCE_ORACLE`/`RESOURCE_ORACLE` env
++                // vars (2026-08-14 pass: "DIAGNOSTIC-ONLY code: it must not
++                // change any replay outcome" -- unlike culture's always-on
++                // checkpoint, these must default to fully inert). See
++                // `ScienceOracleDivergence`/`ResourceOracleDivergence`'s own
++                // docs.
++                if crate::debugflags::science_oracle() {
++                    if let Some(want) = trailing_now_science(line.text) {
++                        if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary) {
++                            r.pending_science_check = Some(PendingScienceCheck {
++                                lineno: line.lineno,
++                                round: line.round.to_string(),
++                                actor_seat: actor,
++                                journal_now: want,
++                                last_action_class: previous_action_class,
++                            });
++                        } else {
++                            r.record_science_check(line.lineno, line.round, actor, want, previous_action_class);
++                        }
++                    }
++                }
++                if crate::debugflags::resource_oracle() {
++                    if let Some(want) = trailing_now_resources(line.text) {
++                        if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary) {
++                            r.pending_resource_check = Some(PendingResourceCheck {
++                                lineno: line.lineno,
++                                round: line.round.to_string(),
++                                actor_seat: actor,
++                                journal_now: want,
++                                last_action_class: previous_action_class,
++                            });
++                        } else {
++                            r.record_resource_check(line.lineno, line.round, actor, want, previous_action_class);
++                        }
++                    }
++                }
+                 r.actions_consumed += 1;
+                 continue;
+             }
+@@ -7500,6 +7910,12 @@ pub fn replay_game(
+         culture_oracle_divergence: r.culture_oracle_divergence,
+         culture_oracle_checked: r.culture_oracle_checked,
+         culture_oracle_agreed: r.culture_oracle_agreed,
++        science_oracle_divergence: r.science_oracle_divergence,
++        science_oracle_checked: r.science_oracle_checked,
++        science_oracle_agreed: r.science_oracle_agreed,
++        resource_oracle_divergence: r.resource_oracle_divergence,
++        resource_oracle_checked: r.resource_oracle_checked,
++        resource_oracle_agreed: r.resource_oracle_agreed,
+         civil_deck_premature_advance,
+         politics_false_skips: r.politics_false_skips,
+         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
+@@ -8816,6 +9232,8 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            food_tokens: crate::state::TokenBank::default(),
++            resource_tokens: crate::state::TokenBank::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+@@ -8860,6 +9278,8 @@ mod tests {
+             pending: crate::state::PendingStack::new(),
+             queue: crate::state::Queue::new(),
+             last_end_of_turn_culture: [None; MAX_PLAYERS],
++            last_end_of_turn_science: [None; MAX_PLAYERS],
++            last_end_of_turn_resources: [None; MAX_PLAYERS],
+         }
+     }
+ 
+@@ -9130,6 +9550,60 @@ mod tests {
+         assert_eq!(skip, [0, 1].into_iter().collect(), "the only open take pairs with the putback even with one candidate");
+     }
+ 
++    /// The `UnrecoverableHiddenInfo: unpaired BGO client-side undo` bug this
++    /// pass fixed (game `7522613` line 177/216/217/219): Green takes
++    /// Reserves (I) (`count [2,2,2]`) for 2 CA in round 6, takes a SECOND
++    /// Reserves (I) for 1 CA in round 7, PLAYS a Reserves (round 7,
++    /// resolving its one-time effect), then puts one back for a 1 CA
++    /// refund. The old `stack.retain(|a| a != actor)` on the `plays` line
++    /// dropped BOTH still-open takes (right for the single-copy case,
++    /// where there is only ever one to drop; wrong here, where a second,
++    /// unrelated take from an earlier turn was sitting in the same
++    /// per-card stack) -- so the later putback found an EMPTY stack and
++    /// reported unpaired outright, not merely a wrong pairing. The
++    /// putback's own 1 CA refund is direct evidence the round-7 take (also
++    /// 1 CA) is the one that survived to be put back, so the commit must
++    /// have consumed the OLDER round-6 take -- i.e. a commit should pop
++    /// only the OLDEST open take (FIFO), not wipe every open take.
++    #[test]
++    fn prescan_putback_skips_lets_a_commit_consume_only_the_oldest_open_take_not_every_open_take() {
++        let card_index = build_card_index();
++        let journal = [
++            line(177, "I", "Green takes Reserves in hand Green uses 2 civil action"),
++            line(216, "I", "Green takes Reserves in hand Green uses 1 civil action"),
++            line(217, "I", "Green plays Reserves Green produces 2 resources"),
++            line(219, "I", "Green puts Reserves back in the row Green gets 1 civil action"),
++        ];
++        let skip = prescan_putback_skips(&journal, &card_index);
++        assert!(
++            skip.contains(&1) && skip.contains(&3),
++            "the round-7 take (index 1) and the putback (index 3) are the pair the refund names -- got {skip:?}"
++        );
++        assert!(
++            !skip.contains(&0),
++            "the round-6 take (index 0) was consumed by the `plays` line, not put back, and must stay a real applied move -- got {skip:?}"
++        );
++    }
++
++    /// Companion to the above with only ONE open take at the time of the
++    /// commit: popping "the oldest" must degrade to the original
++    /// behaviour (removing that single entry), confirming the fix does
++    /// not regress the overwhelmingly common single-copy case.
++    #[test]
++    fn prescan_putback_skips_still_drops_a_lone_take_on_commit() {
++        let card_index = build_card_index();
++        let journal = [
++            line(1, "A", "Orange takes Frugality in hand Orange uses 1 civil action"),
++            line(2, "A", "Orange plays Frugality Orange increases population; Orange spends 2 food; Orange produces 1 food"),
++            line(3, "A", "Orange puts Frugality back in the row Orange gets 1 civil action"),
++        ];
++        let skip = prescan_putback_skips(&journal, &card_index);
++        assert!(
++            skip.is_empty(),
++            "the take was consumed by the `plays` line, so the later, unrelated putback has nothing open to pair with -- got {skip:?}"
++        );
++    }
++
+     /// The `IllegalMove: Pop` bug this pass fixed (game `7522648` round 7,
+     /// `docs/REPLAY.md`'s handoff): a player's own `End turn` line can leave
+     /// a `DiscardMilitary` choice open (`economy::end_of_turn` interrupted
+@@ -9440,6 +9914,122 @@ mod tests {
+         assert!(r.state.last_end_of_turn_culture[0].is_none(), "the snapshot must be consumed, not left to leak into a later checkpoint");
+     }
+ 
++    /// [`flush_pending_culture_check_defers_while_the_actors_own_discard_choice_is_still_open`]'s
++    /// science twin -- SCIDRIFT 2026-08-14 pass. Same false-positive shape:
++    /// production has not run yet, so the pre-production live `science` must
++    /// not be compared against BGO's post-production `"(now M)"`.
++    #[test]
++    fn flush_pending_science_check_defers_while_the_actors_own_discard_choice_is_still_open() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        let mut options = crate::state::OptionList::new();
++        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
++        options.push(ChoiceOption::Card(legion));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
++        r.state.players[0].science = 2; // pre-production, must not be compared yet
++        r.pending_science_check = Some(PendingScienceCheck {
++            lineno: 64,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_science_check();
++
++        assert_eq!(r.science_oracle_checked, 0, "must not count a checkpoint whose production has not run yet");
++        assert!(r.science_oracle_divergence.is_none(), "must not flag a false divergence while still blocked");
++        assert!(r.pending_science_check.is_some(), "the check must be put back, not dropped, while still blocked");
++    }
++
++    /// [`flush_pending_culture_check_compares_once_the_discard_resolves`]'s
++    /// science twin.
++    #[test]
++    fn flush_pending_science_check_compares_once_the_discard_resolves() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        assert!(r.state.pending.is_empty(), "fixture assumption: the discard already resolved, nothing left open");
++        r.state.last_end_of_turn_science[0] = Some(6); // resume_end_turn's own snapshot, matching BGO's own "(now 6)"
++        r.pending_science_check = Some(PendingScienceCheck {
++            lineno: 296,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_science_check();
++
++        assert_eq!(r.science_oracle_checked, 1, "the deferred checkpoint must be counted once resolved");
++        assert_eq!(r.science_oracle_agreed, 1, "6 == 6: this binary's reconstruction agrees with the journal");
++        assert!(r.science_oracle_divergence.is_none());
++        assert!(r.pending_science_check.is_none(), "consumed, not left pending forever");
++        assert!(r.state.last_end_of_turn_science[0].is_none(), "the snapshot must be consumed, not left to leak into a later checkpoint");
++    }
++
++    /// A real divergence must be recorded, not silently swallowed --
++    /// reproduces the exact shape PACTS's writeup found in game `7523162`
++    /// (Grey's tracked science silently drops 2 points with no journal
++    /// cause): `record_science_check` must set `science_oracle_divergence`
++    /// with the right sign (`reconstructed - journal_now`) when the
++    /// snapshot disagrees with BGO's own running total.
++    #[test]
++    fn record_science_check_flags_a_real_divergence_with_the_correct_sign() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.last_end_of_turn_science[0] = Some(4); // this binary's own reconstruction: 4
++        r.record_science_check(301, "10", 0, 6, Some(ActionClass::TakeCard)); // BGO says 6
++
++        assert_eq!(r.science_oracle_checked, 1);
++        assert_eq!(r.science_oracle_agreed, 0);
++        let d = r.science_oracle_divergence.expect("a real 4 vs 6 mismatch must be flagged");
++        assert_eq!(d.lineno, 301);
++        assert_eq!(d.round, "10");
++        assert_eq!(d.journal_now, 6);
++        assert_eq!(d.reconstructed, 4);
++        assert_eq!(d.reconstructed - d.journal_now, -2, "this binary under-counts by 2, matching the known 7523162 repro");
++    }
++
++    /// The resources oracle's own parity tests -- same shape as science's
++    /// pair just above, `resources`/`RESOURCE_ORACLE` in place of
++    /// `science`/`SCIENCE_ORACLE`.
++    #[test]
++    fn flush_pending_resource_check_defers_while_the_actors_own_discard_choice_is_still_open() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        let mut options = crate::state::OptionList::new();
++        let legion = CardId::by_name("Legion").expect("Legion is a known military card");
++        options.push(ChoiceOption::Card(legion));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::DiscardMilitary, options }));
++        r.state.players[0].resources = 2; // pre-production, must not be compared yet
++        r.pending_resource_check = Some(PendingResourceCheck {
++            lineno: 64,
++            round: "9".to_string(),
++            actor_seat: 0,
++            journal_now: 6,
++            last_action_class: Some(ActionClass::TakeCard),
++        });
++
++        r.flush_pending_resource_check();
++
++        assert_eq!(r.resource_oracle_checked, 0, "must not count a checkpoint whose production has not run yet");
++        assert!(r.resource_oracle_divergence.is_none(), "must not flag a false divergence while still blocked");
++        assert!(r.pending_resource_check.is_some(), "the check must be put back, not dropped, while still blocked");
++    }
++
++    #[test]
++    fn record_resource_check_flags_a_real_divergence_with_the_correct_sign() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.last_end_of_turn_resources[0] = Some(9); // this binary's own reconstruction: 9
++        r.record_resource_check(240, "7", 0, 4, Some(ActionClass::BuildWonderStage)); // BGO says 4
++
++        assert_eq!(r.resource_oracle_checked, 1);
++        assert_eq!(r.resource_oracle_agreed, 0);
++        let d = r.resource_oracle_divergence.expect("a real 9 vs 4 mismatch must be flagged");
++        assert_eq!(d.reconstructed - d.journal_now, 5, "this binary over-counts by 5");
++    }
++
+     /// Real game `7523612` round 14 (`docs/REPLAY.md`'s "Culture oracle"
+     /// section, `WinWar`-bucket trace): Purple's own `EndTurn` opens a
+     /// `DiscardMilitary` pending exactly as the test above, but resolving it
+@@ -12154,6 +12744,60 @@ mod tests {
+         );
+     }
+ 
++    /// `WarTech` (War over Technology): the ENGINE BUG this whole pass
++    /// fixes -- games `7522455`/`7522967` (real BGA journals, `docs/
++    /// REPLAY.md`) both got stuck forever on this exact `Pending`, because
++    /// `resolve_intervening` used to leave `ChoiceKind::WarTech` alone
++    /// unconditionally (the fallthrough arm's own former comment: "`Annex`/
++    /// `WarTech` have not been needed by any corpus game sampled so far").
++    /// `interact::war_tech_spoils` itself already modelled mixing correctly
++    /// (`combat.rs`'s own `apply_war_spoils_technology_the_victor_may_mix_
++    /// cards_and_science` test) -- the gap was purely on this file's side:
++    /// nothing ever translated the journal's per-pick `"takes spoils of
++    /// war"` lines into the `Move::Choose`s that mixing needs. This drives
++    /// the real war_tech_spoils entry point exactly like production does
++    /// (not a hand-built `Pending::Choice`), so it also exercises `interact::
++    /// offer_war_tech`'s re-offer-after-a-steal loop: after the steal
++    /// resolves, budget 8 minus Navigation's cost 6 leaves 2, and with no
++    /// second stealable special tech in play, `offer_war_tech` auto-resolves
++    /// that remainder as science with NO second `Pending` -- so ONE `resolve_
++    /// intervening` call must drain the whole two-pick FIFO and leave
++    /// `state.pending` empty, not just the first pick.
++    #[test]
++    fn resolve_intervening_drains_a_war_tech_pending_split_between_a_steal_and_the_science_remainder() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known special technology");
++        r.state.players[1].techs.insert(navigation, crate::state::TechSlot { workers: 0, stored: 0 });
++        r.state.players[1].science = 20;
++        // The real production entry point (`combat::apply_war_spoils`'s own
++        // caller) -- opens the live `Pending::Choice(WarTech)` exactly like
++        // an actual resolved war does, budget 8 = Navigation's cost (6) plus
++        // a 2-science remainder, matching the split this test's own doc
++        // describes.
++        crate::interact::war_tech_spoils(&mut r.state, 0, 1, 8);
++        assert!(r.state.pending.top().is_some(), "war_tech_spoils must open a real choice when a steal is on offer");
++        r.war_tech_spoils.insert(0, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
++
++        // `expected_actor: 0`, matching the victor: once both picks drain
++        // and `state.pending` empties, `resolve_intervening`'s own "whose
++        // turn is it really" fallback must agree with whoever is genuinely
++        // up next in a freshly `Replayer::new`-constructed game (player 0),
++        // exactly like the `LoseColony`/`FlipWonder` tests above use `0` for
++        // the same reason -- an `expected_actor` that does not match would
++        // report an unrelated `StuckPending` AFTER this choice already
++        // resolved correctly, not a failure of the fix under test here.
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
++
++        assert!(result.is_ok(), "{result:?}");
++        assert!(r.state.pending.is_empty(), "both picks must be resolved, not just the first");
++        assert!(r.state.players[0].techs.has(navigation), "the stolen technology must move to the victor's play area");
++        assert!(!r.state.players[1].techs.has(navigation), "and leave the loser's");
++        assert_eq!(r.state.players[1].science, 18, "the loser pays the 2-science remainder after the 6-cost steal");
++        assert_eq!(r.state.players[0].science, 2, "the victor gains exactly the remainder, not the whole budget");
++    }
++
+     /// `FlipWonder` (Ravages of Time, the last of the seven kinds): a still-
+     /// open multi-wonder `Pending::Choice(FlipWonder)` used to fall through
+     /// to the generic catch-all, even though the real choice's own
+@@ -12222,6 +12866,70 @@ mod tests {
+         );
+     }
+ 
++    /// [`parse_war_tech_steal_line`]: the doubled-actor BGO shape from real
++    /// game `7522455` line 201, and the confirming `"wins War over
++    /// Technology ... takes spoils of war"` line right before it (`7522455`
++    /// line 198) -- which ends at "war" with no continuation -- must NOT be
++    /// mistaken for a steal.
++    #[test]
++    fn parse_war_tech_steal_line_reads_the_stolen_card_and_ignores_the_winwar_confirmation() {
++        let card_index = build_card_index();
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known card");
++        assert_eq!(
++            parse_war_tech_steal_line(&card_index, "Orange takes spoils of war Orange steals Navigation from Purple"),
++            Some((Color::Orange, navigation))
++        );
++        assert_eq!(
++            parse_war_tech_steal_line(
++                &card_index,
++                "Orange wins War over Technology Attacker's strength: 27; Defender's strength: 14; Orange takes spoils of war"
++            ),
++            None
++        );
++    }
++
++    /// [`parse_war_tech_science_line`]: real game `7522455` line 202 --
++    /// the remainder-as-science half of the same split whose steal half
++    /// [`parse_war_tech_steal_line_reads_the_stolen_card_and_ignores_the_winwar_confirmation`]
++    /// covers. Only the shape is checked, not the amount (see [`WarSpoil::
++    /// Science`]'s own doc), so a double-digit amount must parse identically
++    /// to a single-digit one.
++    #[test]
++    fn parse_war_tech_science_line_reads_the_actor_regardless_of_amount_width() {
++        assert_eq!(
++            parse_war_tech_science_line("Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"),
++            Some(Color::Orange)
++        );
++        assert_eq!(
++            parse_war_tech_science_line("Orange takes spoils of war Orange gets 11 science; Purple loses 11 science"),
++            Some(Color::Orange)
++        );
++        assert_eq!(parse_war_tech_science_line("Orange takes spoils of war Orange steals Navigation from Purple"), None);
++    }
++
++    /// [`prescan_war_tech_spoils`]: the exact two-line split real game
++    /// `7522455` logs (steal, then the remainder as science) must land in
++    /// that same order in the per-actor FIFO -- `resolve_intervening`'s
++    /// `ChoiceKind::WarTech` arm pops front-first, so a reversed order would
++    /// silently offer the science pick before the steal one.
++    #[test]
++    fn prescan_war_tech_spoils_orders_a_steal_then_science_split_in_journal_order() {
++        let card_index = build_card_index();
++        let navigation = CardId::by_name("Navigation").expect("Navigation is a known card");
++        let journal = [
++            line(
++                198,
++                "II",
++                "Orange wins War over Technology Attacker's strength: 27; Defender's strength: 14; Orange takes spoils of war",
++            ),
++            line(201, "II", "Orange takes spoils of war Orange steals Navigation from Purple"),
++            line(202, "II", "Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"),
++        ];
++        let mut out = prescan_war_tech_spoils(&journal, &card_index);
++        let q = out.remove(&Color::Orange.seat()).expect("Orange has two spoils picks");
++        assert_eq!(q, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
++    }
++
+     /// [`parse_ravages_of_time_line`]: the actor comes from `Line::color`
+     /// (column 2), not the text itself -- and a leading "The " in the
+     /// flavour text (present for some wonders, absent for others, e.g. "St.
+diff --git i/rust/src/state.rs w/rust/src/state.rs
+index dd0bfe6..af4ac9f 100644
+--- i/rust/src/state.rs
++++ w/rust/src/state.rs
+@@ -655,6 +655,57 @@ pub struct PlayerState {
+     pub trade_resource_as_food_used_this_turn: u8,
+ 
+     pub resigned: bool,
++
++    /// Blue tokens actually placed on this player's Farm cards, grouped by
++    /// denomination (printed food value) -- see [`TokenBank`]'s own doc.
++    /// `economy::blue_used`/`gain_food`/`pay_food`/`credit_production`'s
++    /// shared body maintains this; nothing else should write it directly.
++    pub food_tokens: TokenBank,
++    /// The Mine-card twin of [`Self::food_tokens`] (printed resource value).
++    pub resource_tokens: TokenBank,
++}
++
++/// A player's blue tokens, bucketed by the denomination (printed farm food /
++/// mine resource value) of whatever card they are placed on -- see
++/// `economy.rs`'s module doc for the corpus bug this closes (RESOURCE_ORACLE
++/// Group A, `analysis/worker_notes_2026-08-14/corrskip__CORRSKIP.txt`/
++/// `corrskip2__CORRSKIP2.txt`).
++///
++/// RULES_SPEC §6.4 / Code of Laws p.11: a token is worth whatever card it is
++/// ACTUALLY sitting on; tokens may move to a LOWER-value card ("making
++/// change") but NEVER to a higher one. The engine used to derive `blue_used`
++/// fresh every call from the scalar `p.food`/`p.resources` total, greedily
++/// re-packed into whatever denominations exist RIGHT NOW -- which silently
++/// assumes every player has always achieved perfect consolidation onto their
++/// best available card, something the "never move up" rule makes impossible
++/// once a higher card enters play after older stock was already placed.
++/// `TokenBank` instead tracks the tokens actually placed, by value, so old
++/// stock stays exactly where a real player's tokens would sit.
++///
++/// Per-DENOMINATION counts, not per-card identity: two cards printing the
++/// same food/resource value are interchangeable for corruption purposes (only
++/// the total occupied-token COUNT feeds the bank, `economy::corruption`),
++/// and nothing in RULES_SPEC/Code of Laws/the FAQ caps how many tokens one
++/// card may hold -- see `corrskip2__CORRSKIP2.txt` for the citation search.
++/// Same fixed 8-slot capacity as `economy::Denoms` (DESIGN.md rule 3: no
++/// `Vec`) for the same reason -- at most four farm/mine levels exist today.
++///
++/// `_len == 0` (the `Default`) also doubles as "never tracked" -- a
++/// hand-built `PlayerState` in a unit test that sets `p.food`/`p.resources`
++/// directly and never calls a real gain/pay path. `economy::blue_used`
++/// reconciles that gap by treating any UNTRACKED amount (`p.food` above
++/// `bank_total_value`) as if it needed fresh greedy placement right now --
++/// i.e. exactly today's pre-fix formula -- so every test that never touches
++/// this field keeps its old, already-asserted behavior unchanged. Real
++/// gameplay (`replay`/self-play) always drives the full `gain_food`/
++/// `pay_food`/`credit_production` chokepoints, so for those the tracked
++/// total and `p.food` never drift apart and the reconciliation fallback is a
++/// no-op.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
++pub struct TokenBank {
++    pub denoms: [u8; 8],
++    pub counts: [u8; 8],
++    pub len: u8,
+ }
+ 
+ /// The one-time cost discount `events::apply_extras` writes onto EVERY
+@@ -1488,6 +1539,18 @@ pub struct GameState {
+     /// after `resume_end_turn` returns can read a value that has already
+     /// been through a DIFFERENT player's entire start-of-turn sequence.
+     pub last_end_of_turn_culture: [Option<u16>; MAX_PLAYERS],
++
++    /// [`GameState::last_end_of_turn_culture`]'s twin for science -- same
++    /// snapshot-before-`advance_turn` timing, same consumer
++    /// (`replay_common.rs`'s science oracle, `SCIENCE_ORACLE`-gated, mirrors
++    /// the culture oracle exactly). Instrumentation only.
++    pub last_end_of_turn_science: [Option<u16>; MAX_PLAYERS],
++
++    /// [`GameState::last_end_of_turn_culture`]'s twin for resources -- same
++    /// snapshot-before-`advance_turn` timing, same consumer
++    /// (`replay_common.rs`'s resource oracle, `RESOURCE_ORACLE`-gated).
++    /// Instrumentation only.
++    pub last_end_of_turn_resources: [Option<u16>; MAX_PLAYERS],
+ }
+ 
+ impl GameState {
