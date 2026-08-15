@@ -1,0 +1,210 @@
+COVERAGE.txt -- closing the "no coverage test on DELIBERATELY_UNPRICED" gap
+============================================================================
+Scratch clone: /private/tmp/actionprice (built on top of commit c94ce90,
+the Hammurabi pricing fix -- not reverted).
+
+WHERE THE TEST LIVES
+---------------------
+rust/src/bots/weighted/cards.rs, inside the existing `#[cfg(test)] mod tests`
+block, as a nested `mod coverage_of_printed_effect_keys` placed right after
+the three pre-existing DELIBERATELY_UNPRICED shape tests
+(deliberately_unpriced_has_no_duplicate_keys /
+unpriced_values_has_no_duplicate_pairs / every_reason_is_a_real_sentence_
+not_a_stub) and before "the valuation layer" section. Four new #[test] fns:
+
+  every_printed_card_effect_is_either_priced_or_explicitly_declared_unpriced
+  every_deliberately_unpriced_key_still_prints_on_a_real_card
+  every_priced_elsewhere_key_still_prints_on_a_real_card
+  priced_elsewhere_and_deliberately_unpriced_share_no_key
+
+WHAT IT ASSERTS
+---------------
+1. Loads the three real base-game data files (data/cards_civil.json,
+   data/cards_military_actions.json, data/cards_wonders_leaders.json) with
+   `crate::fixtures::parse_json` -- the same dependency-free JSON reader
+   `card_table.rs`'s own `baked_table_matches_source_data` test uses, and
+   asserts `scope == "base-2015"` exactly as that test does (expansion is
+   out of scope by standing decision). This is a genuine load of the real
+   printed data, not the baked-in `CARDS` static (which only carries fields
+   `gen_cards.py`/the struct already knew to capture, so it could not have
+   revealed a key nobody modeled).
+
+2. Collects every TOP-LEVEL key of each card's `effects` JSON object,
+   paired with the card's name (114 distinct keys across 236 cards).
+
+3. Forward direction: every one of those 114 keys must be either
+   (a) listed in DELIBERATELY_UNPRICED, or
+   (b) listed in a new local table, PRICED_ELSEWHERE (defined inside the
+       test module), which names every key genuinely priced OUTSIDE
+       card_yields's own flat dispatch -- a CardEffects scalar field
+       card_yields reads directly, a Special variant a different function
+       consumes (card_choice, board_yields::government_plans/board_extra),
+       a ring-fenced action_value/yield_marginal reroute, or a leader-NAME
+       rider off board_yields::rider_of (Genghis Khan / Winston Churchill /
+       Hammurabi). A key in neither table fails the test, and the failure
+       message names the key AND every card it appears on.
+
+4. Reverse direction (the task's explicit ask, and a second reverse check
+   added for the same reason): every DELIBERATELY_UNPRICED entry, and every
+   PRICED_ELSEWHERE entry, must still print on some real card -- so neither
+   table can rot with a stale/typo'd/renamed key. Also: the two tables must
+   not share a key (one claiming "priced", the other "deliberately not" --
+   both cannot be true).
+
+WHAT THIS DOES AND DOES NOT CATCH -- read before trusting the green result
+----------------------------------------------------------------------------
+DOES catch: any key printed at the top level of a base-game card's
+`effects` object that is neither in DELIBERATELY_UNPRICED nor in the new
+PRICED_ELSEWHERE table. Since this test currently passes, that means: as of
+this commit, every one of the 114 top-level effect keys the base game
+prints is accounted for by one of the two tables.
+
+Does NOT catch, and this is a real, deliberate limitation, not an oversight
+papered over:
+
+  (a) PRICED_ELSEWHERE is a HAND-AUDITED allowlist, built by reading
+      card_yields/board_yields.rs/action_value source once (this session,
+      2026-08-13) and citing which function prices each key. It is not
+      independently, mechanically re-derived from the pricing code the way
+      card_table.rs's `baked_table_matches_source_data` re-derives CARDS
+      from JSON. A future refactor that silently stops reading a
+      PRICED_ELSEWHERE-listed field (e.g. someone deletes the `push(out,
+      WeightKey::HappyMargin, eff.happy ...)` line) will NOT be caught by
+      this test -- the key stays in PRICED_ELSEWHERE, still prints on a real
+      card, and the test stays green while the bot silently stops pricing
+      `happy`. Closing that second-level gap would need a behavioural check
+      (call card_yields on a real card and assert a specific WeightKey
+      shows up) for all ~29 PRICED_ELSEWHERE entries individually, which is
+      real, separate work (see OPEN ITEMS below) -- deliberately NOT
+      attempted here to stay within budget, and because faking that check
+      shallowly (e.g. "assert card_yields' output is non-empty") would be
+      worse than not having it.
+
+  (b) Scoped to the TOP LEVEL of each card's `effects` object only. It does
+      NOT recurse into nested blocks: a pact's `A`/`B`/`bothPlayers`
+      sub-keys (`foodProduction`, `technologyScienceDiscount`, ...), an
+      event's `allPlayers`/`weakestPlayer`/... sub-keys, `takeFromOpponent`'s
+      sub-keys, `buildDiscount`'s per-age sub-keys, etc. Those wrapper keys
+      ARE in DELIBERATELY_UNPRICED bucket 6 ("addressing"), so the wrapper
+      itself is accounted for -- but a key ADDED inside one of those blocks
+      later would not be audited by this test at all. This is the same
+      scope DELIBERATELY_UNPRICED itself has always had (it is keyed by
+      top-level printed strings too), so this test's coverage matches the
+      table's own stated scope exactly -- but it is real and worth naming.
+
+  (c) Does not audit top-level card fields that are effects "in all but
+      name" (`strength`/`civilActions`/`militaryActions`/
+      `urbanBuildingLimit` printed OUTSIDE the `effects` object, on units
+      and governments) -- `card_table.rs`'s own KNOWN_TOP_KEYS test already
+      owns that vocabulary (structural fields, not printed effects), and
+      DELIBERATELY_UNPRICED itself is not keyed by them either, so this is
+      consistent scope, not a gap this test silently introduces.
+
+  (d) "Priced" here means "some function in the weighted-bot module reads
+      this value and turns it into a WeightKey contribution", not "prices
+      it correctly" or "prices it well". Existing pricing bugs on an
+      already-PRICED_ELSEWHERE key are out of scope.
+
+CONFIRMED RED (verbatim)
+-------------------------
+Temporarily deleted the `civilActionUpgradeUrbanBuildingToTheater` line from
+DELIBERATELY_UNPRICED and re-ran:
+
+  $ cargo test --profile difftest --lib coverage_of_printed_effect_keys
+
+  running 4 tests
+  test bots::weighted::cards::tests::coverage_of_printed_effect_keys::priced_elsewhere_and_deliberately_unpriced_share_no_key ... ok
+  test bots::weighted::cards::tests::coverage_of_printed_effect_keys::every_priced_elsewhere_key_still_prints_on_a_real_card ... ok
+  test bots::weighted::cards::tests::coverage_of_printed_effect_keys::every_deliberately_unpriced_key_still_prints_on_a_real_card ... ok
+  test bots::weighted::cards::tests::coverage_of_printed_effect_keys::every_printed_card_effect_is_either_priced_or_explicitly_declared_unpriced ... FAILED
+
+  failures:
+
+  ---- bots::weighted::cards::tests::coverage_of_printed_effect_keys::every_printed_card_effect_is_either_priced_or_explicitly_declared_unpriced stdout ----
+
+  thread '...' panicked at src/bots/weighted/cards.rs:2703:13:
+  printed effect key(s) neither priced (see PRICED_ELSEWHERE above) nor declared (see DELIBERATELY_UNPRICED) -- add a real, specific reason to one of the two, or price it:
+    "civilActionUpgradeUrbanBuildingToTheater" (on: J. S. Bach)
+
+  test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 1267 filtered out; finished in 0.01s
+
+Then restored the line (same content, same bucket, no functional change) and
+re-ran -- back to 4/4 passing. Diff after restore is a pure relocation
+(-1/+1 in `git diff --stat`, identical text), confirmed with `git diff`.
+
+GENUINELY UNCOVERED KEYS THIS TEST FOUND (fixed, not left as an open list)
+----------------------------------------------------------------------------
+Before this session, 20 printed effect keys were neither priced by the
+weighted bot NOR listed in DELIBERATELY_UNPRICED -- a real, silent gap this
+test now closes structurally. All 20 are correctly IMPLEMENTED by the rules
+engine (confirmed by reading effects.rs::apply_special/compute, or
+costs.rs), so the games these cards appear in play correctly -- they were
+just never priced for AI decision-making. Confirmed by grep that none of
+the 20 is referenced anywhere in board_yields.rs or bots/weighted/cards.rs
+outside this table itself (i.e. no board-aware rider prices them either).
+All 20 got a real, specific, honest reason and were added to
+DELIBERATELY_UNPRICED (see the diff, bucket "8. NEWLY AUDITED"):
+
+  Board-scaled (bucket-1 shape -- coefficient x a board count/level the
+  static per-card table has no access to):
+    bestTheaterDoubleCulture              (Charlie Chaplin)
+    cultureFirstColony                    (James Cook)
+    culturePerAdditionalColony            (James Cook)
+    culturePerHappyFromTemplesTheatersWonders (Michelangelo)
+    culturePerLabEqualToLevel             (Sid Meier)
+    culturePerLibraryTheaterPair          (William Shakespeare)
+    culturePerTheater                     (J. S. Bach)
+    doubleBestMine                        (Transcontinental Railroad)
+    extraHappyPerHappySource              (St. Peter's Basilica)
+    resourcesPerLabEqualToLevel           (Bill Gates)
+    sciencePerBestLabOrLibraryLevel       (da Vinci / Newton / Einstein)
+    sciencePerLab                         (Sid Meier)
+    strengthPerArtillery                  (Great Wall)
+    strengthPerInfantry                   (Great Wall)
+    strengthPerMilitaryUnit               (Alexander the Great)
+    strengthPerTempleOrGovernmentHappy    (Joan of Arc)
+    strengthPerUnitType                   (Napoleon Bonaparte)
+
+  Rule change (alters legality, not a yield):
+    cannotPlayAggressionOrWar             (Mahatma Gandhi)
+
+  Trigger (pays per future action, needs a measured firing rate):
+    popIncreaseFoodDiscount               (Moses)
+
+  Future-leader-take discount (same shape as leaderTakeCivilActionDiscount):
+    takeCivilActionDiscountIfLeaderReplacedThisTurn (Taj Mahal)
+
+Two keys I initially misclassified as dead while auditing, corrected before
+adding anything: `cultureIfTopTwoStrength` (Genghis Khan) and `perTurnChoice`
+(Winston Churchill) looked unreferenced under a `Special::Name` grep, but
+board_yields.rs imports `Special` variants unqualified in some functions and
+prices both via NAME-dispatch riders (`board_yields::genghis` /
+`board_yields::churchill`, off `rider_of`) -- both are genuinely PRICED and
+are now in PRICED_ELSEWHERE, not DELIBERATELY_UNPRICED.
+
+PEER-REPORTED FIVE KEYS -- VERDICT
+------------------------------------
+All five were already present in DELIBERATELY_UNPRICED before this session
+(pre-existing entries, not added now) -- checked directly against the table:
+  civilActionUpgradeUrbanBuildingToTheater  -- "rule change" (line ~701)
+  removeAsPoliticalActionForYellowToken     -- "rule change" (line ~692)
+  removeAsPoliticalActionFreeColonize       -- "rule change" (line ~693)
+  opponentsPayDoubleMilitaryActionsToAttackYou -- "rule change" (line ~670)
+  peekTopEventCardInPolitics                -- "rule change" (line ~694)
+The coverage test's forward-direction check confirms all five are
+"accounted for" (declared, not priced) -- no action needed; recorded here
+per instructions so nobody re-audits them.
+
+FULL SUITE RESULT
+-------------------
+`cargo test --profile difftest` (all 28 test binaries: lib + every bin +
+the tests/suite integration harness):
+  1452 passed, 0 failed, 1 ignored, across 28 "test result: ok" blocks.
+  Zero "test result: FAILED" blocks.
+`cargo test --profile difftest --lib` alone: 1271 passed, 0 failed,
+0 ignored (this includes the 4 new coverage tests plus the 3 pre-existing
+DELIBERATELY_UNPRICED shape tests, all passing).
+
+Nothing that previously passed regressed. The only new failure ever
+observed was the deliberate, temporary RED above (one line removed, then
+restored).

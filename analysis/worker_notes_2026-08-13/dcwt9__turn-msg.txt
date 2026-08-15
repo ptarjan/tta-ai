@@ -1,0 +1,44 @@
+Re-point every live object on every tick, not the ones a guard names
+
+The Turn rebuild hung off `if "status" in reloaded`, so it ran only when
+status.py happened to change in the same tick. The ordinary commit that
+adds a field to Turn and reads it from a collaborator reloads
+["replies", "turn"]: Replies was reclassed onto code reading the new
+field while agent.turn was still the OLD dataclass, and the
+AttributeError went into the per-agent except — one log line, one dead
+channel, nothing in Discord.
+
+The fix is not a second guard. Both verbs already return at
+`type(obj) is cls`, so re-pointing an object whose class did not move is
+a comparison: the guards bought nothing and made a whole class of silent
+bug available. They are gone. `reloaded` now decides one thing — whether
+there is anything to do at all — and the tick re-points what is STALE.
+That deletes fourteen branches from _hot_reload. The Turn is rebuilt
+first, ahead of every reclass, which the docstring already promised.
+
+The test half was masking. Its fixture built `tn.Turn(prompt="hello")`,
+already an instance of the class under test, so all four assertions were
+true of the object the fixture made and deleting the production line left
+the suite green. Rewritten to put every live object under a throwaway
+subclass first, so the assertion is about the reload.
+
+The rule behind it is derived once now, in tests/sources.py:
+held_instances() reads every `self.x = mod.Class(...)` in an __init__ for
+a hot mod — long-lived and held by a long-lived owner, which is what
+makes an object need re-pointing. The old derivation asked for a back
+reference to the owner as well, which structurally cannot yield `turn`;
+that is exactly where the rebuild went missing. The back reference now
+picks the VERB (reclass for what cannot be remade, rebuild for a record)
+rather than the membership. Both halves of the rule live in the new
+tests/test_collaborators.py — the layer-4 rule moved out of
+test_invariants.py and the wiring tests out of test_hotreload.py, rather
+than a third copy — with an asserted floor so a derivation that resolved
+to nothing could not read as coverage.
+
+Mutations run against the production lines: 14, all 14 caught (deleting
+the rebuild, re-gating it on status, rebuilding the turn last, three
+reclasses turned into bare attribute reads, four deleted, one re-gated,
+one pointed at the wrong class, and two that break the derivation
+itself).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

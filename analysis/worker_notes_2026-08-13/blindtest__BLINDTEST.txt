@@ -1,0 +1,138 @@
+BLINDTEST -- can the 2p hill-climb's fitness signal see individual weight coordinates?
+========================================================================================
+Setup:
+  Base vector: /private/tmp/rowdig/frozen_champion_2p.json (real 2p champion, gen 42825, 162 weights)
+  Harness: rust/target/difftest/bin/arena (existing seat-paired A/B duel binary; see src/arena.rs)
+  Command shape: arena --a <modified.json> --b <base.json> --games 200 --players 2 --seed 1 --threads 2
+  200 games = 100 deals x 2 seats (A rotates seats to cancel the seat-order advantage), seed 1..100 (deal seeds), which is the "seeds 1..200" paired-game run requested.
+  Statistical power note: with 200 paired 2p games, the interval half-width is roughly
+  +/-7-9 points at these observed rho/deff values. A win rate landing within ~7-9pts of
+  50% and with p > 0.05 is being called INVISIBLE AT THIS SAMPLE SIZE, not proven zero-effect.
+  Bigger true effects would need fewer games to detect; a true effect under ~5-7pts could
+  easily hide inside this noise floor. Treat every INVISIBLE verdict as "undetectable here",
+  not "provably irrelevant to the evaluator".
+
+dominance_repair check (source read, not just runtime): load_weights -> parse_weights calls
+dominance_repair on every load. Checked NON_POSITIVE_GATES, NON_NEGATIVE_GATES, DOMINATES,
+and NET_NONNEG_PHASE (src/bots/weighted/eval.rs) against all 6 target keys:
+  - card_board_leader: NOT in any gate table (source comment explicitly says the
+    card_board_* siblings are "deliberately left ungated"). No repair possible.
+  - row_last_copy: NOT in any gate table. No repair possible.
+  - ca_left: NOT in any gate table (control). No repair possible.
+  - card_board_wonder: NOT in any gate table (explicitly called out as excluded from
+    STOCK_NONNEG_GATES). No repair possible.
+  - special_techs: NOT in any gate table.
+  - uprising: IS in LOSS_GATES (non-positive gate: value must be <= 0, repaired to 0.0 if
+    a positive slips in). Base -60 and tested value 0.0 are BOTH <= 0, so the gate never
+    fires for this experiment; the requested value is played as-is. (A positive uprising
+    test would have been silently zeroed -- not attempted here since the task only asked
+    for 0.0.)
+No repairs fire for any of the 8 tested vectors; the values below are exactly what gets played.
+
+RESULTS (all 8 requested runs completed; raw arena output for every run is in
+all_raw_outputs.txt in this directory)
+------------------------------------------------------------------------------------------
+
+# | coordinate          | base value  | tested value | A win rate vs base | +/- SE | p-value | verdict
+1a| card_board_leader    | -15.0032    | +15.0        | 35.0%              | 6.7    | 0.0000  | VISIBLE (A worse)
+1b| card_board_leader    | -15.0032    |   0.0        | 40.2%              | 6.1    | 0.0015  | VISIBLE (A worse)
+2a| row_last_copy        |  -3.1648    |  -1.0        | 48.2%              | 7.2    | 0.6312  | INVISIBLE
+2b| row_last_copy        |  -3.1648    | -10.0        | 49.5%              | 6.7    | 0.8821  | INVISIBLE
+3 | ca_left (CONTROL)    |  -2.1058    |  -8.0        | 25.0%              | 5.7    | 0.0000  | VISIBLE (control confirmed -- harness is trustworthy)
+4 | special_techs        | +40.0519*   |   0.0        | 51.0%              | 2.0    | 0.3173  | INVISIBLE (tight CI -- see note)
+5 | uprising             | -60.0       |   0.0        | 25.8%              | 5.7    | 0.0000  | VISIBLE (A much worse)
+6 | card_board_wonder    |  +1.5067    | -1.5067       | 50.0%              | 0.0    | 1.0000  | INVISIBLE (exact null -- see note)
+
+* Note on special_techs: the task brief said this coordinate sits pinned at its +60
+  clamp. In the actual frozen_champion_2p.json base vector it is +40.0519, NOT at the
+  clamp. Reported here for the record; the 0.0 test result stands regardless of where the
+  base sits.
+
+All 6 requested coordinates were tested (8 rows, including the two-value rows 1 and 2 and
+the ca_left positive control). Nothing was dropped -- budget and time were both ample.
+
+Command used for every row:
+  arena --a <modified.json> --b base.json --games 200 --players 2 --seed 1 --threads 2
+(200 games = 100 deals x 2 seats, A rotated through both seats per deal to cancel the
+seating-order bias -- see src/arena.rs's doc comment on why this design is seat-paired.)
+
+Notable details beyond the headline numbers:
+
+- Positive control (row 3, ca_left -2.1058 -> -8.0): 25.0% win rate, p=0.0000. This
+  matches the task's stated expectation that ca_left is visible (ca_left=0.0 is known to
+  lose at 38.2%; an even larger swing to -8.0 loses harder still, consistent direction).
+  Harness validated -- trust the other rows.
+
+- Row 1 (card_board_leader) is VISIBLE, and clearly so, in BOTH directions tested. This
+  is a genuine surprise given the task's framing: card_board_leader was cited as the
+  headline example of instability (-1.02, then -40.70, then -15.00 across recent
+  champions), which reads like it's being blindly diffused. The A/B data says otherwise --
+  moving it by +15 or all the way to 0 both make the vector measurably WORSE at n=200
+  (p<0.002 in both directions). That instability is NOT explained by fitness blindness;
+  something else is producing the swings (e.g. interaction with a correlated coordinate,
+  the climb overshooting/oscillating around a moving optimum, or genuine non-stationarity
+  in what "board credit for a leader" should be worth as other weights move around it).
+  This coordinate should be taken OFF the "diffusing blind" list.
+
+- Row 5 (uprising) is also clearly VISIBLE: forcing it to 0.0 (instead of its penalty
+  value -60) costs ~24 points of win rate, p=0.0000. Its sitting AT the clamp is
+  therefore plausibly a real fitted response to a genuinely large, real penalty -- the
+  clamp may be under-sized for how much this coordinate actually matters, rather than
+  evidence the climb can't see it. (This experiment cannot distinguish "-60 is optimal"
+  from "the true optimum is more negative than -60 and the clamp is truncating it" --
+  both look identical from a single 0.0-vs-base comparison. It only rules out "the climb
+  can't tell -60 from 0", which it clearly can.)
+
+- Row 6 (card_board_wonder) produced an unusually clean result: win rate EXACTLY 50.0%,
+  SE 0.0, rho -1.00, deff 0.00. That is not merely "not statistically different from
+  50%" -- it means every one of the 100 seat-paired deals landed on an EXACT tie (A's
+  seat-0 and seat-1 results canceled perfectly), i.e. flipping this coordinate's sign
+  changed not a single recorded win/loss outcome in 200 games. This is the strongest
+  single piece of evidence in this run for real fitness-blindness on a coordinate: it
+  isn't just underpowered, the observed effect is indistinguishable from a coordinate
+  that has zero causal influence on any decision actually taken in these games.
+
+- Row 4 (special_techs) also came back tight (+/-2.0, not the usual +/-6-7), because its
+  paired variance was unusually small (deff 0.08) -- so this INVISIBLE verdict has more
+  power behind it than the nominal "200 games detects ~7 points" rule of thumb suggests;
+  an effect bigger than roughly 2 points would likely have shown up here and didn't.
+
+- Row 2 (row_last_copy) is INVISIBLE under both a small (-1.0) and a large (-10.0, more
+  than 3x the base magnitude) perturbation, at the ordinary ~7-point power level for this
+  harness.
+
+STATISTICAL POWER, STATED EXPLICITLY: at 200 paired 2p games with the rho/deff seen here,
+the harness reliably detects win-rate swings of roughly 6-8 points (see the +/- SE column
+above, which is per-run since deff varies row to row). It does NOT reliably detect a
+1-2 point swing except where deff happened to come in very low (rows 4 and 6 above, where
+the achieved precision was much tighter). So "INVISIBLE" in this report means "no
+detectable effect at this sample size and this run's paired variance," not "provably zero
+effect on the true evaluator." Two of the three INVISIBLE rows (special_techs,
+card_board_wonder) got unusually strong power for free via low deff; row_last_copy is the
+one INVISIBLE verdict where a true small-but-real effect (a few points) could still be
+hiding under the ordinary ~7-point noise floor.
+
+BOTTOM LINE
+------------------------------------------------------------------------------------------
+Of the 5 substantive (non-control) coordinates tested, the fitness signal clearly SEES
+2 of them (card_board_leader, uprising) and shows no detectable effect for 3
+(row_last_copy, special_techs, card_board_wonder) -- one of those three (card_board_wonder)
+with unusually strong, near-airtight evidence of zero causal effect on outcomes in this
+sample. That is a mixed result, not a clean confirmation of "most coordinates are blind":
+the coordinate offered as the headline example of instability (card_board_leader) turned
+out to be visible and reactive to large perturbations, which argues its drift across
+champions is being driven by something other than fitness blindness (likely a moving
+optimum from interaction with other weights, or climb dynamics/overshoot) -- a genuinely
+invisible coordinate should NOT reliably punish a champion for moving it, and this one
+does, hard, in both directions. Meanwhile row_last_copy and card_board_wonder behave
+exactly as the blind-diffusion hypothesis predicts: large, deliberate swings produce no
+measurable win-rate change, so the climb has no gradient to work with there and whatever
+values those two coordinates carry are effectively arbitrary from the fitness function's
+point of view -- hill-climbing cannot ever set them "correctly" because it cannot tell
+right from wrong on them. special_techs is in the same boat, with the caveat that its
+base value in this particular champion (+40.05) is not actually at the clamp the task
+described, so its instability story (if any) is not the "pinned at the wall" pattern
+the other two exhibit. Net effect: this run neither confirms nor refutes "most of the 162
+coordinates are blind" as a global claim -- it only speaks to these 6 -- but it does show
+the phenomenon is real and severe for at least card_board_wonder and row_last_copy, while
+showing card_board_leader specifically needs a different explanation than blindness.

@@ -1,0 +1,200 @@
+CLIFF AUDIT -- legality-cliff sweep of rust/src/legal.rs and rust/src/combat.rs
+================================================================================
+Scope: every boolean fact about a player's OWN board that changes what
+OPPONENTS may legally do to them (a legal-target gate, or a cost/strength
+MULTIPLIER on an opponent's move). Not card value. Not an effect. Must be
+priced as a 0/1 cliff, sign_intent left Free.
+
+Two cliffs already existed as the template:
+  - WeightKey::HasUnit    (RULES_SPEC 11.3) -- rust/src/bots/weighted/weights.rs:558
+  - WeightKey::HasColony  (RULES_SPEC 5.4)  -- rust/src/bots/weighted/weights.rs:576
+    prices legal.rs:170-179 (aggression_target_qualifies, Annex/StealColony
+    half: q.colonies.is_empty())
+
+
+1. VERDICT ON WeightKey::NoAggression
+--------------------------------------------------------------------------
+NoAggression is NOT a legality cliff on opponents. It is the mirror image.
+
+  s.no_aggression comes from Special::CannotPlayAggressionOrWar
+  (rust/src/effects.rs:1150, rust/src/card_table.rs:1926 -- Mahatma Gandhi's
+  leader card). It is read at rust/src/legal.rs:301 and :339, where `s` is
+  ALWAYS `effects::state_stats(state, p)` for the ACTING player `p` who is
+  generating their OWN legal moves (legal.rs:253/406/787/973). So
+  no_aggression gates whether the bearer (Gandhi's own holder) may play
+  Aggression/War cards THEMSELVES -- it restricts what its holder can do TO
+  opponents, the opposite direction from "what opponents can do to you".
+
+  SHAPE: correct. It is inherently a single bit (has the flag / does not),
+  computed as a boolean 0.0/1.0 in features.rs:616 already -- there is no
+  slope version of it to confuse it with, so the HasColony-style "cliff vs
+  slope" defect does not apply here at all.
+
+  SIGN: correctly Free (weights.rs:617, group Board) -- restricting your own
+  aggression is not unconditionally bad (it comes bundled with Gandhi's
+  culture and the attack-cost-doubling below), so an unsigned coordinate is
+  right, same reasoning as the rest of this table.
+
+  ACTION: none. NoAggression is fine as-is. It is a normal card-effect flag
+  that happens to already have the right (trivial) shape; it simply does not
+  belong to the "legality cliff on opponents" family this audit is chasing.
+  Mahatma Gandhi's card in fact carries BOTH kinds of flag on one leader:
+  CannotPlayAggressionOrWar (self-restriction, priced by NoAggression,
+  already fine) and OpponentsPayDoubleMilitaryActionsToAttackYou (the real,
+  unpriced, opponent-facing cliff -- see #2 below).
+
+
+2. COMPLETE ENUMERATION OF LEGALITY CLIFFS
+--------------------------------------------------------------------------
+Every condition in legal.rs/combat.rs gating an opponent's legal move
+against a player, or a cost/strength multiplier on it, cross-checked
+against docs/RULES_SPEC.md.
+
+(a) PRICED, no action needed
+  - Annex target gate: q.colonies.is_empty() [legal.rs:176-179;
+    RULES_SPEC.md:123 (5.4)] -> WeightKey::HasColony. Cross-file test
+    already existed: legal.rs::has_colony_feature_agrees_with_annex_
+    targeting_legality.
+  - Colonization-force eligibility (a player at 0 units cannot bid/attack)
+    [RULES_SPEC.md:278 (11.3)] -> WeightKey::HasUnit.
+  - NoAttacksBetweenParties pact gate: combat::pact_forbids_attack
+    [combat.rs:145-154; RULES_SPEC.md:131 (5.6, "illegal if a pact forbids
+    it")] -> WeightKey::PactBlocksAttack (features.rs:312-326,564),
+    verified to read the identical Special::NoAttacksBetweenParties check.
+  - Infiltrate target gate, LEADER half: q.leader.is_none() [legal.rs:187;
+    RULES_SPEC.md:129 (5.5, "remove rival's leader ... from game")] ->
+    WeightKey::Leader (features.rs:615, `p.leader.is_none()`, same check).
+  - Pact strength modifiers feeding attack/defense strength
+    (pact_attack_bonus, doomed_pact_strength, combat.rs:169-214) -> the
+    PactBlock.strength field flowing into WeightKey::Strength/Pacts/
+    PactBlocksAttack via rivals.rs::add_pact_block -- rate-shaped, not a
+    cliff, already the established home for this field.
+
+(b) NEWLY PRICED BY THIS AUDIT (3 new WeightKeys)
+  - War-immunity gate: combat::war_forbidden ORs in
+    effects::state_stats(.., defender).war_immune [combat.rs:162-163;
+    RULES_SPEC.md:131 (5.6)], set by a pact side printing
+    cannotBeDeclaredWarOnByAnyone (PactBlock.war_immune, e.g. "Loss of
+    Sovereignty"'s B side). cards.rs:1559-1564 and rivals.rs:264-266
+    explicitly name war_immune as one of the PactBlock fields left OUT of
+    the rate-shaped decomposition on purpose -- exactly the effect-
+    decomposition-cannot-produce-it gap this audit exists to close.
+    -> NEW WeightKey::WarImmune ("war_immune", default 0.0, group Military,
+    sign_intent Free). Computed at features.rs:570 off `s.war_immune`
+    (the same Stats struct `s` already computed for this player).
+
+  - Attack-cost-doubling: legal.rs:308 and :348 (Aggression and War move
+    generation) and combat.rs:262 (start_aggression) all double the
+    military-action cost an OPPONENT pays to attack a player whose leader
+    is Mahatma Gandhi [RULES_SPEC.md 5.4/5.6 MA-cost clauses], via
+    Special::OpponentsPayDoubleMilitaryActionsToAttackYou (card_table.rs,
+    currently only Gandhi's leader card). This is Mahatma Gandhi's OTHER
+    special (see NoAggression verdict above) and was priced nowhere.
+    -> NEW WeightKey::AttackCostDoubled ("attack_cost_doubled", default
+    0.0, group Military, sign_intent Free). Computed at features.rs:576-580
+    by checking whether the player's own leader card carries the Special
+    (not by hardcoding the leader's name the way the engine's `leader_is`
+    shortcut does), so a future card sharing the special prices correctly
+    without a code change.
+
+  - Infiltrate target gate, WONDER half: q.wonder.is_none() [legal.rs:187;
+    RULES_SPEC.md:129 (5.5)]. The leader half was already priced (Leader,
+    see 2a) but the wonder half was not: WonderProgress is a RATE-shaped
+    sunk-cost magnitude (horizon::wonder_outlook), tuned to value how much
+    a wonder is worth finishing, not whether TAKING one at all made its
+    owner Infiltrate-able -- the identical "linear count can't express the
+    first step" gap Colonies alone left for HasColony.
+    -> NEW WeightKey::WonderInProgress ("wonder_in_progress", default 0.0,
+    group Wonders, sign_intent Free). Computed at features.rs:616-622 off
+    `p.wonder.is_none()`, the exact field legal.rs's own gate reads.
+
+(c) DELIBERATELY NOT PRICED (not a legality cliff -- value fields, out of
+    scope for this audit even though also currently unpriced)
+  - PactBlock.attacker_strength (Special::OnAttackBetweenParties) -- a
+    conditional STRENGTH MAGNITUDE (continuous), not a boolean gate;
+    cards.rs:1562-1564 names it explicitly as unpriced but it belongs to
+    pact-offer valuation, not this audit.
+  - PactBlock.tech_discount / food_as_resource / resource_as_food /
+    other_party_pays_science / culture_per_wonder_of_other_party -- all
+    magnitude/value fields, same reasoning, not legality booleans.
+  - p.war_declared_by_me (legal.rs:339) -- restricts the ACTOR's own next
+    War declaration (can't declare a second war while one is pending), the
+    same self-facing direction as NoAggression, not opponent-facing.
+  - state.last_round (legal.rs:339) -- global game-clock fact, not a
+    per-player board predicate.
+
+
+3. RED-TEST CONFIRMATION
+--------------------------------------------------------------------------
+For all 3 new keys, the real computation lines in features.rs were
+temporarily replaced with hardcoded `0.0` (compiles fine, since the
+WeightKey/table/group/sign_intent scaffolding was left in place -- only the
+"reads real board state" line was reverted), and the full features.rs +
+legal.rs test set was re-run:
+
+  cargo test --profile difftest -q --lib -- weighted::features:: legal::
+  -> 92 passed; 6 FAILED (exactly the 6 new "flips to 1.0" /
+     "feature agrees with legality" tests, all others green):
+       bots::weighted::features::tests::attack_cost_doubled_flips_to_one_only_for_gandhi
+       bots::weighted::features::tests::war_immune_flips_to_one_with_a_war_immunity_pact_side
+       bots::weighted::features::tests::wonder_in_progress_flips_to_one_the_instant_a_wonder_is_taken
+       legal::tests::attack_cost_doubled_feature_agrees_with_war_cost_legality
+       legal::tests::war_immune_feature_agrees_with_war_targeting_legality
+       legal::tests::wonder_in_progress_feature_agrees_with_infiltrate_targeting_legality
+
+The three real computation lines were then restored verbatim (verified by
+re-grepping for the temporary markers -- none left) and the full suite was
+re-run green (see below).
+
+
+4. TEST NUMBERS
+--------------------------------------------------------------------------
+WeightKey::ALL.len(): 157 before this change -> 160 after (3 new variants:
+WarImmune, AttackCostDoubled, WonderInProgress).
+
+9 new tests added (6 in features.rs, 3 cross-file in legal.rs):
+  features.rs:
+    war_immune_is_zero_with_no_pacts
+    war_immune_flips_to_one_with_a_war_immunity_pact_side
+    attack_cost_doubled_is_zero_with_no_leader
+    attack_cost_doubled_flips_to_one_only_for_gandhi
+    wonder_in_progress_is_zero_with_no_wonder
+    wonder_in_progress_flips_to_one_the_instant_a_wonder_is_taken
+  legal.rs (cross-file, asserting the feature against the REAL
+  politics_moves move generator, same shape as has_colony's own test):
+    wonder_in_progress_feature_agrees_with_infiltrate_targeting_legality
+    war_immune_feature_agrees_with_war_targeting_legality
+    attack_cost_doubled_feature_agrees_with_war_cost_legality
+
+Full suite (`cargo build --profile difftest` then `cargo test --profile
+difftest`, from rust/, jobs=2, no --release used anywhere):
+  build: clean, no errors, one pre-existing unrelated warning
+  (bin/humanwinners.rs:134 `color` field never read -- untouched by this
+  change).
+  lib tests: 1346 passed; 0 failed; 0 ignored.
+  All other test binaries (selfplay, strengthrelab, diagnostics, suite
+  integration tests, doc-tests): every one 0 failed.
+
+
+5. FILES CHANGED (rust/src only, for the coordinator to land)
+--------------------------------------------------------------------------
+  rust/src/bots/weighted/weights.rs   -- 3 new WeightKey variants, table
+                                          entries (name + 0.0 default),
+                                          group() arms (Military x2,
+                                          Wonders x1), sign_intent() Free
+                                          bucket entries.
+  rust/src/bots/weighted/features.rs  -- 3 new f.set(...) computations
+                                          (WarImmune, AttackCostDoubled,
+                                          WonderInProgress) plus 6 new
+                                          #[cfg(test)] unit tests.
+  rust/src/legal.rs                   -- 3 new cross-file #[cfg(test)]
+                                          tests asserting each new feature
+                                          against the real politics_moves
+                                          move generator.
+
+No existing WeightKey, table entry, or computation was modified. Colonies,
+ca_left, and row_last_copy were not touched. No per-card WeightKeys were
+added -- all 3 new keys price a general mechanic (a Special variant /
+Stats flag / board field), matching HasColony's own precedent, not an
+individual card identity. All 3 sign_intent entries are Free, no sign
+declared, per instruction.

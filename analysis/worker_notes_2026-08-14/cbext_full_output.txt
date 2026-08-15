@@ -1,0 +1,1353 @@
+CA_TOTAL_UNDERCOUNT game=7522905 actor=3 lineno=20 age_civil=A round=1 take_spend_this_turn=5 ca_total=4 deficit=1
+# cardblame: 1011 games sampled, 690 completed, 663/690 exact
+
+## Coverage summary
+
+cards: 236 total in `tta::CARDS`. narrow set (cards_in_play): 85 observed at least once, 77 cleared the 20-game cutoff. widened set (ever_cards_in_play): 226 observed at least once, 213 cleared the cutoff.
+Move variants: 37 total (`moves.rs`). 35 observed at least once, 35 cleared the cutoff (completion cut).
+ActionClass variants: 31 total (`corpus::ActionClass::ALL`). 27 observed at least once, 26 cleared the cutoff (completion cut).
+
+## Not attributable by this tool
+
+- Anything strictly AFTER a game's replay STOPS on a `Mismatch`: only what the replayer actually reconstructed up to the stop point is visible to any cut here. A card or happening that would only have mattered LATER in that same game is invisible by construction, not merely unsampled.
+- Per-turn passive/continuous card effects with no `Move` or `ActionClass` line of their own (e.g. a `Special` like `CulturePerLabEqualToLevel`, folded silently into whichever `Move` triggers scoring, usually `EndTurn`): the OWNING card still lands in `cards_in_play`/`ever_cards_in_play` so it can still be blamed at the card level, but there is no separate happenings row for the effect itself.
+- Cut 3 (corruption vs. journal `CORRUPTION!` marker) is its OWN separate checkpoint-level population, kept exactly as previously built -- not re-run against the widened card set or the happenings cuts this pass.
+- `GameResult::final_event_cards`/`final_event_award_divergences` (the separate §12.5.2 final-scoring oracle) are not folded into any cut here.
+
+## Cut 1 [narrow]: completion-failure enrichment -- cards_in_play (snapshot at stop/end)
+
+corpus base rate: 321/1011 = 31.8% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | group | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|---|
+| 3.15x | Joan of Arc | leader | 36 | 36 | 100.0% | 9.5 | 17.6 |
+| 3.15x | Leonardo da Vinci | leader | 35 | 35 | 100.0% | 8.5 | 17.6 |
+| 3.15x | Genghis Khan | leader | 37 | 37 | 100.0% | 9.7 | 17.6 |
+| 3.15x | Hammurabi | leader | 20 | 20 | 100.0% | 5.0 | 17.6 |
+| 3.15x | Napoleon Bonaparte | leader | 120 | 120 | 100.0% | 14.0 | 17.7 |
+| 3.15x | William Shakespeare | leader | 29 | 29 | 100.0% | 14.4 | 17.4 |
+| 3.15x | Michelangelo | leader | 35 | 35 | 100.0% | 9.9 | 17.6 |
+| 3.15x | James Cook | leader | 32 | 32 | 100.0% | 13.4 | 17.4 |
+| 3.15x | Maximilien Robespierre | leader | 41 | 41 | 100.0% | 13.6 | 17.5 |
+| 3.15x | Isaac Newton | leader | 80 | 80 | 100.0% | 13.7 | 17.6 |
+| 1.90x | Phalanx | tactic | 98 | 59 | 60.2% | 14.6 | 17.6 |
+| 1.77x | Medieval Army | tactic | 183 | 103 | 56.3% | 15.3 | 17.7 |
+| 1.66x | Legion | tactic | 163 | 86 | 52.8% | 15.4 | 17.7 |
+| 1.60x | Heavy Cavalry | tactic | 57 | 29 | 50.9% | 15.5 | 17.4 |
+| 1.22x | Warfare | special technology | 224 | 87 | 38.8% | 16.8 | 17.4 |
+| 1.22x | Fighting Band | tactic | 201 | 78 | 38.8% | 16.3 | 17.6 |
+| 1.08x | Masonry | special technology | 259 | 89 | 34.4% | 17.3 | 17.3 |
+| 1.04x | Bread and Circuses | urban building | 200 | 66 | 33.0% | 17.6 | 17.2 |
+| 1.03x | Defensive Army | tactic | 98 | 32 | 32.7% | 17.8 | 17.3 |
+| 1.02x | Code of Laws | special technology | 437 | 142 | 32.5% | 17.3 | 17.3 |
+| 1.00x | Warriors | military unit | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Religion | urban building | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Agriculture | production | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Bronze | production | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Philosophy | urban building | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 0.98x | Swordsmen | military unit | 703 | 218 | 31.0% | 17.7 | 16.5 |
+| 0.97x | Alchemy | urban building | 869 | 268 | 30.8% | 17.5 | 16.2 |
+| 0.96x | Knights | military unit | 777 | 236 | 30.4% | 17.6 | 16.2 |
+| 0.95x | Cartography | special technology | 462 | 139 | 30.1% | 17.6 | 17.1 |
+| 0.93x | Theology | urban building | 288 | 85 | 29.5% | 17.8 | 17.1 |
+| 0.93x | Iron | production | 942 | 277 | 29.4% | 17.6 | 12.9 |
+| 0.92x | Irrigation | production | 932 | 273 | 29.3% | 17.7 | 12.4 |
+| 0.90x | Conquistadors | tactic | 101 | 29 | 28.7% | 17.7 | 17.3 |
+| 0.90x | Classic Army | tactic | 220 | 63 | 28.6% | 18.1 | 17.1 |
+| 0.86x | Drama | urban building | 325 | 89 | 27.4% | 17.8 | 17.1 |
+| 0.86x | Printing Press | urban building | 355 | 97 | 27.3% | 17.8 | 17.0 |
+| 0.81x | Mobile Artillery | tactic | 136 | 35 | 25.7% | 18.2 | 17.2 |
+| 0.78x | Coal | production | 423 | 105 | 24.8% | 18.1 | 16.7 |
+| 0.76x | Scientific Method | urban building | 577 | 140 | 24.3% | 18.3 | 16.0 |
+| 0.76x | Strategy | special technology | 583 | 141 | 24.2% | 18.3 | 15.9 |
+| 0.76x | Selective Breeding | production | 549 | 132 | 24.0% | 18.2 | 16.2 |
+| 0.75x | Riflemen | military unit | 483 | 115 | 23.8% | 18.3 | 16.4 |
+| 0.75x | Justice System | special technology | 307 | 73 | 23.8% | 18.1 | 17.0 |
+| 0.75x | Cannon | military unit | 694 | 165 | 23.8% | 18.3 | 15.0 |
+| 0.73x | Team Sports | urban building | 168 | 39 | 23.2% | 18.4 | 17.1 |
+| 0.73x | Napoleonic Army | tactic | 207 | 48 | 23.2% | 18.4 | 17.0 |
+| 0.73x | Cavalrymen | military unit | 464 | 107 | 23.1% | 18.4 | 16.4 |
+| 0.72x | Organized Religion | urban building | 533 | 122 | 22.9% | 18.3 | 16.2 |
+| 0.71x | Fortifications | tactic | 71 | 16 | 22.5% | 18.2 | 17.2 |
+| 0.71x | Navigation | special technology | 384 | 86 | 22.4% | 18.4 | 16.7 |
+| 0.64x | Journalism | urban building | 375 | 76 | 20.3% | 18.4 | 16.6 |
+| 0.60x | Architecture | special technology | 440 | 84 | 19.1% | 18.5 | 16.4 |
+| 0.55x | Opera | urban building | 307 | 54 | 17.6% | 18.6 | 16.7 |
+| 0.49x | Mechanized Army | tactic | 109 | 17 | 15.6% | 19.2 | 17.1 |
+| 0.48x | Mahatma Gandhi | leader | 117 | 18 | 15.4% | 18.8 | 17.1 |
+| 0.41x | Winston Churchill | leader | 269 | 35 | 13.0% | 18.9 | 16.7 |
+| 0.40x | Oil | production | 263 | 33 | 12.5% | 19.1 | 16.7 |
+| 0.39x | Bill Gates | leader | 331 | 41 | 12.4% | 19.0 | 16.5 |
+| 0.38x | Air Forces | military unit | 457 | 55 | 12.0% | 19.0 | 15.9 |
+| 0.34x | Civil Service | special technology | 434 | 47 | 10.8% | 19.0 | 16.0 |
+| 0.33x | Computers | urban building | 664 | 70 | 10.5% | 19.0 | 14.0 |
+| 0.32x | Albert Einstein | leader | 337 | 34 | 10.1% | 19.0 | 16.5 |
+| 0.31x | Entrenchments | tactic | 60 | 6 | 10.0% | 19.0 | 17.2 |
+| 0.31x | Rockets | military unit | 196 | 19 | 9.7% | 19.0 | 16.9 |
+| 0.29x | Tanks | military unit | 207 | 19 | 9.2% | 19.2 | 16.8 |
+| 0.28x | Movies | urban building | 335 | 30 | 9.0% | 19.1 | 16.4 |
+| 0.28x | Multimedia | urban building | 373 | 33 | 8.8% | 19.2 | 16.2 |
+| 0.25x | Satellites | special technology | 334 | 27 | 8.1% | 19.1 | 16.4 |
+| 0.25x | Mechanized Agriculture | production | 322 | 26 | 8.1% | 19.0 | 16.5 |
+| 0.24x | Military Theory | special technology | 429 | 33 | 7.7% | 19.1 | 16.0 |
+| 0.24x | Modern Army | tactic | 160 | 12 | 7.5% | 19.2 | 16.9 |
+| 0.23x | Modern Infantry | military unit | 189 | 14 | 7.4% | 19.2 | 16.9 |
+| 0.23x | Engineering | special technology | 441 | 32 | 7.3% | 19.1 | 15.9 |
+| 0.21x | Charlie Chaplin | leader | 274 | 18 | 6.6% | 19.1 | 16.6 |
+| 0.20x | Sid Meier | leader | 375 | 24 | 6.4% | 19.1 | 16.2 |
+| 0.20x | Shock Troops | tactic | 64 | 4 | 6.2% | 19.3 | 17.2 |
+| 0.19x | Professional Sports | urban building | 196 | 12 | 6.1% | 19.2 | 16.9 |
+
+8 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | group | games | failures | rate |
+|---|---|---|---|---|
+| Aristotle | leader | 16 | 16 | 100.0% |
+| Julius Caesar | leader | 13 | 13 | 100.0% |
+| Frederick Barbarossa | leader | 11 | 11 | 100.0% |
+| Homer | leader | 10 | 10 | 100.0% |
+| J. S. Bach | leader | 10 | 10 | 100.0% |
+| Christopher Columbus | leader | 9 | 9 | 100.0% |
+| Moses | leader | 9 | 9 | 100.0% |
+| Alexander the Great | leader | 7 | 7 | 100.0% |
+
+151 of 236 cards have ZERO exposure in this set (Cut 1 [narrow]) -- never appears across the whole sample:
+
+| card | group |
+|---|---|
+| Acceptance of Supremacy | pact |
+| Aggression: Annex | aggression |
+| Aggression: Armed Intervention | aggression |
+| Aggression: Enslave | aggression |
+| Aggression: Infiltrate | aggression |
+| Aggression: Plunder (I) | aggression |
+| Aggression: Plunder (II) | aggression |
+| Aggression: Plunder (III) | aggression |
+| Aggression: Raid (I) | aggression |
+| Aggression: Raid (II) | aggression |
+| Aggression: Raid (III) | aggression |
+| Aggression: Spy | aggression |
+| Barbarians | event |
+| Border Conflict | event |
+| Breakthrough (I) | action (one-shot) |
+| Breakthrough (II) | action (one-shot) |
+| Civil Unrest | event |
+| Cold War | event |
+| Colossus | wonder |
+| Communism | government |
+| Constitutional Monarchy | government |
+| Crime Wave | event |
+| Crusades | event |
+| Cultural Heritage (A) | action (one-shot) |
+| Cultural Heritage (I) | action (one-shot) |
+| Cultural Influence | event |
+| Democracy | government |
+| Despotism | government |
+| Developed Territory (I) | territory / colony |
+| Developed Territory (II) | territory / colony |
+| Development of Agriculture | event |
+| Development of Civil Life | event |
+| Development of Crafts | event |
+| Development of Markets | event |
+| Development of Politics | event |
+| Development of Religion | event |
+| Development of Science | event |
+| Development of Settlement | event |
+| Development of Trade Routes | event |
+| Development of Warfare | event |
+| Economic Progress | event |
+| Efficient Upgrade (II) | action (one-shot) |
+| Efficient Upgrade (III) | action (one-shot) |
+| Eiffel Tower | wonder |
+| Emigration | event |
+| Endowment for the Arts | action (one-shot) |
+| Engineering Genius (A) | action (one-shot) |
+| Engineering Genius (I) | action (one-shot) |
+| Engineering Genius (II) | action (one-shot) |
+| Engineering Genius (III) | action (one-shot) |
+| Fast Food Chains | wonder |
+| First Space Flight | wonder |
+| Foray | event |
+| Frugality (A) | action (one-shot) |
+| Frugality (I) | action (one-shot) |
+| Frugality (II) | action (one-shot) |
+| Fundamentalism | government |
+| Good Harvest | event |
+| Great Wall | wonder |
+| Hanging Gardens | wonder |
+| Historic Territory (I) | territory / colony |
+| Historic Territory (II) | territory / colony |
+| Hollywood | wonder |
+| Iconoclasm | event |
+| Immigration | event |
+| Impact of Agriculture | event |
+| Impact of Architecture | event |
+| Impact of Balance | event |
+| Impact of Colonies | event |
+| Impact of Competition | event |
+| Impact of Government | event |
+| Impact of Happiness | event |
+| Impact of Industry | event |
+| Impact of Population | event |
+| Impact of Progress | event |
+| Impact of Science | event |
+| Impact of Strength | event |
+| Impact of Technology | event |
+| Impact of Variety | event |
+| Impact of Wonders | event |
+| Independence Declaration | event |
+| Inhabited Territory (I) | territory / colony |
+| Inhabited Territory (II) | territory / colony |
+| International Agreement | event |
+| International Tourism | pact |
+| International Trade Agreement | pact |
+| Internet | wonder |
+| Kremlin | wonder |
+| Library of Alexandria | wonder |
+| Loss of Sovereignty | pact |
+| Military Alliance | pact |
+| Military Bonus (defense 2 / colonization 1) | military bonus |
+| Military Bonus (defense 4 / colonization 2) | military bonus |
+| Military Bonus (defense 6 / colonization 3) | military bonus |
+| Military Build-Up | action (one-shot) |
+| Monarchy | government |
+| National Pride | event |
+| New Deposits | event |
+| Ocean Liners | wonder |
+| Open Borders Agreement | pact |
+| Patriotism (A) | action (one-shot) |
+| Patriotism (I) | action (one-shot) |
+| Patriotism (II) | action (one-shot) |
+| Patriotism (III) | action (one-shot) |
+| Peace Treaty | pact |
+| Pestilence | event |
+| Politics of Strength | event |
+| Popularization of Science | event |
+| Promise of Military Protection | pact |
+| Prosperity | event |
+| Pyramids | wonder |
+| Raiders | event |
+| Rats | event |
+| Ravages of Time | event |
+| Rebellion | event |
+| Refugees | event |
+| Reign of Terror | event |
+| Republic | government |
+| Reserves (I) | action (one-shot) |
+| Reserves (II) | action (one-shot) |
+| Reserves (III) | action (one-shot) |
+| Revolutionary Idea (II) | action (one-shot) |
+| Revolutionary Idea (III) | action (one-shot) |
+| Rich Land (A) | action (one-shot) |
+| Rich Land (I) | action (one-shot) |
+| Rich Land (II) | action (one-shot) |
+| Scientific Breakthrough | event |
+| Scientific Cooperation | pact |
+| St. Peter's Basilica | wonder |
+| Stock Pile | action (one-shot) |
+| Strategic Territory (I) | territory / colony |
+| Strategic Territory (II) | territory / colony |
+| Taj Mahal | wonder |
+| Terrorism | event |
+| Theocracy | government |
+| Trade Routes Agreement | pact |
+| Transcontinental Railroad | wonder |
+| Uncertain Borders | event |
+| Universitas Carolina | wonder |
+| Urban Growth (A) | action (one-shot) |
+| Urban Growth (I) | action (one-shot) |
+| Urban Growth (II) | action (one-shot) |
+| Urban Growth (III) | action (one-shot) |
+| Vast Territory (I) | territory / colony |
+| Vast Territory (II) | territory / colony |
+| War over Culture | war |
+| War over Technology | war |
+| War over Territory | war |
+| Wave of Nationalism | action (one-shot) |
+| Wealthy Territory (I) | territory / colony |
+| Wealthy Territory (II) | territory / colony |
+
+## Cut 1w [widened]: completion-failure enrichment -- ever_cards_in_play (played or resolved at any point)
+
+corpus base rate: 321/1011 = 31.8% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | group | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|---|
+| 3.15x | Transcontinental Railroad | wonder | 29 | 29 | 100.0% | 13.0 | 17.4 |
+| 3.15x | Eiffel Tower | wonder | 25 | 25 | 100.0% | 13.2 | 17.4 |
+| 2.01x | Despotism | government | 316 | 202 | 63.9% | 14.3 | 18.7 |
+| 1.92x | War over Technology | war | 97 | 59 | 60.8% | 16.5 | 17.4 |
+| 1.59x | Trade Routes Agreement | pact | 85 | 43 | 50.6% | 15.2 | 17.5 |
+| 1.40x | Open Borders Agreement | pact | 108 | 48 | 44.4% | 16.3 | 17.4 |
+| 1.35x | First Space Flight | wonder | 96 | 41 | 42.7% | 18.1 | 17.2 |
+| 1.33x | Aggression: Annex | aggression | 38 | 16 | 42.1% | 17.4 | 17.3 |
+| 1.31x | Scientific Cooperation | pact | 60 | 25 | 41.7% | 17.5 | 17.3 |
+| 1.30x | Fast Food Chains | wonder | 85 | 35 | 41.2% | 18.4 | 17.2 |
+| 1.24x | Julius Caesar | leader | 289 | 114 | 39.4% | 16.7 | 17.6 |
+| 1.21x | Uncertain Borders | event | 299 | 115 | 38.5% | 16.9 | 17.5 |
+| 1.21x | Patriotism (A) | action (one-shot) | 120 | 46 | 38.3% | 17.2 | 17.3 |
+| 1.20x | Aggression: Raid (II) | aggression | 136 | 52 | 38.2% | 17.7 | 17.2 |
+| 1.20x | Internet | wonder | 55 | 21 | 38.2% | 18.3 | 17.2 |
+| 1.17x | Border Conflict | event | 296 | 110 | 37.2% | 17.1 | 17.4 |
+| 1.15x | Alexander the Great | leader | 290 | 106 | 36.6% | 17.0 | 17.4 |
+| 1.14x | Joan of Arc | leader | 388 | 141 | 36.3% | 17.2 | 17.4 |
+| 1.14x | Rats | event | 263 | 95 | 36.1% | 17.2 | 17.3 |
+| 1.14x | Foray | event | 363 | 131 | 36.1% | 17.1 | 17.4 |
+| 1.12x | Theocracy | government | 157 | 56 | 35.7% | 17.4 | 17.3 |
+| 1.12x | Reign of Terror | event | 288 | 102 | 35.4% | 17.2 | 17.3 |
+| 1.11x | Legion | tactic | 390 | 138 | 35.4% | 17.1 | 17.4 |
+| 1.11x | Historic Territory (I) | territory / colony | 346 | 122 | 35.3% | 17.2 | 17.4 |
+| 1.11x | Aggression: Plunder (I) | aggression | 128 | 45 | 35.2% | 17.4 | 17.3 |
+| 1.10x | Cultural Influence | event | 338 | 118 | 34.9% | 17.4 | 17.2 |
+| 1.10x | Monarchy | government | 302 | 105 | 34.8% | 17.3 | 17.3 |
+| 1.09x | Stock Pile | action (one-shot) | 369 | 128 | 34.7% | 17.3 | 17.3 |
+| 1.09x | Warfare | special technology | 255 | 88 | 34.5% | 17.1 | 17.4 |
+| 1.07x | Hollywood | wonder | 44 | 15 | 34.1% | 18.4 | 17.3 |
+| 1.07x | Aggression: Raid (I) | aggression | 135 | 46 | 34.1% | 17.6 | 17.3 |
+| 1.06x | Crusades | event | 298 | 100 | 33.6% | 17.4 | 17.3 |
+| 1.05x | Scientific Breakthrough | event | 433 | 145 | 33.5% | 17.3 | 17.3 |
+| 1.05x | Genghis Khan | leader | 329 | 110 | 33.4% | 17.2 | 17.3 |
+| 1.05x | Inhabited Territory (I) | territory / colony | 372 | 124 | 33.3% | 17.4 | 17.2 |
+| 1.04x | Phalanx | tactic | 365 | 121 | 33.2% | 17.5 | 17.2 |
+| 1.04x | Moses | leader | 290 | 96 | 33.1% | 17.0 | 17.4 |
+| 1.04x | Bread and Circuses | urban building | 200 | 66 | 33.0% | 17.6 | 17.2 |
+| 1.03x | Homer | leader | 318 | 104 | 32.7% | 17.1 | 17.4 |
+| 1.02x | Fighting Band | tactic | 578 | 188 | 32.5% | 17.4 | 17.2 |
+| 1.02x | Good Harvest | event | 413 | 134 | 32.4% | 17.4 | 17.2 |
+| 1.01x | Raiders | event | 239 | 77 | 32.2% | 17.4 | 17.3 |
+| 1.01x | Wealthy Territory (I) | territory / colony | 376 | 121 | 32.2% | 17.4 | 17.3 |
+| 1.01x | Aggression: Enslave | aggression | 115 | 37 | 32.2% | 17.6 | 17.3 |
+| 1.01x | Masonry | special technology | 284 | 91 | 32.0% | 17.4 | 17.3 |
+| 1.01x | Cultural Heritage (A) | action (one-shot) | 275 | 88 | 32.0% | 17.2 | 17.4 |
+| 1.00x | Barbarians | event | 308 | 98 | 31.8% | 17.4 | 17.3 |
+| 1.00x | Heavy Cavalry | tactic | 176 | 56 | 31.8% | 17.4 | 17.3 |
+| 1.00x | Frugality (I) | action (one-shot) | 560 | 178 | 31.8% | 17.4 | 17.1 |
+| 1.00x | Warriors | military unit | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Religion | urban building | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Philosophy | urban building | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Bronze | production | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Agriculture | production | 1011 | 321 | 31.8% | 17.3 | NaN |
+| 1.00x | Hammurabi | leader | 687 | 218 | 31.7% | 17.2 | 17.5 |
+| 1.00x | Frugality (A) | action (one-shot) | 602 | 191 | 31.7% | 17.3 | 17.3 |
+| 1.00x | Pestilence | event | 205 | 65 | 31.7% | 17.4 | 17.3 |
+| 1.00x | Aristotle | leader | 480 | 152 | 31.7% | 17.2 | 17.4 |
+| 1.00x | Christopher Columbus | leader | 307 | 97 | 31.6% | 17.4 | 17.3 |
+| 0.99x | Rebellion | event | 317 | 100 | 31.5% | 17.5 | 17.2 |
+| 0.99x | Rich Land (A) | action (one-shot) | 691 | 217 | 31.4% | 17.3 | 17.3 |
+| 0.99x | Frederick Barbarossa | leader | 131 | 41 | 31.3% | 17.6 | 17.3 |
+| 0.98x | International Agreement | event | 186 | 58 | 31.2% | 17.8 | 17.2 |
+| 0.98x | Engineering Genius (A) | action (one-shot) | 709 | 221 | 31.2% | 17.3 | 17.3 |
+| 0.98x | Strategic Territory (I) | territory / colony | 325 | 101 | 31.1% | 17.5 | 17.2 |
+| 0.98x | Michelangelo | leader | 383 | 119 | 31.1% | 17.5 | 17.2 |
+| 0.98x | Urban Growth (A) | action (one-shot) | 734 | 228 | 31.1% | 17.4 | 17.2 |
+| 0.98x | Medieval Army | tactic | 522 | 162 | 31.0% | 17.5 | 17.1 |
+| 0.98x | Swordsmen | military unit | 703 | 218 | 31.0% | 17.7 | 16.5 |
+| 0.98x | Patriotism (I) | action (one-shot) | 313 | 97 | 31.0% | 17.7 | 17.1 |
+| 0.97x | Code of Laws | special technology | 472 | 146 | 30.9% | 17.4 | 17.2 |
+| 0.97x | Alchemy | urban building | 869 | 268 | 30.8% | 17.5 | 16.2 |
+| 0.96x | Developed Territory (I) | territory / colony | 379 | 116 | 30.6% | 17.5 | 17.2 |
+| 0.96x | Cultural Heritage (I) | action (one-shot) | 361 | 110 | 30.5% | 17.6 | 17.1 |
+| 0.96x | Knights | military unit | 777 | 236 | 30.4% | 17.6 | 16.2 |
+| 0.95x | Vast Territory (I) | territory / colony | 374 | 113 | 30.2% | 17.6 | 17.1 |
+| 0.95x | New Deposits | event | 467 | 141 | 30.2% | 17.6 | 17.1 |
+| 0.94x | Breakthrough (I) | action (one-shot) | 872 | 261 | 29.9% | 17.6 | 15.3 |
+| 0.93x | Engineering Genius (I) | action (one-shot) | 770 | 228 | 29.6% | 17.7 | 16.2 |
+| 0.93x | Military Bonus (defense 2 / colonization 1) | military bonus | 635 | 188 | 29.6% | 17.8 | 16.5 |
+| 0.93x | Theology | urban building | 288 | 85 | 29.5% | 17.8 | 17.1 |
+| 0.93x | Immigration | event | 349 | 103 | 29.5% | 17.6 | 17.2 |
+| 0.93x | Iron | production | 942 | 277 | 29.4% | 17.6 | 12.9 |
+| 0.92x | Irrigation | production | 932 | 273 | 29.3% | 17.7 | 12.4 |
+| 0.92x | Rich Land (I) | action (one-shot) | 749 | 219 | 29.2% | 17.7 | 16.0 |
+| 0.92x | Reserves (I) | action (one-shot) | 574 | 167 | 29.1% | 17.7 | 16.8 |
+| 0.90x | Urban Growth (I) | action (one-shot) | 711 | 203 | 28.6% | 17.7 | 16.3 |
+| 0.90x | Leonardo da Vinci | leader | 646 | 184 | 28.5% | 17.6 | 16.7 |
+| 0.89x | Napoleon Bonaparte | leader | 593 | 168 | 28.3% | 18.1 | 16.2 |
+| 0.89x | Classic Army | tactic | 251 | 71 | 28.3% | 18.2 | 17.0 |
+| 0.89x | International Trade Agreement | pact | 96 | 27 | 28.1% | 17.8 | 17.2 |
+| 0.88x | Cartography | special technology | 500 | 140 | 28.0% | 17.7 | 16.9 |
+| 0.88x | War over Territory | war | 68 | 19 | 27.9% | 18.1 | 17.2 |
+| 0.88x | Defensive Army | tactic | 140 | 39 | 27.9% | 18.1 | 17.2 |
+| 0.86x | Drama | urban building | 325 | 89 | 27.4% | 17.8 | 17.1 |
+| 0.86x | Aggression: Plunder (II) | aggression | 128 | 35 | 27.3% | 18.0 | 17.2 |
+| 0.86x | Printing Press | urban building | 355 | 97 | 27.3% | 17.8 | 17.0 |
+| 0.86x | Maximilien Robespierre | leader | 290 | 79 | 27.2% | 18.1 | 17.0 |
+| 0.86x | Iconoclasm | event | 265 | 72 | 27.2% | 18.1 | 17.0 |
+| 0.82x | Vast Territory (II) | territory / colony | 520 | 136 | 26.2% | 18.2 | 16.4 |
+| 0.82x | Popularization of Science | event | 280 | 73 | 26.1% | 18.1 | 17.0 |
+| 0.82x | Politics of Strength | event | 173 | 45 | 26.0% | 18.3 | 17.1 |
+| 0.81x | Terrorism | event | 174 | 45 | 25.9% | 18.3 | 17.1 |
+| 0.80x | Conquistadors | tactic | 180 | 46 | 25.6% | 18.2 | 17.1 |
+| 0.80x | Ravages of Time | event | 150 | 38 | 25.3% | 18.3 | 17.1 |
+| 0.80x | James Cook | leader | 178 | 45 | 25.3% | 18.0 | 17.2 |
+| 0.79x | Aggression: Infiltrate | aggression | 119 | 30 | 25.2% | 18.5 | 17.1 |
+| 0.79x | Crime Wave | event | 156 | 39 | 25.0% | 18.2 | 17.1 |
+| 0.78x | Coal | production | 423 | 105 | 24.8% | 18.1 | 16.7 |
+| 0.78x | Isaac Newton | leader | 577 | 143 | 24.8% | 18.2 | 16.1 |
+| 0.77x | Historic Territory (II) | territory / colony | 229 | 56 | 24.5% | 18.2 | 17.0 |
+| 0.77x | Military Bonus (defense 4 / colonization 2) | military bonus | 726 | 177 | 24.4% | 18.2 | 15.0 |
+| 0.76x | National Pride | event | 210 | 51 | 24.3% | 18.2 | 17.1 |
+| 0.76x | Scientific Method | urban building | 577 | 140 | 24.3% | 18.3 | 16.0 |
+| 0.76x | Selective Breeding | production | 549 | 132 | 24.0% | 18.2 | 16.2 |
+| 0.76x | Economic Progress | event | 329 | 79 | 24.0% | 18.2 | 16.9 |
+| 0.75x | Prosperity | event | 288 | 69 | 24.0% | 18.2 | 17.0 |
+| 0.75x | Riflemen | military unit | 483 | 115 | 23.8% | 18.3 | 16.4 |
+| 0.75x | Cannon | military unit | 694 | 165 | 23.8% | 18.3 | 15.0 |
+| 0.75x | Republic | government | 463 | 110 | 23.8% | 18.2 | 16.5 |
+| 0.74x | Cold War | event | 278 | 65 | 23.4% | 18.2 | 17.0 |
+| 0.73x | Independence Declaration | event | 206 | 48 | 23.3% | 18.2 | 17.1 |
+| 0.73x | Strategy | special technology | 606 | 141 | 23.3% | 18.4 | 15.7 |
+| 0.73x | Team Sports | urban building | 168 | 39 | 23.2% | 18.4 | 17.1 |
+| 0.73x | Cavalrymen | military unit | 464 | 107 | 23.1% | 18.4 | 16.4 |
+| 0.73x | Breakthrough (II) | action (one-shot) | 807 | 186 | 23.0% | 18.3 | 13.3 |
+| 0.73x | Napoleonic Army | tactic | 230 | 53 | 23.0% | 18.5 | 17.0 |
+| 0.72x | Developed Territory (II) | territory / colony | 313 | 72 | 23.0% | 18.3 | 16.8 |
+| 0.72x | Organized Religion | urban building | 533 | 122 | 22.9% | 18.3 | 16.2 |
+| 0.72x | Rich Land (II) | action (one-shot) | 521 | 119 | 22.8% | 18.3 | 16.3 |
+| 0.71x | Aggression: Spy | aggression | 172 | 39 | 22.7% | 18.2 | 17.1 |
+| 0.71x | Inhabited Territory (II) | territory / colony | 298 | 67 | 22.5% | 18.4 | 16.8 |
+| 0.70x | Civil Unrest | event | 237 | 53 | 22.4% | 18.3 | 17.0 |
+| 0.70x | Constitutional Monarchy | government | 698 | 156 | 22.3% | 18.3 | 15.1 |
+| 0.70x | Mobile Artillery | tactic | 179 | 40 | 22.3% | 18.4 | 17.1 |
+| 0.70x | Justice System | special technology | 328 | 73 | 22.3% | 18.2 | 16.9 |
+| 0.70x | Strategic Territory (II) | territory / colony | 279 | 62 | 22.2% | 18.2 | 16.9 |
+| 0.70x | Efficient Upgrade (II) | action (one-shot) | 704 | 156 | 22.2% | 18.3 | 15.0 |
+| 0.69x | Urban Growth (II) | action (one-shot) | 520 | 114 | 21.9% | 18.4 | 16.1 |
+| 0.69x | Wave of Nationalism | action (one-shot) | 467 | 102 | 21.8% | 18.4 | 16.3 |
+| 0.69x | Navigation | special technology | 399 | 87 | 21.8% | 18.4 | 16.6 |
+| 0.68x | Refugees | event | 207 | 45 | 21.7% | 18.4 | 17.0 |
+| 0.68x | Engineering Genius (II) | action (one-shot) | 489 | 106 | 21.7% | 18.3 | 16.4 |
+| 0.68x | Fortifications | tactic | 102 | 22 | 21.6% | 18.3 | 17.2 |
+| 0.68x | Reserves (II) | action (one-shot) | 731 | 157 | 21.5% | 18.4 | 14.4 |
+| 0.67x | Wealthy Territory (II) | territory / colony | 382 | 81 | 21.2% | 18.4 | 16.6 |
+| 0.67x | Frugality (II) | action (one-shot) | 397 | 84 | 21.2% | 18.4 | 16.6 |
+| 0.66x | Impact of Strength | event | 67 | 14 | 20.9% | 18.8 | 17.2 |
+| 0.65x | Emigration | event | 241 | 50 | 20.7% | 18.4 | 17.0 |
+| 0.65x | Revolutionary Idea (II) | action (one-shot) | 706 | 145 | 20.5% | 18.4 | 14.7 |
+| 0.64x | William Shakespeare | leader | 196 | 40 | 20.4% | 18.3 | 17.1 |
+| 0.64x | Journalism | urban building | 375 | 76 | 20.3% | 18.4 | 16.6 |
+| 0.61x | Patriotism (II) | action (one-shot) | 402 | 78 | 19.4% | 18.5 | 16.5 |
+| 0.58x | Architecture | special technology | 458 | 85 | 18.6% | 18.5 | 16.3 |
+| 0.58x | J. S. Bach | leader | 108 | 20 | 18.5% | 18.6 | 17.1 |
+| 0.55x | Opera | urban building | 307 | 54 | 17.6% | 18.6 | 16.7 |
+| 0.51x | Mechanized Army | tactic | 124 | 20 | 16.1% | 19.2 | 17.0 |
+| 0.50x | Mahatma Gandhi | leader | 125 | 20 | 16.0% | 18.9 | 17.1 |
+| 0.49x | Aggression: Plunder (III) | aggression | 115 | 18 | 15.7% | 18.9 | 17.1 |
+| 0.47x | Impact of Technology | event | 54 | 8 | 14.8% | 19.1 | 17.2 |
+| 0.44x | Military Alliance | pact | 65 | 9 | 13.8% | 18.8 | 17.2 |
+| 0.42x | Aggression: Raid (III) | aggression | 89 | 12 | 13.5% | 19.1 | 17.1 |
+| 0.41x | Winston Churchill | leader | 277 | 36 | 13.0% | 18.9 | 16.7 |
+| 0.40x | Oil | production | 263 | 33 | 12.5% | 19.1 | 16.7 |
+| 0.39x | Impact of Happiness | event | 73 | 9 | 12.3% | 19.2 | 17.2 |
+| 0.38x | International Tourism | pact | 41 | 5 | 12.2% | 19.1 | 17.2 |
+| 0.38x | Bill Gates | leader | 345 | 42 | 12.2% | 19.0 | 16.4 |
+| 0.38x | Impact of Colonies | event | 115 | 14 | 12.2% | 19.1 | 17.1 |
+| 0.38x | Impact of Industry | event | 779 | 94 | 12.1% | 19.0 | 11.6 |
+| 0.38x | Air Forces | military unit | 457 | 55 | 12.0% | 19.0 | 15.9 |
+| 0.37x | Military Bonus (defense 6 / colonization 3) | military bonus | 504 | 60 | 11.9% | 19.0 | 15.6 |
+| 0.37x | Fundamentalism | government | 76 | 9 | 11.8% | 19.0 | 17.2 |
+| 0.36x | Aggression: Armed Intervention | aggression | 230 | 26 | 11.3% | 19.1 | 16.8 |
+| 0.36x | Impact of Science | event | 62 | 7 | 11.3% | 19.1 | 17.2 |
+| 0.35x | War over Culture | war | 190 | 21 | 11.1% | 19.2 | 16.9 |
+| 0.34x | Civil Service | special technology | 434 | 47 | 10.8% | 19.0 | 16.0 |
+| 0.33x | Computers | urban building | 664 | 70 | 10.5% | 19.0 | 14.0 |
+| 0.32x | Communism | government | 88 | 9 | 10.2% | 19.2 | 17.1 |
+| 0.32x | Revolutionary Idea (III) | action (one-shot) | 639 | 65 | 10.2% | 19.1 | 14.2 |
+| 0.32x | Albert Einstein | leader | 348 | 35 | 10.1% | 19.0 | 16.4 |
+| 0.32x | Efficient Upgrade (III) | action (one-shot) | 548 | 55 | 10.0% | 19.0 | 15.3 |
+| 0.31x | Military Build-Up | action (one-shot) | 308 | 30 | 9.7% | 19.1 | 16.5 |
+| 0.31x | Democracy | government | 422 | 41 | 9.7% | 19.1 | 16.0 |
+| 0.31x | Rockets | military unit | 196 | 19 | 9.7% | 19.0 | 16.9 |
+| 0.30x | Impact of Balance | event | 62 | 6 | 9.7% | 19.2 | 17.2 |
+| 0.30x | Impact of Agriculture | event | 732 | 70 | 9.6% | 19.1 | 12.6 |
+| 0.30x | Impact of Government | event | 95 | 9 | 9.5% | 19.1 | 17.1 |
+| 0.30x | Entrenchments | tactic | 74 | 7 | 9.5% | 19.1 | 17.2 |
+| 0.30x | Peace Treaty | pact | 32 | 3 | 9.4% | 18.9 | 17.3 |
+| 0.29x | Tanks | military unit | 207 | 19 | 9.2% | 19.2 | 16.8 |
+| 0.29x | Impact of Population | event | 165 | 15 | 9.1% | 19.1 | 16.9 |
+| 0.28x | Movies | urban building | 335 | 30 | 9.0% | 19.1 | 16.4 |
+| 0.28x | Multimedia | urban building | 373 | 33 | 8.8% | 19.2 | 16.2 |
+| 0.27x | Impact of Architecture | event | 92 | 8 | 8.7% | 19.1 | 17.1 |
+| 0.27x | Reserves (III) | action (one-shot) | 703 | 61 | 8.7% | 19.1 | 13.2 |
+| 0.27x | Modern Army | tactic | 177 | 15 | 8.5% | 19.2 | 16.9 |
+| 0.27x | Urban Growth (III) | action (one-shot) | 617 | 52 | 8.4% | 19.1 | 14.5 |
+| 0.25x | Satellites | special technology | 334 | 27 | 8.1% | 19.1 | 16.4 |
+| 0.25x | Mechanized Agriculture | production | 322 | 26 | 8.1% | 19.0 | 16.5 |
+| 0.24x | Military Theory | special technology | 429 | 33 | 7.7% | 19.1 | 16.0 |
+| 0.23x | Modern Infantry | military unit | 189 | 14 | 7.4% | 19.2 | 16.9 |
+| 0.23x | Impact of Competition | event | 656 | 48 | 7.3% | 19.2 | 13.9 |
+| 0.23x | Impact of Wonders | event | 302 | 22 | 7.3% | 19.1 | 16.5 |
+| 0.23x | Engineering | special technology | 441 | 32 | 7.3% | 19.1 | 15.9 |
+| 0.23x | Endowment for the Arts | action (one-shot) | 386 | 28 | 7.3% | 19.1 | 16.2 |
+| 0.22x | Patriotism (III) | action (one-shot) | 296 | 21 | 7.1% | 19.2 | 16.5 |
+| 0.22x | Shock Troops | tactic | 71 | 5 | 7.0% | 19.2 | 17.2 |
+| 0.21x | Charlie Chaplin | leader | 280 | 19 | 6.8% | 19.1 | 16.6 |
+| 0.21x | Sid Meier | leader | 384 | 25 | 6.5% | 19.1 | 16.2 |
+| 0.20x | Impact of Progress | event | 528 | 34 | 6.4% | 19.2 | 15.3 |
+| 0.20x | Impact of Variety | event | 64 | 4 | 6.2% | 19.0 | 17.2 |
+| 0.19x | Professional Sports | urban building | 196 | 12 | 6.1% | 19.2 | 16.9 |
+| 0.17x | Engineering Genius (III) | action (one-shot) | 402 | 22 | 5.5% | 19.2 | 16.1 |
+
+13 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | group | games | failures | rate |
+|---|---|---|---|---|
+| Taj Mahal | wonder | 16 | 16 | 100.0% |
+| Promise of Military Protection | pact | 16 | 5 | 31.2% |
+| Kremlin | wonder | 15 | 15 | 100.0% |
+| St. Peter's Basilica | wonder | 14 | 14 | 100.0% |
+| Universitas Carolina | wonder | 14 | 14 | 100.0% |
+| Library of Alexandria | wonder | 10 | 10 | 100.0% |
+| Ocean Liners | wonder | 7 | 7 | 100.0% |
+| Hanging Gardens | wonder | 6 | 6 | 100.0% |
+| Great Wall | wonder | 6 | 6 | 100.0% |
+| Acceptance of Supremacy | pact | 5 | 2 | 40.0% |
+| Pyramids | wonder | 4 | 4 | 100.0% |
+| Loss of Sovereignty | pact | 3 | 0 | 0.0% |
+| Colossus | wonder | 1 | 1 | 100.0% |
+
+10 of 236 cards have ZERO exposure in this set (Cut 1w [widened]) -- never appears across the whole sample:
+
+| card | group |
+|---|---|
+| Development of Agriculture | event |
+| Development of Civil Life | event |
+| Development of Crafts | event |
+| Development of Markets | event |
+| Development of Politics | event |
+| Development of Religion | event |
+| Development of Science | event |
+| Development of Settlement | event |
+| Development of Trade Routes | event |
+| Development of Warfare | event |
+
+## Cut 2 [narrow]: score-mismatch enrichment (completing games only) -- cards_in_play
+
+corpus base rate: 27/690 = 3.9% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | group | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|---|
+| 2.74x | Heavy Cavalry | tactic | 28 | 3 | 10.7% | 19.1 | 19.3 |
+| 2.56x | Shock Troops | tactic | 60 | 6 | 10.0% | 19.3 | 19.3 |
+| 1.94x | Defensive Army | tactic | 66 | 5 | 7.6% | 19.1 | 19.3 |
+| 1.86x | Winston Churchill | leader | 234 | 17 | 7.3% | 19.2 | 19.3 |
+| 1.56x | Code of Laws | special technology | 295 | 18 | 6.1% | 19.0 | 19.5 |
+| 1.55x | Mahatma Gandhi | leader | 99 | 6 | 6.1% | 19.2 | 19.3 |
+| 1.44x | Rockets | military unit | 177 | 10 | 5.6% | 19.2 | 19.3 |
+| 1.42x | Entrenchments | tactic | 54 | 3 | 5.6% | 19.2 | 19.3 |
+| 1.40x | Air Forces | military unit | 402 | 22 | 5.5% | 19.3 | 19.2 |
+| 1.39x | Fortifications | tactic | 55 | 3 | 5.5% | 19.1 | 19.3 |
+| 1.39x | Team Sports | urban building | 129 | 7 | 5.4% | 19.3 | 19.2 |
+| 1.38x | Theology | urban building | 203 | 11 | 5.4% | 19.2 | 19.3 |
+| 1.38x | Modern Army | tactic | 148 | 8 | 5.4% | 19.4 | 19.2 |
+| 1.37x | Navigation | special technology | 298 | 16 | 5.4% | 19.2 | 19.3 |
+| 1.35x | Albert Einstein | leader | 303 | 16 | 5.3% | 19.2 | 19.3 |
+| 1.33x | Bread and Circuses | urban building | 134 | 7 | 5.2% | 19.4 | 19.2 |
+| 1.31x | Warfare | special technology | 137 | 7 | 5.1% | 19.2 | 19.3 |
+| 1.29x | Napoleonic Army | tactic | 159 | 8 | 5.0% | 19.3 | 19.3 |
+| 1.25x | Riflemen | military unit | 368 | 18 | 4.9% | 19.2 | 19.3 |
+| 1.25x | Satellites | special technology | 307 | 15 | 4.9% | 19.2 | 19.3 |
+| 1.23x | Scientific Method | urban building | 437 | 21 | 4.8% | 19.3 | 19.2 |
+| 1.22x | Cavalrymen | military unit | 357 | 17 | 4.8% | 19.3 | 19.2 |
+| 1.19x | Engineering | special technology | 409 | 19 | 4.6% | 19.3 | 19.3 |
+| 1.18x | Knights | military unit | 541 | 25 | 4.6% | 19.3 | 19.3 |
+| 1.17x | Modern Infantry | military unit | 175 | 8 | 4.6% | 19.2 | 19.3 |
+| 1.16x | Swordsmen | military unit | 485 | 22 | 4.5% | 19.3 | 19.2 |
+| 1.14x | Classic Army | tactic | 157 | 7 | 4.5% | 19.3 | 19.3 |
+| 1.11x | Professional Sports | urban building | 184 | 8 | 4.3% | 19.3 | 19.3 |
+| 1.11x | Cannon | military unit | 529 | 23 | 4.3% | 19.3 | 19.2 |
+| 1.11x | Alchemy | urban building | 601 | 26 | 4.3% | 19.2 | 19.5 |
+| 1.08x | Drama | urban building | 236 | 10 | 4.2% | 19.3 | 19.3 |
+| 1.08x | Computers | urban building | 594 | 25 | 4.2% | 19.2 | 19.4 |
+| 1.05x | Masonry | special technology | 170 | 7 | 4.1% | 19.2 | 19.3 |
+| 1.04x | Selective Breeding | production | 417 | 17 | 4.1% | 19.2 | 19.4 |
+| 1.04x | Iron | production | 665 | 27 | 4.1% | 19.3 | 19.0 |
+| 1.01x | Movies | urban building | 305 | 12 | 3.9% | 19.3 | 19.2 |
+| 1.00x | Philosophy | urban building | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Agriculture | production | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Religion | urban building | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Bronze | production | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Warriors | military unit | 690 | 27 | 3.9% | 19.3 | NaN |
+| 0.98x | Strategy | special technology | 442 | 17 | 3.8% | 19.2 | 19.4 |
+| 0.97x | Irrigation | production | 659 | 25 | 3.8% | 19.3 | 19.1 |
+| 0.97x | Military Theory | special technology | 396 | 15 | 3.8% | 19.2 | 19.3 |
+| 0.96x | Coal | production | 318 | 12 | 3.8% | 19.2 | 19.3 |
+| 0.96x | Medieval Army | tactic | 80 | 3 | 3.8% | 19.3 | 19.3 |
+| 0.95x | Tanks | military unit | 188 | 7 | 3.7% | 19.4 | 19.2 |
+| 0.95x | Sid Meier | leader | 351 | 13 | 3.7% | 19.2 | 19.3 |
+| 0.93x | Organized Religion | urban building | 411 | 15 | 3.6% | 19.2 | 19.3 |
+| 0.92x | Civil Service | special technology | 387 | 14 | 3.6% | 19.2 | 19.3 |
+| 0.90x | Charlie Chaplin | leader | 256 | 9 | 3.5% | 19.3 | 19.3 |
+| 0.89x | Printing Press | urban building | 258 | 9 | 3.5% | 19.3 | 19.3 |
+| 0.89x | Oil | production | 230 | 8 | 3.5% | 19.3 | 19.2 |
+| 0.86x | Mechanized Agriculture | production | 296 | 10 | 3.4% | 19.2 | 19.3 |
+| 0.85x | Journalism | urban building | 299 | 10 | 3.3% | 19.2 | 19.3 |
+| 0.83x | Mechanized Army | tactic | 92 | 3 | 3.3% | 19.5 | 19.2 |
+| 0.81x | Opera | urban building | 253 | 8 | 3.2% | 19.3 | 19.3 |
+| 0.79x | Architecture | special technology | 356 | 11 | 3.1% | 19.1 | 19.4 |
+| 0.75x | Multimedia | urban building | 340 | 10 | 2.9% | 19.3 | 19.2 |
+| 0.71x | Cartography | special technology | 323 | 9 | 2.8% | 19.3 | 19.3 |
+| 0.71x | Conquistadors | tactic | 72 | 2 | 2.8% | 19.0 | 19.3 |
+| 0.70x | Bill Gates | leader | 290 | 8 | 2.8% | 19.2 | 19.3 |
+| 0.66x | Legion | tactic | 77 | 2 | 2.6% | 19.0 | 19.3 |
+| 0.66x | Phalanx | tactic | 39 | 1 | 2.6% | 19.2 | 19.3 |
+| 0.66x | Justice System | special technology | 234 | 6 | 2.6% | 19.2 | 19.3 |
+| 0.62x | Fighting Band | tactic | 123 | 3 | 2.4% | 19.1 | 19.3 |
+| 0.25x | Mobile Artillery | tactic | 101 | 1 | 1.0% | 19.2 | 19.3 |
+
+0 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | group | games | failures | rate |
+|---|---|---|---|---|
+
+169 of 236 cards have ZERO exposure in this set (Cut 2 [narrow]) -- never appears across the whole sample:
+
+| card | group |
+|---|---|
+| Acceptance of Supremacy | pact |
+| Aggression: Annex | aggression |
+| Aggression: Armed Intervention | aggression |
+| Aggression: Enslave | aggression |
+| Aggression: Infiltrate | aggression |
+| Aggression: Plunder (I) | aggression |
+| Aggression: Plunder (II) | aggression |
+| Aggression: Plunder (III) | aggression |
+| Aggression: Raid (I) | aggression |
+| Aggression: Raid (II) | aggression |
+| Aggression: Raid (III) | aggression |
+| Aggression: Spy | aggression |
+| Alexander the Great | leader |
+| Aristotle | leader |
+| Barbarians | event |
+| Border Conflict | event |
+| Breakthrough (I) | action (one-shot) |
+| Breakthrough (II) | action (one-shot) |
+| Christopher Columbus | leader |
+| Civil Unrest | event |
+| Cold War | event |
+| Colossus | wonder |
+| Communism | government |
+| Constitutional Monarchy | government |
+| Crime Wave | event |
+| Crusades | event |
+| Cultural Heritage (A) | action (one-shot) |
+| Cultural Heritage (I) | action (one-shot) |
+| Cultural Influence | event |
+| Democracy | government |
+| Despotism | government |
+| Developed Territory (I) | territory / colony |
+| Developed Territory (II) | territory / colony |
+| Development of Agriculture | event |
+| Development of Civil Life | event |
+| Development of Crafts | event |
+| Development of Markets | event |
+| Development of Politics | event |
+| Development of Religion | event |
+| Development of Science | event |
+| Development of Settlement | event |
+| Development of Trade Routes | event |
+| Development of Warfare | event |
+| Economic Progress | event |
+| Efficient Upgrade (II) | action (one-shot) |
+| Efficient Upgrade (III) | action (one-shot) |
+| Eiffel Tower | wonder |
+| Emigration | event |
+| Endowment for the Arts | action (one-shot) |
+| Engineering Genius (A) | action (one-shot) |
+| Engineering Genius (I) | action (one-shot) |
+| Engineering Genius (II) | action (one-shot) |
+| Engineering Genius (III) | action (one-shot) |
+| Fast Food Chains | wonder |
+| First Space Flight | wonder |
+| Foray | event |
+| Frederick Barbarossa | leader |
+| Frugality (A) | action (one-shot) |
+| Frugality (I) | action (one-shot) |
+| Frugality (II) | action (one-shot) |
+| Fundamentalism | government |
+| Genghis Khan | leader |
+| Good Harvest | event |
+| Great Wall | wonder |
+| Hammurabi | leader |
+| Hanging Gardens | wonder |
+| Historic Territory (I) | territory / colony |
+| Historic Territory (II) | territory / colony |
+| Hollywood | wonder |
+| Homer | leader |
+| Iconoclasm | event |
+| Immigration | event |
+| Impact of Agriculture | event |
+| Impact of Architecture | event |
+| Impact of Balance | event |
+| Impact of Colonies | event |
+| Impact of Competition | event |
+| Impact of Government | event |
+| Impact of Happiness | event |
+| Impact of Industry | event |
+| Impact of Population | event |
+| Impact of Progress | event |
+| Impact of Science | event |
+| Impact of Strength | event |
+| Impact of Technology | event |
+| Impact of Variety | event |
+| Impact of Wonders | event |
+| Independence Declaration | event |
+| Inhabited Territory (I) | territory / colony |
+| Inhabited Territory (II) | territory / colony |
+| International Agreement | event |
+| International Tourism | pact |
+| International Trade Agreement | pact |
+| Internet | wonder |
+| Isaac Newton | leader |
+| J. S. Bach | leader |
+| James Cook | leader |
+| Joan of Arc | leader |
+| Julius Caesar | leader |
+| Kremlin | wonder |
+| Leonardo da Vinci | leader |
+| Library of Alexandria | wonder |
+| Loss of Sovereignty | pact |
+| Maximilien Robespierre | leader |
+| Michelangelo | leader |
+| Military Alliance | pact |
+| Military Bonus (defense 2 / colonization 1) | military bonus |
+| Military Bonus (defense 4 / colonization 2) | military bonus |
+| Military Bonus (defense 6 / colonization 3) | military bonus |
+| Military Build-Up | action (one-shot) |
+| Monarchy | government |
+| Moses | leader |
+| Napoleon Bonaparte | leader |
+| National Pride | event |
+| New Deposits | event |
+| Ocean Liners | wonder |
+| Open Borders Agreement | pact |
+| Patriotism (A) | action (one-shot) |
+| Patriotism (I) | action (one-shot) |
+| Patriotism (II) | action (one-shot) |
+| Patriotism (III) | action (one-shot) |
+| Peace Treaty | pact |
+| Pestilence | event |
+| Politics of Strength | event |
+| Popularization of Science | event |
+| Promise of Military Protection | pact |
+| Prosperity | event |
+| Pyramids | wonder |
+| Raiders | event |
+| Rats | event |
+| Ravages of Time | event |
+| Rebellion | event |
+| Refugees | event |
+| Reign of Terror | event |
+| Republic | government |
+| Reserves (I) | action (one-shot) |
+| Reserves (II) | action (one-shot) |
+| Reserves (III) | action (one-shot) |
+| Revolutionary Idea (II) | action (one-shot) |
+| Revolutionary Idea (III) | action (one-shot) |
+| Rich Land (A) | action (one-shot) |
+| Rich Land (I) | action (one-shot) |
+| Rich Land (II) | action (one-shot) |
+| Scientific Breakthrough | event |
+| Scientific Cooperation | pact |
+| St. Peter's Basilica | wonder |
+| Stock Pile | action (one-shot) |
+| Strategic Territory (I) | territory / colony |
+| Strategic Territory (II) | territory / colony |
+| Taj Mahal | wonder |
+| Terrorism | event |
+| Theocracy | government |
+| Trade Routes Agreement | pact |
+| Transcontinental Railroad | wonder |
+| Uncertain Borders | event |
+| Universitas Carolina | wonder |
+| Urban Growth (A) | action (one-shot) |
+| Urban Growth (I) | action (one-shot) |
+| Urban Growth (II) | action (one-shot) |
+| Urban Growth (III) | action (one-shot) |
+| Vast Territory (I) | territory / colony |
+| Vast Territory (II) | territory / colony |
+| War over Culture | war |
+| War over Technology | war |
+| War over Territory | war |
+| Wave of Nationalism | action (one-shot) |
+| Wealthy Territory (I) | territory / colony |
+| Wealthy Territory (II) | territory / colony |
+| William Shakespeare | leader |
+
+## Cut 2w [widened]: score-mismatch enrichment (completing games only) -- ever_cards_in_play
+
+corpus base rate: 27/690 = 3.9% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | group | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|---|
+| 3.83x | Open Borders Agreement | pact | 60 | 9 | 15.0% | 18.9 | 19.3 |
+| 3.52x | Peace Treaty | pact | 29 | 4 | 13.8% | 19.1 | 19.3 |
+| 3.04x | Trade Routes Agreement | pact | 42 | 5 | 11.9% | 19.1 | 19.3 |
+| 3.01x | Internet | wonder | 34 | 4 | 11.8% | 19.0 | 19.3 |
+| 2.92x | Scientific Cooperation | pact | 35 | 4 | 11.4% | 19.1 | 19.3 |
+| 2.69x | War over Technology | war | 38 | 4 | 10.5% | 19.6 | 19.2 |
+| 2.32x | Shock Troops | tactic | 66 | 6 | 9.1% | 19.3 | 19.3 |
+| 2.32x | Aggression: Annex | aggression | 22 | 2 | 9.1% | 19.3 | 19.3 |
+| 2.02x | Theocracy | government | 101 | 8 | 7.9% | 19.3 | 19.3 |
+| 1.97x | Aggression: Enslave | aggression | 78 | 6 | 7.7% | 19.3 | 19.3 |
+| 1.91x | Winston Churchill | leader | 241 | 18 | 7.5% | 19.2 | 19.3 |
+| 1.89x | Phalanx | tactic | 244 | 18 | 7.4% | 19.3 | 19.3 |
+| 1.86x | Impact of Science | event | 55 | 4 | 7.3% | 19.4 | 19.3 |
+| 1.85x | International Trade Agreement | pact | 69 | 5 | 7.2% | 19.1 | 19.3 |
+| 1.83x | Good Harvest | event | 279 | 20 | 7.2% | 19.3 | 19.2 |
+| 1.78x | Independence Declaration | event | 158 | 11 | 7.0% | 19.2 | 19.3 |
+| 1.76x | Joan of Arc | leader | 247 | 17 | 6.9% | 19.2 | 19.3 |
+| 1.70x | Impact of Population | event | 150 | 10 | 6.7% | 19.3 | 19.3 |
+| 1.68x | Crusades | event | 198 | 13 | 6.6% | 19.3 | 19.3 |
+| 1.67x | Uncertain Borders | event | 184 | 12 | 6.5% | 19.3 | 19.3 |
+| 1.66x | Aggression: Raid (III) | aggression | 77 | 5 | 6.5% | 19.4 | 19.2 |
+| 1.66x | Patriotism (I) | action (one-shot) | 216 | 14 | 6.5% | 19.2 | 19.3 |
+| 1.60x | Fortifications | tactic | 80 | 5 | 6.2% | 19.2 | 19.3 |
+| 1.58x | Terrorism | event | 129 | 8 | 6.2% | 19.2 | 19.3 |
+| 1.58x | Moses | leader | 194 | 12 | 6.2% | 19.2 | 19.3 |
+| 1.57x | Despotism | government | 114 | 7 | 6.1% | 19.3 | 19.3 |
+| 1.56x | Immigration | event | 246 | 15 | 6.1% | 19.3 | 19.2 |
+| 1.55x | Homer | leader | 214 | 13 | 6.1% | 19.3 | 19.3 |
+| 1.54x | Foray | event | 232 | 14 | 6.0% | 19.3 | 19.3 |
+| 1.54x | Aggression: Plunder (I) | aggression | 83 | 5 | 6.0% | 19.3 | 19.3 |
+| 1.54x | James Cook | leader | 133 | 8 | 6.0% | 19.2 | 19.3 |
+| 1.53x | Crime Wave | event | 117 | 7 | 6.0% | 19.2 | 19.3 |
+| 1.53x | Entrenchments | tactic | 67 | 4 | 6.0% | 19.3 | 19.3 |
+| 1.52x | Aggression: Raid (II) | aggression | 84 | 5 | 6.0% | 19.3 | 19.3 |
+| 1.52x | Defensive Army | tactic | 101 | 6 | 5.9% | 19.1 | 19.3 |
+| 1.49x | New Deposits | event | 326 | 19 | 5.8% | 19.3 | 19.2 |
+| 1.48x | Popularization of Science | event | 207 | 12 | 5.8% | 19.2 | 19.3 |
+| 1.47x | Emigration | event | 191 | 11 | 5.8% | 19.2 | 19.3 |
+| 1.46x | Mahatma Gandhi | leader | 105 | 6 | 5.7% | 19.2 | 19.3 |
+| 1.44x | Rockets | military unit | 177 | 10 | 5.6% | 19.2 | 19.3 |
+| 1.44x | Aggression: Infiltrate | aggression | 89 | 5 | 5.6% | 19.4 | 19.2 |
+| 1.42x | International Tourism | pact | 36 | 2 | 5.6% | 19.4 | 19.3 |
+| 1.41x | Code of Laws | special technology | 326 | 18 | 5.5% | 19.0 | 19.5 |
+| 1.40x | Prosperity | event | 219 | 12 | 5.5% | 19.2 | 19.3 |
+| 1.40x | Genghis Khan | leader | 219 | 12 | 5.5% | 19.2 | 19.3 |
+| 1.40x | Air Forces | military unit | 402 | 22 | 5.5% | 19.3 | 19.2 |
+| 1.39x | Navigation | special technology | 312 | 17 | 5.4% | 19.2 | 19.3 |
+| 1.39x | Frugality (II) | action (one-shot) | 313 | 17 | 5.4% | 19.2 | 19.3 |
+| 1.39x | Team Sports | urban building | 129 | 7 | 5.4% | 19.3 | 19.2 |
+| 1.38x | Theology | urban building | 203 | 11 | 5.4% | 19.2 | 19.3 |
+| 1.37x | Military Alliance | pact | 56 | 3 | 5.4% | 19.1 | 19.3 |
+| 1.37x | Rats | event | 168 | 9 | 5.4% | 19.2 | 19.3 |
+| 1.37x | Impact of Balance | event | 56 | 3 | 5.4% | 19.4 | 19.2 |
+| 1.36x | War over Culture | war | 169 | 9 | 5.3% | 19.4 | 19.2 |
+| 1.34x | Inhabited Territory (I) | territory / colony | 248 | 13 | 5.2% | 19.2 | 19.3 |
+| 1.33x | Bread and Circuses | urban building | 134 | 7 | 5.2% | 19.4 | 19.2 |
+| 1.33x | Scientific Breakthrough | event | 288 | 15 | 5.2% | 19.2 | 19.3 |
+| 1.33x | Historic Territory (II) | territory / colony | 173 | 9 | 5.2% | 19.3 | 19.3 |
+| 1.32x | Legion | tactic | 252 | 13 | 5.2% | 19.2 | 19.3 |
+| 1.31x | Albert Einstein | leader | 313 | 16 | 5.1% | 19.2 | 19.3 |
+| 1.30x | Wealthy Territory (I) | territory / colony | 255 | 13 | 5.1% | 19.3 | 19.2 |
+| 1.30x | Patriotism (III) | action (one-shot) | 275 | 14 | 5.1% | 19.3 | 19.2 |
+| 1.30x | Strategic Territory (II) | territory / colony | 217 | 11 | 5.1% | 19.3 | 19.3 |
+| 1.29x | Communism | government | 79 | 4 | 5.1% | 19.4 | 19.2 |
+| 1.29x | Military Build-Up | action (one-shot) | 278 | 14 | 5.0% | 19.3 | 19.3 |
+| 1.29x | National Pride | event | 159 | 8 | 5.0% | 19.3 | 19.3 |
+| 1.28x | Heavy Cavalry | tactic | 120 | 6 | 5.0% | 19.2 | 19.3 |
+| 1.28x | Cultural Influence | event | 220 | 11 | 5.0% | 19.3 | 19.2 |
+| 1.28x | Impact of Wonders | event | 280 | 14 | 5.0% | 19.2 | 19.3 |
+| 1.27x | Stock Pile | action (one-shot) | 241 | 12 | 5.0% | 19.3 | 19.3 |
+| 1.27x | Impact of Colonies | event | 101 | 5 | 5.0% | 19.4 | 19.2 |
+| 1.26x | Developed Territory (I) | territory / colony | 263 | 13 | 4.9% | 19.3 | 19.3 |
+| 1.26x | Napoleon Bonaparte | leader | 425 | 21 | 4.9% | 19.3 | 19.2 |
+| 1.26x | Modern Army | tactic | 162 | 8 | 4.9% | 19.4 | 19.2 |
+| 1.25x | Aggression: Armed Intervention | aggression | 204 | 10 | 4.9% | 19.4 | 19.2 |
+| 1.25x | Riflemen | military unit | 368 | 18 | 4.9% | 19.2 | 19.3 |
+| 1.25x | Satellites | special technology | 307 | 15 | 4.9% | 19.2 | 19.3 |
+| 1.23x | Scientific Method | urban building | 437 | 21 | 4.8% | 19.3 | 19.2 |
+| 1.22x | Warfare | special technology | 167 | 8 | 4.8% | 19.3 | 19.3 |
+| 1.22x | Cultural Heritage (I) | action (one-shot) | 251 | 12 | 4.8% | 19.2 | 19.3 |
+| 1.22x | Cavalrymen | military unit | 357 | 17 | 4.8% | 19.3 | 19.2 |
+| 1.22x | Impact of Architecture | event | 84 | 4 | 4.8% | 19.4 | 19.3 |
+| 1.21x | Maximilien Robespierre | leader | 211 | 10 | 4.7% | 19.2 | 19.3 |
+| 1.20x | Hammurabi | leader | 469 | 22 | 4.7% | 19.1 | 19.6 |
+| 1.20x | Politics of Strength | event | 128 | 6 | 4.7% | 19.2 | 19.3 |
+| 1.19x | Impact of Government | event | 86 | 4 | 4.7% | 19.4 | 19.2 |
+| 1.19x | Engineering | special technology | 409 | 19 | 4.6% | 19.3 | 19.3 |
+| 1.18x | Frugality (A) | action (one-shot) | 411 | 19 | 4.6% | 19.2 | 19.3 |
+| 1.18x | Knights | military unit | 541 | 25 | 4.6% | 19.3 | 19.3 |
+| 1.18x | Rebellion | event | 217 | 10 | 4.6% | 19.2 | 19.3 |
+| 1.17x | Modern Infantry | military unit | 175 | 8 | 4.6% | 19.2 | 19.3 |
+| 1.16x | Swordsmen | military unit | 485 | 22 | 4.5% | 19.3 | 19.2 |
+| 1.16x | Republic | government | 353 | 16 | 4.5% | 19.2 | 19.4 |
+| 1.16x | Reserves (II) | action (one-shot) | 574 | 26 | 4.5% | 19.2 | 19.5 |
+| 1.16x | Napoleonic Army | tactic | 177 | 8 | 4.5% | 19.3 | 19.3 |
+| 1.15x | Aggression: Raid (I) | aggression | 89 | 4 | 4.5% | 19.3 | 19.3 |
+| 1.14x | Ravages of Time | event | 112 | 5 | 4.5% | 19.3 | 19.3 |
+| 1.13x | Urban Growth (II) | action (one-shot) | 406 | 18 | 4.4% | 19.2 | 19.4 |
+| 1.13x | Vast Territory (II) | territory / colony | 384 | 17 | 4.4% | 19.2 | 19.3 |
+| 1.13x | Reserves (I) | action (one-shot) | 407 | 18 | 4.4% | 19.2 | 19.3 |
+| 1.13x | Breakthrough (I) | action (one-shot) | 611 | 27 | 4.4% | 19.2 | 19.6 |
+| 1.12x | Economic Progress | event | 250 | 11 | 4.4% | 19.2 | 19.3 |
+| 1.12x | Wave of Nationalism | action (one-shot) | 365 | 16 | 4.4% | 19.2 | 19.3 |
+| 1.11x | Cannon | military unit | 529 | 23 | 4.3% | 19.3 | 19.2 |
+| 1.11x | Civil Unrest | event | 184 | 8 | 4.3% | 19.2 | 19.3 |
+| 1.11x | Alexander the Great | leader | 184 | 8 | 4.3% | 19.4 | 19.2 |
+| 1.11x | Professional Sports | urban building | 184 | 8 | 4.3% | 19.3 | 19.3 |
+| 1.11x | Rich Land (I) | action (one-shot) | 530 | 23 | 4.3% | 19.3 | 19.3 |
+| 1.11x | Alchemy | urban building | 601 | 26 | 4.3% | 19.2 | 19.5 |
+| 1.10x | Raiders | event | 162 | 7 | 4.3% | 19.3 | 19.2 |
+| 1.10x | Refugees | event | 162 | 7 | 4.3% | 19.3 | 19.2 |
+| 1.10x | Reign of Terror | event | 186 | 8 | 4.3% | 19.3 | 19.2 |
+| 1.09x | Military Bonus (defense 2 / colonization 1) | military bonus | 447 | 19 | 4.3% | 19.3 | 19.3 |
+| 1.08x | Drama | urban building | 236 | 10 | 4.2% | 19.3 | 19.3 |
+| 1.08x | Engineering Genius (III) | action (one-shot) | 380 | 16 | 4.2% | 19.3 | 19.3 |
+| 1.08x | Computers | urban building | 594 | 25 | 4.2% | 19.2 | 19.4 |
+| 1.07x | Democracy | government | 381 | 16 | 4.2% | 19.3 | 19.3 |
+| 1.07x | Breakthrough (II) | action (one-shot) | 621 | 26 | 4.2% | 19.2 | 19.6 |
+| 1.07x | Revolutionary Idea (III) | action (one-shot) | 574 | 24 | 4.2% | 19.3 | 19.3 |
+| 1.06x | Michelangelo | leader | 264 | 11 | 4.2% | 19.2 | 19.3 |
+| 1.06x | Urban Growth (A) | action (one-shot) | 506 | 21 | 4.2% | 19.2 | 19.4 |
+| 1.06x | Iconoclasm | event | 193 | 8 | 4.1% | 19.2 | 19.3 |
+| 1.05x | Engineering Genius (A) | action (one-shot) | 488 | 20 | 4.1% | 19.2 | 19.4 |
+| 1.04x | War over Territory | war | 49 | 2 | 4.1% | 19.4 | 19.3 |
+| 1.04x | Selective Breeding | production | 417 | 17 | 4.1% | 19.2 | 19.4 |
+| 1.04x | Monarchy | government | 197 | 8 | 4.1% | 19.2 | 19.3 |
+| 1.04x | Iron | production | 665 | 27 | 4.1% | 19.3 | 19.0 |
+| 1.03x | Reserves (III) | action (one-shot) | 642 | 26 | 4.0% | 19.3 | 19.4 |
+| 1.03x | Historic Territory (I) | territory / colony | 224 | 9 | 4.0% | 19.3 | 19.2 |
+| 1.02x | Rich Land (A) | action (one-shot) | 474 | 19 | 4.0% | 19.3 | 19.2 |
+| 1.02x | Military Bonus (defense 4 / colonization 2) | military bonus | 549 | 22 | 4.0% | 19.3 | 19.3 |
+| 1.02x | Fast Food Chains | wonder | 50 | 2 | 4.0% | 19.3 | 19.3 |
+| 1.01x | Impact of Competition | event | 608 | 24 | 3.9% | 19.3 | 19.3 |
+| 1.01x | Urban Growth (I) | action (one-shot) | 508 | 20 | 3.9% | 19.2 | 19.4 |
+| 1.01x | Movies | urban building | 305 | 12 | 3.9% | 19.3 | 19.2 |
+| 1.00x | Frugality (I) | action (one-shot) | 382 | 15 | 3.9% | 19.2 | 19.3 |
+| 1.00x | Revolutionary Idea (II) | action (one-shot) | 561 | 22 | 3.9% | 19.2 | 19.4 |
+| 1.00x | Isaac Newton | leader | 434 | 17 | 3.9% | 19.2 | 19.4 |
+| 1.00x | Engineering Genius (II) | action (one-shot) | 383 | 15 | 3.9% | 19.2 | 19.4 |
+| 1.00x | Agriculture | production | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Philosophy | urban building | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Bronze | production | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Warriors | military unit | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Religion | urban building | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Endowment for the Arts | action (one-shot) | 358 | 14 | 3.9% | 19.2 | 19.3 |
+| 1.00x | Leonardo da Vinci | leader | 462 | 18 | 3.9% | 19.2 | 19.5 |
+| 1.00x | Inhabited Territory (II) | territory / colony | 231 | 9 | 3.9% | 19.4 | 19.2 |
+| 1.00x | Urban Growth (III) | action (one-shot) | 565 | 22 | 3.9% | 19.3 | 19.3 |
+| 0.99x | Classic Army | tactic | 180 | 7 | 3.9% | 19.3 | 19.2 |
+| 0.99x | Strategy | special technology | 465 | 18 | 3.9% | 19.2 | 19.4 |
+| 0.98x | Efficient Upgrade (III) | action (one-shot) | 493 | 19 | 3.9% | 19.2 | 19.4 |
+| 0.98x | Impact of Progress | event | 494 | 19 | 3.8% | 19.3 | 19.3 |
+| 0.98x | Military Bonus (defense 6 / colonization 3) | military bonus | 444 | 17 | 3.8% | 19.3 | 19.3 |
+| 0.97x | Christopher Columbus | leader | 210 | 8 | 3.8% | 19.2 | 19.3 |
+| 0.97x | Barbarians | event | 210 | 8 | 3.8% | 19.2 | 19.3 |
+| 0.97x | Impact of Industry | event | 685 | 26 | 3.8% | 19.3 | 19.6 |
+| 0.97x | Irrigation | production | 659 | 25 | 3.8% | 19.3 | 19.1 |
+| 0.97x | Military Theory | special technology | 396 | 15 | 3.8% | 19.2 | 19.3 |
+| 0.96x | Coal | production | 318 | 12 | 3.8% | 19.2 | 19.3 |
+| 0.96x | Border Conflict | event | 186 | 7 | 3.8% | 19.2 | 19.3 |
+| 0.96x | Aggression: Spy | aggression | 133 | 5 | 3.8% | 19.3 | 19.3 |
+| 0.95x | Tanks | military unit | 188 | 7 | 3.7% | 19.4 | 19.2 |
+| 0.95x | Patriotism (II) | action (one-shot) | 324 | 12 | 3.7% | 19.2 | 19.3 |
+| 0.94x | Constitutional Monarchy | government | 542 | 20 | 3.7% | 19.2 | 19.4 |
+| 0.93x | Wealthy Territory (II) | territory / colony | 301 | 11 | 3.7% | 19.3 | 19.2 |
+| 0.93x | Organized Religion | urban building | 411 | 15 | 3.6% | 19.2 | 19.3 |
+| 0.93x | Efficient Upgrade (II) | action (one-shot) | 548 | 20 | 3.6% | 19.2 | 19.5 |
+| 0.93x | First Space Flight | wonder | 55 | 2 | 3.6% | 19.0 | 19.3 |
+| 0.93x | Masonry | special technology | 193 | 7 | 3.6% | 19.2 | 19.3 |
+| 0.93x | Impact of Agriculture | event | 662 | 24 | 3.6% | 19.3 | 19.5 |
+| 0.93x | Sid Meier | leader | 359 | 13 | 3.6% | 19.2 | 19.3 |
+| 0.92x | Civil Service | special technology | 387 | 14 | 3.6% | 19.2 | 19.3 |
+| 0.92x | Medieval Army | tactic | 360 | 13 | 3.6% | 19.3 | 19.3 |
+| 0.91x | Strategic Territory (I) | territory / colony | 224 | 8 | 3.6% | 19.3 | 19.3 |
+| 0.90x | Engineering Genius (I) | action (one-shot) | 542 | 19 | 3.5% | 19.2 | 19.4 |
+| 0.89x | Printing Press | urban building | 258 | 9 | 3.5% | 19.3 | 19.3 |
+| 0.89x | Oil | production | 230 | 8 | 3.5% | 19.3 | 19.2 |
+| 0.88x | Charlie Chaplin | leader | 261 | 9 | 3.4% | 19.3 | 19.3 |
+| 0.88x | Vast Territory (I) | territory / colony | 261 | 9 | 3.4% | 19.3 | 19.2 |
+| 0.88x | Julius Caesar | leader | 175 | 6 | 3.4% | 19.3 | 19.3 |
+| 0.86x | Mechanized Agriculture | production | 296 | 10 | 3.4% | 19.2 | 19.3 |
+| 0.85x | Journalism | urban building | 299 | 10 | 3.3% | 19.2 | 19.3 |
+| 0.85x | Fighting Band | tactic | 390 | 13 | 3.3% | 19.2 | 19.3 |
+| 0.85x | Frederick Barbarossa | leader | 90 | 3 | 3.3% | 19.4 | 19.3 |
+| 0.85x | Impact of Variety | event | 60 | 2 | 3.3% | 19.2 | 19.3 |
+| 0.84x | Bill Gates | leader | 303 | 10 | 3.3% | 19.2 | 19.3 |
+| 0.84x | Cold War | event | 213 | 7 | 3.3% | 19.2 | 19.3 |
+| 0.83x | Rich Land (II) | action (one-shot) | 402 | 13 | 3.2% | 19.2 | 19.4 |
+| 0.82x | Aggression: Plunder (II) | aggression | 93 | 3 | 3.2% | 19.2 | 19.3 |
+| 0.82x | Architecture | special technology | 373 | 12 | 3.2% | 19.1 | 19.4 |
+| 0.81x | Opera | urban building | 253 | 8 | 3.2% | 19.3 | 19.3 |
+| 0.80x | International Agreement | event | 128 | 4 | 3.1% | 19.1 | 19.3 |
+| 0.78x | Aristotle | leader | 328 | 10 | 3.0% | 19.2 | 19.3 |
+| 0.76x | Fundamentalism | government | 67 | 2 | 3.0% | 19.3 | 19.3 |
+| 0.76x | Conquistadors | tactic | 134 | 4 | 3.0% | 19.2 | 19.3 |
+| 0.75x | Multimedia | urban building | 340 | 10 | 2.9% | 19.3 | 19.2 |
+| 0.74x | Developed Territory (II) | territory / colony | 241 | 7 | 2.9% | 19.3 | 19.3 |
+| 0.74x | Mechanized Army | tactic | 104 | 3 | 2.9% | 19.5 | 19.2 |
+| 0.71x | Cartography | special technology | 360 | 10 | 2.8% | 19.3 | 19.3 |
+| 0.70x | Justice System | special technology | 255 | 7 | 2.7% | 19.2 | 19.3 |
+| 0.68x | Cultural Heritage (A) | action (one-shot) | 187 | 5 | 2.7% | 19.2 | 19.3 |
+| 0.66x | William Shakespeare | leader | 156 | 4 | 2.6% | 19.2 | 19.3 |
+| 0.58x | J. S. Bach | leader | 88 | 2 | 2.3% | 19.1 | 19.3 |
+| 0.56x | Impact of Technology | event | 46 | 1 | 2.2% | 19.4 | 19.3 |
+| 0.53x | Aggression: Plunder (III) | aggression | 97 | 2 | 2.1% | 19.4 | 19.2 |
+| 0.48x | Impact of Strength | event | 53 | 1 | 1.9% | 19.5 | 19.2 |
+| 0.40x | Impact of Happiness | event | 64 | 1 | 1.6% | 19.4 | 19.2 |
+| 0.37x | Mobile Artillery | tactic | 139 | 2 | 1.4% | 19.3 | 19.3 |
+| 0.37x | Pestilence | event | 140 | 2 | 1.4% | 19.2 | 19.3 |
+| 0.00x | Patriotism (A) | action (one-shot) | 74 | 0 | 0.0% | 19.4 | 19.2 |
+| 0.00x | Hollywood | wonder | 29 | 0 | 0.0% | 19.4 | 19.3 |
+
+3 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | group | games | failures | rate |
+|---|---|---|---|---|
+| Promise of Military Protection | pact | 11 | 1 | 9.1% |
+| Loss of Sovereignty | pact | 3 | 1 | 33.3% |
+| Acceptance of Supremacy | pact | 3 | 0 | 0.0% |
+
+22 of 236 cards have ZERO exposure in this set (Cut 2w [widened]) -- never appears across the whole sample:
+
+| card | group |
+|---|---|
+| Colossus | wonder |
+| Development of Agriculture | event |
+| Development of Civil Life | event |
+| Development of Crafts | event |
+| Development of Markets | event |
+| Development of Politics | event |
+| Development of Religion | event |
+| Development of Science | event |
+| Development of Settlement | event |
+| Development of Trade Routes | event |
+| Development of Warfare | event |
+| Eiffel Tower | wonder |
+| Great Wall | wonder |
+| Hanging Gardens | wonder |
+| Kremlin | wonder |
+| Library of Alexandria | wonder |
+| Ocean Liners | wonder |
+| Pyramids | wonder |
+| St. Peter's Basilica | wonder |
+| Taj Mahal | wonder |
+| Transcontinental Railroad | wonder |
+| Universitas Carolina | wonder |
+
+## Cut 4: happenings by Move -- completion-failure enrichment (every Move variant, exhaustively classified)
+
+corpus base rate: 321/1011 = 31.8% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|
+| 1.74x | TradeFoodAsResource | 65 | 36 | 55.4% | 15.1 | 17.5 |
+| 1.28x | OfferPact | 232 | 94 | 40.5% | 16.4 | 17.6 |
+| 1.27x | TradeResourceAsFood | 42 | 17 | 40.5% | 16.7 | 17.3 |
+| 1.15x | RemoveLeaderYellow | 257 | 94 | 36.6% | 17.2 | 17.3 |
+| 1.00x | EndTurn | 1010 | 320 | 31.7% | 17.3 | 19.0 |
+| 1.00x | Take | 1010 | 320 | 31.7% | 17.3 | 19.0 |
+| 1.00x | PlayAction | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 1.00x | PolPass | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 1.00x | PlayLeader | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 1.00x | Pop | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 0.99x | Build | 1008 | 318 | 31.5% | 17.3 | 8.7 |
+| 0.99x | WonderStep | 1008 | 318 | 31.5% | 17.3 | 8.0 |
+| 0.99x | Choose | 1007 | 317 | 31.5% | 17.3 | 6.5 |
+| 0.99x | PrepareEvent | 1005 | 315 | 31.3% | 17.4 | 7.5 |
+| 0.98x | Develop | 1000 | 310 | 31.0% | 17.4 | 5.0 |
+| 0.97x | PlayTactic | 992 | 305 | 30.7% | 17.5 | 8.3 |
+| 0.96x | Upgrade | 993 | 303 | 30.5% | 17.5 | 5.2 |
+| 0.96x | War | 282 | 86 | 30.5% | 18.1 | 17.0 |
+| 0.95x | Barbarossa | 126 | 38 | 30.2% | 17.7 | 17.3 |
+| 0.90x | ColumbusColonize | 269 | 77 | 28.6% | 17.6 | 17.2 |
+| 0.90x | CopyTactic | 600 | 171 | 28.5% | 17.9 | 16.5 |
+| 0.89x | Aggression | 596 | 169 | 28.4% | 18.0 | 16.4 |
+| 0.86x | Defend | 412 | 112 | 27.2% | 18.1 | 16.8 |
+| 0.85x | Bid | 886 | 238 | 26.9% | 17.9 | 12.8 |
+| 0.84x | BidPass | 886 | 237 | 26.7% | 17.9 | 12.7 |
+| 0.84x | Revolution | 412 | 110 | 26.7% | 18.1 | 16.8 |
+| 0.83x | DefendDone | 526 | 138 | 26.2% | 18.1 | 16.5 |
+| 0.82x | SendDone | 866 | 226 | 26.1% | 18.0 | 13.1 |
+| 0.79x | SendBonus | 812 | 203 | 25.0% | 18.1 | 14.1 |
+| 0.77x | SendUnit | 766 | 188 | 24.5% | 18.2 | 14.5 |
+| 0.69x | PopFree | 141 | 31 | 22.0% | 18.6 | 17.1 |
+| 0.68x | Destroy | 729 | 158 | 21.7% | 18.3 | 14.7 |
+| 0.67x | SendDiscard | 89 | 19 | 21.3% | 18.2 | 17.2 |
+| 0.61x | BachTheater | 52 | 10 | 19.2% | 18.5 | 17.2 |
+| 0.40x | Churchill | 276 | 35 | 12.7% | 19.0 | 16.7 |
+
+0 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | games | failures | rate |
+|---|---|---|---|
+
+## Cut 5: happenings by Move -- score-mismatch enrichment (completing games only)
+
+corpus base rate: 27/690 = 3.9% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|
+| 4.09x | TradeResourceAsFood | 25 | 4 | 16.0% | 19.2 | 19.3 |
+| 3.52x | TradeFoodAsResource | 29 | 4 | 13.8% | 19.2 | 19.3 |
+| 2.04x | OfferPact | 138 | 11 | 8.0% | 19.0 | 19.3 |
+| 1.91x | Churchill | 241 | 18 | 7.5% | 19.2 | 19.3 |
+| 1.25x | RemoveLeaderYellow | 163 | 8 | 4.9% | 19.3 | 19.2 |
+| 1.20x | Aggression | 427 | 20 | 4.7% | 19.3 | 19.2 |
+| 1.19x | Defend | 300 | 14 | 4.7% | 19.3 | 19.2 |
+| 1.19x | DefendDone | 388 | 18 | 4.6% | 19.3 | 19.2 |
+| 1.16x | PopFree | 110 | 5 | 4.5% | 19.3 | 19.2 |
+| 1.10x | Revolution | 302 | 13 | 4.3% | 19.3 | 19.3 |
+| 1.10x | SendDiscard | 70 | 3 | 4.3% | 19.2 | 19.3 |
+| 1.07x | CopyTactic | 429 | 18 | 4.2% | 19.2 | 19.3 |
+| 1.04x | War | 196 | 8 | 4.1% | 19.4 | 19.2 |
+| 1.03x | Destroy | 571 | 23 | 4.0% | 19.3 | 19.3 |
+| 1.01x | SendBonus | 609 | 24 | 3.9% | 19.2 | 19.4 |
+| 1.00x | PlayTactic | 687 | 27 | 3.9% | 19.3 | 18.7 |
+| 1.00x | Upgrade | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | PlayAction | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Build | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | PlayLeader | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | PolPass | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Develop | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | EndTurn | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Take | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | PrepareEvent | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | WonderStep | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Pop | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | Choose | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | SendDone | 640 | 25 | 3.9% | 19.3 | 19.3 |
+| 0.99x | Bid | 648 | 25 | 3.9% | 19.3 | 19.4 |
+| 0.98x | BidPass | 649 | 25 | 3.9% | 19.3 | 19.4 |
+| 0.97x | SendUnit | 578 | 22 | 3.8% | 19.3 | 19.3 |
+| 0.93x | ColumbusColonize | 192 | 7 | 3.6% | 19.2 | 19.3 |
+| 0.87x | Barbarossa | 88 | 3 | 3.4% | 19.4 | 19.2 |
+| 0.00x | BachTheater | 42 | 0 | 0.0% | 19.1 | 19.3 |
+
+0 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | games | failures | rate |
+|---|---|---|---|
+
+## Cut 6: happenings by ActionClass -- completion-failure enrichment (every journal line-shape, exhaustively classified)
+
+corpus base rate: 321/1011 = 31.8% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|
+| 1.28x | accept pact | 228 | 93 | 40.8% | 16.4 | 17.6 |
+| 1.28x | propose pact | 232 | 94 | 40.5% | 16.4 | 17.6 |
+| 1.00x | take card from row | 1010 | 320 | 31.7% | 17.3 | 19.0 |
+| 1.00x | elect leader | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 1.00x | build building | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 1.00x | pass | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 1.00x | increase population | 1009 | 319 | 31.6% | 17.3 | 10.0 |
+| 0.99x | build wonder stage | 1008 | 318 | 31.5% | 17.3 | 8.0 |
+| 0.99x | play action card | 1007 | 317 | 31.5% | 17.3 | 7.5 |
+| 0.99x | play event | 1005 | 315 | 31.3% | 17.4 | 7.5 |
+| 0.98x | develop technology | 1002 | 312 | 31.1% | 17.4 | 5.1 |
+| 0.98x | discard | 1000 | 310 | 31.0% | 17.4 | 5.6 |
+| 0.97x | build unit | 999 | 309 | 30.9% | 17.4 | 5.2 |
+| 0.97x | play tactic | 992 | 305 | 30.7% | 17.5 | 8.3 |
+| 0.96x | upgrade production (farm/mine) | 994 | 304 | 30.6% | 17.5 | 5.4 |
+| 0.96x | declare war | 282 | 86 | 30.5% | 18.1 | 17.0 |
+| 0.93x | play aggression | 606 | 179 | 29.5% | 17.9 | 16.5 |
+| 0.89x | change government | 467 | 132 | 28.3% | 17.9 | 16.8 |
+| 0.88x | upgrade unit | 812 | 227 | 28.0% | 17.9 | 15.0 |
+| 0.85x | bid | 888 | 240 | 27.0% | 17.9 | 12.8 |
+| 0.85x | win war | 264 | 71 | 26.9% | 18.3 | 17.0 |
+| 0.85x | win auction | 886 | 238 | 26.9% | 17.9 | 12.8 |
+| 0.85x | colonize | 886 | 238 | 26.9% | 17.9 | 12.8 |
+| 0.78x | destroy | 758 | 188 | 24.8% | 18.1 | 14.8 |
+| 0.66x | disband | 523 | 110 | 21.0% | 18.4 | 16.1 |
+| 0.63x | J. S. Bach: Temple/Library to Theater | 60 | 12 | 20.0% | 18.5 | 17.2 |
+
+1 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | games | failures | rate |
+|---|---|---|---|
+| put card back (take-back upper bound) | 17 | 17 | 100.0% |
+
+## Cut 7: happenings by ActionClass -- score-mismatch enrichment (completing games only)
+
+corpus base rate: 27/690 = 3.9% -- every row's own rate below is divided by this to get `enrichment` (1.0 = exactly base rate, no signal)
+
+ALL rows clearing the 20-exposure cutoff, by enrichment descending (not capped to a top-N -- see the module doc's "Total coverage"; `round_with`/`round_without` are the late-game confound check -- a big gap there means treat `enrichment` as partly a game-length proxy, not purely a card/happening effect):
+
+| enrichment | name | games | failures | rate | round_with | round_without |
+|---|---|---|---|---|---|---|
+| 2.08x | accept pact | 135 | 11 | 8.1% | 19.0 | 19.3 |
+| 2.04x | propose pact | 138 | 11 | 8.0% | 19.0 | 19.3 |
+| 1.20x | play aggression | 427 | 20 | 4.7% | 19.3 | 19.2 |
+| 1.14x | upgrade unit | 585 | 26 | 4.4% | 19.2 | 19.4 |
+| 1.08x | destroy | 570 | 24 | 4.2% | 19.3 | 19.2 |
+| 1.07x | change government | 335 | 14 | 4.2% | 19.3 | 19.3 |
+| 1.06x | win war | 193 | 8 | 4.1% | 19.4 | 19.2 |
+| 1.05x | disband | 413 | 17 | 4.1% | 19.3 | 19.2 |
+| 1.04x | declare war | 196 | 8 | 4.1% | 19.4 | 19.2 |
+| 1.00x | play tactic | 687 | 27 | 3.9% | 19.3 | 18.7 |
+| 1.00x | upgrade production (farm/mine) | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | develop technology | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | pass | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | take card from row | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | play event | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | elect leader | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | build wonder stage | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | increase population | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | discard | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | play action card | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | build unit | 690 | 27 | 3.9% | 19.3 | NaN |
+| 1.00x | build building | 690 | 27 | 3.9% | 19.3 | NaN |
+| 0.99x | bid | 648 | 25 | 3.9% | 19.3 | 19.4 |
+| 0.99x | colonize | 648 | 25 | 3.9% | 19.3 | 19.4 |
+| 0.99x | win auction | 648 | 25 | 3.9% | 19.3 | 19.4 |
+| 0.00x | J. S. Bach: Temple/Library to Theater | 48 | 0 | 0.0% | 19.1 | 19.3 |
+
+0 rows below the 20-exposure cutoff but seen at least once (listed, not hidden -- their rate is noise, but noise is not the same as nothing):
+
+| name | games | failures | rate |
+|---|---|---|---|
+
+## Cut 3: corruption charge vs journal `CORRUPTION!` marker (unchanged from the previous pass)
+
+358/40861 "End turn" checkpoints disagree on whether corruption was charged this turn (both agreements AND disagreements counted here -- a card equally common on both sides is NOT a cause and this cut is built to say so, not just to find something).
+
+each row's `games` is CHECKPOINTS (one per "End turn" line), not games -- a card in play for many turns of the same game is counted once per turn, on purpose: the hypothesis under test (a permanent -1 blue-token territory) is a per-turn effect, not a per-game one. Uses the ACTING PLAYER's own broader card set (tableau, government, leader, wonder, tactic, and every territory won at colonization), NOT the narrow or widened sets above -- see `player_cards_in_play`'s own doc in `replay_common.rs`.
+
+corpus base disagreement rate: 358/40861 = 0.9%
+
+all rows clearing 20 checkpoints (the round-reached confound columns from the card cuts above are omitted here -- this cut counts per-TURN checkpoints, not per-game, so a per-game round-reached figure would not mean the same thing):
+
+| enrichment | card | group | checkpoints | disagreements | rate |
+|---|---|---|---|---|---|
+| 6.06x | Bill Gates | leader | 999 | 53 | 5.3% |
+| 4.96x | Transcontinental Railroad | wonder | 736 | 32 | 4.3% |
+| 4.50x | Shock Troops | tactic | 203 | 8 | 3.9% |
+| 3.13x | Vast Territory (II) | territory / colony | 838 | 23 | 2.7% |
+| 3.06x | First Space Flight | wonder | 1006 | 27 | 2.7% |
+| 2.89x | Historic Territory (II) | territory / colony | 671 | 17 | 2.5% |
+| 2.78x | Internet | wonder | 533 | 13 | 2.4% |
+| 2.69x | James Cook | leader | 763 | 18 | 2.4% |
+| 2.69x | Modern Army | tactic | 510 | 12 | 2.4% |
+| 2.66x | Computers | urban building | 2534 | 59 | 2.3% |
+| 2.45x | Fast Food Chains | wonder | 793 | 17 | 2.1% |
+| 2.21x | Air Forces | military unit | 1444 | 28 | 1.9% |
+| 2.12x | Coal | production | 3069 | 57 | 1.9% |
+| 2.12x | Mechanized Agriculture | production | 808 | 15 | 1.9% |
+| 2.10x | Cartography | special technology | 5103 | 94 | 1.8% |
+| 2.08x | Napoleonic Army | tactic | 1207 | 22 | 1.8% |
+| 2.08x | Oil | production | 823 | 15 | 1.8% |
+| 2.07x | Hollywood | wonder | 386 | 7 | 1.8% |
+| 1.96x | Engineering | special technology | 931 | 16 | 1.7% |
+| 1.96x | Democracy | government | 1341 | 23 | 1.7% |
+| 1.92x | Constitutional Monarchy | government | 4874 | 82 | 1.7% |
+| 1.92x | Irrigation | production | 14059 | 236 | 1.7% |
+| 1.90x | Military Theory | special technology | 1081 | 18 | 1.7% |
+| 1.88x | Vast Territory (I) | territory / colony | 2792 | 46 | 1.6% |
+| 1.83x | Organized Religion | urban building | 3556 | 57 | 1.6% |
+| 1.82x | Drama | urban building | 3821 | 61 | 1.6% |
+| 1.78x | Civil Service | special technology | 1089 | 17 | 1.6% |
+| 1.77x | Christopher Columbus | leader | 711 | 11 | 1.5% |
+| 1.70x | Mechanized Army | tactic | 336 | 5 | 1.5% |
+| 1.67x | Cannon | military unit | 5054 | 74 | 1.5% |
+| 1.66x | Cavalrymen | military unit | 2811 | 41 | 1.5% |
+| 1.66x | Mahatma Gandhi | leader | 344 | 5 | 1.5% |
+| 1.64x | Theology | urban building | 3069 | 44 | 1.4% |
+| 1.62x | Strategy | special technology | 3380 | 48 | 1.4% |
+| 1.61x | Albert Einstein | leader | 1066 | 15 | 1.4% |
+| 1.61x | Scientific Method | urban building | 4551 | 64 | 1.4% |
+| 1.60x | Iron | production | 17496 | 246 | 1.4% |
+| 1.59x | Swordsmen | military unit | 9574 | 133 | 1.4% |
+| 1.57x | Developed Territory (I) | territory / colony | 2839 | 39 | 1.4% |
+| 1.56x | Alchemy | urban building | 14264 | 195 | 1.4% |
+| 1.55x | Tanks | military unit | 515 | 7 | 1.4% |
+| 1.53x | Leonardo da Vinci | leader | 3573 | 48 | 1.3% |
+| 1.52x | Strategic Territory (II) | territory / colony | 828 | 11 | 1.3% |
+| 1.52x | Printing Press | urban building | 4818 | 64 | 1.3% |
+| 1.51x | Knights | military unit | 12890 | 171 | 1.3% |
+| 1.50x | Eiffel Tower | wonder | 759 | 10 | 1.3% |
+| 1.50x | Journalism | urban building | 2588 | 34 | 1.3% |
+| 1.49x | Isaac Newton | leader | 2305 | 30 | 1.3% |
+| 1.48x | Masonry | special technology | 3002 | 39 | 1.3% |
+| 1.47x | Republic | government | 2953 | 38 | 1.3% |
+| 1.46x | Defensive Army | tactic | 624 | 8 | 1.3% |
+| 1.45x | Medieval Army | tactic | 5509 | 70 | 1.3% |
+| 1.44x | Theocracy | government | 1501 | 19 | 1.3% |
+| 1.43x | Inhabited Territory (II) | territory / colony | 875 | 11 | 1.3% |
+| 1.42x | Architecture | special technology | 2809 | 35 | 1.2% |
+| 1.42x | Maximilien Robespierre | leader | 966 | 12 | 1.2% |
+| 1.41x | Universitas Carolina | wonder | 1056 | 13 | 1.2% |
+| 1.40x | William Shakespeare | leader | 895 | 11 | 1.2% |
+| 1.39x | Warfare | special technology | 2629 | 32 | 1.2% |
+| 1.38x | Satellites | special technology | 743 | 9 | 1.2% |
+| 1.36x | Classic Army | tactic | 1594 | 19 | 1.2% |
+| 1.35x | Team Sports | urban building | 1015 | 12 | 1.2% |
+| 1.33x | Michelangelo | leader | 2321 | 27 | 1.2% |
+| 1.32x | Ocean Liners | wonder | 346 | 4 | 1.2% |
+| 1.31x | Wealthy Territory (II) | territory / colony | 787 | 9 | 1.1% |
+| 1.30x | Selective Breeding | production | 4747 | 54 | 1.1% |
+| 1.29x | Strategic Territory (I) | territory / colony | 2381 | 27 | 1.1% |
+| 1.28x | Communism | government | 268 | 3 | 1.1% |
+| 1.27x | Modern Infantry | military unit | 450 | 5 | 1.1% |
+| 1.26x | Conquistadors | tactic | 905 | 10 | 1.1% |
+| 1.25x | Fighting Band | tactic | 6094 | 67 | 1.1% |
+| 1.24x | Charlie Chaplin | leader | 737 | 8 | 1.1% |
+| 1.20x | Phalanx | tactic | 2955 | 31 | 1.0% |
+| 1.20x | Mobile Artillery | tactic | 858 | 9 | 1.0% |
+| 1.18x | Navigation | special technology | 2414 | 25 | 1.0% |
+| 1.17x | Fortifications | tactic | 389 | 4 | 1.0% |
+| 1.16x | Riflemen | military unit | 3343 | 34 | 1.0% |
+| 1.15x | Movies | urban building | 891 | 9 | 1.0% |
+| 1.13x | Fundamentalism | government | 202 | 2 | 1.0% |
+| 1.13x | Great Wall | wonder | 710 | 7 | 1.0% |
+| 1.10x | Napoleon Bonaparte | leader | 2688 | 26 | 1.0% |
+| 1.10x | Historic Territory (I) | territory / colony | 2496 | 24 | 1.0% |
+| 1.08x | J. S. Bach | leader | 423 | 4 | 0.9% |
+| 1.07x | Opera | urban building | 2034 | 19 | 0.9% |
+| 1.06x | Legion | tactic | 3775 | 35 | 0.9% |
+| 1.03x | Kremlin | wonder | 444 | 4 | 0.9% |
+| 1.02x | Inhabited Territory (I) | territory / colony | 2786 | 25 | 0.9% |
+| 1.01x | Multimedia | urban building | 1127 | 10 | 0.9% |
+| 1.01x | Code of Laws | special technology | 5551 | 49 | 0.9% |
+| 1.00x | Agriculture | production | 40861 | 358 | 0.9% |
+| 1.00x | Warriors | military unit | 40861 | 358 | 0.9% |
+| 1.00x | Philosophy | urban building | 40861 | 358 | 0.9% |
+| 1.00x | Religion | urban building | 40861 | 358 | 0.9% |
+| 1.00x | Bronze | production | 40861 | 358 | 0.9% |
+| 0.98x | Wealthy Territory (I) | territory / colony | 2673 | 23 | 0.9% |
+| 0.95x | Bread and Circuses | urban building | 2159 | 18 | 0.8% |
+| 0.88x | Monarchy | government | 2987 | 23 | 0.8% |
+| 0.86x | Professional Sports | urban building | 396 | 3 | 0.8% |
+| 0.84x | Joan of Arc | leader | 2169 | 16 | 0.7% |
+| 0.84x | Heavy Cavalry | tactic | 1223 | 9 | 0.7% |
+| 0.77x | Sid Meier | leader | 1040 | 7 | 0.7% |
+| 0.75x | Justice System | special technology | 2135 | 14 | 0.7% |
+| 0.75x | Taj Mahal | wonder | 763 | 5 | 0.7% |
+| 0.72x | Despotism | government | 26735 | 168 | 0.6% |
+| 0.66x | St. Peter's Basilica | wonder | 1721 | 10 | 0.6% |
+| 0.64x | Entrenchments | tactic | 179 | 1 | 0.6% |
+| 0.48x | Rockets | military unit | 477 | 2 | 0.4% |
+| 0.45x | Developed Territory (II) | territory / colony | 1024 | 4 | 0.4% |
+| 0.42x | Genghis Khan | leader | 1901 | 7 | 0.4% |
+| 0.34x | Frederick Barbarossa | leader | 665 | 2 | 0.3% |
+| 0.28x | Moses | leader | 1222 | 3 | 0.2% |
+| 0.16x | Alexander the Great | leader | 711 | 1 | 0.1% |
+| 0.16x | Hanging Gardens | wonder | 1442 | 2 | 0.1% |
+| 0.14x | Winston Churchill | leader | 789 | 1 | 0.1% |
+| 0.13x | Hammurabi | leader | 2580 | 3 | 0.1% |
+| 0.12x | Homer | leader | 929 | 1 | 0.1% |
+| 0.12x | Aristotle | leader | 1912 | 2 | 0.1% |
+| 0.10x | Julius Caesar | leader | 1190 | 1 | 0.1% |
+| 0.07x | Library of Alexandria | wonder | 1696 | 1 | 0.1% |
+| 0.06x | Pyramids | wonder | 1965 | 1 | 0.1% |
+| 0.00x | Colossus | wonder | 620 | 0 | 0.0% |
+
+0 cards below the 20-checkpoint exposure cutoff:
+
+| card | group | checkpoints | disagreements | rate |
+|---|---|---|---|---|

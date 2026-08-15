@@ -1,0 +1,156 @@
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index 6f8283c..c75c58d 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -1024,10 +1024,35 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action:
+         p.civil_actions = 0;
+         p.military_actions = carry_over_action_pool(old.military_actions, s.military_actions, spent, old_remaining_m);
+     }
+-    if leader_is(&state.players[idx as usize], "Isaac Newton") {
+-        let p = &mut state.players[idx as usize];
+-        p.civil_actions = s.civil_actions.min(p.civil_actions as i32 + 1) as i8;
+-    }
++    // §8.3.4 / `docs/RULES_SPEC.md` line 232: "revolution counts as
++    // developing a technology" (that line's own text is about Newton, but
++    // the citation is general -- a revolution IS a `DevelopTechnology`, see
++    // this file's own doc comment on `Move::Develop`/`Move::Revolution`
++    // just above `h_develop`'s definition). `h_develop`'s peaceful path
++    // already reaches every develop-triggered leader ability uniformly via
++    // `on_develop` (Leonardo da Vinci's +1 resource, Albert Einstein's +3
++    // culture, Isaac Newton's +1 CA) -- this branch used to hand-roll ONLY
++    // Newton's arm inline, so a Leonardo da Vinci or Albert Einstein player
++    // who seized their government by violent revolution never got their
++    // trigger at all. REPLAYER-BUG-CONFIRMED-ENGINE-BUG (`IllegalMove:
++    // Upgrade` bucket, game `7522665` round 11): the journal's own
++    // resolution line names the leader explicitly --
++    // "Orange revolutions Change government to Constitutional Monarchy; 6
++    // science points spent; Orange loses 6 science; Leonardo Da Vinci gives
++    // 1 resource" -- and the missing +1 resource is a permanent, uncorrected
++    // 1-resource deficit for the rest of the game (confirmed against every
++    // later `"(now N)"` resource total in that journal, off by exactly -1
++    // from this round onward) until it starves an `Upgrade` 7 rounds later.
++    // `on_develop` recomputes its own `effects::state_stats` fresh, but that
++    // is provably identical to the `s` already in scope here: nothing this
++    // function touches between computing `s` (just above) and this call
++    // changes any input `state_stats` reads (`p.techs`/`p.government`/
++    // leader/production), so re-deriving it is not a race, just a second
++    // read of the same answer -- and calling the ONE shared helper instead
++    // of hand-rolling Newton's own arithmetic a second time here is exactly
++    // the "single source of truth" reasoning `costs::build_cost_net`'s own
++    // doc comment already established for this file.
++    on_develop(state, idx);
+ }
+ 
+ /// §8.3.4: science cost to seize a government by violent revolution.
+@@ -2855,6 +2880,32 @@ mod tests {
+         assert_eq!(state.players[0].civil_actions, 7);
+     }
+ 
++    /// ENGINE BUG FIX (`IllegalMove: Upgrade` bucket, game `7522665` round
++    /// 11): `docs/RULES_SPEC.md` line 232 says a revolution "counts as
++    /// developing a technology" (that line is citing Newton's own trigger,
++    /// but the citation covers every develop-triggered leader ability the
++    /// same way `h_develop`'s peaceful path already does via `on_develop`).
++    /// `h_revolution` used to hand-roll ONLY Newton's arm inline, so a
++    /// Leonardo da Vinci player seizing their government by violent
++    /// revolution never got the leader's "every time you develop a
++    /// technology, gain 1 resource" trigger. The real game's own journal
++    /// names the leader explicitly on this exact move: "Orange revolutions
++    /// Change government to Constitutional Monarchy; 6 science points
++    /// spent; Orange loses 6 science; Leonardo Da Vinci gives 1 resource".
++    #[test]
++    fn h_revolution_triggers_leonardo_da_vincis_develop_bonus() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("Leonardo da Vinci");
++        p.science = 10;
++        p.civil_actions = 4; // == ca_total(Despotism): every CA still unspent
++        p.military_actions = 2; // == Despotism's full MA pool: none spent yet
++        p.blue_total = 20; // bank room for gain_resources to actually pay out
++        p.hand_civil.push(card("Monarchy"));
++        let mut state = one_player_state(p);
++        h_revolution(&mut state, 0, card("Monarchy"), false);
++        assert_eq!(state.players[0].resources, 1, "Leonardo da Vinci's +1 resource must fire on a revolution, not just a peaceful develop");
++    }
++
+     #[test]
+     fn do_wonder_step_pays_resources_and_advances_progress() {
+         // Pyramids: stages [3, 2, 1].
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index ce21541..83ba907 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -6782,7 +6782,26 @@ fn apply_one(
+         }
+         ActionClass::IncreasePopulation => {
+             let legal = legal::legal_moves(&r.state);
+-            if legal.as_slice().contains(&Move::Pop) {
++            // BGO's own line names the free-population source explicitly
++            // when one was used ("Ocean Liner Service used" -- the wonder's
++            // once-per-turn free Increase Population, §9, mirrored by
++            // `Move::PopFree`/`h_pop_free`). ENGINE BUG (found chasing the
++            // `IllegalMove: Take` bucket, game `7523341` round 14): this
++            // arm used to try `Move::Pop` FIRST whenever it happened to be
++            // legal, ignoring that signal entirely -- a player with both a
++            // spare civil action AND the free Ocean Liner option still
++            // available took the free one in reality (the journal's own
++            // "Ocean Liner Service used" says so), but this binary silently
++            // spent a civil action instead, permanently overcharging
++            // `p.civil_actions` for the rest of that turn until it starved
++            // a later `Take`. The SAME line's text is unambiguous here --
++            // trust it exactly the way this file already trusts every
++            // other named-source journal clause -- and only fall back to
++            // the "whichever is legal" guess when the text does not say.
++            let free_source_named = raw_text.contains("Ocean Liner Service used");
++            if free_source_named && legal.as_slice().contains(&Move::PopFree) {
++                r.try_apply(Move::PopFree, true)
++            } else if legal.as_slice().contains(&Move::Pop) {
+                 r.try_apply(Move::Pop, true)
+             } else if legal.as_slice().contains(&Move::PopFree) {
+                 r.try_apply(Move::PopFree, true)
+@@ -9233,6 +9252,46 @@ mod tests {
+         assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
+     }
+ 
++    /// ENGINE BUG FIX (`IllegalMove: Take` bucket, game `7523341` round 14):
++    /// when a player has BOTH a spare civil action AND the wonder's free
++    /// Ocean Liners population increase still available this turn, BGO's
++    /// own line says exactly which one the human used --
++    /// `"<Color> increases population Ocean Liner Service used"` -- but
++    /// `apply_one`'s `IncreasePopulation` arm used to try `Move::Pop` first
++    /// whenever it happened to be legal, silently spending a civil action
++    /// the real player never spent. That phantom charge starved a LATER
++    /// `Take` on the same turn, several lines downstream, of the 1 civil
++    /// action it actually still had. This is `apply_one`'s real dispatch
++    /// path (not `civil_life_move`'s ordered-action bypass above), so the
++    /// test goes through `apply_one` directly with a `Replayer` set up so
++    /// BOTH `Move::Pop` and `Move::PopFree` are legal at once -- the exact
++    /// ambiguity the old "whichever is legal" logic got wrong.
++    #[test]
++    fn a_pop_line_naming_ocean_liner_service_used_takes_the_free_move_even_when_a_paid_pop_is_also_legal() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.round = 5;
++        r.state.phase = Phase::Actions;
++        r.state.current = 0;
++        r.state.players[0].civil_actions = 4; // Move::Pop would also be legal
++        r.state.players[0].food = 20; // plenty, for either move
++        r.state.players[0].yellow_bank = 1; // pop_cost needs a nonzero bank
++        r.state.players[0].completed_wonders.push(card("Ocean Liners")); // grants free_pop_per_turn
++        r.state.players[0].ocean_liners_used = false;
++        let out = apply_one(
++            &mut r,
++            0,
++            ActionClass::IncreasePopulation,
++            None,
++            "increases population Ocean Liner Service used",
++            "Orange increases population Ocean Liner Service used",
++            None,
++        );
++        assert!(out.is_ok(), "{out:?}");
++        assert_eq!(r.state.players[0].civil_actions, 4, "the free Ocean Liners move must not spend a civil action");
++        assert!(r.state.players[0].ocean_liners_used, "PopFree, not Pop, must be the move actually applied");
++    }
++
+     /// `is_pure_confirmation_line`'s membership is what routes `PlayEvent`,
+     /// `WinAuction`, and `Colonize` lines around `resolve_intervening`
+     /// The residual, genuinely-contradictory shape: player 0 starts

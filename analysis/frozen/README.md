@@ -4,38 +4,19 @@ These files are the fixed reference bots the A/B harnesses load. They are
 **not** the bot the league trains. This file exists because that difference
 silently invalidated a night of measurements, and nothing on disk said so.
 
-**`gauntlet/`, this directory's one subdirectory, is a different collection
-for a different purpose** — dated past champions `climb` itself measures the
-live champion against every `--gauntlet-every` generations, because the
-anchor it already compares against saturated (`docs/RUST_LEAGUE.md`'s "The
-anchor number is not a strength ladder"). Same freeze-forever, append-only
-rule as everything below, its own `README.md`, but not an A/B harness input.
-
 ## Provenance
 
 All three were written by `f6318cc` (2026-07-26 12:45) — "frozen champion
 snapshot for a reproducible A/B". Each was copied off the *running* league's
 on-disk champion at that moment, which is why every one of them is a few
-generations AHEAD of that commit's own committed sibling, `experiments/
-champion_*.json` — itself moved into this directory on 2026-08-06 and
-renamed for its era and generation so it cannot be mistaken for current (see
-[`docs/RUST_LEAGUE.md`](../../docs/RUST_LEAGUE.md#which-champion-file-is-live)):
+generations AHEAD of the `experiments/champion_*.json` committed in the same
+commit:
 
 | file | gen at snapshot | committed sibling |
 |---|---|---|
-| `champion_2p.json` | 220 | `python_champion_2p_gen209_2026-07-26.json` |
-| `champion_3p.json` | 160 | `python_champion_3p_gen152_2026-07-26.json` |
-| `champion_4p.DEGENERATE.json` | 139 | `python_champion_4p_gen133_2026-07-26.json` |
-
-The three `python_champion_{2,3,4}p_..._2026-07-26.json` files are the
-**final vectors the Python-era trainer ever wrote** — 78 weight keys, last
-meaningfully changed 2026-07-26, superseded since by the Rust league's own
-`experiments/rust_champion_{2,3,4}p.json` (130+ keys and climbing; gitignored,
-so only present in a working checkout — see
-[`docs/RUST_LEAGUE.md`](../../docs/RUST_LEAGUE.md#which-champion-file-is-live)).
-They are kept here, not deleted, purely so numbers already published against
-them in old docs can still be checked; do not read them as describing the
-current bot.
+| `champion_2p.json` | 220 | `experiments/champion_2p.json` gen 209 |
+| `champion_3p.json` | 160 | `experiments/champion_3p.json` gen 152 |
+| `champion_4p.DEGENERATE.json` | 139 | `experiments/champion_4p.json` gen 133 |
 
 They are legitimate trained champions **of their era**. The problem is the
 era.
@@ -78,12 +59,9 @@ here and must use a vector that carries the card-row weights.
 
 ## `champion_4p.DEGENERATE.json` — retired, deliberately kept
 
-This file is a vector that must never be warm-started from
-(`science = -6.08883`; measured (Python-era, in the now-deleted
-`docs/CULTURE_GAP.md` — see `docs/EVALUATOR_HISTORY.md`'s "Superseded without
-independent content" note, or git history for the specific number) at
-**20.1% against a 25% null** — worse than random seating), six generations
-later. It
+This file is the vector `docs/TRAINING_RUN.md` says never to warm-start from
+(`science = -6.08883`; `docs/CULTURE_GAP.md` Sec 8f measured it at **20.1%
+against a 25% null** — worse than random seating), six generations later. It
 reproduces **all 62** of that vector's informative weights bit-for-bit and
 differs on exactly two keys, `colonies` and `pacts` — and only because
 `15b9764` reset those two to defaults in the committed copy while the on-disk

@@ -1,0 +1,395 @@
+REPLACING THE round<=3 MAGIC CONSTANT WITH A COMPUTED RULEBOOK FACT
+===============================================================================
+Working clone: /private/tmp/strgate (copied from /private/tmp/earlymil with
+`cp -Rc`). Base commits: 983809a (EARLYMIL.txt checkpoint), 578ee9e (the
+round<=3 fix being replaced), 6168d5a (pre-fix). Two scratch comparison
+builds, /private/tmp/strgate-prefix (checked out to 6168d5a) and
+/private/tmp/strgate-gated (checked out to 578ee9e), were made from `cp -Rc`
+copies of this same clone purely to build historical binaries for the A/Bs
+below; neither /private/tmp/earlymil nor any other pre-existing clone was
+touched. Landed as two commits on top of 983809a: 6d26d9d (the predicate and
+the refactor) and f0df90a (a bug found by measurement, fixed, plus
+strengthrelab's --opponent flag).
+
+STATUS: complete.
+
+HEADLINE: `state.round <= 3`, repeated as a bare literal in three call sites,
+is replaced by `horizon::combat_unreachable(state)` -- a single function,
+called from all three, computing whether any active player could possibly
+hold an aggression or war card yet. Behavioural rate stays flipped
+(military-first 2p/3p/4p: 96.7/96.9/96.5% pre-fix -> 99.3/98.9/98.8% with
+this change, matching 578ee9e's own 100/98.2/99.2%). Win rate against the
+pre-fix vector: 46.0% +/- 1.7 (n=3000, 2p) -- decisively negative, expected,
+not chased (same co-adaptation story 578ee9e's own EARLYMIL.txt already
+documented at 44.1%). Win rate against 578ee9e's own round-gated version:
+54.8% +/- 1.6 (n=3000, 2p) -- decisively POSITIVE.
+
+
+1. THE PROBLEM
+-------------------------------------------------------------------------
+Commit 578ee9e fixed a real bug (military built first in ~97% of games) by
+gating a new, less-aggressive StrengthRel phase blend on a literal
+`state.round <= 3`, repeated in eval.rs::evaluate, eval.rs::linear_features,
+and rivals.rs::strength_marginal. Per EARLYMIL.txt section 3b, `3` was
+chosen by trying an ungated version (27.7% win rate, n=3000), diagnosing it
+as too broad, and narrowing until the number recovered most of the loss
+(44.1%). That is a fitted parameter, selected by measuring outcomes, sitting
+as a bare literal in engine code. This project's rule: the ENGINE computes
+rulebook facts; the LEARNER learns worth. `3` must go.
+
+
+2. DERIVING THE PREDICATE
+-------------------------------------------------------------------------
+### 2a. What actually gates a political action
+RULES_SPEC 5.1 ("In the Politics Phase you may perform AT MOST ONE political
+action") and 5.4/5.6 ("Reveal [...] pay its military action cost" / "reveal;
+pay its MA cost") both name a card that is already IN HAND -- an aggression
+or war card can only ever be played from a hand, and a hand can only ever
+gain such a card via a military-deck draw. Two more RULES_SPEC facts jointly
+bound when that first happens:
+
+- 1.4: "Current age military deck space is empty in Age A [...] players
+  never draw Age A military cards." Age A's own 10-card military deck is
+  instead shuffled once, at setup, straight into the current-events deck
+  (1.6), and whatever is left over "return[s] the rest to the box unseen" --
+  no Age A military card is EVER dealt to any hand, at any point in the
+  game, confirmed directly in code: `game.rs`'s card-row `replenish` drops
+  the whole remaining Age A civil deck the same way, and nothing in
+  `economy.rs`'s draw step (`draw_military_step`) ever reads from an Age A
+  deck at all.
+- 6.6.4 (draw military cards, "1 per unused [...] military action, max 3
+  [...] none on round 1"): confirmed in code at `economy.rs:734`,
+  `if state.age_military != Age::IV && state.round > 1`.
+
+So nobody can hold a combat-capable card before at least the first
+non-round-1, non-Age-A military draw. Read directly off the one quantity
+that actually tracks the consequence of this (hand size) rather than
+re-deriving "when" from round/age arithmetic a second time (a second copy
+of the same fact is exactly the shape of bug this project's own
+`card_board_leader` precedent warns about, cited in 578ee9e's own commit
+message).
+
+### 2b. `EARLIEST_COMBAT_ROUND`: a proven lower bound, not a second literal
+Measurement (section 7 below) found that hand size ALONE is not sufficient
+-- see section 3. The fix needed a genuinely rules-derived floor,
+`horizon::EARLIEST_COMBAT_ROUND`, chained from the same two RULES_SPEC facts
+6.6.4 already gave: `FIRST_DRAW_ROUND = 2` (6.6.4, "none on round 1") and a
+card gained at end-of-turn cannot be played until that SAME player's own
+NEXT turn -- the Politics Phase where it could have been played already
+happened earlier in the SAME turn's own sequence (5.0: Start-of-Turn ->
+Politics Phase -> Action Phase -> End-of-Turn, and drawing is an End-of-Turn
+step) -- one round later under RULES_SPEC 5.0's fixed one-turn-per-player-
+per-round cadence. `EARLIEST_COMBAT_ROUND = FIRST_DRAW_ROUND + 1 = 3`. This
+number is IDENTICAL to 578ee9e's own `3`, which is not a coincidence to be
+suspicious of: it confirms the empirical win-rate search in 578ee9e
+independently rediscovered the true structural boundary. The difference
+that matters for this task is HOW the number is obtained: `578ee9e` got `3`
+by trying values and reading off which one won more; this pass gets `3` by
+chaining two already-cited, unrelated rules facts (draw timing, turn
+cadence) that were never searched over at all -- changing either one (a
+different draw-timing rule, a different-length turn) would change this
+constant WITHOUT touching a single measured win rate, which is exactly what
+distinguishes a rules constant (see `horizon.rs`'s own `AGE_IV_ROUNDS`,
+labelled "RULE-DERIVED" the same way) from a fitted parameter.
+
+
+3. THE REACTIVE-EQUILIBRIUM TRAP -- addressed explicitly
+-------------------------------------------------------------------------
+The obvious predicate, "no rival currently has nonzero strength," is
+REACTIVE: in self-play, if nobody ever builds military, no rival ever shows
+strength, so the gate never closes, so strength never gets valued, so
+nobody ever builds it -- a degenerate equilibrium that is also exploitable
+by any opponent who does invest. `combat_unreachable` does not read built
+units or strength at all, only hand-card COUNTS and `state.round`. Military
+card draws are NOT a strategic choice -- 6.6.4's draw step fires
+automatically off UNUSED military actions at the end of every turn,
+regardless of what a player intends to do with them (Despotism alone grants
+2 MA before anyone builds a single Warriors unit -- confirmed in
+`economy.rs`'s own test fixture comment, "Despotism: 4 civil actions, 2
+military actions"). So even a fully pacifist self-play population keeps
+drawing military cards on a fixed schedule and the gate closes on time
+regardless of anyone's actual strategy -- the same property `lateness`/
+`rounds_left` already have. `EARLIEST_COMBAT_ROUND` is a compile-time
+constant, not a per-game observation, so it cannot be gamed by any strategy
+either.
+
+A residual, honestly-flagged limitation: the hand-size half of the
+predicate, once past the round floor, is a conservative UPPER BOUND on
+combat-readiness (a nonempty military hand does not guarantee it contains
+an aggression or war card specifically, rather than a bonus/event card --
+the engine has no cheaper public signal that distinguishes them without
+reading hand identity, which would be illegal). This can only make the gate
+close a little EARLIER than strictly necessary in some games (pricing
+strength slightly sooner than truly required), never later -- i.e. it is
+conservative in the SAFE direction for the original bug (overvaluing
+strength too early), not the trap's direction.
+
+
+4. LEGALITY -- public information only
+-------------------------------------------------------------------------
+`combat_unreachable` reads exactly two things:
+- `state.round` -- global public state.
+- `PlayerState::hand_size_military()` (`hand_military.len() + hidden_military`)
+  -- a COUNT, never `hand_military`'s actual contents. This is not a new
+  public/private boundary invented for this task: `state.rs`'s own
+  `hidden_military: u8` field exists specifically because "the app harness
+  [...] mirrors a rival whose hand SIZE is public [...] but whose contents
+  were not transcribed. Without them such a rival reads as an EMPTY hand,
+  which is not 'unknown', it is wrong" (`state.rs`, `PlayerState::
+  hidden_civil`/`hidden_military` doc comment) -- i.e. the engine already
+  treats hand SIZE, for every player including rivals, as legitimately
+  public, the same physical-card convention this task's own brief names
+  ("knowing how many cards remain is public; knowing which, is not").
+  `hand_size_civil`'s sibling doc comment cites RULES_SPEC 2.5's hand-limit
+  accounting as the rule that actually counts a hand this way.
+
+The function never reads `hand_military.as_slice()` or any card's identity,
+for any player, including the evaluated player's own -- proven by a
+dedicated test (section 6) that also confirms a violation would be caught.
+
+
+5. THE REFACTOR
+-------------------------------------------------------------------------
+One function, `horizon::combat_unreachable(state) -> bool`
+(`rust/src/bots/weighted/horizon.rs`, next to `lateness`/`live_count`, the
+module every one of the three call sites already imports):
+
+    const FIRST_DRAW_ROUND: u16 = 2;
+    pub const EARLIEST_COMBAT_ROUND: u16 = FIRST_DRAW_ROUND + 1;
+
+    pub fn combat_unreachable(state: &GameState) -> bool {
+        state.round < EARLIEST_COMBAT_ROUND || state.active().all(|p| p.hand_size_military() == 0)
+    }
+
+Called from all three sites that used to repeat `state.round <= 3`:
+- `eval.rs::evaluate` (the StrengthRel phase-blend gate)
+- `eval.rs::linear_features` (the mirrored `out[StrengthRel] *= late` gate)
+- `rivals.rs::strength_marginal` (the same concept applied to card pricing)
+
+No new WeightKey, no new tunable threshold: `EARLIEST_COMBAT_ROUND` is a
+`const`, not read from the weight vector, and is not subject to
+`climb.rs`'s mutation or `WeightKey::sign_intent`'s classification (it isn't
+a `WeightKey` at all) -- consistent with constraint 4 (a threshold, if truly
+unavoidable, belongs in the weight vector; this one avoids needing that by
+being a proven structural bound instead of a free dial).
+
+
+6. TESTS
+-------------------------------------------------------------------------
+New, in `horizon.rs`'s `#[cfg(test)] mod tests`:
+  combat_unreachable_is_true_on_a_fresh_deal
+  combat_unreachable_flips_the_moment_any_one_player_has_a_military_card
+  a_resigned_players_military_hand_does_not_keep_the_gate_closed
+  combat_unreachable_does_not_depend_on_which_cards_are_in_a_hand_only_how_many
+  the_earliest_combat_round_floor_holds_even_if_a_hand_is_already_nonempty
+
+Existing test renamed and re-fixtured (round<=3 fixture -> combat_unreachable
+fixture) in `eval.rs`:
+  evaluate_prices_strength_rel_with_the_old_always_on_base_once_past_round_three
+  -> evaluate_prices_strength_rel_with_the_old_always_on_base_once_combat_is_reachable
+
+RED CONFIRMATIONS (all performed by temporarily editing the file, running
+the single test, observing FAILED, then editing back -- verified by
+re-running the full suite green immediately after each restore):
+
+1. Headline gate, first pass (pure hand-check, before the round floor was
+   added): reverted `horizon::combat_unreachable(state)` back to
+   `state.round <= 3` at all three sites, ran
+   `evaluate_prices_strength_rel_with_the_old_always_on_base_once_combat_is_reachable`:
+     thread '...eval::tests::evaluate_prices_strength_rel_with_the_old_always_on_base_once_combat_is_reachable' panicked at src/bots/weighted/eval.rs:1245:9:
+     delta=1.3092105263157892 old_formula_expected=16.855263157894736
+     test result: FAILED. 2 passed; 1 failed
+   Restored; full suite green (1319 passed) immediately after.
+
+2. Headline gate, second pass (after the round floor was added, commit
+   f0df90a): same revert, same test, identical numbers:
+     thread '...' panicked at src/bots/weighted/eval.rs:1258:9:
+     delta=1.3092105263157892 old_formula_expected=16.855263157894736
+     test result: FAILED. 0 passed; 1 failed
+   Restored; full suite green (1320 passed) immediately after.
+
+3. Legality test: temporarily rewrote `combat_unreachable` to also require
+   `p.hand_military.as_slice().first() != Some(&CardId(0))` -- i.e. made it
+   depend on a specific card's IDENTITY, not just hand SIZE -- ran
+   `combat_unreachable_does_not_depend_on_which_cards_are_in_a_hand_only_how_many`:
+     thread '...horizon::tests::combat_unreachable_does_not_depend_on_which_cards_are_in_a_hand_only_how_many' panicked at src/bots/weighted/horizon.rs:1047:9:
+     assertion `left == right` failed: the predicate must answer identically when only hand CONTENTS differ, not just hand SIZE
+       left: false
+      right: true
+   Restored to the real, content-blind implementation; full suite green
+   immediately after.
+
+4. Round-floor regression test: temporarily removed the
+   `state.round < EARLIEST_COMBAT_ROUND ||` clause (pure hand-check again),
+   ran `the_earliest_combat_round_floor_holds_even_if_a_hand_is_already_nonempty`:
+     thread '...horizon::tests::the_earliest_combat_round_floor_holds_even_if_a_hand_is_already_nonempty' panicked at src/bots/weighted/horizon.rs:1062:9:
+     the floor must protect every round below EARLIEST_COMBAT_ROUND regardless of hand contents
+   Restored; full suite green immediately after.
+
+Full suite: `export PATH="$HOME/.cargo/bin:$PATH"; cd /private/tmp/strgate/rust && cargo test --profile difftest -- --test-threads 2`
+  lib: 1320 passed; 0 failed; 0 ignored
+  every other binary/integration target: "ok", 0 failed, across the whole
+  workspace (arena, harness, forceopen, humanpaired, corpuscensus, suite
+  integration tests, etc.) -- verified after every RED/restore cycle above,
+  not just once at the end.
+
+Build: `cargo build --profile difftest -j 2` (used `-j 2` in place of a
+`--threads` build flag, which does not exist for `cargo build` -- `--threads`
+is this project's own binaries' own flag, applied everywhere below on the
+measurement tools themselves).
+
+
+7. MEASUREMENTS -- honest, including the bug this process found
+-------------------------------------------------------------------------
+### 7a. A real regression found and fixed mid-pass
+The FIRST version of `combat_unreachable` (commit 6d26d9d, pure hand-count,
+no round floor) passed every unit test but, measured against real self-play,
+gave 47.2% military-first at 2p (`behavcensus`, n=300 games / 600
+player-games) -- a near-total reopening of the bug this whole task exists to
+close. Root-caused, not patched blind: `STRGATE_DEBUG`-instrumented run
+showed `combat_unreachable round=2 sizes=[2, 0] -> false` occurring 369/600
+times -- seat 0, under Despotism's 2 unused MAs, draws 2 military cards at
+the END of its own round-2 turn (6.6.4's automatic draw), making its hand
+nonempty BEFORE seat 1 has even made ITS round-2 build decision, even though
+seat 0 cannot play either card until round 3. A bare hand-size check calls
+this "combat reachable" for seat 1's decision, which is exactly the
+overvaluation the fix exists to prevent, just one round-of-the-game earlier
+than the original bug. Fixed by `EARLIEST_COMBAT_ROUND` (section 2b/5),
+which as a proven LOWER BOUND can only ever protect decisions the raw hand
+check mishandled, never weaken protection past it. This finding, its
+root-cause, and the fix are recorded here in full rather than only in a
+commit message, per this task's "measure honestly" instruction.
+
+### 7b. Behavioural rate: first build = Military, round <= 3
+Same instrument, same seed, before/after, at every player count --
+`behavcensus --games 300 --players N --weights /private/tmp/rowdig/frozen_champion_2p.json --seed 500 --threads 2`,
+reading the "First build/develop/upgrade kind by round 3" table verbatim
+(every kind the tool reported is listed; nothing omitted). The remainder of
+each 600/900/1200 player-game total not listed by name is split between
+"none" (no build at all by round 3) and, potentially, "Military" -- the tool
+does not print a zero-count row, so a bare table cannot by itself prove
+Military is exactly zero versus merely too small to appear; both 578ee9e and
+this pass leave an equally small, single-digit-percent remainder, and
+neither shows a visible "Military" line in this sample:
+
+  PRE-FIX (6168d5a)  2p: Military 580/600 (96.7%), Farm 14/600 (2.3%)
+  PRE-FIX (6168d5a)  3p: Military 872/900 (96.9%), Farm 13/900 (1.4%)
+  PRE-FIX (6168d5a)  4p: Military 1158/1200 (96.5%), Farm 16/1200 (1.3%), Mine 6/1200 (0.5%)
+
+  578ee9e (round<=3) 2p: Farm 600/600 (100.0%)
+  578ee9e (round<=3) 3p: Farm 884/900 (98.2%), Mine 1/900 (0.1%)   [remainder 15/900, 1.7%]
+  578ee9e (round<=3) 4p: Farm 1190/1200 (99.2%), Mine 10/1200 (0.8%)   [remainder 0/1200, 0.0%]
+
+  THIS PASS (combat_unreachable) 2p: Farm 596/600 (99.3%)   [remainder 4/600, 0.7%]
+  THIS PASS (combat_unreachable) 3p: Farm 890/900 (98.9%), Mine 1/900 (0.1%)   [remainder 9/900, 1.0%]
+  THIS PASS (combat_unreachable) 4p: Farm 1186/1200 (98.8%), Mine 10/1200 (0.8%)   [remainder 4/1200, 0.3%]
+
+This pass's numbers are within roughly a percentage point of 578ee9e's own
+at every player count, both an overwhelming flip from the pre-fix baseline
+-- the fix is intact: the champion still opens like a human (Mine/Farm-
+first, not Military-first) essentially every game, exactly as it did with
+the round-gated version, now derived rather than fitted.
+
+### 7c. Paired win-rate A/B, 2p, n=3000, this pass vs the pre-fix vector
+Reused `strengthrelab` (already built for 578ee9e's own measurement) with
+its `evaluate_legacy_strength_rel` comparator (reproduces the pre-fix
+always-on-base formula exactly for the build-decision mechanism; see its own
+top doc comment for the one honest, conservative approximation it carries
+for nested card-pricing calls, unchanged from 578ee9e's own version):
+
+  `strengthrelab --games 3000 --players 2 --weights /private/tmp/rowdig/frozen_champion_2p.json --seed 900 --threads 2 --opponent legacy`
+
+    win rate     46.0%  +/- 1.7   (null 50.0%)   p = 0.0000
+                 [naive +/- 1.8, rho -0.13, deff 0.87, 1500 deals]
+    verdict      reject -- fixed is WORSE than legacy
+
+Comparable to 578ee9e's own reported 44.1% +/- 1.6 (n=3000) against the same
+pre-fix vector -- both decisively negative, both a real, honestly-measured
+co-adaptation cost (this champion's other ~155 coordinates were hill-climbed
+for tens of thousands of generations while the always-on-base defect was
+present and have never seen a corrected opening, whichever exact gate
+produces it) -- EXPECTED AND ACCEPTED per this task's own instruction, not
+chased or tuned toward.
+
+### 7d. Paired win-rate A/B, 2p, n=3000, this pass vs 578ee9e's own round-gated fix
+`strengthrelab` extended with `--opponent roundgated`, a second closed-form
+comparator (`evaluate_roundgated_strength_rel`) that reproduces exactly
+578ee9e's `state.round <= 3` gate on the SAME new phase-blend formula (zero
+correction wherever the two gates agree, which is nearly everywhere; a
+closed-form swap only in the states where `state.round <= 3` and
+`combat_unreachable(state)` disagree):
+
+  `strengthrelab --games 3000 --players 2 --weights /private/tmp/rowdig/frozen_champion_2p.json --seed 900 --threads 2 --opponent roundgated`
+
+    win rate     54.8%  +/- 1.6   (null 50.0%)   p = 0.0000
+                 [naive +/- 1.8, rho -0.20, deff 0.81, 1500 deals]
+    verdict      accept -- fixed beats B (interval clear of the null)
+
+This pass's version decisively BEATS 578ee9e's own round-gated version at
+2p. Not chased or investigated further (not required, and the task's own
+instruction is to report the number honestly either way) -- a plausible
+mechanism is that `EARLIEST_COMBAT_ROUND`'s floor keeps ALL of round 2
+protected unconditionally (578ee9e's `round<=3` does too), while the
+hand-check half can, in some games, keep protecting genuinely-still-empty
+hands a little further into round 3 than a blind round cutoff would, and
+the reverse (closing a hair earlier when a hand is already real) also
+happens -- but this is offered as a plausible read of the mechanism, not a
+measured claim; no additional experiment was run to confirm it, per this
+task's explicit instruction not to chase win rate.
+
+Historical binaries for both A/Bs above were built from `cp -Rc` copies of
+this same clone checked out to the two historical commits (`/private/tmp/
+strgate-prefix` at 6168d5a, `/private/tmp/strgate-gated` at 578ee9e) purely
+to confirm 7b's PRE-FIX/578ee9e rows independently with the SAME instrument
+and seed as this pass's own row; the win-rate A/Bs themselves (7c/7d) run
+entirely inside this clone's own `strengthrelab`, which reproduces both
+comparators via closed-form correction rather than needing separate
+binaries at all.
+
+
+8. WHAT WAS NOT DONE
+-------------------------------------------------------------------------
+- `opening_force.rs`'s OWN, separate `state.round <= 3` ("the forced opening
+  window") was left untouched -- it is a different mechanism (a tool that
+  FORCES a Mine-first opening move for a different experiment), not the
+  StrengthRel pricing gate this task is about; touching it was out of scope
+  ("do not fix anything else you notice").
+- `bin/humanopenings.rs`'s own `round <= 3` (a human-corpus opening-window
+  comparator) was left untouched for the same reason.
+- No re-run of the hill climb from this fixed evaluator to let the other
+  ~155 coordinates re-adapt to the corrected opening (EARLYMIL.txt sections
+  5c/6 already named this as the natural next step for the win-rate deficit
+  in 7c; a real climb run is hours, out of this pass's budget).
+- No 3p/4p win-rate A/Bs -- matching 578ee9e's own scope note and this
+  task's own instruction (2p is the only bucket with a champion self-play
+  comparison point in this project's convention); 3p/4p were measured
+  behaviourally (7b) only.
+- EARLYMIL.txt sections 8a/8b (the `strength`/`strength_rel` algebraic
+  unidentifiability at the opening, and the separate rank-deficient
+  base/early/late triple a different worker was reparameterising in
+  `/private/tmp/phasecut`) were not investigated or touched -- this pass's
+  fix changes neither weight's VALUE and does not re-split or re-basis
+  anything, only how the existing `EARLIEST_COMBAT_ROUND`-and-hand-size gate
+  is computed, so it does not depend on resolving either.
+- The two scratch comparison clones, `/private/tmp/strgate-prefix` and
+  `/private/tmp/strgate-gated`, are deleted at the end of this pass (built
+  only to confirm section 7b's historical rows independently; nothing in
+  them is a deliverable).
+- Did not touch any file in `/private/tmp/earlymil`, `/Users/pt/tta-ai`, or
+  `/Users/pt` at any point -- every git and cargo command ran inside
+  `/private/tmp/strgate` (or its own throwaway comparison copies) only.
+
+
+9. COMMITS
+-------------------------------------------------------------------------
+  6d26d9d  Replace round<=3 strength-gate literal with a computed rulebook fact
+           (the predicate, the three-call-site refactor, the first four tests)
+  f0df90a  Add a rules-derived round floor to combat_unreachable; extend strengthrelab
+           (the bug found in section 7a, its fix, the fifth test, strengthrelab's
+           --opponent flag)
+
+Both on top of 983809a (this clone's own starting point), by explicit
+pathspec only, gpgsign disabled per this environment's own convention
+(matching this clone's prior commits, e.g. `git log` shows the same on
+578ee9e/6168d5a). Grepped for `<<<<<<<`/`>>>>>>>` before each commit: none
+found.

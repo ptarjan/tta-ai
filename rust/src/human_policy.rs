@@ -350,7 +350,7 @@ pub fn is_held_out(game_id: &str) -> bool {
         hash ^= u64::from(*b);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    hash % 5 == 0
+    hash.is_multiple_of(5)
 }
 
 // -------------------------------------------------------------- training
@@ -577,12 +577,19 @@ pub fn parse_weights_text(text: &str) -> Result<Weights, String> {
     let doc = crate::fixtures::parse_json(text).map_err(|e| format!("{e:?}"))?;
     let fields = match &doc {
         crate::fixtures::Json::Obj(fields) => fields,
-        _ => return Err("human weights JSON is not an object".to_string()),
+        crate::fixtures::Json::Null | crate::fixtures::Json::Bool(_) | crate::fixtures::Json::Num(_) | crate::fixtures::Json::Str(_) | crate::fixtures::Json::Arr(_) => return Err("human weights JSON is not an object".to_string()),
     };
     let mut w = Weights::default();
     for &k in WeightKey::ALL {
         w.set(k, 0.0);
     }
+    // Same reason as `RETIRED_KEYS` below, for the three names the T1-A/C/D
+    // phase collapse folded rather than discarded: they carry real values,
+    // so they can be neither rejected nor dropped. Shared with
+    // `eval::parse_weights` so the two readers cannot drift again -- they
+    // already did once, and every frozen human/anchor file on disk became
+    // unloadable here while the champion files kept working.
+    let mut legacy_early = crate::bots::weighted::eval::LegacyPhaseEarly::new();
     for (name, value) in fields {
         // A RETIRED name is dropped, not rejected -- exactly as
         // `eval::load_weights` does. This loader is deliberately separate
@@ -594,13 +601,17 @@ pub fn parse_weights_text(text: &str) -> Result<Weights, String> {
         if crate::bots::weighted::weights::RETIRED_KEYS.contains(&name.as_str()) {
             continue;
         }
-        let key = WeightKey::by_name(name).ok_or_else(|| format!("unknown weight {name:?}"))?;
         let v = value.as_f64().ok_or_else(|| format!("weight {name:?} is not a number"))?;
         if !v.is_finite() {
             return Err(format!("weight {name:?} is not finite"));
         }
+        if legacy_early.capture(name.as_str(), v) {
+            continue;
+        }
+        let key = WeightKey::by_name(name).ok_or_else(|| format!("unknown weight {name:?}"))?;
         w.set(key, v);
     }
+    legacy_early.apply(&mut w);
     Ok(w)
 }
 
@@ -781,14 +792,14 @@ mod tests {
         for r in &rows {
             for c in &r.candidates {
                 let normed = norm.apply(c);
-                for k in 0..dim {
-                    total[k] += normed[k];
+                for (t, v) in total.iter_mut().zip(normed.iter()) {
+                    *t += v;
                 }
                 n += 1.0;
             }
         }
-        for k in 0..dim {
-            assert!((total[k] / n).abs() < 1e-9, "coord {k} mean should be ~0 after normalizing, got {}", total[k] / n);
+        for (k, t) in total.iter().enumerate() {
+            assert!((t / n).abs() < 1e-9, "coord {k} mean should be ~0 after normalizing, got {}", t / n);
         }
     }
 
@@ -855,6 +866,55 @@ mod tests {
     #[test]
     fn parse_weights_text_rejects_an_unknown_key() {
         assert!(parse_weights_text(r#"{"not_a_real_weight": 1.0}"#).is_err());
+    }
+
+    /// Every name `eval::parse_weights` accepts, this reader must accept
+    /// too. This is the guard for the drift that actually happened: the
+    /// T1-A/C/D phase collapse taught only the champion reader to fold the
+    /// three legacy `_early` names, so `analysis/frozen/human_weights.json`
+    /// -- a FROZEN file that can never be rewritten -- stopped loading here
+    /// and every climb arm died at startup the moment the binary was
+    /// rebuilt. Asserting name-for-name agreement rather than testing the
+    /// three names by hand is what makes the NEXT retirement break a test
+    /// instead of the league.
+    #[test]
+    fn both_weight_readers_accept_exactly_the_same_key_names() {
+        for &(name, _) in crate::bots::weighted::eval::legacy_phase_early_names() {
+            let text = format!(r#"{{"{name}": 1.5, "culture": 2.0}}"#);
+            assert!(
+                crate::bots::weighted::eval::parse_weights(&text).is_ok(),
+                "champion reader rejected legacy name {name:?}"
+            );
+            assert!(
+                parse_weights_text(&text).is_ok(),
+                "human reader rejected legacy name {name:?}"
+            );
+        }
+        for &name in crate::bots::weighted::weights::RETIRED_KEYS {
+            let text = format!(r#"{{"{name}": 1.5, "culture": 2.0}}"#);
+            assert!(
+                crate::bots::weighted::eval::parse_weights(&text).is_ok(),
+                "champion reader rejected retired name {name:?}"
+            );
+            assert!(
+                parse_weights_text(&text).is_ok(),
+                "human reader rejected retired name {name:?}"
+            );
+        }
+    }
+
+    /// The legacy fold is not merely tolerated here, it produces the same
+    /// arithmetic both readers document: `new_start = old_base + old_early`.
+    /// Tolerating the name while dropping its value would keep the league
+    /// running and silently throw away every value ever climbed into it.
+    #[test]
+    fn the_human_reader_folds_a_legacy_early_value_rather_than_discarding_it() {
+        let folded = parse_weights_text(r#"{"hand_value": 0.25, "hand_value_early": 0.2}"#).unwrap();
+        let bare = parse_weights_text(r#"{"hand_value": 0.25}"#).unwrap();
+        assert!(
+            (folded.get(WeightKey::HandValue) - bare.get(WeightKey::HandValue) - 0.2).abs() < 1e-12,
+            "legacy `_early` value was accepted but not folded in"
+        );
     }
 
     /// [`load_weights`]/[`save_weights`] round-trip through an actual file on

@@ -1,0 +1,291 @@
+GAMEDROP -- why 789/1011 BGO human games contributed ZERO leafdump rows
+=========================================================================
+reason (top-level)                games   pct-of-789
+IllegalMove (17 move kinds)         456       57.8%
+StuckPending (10 stall shapes)      228       28.9%
+TruncatedAfterGameOver (NEW find)    68        8.6%
+UnrecoverableHiddenInfo               22        2.8%
+ParserGap (14 shapes)                 15        1.9%
+TOTAL, all 789 accounted for         789      100.0%   (222/1011 already completed to a verified outcome)
+RECOVERABLE PRIZE, single biggest ADDRESSABLE cause (TruncatedAfterGameOver):
+  +68 games (222->290, +30.6%), est. +~20,700 decision rows (63,917->~84,600,
+  +32%). HYPOTHESISED -- fix NOT applied this pass, see "THE PRIZE" below.
+=========================================================================
+
+Working copy: /private/tmp/gamedrop (cp -Rc of /private/tmp/leafreg). Never
+touched /Users/pt/tta-ai or /Users/pt -- forbidden, confirmed not done.
+/private/tmp/bgoholdout was never read, listed, or referenced (grepped this
+task's own diff for "bgoholdout": zero matches). No rival hidden-hand or
+deck-order data was read anywhere in this task -- I only read replaystats.rs
+histogram output and raw journal text with plain grep/awk, never touched
+bots/weighted/*.rs.
+
+--------------------------------------------------------------------------
+SETUP (MEASURED)
+--------------------------------------------------------------------------
+Journals already extracted at /tmp/bgo-journals/journals (1011 files, from a
+prior task on this shared machine -- re-verified count, not re-extracted).
+sources/bgo/index.tsv has 1011 rows. Every game has a journal file (0
+"no journal" skips) -- same as LEAFREG.txt's own prior finding.
+
+Binary used: rust/src/bin/replaystats.rs (pre-existing, NOT written this
+pass) -- "a ranked histogram of WHY replay_game's reconstruction stops
+before a game's journal runs out". I extended it (see "CODE CHANGE" below)
+because its stock output silently dropped 68 games from its own histogram
+and denominator with a `continue // shouldn't happen` comment -- they DO
+happen, 68 times, and finding out why is most of this report.
+
+Regeneration (from rust/, PATH set, difftest profile only):
+  cargo build --profile difftest --bin replaystats
+  ./target/difftest/replaystats ../sources/bgo/index.tsv /tmp/bgo-journals/journals
+
+Full-corpus run this pass (measured, this exact checkout + my one-file diff):
+  1011 games sampled, 222 completed to state.game_over (matches LEAFREG.txt's
+  leafdump run exactly -- same corpus, same replayer, consistent).
+  Stop-reason histogram (the `continue` bucket fixed to no longer vanish)
+  sums to EXACTLY 789 = 1011 - 222. No games unaccounted for.
+
+--------------------------------------------------------------------------
+TASK 3 CHECK FIRST: is any of this corpus expansion content? NO -- MEASURED
+--------------------------------------------------------------------------
+index.tsv's own `edition_verified_by` column (col 11) has exactly two
+values across all 1011 rows, both confirming the 2015 BASE game:
+  474 board:2015-numeric-signature
+  537 journal:2015-leader-name
+  474 + 537 = 1011 -- every row independently verified, none unverified,
+  none expansion. corpus.rs's own module doc independently confirms this
+  from the card-name-dictionary side: "zero games contain a card name
+  outside the 2015 base game -- the edition_verified_by column's promise
+  holds, checked, not just trusted." So none of the 789 drops are
+  expansion-content exclusions -- that hypothesis is measured OUT, not just
+  assumed out. Every one of the 789 is either a genuine log property, a
+  replayer gap, or a bug, per the breakdown below.
+
+--------------------------------------------------------------------------
+FULL REASON TABLE -- all 789, exhaustively bucketed (MEASURED)
+--------------------------------------------------------------------------
+Top-level (grouping the histogram's own more granular keys by their common
+prefix -- e.g. "IllegalMove" covers 17 different Move kinds, each its own
+row in the raw histogram):
+
+  456  IllegalMove       (Build 104, Develop 58, PolPass 55, WonderStep 47,
+                           PlayAction 41, Upgrade 37, Take 26, Aggression 23,
+                           Revolution 19, Pop 15, PlayLeader 8, War 8,
+                           Barbarossa 6, PlayTactic 3, Bid 3, CopyTactic 2,
+                           Destroy 1)
+  228  StuckPending      (decider!=expected actor,no pending 101, PlunderSplit
+                           74, auction bid/pass timing 39, Raid 4, DestroyOwn
+                           4, WarTech 2, LosePop 1, GainBlock 1, Breakthrough
+                           free-civil-action gap 2)
+   68  TruncatedAfterGameOver (NEW this pass -- one bucket, see below)
+   22  UnrecoverableHiddenInfo (unpaired client-side undo 16, colonization
+                           bid vs force-ceiling contradiction 2, build-cost
+                           mismatch/unmodeled discount 4)
+   15  ParserGap         (mostly Urban Growth/Efficient Upgrade/Rich Land's
+                           free-civil-action option lists not including the
+                           observed Build/Upgrade target, 1-2 games each)
+  ---
+  789  TOTAL
+
+Raw per-key table (46 rows, every one of the 789) is in
+/tmp/replaystats_final.txt (not committed -- too large/derived, matches
+this project's "don't commit datasets" rule in spirit) and reproducible
+exactly with the regeneration command above on this exact checkout.
+
+--------------------------------------------------------------------------
+CODE CHANGE this pass (committed, diagnostic only, no replay-outcome change)
+--------------------------------------------------------------------------
+rust/src/bin/replaystats.rs: the `let Some(m) = &result.mismatch else { continue }`
+branch (stopped, not completed, but `GameResult::mismatch` is `None`) used to
+silently drop the game from BOTH the histogram AND its own implicit
+denominator, with a comment claiming "shouldn't happen". It happens 68
+times. Replaced the bare `continue` with a proper `Bucket` entry
+("TruncatedAfterGameOver: ...") in the SAME `buckets` map every other reason
+uses, so it now shows up ranked, with a count, mean round reached, and an
+example game id -- exactly like every other reason. This is a reporting-only
+change: `replay_game` itself, `GameResult`, and every other file are
+untouched (confirmed: `git diff` touches exactly one file,
+rust/src/bin/replaystats.rs, 25 insertions). Verified this doesn't change
+any OTHER bucket's count: re-ran full corpus before/after, every other
+row's count is identical, only the new row appeared and the total went from
+721 (silently missing 68) to 789 (exact).
+
+--------------------------------------------------------------------------
+TOP 3 REASONS BY VOLUME -- dug in, classified (a)/(b)/(c), concrete examples
+--------------------------------------------------------------------------
+
+### 1. IllegalMove, 456 games (57.8%) -- (b) genuine gap in the replayer's/
+###    engine's own RULES MODELING, not "replay failed" and not log noise.
+
+Did not re-derive from scratch -- this project's docs/REPLAY.md already has
+an extensive, dated trace of the largest sub-bucket (`Build`, 104 games
+current count) from a prior pass (docs/REPLAY.md line ~5005). Quoting its
+own conclusion rather than re-deriving: of that pass's 102 `Build` games,
+62 were `resources_short` (this reconstruction's own `p.resources` is 1-3
+short of `build_cost_for(card)`, even though the build's own COST is
+correctly computed). Traced end-to-end on game 7522886, cross-checked
+against THREE independent numbers (a running "(now N)" total, the
+following round's own spend lines, and the event's own journal text): the
+root cause is that `events::food_or_resources` (the "strongest/weakest
+civilization loses/gains N food and/or resources" event block, e.g.
+Raiders/Foray/Crime Wave/Refugees) is coded as a FIXED deterministic
+formula ("drain resources first"), but BGO's own journal text says
+"<Color> CHOSES first" and the actual per-player resolutions
+(e.g. "Orange spends 2 food" [all food] vs "Green spends 1 food; Green
+spends 1 resource" [a 1/1 split] for an IDENTICAL "lose 2" block) prove it
+is a real, independent PER-PLAYER CHOICE the replayer currently guesses
+wrong. Concrete example: game 7522886 (round 6-7, Orange). Extrapolated
+(not fully proven per-instance): ~50 of that pass's 62 `resources_short`
+games have a Foray/Raiders/Crime Wave/Refugees event in their own journal,
+so this ONE mechanism plausibly explains roughly half of the `Build`
+sub-bucket alone, and likely leaks into `Upgrade`/`Develop`/`WonderStep`
+too (same resource-shortfall shape). NOT fixed by that pass or this one --
+a correct fix needs a new `Pending::Choice` kind (self-directed
+food/resources split, mirroring the existing `PlunderSplit` machinery),
+explicitly documented there as "larger than one pass's remaining budget
+could safely implement AND confirm-by-revert-test in one sitting" -- I
+agree with that assessment and did not attempt it.
+
+### 2. StuckPending, 228 games (28.9%) -- (b)/(c) mix, ALSO already deeply
+###    traced across many prior passes, NOT log noise, NOT expansion content.
+
+Dominant sub-bucket, current count 101: "decider # != expected actor #,
+phase Actions, no pending". docs/REPLAY.md (line ~7548 onward) already
+root-caused this at length across several passes, not re-derived here:
+the MAJORITY shape (originally 199/241 games in that pass's own numbering)
+is a downstream SYMPTOM of a hand-military-SIZE undercount at end-of-turn
+(the same disease this doc's discard-phase-oracle and military-hand-ledger
+sections track elsewhere) -- this reconstruction's own simulated hand is
+smaller than the real human's, so no discard `Pending::Choice` ever opens,
+the turn silently completes, and the NEXT journal line (the human's real
+forced discard) finds `decider()` already moved on to the next seat.
+Two concrete, CONFIRMED ENGINE bugs behind slices of this were found and
+fixed by prior passes (both already landed in this checkout, which is why
+today's count, 101, is lower than the doc's own historical 199/241/220
+numbers): a missing military-actions top-up when a pact granting them is
+ACCEPTED mid-turn (commit 652c37c, cut the bucket 241->106 corpus-wide),
+and `LosePop`'s same-line fast path only recognising "destroys", never
+"disbands" (cut 241->220). At least two more confirmed-but-UNFIXED
+mechanisms remain, named with game IDs in docs/REPLAY.md: `set_government`'s
+peaceful-change formula gives back too few tokens on a DECREASE (RULES_SPEC
+Sec8.2's "spent first" isn't honoured -- concrete numbers given on game
+7523357 round 10), and a pre-round-13 hand-size drift on game 7523354 not
+yet isolated to a specific event. Concrete example for THIS bucket today:
+game 7523354 line 251 (round 14, Purple) -- "Purple discards 1 card" stall.
+Category: genuine ENGINE/replayer modeling gaps, several already fixed,
+more open -- never a property of the log itself.
+
+### 3. TruncatedAfterGameOver, 68 games (8.6%) -- NEW THIS PASS -- (b), a
+###    clean, narrow, well-understood gap in replay_common.rs's OWN
+###    completion bookkeeping, not a rules bug and not a log-truncation.
+
+Every one of these 68 journals DOES contain a real "End of game" text
+marker later in the file -- these are NOT resignations or abandoned games
+(the pre-existing code comment guessed "some journals end mid-stream, e.g.
+a resignation"; measured, that guess is wrong for all 68). Proven
+structurally, not just eyeballed on one example:
+  - For all 68 dropped games: the "End of game" line's own line number is
+    STRICTLY GREATER than the last "End turn" line's own line number.
+  - For all 222 currently-completed games (control group, same measurement):
+    the opposite holds in every single case -- "End of game" comes BEFORE
+    the last "End turn" line.
+  0 exceptions in either direction, either group (measured with grep -n over
+  every one of the 1011 journal files, see commands below to reproduce).
+
+    for id in $(cut -f1 /tmp/leaf_dataset.tsv | tail -n +2 | sort -u); do
+      f=/tmp/bgo-journals/journals/$id.tsv
+      eog=$(grep -n "End of game" "$f" | head -1 | cut -d: -f1)
+      let=$(grep -n "End turn" "$f" | tail -1 | cut -d: -f1)
+      [ "$eog" -lt "$let" ] || echo "UNEXPECTED: $id"   # prints nothing
+    done
+
+Root cause, traced on game 7522663 (2p) with a temporary per-line trace
+print (added, used, then reverted -- not shipped, `git diff` confirms
+replay_common.rs has zero net changes): BGO logs its final turn's
+end-of-turn TWICE (a documented, already-handled quirk -- see
+replay_common.rs's own long comment above the "End of game" branch). The
+FIRST duplicate "End turn" line genuinely triggers `game::advance_turn`'s
+round-wrap check, which calls `finish_game` and flips `r.state.game_over`
+to true for real, correctly. `replay_game`'s loop has a guard,
+`if r.state.game_over { break; }`, an UNLABELED `break` (so it does not
+show up in a `grep "break 'lines"` audit -- I exhaustively checked all 18
+labelled `break 'lines` sites and confirmed every one of them sets
+`mismatch` first; this one is the ONLY unguarded exit and it is exactly
+what fires here) -- placed to stop the SECOND duplicate "End turn" line
+from being replayed against an already-finished game. For these 68 games,
+that guard fires on the second duplicate line, one line before the file's
+own "End of game" marker is ever reached -- so `completed` (which is ONLY
+ever set by literally reading that marker's text) stays false, even though
+the engine's own authoritative `state.game_over` is already true and
+correct. The code's existing big comment (~replay_common.rs line 5256)
+explicitly assumes "BGO logs that marker BEFORE the true last turn's own
+end-of-turn processing" -- true for 222/222 of the currently-working
+games, false for all 68 of these.
+Category: (b), a narrow, deterministic gap in this ONE file's own
+completion bookkeeping -- not a rules/engine bug (the real game state is
+computed correctly), not a parser gap (every line here parses fine), and
+definitely not a property of the source log (the log contains a perfectly
+good "End of game" line every time, just one line later than this file's
+completion check currently tolerates).
+
+--------------------------------------------------------------------------
+THE PRIZE -- HYPOTHESISED, fix NOT applied this pass
+--------------------------------------------------------------------------
+TruncatedAfterGameOver is, by a wide margin, the cheapest of the three
+reasons above to fix: the other two (IllegalMove/Build's food-or-resources
+choice, StuckPending's remaining hand-size-undercount mechanisms) are
+already-open, multi-pass efforts in docs/REPLAY.md needing new engine
+Pending::Choice machinery or further hand-tracking archaeology -- neither
+is "small and obviously safe" for one sitting. TruncatedAfterGameOver's fix
+IS narrow in scope (touches only the post-loop completion check in
+replay_game), but is NOT a one-line flip either, which is why I did not
+attempt it:
+
+Naively setting `completed = true` whenever the loop's `game_over` break
+fires (mismatch none) would skip `ground_final_events` -- the step that
+grounds the SET of Age III events actually scored, read off the "End of
+game" line's own text (`parse_real_final_events`), which this file's
+existing "Final scores" section (docs/REPLAY.md) already shows is NOT
+always a no-op even on the currently-working 222 (202/222 exact score
+matches, 20 games off by 1-16 points, some already traced to exactly this
+kind of event-set drift). A correct fix needs the game_over break to first
+PEEK at the still-unconsumed remainder of the journal for the "End of
+game" line (it is always there for these 68, always within 1-2 lines), run
+the same grounding that branch already does, THEN set completed=true --
+small in scope, but needs its own before/after score cross-check (the same
+kind replaystats.rs already runs) before trusting it, which is a full
+follow-up pass's worth of verification, not a same-sitting addition.
+
+Estimate (HYPOTHESISED, extrapolated from this run's own measured rates,
+NOT measured directly since the fix isn't implemented):
+  Games recoverable:     +68  (222 -> 290, +30.6%)
+  Player-count mix of the 68 (measured, from index.tsv):
+    2p: 52   3p: 11   4p: 5
+  Current corpus's own measured decision-rows-per-game, by player count
+  (from LEAFREG.txt's leafdump run: 52400/193=271.5 (2p), 8367/23=363.8
+  (3p), 3150/6=525.0 (4p)):
+    52*271.5 + 11*363.8 + 5*525.0 = 14118 + 4001.8 + 2625.0 ~= 20,745 rows
+  Decision rows recoverable: ~+20,700  (63,917 -> ~84,600, +32.4%)
+
+This is the number that should decide whether the completion-check fix
+(with its required peek-ahead + grounding + rescored cross-check) is worth
+a dedicated follow-up pass: roughly a third more usable games AND a third
+more decision rows, from ONE narrow, already-fully-diagnosed cause, versus
+the other two top reasons which are large but each individually already
+several passes deep with diminishing per-pass returns.
+
+--------------------------------------------------------------------------
+WHAT WAS NOT DONE
+--------------------------------------------------------------------------
+- Did not implement the TruncatedAfterGameOver fix (see above -- not
+  "small and obviously safe" per this task's own instruction; needs a
+  peek-ahead + grounding + rescoring verification pass of its own).
+- Did not re-chase IllegalMove/StuckPending's already-open, multi-pass
+  root causes in docs/REPLAY.md -- quoted their own conclusions rather
+  than re-deriving, per this project's "don't re-derive, write it down"
+  house rule.
+- Did not touch bots/weighted/*.rs, game.rs, apply.rs, legal.rs, costs.rs.
+- Did not touch /private/tmp/bgoholdout, sources/bgo/index.tsv (read-only),
+  or /Users/pt/tta-ai.
+- Did not commit any dataset (/tmp/leaf_dataset.tsv, /tmp/replaystats_*.txt
+  all stayed in /tmp, never staged).

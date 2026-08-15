@@ -1,0 +1,150 @@
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index e70af2f..d104817 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -377,16 +377,28 @@ fn on_enter_play(p: &mut PlayerState, id: CardId) {
+     }
+ }
+ 
+-/// The leave-play twin of [`on_enter_play`]. `cultureOnLeaveEqualToLab
+-/// ResourceProduction` (Bill Gates) is a genuine gap: it needs
+-/// `_lab_level_workers` (sum of lab level * workers), which is
+-/// self-contained and easy, but wiring it up needs `Special::
+-/// CultureOnLeaveEqualToLabResourceProduction` to be checked here, and
+-/// nothing in `p.effects` distinguishes "Bill Gates left play" from "a lab
+-/// technology's own `on_enter_play`" without it. Left unported since Bill
+-/// Gates is a rare leader swap and this module already has enough named
+-/// gaps to track.
++/// The leave-play twin of [`on_enter_play`].
++///
++/// `CultureOnLeaveEqualToLabResourceProduction` (Bill Gates -- Code of Laws:
++/// "When Bill Gates leaves play, score culture equal to the amount of
++/// resources you produce from labs"): scores culture equal to
++/// `effects::lab_level_workers`, the SAME level*workers-summed-over-staffed-
++/// labs formula `ResourcesPerLabEqualToLevel` uses for his OTHER (in-play)
++/// ability -- both keys live on the one card (`card_table.rs`'s "Bill
++/// Gates"). Was a documented, unwired gap (this function's own prior doc
++/// comment named it "left unported"); traced live to game `7522665`'s own
++/// journal: Iconoclasm (line 332, round 18) discards Bill Gates for missing
++/// the current age, and the journal's own next `"End turn"` checkpoint (line
++/// 340, `"(now 81)"`) is short by exactly 9 without this -- the SAME 9 a
++/// staffed lab producing 9 resources/turn would owe, confirmed against
++/// Orange's own tableau at that point in a `REPLAY_DEBUG_ALL` trace.
++/// Computed BEFORE the token/civil-action bookkeeping below reads `id`'s
++/// OTHER effects, though order does not matter here (independent fields).
+ pub(crate) fn on_leave_play(p: &mut PlayerState, id: CardId) {
++    if id.get().special.contains(&Special::CultureOnLeaveEqualToLabResourceProduction) {
++        let gained = effects::lab_level_workers(&p.techs);
++        p.culture = (p.culture as i32 + gained).max(0) as u16;
++    }
+     let eff = &id.get().effects;
+     let bt = eff.blue_tokens as i32;
+     if bt != 0 {
+@@ -1778,6 +1790,54 @@ mod tests {
+         blank_state(4, players)
+     }
+ 
++    // -------------------------------------------------------------- leave play
++
++    /// Regression for the `7522665` culture-checkpoint gap (`docs/REPLAY.md`'s
++    /// culture-oracle `BuildWonderStage`-bucket trace): Bill Gates leaving
++    /// play (there, via Iconoclasm discarding him for being off-age) must
++    /// score culture equal to `effects::lab_level_workers`, mirroring his
++    /// OTHER, already-wired ability (`ResourcesPerLabEqualToLevel`) which
++    /// uses the identical formula while he is still in play. Revert the
++    /// `CultureOnLeaveEqualToLabResourceProduction` branch in `on_leave_play`
++    /// to see this go RED: culture stays 0 instead of 9.
++    #[test]
++    fn on_leave_play_scores_culture_equal_to_lab_level_workers_when_bill_gates_leaves() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("Bill Gates");
++        // A level-III lab staffed by 3 workers: lab_level_workers = 3*3 = 9,
++        // matching the 9-culture gap traced in game 7522665 line 340.
++        p.techs.insert(card("Computers"), TechSlot { workers: 3, stored: 0 });
++        on_leave_play(&mut p, card("Bill Gates"));
++        assert_eq!(p.culture, 9);
++    }
++
++    /// An UNSTAFFED lab contributes nothing (`lab_level_workers` sums
++    /// `level * workers`, and `workers == 0` zeroes that lab's own term) --
++    /// distinguishes "the formula is wired at all" from "the formula reads
++    /// the tableau correctly" rather than the first test alone, which could
++    /// pass by accident if `on_leave_play` granted a flat bonus instead.
++    #[test]
++    fn on_leave_play_grants_no_culture_from_bill_gates_for_an_unstaffed_lab() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("Bill Gates");
++        p.techs.insert(card("Computers"), TechSlot { workers: 0, stored: 0 });
++        on_leave_play(&mut p, card("Bill Gates"));
++        assert_eq!(p.culture, 0);
++    }
++
++    /// A leader with no `CultureOnLeaveEqualToLabResourceProduction` special
++    /// (e.g. Napoleon) must not touch culture at all when leaving play, even
++    /// with a staffed lab present -- the branch is gated on THIS specific
++    /// leader's own special, not "any leader leaving play with a lab up".
++    #[test]
++    fn on_leave_play_does_not_score_culture_for_a_leader_without_the_bill_gates_special() {
++        let mut p = blank_player(0, card("Despotism"));
++        p.leader = card("Napoleon Bonaparte");
++        p.techs.insert(card("Computers"), TechSlot { workers: 3, stored: 0 });
++        on_leave_play(&mut p, card("Napoleon Bonaparte"));
++        assert_eq!(p.culture, 0);
++    }
++
+     // -------------------------------------------------------------- take
+ 
+     #[test]
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index dce4be7..0826896 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -331,7 +331,12 @@ fn for_each_output_special(p: &PlayerState, mut f: impl FnMut(Special)) {
+ /// RATING versions of the same two cards -- see that match's doc comment on
+ /// why this codebase, like Python, accepts that duplication rather than
+ /// routing a scorer through the feed it mirrors).
+-fn lab_level_workers(techs: &Tableau) -> i32 {
++///
++/// `pub(crate)` so `apply::on_leave_play` can reuse the SAME formula for
++/// `CultureOnLeaveEqualToLabResourceProduction` (also Bill Gates -- see that
++/// special's own doc) rather than re-deriving it, matching this module's own
++/// stated preference for one formula per shared arithmetic shape.
++pub(crate) fn lab_level_workers(techs: &Tableau) -> i32 {
+     techs
+         .iter()
+         .filter(|(id, _)| id.kind() == CardType::Lab)
+diff --git a/rust/src/game.rs b/rust/src/game.rs
+index 88c3c6e..3b62b5d 100644
+--- a/rust/src/game.rs
++++ b/rust/src/game.rs
+@@ -102,6 +102,7 @@
+ use crate::cards::{Age, CardId, CardType, Special, CARDS};
+ use crate::combat;
+ use crate::economy;
++use crate::effects;
+ use crate::events;
+ use crate::legal;
+ use crate::moves::{Move, MoveList};
+@@ -655,11 +656,18 @@ fn antiquate(state: &mut GameState, ended: Age) {
+ /// Duplicated from `apply.rs`'s private `on_leave_play` rather than shared,
+ /// exactly as `legal.rs`/`costs.rs`/`apply.rs` each keep their own four-line
+ /// `leader_is`: making it `pub(crate)` is an edit to a module this port does
+-/// not own. It is six lines and it is the whole of Python's
+-/// `effects.on_leave_play` for the non-`Special` half. (Bill Gates'
+-/// `cultureOnLeaveEqualToLabResourceProduction` is a gap `apply.rs` already
+-/// names and carries; it is not re-opened here.)
++/// not own. It is the whole of Python's `effects.on_leave_play` for the
++/// non-`Special` half, PLUS the one `Special` this port models here too:
++/// `CultureOnLeaveEqualToLabResourceProduction` (Bill Gates) now fires on
++/// THIS path as well (antiquation -- a leader too old for the current age is
++/// discarded exactly like any other leave-play, so a Bill Gates who ages out
++/// rather than being Iconoclasm'd owes the same culture; `apply.rs`'s own
++/// twin carries the full citation/trace for the mechanism itself).
+ fn on_leave_play(p: &mut PlayerState, id: CardId) {
++    if id.get().special.contains(&Special::CultureOnLeaveEqualToLabResourceProduction) {
++        let gained = effects::lab_level_workers(&p.techs);
++        p.culture = (p.culture as i32 + gained).max(0) as u16;
++    }
+     let eff = &id.get().effects;
+     let bt = eff.blue_tokens as i32;
+     if bt != 0 {

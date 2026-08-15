@@ -1,0 +1,232 @@
+TOKENGAIN worker -- 2026-08-14 -- clone /private/tmp/tokengain (deleted at end
+of pass per cleanup rule; tokengain.patch in this directory is the full diff,
+`git diff 84bdf2e 5d5dbcf` run inside the clone, i.e. tokenbank3.patch +
+tokencount.patch + this pass's own single commit).
+
+TASK: make non-production gains (gain_food/gain_resources, as opposed to
+credit_production) take the FEWEST possible blue tokens -- greedily the
+LARGEST unlocked denomination first, remainder in smaller ones -- per the
+owner's direct confirmation (2026-08-14: "in practice you always want to
+take the highest denomination"), unconditionally, no policy knob. Then
+re-measure against the frozen 734/707 baseline and the tokenbank3-alone
+736/709 result with wins {7520999,7522236,7522673,7523203,7523634} and
+regressions {7521459,7522402,7522796}, trying to kill the 3 regressions.
+
+===========================================================================
+[0] SETUP
+===========================================================================
+cp -Rc base0816 -> /private/tmp/tokengain, replay_common.rs synced to live
+a64a18e (commit 13c3c43), tokenbank3.patch applied cleanly (commit 579a33a),
+tokencount.patch applied cleanly (commit 84bdf2e) -- both `git apply`
+(non-3way) succeeded on the first try this time, no conflicts, no manual
+resolution needed. `cargo test --profile fasttest --lib` on this base
+(before my own change): passes (1451, matching 1448 [tokenbank3] + 2
+[tokencount] + 1 not-yet-added).
+
+===========================================================================
+[1] THE KEY FINDING: THE REQUESTED POLICY ALREADY EXISTS
+===========================================================================
+Read economy.rs before writing any code. tokenbank3.patch (already applied,
+NOT written by me) already implements EXACTLY the requested behaviour,
+unconditionally, with no knob:
+
+  - `Denoms::of` (economy.rs:361-395) builds the caller's unlocked
+    denomination set and sorts it DESCENDING (`sort_unstable_by(|a, b|
+    b.cmp(a))`, line 380) -- highest first, always, every call site.
+  - `gain(n, free, denoms)` (line 726) searches DOWNWARD from `n` for the
+    largest amount whose minimal packing (`tokens_for`, itself a greedy
+    descending-denom loop) fits in `free` -- i.e. it already prefers fewer
+    tokens over getting the full requested amount when the two conflict.
+  - `gain_food`/`gain_resources` (lines 751-771) call `bank_credit_greedy`
+    with `denoms.as_slice()` (the same descending order) -- greedily fills
+    the highest denomination first, remainder in smaller ones, exactly the
+    rule as now confirmed.
+  - There was already ONE pinning test for this,
+    `gain_food_places_newly_gained_food_on_the_highest_available_denomination`
+    (line 1721), but only for the exact-single-denomination case (3 food,
+    one denom-3 tech, no remainder exercised) and only for the food side.
+
+So my assigned "make the change" step had NO functional code to write:
+non-production-gain placement is already highest-first, unconditional, no
+config knob, matching the owner's confirmation to the letter. This is not a
+guess -- I read `gain`/`gain_food`/`gain_resources`/`bank_credit_greedy`/
+`Denoms::of` directly and traced the sort order and call sites myself,
+independent of the two prior workers' notes.
+
+Grepped for any OTHER site that bypasses `gain_food`/`gain_resources` and
+sets `p.food`/`p.resources` directly outside a test: found none in the
+main replay path. The only two such bypasses that existed
+(`replay_common.rs`'s two journal-correction sites) were already found and
+fixed by the TOKENCOUNT pass, on top of which I am built.
+
+===========================================================================
+[2] WHAT I ACTUALLY DID
+===========================================================================
+Since the food-side test already existed but the resource side (and the
+REMAINDER case, which is the actually load-bearing part of "greedily
+largest first, remainder in smaller ones" -- the food test never exercises
+a case where the gain doesn't divide evenly into one denomination) did not,
+I added:
+
+  gain_resources_places_newly_gained_resources_greedily_from_the_highest_denomination_down_with_the_remainder_in_smaller_ones
+
+(economy.rs, next to the food test). Setup: only an Iron tech (denom 2) in
+play (denom-1 is always implicitly present), `gain_resources(&mut p, 5)`.
+5 does not divide evenly into 2s, so this pins the REMAINDER behaviour:
+expected `blue_used == 3` (two denom-2 tokens + one denom-1 token = 3
+tokens, the minimal packing of 5 over [2,1]), not 5 (five denom-1 tokens,
+the degenerate all-ones outcome the task's own history flagged as the
+wrong direction for a lowest-first experiment).
+
+CONFIRMED RED: temporarily flipped `Denoms::of`'s sort from descending to
+ascending (`sort_unstable_by(|a, b| a.cmp(b))`), reran just this test:
+FAILED, "left: 5, right: 3" (ascending order degenerates to 5 denom-1
+tokens, exactly the already-ruled-out failure mode). Restored the real
+descending sort immediately after (verified via `git diff --stat` showing
+only the new test as a net diff, zero stray hunks).
+
+`cargo test --profile fasttest --lib`: 1452 passed, 0 failed.
+`cargo clippy --all-targets -- -D warnings`: clean.
+
+Committed as 5d5dbcf ("Pin gain_resources highest-denomination-first
+placement with a RED-confirmed test"). `credit_production` untouched --
+verified via `git diff --stat` on this commit: exactly 1 file, 23 insertions,
+0 deletions, all inside the `#[cfg(test)]` module.
+
+===========================================================================
+[3] MEASUREMENT
+===========================================================================
+difftest build: `cargo build --profile difftest --bin replaystats` from
+rust/ -- clean, 1m35s.
+
+SCOREDIV_DUMP_COMPLETED=1 sweep (/tmp/tg_after.txt):
+"# replaystats: 1011 games sampled, 736 completed to state.game_over"
+"736/736 completed games actually flipped state.game_over ... 709/736 of
+those matched index.tsv exactly"
+  => 736 completed / 709 exact -- BYTE-IDENTICAL to tokenbank3-alone and to
+     tokenbank3+tokencount (both already at 736/709). My change (test-only,
+     no functional diff) could not move this, and did not.
+
+comm -23 guard_ids.txt tg_ids.txt (REGRESSIONS), VERBATIM:
+  7521459
+  7522402
+  7522796
+
+comm -13 guard_ids.txt tg_ids.txt (WINS), VERBATIM:
+  7520999
+  7522236
+  7522673
+  7523203
+  7523634
+
+Identical set, both directions, to the task's own stated tokenbank3-alone
+result and to TOKENCOUNT's re-measurement. The guard bar (comm -23 empty)
+is NOT met: same 3 regressions remain.
+
+RESOURCE_ORACLE=1 (/tmp/tg_oracle.txt):
+"41581 \"End turn\" checkpoints ...; 41256 (99.2%) matched exactly.
+114/1011 games sampled had at least one checkpoint disagree."
+  => 99.2% / 114 diverging -- BYTE-IDENTICAL to TOKENCOUNT's own re-derived
+     number on the same (tokenbank3+tokencount) base. Confirms my
+     test-only change has zero behavioural effect, as expected given [1].
+
+===========================================================================
+[4] TRACE: 7521459 ROUND 17, WITH ACTUAL BANK CONTENTS (new evidence)
+===========================================================================
+TOKENBANK3's original trace found `credit_production` capped at 3 new
+resource tokens (free = blue_total(18) - blue_used(15) = 3) where the
+journal implies 4 workers' worth of production was needed. TOKENCOUNT
+narrowed the cause to "not a scalar/bank desync, not change-making
+eagerness, not spend order, not a card-removal stranding" and landed on
+"most likely the non-production-gain denomination CHOICE" as the
+remaining open lead -- but its own experiment only tested a degenerate
+ascending-order alternative, and did not look at what the bank actually
+held.
+
+I extended the existing `DEBUG blue_used` eprintln (temporarily, reverted
+after) to also print `p.food_tokens`/`p.resource_tokens`'s actual
+`denoms`/`counts` arrays, not just the derived token COUNT, and reran a
+one-row REPLAY_DEBUG_ALL=1 repro of 7521459. At the round-17 pre-corruption
+checkpoint for Grey (idx=3):
+
+  mine_denoms=[5, 2, 1] mine_tokens=8
+  mine_bank: denoms=[1, 2, 5] counts=[0, 3, 5]   (value = 0 + 6 + 25 = 31)
+
+Minimal packing of 31 over [5,2,1] is 7 tokens (6x5 + 1x1). The actual
+tracked bank holds 8 tokens (5x5 + 3x2, ZERO denom-1 tokens) -- one token
+"too many" relative to a from-scratch minimal repacking of the same value.
+
+THIS IS NOT A BUG IN THE NON-PRODUCTION GAIN PATH. `gain_resources` is
+confirmed (this pass, [1]-[2] above) to already place tokens minimally,
+highest-first, every single call, unconditionally. Watching the bank's
+own evolution across this exact turn (denoms=[1,2,5], counts as
+[before]/[after] at each step):
+  pre-corruption:        [0,3,5]  (8 tokens, value 31)
+  after corruption -4:   [0,1,5]  (6 tokens, value 27) -- 2 denom-2 tokens
+                          removed, LOWEST-first (no denom-1 tokens exist to
+                          take first) -- correct per the debit rule.
+  after credit_production (free=3): [0,3,6] (9 tokens, value 36) -- 2 new
+                          denom-2 + 1 new denom-5 tokens added, ONE per
+                          producing worker AT THAT WORKER'S OWN CARD
+                          (mandated by rule 4, not a repacking choice) --
+                          capped at 3 total new tokens by `free`.
+
+The "3, 5" (no denom-1) composition of the bank BEFORE this turn is the
+accumulated, mandated result of 16 prior rounds of `credit_production`
+(one token per worker, forced to that worker's card's own denomination,
+NEVER re-packed or consolidated -- rule 2/rule 4, both explicitly not in
+question) interleaved with `bank_debit_lowest_first`'s change-making on
+corruption/spending. Given those two mechanisms are both fully determined
+(no freedom, confirmed by TOKENCOUNT's own hypothesis 1/2/4 elimination and
+independently by my own read of the code), and non-production gains are
+now independently confirmed (this pass) to already be minimal, there is NO
+remaining placement POLICY left to tune. The 1-token "excess" here is not
+an artifact of any choice the engine makes -- it is the correct, forced
+consequence of rule 4 (a worker on a denom-2 mine card produces a denom-2
+token, period, regardless of whether a denom-5 card exists elsewhere) as
+applied across a full game's worth of tableau growth (mine techs unlocked
+over time) and worker reassignment history that the journal's running
+totals alone cannot fully specify.
+
+PRECISE REMAINING OVER-COUNT SOURCE (as requested by the task): it is
+`credit_production`'s mandatory per-worker-per-card placement, ACCUMULATED
+over the game's full production history, not any denomination CHOICE
+anywhere in the (now confirmed correct) `gain_food`/`gain_resources` path.
+The engine has no freedom left to reduce this count without either (a)
+violating rule 4 by re-packing production tokens post hoc (forbidden,
+already litigated and ruled out by the owner's own words, "you produce
+wherever your yellow tokens are"), or (b) somehow inferring the TRUE
+historical worker-to-card assignment more precisely than the journal
+records -- which is an information problem, not a policy bug. This is
+consistent with, and sharpens with concrete bank-content evidence, both
+prior workers' independent conclusions that assumption #3 (non-production
+gain placement) is a dead end for these specific 3 games.
+
+7522402 was not re-traced this pass (TOKENBANK3 already spot-checked it as
+"identical shape" to 7521459); 7522796's smaller, opposite-sign (+1)
+divergence remains unexplained, as in both prior passes -- no budget spent
+on it this pass since the shared-shape pair was the documented repro and
+the +1 case is very likely a different, unrelated mechanism.
+
+===========================================================================
+VERDICT
+===========================================================================
+Tests: 1452/1452 passing (1451 pre-change + 0 -- wait: 1451 base + 1 new
+test = 1452, confirmed). Clippy: clean. Guard sweep: comm -23 NOT EMPTY,
+byte-identical to both prior passes (7521459, 7522402, 7522796 remain; same
+5 wins). RESOURCE_ORACLE: byte-identical, 99.2%/114 diverging.
+
+The task's premise -- that non-production gains needed to be CHANGED to
+take the largest denomination first -- was already true of the code before
+this pass started (tokenbank3.patch already implements it, unconditionally,
+correctly). This pass's real contribution is (a) independently verifying
+that from the code itself, not by trusting the prior notes; (b) closing the
+one real gap, a missing REMAINDER-case pinning test on the resource side
+(RED-confirmed against the exact degenerate ascending-order failure mode
+the task warned about); and (c) using the confirmed-correct gain path to
+rule OUT denomination choice as 7521459's cause with direct bank-content
+evidence, narrowing the true remaining cause precisely to
+`credit_production`'s mandated, non-negotiable per-worker-per-card
+placement accumulated over the game's full history -- a structural
+information gap (the journal never records per-card production history),
+not a fixable policy bug anywhere in the token-placement code.

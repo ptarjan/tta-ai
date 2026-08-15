@@ -4,8 +4,8 @@
 //! `advisor` is the mirror + bot + session operations the REPL in
 //! `bin/advisor.rs` drives.
 
-pub mod advisor;
+pub mod session;
 pub mod describe;
 pub mod state_io;
 
-pub use advisor::Advisor;
+pub use session::Advisor;

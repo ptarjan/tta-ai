@@ -48,8 +48,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use tta::corpus::{
-    actor_and_rest, build_card_index, classify, parse_index, ActionClass, Color, GameMeta,
-    LineOutcome,
+    actor_and_rest, build_card_index, classify, find_ascii_ci, leading_int, parse_index,
+    parse_winner_line, title_case, ActionClass, Color, GameMeta, LineOutcome,
 };
 use tta::effects::army_strength;
 use tta::replay_common::replay_game;
@@ -59,49 +59,13 @@ use tta::{Age, CardId};
 // Small parsing helpers over raw journal text (all ASCII-safe: never slice
 // a lowercased copy of text that might contain non-ASCII, only ever slice
 // the ORIGINAL string at byte offsets found by scanning ASCII markers).
+// `title_case`/`leading_int`/`find_ascii_ci`/`parse_winner_line` moved to
+// `tta::corpus` (2026-08-13): `bin/humanopenings.rs`'s own text-based
+// outcome determination needs `parse_winner_line` too -- see that module's
+// doc for why text beats gating outcome on full engine-replay completion --
+// imported above under their original names so nothing below this point
+// changes.
 // ---------------------------------------------------------------------
-
-/// Uppercases the first char, lowercases the rest -- normalises BGO's
-/// "ORANGE" (the winner clause is upper-case) and "Green" (every other rank
-/// clause is title-case) to the one spelling `Color::parse` accepts.
-fn title_case(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
-        None => String::new(),
-    }
-}
-
-/// Leading run of ASCII digits (optionally preceded by whitespace), parsed
-/// as `i32`. `None` if the trimmed text does not start with a digit.
-fn leading_int(s: &str) -> Option<i32> {
-    let s = s.trim_start();
-    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-    if end == 0 {
-        return None;
-    }
-    s[..end].parse().ok()
-}
-
-/// Case-insensitive byte-level search for a pure-ASCII marker. Never
-/// lowercases `text` itself (which may contain multi-byte UTF-8 names, e.g.
-/// "PLAYER") -- only compares fixed-width ASCII windows, so the
-/// returned offset is always a valid char boundary in the ORIGINAL string
-/// (an ASCII byte can only ever match itself, never a UTF-8 continuation
-/// byte).
-fn find_ascii_ci(text: &str, marker: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let m = marker.as_bytes();
-    if bytes.len() < m.len() {
-        return None;
-    }
-    for i in 0..=(bytes.len() - m.len()) {
-        if bytes[i..i + m.len()].eq_ignore_ascii_case(m) {
-            return Some(i);
-        }
-    }
-    None
-}
 
 /// Given `"... <marker><ColorName> ..."`, returns the colour named right
 /// after `marker` (case-insensitive marker, e.g. `" on "` for a war
@@ -158,26 +122,8 @@ fn color_for_seat(seat: u8) -> Color {
     }
 }
 
-/// One rank-clause from the "End of game" line: `"WINNER IS <NAME> AS
-/// <COLOR> (<N> PTS)"` (rank 1, always upper-case "AS") or `"2nd/3rd/4th is
-/// <name> as <Color> (<n> pts)"` (rank 2-4, title-case "as"). Parsed by
-/// scanning for the `" as "` marker (case-insensitive) rather than the
-/// ordinal text, since the marker is what's common to every clause.
-fn parse_winner_line(s: &str) -> Vec<(u8, Color, i32)> {
-    let mut out = Vec::new();
-    let mut rank: u8 = 0;
-    for clause in s.split("; ") {
-        let Some(as_pos) = find_ascii_ci(clause, " as ") else { continue };
-        let after = &clause[as_pos + 4..];
-        let word: String = after.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-        let Some(color) = Color::parse(&title_case(&word)) else { continue };
-        let Some(paren) = after.find('(') else { continue };
-        let Some(score) = leading_int(&after[paren + 1..]) else { continue };
-        rank += 1;
-        out.push((rank, color, score));
-    }
-    out
-}
+// `parse_winner_line` moved to `tta::corpus` (imported above) -- see this
+// file's own top-of-file note.
 
 // ---------------------------------------------------------------------
 // Per-(game, colour) aggregate -- everything Pass 1 extracts from text.
@@ -185,6 +131,14 @@ fn parse_winner_line(s: &str) -> Vec<(u8, Color, i32)> {
 
 #[derive(Clone)]
 struct PlayerAgg {
+    // Stored for symmetry with the constructor's `Color` argument and kept
+    // on the struct for future per-player reporting; today every reader
+    // gets the colour from the `by_color: HashMap<Color, PlayerAgg>` key
+    // instead, so this field itself is never read. Removing it would also
+    // mean dropping the `new(color: Color)` parameter and touching every
+    // call site for a field that costs nothing to keep -- not worth the
+    // extra churn for a lint-only fix.
+    #[allow(dead_code)]
     color: Color,
     /// 1-based; 0 means the "WINNER IS" line wasn't found/parsed for this
     /// game (excluded from every winner/loser split, counted in coverage).
@@ -415,7 +369,7 @@ fn parse_game(meta: &GameMeta, text: &str, card_index: &HashMap<&'static str, Ca
         }
         let mean = vals.iter().map(|(_, v)| *v as f64).sum::<f64>() / vals.len() as f64;
         let mut sorted = vals.clone();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|x| std::cmp::Reverse(x.1));
         for (rank_idx, (color, _)) in sorted.iter().enumerate() {
             if let Some(p) = by_color.get_mut(color) {
                 p.age_culture_rank[idx] = Some((rank_idx + 1) as u8);
@@ -484,7 +438,7 @@ fn run_military_pass(
             let state = &result.decisions[i].state;
             let mut strengths: Vec<(u8, i32)> =
                 (0..meta.players).map(|seat| (seat, army_strength(&state.players[seat as usize]))).collect();
-            strengths.sort_by(|a, b| b.1.cmp(&a.1));
+            strengths.sort_by_key(|x| std::cmp::Reverse(x.1));
             for (rank_idx, (seat, _)) in strengths.iter().enumerate() {
                 age2.insert((meta.id.clone(), color_for_seat(*seat)), (rank_idx + 1) as u8);
             }
@@ -494,7 +448,7 @@ fn run_military_pass(
             let state = &result.decisions[i].state;
             let mut strengths: Vec<(u8, i32)> =
                 (0..meta.players).map(|seat| (seat, army_strength(&state.players[seat as usize]))).collect();
-            strengths.sort_by(|a, b| b.1.cmp(&a.1));
+            strengths.sort_by_key(|x| std::cmp::Reverse(x.1));
             for (rank_idx, (seat, _)) in strengths.iter().enumerate() {
                 age3.insert((meta.id.clone(), color_for_seat(*seat)), (rank_idx + 1) as u8);
             }
@@ -787,7 +741,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             if scored.len() != g.players as usize {
                 continue;
             }
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|x| std::cmp::Reverse(x.1));
             let leader = scored[0].0;
             let last = scored[scored.len() - 1].0;
             let leader_won = g.by_color.get(&leader).map(|p| p.rank == 1).unwrap_or(false);

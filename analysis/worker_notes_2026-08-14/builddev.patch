@@ -1,0 +1,239 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 1d96ea8..3e746a8 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -2922,6 +2922,51 @@ fn apply_churchill_end_turn_choice(r: &mut Replayer, end_turn_text: &str) -> Res
+     Ok(())
+ }
+ 
++/// [`apply_churchill_end_turn_choice`]'s MILITARY twin. That function's own
++/// doc comment claimed the "3 science and 3 resources for developing
++/// military unit technologies and building/upgrading units" option was
++/// "never once observed in the corpus" -- WRONG: BGO simply never announces
++/// this choice as its own line (there is no culture-style "scores" clause
++/// to glue it onto), so the only observable evidence is downstream, on a
++/// LATER Build/Upgrade/Develop line's `"loses N military resource"`/`"loses
++/// N military science"` clause (`lost_military_resource`/
++/// `lost_military_science`'s own doc comments -- one of them already flagged
++/// this exact shape as "a currently-unexplained baseline case" without
++/// chasing it: lines showing the clause with NO preceding Wave of
++/// Nationalism/Military Build-Up/Patriotism grant visible in the journal at
++/// all). Confirmed against the corpus's two largest `IllegalMove` buckets
++/// (`Build`/`Develop`): 24 and 26 respectively of their failures are a unit
++/// build or a unit-technology develop by a Winston-Churchill-led player
++/// whose `p.mil_discount`/`p.mil_sci_discount` this binary had never once
++/// been given a chance to fill, because nothing in this file ever applied
++/// `Move::Churchill{Military}` at all before this fix.
++///
++/// Called right before a Build/Upgrade/Develop line is applied (mirroring
++/// where `apply_churchill_end_turn_choice` sits relative to `Move::EndTurn`
++/// -- Churchill's choice is always an Action-phase move exercised BEFORE
++/// whatever it pays for). Gated on the CURRENT pool actually being short of
++/// what the line claims was drawn from it, not merely on the clause's
++/// presence -- a player who already topped the pool up from Wave of
++/// Nationalism/Military Build-Up/Patriotism this turn needs no synthesis,
++/// and synthesizing anyway would incorrectly mark `churchill_used`, breaking
++/// this turn's OWN end-of-turn Culture-choice line (mutually exclusive by
++/// the rules: `try_apply` legality-checks this exactly like every other
++/// synthesized move this file inserts, so a wrong guess fails loud here
++/// rather than silently drifting the pool).
++fn maybe_synthesize_churchill_military(r: &mut Replayer, actor: u8, raw_text: &str) -> Result<(), MismatchKind> {
++    let need_resource = lost_military_resource(raw_text).unwrap_or(0);
++    let need_science = lost_military_science(raw_text).unwrap_or(0);
++    if need_resource == 0 && need_science == 0 {
++        return Ok(());
++    }
++    let p = &r.state.players[actor as usize];
++    let short = need_resource > p.mil_discount as i32 || need_science > p.mil_sci_discount as i32;
++    if !short || p.leader.is_none() || p.leader.get().name != "Winston Churchill" || p.churchill_used {
++        return Ok(());
++    }
++    r.try_apply(Move::Churchill { choice: ChurchillChoice::Military }, true)
++}
++
+ /// DIAGNOSTIC ONLY (temporary, this pass): [`trailing_now_science`]'s twin
+ /// for the `"N culture (now M)"` clause of an `"End turn"` line, used to
+ /// bisect where a completed game's running culture total first drifts from
+@@ -2991,14 +3036,18 @@ fn spent_resource_after_food(text: &str) -> i32 {
+ /// build/upgrade's total resource payment into two clauses by SOURCE: any
+ /// portion covered by `p.mil_discount` (Patriotism/Wave of Nationalism/
+ /// Military Build-Up's "pay N fewer resources [for military units]" pool,
+-/// `costs::spend_mil_discount`) is printed as `"loses N military resource"`,
+-/// and any REMAINING portion paid from the ordinary resource pool as
+-/// `"spends N resource"` -- found by replaying real BGO games
+-/// (`docs/REPLAY.md` fifth pass): `loses` + `spends` summed always equals
+-/// exactly this binary's own `costs::build_cost_for` for the unit, even on
+-/// lines with NO preceding Patriotism-style grant visible in the journal at
+-/// all (a currently-unexplained baseline case -- see the doc's own notes).
+-/// Reading `"spends"` alone (the OLD behaviour) silently under-counted the
++/// OR Winston Churchill's own once-per-turn "3 resources for military
++/// units" choice, `costs::spend_mil_discount`) is printed as `"loses N
++/// military resource"`, and any REMAINING portion paid from the ordinary
++/// resource pool as `"spends N resource"` -- found by replaying real BGO
++/// games (`docs/REPLAY.md` fifth pass): `loses` + `spends` summed always
++/// equals exactly this binary's own `costs::build_cost_for` for the unit,
++/// including lines with NO preceding Patriotism-style grant visible in the
++/// journal at all -- previously an unexplained baseline case, now
++/// understood to be Churchill's silent choice: BGO never announces it as
++/// its own line, so this clause IS the only observable evidence
++/// (`maybe_synthesize_churchill_military`'s own doc comment). Reading
++/// `"spends"` alone (the OLD behaviour) silently under-counted the
+ /// unit's total cost by exactly the `"loses"` amount, which this binary's
+ /// `costs::build_cost_for` never subtracts for units (`is_unit` gates BOTH
+ /// `one_time_discount` fields out on purpose -- Civil Life's grant text is
+@@ -3018,6 +3067,27 @@ fn lost_military_resource(text: &str) -> Option<i32> {
+     rest[..digits_end].parse().ok()
+ }
+ 
++/// [`lost_military_resource`]'s DEVELOP-side twin: the number right after
++/// `" loses "` in `text`, if the SAME clause names `"military science"` --
++/// Winston Churchill's military choice's other pool (`p.mil_sci_discount`,
++/// [`costs::spend_mil_sci_discount`]), e.g. `"Orange discovers Air Forces
++/// Orange loses 3 military science; Orange loses 9 science"`. Anchoring on
++/// the FIRST `" loses "` clause (same as `lost_military_resource`) is safe
++/// here for the identical reason: BGO always prints the pool-sourced
++/// portion first, ahead of the ordinary `"loses N science"` remainder.
++fn lost_military_science(text: &str) -> Option<i32> {
++    let p = text.find(" loses ")?;
++    let rest = &text[p + " loses ".len()..];
++    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
++    if digits_end == 0 {
++        return None;
++    }
++    if !rest[digits_end..].starts_with(" military science") {
++        return None; // e.g. "loses 9 science" -- the ordinary remainder, not this clause
++    }
++    rest[..digits_end].parse().ok()
++}
++
+ /// The TOTAL a build/upgrade line actually paid: [`spent_resources`]'s
+ /// `"spends N resource"` clause plus [`lost_military_resource`]'s `"loses N
+ /// military resource"` clause, whichever of the two (or both) are present.
+@@ -6403,6 +6473,7 @@ fn apply_one(
+             if free_civil_action_move(r, actor, rest, Move::Build { card }, card)? {
+                 return Ok(());
+             }
++            maybe_synthesize_churchill_military(r, actor, raw_text)?;
+             if let (Some(want), Some(got)) = (
+                 total_paid_for_build(raw_text).map(|base| base + spent_food_after_resource(raw_text)),
+                 costs::build_cost_for(&r.state, &r.state.players[actor as usize], card),
+@@ -6554,6 +6625,7 @@ fn apply_one(
+             if free_civil_action_move(r, actor, rest, Move::Upgrade { from, to }, to)? {
+                 return Ok(());
+             }
++            maybe_synthesize_churchill_military(r, actor, raw_text)?;
+             // Same Trade Routes fold as `ActionClass::BuildBuilding`'s Build
+             // arm (`convert_trade_food_shortfall`'s own doc) -- an upgrade is
+             // priced in resources exactly like a build, and BGO folds the
+@@ -6594,6 +6666,7 @@ fn apply_one(
+             if free_civil_action_move(r, actor, rest, Move::Develop { card }, card)? {
+                 return Ok(());
+             }
++            maybe_synthesize_churchill_military(r, actor, raw_text)?;
+             r.try_apply(Move::Develop { card }, true)
+         }
+         ActionClass::ElectLeader => {
+@@ -8581,6 +8654,26 @@ mod tests {
+         assert_eq!(lost_military_resource("Purple builds Bronze Purple spends 2 resources"), None);
+     }
+ 
++    /// [`lost_military_resource`]'s develop-side twin, real shape from
++    /// `IllegalMove: Develop` bucket triage: `"Orange discovers Air Forces
++    /// Orange loses 3 military science; Orange loses 9 science"` -- the
++    /// FIRST `" loses "` clause is the `p.mil_sci_discount`-funded portion,
++    /// the second is the ordinary remainder.
++    #[test]
++    fn lost_military_science_reads_a_loses_military_science_clause() {
++        assert_eq!(
++            lost_military_science("Orange discovers Air Forces Orange loses 3 military science; Orange loses 9 science"),
++            Some(3)
++        );
++        assert_eq!(lost_military_science("Purple discovers Democracy Purple loses 17 science"), None);
++    }
++
++    #[test]
++    fn lost_military_science_ignores_an_unrelated_loses_clause() {
++        assert_eq!(lost_military_science("Purple loses 1 population"), None);
++        assert_eq!(lost_military_science("Purple discovers Computers Purple loses 8 science"), None);
++    }
++
+     /// The property this binary's build-cost cross-check actually needs:
+     /// the TOTAL a unit build paid is `loses` + `spends` summed, matching
+     /// the engine's own `costs::build_cost_for` (which prices units at full
+@@ -9579,6 +9672,76 @@ mod tests {
+         assert!(!r.state.players[0].churchill_used);
+     }
+ 
++    /// `maybe_synthesize_churchill_military`'s reason for existing: BGO
++    /// never announces Churchill's MILITARY choice as its own line (unlike
++    /// the culture choice's "End turn ... scores 3 culture." prefix above)
++    /// -- the ONLY observable evidence is a LATER Build/Upgrade/Develop
++    /// line's own `"loses N military resource"` clause. Real shape from the
++    /// `IllegalMove: Build` bucket, game `7522612`: a Churchill-led player
++    /// with an EMPTY `mil_discount` pool builds a unit whose journal line
++    /// shows `"loses 2 military resource"` -- before this fix nothing ever
++    /// filled the pool, so the build was rejected as illegal even though the
++    /// human plainly just made this exact move.
++    #[test]
++    fn maybe_synthesize_churchill_military_fills_the_resource_pool_from_a_build_lines_evidence() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.current = 0;
++        r.state.phase = Phase::Actions;
++        r.state.round = 17; // Churchill is Age III, never legitimately in play in round 1
++        r.state.players[0].leader = crate::CardId::by_name("Winston Churchill").expect("Churchill is in the table");
++        assert_eq!(r.state.players[0].mil_discount, 0, "no prior grant this turn");
++
++        maybe_synthesize_churchill_military(&mut r, 0, "Orange builds Warrior Orange loses 2 military resource")
++            .expect("Churchill's military choice is legal on his owner's turn");
++
++        assert_eq!(r.state.players[0].mil_discount, 3, "the whole once-per-turn grant, not just the 2 this line needed");
++        assert_eq!(r.state.players[0].mil_sci_discount, 3, "the SAME choice fills both pools at once");
++        assert!(r.state.players[0].churchill_used, "the once-per-turn choice is spent");
++    }
++
++    /// A player already holding enough pool from an UNRELATED source (Wave
++    /// of Nationalism / Military Build-Up / Patriotism, all flat/`mil_
++    /// discount`-only grants) needs no synthesis -- and synthesizing anyway
++    /// would wrongly mark `churchill_used`, breaking this turn's own
++    /// end-of-turn Culture-choice line if that is what the human actually
++    /// picked (the two choices are mutually exclusive by the rules).
++    #[test]
++    fn maybe_synthesize_churchill_military_is_a_no_op_when_the_pool_already_covers_the_line() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.current = 0;
++        r.state.phase = Phase::Actions;
++        r.state.round = 17;
++        r.state.players[0].leader = crate::CardId::by_name("Winston Churchill").expect("Churchill is in the table");
++        r.state.players[0].mil_discount = 6; // e.g. already granted by Wave of Nationalism this turn
++
++        maybe_synthesize_churchill_military(&mut r, 0, "Orange builds Warrior Orange loses 2 military resource")
++            .expect("a covered line is always Ok");
++
++        assert_eq!(r.state.players[0].mil_discount, 6, "untouched -- the existing pool already covered it");
++        assert!(!r.state.players[0].churchill_used, "Churchill's OWN choice was never actually exercised here");
++    }
++
++    /// A player with no Churchill in play at all must never be charged his
++    /// choice just because a `"loses N military resource"` clause happens
++    /// to be present -- that evidence has to come from SOME source (Wave of
++    /// Nationalism etc.), just not this one.
++    #[test]
++    fn maybe_synthesize_churchill_military_is_a_no_op_without_churchill_in_play() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.current = 0;
++        r.state.phase = Phase::Actions;
++        r.state.round = 17;
++
++        maybe_synthesize_churchill_military(&mut r, 0, "Orange builds Warrior Orange loses 2 military resource")
++            .expect("no Churchill means nothing to synthesize, never an error");
++
++        assert_eq!(r.state.players[0].mil_discount, 0);
++        assert!(!r.state.players[0].churchill_used);
++    }
++
+     /// Julius Caesar offers a SECOND political action after the first one
+     /// (`apply::end_politics`), and a human who declines it leaves BGO's
+     /// `"passes Political Phase"` line wherever they happened to click it --

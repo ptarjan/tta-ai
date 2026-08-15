@@ -97,9 +97,9 @@ fn live_count(state: &GameState) -> usize {
 /// nothing for an `"1p"` key the printed data never has -- an empty
 /// composition, not a crash. `game::build_deck` instead computes `num_players
 /// - 2` to index `Card::count`, which underflows for `n < 2`, so this wrapper
-/// is the guard that keeps this module's behaviour identical to Python's for
-/// the same (rare: a forced-win endgame with one player left) input, rather
-/// than inheriting a panic that only a subtraction away.
+///   is the guard that keeps this module's behaviour identical to Python's for
+///   the same (rare: a forced-win endgame with one player left) input, rather
+///   than inheriting a panic that only a subtraction away.
 fn deck_or_empty(age: Age, civil: bool, n: usize) -> CardList<MAX_DECK> {
     if !(2..=4).contains(&n) {
         return CardList::new();
@@ -269,9 +269,9 @@ pub fn civil_outlook(state: &GameState, idx: u8) -> Vec<(CardId, f64)> {
         let comp = tally(&deck_or_empty(age, true, n));
         if age != cur {
             // The whole deck is still to come.
-            for i in 0..NUM_CARDS {
-                if comp[i] > 0 {
-                    out.push((CardId(i as u16), comp[i] as f64));
+            for (i, &c) in comp.iter().enumerate() {
+                if c > 0 {
+                    out.push((CardId(i as u16), c as f64));
                 }
             }
             continue;
@@ -290,8 +290,8 @@ pub fn civil_outlook(state: &GameState, idx: u8) -> Vec<(CardId, f64)> {
             }
         }
         if total <= 0 {
-            for i in 0..NUM_CARDS {
-                if comp[i] > 0 {
+            for (i, &c) in comp.iter().enumerate() {
+                if c > 0 {
                     out.push((CardId(i as u16), 0.0));
                 }
             }

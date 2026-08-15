@@ -1,0 +1,278 @@
+RESOURCE-SHORTFALL BUILD BUCKET -- investigation notes, NO FIX LANDED
+Worker: resshort (clone /private/tmp/resshort, base commit 791150f, "resshort" branch
+of base0815 -- includes the build-payment reconstruction fix and buildbkt's Trade-
+Routes/Raid-bracket fixes already)
+Date: 2026-08-14
+
+OUTCOME
+-------
+No functional change landed. `git diff 791150f -- rust/` is EMPTY (confirmed twice:
+once after reverting a disproven experimental fix, once via the patch file below).
+This is a measured negative, not a stall: two concrete, independently falsifiable
+theories were formed, IMPLEMENTED, and MEASURED against real games; both were
+disproven by direct evidence rather than abandoned on suspicion. Guard comm output
+(both directions empty) is pasted verbatim near the bottom.
+
+SCOPE -- re-derived and cross-validated against a same-day prior worker
+-------------------------------------------------------------------------
+Bucket definition (from the task brief): games failing `IllegalMove: Build` where the
+SPECIFIC card built is too expensive for the resources the engine thinks the human
+had, while OTHER `Build{...}` moves remain legal in `legal_moves` (proves it is not a
+`workers_free==0` problem -- that is a different worker's bucket).
+
+At base 791150f, `REPLAY_DUMP_BUCKET="IllegalMove: Build"` (via
+`replaystats`/`REPLAY_DEBUG=1`) finds 36 games with an `IllegalMove: Build` mismatch.
+Splitting each game's own `legal_moves` list on "does it contain any OTHER
+`Build{card:X}` entry besides the attempted one" gives exactly 20 games in the
+resource-shortfall shape -- this independently reproduces
+`analysis/worker_notes_2026-08-14/build2__BUILD2.txt`'s own 20-game "cost-short for
+one specific card" sub-bucket byte-for-byte (same 20 IDs, listed there as "NOT chased
+this pass -- no hypothesis formed, genuinely untouched"):
+
+7523818 7522648 7521377 7521850 7521832 7521819 7522520 7522505 7523608 7522845
+7522914 7521912 7523543 7523566 7522315 7522347 7522358 7522818 7522587 7523124
+
+(The other 16 of the 36 are the `workers_free==0` bucket, a different worker's job --
+7523355 7523082 7521544 7521791 7523640 7520999 7522113 7523383 7523420 7523438
+7522673 7522024 7523283 7522608 7521657 7523132.)
+
+===========================================================================
+HAND-TRACE 1: game 7523124, "Purple builds Cannon Purple spends 5 resources", line
+357, round 18 -- CORRUPTION vs BLUE-TOKEN CAPACITY, dead end
+===========================================================================
+
+`REPLAY_DEBUG=1 REPLAY_DEBUG_ALL=1 replay ... 7523124` -> engine fails with
+`resources=4 < cost 5` for Cannon at round 18. Legal_moves at the failure includes
+`Build{Knights}`/`Build{Swordsmen}`/`Build{Warriors}` -- confirms the resource-
+shortfall shape (other, cheaper builds remain legal).
+
+Checkpoint: journal's round-17 "End turn" line (326) reads "11 resources (now 17)".
+The engine's OWN `REPLAY_DEBUG`-gated drift check (`end-turn resources drift`) fires
+HERE for the first and only time in this game: "journal says (now 17), this binary
+computes 15 (delta -2)". Every EARLIER end-turn checkpoint in this game matched
+exactly (no drift line before this one) -- the -2 gap opens during THIS turn's own
+production, not earlier.
+
+Traced `economy::end_of_turn`'s internal `pre-corruption`/`blue_used` debug lines
+(temporarily run with `REPLAY_DEBUG_ALL=1`, not committed) for Purple (idx=1) at this
+exact checkpoint:
+  resources=6 food=1 blue_total=16 blue_used=7 corr=2 s.resources=11 s.food=6
+`blue_used=7` = `food_tokens(1,[5,1])=1` + `mine_tokens(6,[1])=6` (Purple's ONLY mine
+tech the entire game is Bronze, denom 1 -- confirmed via `REPLAY_DEBUG_TECHS=1` at
+every checkpoint, never upgraded). `blue_available = 16-7 = 9`, landing in
+`RULES_SPEC.md` §6.2's `10-6 -> corruption 2` band. Paying that 2 from resources
+(6->4) is EXACTLY the -2 delta: with corr=0 the turn would net to 6+11=17, matching
+the journal precisely.
+
+BUT the journal's line 326 has NO "CORRUPTION!" marker -- and this same journal DOES
+print that marker verbatim elsewhere ("CORRUPTION! Orange loses 2 resources", line
+247, round 14), which THIS ENGINE reproduces exactly at the matching checkpoint
+(idx=0, blue_used=6, blue_available=10, corr=2 -- same band, confirmed by trace).
+So the corruption MECHANISM is validated correct on a real in-game example, in the
+SAME game, yet still disagrees for Purple round 17.
+
+Exhaustively ruled out as the cause of the -2 (each independently confirmed against
+the trace, `card_table.rs`, or `docs/RULES_SPEC.md` before moving to the next):
+  - `blue_total=16` is correct: Purple gained +1 blue/+1 yellow from colonizing
+    "Developed Territory (I)" (round 9, `blue_tokens:1` in `card_table.rs`) and lost
+    it back exactly when "Independence Declaration" stripped that colony (round 12,
+    `Special::WeakestPlayer` -- Purple WAS the weakest that round, this part is
+    right) -- the 16->17->16 fluctuation in the trace is this pair, not a bug.
+  - Purple's denominations (`Denoms::of`) are forced: Bronze (mine, denom 1) is their
+    ONLY mine card ever; Agriculture(1)+Mechanized Agriculture(5) legitimately
+    coexist as TWO separate farm cards mid-upgrade (upgrade moves ONE worker per CoL
+    p.5's "Upgrade a Farm/Mine" action -- Agriculture had 2 workers, only 1 moved
+    this turn, matching the SAME upgrade repeating next turn in the journal, line
+    355).
+  - No leader/wonder/government Purple has (Michelangelo -> Napoleon Bonaparte ->
+    Bill Gates leaders; Library of Alexandria + St. Peter's Basilica wonders) prints
+    `blue_tokens` in `card_table.rs`.
+  - `economy::corruption`'s own band table matches `RULES_SPEC.md` §6.2's printed
+    table exactly, cross-checked against the CoL rulebook screenshot text directly
+    (`sources/cge_code_of_laws.pdf`, p.6: "the leftmost square in each section...
+    if all these numbers are covered by blue tokens, you have no corruption").
+  - Ruled out re-opening the CLOSED production-cap theory (per task instructions):
+    the -2 gap is fully explained by `corr` alone WITHOUT touching
+    `gain_resources`/`gain_food`'s capacity math -- but further tracing (see next
+    paragraph) shows the two are NOT actually separable in this engine's model.
+
+Why this was NOT shipped as a fix: recomputing "what if corr=0" is NOT simply
+"+2 to the final total" -- blue token CAPACITY (`blue_available`) is shared between
+what corruption charges and what THIS SAME TURN'S production/`gain_resources` can
+still store. Recomputing the whole turn with corr forced to 0 by hand (pre-corruption
+resources stay 6 instead of dropping to 4) actually reproduces 15 again, NOT 17 --
+because keeping more resources stored leaves LESS capacity for the subsequent
+Bill-Gates-sourced `gain_resources` bonus (`Special::ResourcesPerLabEqualToLevel`,
+routed as a general CoL p.11 "gain" through the SAME blue-token pool `corruption`
+reads). This entangles any "corruption shouldn't have fired" fix with exactly the
+capacity-limited `gain_resources`/`gain_food` machinery the task explicitly marks
+CLOSED (fixed at 613ff6c, "do not re-open... for a production-cap theory"). Given
+that entanglement, and that this mechanism validates correctly elsewhere in the SAME
+game, no fix was attempted here -- shipping one blind would risk exactly the
+"manufactured win" the task forbids.
+
+===========================================================================
+HAND-TRACE 2: game 7522914, "Purple builds Journalism Purple spends 8 resources",
+line 206, round 9 -- EVENT "strongest civilization" targeting, TWO THEORIES BOTH
+FALSIFIED BY MEASUREMENT
+===========================================================================
+
+`REPLAY_DEBUG=1 REPLAY_DEBUG_ALL=1 replay ... 7522914` -> engine fails: Purple has
+`resources=6` at the Journalism build (cost 8), `workers_free=2` and other, cheaper
+`Build{...}` moves ARE legal (confirms the shape). Journal math: round-8 end-turn
+checkpoint reads "3 resources (now 6)" (validated exact, no drift). Round 9's only
+resource-relevant line before the build is line 202: "Purple plays event... Border
+Conflict; The weakest civilization must destroy...; The strongest civilization gains
+3 resources.; Purple produces 3 resources; Orange must destroy a mine, farm or
+urban building" -- i.e. the journal explicitly names PURPLE as "strongest" and grants
+Purple +3 (6->9, comfortably covering the cost-8 Journalism build).
+
+The engine's own trace of this exact event resolution (`events::apply_single_target`,
+`RankStat::Strength`, `Special::StrongestPlayer`/`Special::WeakestPlayer` from
+`card_table.rs`'s "Border Conflict" entry):
+  apply_single_target: order=[1, 2, 0] stat=Strength best=true ranked=[2, 1, 0]
+    values=[7, 9, 7]     (Purple=7, Green=9, Orange=7)
+  apply_gains_block: idx=2 (GREEN) ... resources_before=4 -> Green gets the +3, not
+    Purple.
+  apply_single_target: ... stat=Strength best=false ranked=[0, 1, 2] values=[7,9,7]
+    -> Orange picked weakest, MATCHES the journal ("Orange destroys Bronze").
+
+So only the STRONGEST half disagrees with the journal; WEAKEST is right. This is the
+SAME general class of bug `analysis/worker_notes_2026-08-14/build2__BUILD2.txt`
+flagged as an unresolved lead from a DIFFERENT game (7523082, `WeakestPlayer`/"Reign
+of Terror") -- there, the engine's live combat-strength computation (tactic army
+bonus via Genghis Khan + a leader's temple/happy bonus) picked a different "weakest"
+player than the journal. Two independent games, two different specific mechanisms,
+same general symptom: `events::rank_stat_value`'s `RankStat::Strength` arm
+(`effects::state_stats(state, p).strength`, the FULL combat-strength number including
+army/tactic bonus and every flat leader/wonder/special-tech `effects.strength` grant)
+disagrees with whatever BGO's own client uses for "strongest/weakest civilization"
+event comparisons.
+
+THEORY A (tested, FALSIFIED): "strength rating" for event-targeting purposes should
+be RAW UNIT STRENGTH ONLY (workers on Infantry/Cavalry/Artillery/Air tech cards times
+that card's own `effects.strength`), excluding both the current tactic's army-
+formation bonus (`effects::army_strength`) AND flat non-unit `effects.strength`
+grants (wonders like Colossus [Green completed it round 4, `blue_tokens`-style flat
+`strength:2` in `card_table.rs`], leaders, special techs). Motivated by
+`RULES_SPEC.md` §11.3's own list of "strength-rating modifiers" EXCLUDED from
+colonization force (Alexander, Napoleon, Great Wall, Warfare, wonders, leaders,
+special techs) -- reasoned this same exclusion list might belong on the event-
+targeting stat too, even though §11.3's own wording implies these ARE normally part
+of the general "strength rating" (a direct tension with the two corpus games above).
+
+IMPLEMENTED as a new `effects::raw_unit_strength(p)` function, wired into
+`events::rank_stat_value`'s `RankStat::Strength` arm ONLY (scoped: does not touch
+`state_stats`/`compute`, used at 83 other call sites per that function's own doc
+comment, so combat/colonization/production are untouched). Rebuilt, re-ran game
+7522914 under the same trace:
+  apply_single_target: order=[1, 2, 0] stat=Strength best=true ranked=[0, 1, 2]
+    values=[3, 2, 4]     (Purple=3, Green=2, ORANGE=4)
+Orange is now ranked strongest -- NOT Purple, NOT a tie. The theory predicted a
+3-way tie at 7 (broken toward Purple, the revealer); the actual raw-unit numbers
+are NOT equal at all (Purple=3, Green=2, Orange=4), so Theory A is falsified by
+direct measurement, not merely unconfirmed. `apply_gains_block: idx=0` (Orange)
+confirms the wrong player still gets the resources, just a DIFFERENT wrong player
+than before. REVERTED immediately (`git checkout -- rust/src/effects.rs
+rust/src/events.rs`), confirmed clean by `git diff --stat` empty. Did not run the
+full guard on this candidate since it does not even fix its own target case --
+running the corpus-wide guard on a fix already known to be wrong would only
+consume budget without adding information.
+
+THEORY B (considered, not implemented): raw units + `army_strength` (tactic bonus)
+INCLUDED, only flat non-unit `effects.strength` (wonder/leader/special-tech)
+excluded. Ruled out by the SAME raw-value evidence before implementing: Orange
+already leads on raw units alone (4 vs Purple's 3) with no tactic bonus added yet
+(Orange's own tactic, Phalanx, would only WIDEN the gap if it forms an army, never
+narrow it) -- adding any army bonus cannot flip a 4-vs-3 gap in Purple's favor, so
+this candidate cannot reproduce "Purple strongest" either. Not implemented; not
+guessed into the tree.
+
+Net conclusion on the strength-ranking lead: the full `state_stats(...).strength`
+computation (Purple=7, Green=9, Orange=7 -- Green wins) is WRONG per the journal
+(Purple should win), but "strip the bonuses back to raw units" is ALSO wrong (Orange
+wins instead). Something in between, or something entirely different from a
+modifier-subtraction theory, must be the real rule -- e.g. BGO's client may use a
+narrower "military strength" concept this codebase does not have a name for yet, or
+the true bug is not in `RankStat::Strength` at all and both games are coincidental.
+Two clean, falsifiable subtraction theories are now closed off for the next worker;
+neither should be re-tried without new evidence.
+
+===========================================================================
+GUARD (verbatim)
+===========================================================================
+Baseline: 671 completed / 630 exact (`/private/tmp/guard_ids.txt`, 671 lines, base
+791150f).
+
+cd /private/tmp/resshort/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/resshort_after.txt 2>&1
+grep '^SCOREDIV_COMPLETED_ID' /tmp/resshort_after.txt | awk '{print $2}' | sort \
+    > /tmp/resshort_ids.txt
+
+After (post-revert, tree identical to 791150f): 671 completed / 630 exact
+("671/671 completed games actually flipped state.game_over... 630/671 of those
+matched index.tsv exactly").
+
+comm -23 /private/tmp/guard_ids.txt /tmp/resshort_ids.txt   (REGRESSIONS):
+<empty>
+
+comm -13 /private/tmp/guard_ids.txt /tmp/resshort_ids.txt   (WINS):
+<empty>
+
+`cargo clippy --all-targets -- -D warnings`: not run against a source diff since
+none exists (tree is identical to 791150f); the reverted experiment was checked
+clean at the time (`cargo build --profile difftest` compiled without warnings)
+before being reverted.
+
+`IllegalMove: Build` resource-shortfall sub-bucket size: still 20 (unchanged -- no
+fix landed).
+
+===========================================================================
+HANDOFF for whoever picks this bucket up next
+===========================================================================
+
+1. Do NOT re-try Theory A or Theory B above (both directly falsified by measurement
+   on game 7522914 -- see the exact `values=[...]` lines in HAND-TRACE 2). Any new
+   theory needs to explain why Orange has MORE raw unit strength (4) than Purple (3)
+   in that game's engine reconstruction, yet the human game still picked Purple as
+   "strongest" -- i.e. this may not be a strength-computation bug at all. Worth
+   checking directly: is our unit COUNT itself right for Orange/Purple/Green at that
+   point (a mistracked unit build/disband/destroy earlier in THIS game, independent
+   of the ranking logic) before touching `events.rs` again. `REPLAY_DEBUG_TECHS=1`
+   dumps each player's full tech list with worker counts at every `end_of_turn`
+   checkpoint -- use it on 7522914 around round 8-9 to hand-verify Orange's/Purple's/
+   Green's unit counts against the journal's own build/disband lines from scratch,
+   independent of any ranking theory.
+2. Game 7523124's corruption/capacity entanglement (HAND-TRACE 1) is a separate,
+   real, unresolved question: does BGO's actual corruption computation get evaluated
+   using a DIFFERENT resource/food snapshot than "whatever is left after this turn's
+   own spending, right before this turn's own production" -- e.g. possibly excluding
+   THIS TURN'S OWN Bill-Gates-style bonus gain from the blue-token capacity race
+   entirely (paying corruption and gaining bonus resources from two logically
+   separate pools, rather than one shared 16-token bank)? Chase `Special::
+   ResourcesPerLabEqualToLevel`'s (Bill Gates) resolution path specifically -- it is
+   the ONLY thing this session found that ties production capacity to corruption
+   in a way `RULES_SPEC.md` §6.4/§6.6 do not obviously describe.
+3. Both games in this bucket ended up NOT being simple "one card's cost is
+   miscalculated" bugs -- they are further symptoms of the SAME systemic drift
+   classes (`workers_free`/resource-tracking drift across many turns, and event-
+   targeting `strongest`/`weakest` disagreement) that `buildbucket__BUILDBUCKET.txt`
+   and `build2__BUILD2.txt` already flagged as NOT locally fixable. A future worker
+   on this specific bucket should expect the SAME outcome unless one of those two
+   systemic questions gets resolved first by whichever worker owns them.
+4. Re-run the bucket census fresh before trusting the 20-game list above: it has
+   shifted after every prior pass on the wider `IllegalMove: Build` bucket, and any
+   fix landing elsewhere will likely shift it again.
+
+===========================================================================
+FILES CHANGED
+===========================================================================
+None. `resshort.patch` (`git diff 791150f -- rust/`) is empty by design -- the one
+functional change attempted this session (Theory A, `effects::raw_unit_strength` +
+`events::rank_stat_value`'s `RankStat::Strength` arm) was implemented, measured
+against the target game, found to make the target game WRONG IN A DIFFERENT WAY (not
+merely "no improvement"), and reverted before this file was written. Confirmed clean:
+`git -C /private/tmp/resshort diff 791150f -- rust/` is empty.

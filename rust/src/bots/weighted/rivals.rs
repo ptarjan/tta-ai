@@ -368,7 +368,7 @@ fn pact_blocks_for(card: CardId, a: u8, b: u8, idx: u8, mut f: impl FnMut(&PactB
             Special::BothPlayers(block) => f(&block),
             Special::A(block) if idx == a => f(&block),
             Special::B(block) if idx == b => f(&block),
-            _ => {}
+            Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => {}
         }
     }
 }
@@ -486,7 +486,7 @@ pub fn deferred_credit(state: &GameState, idx: u8) -> DeferredCredit {
                 add_immediate_effects(&mut out.gains, &card.immediate_effects, 1.0);
             }
         }
-        _ => {}
+        Pending::Auction(_) | Pending::Defense(_) | Pending::Colonize(_) => {}
     }
     out
 }
@@ -608,11 +608,18 @@ pub struct RivalContext {
 /// mid-search passes both, for the reason Python's own docstring gives:
 /// recomputing either from the trial state's own row/decks is exactly the
 /// information leak `root_row_budget` and `bots::counting` exist to prevent.
+/// Owned `(civil outlook, (event pool, its own total))`, as returned by a
+/// previous root-level `rival_context` call and threaded back in by callers
+/// re-deriving context on a trial state (see this function's own doc comment
+/// above for why that reuse matters). `plan::RootCountsRef` is the borrowed
+/// sibling of this same shape.
+pub type RootCounts = (Vec<(CardId, f64)>, (Vec<(CardId, u16)>, f64));
+
 pub fn rival_context(
     state: &GameState,
     idx: u8,
     root_row: Option<CardList<ROW_SIZE>>,
-    root_counts: Option<(Vec<(CardId, f64)>, (Vec<(CardId, u16)>, f64))>,
+    root_counts: Option<RootCounts>,
 ) -> RivalContext {
     let (civil_outlook, event_pool) =
         root_counts.unwrap_or_else(|| (counting::civil_outlook(state, idx), counting::event_pool(state, idx)));
@@ -742,9 +749,27 @@ pub fn strength_marginal(state: &GameState, idx: u8, w: &Weights, ctx: Option<&R
     let p = &state.players[idx as usize];
     let rel = effects::state_stats(state, p).strength - rival;
     let late = horizon::lateness(state);
-    let mut total = w.get(WeightKey::Strength) + w.get(WeightKey::StrengthRel);
-    total += (1.0 - late) * w.get(WeightKey::StrengthRel.early());
-    total += late * w.get(WeightKey::StrengthRel.late());
+    let early = 1.0 - late;
+    // STRUCTURAL FIX (earlymil, 2026-08-13; regated in STRGATE.txt):
+    // mirrors `eval::evaluate`'s own `StrengthRel` special case exactly,
+    // INCLUDING its [`horizon::combat_unreachable`] gate (see that
+    // function's doc comment for the RULES_SPEC derivation, and for why an
+    // earlier, ungated version of this fix measured decisively worse) --
+    // while no player can possibly hold an aggression or war card yet,
+    // `strength_rel`'s base folds into the LATE endpoint only, alongside
+    // `strength_rel_late`, while `strength_rel_early` becomes the whole
+    // early-game coefficient; once combat is reachable, this is
+    // byte-identical to the pre-fix formula. Kept in lock-step with
+    // `evaluate` deliberately: this function is the SAME marginal-strength
+    // concept applied to card pricing, and the earlier `card_board_leader`
+    // bug was exactly two call sites silently pricing the same thing two
+    // different ways.
+    let strength_rel_eff = if horizon::combat_unreachable(state) {
+        early * w.get(WeightKey::StrengthRel.early()) + late * (w.get(WeightKey::StrengthRel) + w.get(WeightKey::StrengthRel.late()))
+    } else {
+        w.get(WeightKey::StrengthRel) + early * w.get(WeightKey::StrengthRel.early()) + late * w.get(WeightKey::StrengthRel.late())
+    };
+    let mut total = w.get(WeightKey::Strength) + strength_rel_eff;
     if rel < 0 {
         total -= w.get(WeightKey::StrengthDeficit);
     } else if rel < 6 {
@@ -816,6 +841,26 @@ pub fn happy_margin_marginal(state: &GameState, idx: u8, w: &Weights) -> f64 {
 /// or ahead of the field reads exactly 0.0, which is what makes the hinge
 /// strictly an ADDITION for a trailing player and never a penalty for a
 /// leading one.
+///
+/// `#[allow(clippy::wildcard_enum_match_arm)]`: this function's two internal
+/// `match key { ... }` blocks are gated to `STANDING_KEYS` (today just
+/// `CultureRate`/`ScienceRate`) by their caller, so the fallback arm below is
+/// a real "must be one of the two I handle" guard, not a swallowed variant.
+/// Spelling that fallback out as `WeightKey::RateHorizon | ... | TechRedundancyDiscount`
+/// instead of `_` would satisfy the lint but BREAK a different, independently
+/// -useful mechanical check: `registry.rs`'s
+/// `every_weight_key_is_named_by_production_source_outside_its_own_declaration`
+/// ratchets the seven phase-suffixed keys (`CultureRateTrailing` among them)
+/// as reachable ONLY via `.early()`/`.late()`/`.trailing()` indirection, never
+/// by literal name -- and this function IS that indirection's callee, so
+/// literally spelling out the `WeightKey` variant for one of those seven
+/// (`CultureRateTrailing`, say) here would be a false "someone reads it
+/// directly now" signal, not a real one, tripping
+/// that ratchet for no actual behaviour change. A real new `WeightKey`
+/// variant added later still can't reach `STANDING_KEYS` silently: `WeightKey
+/// ::ALL`/`registry.rs`'s own exhaustive tests over every variant are the
+/// mechanical net for that, not this function.
+#[allow(clippy::wildcard_enum_match_arm)]
 fn trailing_fraction(key: WeightKey, state: &GameState, idx: u8) -> f64 {
     let me = effects::state_stats(state, &state.players[idx as usize]);
     let (mine, best) = {
@@ -884,8 +929,21 @@ pub fn feature_marginal(
     }
     if PHASE_KEYS.contains(&key) {
         let late = late.unwrap_or_else(|| horizon::lateness(state));
-        m += (1.0 - late) * w.get(key.early());
-        m += late * w.get(key.late());
+        if matches!(key, WeightKey::Workers | WeightKey::TechLevels | WeightKey::HandValue) {
+            // T1-A/C/D collapse (PHASECUT.txt, 2026-08-13): `m` currently
+            // holds `w.get(key)`, the L=0 ("start") coefficient (set above,
+            // untouched by the STANDING_KEYS block for these three) --
+            // replace the old "unconditional base + phase nudge" with the
+            // convex blend of the two endpoints, mirroring `eval::evaluate`'s
+            // own formula for these three keys exactly. `StrengthRel`
+            // (below) is excluded from the collapse -- see PHASECUT.txt.
+            let start = m;
+            let end = w.get(key.late());
+            m = start * (1.0 - late) + end * late;
+        } else {
+            m += (1.0 - late) * w.get(key.early());
+            m += late * w.get(key.late());
+        }
     }
     // THE RATE HORIZON. `evaluate` prices a rate at `blend * horizon`, so its
     // marginal is too -- and because this function is the single definition
@@ -1066,6 +1124,38 @@ mod tests {
         let via_marginal = feature_marginal(WeightKey::Strength, &state, 0, &w, None, None);
         assert_eq!(direct, via_marginal);
         assert_ne!(direct, w.get(WeightKey::Strength), "strength_marginal must fold in strength_rel and its phase pair too");
+    }
+
+    /// STRUCTURAL FIX regression (earlymil, 2026-08-13): `strength_marginal`
+    /// must implement the SAME `StrengthRel` blend `eval::evaluate` does --
+    /// the whole reason this function was rewritten alongside `evaluate` is
+    /// that the two used to compute the identical concept in two places
+    /// (`docs`' own `card_board_leader` precedent for exactly this class of
+    /// silent-drift bug). At a genuinely early state, the base
+    /// `strength_rel` weight must NOT be added on top of the phase blend
+    /// any more -- the effective coefficient must equal `strength_rel_early`
+    /// alone, not `strength_rel + strength_rel_early`.
+    #[test]
+    fn strength_marginal_no_longer_adds_the_base_strength_rel_weight_on_top_of_the_early_phase_term() {
+        let state = G::new_game(2, 27);
+        let late = horizon::lateness(&state);
+        assert!(late < 0.15, "fixture assumption: a fresh deal must be genuinely early, got {late}");
+        let early = 1.0 - late;
+
+        let mut w = Weights::default();
+        w.set(WeightKey::Strength, 0.0);
+        w.set(WeightKey::StrengthDeficit, 0.0);
+        w.set(WeightKey::StrengthLead, 0.0);
+        w.set(WeightKey::StrengthRel, 17.0);
+        w.set(WeightKey::StrengthRel.early(), -1.0);
+        w.set(WeightKey::StrengthRel.late(), 9.0);
+
+        let got = strength_marginal(&state, 0, &w, None);
+        let new_expected = -early + late * (17.0 + 9.0);
+        let old_would_have_been = 17.0 + -early + late * 9.0;
+
+        assert!((got - new_expected).abs() < 1e-9, "got={got} new_expected={new_expected}");
+        assert!(got < old_would_have_been - 1.0, "must be decisively below the old always-on-base formula: got={got} old={old_would_have_been}");
     }
 
     /// A `bid_pass` that settles the LAST bidder pops `Auction` and pushes

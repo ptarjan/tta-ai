@@ -31,20 +31,20 @@
 //!
 //! Python builds `PHASE_WEIGHTS` BY COMPREHENSION over `PHASE_KEYS` (`{k + s:
 //! _PHASE_PRIOR[k + s] for k in PHASE_KEYS for s in ("_early", "_late")}`)
-//! rather than writing the eight keys out by hand, specifically so
-//! `PHASE_KEYS` and the phase table can never name a different set of
-//! features (see that constant's own comment: "a pair for a key that is no
-//! longer phase-multiplied would be a weight the trainer mutates, the guard
-//! checks and `evaluate` never reads"). The flat `weight_keys!` table below
-//! still needs eight literal entries for the `*_early`/`*_late` variants -- a
+//! rather than writing the keys out by hand, specifically so `PHASE_KEYS`
+//! and the phase table can never name a different set of features (see that
+//! constant's own comment: "a pair for a key that is no longer
+//! phase-multiplied would be a weight the trainer mutates, the guard checks
+//! and `evaluate` never reads"). The flat `weight_keys!` table below still
+//! needs literal entries for the `*_early`/`*_late` variants -- a
 //! `macro_rules!` cannot synthesize a new identifier by string concatenation
 //! without a proc-macro, and this crate deliberately has none (`Cargo.toml`'s
 //! `[dependencies]` is empty on purpose) -- so the "can never disagree"
 //! guarantee is reconstructed a different way: [`PHASE_KEYS`] lists only the
 //! four BASE keys, and [`WeightKey::early`]/[`WeightKey::late`] are the ONLY
-//! way to reach a phase partner -- both `match` on exactly those four
-//! variants and panic on any other input, so a caller can never silently read
-//! a phase pair for a key that is not one. `tests::
+//! way to reach a phase partner -- both `match` on exactly the keys that
+//! still have one and panic on any other input, so a caller can never
+//! silently read a phase pair for a key that is not one. `tests::
 //! phase_keys_and_the_flat_table_agree` below checks the converse direction:
 //! every `*_early`/`*_late` entry that IS in the flat table is reachable from
 //! `PHASE_KEYS`, and nothing else is. The two (the macro table and the
@@ -52,6 +52,18 @@
 //! on the same new lie, which is a narrower window than Python's single
 //! dict comprehension leaves open, but it is the honest cost of this crate
 //! having no macro-generated identifiers.
+//!
+//! PHASECUT.txt (2026-08-13, T1-A/C/D) collapsed three of the four
+//! `PHASE_KEYS` triples (`Workers`/`TechLevels`/`HandValue`) from the old
+//! 3-parameter `{base, early, late}` shape to a non-redundant 2-parameter
+//! `{start, end}` one -- the old blend had only 2 real degrees of freedom
+//! for 3 raw numbers, a proven, exact, data-independent dead direction. Only
+//! `StrengthRel` still has a real `_early` key (excluded from the collapse
+//! -- a parallel fix makes its triple genuinely identifiable via a
+//! round-gated blend, so collapsing it would delete a distinction that fix
+//! depends on; see [`WeightKey::early`]'s own doc comment). [`WeightKey::
+//! late`] still resolves for all four -- see that method's own doc comment
+//! for what it means for each.
 //!
 //! ## `RETIRED_KEYS`
 //!
@@ -128,8 +140,11 @@ pub enum WeightKey {
     TacticShort,
     HasUnit,
     Colonies,
+    HasColony,
     Pacts,
     PactBlocksAttack,
+    WarImmune,
+    AttackCostDoubled,
     AuctionCommitted,
     AuctionBid,
     TechLevels,
@@ -191,6 +206,7 @@ pub enum WeightKey {
     /// the day this lands.
     WonderAgeOverrun,
     Leader,
+    WonderInProgress,
     HandLimit,
     ColonizeBonus,
     BuildDiscount,
@@ -204,9 +220,8 @@ pub enum WeightKey {
     CardBoardCredit,
     EventScoringMargin,
     CardBoardLeader,
-    CardBoardGovernment,
-    CardBoardAction,
-    CardBoardWonder,
+    // `CardBoardGovernment`/`CardBoardAction`/`CardBoardWonder` retired
+    // 2026-08-13 -- see `RETIRED_KEYS`'s own entry for why.
     CardBoardBonus,
     HandSwapExtra,
     CardRateCredit,
@@ -281,13 +296,26 @@ pub enum WeightKey {
     /// Standing hinge on [`ScienceRate`](Self::ScienceRate). See
     /// [`CultureRateTrailing`](Self::CultureRateTrailing).
     ScienceRateTrailing,
-    WorkersEarly,
+    // `WorkersEarly`/`TechLevelsEarly`/`HandValueEarly` retired 2026-08-13
+    // (PHASECUT.txt, T1-A/C/D): the OLD three-parameter blend `w[base] +
+    // (1-L)*w[early] + L*w[late]` has only two degrees of freedom (its
+    // value at L=0 and L=1), so the direction (base,early,late) +=
+    // t*(1,-1,-1) changed nothing `evaluate` ever computed -- a proven,
+    // exact, data-independent dead parameter for these three keys (NOT
+    // `StrengthRel`, whose triple a parallel fix, commit 578ee9e
+    // "earlymil", makes genuinely identifiable via a round-gated blend --
+    // see PHASECUT.txt's scope note for the full argument). `Workers`/
+    // `TechLevels`/`HandValue` themselves are repurposed to carry the FULL
+    // early-extreme ("start") coefficient (`old_base + old_early`), and
+    // `WorkersLate`/`TechLevelsLate`/`HandValueLate` now carry the FULL
+    // late-extreme ("end") coefficient (`old_base + old_late`), blended as
+    // `start*(1-L) + end*L` -- the identical 2-df curve, spanned by a basis
+    // with no redundant direction. See `eval::load_weights`/`parse_weights`
+    // for the exact, lossless, load-time conversion of every file on disk.
     WorkersLate,
     StrengthRelEarly,
     StrengthRelLate,
-    TechLevelsEarly,
     TechLevelsLate,
-    HandValueEarly,
     HandValueLate,
 
     // ------------------------------------------------- marginal need (gap/surplus)
@@ -441,7 +469,13 @@ weight_key_table! {
     PopCost => "pop_cost", -0.4;
     YellowBank => "yellow_bank", -0.1;
     FreeWorkers => "free_workers", 0.4;
-    Workers => "workers", 1.4;
+    // T1-A collapse (PHASECUT.txt, 2026-08-13): was `1.4` (the old
+    // always-on flat term); now the FOLDED early-extreme ("start")
+    // coefficient `old_base(1.4) + old_workers_early(0.8) = 2.2`, so a
+    // freshly-authored vector scores every existing champion's L=0
+    // position identically to before the collapse. See `eval::
+    // parse_weights` for the load-time conversion every file on disk gets.
+    Workers => "workers", 2.2;
     ProdWorkers => "prod_workers", 0.3;
     UrbanWorkers => "urban_workers", 0.5;
     UnitWorkers => "unit_workers", 0.1;
@@ -528,11 +562,54 @@ weight_key_table! {
     // over an unmeasured guess (docs/OPEN_ITEMS.md).
     HasUnit => "has_unit", 0.0;
     Colonies => "colonies", 2.0;
+    // RULES_SPEC 5.4 cliff, not a slope -- `legal.rs`'s
+    // `aggression_target_qualifies` gates Annex on `q.colonies.is_empty()`,
+    // the printed target clause "one opponent who owns at least one
+    // colony" [RULES_SPEC.md:123]. `Colonies` (the raw count above) already
+    // carries every colony's production/culture/science/strength benefit
+    // through the other priced coordinates it feeds, plus exposure to the
+    // "Impact of Colonies" event via `EventScoringMargin` -- what neither
+    // of those can express is that going from 0 to 1 colonies alone makes
+    // you a legal Annex target, a step function no linear count can price.
+    // Seeded at 0.0, same as `HasUnit`, and left `Free` in `sign_intent`
+    // below: the engine states the rulebook fact, the league prices it.
+    HasColony => "has_colony", 0.0;
     Pacts => "pacts", 0.5;
     PactBlocksAttack => "pact_blocks_attack", 0.5;
+    // RULES_SPEC 5.6 cliff, not a slope -- "declare a war ... illegal if a
+    // pact forbids it" [RULES_SPEC.md:131] covers `pact_forbids_attack`
+    // (already priced by `PactBlocksAttack` above), but `combat::
+    // war_forbidden` ORs in a second, independent gate:
+    // `effects::state_stats(.., defender).war_immune`, set by a pact side
+    // printing `cannotBeDeclaredWarOnByAnyone` (`Special::B`/`A`/
+    // `BothPlayers`'s `PactBlock.war_immune`, e.g. "Loss of Sovereignty"'s B
+    // side). `cards.rs`'s `pact_value` and `rivals.rs`'s `add_pact_block`
+    // both name `war_immune` explicitly as one of the `PactBlock` fields
+    // deliberately left OUT of the RATE-shaped decomposition (not a
+    // per-turn yield, a boolean gate on legality) -- this is that gate's
+    // home. Holding it makes War against you categorically illegal, not
+    // merely less attractive, the same all-or-nothing shape `HasColony`/
+    // `HasUnit` already price elsewhere.
+    WarImmune => "war_immune", 0.0;
+    // A cost MULTIPLIER cliff, not a slope: `legal.rs`'s `action_moves`
+    // (Aggression and War branches alike) and `combat::start_aggression`
+    // all read `leader_is(q, "Mahatma Gandhi")` to double the military-
+    // action cost an OPPONENT pays to attack `q` -- the printed leader
+    // effect `Special::OpponentsPayDoubleMilitaryActionsToAttackYou`
+    // (`card_table.rs`), currently the only card carrying it. Computed
+    // here off the SPECIAL on the player's own leader card (mirroring the
+    // rules fact, not the engine's hardcoded name check) so a future card
+    // sharing the special is priced automatically. Distinct from
+    // `NoAggression` (`Special::CannotPlayAggressionOrWar`, same leader):
+    // that flag restricts what ITS OWN holder may play; this one restricts
+    // what OPPONENTS may afford to do to the holder -- the opposite
+    // direction, and the one this audit exists to catch.
+    AttackCostDoubled => "attack_cost_doubled", 0.0;
     AuctionCommitted => "auction_committed", 2.0;
     AuctionBid => "auction_bid", -0.4;
-    TechLevels => "tech_levels", 1.0;
+    // T1-C collapse (PHASECUT.txt): folded start = 1.0 + 0.5 = 1.5. See
+    // `Workers`'s own comment above for the full reasoning.
+    TechLevels => "tech_levels", 1.5;
     GovLevel => "gov_level", 2.0;
     BestFarm => "best_farm", 0.5;
     BestMine => "best_mine", 0.5;
@@ -561,6 +638,19 @@ weight_key_table! {
     WonderPromise => "wonder_promise", 0.0;
     WonderAgeOverrun => "wonder_age_overrun", 0.0;
     Leader => "leader", 1.5;
+    // RULES_SPEC 5.5 cliff, not a slope -- "Infiltrate 2 (remove rival's
+    // leader or unfinished wonder from game...)" [RULES_SPEC.md:129].
+    // `legal.rs`'s `aggression_target_qualifies` gates Infiltrate
+    // (`Special::RemoveFromGame`) on `q.leader.is_none() && q.wonder.is_none()`
+    // -- `Leader` (above) already prices the leader half of that OR, but
+    // nothing priced the wonder half: `WonderProgress` is a RATE-shaped
+    // sunk-cost magnitude tuned to value how much a wonder is worth
+    // finishing, not whether starting one alone made its owner Infiltrate-
+    // able, the same conflation `Colonies` alone left for `HasColony`
+    // (going from no wonder to the first resource invested is a step no
+    // linear progress count can express). Seeded at 0.0 and left `Free`,
+    // same as `HasColony`.
+    WonderInProgress => "wonder_in_progress", 0.0;
     HandLimit => "hand_limit", 0.0;
     ColonizeBonus => "colonize_bonus", 0.0;
     BuildDiscount => "build_discount", 0.0;
@@ -574,13 +664,17 @@ weight_key_table! {
     CardBoardCredit => "card_board_credit", 0.0;
     EventScoringMargin => "event_scoring_margin", 0.0;
     CardBoardLeader => "card_board_leader", 0.0;
-    CardBoardGovernment => "card_board_government", 0.0;
-    CardBoardAction => "card_board_action", 0.0;
-    CardBoardWonder => "card_board_wonder", 0.0;
-    // The military-deck sibling of the other four `board_credit_key` offsets
-    // -- see `cards.rs::board_credit_key`'s own doc comment for why a
-    // Military Bonus card (`defenseBonus`/`colonizationBonus`) needed one
-    // too. 0.0, matching every other per-type offset's default.
+    // `CardBoardLeader`'s sibling for the OTHER type with no dedicated
+    // board-aware pricing function of its own -- see `cards.rs::
+    // board_credit_key`'s own doc comment for why a Military Bonus card
+    // (`defenseBonus`/`colonizationBonus`) needed one. 0.0, matching
+    // `CardBoardLeader`'s own default. (Government/Action/Wonder used to
+    // have the identical per-type shape here; all three were retired
+    // 2026-08-13 -- their dedicated `gov_board_credit`/`action_board_credit`/
+    // `wonder_board_credit` branches in `card_potential_core` unconditionally
+    // intercept before this per-type path is ever reached whenever nonzero,
+    // which is every trained champion sampled, so the per-type key was a
+    // live-looking knob wired to nothing. See `RETIRED_KEYS`.)
     CardBoardBonus => "card_board_bonus", 0.0;
     HandSwapExtra => "hand_swap_extra", 0.0;
     CardRateCredit => "card_rate_credit", 1.0;
@@ -621,7 +715,12 @@ weight_key_table! {
     // number (see this key's own comment on its `WeightKey` declaration).
     TacticReachCredit => "tactic_reach_credit", 0.3;
     HandCivil => "hand_civil", 0.3;
-    HandValue => "hand_value", 0.25;
+    // T1-D collapse (PHASECUT.txt): folded start = 0.25 + 0.2 = 0.45. See
+    // `Workers`'s own comment above for the full reasoning. Also now
+    // classified `SignIntent::NonNegative` (was `Free`, guarded instead by
+    // the composite `NET_NONNEG_PHASE` mechanism) -- see `sign_intent`'s
+    // own `HandValue` arm below.
+    HandValue => "hand_value", 0.45;
     HandPotential => "hand_potential", 0.125;
     HandMilitary => "hand_military", 0.3;
     HandMilValue => "hand_mil_value", 0.15;
@@ -641,16 +740,21 @@ weight_key_table! {
     ScienceRateTrailing => "science_rate_trailing", 0.0;
 
     // phase-suffixed pairs -- see this module's top doc comment for why
-    // these eight are still spelled out by hand here even though PHASE_KEYS
-    // below is the honest source of "which base keys get a pair".
-    WorkersEarly => "workers_early", 0.8;
-    WorkersLate => "workers_late", -0.6;
+    // these five are still spelled out by hand here even though PHASE_KEYS
+    // below is the honest source of "which base keys get a pair". Only
+    // `StrengthRel` still has a separate `_early` key -- `Workers`/
+    // `TechLevels`/`HandValue`'s `_early` keys were retired 2026-08-13
+    // (PHASECUT.txt, T1-A/C/D collapse); their base key above now carries
+    // the folded early-extreme default (`old_base + old_early`) and their
+    // `_late` key below carries the folded late-extreme default
+    // (`old_base + old_late`) -- see each base key's own default for the
+    // arithmetic (workers: 1.4+0.8=2.2, tech_levels: 1.0+0.5=1.5,
+    // hand_value: 0.25+0.2=0.45) and PHASECUT.txt for the full derivation.
+    WorkersLate => "workers_late", 0.8; // 1.4 + (-0.6), the old base+late
     StrengthRelEarly => "strength_rel_early", -0.1;
     StrengthRelLate => "strength_rel_late", 0.5;
-    TechLevelsEarly => "tech_levels_early", 0.5;
-    TechLevelsLate => "tech_levels_late", -0.4;
-    HandValueEarly => "hand_value_early", 0.2;
-    HandValueLate => "hand_value_late", -0.2;
+    TechLevelsLate => "tech_levels_late", 0.6; // 1.0 + (-0.4)
+    HandValueLate => "hand_value_late", 0.05; // 0.25 + (-0.2)
 
     // marginal-need gap/surplus coordinates -- see the enum declaration's
     // own comment above this block. All 0.0: unmeasured by construction, so
@@ -687,26 +791,41 @@ impl WeightKey {
         WeightKey::ALL.iter().copied().find(|k| k.name() == name)
     }
 
-    /// The early-phase partner of a [`PHASE_KEYS`] member -- `w[k + "_early"]`
-    /// in Python, blended into `evaluate` as `(1 - lateness) * w[k_early]`.
+    /// The early-phase partner of the ONE remaining [`PHASE_KEYS`] member
+    /// that still has one -- `w[k + "_early"]` in Python, blended into
+    /// `evaluate` as `(1 - lateness) * w[k_early]`.
+    ///
+    /// PHASECUT.txt (2026-08-13, T1-A/C/D): `Workers`/`TechLevels`/
+    /// `HandValue` USED to have an `_early` partner too, but their triple
+    /// was a proven, exact, data-independent redundancy (the old blend
+    /// `w[base] + (1-L)*w[early] + L*w[late]` has only 2 degrees of
+    /// freedom for 3 raw numbers) -- collapsed to a 2-parameter
+    /// `{start, end}` basis, so those three keys no longer have a
+    /// separate early partner AT ALL (`self` now IS the early-extreme
+    /// value). `StrengthRel` is the sole survivor of the old 3-parameter
+    /// shape: a PARALLEL fix (commit 578ee9e, "earlymil") replaced its
+    /// blend with a round-gated piecewise formula that makes the triple
+    /// genuinely identifiable again (not the flat line the collapse
+    /// argument depends on) -- collapsing it too would delete the exact
+    /// distinction that fix relies on. See PHASECUT.txt for the full
+    /// argument in both directions.
     ///
     /// # Panics
-    /// If `self` is not one of the four [`PHASE_KEYS`] members -- mirrors
-    /// Python's `_PHASE_PRIOR[k + "_early"]`, a `KeyError` for the same
-    /// misuse. Restricting the match to exactly those four (rather than
-    /// falling back to `self` or to `0.0`) is what makes it impossible to
-    /// silently read a phase pair for a key that is not phase-multiplied.
+    /// If `self` is not [`WeightKey::StrengthRel`] -- restricting the match
+    /// to exactly that one key (rather than falling back to `self` or to
+    /// `0.0`) is what makes it impossible to silently read a phase pair for
+    /// a key that is not phase-multiplied this way.
     pub const fn early(self) -> WeightKey {
         match self {
-            WeightKey::Workers => WeightKey::WorkersEarly,
             WeightKey::StrengthRel => WeightKey::StrengthRelEarly,
-            WeightKey::TechLevels => WeightKey::TechLevelsEarly,
-            WeightKey::HandValue => WeightKey::HandValueEarly,
-            _ => panic!("WeightKey::early called on a key outside PHASE_KEYS"),
+            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::CultureRate | WeightKey::Science | WeightKey::ScienceRate | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::Workers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::TechLevels | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::FreeCivilAction | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::RestrictedResources | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::CardBoardBonus | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandValue | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount => panic!("WeightKey::early called on a key with no _early partner (only StrengthRel has one post PHASECUT.txt's T1-A/C/D collapse)"),
         }
     }
 
-    /// The late-phase partner of a [`PHASE_KEYS`] member. See [`Self::early`].
+    /// The late-phase partner of a [`PHASE_KEYS`] member -- for `Workers`/
+    /// `TechLevels`/`HandValue` this is the "end" (late-extreme) half of
+    /// the collapsed `{start, end}` basis (PHASECUT.txt); for `StrengthRel`
+    /// it keeps its original, untouched meaning. See [`Self::early`].
     ///
     /// # Panics
     /// If `self` is not one of the four [`PHASE_KEYS`] members.
@@ -716,7 +835,7 @@ impl WeightKey {
             WeightKey::StrengthRel => WeightKey::StrengthRelLate,
             WeightKey::TechLevels => WeightKey::TechLevelsLate,
             WeightKey::HandValue => WeightKey::HandValueLate,
-            _ => panic!("WeightKey::late called on a key outside PHASE_KEYS"),
+            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::CultureRate | WeightKey::Science | WeightKey::ScienceRate | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::FreeCivilAction | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::RestrictedResources | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::CardBoardBonus | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount => panic!("WeightKey::late called on a key outside PHASE_KEYS"),
         }
     }
 
@@ -742,7 +861,7 @@ impl WeightKey {
         match self {
             WeightKey::CultureRate => WeightKey::CultureRateTrailing,
             WeightKey::ScienceRate => WeightKey::ScienceRateTrailing,
-            _ => panic!("WeightKey::trailing called on a key outside STANDING_KEYS"),
+            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::Science | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::Workers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthRel | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::TechLevels | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::FreeCivilAction | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::RestrictedResources | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::CardBoardBonus | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandValue | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount => panic!("WeightKey::trailing called on a key outside STANDING_KEYS"),
         }
     }
 
@@ -783,10 +902,9 @@ impl WeightKey {
             }
 
             UrbanLimit | GovActionCost | NoAggression | RestrictedResources
-            | CardBoardCredit | CardBoardLeader | CardBoardGovernment | CardBoardAction
-            | CardBoardWonder | CardBoardBonus => WeightGroup::Board,
+            | CardBoardCredit | CardBoardLeader | CardBoardBonus => WeightGroup::Board,
 
-            HandCivil | HandValue | HandValueEarly | HandValueLate | HandPotential
+            HandCivil | HandValue | HandValueLate | HandPotential
             // `HandPerishable` is a property OF the hand (how much of it is
             // about to expire), so it moves with the rest of the hand axis.
             | HandPerishable
@@ -797,7 +915,7 @@ impl WeightKey {
             RateHorizon | Culture | CultureRate | CultureRateTrailing | Science | ScienceRate
             | ScienceRateTrailing | FoodRate
             | ResourceRate | FoodStock | ResourceStock | BlueFree | CorruptionHeadroom
-            | ConsumptionHeadroom | PopCost | YellowBank | FreeWorkers | Workers | WorkersEarly
+            | ConsumptionHeadroom | PopCost | YellowBank | FreeWorkers | Workers
             | WorkersLate | ProdWorkers | UrbanWorkers | UnitWorkers
             // The marginal-need gap/surplus pairs for food, resources,
             // science, culture and workers -- each stays in the SAME group
@@ -827,8 +945,11 @@ impl WeightKey {
             HappyMargin | Discontent | Uprising | HappySurplus => WeightGroup::Happiness,
 
             Strength | StrengthRel | StrengthRelEarly | StrengthRelLate | StrengthDeficit
-            | StrengthLead | TacticLevel | TacticGain | TacticShort | HasUnit | Colonies | Pacts
-            | PactBlocksAttack | AuctionCommitted | AuctionBid => WeightGroup::Military,
+            | StrengthLead | TacticLevel | TacticGain | TacticShort | HasUnit | Colonies
+            | HasColony | Pacts | PactBlocksAttack | WarImmune | AttackCostDoubled
+            | AuctionCommitted | AuctionBid => {
+                WeightGroup::Military
+            }
 
             HandLimit | ColonizeBonus | BuildDiscount | FreeCivilAction | ResourceDiscount
             | DefenseBonus | CardRateCredit | UnitStrengthCredit | TerritoryCredit
@@ -852,7 +973,7 @@ impl WeightKey {
 
             AttackTargetLead | AttackTargetWeakness | PactPartnerLead => WeightGroup::Targeting,
 
-            TechLevels | TechLevelsEarly | TechLevelsLate | GovLevel | BestFarm | BestMine
+            TechLevels | TechLevelsLate | GovLevel | BestFarm | BestMine
             | BestLab | BestTemple | BestTheater | BestLibrary | BestArena | BestUnit
             | NumTechs | SpecialTechs => WeightGroup::Tech,
 
@@ -861,9 +982,351 @@ impl WeightKey {
             // The two new wonder coordinates: the value still ahead of the
             // player, and the deadline the rules impose on reaching it.
             | WonderPromise | WonderAgeOverrun
-            | Leader => WeightGroup::Wonders,
+            | Leader | WonderInProgress => WeightGroup::Wonders,
         }
     }
+
+    /// What the ARITHMETIC forces on this weight's coefficient sign, derived
+    /// once, here, from the enum itself -- the structural fix for the bug
+    /// class `card_board_leader = -15.0` was: `card_potential` priced every
+    /// leader's board benefit through `card_board_credit + card_board_leader`,
+    /// and the only sign gate that existed (`eval::BENEFIT_GATES`, a
+    /// hand-typed list) never named the per-type key, so a helpful leader
+    /// priced as a LOSS for months with nothing failing. `dominance_repair`
+    /// closed that ONE key; this closes the SHAPE, the same way
+    /// [`WeightKey::group`] above closes "which strategic axis" instead of
+    /// leaving it to a hand-maintained list a new variant can silently miss.
+    ///
+    /// Deliberately NO wildcard `_ =>` arm, for [`group`](Self::group)'s own
+    /// reason restated: a 163rd variant is a compile error here until a
+    /// human puts it in one of [`SignIntent`]'s three buckets on purpose.
+    /// [`SignIntent::Free`] is not a fallback a classifier falls into by
+    /// omission -- every arm below names it explicitly, with the evidence
+    /// for why (a doc citation, a feature's proven sign, or "no RULES_SPEC
+    /// citation forces a direction, matches this project's own existing
+    /// conservatism") right next to it, because a WRONG gate silently
+    /// overrides a real fitted value and is worse than a missing one
+    /// (`SIGNAUDIT.txt`'s own framing). [`eval::dominance_repair`] reads
+    /// this match directly (no second, copied table), so a key reclassified
+    /// here is repaired at both load time and `bin/climb.rs` mutation time
+    /// automatically -- see that function's own doc comment.
+    pub const fn sign_intent(self) -> SignIntent {
+        use SignIntent::*;
+        use WeightKey::*;
+        match self {
+            // ---------------------------------------------------- NonNegative
+            // Scales a PRINTED per-card benefit and nothing else -- the ONLY
+            // channel its class has, and a card that prints one is never
+            // worse than the same card without it (RULES_SPEC never makes a
+            // grant compulsory to use). Matches the former `BENEFIT_GATES`.
+            BuildDiscount | CardBoardCredit | DefenseBonus | FreeCivilAction | HandLimit
+            | ResourceDiscount | RestrictedResources | UnitStrengthCredit
+            | WonderStagesPerAction => NonNegative("scales a printed benefit"),
+            // A redundant card getting MORE valuable the more of its lane is
+            // already covered would invert the discount's own premise, not
+            // just leave a direction unmeasured. Former `REDUNDANCY_NONNEG_GATES`.
+            TechRedundancyDiscount => {
+                NonNegative("discounts a redundant card, never rewards one")
+            }
+            // The SOLE identity-aware channel pricing what completing THIS
+            // in-progress wonder would do -- gains-only by construction
+            // (`gains_only_sum`/`gains_only_board_sum` drop every Cost-kind
+            // triple before either function ever sees one). Former
+            // `WONDER_VALUE_GATES`.
+            WonderPotential | WonderPromise => {
+                NonNegative("prices the in-progress wonder's completion value")
+            }
+            // Raw board STOCKS the rules only ever ADD effects for, cited
+            // chapter and verse (RULES_SPEC, see `eval::dominance_repair`'s
+            // own doc comment on this bucket): an available civil action, its
+            // whole-turn surplus, and a completed wonder. Former
+            // `STOCK_NONNEG_GATES` -- deliberately NOT extended to every
+            // other stock-shaped key in this table (`workers`, `culture`,
+            // `science_rate`, ...): those lack an equally citable rule and
+            // stay `Free` below, matching that gate's own existing refusal to
+            // guess.
+            CivilActions | CivilActionSurplus | Wonders => {
+                NonNegative("prices an available/completed stock the rules never subtract for")
+            }
+            // `cards::tactic_terms`: `gain = max(0, best_army -
+            // army_strength(p))`, an available army-strength IMPROVEMENT --
+            // never negative by construction, and forming it is optional, so
+            // a bigger available gain is never worse. NEW this audit: found
+            // negative in 8 of 10 champion snapshots on disk (as low as
+            // -60.0), the identical inversion `card_board_leader` had --
+            // see SIGNAUDIT.txt.
+            TacticGain => NonNegative("prices an available army-strength improvement as a downside"),
+
+            // ---------------------------------------------------- NonPositive
+            // `max(0, need - have)` marginal-need SHORTFALLS -- a bigger gap
+            // is never an improvement under any reading of the rules. Former
+            // `SHORTFALL_GATES`. The matching `*Surplus` siblings are `Free`
+            // below on purpose -- see that bucket's own comment.
+            FoodGap | ResourceGap | ScienceGap | CultureGap | CivilActionGap
+            | MilitaryActionGap | WorkerGap => NonPositive("prices a marginal-need shortfall"),
+            // Penalties the rules IMPOSE, larger the worse off the player is
+            // -- `discontent = max(0, -happy_margin)`, `uprising` a 0/1
+            // indicator, `strength_deficit = max(0, -relative_strength)`.
+            // Former `LOSS_GATES`.
+            Discontent | Uprising | StrengthDeficit => {
+                NonPositive("prices a penalty the rules impose")
+            }
+            // `economy::pop_food_cost` -- the RULEBOOK's own cost table for
+            // the next population increase, always >= 0 by construction
+            // (`unwrap_or(8)`, never negative). Larger the further a stage
+            // is from paid, exactly `corruption`/`consumption`'s own shape
+            // (both netted OUT of separate weights for this identical
+            // confound: a big civilization pays more of a rulebook cost than
+            // a small one, so a strictly-bad coordinate correlates with
+            // strength, and a climb chasing win rate charges the correlation
+            // to the "penalty"). `pop_cost` is still a live, separate
+            // `WeightKey` (never netted), so it still needs the gate its
+            // netted siblings no longer do. NEW this audit: found +13.34 in
+            // one live 4p champion snapshot (authored default -0.4) -- see
+            // SIGNAUDIT.txt.
+            PopCost => NonPositive("prices a rulebook population-growth cost as an upside"),
+            // What an UNFINISHED wonder still owes -- non-negative magnitudes
+            // that fall on exactly the move that pays a stage, so a positive
+            // price turns paying into a loss. Former `WONDER_DEBT_GATES`.
+            WonderRemaining | WonderStagesLeft | WonderTurnsToFinish | WonderOverrun
+            | WonderAgeOverrun => NonPositive("prices an unpaid wonder debt as an upside"),
+            // How much of the civil hand the next age boundary is about to
+            // discard for nothing (RULES_SPEC 12.2) -- never an upside.
+            // Former `PERISHABLE_GATES`.
+            HandPerishable => NonPositive("prices a hand about to expire as an upside"),
+            // `effects::tactic_outlook`'s per-type shortfall to the NEXT
+            // army -- `TacticGain`'s own shortfall half, same shape as
+            // `SHORTFALL_GATES` above (ported from the identical "whole-hand
+            // analogue" `TacticShortfallCost`'s own doc comment already
+            // names). NEW this audit: found positive in 6 of 10 champion
+            // snapshots on disk (as high as +10.8) -- see SIGNAUDIT.txt.
+            TacticShort => NonPositive("prices a marginal-need shortfall"),
+
+            // -------------------------------------------------------- Free
+            // Composite constraints living in a DIFFERENT mechanism, not a
+            // simple per-key sign -- classifying either `NonNegative` here
+            // would be WRONG (over-constraining a coordinate whose base term
+            // is legally allowed to be negative as long as the SUM is not):
+            //
+            // * `CardBoardLeader`/`CardBoardBonus`: the effective multiplier
+            //   `cards::card_potential` scales a leader/bonus swap diff by is
+            //   `CardBoardCredit + <this key>`, not either term alone --
+            //   `eval::dominance_repair`'s `card_board_credit_keys()` loop
+            //   (itself derived from `cards::board_credit_key`, not hand
+            //   copied) gates the SUM. `CardBoardGovernment`/`CardBoardAction`/
+            //   `CardBoardWonder` used to sit alongside these two here; all
+            //   three are RETIRED as of this audit (`RETIRED_KEYS`) --
+            //   `cards::card_potential_core`'s dedicated
+            //   `gov_value`/`action_value`/wonder swap-diff branches
+            //   unconditionally intercept and `return` before the generic
+            //   per-type path is ever reached whenever their own
+            //   `GovBoardCredit`/`ActionBoardCredit`/`WonderBoardCredit` is
+            //   nonzero -- which is every trained champion sampled, since
+            //   the first two default nonzero and are "measured effective"
+            //   -- so the three retired keys were live-looking knobs wired
+            //   to nothing, the same shape `card_yields`'s own deleted
+            //   static action formula was retired for (see
+            //   `cards.rs::tests::card_yields_never_reprices_the_action_
+            //   boards_ring_fenced_coordinates`'s doc comment for that
+            //   precedent). See SIGNAUDIT.txt.
+            CardBoardLeader | CardBoardBonus => Free,
+            // `HandValue`/`HandValueLate`: the feature `hand_value` (`Σ
+            // level()+1` over the civil hand) is always >= 0, so the
+            // coefficient `evaluate` actually applies at ANY lateness must
+            // never be negative either. Until 2026-08-13 this was `Free`
+            // (both individually unsigned) with a SEPARATE composite
+            // mechanism (`eval::NET_NONNEG_PHASE`) enforcing the NET
+            // `base + phase-blend >= 0` at load/mutation time, because the
+            // three-parameter blend made "the base alone" and "the net"
+            // different things. PHASECUT.txt's T1-D collapse removed that
+            // distinction: `HandValue` now directly holds the L=0 value and
+            // `HandValueLate` the L=1 value of `start*(1-L) + end*L`, a
+            // CONVEX combination of the two -- so the net is >= 0 at every
+            // lateness in [0,1] if and only if BOTH endpoints are >= 0
+            // individually, exactly what a plain per-key `NonNegative` gate
+            // on each already checks. Strictly simpler, not weaker (the old
+            // composite constraint set and this one are identical once the
+            // redundant degree of freedom is gone) -- `eval::
+            // NET_NONNEG_PHASE` is now empty. Found net-negative (as low as
+            // `0.2 + (-27.68) = -27.48` under the OLD basis) in every
+            // champion snapshot on disk carrying nonzero phase pairs -- see
+            // SIGNAUDIT.txt.
+            HandValue | HandValueLate => {
+                NonNegative("hand_value's feature is always >= 0 (a convex blend of two such endpoints is too)")
+            }
+
+            // Every remaining key: a genuine trade-off / preference
+            // coordinate the league prices empirically, with no RULES_SPEC
+            // citation or gains-only proof forcing a direction -- grouped by
+            // WHY below rather than left to speak for itself, so a future
+            // reader auditing one bucket does not have to re-derive the
+            // reasoning `SIGNAUDIT.txt` already wrote down.
+            //
+            // Raw economy/board magnitudes and rates with no rulebook
+            // citation that a bigger number is never a downside -- the same
+            // conservatism `STOCK_NONNEG_GATES`'s own doc comment already
+            // states outright for `science_rate` ("no RULES_SPEC citation
+            // establishing that more science production can never be a
+            // downside... guessing its sign is exactly what this table
+            // exists to refuse to do"), generalised to every sibling stock/
+            // rate/level here rather than re-litigated key by key.
+            RateHorizon | Culture | CultureRate | Science | ScienceRate | FoodRate
+            | ResourceRate | FoodStock | ResourceStock | BlueFree | YellowBank | FreeWorkers
+            | Workers | ProdWorkers | UrbanWorkers | UnitWorkers | HappyMargin
+            | MilitaryActions | TechLevels | GovLevel | BestFarm | BestMine | BestLab
+            | BestTemple | BestTheater | BestLibrary | BestArena | BestUnit | NumTechs
+            | SpecialTechs | WonderProgress | Leader | Strength | StrengthRel | StrengthLead
+            | TacticLevel | HasUnit | Colonies | HasColony | Pacts | PactBlocksAttack
+            | WarImmune | AttackCostDoubled | WonderInProgress => Free,
+            // `CorruptionHeadroom`/`ConsumptionHeadroom`: `features.rs`'s own
+            // comment on these two, verbatim -- "headroom is a deterministic
+            // function of `BlueFree`/`YellowBank`, so 'good all else equal'
+            // is vacuous here -- the two coordinates cannot move
+            // independently, and the league is left to price the pair."
+            CorruptionHeadroom | ConsumptionHeadroom => Free,
+            // `CaLeft`: `weights.rs`'s own extensive VERDICT comment on this
+            // key already establishes it is deliberately uncapped/unsigned
+            // (mid-turn option value, no rulebook conversion to approximate)
+            // -- SIGNAUDIT.txt's task explicitly keeps it out of scope
+            // ("measured: net regression, loses at 38.2%"), so it is not
+            // revisited here. `MaLeft`'s end-of-turn draw is a cliff already
+            // capped elsewhere (`board_yields::MA_DRAW_CAP`), not by a sign
+            // gate on this coefficient.
+            CaLeft | MaLeft => Free,
+            // Already explicitly declared free by `TakeCostShare`'s own doc
+            // comment: "spending actions on a card worth having is not a
+            // rules-level loss, so its sign is the league's to find" --
+            // restated here for `TakeCostPaid`, its numerator.
+            TakeCostPaid | TakeCostShare => Free,
+            // Row-reading and rival-row preference coordinates -- how much to
+            // weigh a rival wanting a card is a strategic read, not a rules
+            // fact. `RowLastCopy`'s units defect ("its defect is units, not
+            // sign", once out of scope for the sign audit) is fixed now --
+            // `row::row_last_copy` no longer sums `card_potential(w) * gone`
+            // (a composite `w` already prices, feeding a second, outer
+            // coefficient with no fixed meaning); it sums `gone` alone,
+            // `card_potential` used only as the `> 0.0` "is this even wanted"
+            // gate. Still `Free` -- fixing the units did not establish a sign
+            // any rule cites, so this classification itself is untouched.
+            RowUrgency | RowBargainForgone | RowLastCopy | RivalDesire | RivalTakeShare => Free,
+            // Raw RIVAL board facts -- whether more of a rival's stock is
+            // something to race against, ignore, or exploit is itself the
+            // strategic judgement being fit; unlike `StrengthDeficit`
+            // (`Military`, already gated), none of these have an established
+            // "this magnitude is always bad for ME" reading.
+            RivalFreeCa | RivalHandCivil | RivalWonders | RivalHandPotential
+            | RivalScienceStock | RivalFoodStock | RivalResourceStock | RivalFreeWorkers
+            | RivalYellowBank | RivalColonies | RivalMilActions | RivalBuildingWonder
+            | RivalCulture | RivalMeanCulture | RivalCultureRate | RivalScienceRate
+            | RivalStrength => Free,
+            // Event-timing and targeting comparisons -- a "lead" or
+            // "weakness" measure is a signed difference by construction, not
+            // a one-directional magnitude.
+            MySeededPending | MyEventThreat | AttackTargetLead | AttackTargetWeakness
+            | PactPartnerLead => Free,
+            // Auction bidding is a genuine trade-off (paying more to win a
+            // colony/aggression slot), not a rules-imposed penalty the
+            // player never chooses.
+            AuctionCommitted | AuctionBid => Free,
+            // Board-state indicator features (`features()` writes a raw
+            // count/flag for each) rather than a per-card printed benefit in
+            // `BuildDiscount`'s sense -- no dedicated citation established
+            // this audit pass; flagged in SIGNAUDIT.txt as a follow-up
+            // candidate, not gated here (a wrong gate is worse than a
+            // missing one).
+            ColonizeBonus | UrbanLimit | NoAggression => Free,
+            // `docs/OPEN_ITEMS.md` item 1: a real, live-reading coordinate
+            // whose drift is documented as "signal vs noise, not yet
+            // determined" -- explicitly not concluded to be rules-forced
+            // either way.
+            GovActionCost => Free,
+            // A scoring MARGIN -- signed by construction (ahead of or behind
+            // the field), not a one-directional magnitude.
+            EventScoringMargin => Free,
+            // A spare single-slot card's (leader/government) incremental
+            // value beyond the best one already counted -- its own doc
+            // comment in `cards.rs` calls it out as "a free 0.0-default
+            // WEIGHT, not a constant", i.e. deliberately the league's to find.
+            HandSwapExtra => Free,
+            // The "how much to trust this dedicated function's board-aware
+            // estimate" multiplier family (`registry.rs`'s own
+            // characterization) -- NOT a printed-benefit magnitude the way
+            // `BuildDiscount`'s siblings are, so `BENEFIT_GATES`'s reasoning
+            // does not automatically transfer. Whether each dedicated
+            // function (`tech_value`/`action_value`/`gov_value`/...) is
+            // provably gains-only the way `wonder_potential` is, and so
+            // deserves a `NonNegative` gate of its own, was NOT verified
+            // within this audit's budget -- flagged in SIGNAUDIT.txt as the
+            // top follow-up candidate, not guessed at here.
+            CardRateCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
+            | GovBoardCredit | WonderBoardCredit | BuildFreshCredit | RestrictedResourceCredit
+            | FreeActionCredit | TerritoryCredit | BonusCardCredit | TacticBoardCredit
+            | AggressionBoardCredit | WarBoardCredit | PactBoardCredit | EventBoardCredit
+            | TacticShortfallCost | TacticReachCredit => Free,
+            // Hand-content magnitudes other than `HandValue` (handled above)
+            // -- plausible `NonNegative` candidates by the same "a card in
+            // hand is never a rules-level cost" logic, but not individually
+            // verified this pass; left `Free` rather than guessed at.
+            HandCivil | HandPotential | HandMilitary | HandMilValue | HandMilPotential => Free,
+            // `WeightedBot::choose`'s own doc comment: "DO NOT fix this
+            // asymmetry ... measured (twice, two different ways) against
+            // every alternative and is strictly stronger" -- an empirically
+            // tuned search bias, not a board-position coefficient at all.
+            EndTurnBias => Free,
+            // Standing hinges, gated at `0.0` by design so landing them moves
+            // no game until the league prices them (`STANDING_KEYS`'s own
+            // doc comment) -- whether trailing in culture/science makes a
+            // marginal point worth MORE or LESS is exactly what the hinge
+            // exists to answer, not a foregone conclusion.
+            CultureRateTrailing | ScienceRateTrailing => Free,
+            // Phase modifiers for the `PHASE_KEYS` members other than
+            // `HandValue` (whose own `_late`/base pair moved to
+            // `NonNegative` above, T1-D) -- `Workers`/`StrengthRel`/
+            // `TechLevels` themselves are `Free` above (no rules citation
+            // forces their own sign), so their late-extreme/phase partners
+            // have nothing non-arbitrary to anchor a sign gate to either.
+            // `WorkersEarly`/`TechLevelsEarly` no longer exist post T1-A/C
+            // collapse (folded into `Workers`/`TechLevels` themselves,
+            // classified above) -- see PHASECUT.txt.
+            WorkersLate | StrengthRelEarly | StrengthRelLate | TechLevelsLate => Free,
+            // The matching SURPLUS half of every gated `*Gap` shortfall above
+            // -- deliberately NOT gated, straight from `SHORTFALL_GATES`'s
+            // own former doc comment: "whether banking more than you need is
+            // worth something or nothing is not unambiguous the way a
+            // shortfall's sign is, so the league prices it unconstrained."
+            // `CivilActionSurplus` is the one exception (see `NonNegative`
+            // above) -- a DIFFERENT, RULES-cited constraint
+            // (`STOCK_NONNEG_GATES`'s own reasoning), not this one.
+            FoodSurplus | ResourceSurplus | ScienceSurplus | CultureSurplus | HappySurplus
+            | MilitaryActionSurplus | WorkerSurplus => Free,
+        }
+    }
+}
+
+/// What [`WeightKey::sign_intent`] concludes about one coefficient's legal
+/// sign -- see that method's own doc comment for the derivation and
+/// [`super::eval::dominance_repair`] for where it is spent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SignIntent {
+    /// Scales a quantity unambiguously GOOD for the player and never
+    /// subtracted for by the rules -- the coefficient must never be
+    /// negative. The `&'static str` is the WHY, logged verbatim by
+    /// [`super::eval::dominance_repair`]'s `Violation::rule` when it fires --
+    /// carried on the classification itself (not a second, parallel lookup)
+    /// so the direction and the reason can never drift apart. Repaired UP to
+    /// `0.0` ("unpriced"), never to an invented positive replacement.
+    NonNegative(&'static str),
+    /// Scales a quantity unambiguously BAD for the player -- the coefficient
+    /// must never be positive. See [`Self::NonNegative`] for what the
+    /// `&'static str` is for. Repaired DOWN to `0.0`.
+    NonPositive(&'static str),
+    /// A trade-off/preference coordinate the league prices empirically, or a
+    /// coefficient whose real constraint is a COMPOSITE one (a sum with
+    /// another key, or a net across a phase pair) enforced by a different
+    /// mechanism -- see the specific [`WeightKey::sign_intent`] match arm for
+    /// which case applies. Not a fallback: every arm chooses this
+    /// explicitly, there is no wildcard feeding it.
+    Free,
 }
 
 /// A coherent strategic axis of the weight vector -- e.g. every economy
@@ -955,16 +1418,29 @@ impl WeightGroup {
     }
 }
 
-/// Mirrors Python's `PHASE_KEYS`: which BASE features additionally carry an
-/// early-game/late-game pair, blended by `lateness()` as `w[k] + (1 - L) *
-/// w[k.early()] + L * w[k.late()]`. The four that stay, and why six others
-/// (`culture`, `culture_rate`, `science_rate`, `food_rate`, `resource_rate`,
+/// Mirrors Python's `PHASE_KEYS`: which BASE features additionally carry a
+/// lateness-blended pair. The four that stay, and why six others (`culture`,
+/// `culture_rate`, `science_rate`, `food_rate`, `resource_rate`,
 /// `wonder_progress`) were retired on 2026-08-04 -- `rate_multiplier` now
 /// prices the four RATE_KEYS through the exact `rounds_left`-derived horizon
 /// instead of this affine shape, and `culture`/`wonder_progress` are
 /// numeraire/stock terms a phase blend must not rescale -- are explained at
 /// length in the Python source's own comment on this constant; not
 /// reproduced here.
+///
+/// Two different blends now live behind this one list (PHASECUT.txt,
+/// 2026-08-13, T1-A/C/D): `Workers`/`TechLevels`/`HandValue` were collapsed
+/// from the old 3-parameter `w[k] + (1-L)*w[k.early()] + L*w[k.late()]`
+/// (only 2 real degrees of freedom for 3 raw numbers -- a proven dead
+/// direction) to the equivalent, non-redundant 2-parameter
+/// `w[k]*(1-L) + w[k.late()]*L`, where `k` itself now holds the
+/// early-extreme ("start") value and `k.late()` the late-extreme ("end")
+/// value -- see `eval::evaluate`'s own phase-blended body for exactly where
+/// this is computed. `StrengthRel` keeps the OLD 3-parameter shape (with a
+/// parallel fix, commit 578ee9e, further round-gating it) -- excluded from
+/// the collapse because that fix makes its triple genuinely identifiable
+/// again; see `WeightKey::early`'s own doc comment and PHASECUT.txt for the
+/// full argument.
 pub const PHASE_KEYS: &[WeightKey] = &[
     WeightKey::Workers,
     WeightKey::StrengthRel,
@@ -1023,6 +1499,32 @@ pub const RETIRED_KEYS: &[&str] = &[
     // makes that unwritable.
     "corruption_loss",
     "consumption",
+    // Retired 2026-08-13 (SIGNAUDIT.txt): `cards::card_potential_core`
+    // dispatches Government/Action/Wonder cards through a DEDICATED
+    // board-aware function (`gov_value`/`action_value`, and Wonder's own
+    // `board_yields::board_yields` swap-diff branch) gated on
+    // `gov_board_credit`/`action_board_credit`/`wonder_board_credit`, and
+    // that branch unconditionally `return`s once its own credit is nonzero
+    // -- it never falls through to the generic per-type path these three
+    // keys used to offset. `gov_board_credit`/`action_board_credit` default
+    // NONZERO (1.0, "measured effective from the start"), so
+    // `card_board_government`/`card_board_action` were dead on every
+    // trained champion by construction, not merely by drift;
+    // `wonder_board_credit` defaults 0.0 but is climbed away from it in
+    // practice, making `card_board_wonder` dead the same way once trained
+    // (measured: nonzero and wrong-signed in most champion snapshots on
+    // disk while simultaneously unreachable). Same shape as `card_yields`'s
+    // own deleted static action formula (see `cards.rs::tests::
+    // card_yields_never_reprices_the_action_boards_ring_fenced_
+    // coordinates`'s doc comment) -- a provably-unreachable pricing path is
+    // deleted, not pinned or left live for a future mutation to rediscover.
+    // `CardBoardLeader`/`CardBoardBonus` are NOT retired alongside these:
+    // Leader and Bonus have no dedicated top-level branch in
+    // `card_potential_core` at all, so their per-type offset is the ONLY
+    // board-aware pricing channel either type has.
+    "card_board_government",
+    "card_board_action",
+    "card_board_wonder",
 ];
 
 /// [`WeightKey::ALL`]'s length -- every [`Weights`] array is exactly this
@@ -1089,23 +1591,30 @@ mod tests {
     }
 
     /// The generation-honesty check this module's top doc comment promises:
-    /// `PHASE_KEYS` and the flat table's `*_early`/`*_late` entries name
-    /// EXACTLY the same set of features, checked in both directions.
+    /// `PHASE_KEYS` and the flat table's `*_late` entries (every member) and
+    /// `*_early` entry (`StrengthRel` alone, post PHASECUT.txt's T1-A/C/D
+    /// collapse -- see `WeightKey::early`'s own doc comment) name EXACTLY
+    /// the expected set of features, checked in both directions.
     #[test]
     fn phase_keys_and_the_flat_table_agree() {
         for &k in PHASE_KEYS {
-            assert!(WeightKey::ALL.contains(&k.early()), "{}: early() not in ALL", k.name());
             assert!(WeightKey::ALL.contains(&k.late()), "{}: late() not in ALL", k.name());
-            assert_eq!(k.early().name(), format!("{}_early", k.name()));
             assert_eq!(k.late().name(), format!("{}_late", k.name()));
         }
+        assert!(WeightKey::ALL.contains(&WeightKey::StrengthRel.early()));
+        assert_eq!(WeightKey::StrengthRel.early().name(), "strength_rel_early");
         for &k in WeightKey::ALL {
             let name = k.name();
-            let base = name.strip_suffix("_early").or_else(|| name.strip_suffix("_late"));
-            if let Some(base) = base {
+            if let Some(base) = name.strip_suffix("_late") {
                 assert!(
                     PHASE_KEYS.iter().any(|&p| p.name() == base),
                     "{name}: phase-suffixed key with no PHASE_KEYS base"
+                );
+            }
+            if let Some(base) = name.strip_suffix("_early") {
+                assert_eq!(
+                    base, "strength_rel",
+                    "{name}: only strength_rel has an _early key post PHASECUT.txt's T1-A/C/D collapse"
                 );
             }
         }
@@ -1178,16 +1687,18 @@ mod tests {
         assert_eq!(names.len(), WeightGroup::ALL.len());
     }
 
-    /// A `_early`/`_late` phase key is in the SAME group as its base key,
-    /// for all four `PHASE_KEYS` -- the property `hillclimb.py`'s
-    /// `GROUP_KEYS` comment relies on ("a group move is 'care more/less
-    /// about this whole strategic axis', at every age").
+    /// A `_late` phase key is in the SAME group as its base key, for all
+    /// four `PHASE_KEYS` -- the property `hillclimb.py`'s `GROUP_KEYS`
+    /// comment relies on ("a group move is 'care more/less about this whole
+    /// strategic axis', at every age"). `StrengthRel`'s `_early` partner
+    /// (the only one left post PHASECUT.txt's T1-A/C/D collapse) is checked
+    /// too.
     #[test]
     fn phase_key_shares_its_base_keys_group() {
         for &k in PHASE_KEYS {
-            assert_eq!(k.early().group(), k.group(), "{}_early", k.name());
             assert_eq!(k.late().group(), k.group(), "{}_late", k.name());
         }
+        assert_eq!(WeightKey::StrengthRel.early().group(), WeightKey::StrengthRel.group());
     }
 
     /// Anti-drift check: hardcodes a handful of (weight name, group name)
@@ -1201,7 +1712,7 @@ mod tests {
     fn rust_grouping_agrees_with_python_groups() {
         let pairs: &[(&str, &str)] = &[
             ("civil_actions", "actions"),                 // GROUPS["actions"]
-            ("card_board_wonder", "board"),                // GROUPS["board"]
+            ("card_board_bonus", "board"),                 // GROUPS["board"]
             ("hand_mil_value", "cards"),                   // GROUPS["cards"]
             ("rate_horizon", "economy"),                   // GROUPS["economy"]
             ("my_event_threat", "events"),                 // GROUPS["events"]
@@ -1218,6 +1729,72 @@ mod tests {
         for &(name, group) in pairs {
             let k = WeightKey::by_name(name).unwrap_or_else(|| panic!("no WeightKey {name}"));
             assert_eq!(k.group().name(), group, "{name}");
+        }
+    }
+
+    /// A key classified [`SignIntent::NonNegative`] must be authored with a
+    /// non-negative default, and one classified [`SignIntent::NonPositive`]
+    /// with a non-positive one -- if the crate's own [`WeightKey::
+    /// default_weight`] disagreed with [`WeightKey::sign_intent`], that would
+    /// mean the classification and the author's own intent contradict each
+    /// other, which is a bug to fix at the source, not something
+    /// `eval::dominance_repair` should paper over on every load. This is the
+    /// single check that used to be split across `eval.rs`'s
+    /// `no_gated_wonder_debt_weight_is_authored_as_an_upside` and
+    /// `no_gated_non_negative_weight_is_authored_as_a_downside` -- one test
+    /// over the derived classification now covers every key either of those
+    /// hand-typed lists could ever have named, plus every key added since.
+    #[test]
+    fn every_sign_intent_classification_agrees_with_its_own_authored_default() {
+        for &k in WeightKey::ALL {
+            match k.sign_intent() {
+                SignIntent::NonNegative(why) => assert!(
+                    k.default_weight() >= 0.0,
+                    "{} is classified NonNegative ({why}) but defaults to {}",
+                    k.name(),
+                    k.default_weight()
+                ),
+                SignIntent::NonPositive(why) => assert!(
+                    k.default_weight() <= 0.0,
+                    "{} is classified NonPositive ({why}) but defaults to {}",
+                    k.name(),
+                    k.default_weight()
+                ),
+                SignIntent::Free => {}
+            }
+        }
+    }
+
+    /// Regression pin for this audit's three NEW classifications
+    /// (SIGNAUDIT.txt): `tactic_gain` scales an always-non-negative available
+    /// army-strength improvement (`NonNegative`), `tactic_short` and
+    /// `pop_cost` scale always-non-negative rulebook shortfalls/costs
+    /// (`NonPositive`). Pinned by name (not just by not-panicking) so a
+    /// future edit that silently reclassifies one of these three back to
+    /// `Free` fails a test instead of quietly reopening the exact hole
+    /// measured wrong-signed in most champion snapshots on disk.
+    #[test]
+    fn the_three_new_gates_this_audit_added_are_classified_as_expected() {
+        assert!(matches!(WeightKey::TacticGain.sign_intent(), SignIntent::NonNegative(_)));
+        assert!(matches!(WeightKey::TacticShort.sign_intent(), SignIntent::NonPositive(_)));
+        assert!(matches!(WeightKey::PopCost.sign_intent(), SignIntent::NonPositive(_)));
+    }
+
+    /// `card_board_government`/`card_board_action`/`card_board_wonder` are
+    /// RETIRED (SIGNAUDIT.txt: `cards::card_potential_core`'s dedicated
+    /// `gov_value`/`action_value`/wonder branches unconditionally shadow the
+    /// generic per-type path whenever their own credit is nonzero, which is
+    /// every trained champion sampled) -- confirm they cannot be resolved
+    /// back to a live `WeightKey` by name, the same guarantee
+    /// `retired_keys_are_not_weight_keys` already checks for every other
+    /// retired key, pinned by name here so a reviewer of THIS audit sees the
+    /// three card-board retirements called out specifically rather than
+    /// folded anonymously into the general list.
+    #[test]
+    fn the_three_retired_card_board_per_type_keys_have_nowhere_to_land() {
+        for name in ["card_board_government", "card_board_action", "card_board_wonder"] {
+            assert_eq!(WeightKey::by_name(name), None, "{name}: retired but still resolvable");
+            assert!(RETIRED_KEYS.contains(&name), "{name}: retired but missing from RETIRED_KEYS");
         }
     }
 }

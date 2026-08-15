@@ -86,7 +86,7 @@ mod tests {
     // `lib.rs`, ...) follows it. That makes "drop everything from the
     // first `#[cfg(test)]` onward" a safe textual proxy for "production
     // code only" without parsing Rust -- a test-only literal mention (like
-    // a `WeightKey::WorkersEarly` inside an `eval.rs` test, which exists
+    // a `WeightKey::WorkersLate` inside an `eval.rs` test, which exists
     // today) must not count as a reader, or this scan would rate a key
     // "live" because a TEST happened to name it, not because anything
     // reads it while actually evaluating a board.
@@ -145,10 +145,17 @@ mod tests {
     /// rs`'s top doc comment, "The phase-suffixed keys". `eval::evaluate`'s
     /// `PHASE_KEYS` loop and `rivals::feature_marginal` are the real
     /// readers; `weights::tests::phase_keys_and_the_flat_table_agree`
-    /// already keeps this eight-key set itself honest (every name here
-    /// really is `<base>_early`/`<base>_late` for a live `PHASE_KEYS`
-    /// member), so this list only has to say WHY no literal reader is
-    /// expected, not re-derive WHICH eight keys that is.
+    /// already keeps this set itself honest (every name here really is
+    /// `<base>_early`/`<base>_late` for a live `PHASE_KEYS` member), so this
+    /// list only has to say WHY no literal reader is expected, not re-derive
+    /// WHICH keys that is.
+    ///
+    /// Five entries as of PHASECUT.txt's T1-A/C/D collapse (2026-08-13), not
+    /// eight: `WorkersEarly`/`TechLevelsEarly`/`HandValueEarly` no longer
+    /// exist as `WeightKey` variants at all (their base key -- `Workers`/
+    /// `TechLevels`/`HandValue`, both very much literally named elsewhere,
+    /// e.g. `features.rs` -- absorbed their information), so there is
+    /// nothing left here to excuse for those three.
     const PHASE_SUFFIXED_NO_LITERAL_READER: &[WeightKey] = &[
         // The standing hinges are reached the same indirect way the phase
         // pairs are -- `rivals::feature_marginal` calls `key.trailing()`
@@ -157,13 +164,10 @@ mod tests {
         // exemption exists.
         WeightKey::CultureRateTrailing,
         WeightKey::ScienceRateTrailing,
-        WeightKey::WorkersEarly,
         WeightKey::WorkersLate,
         WeightKey::StrengthRelEarly,
         WeightKey::StrengthRelLate,
-        WeightKey::TechLevelsEarly,
         WeightKey::TechLevelsLate,
-        WeightKey::HandValueEarly,
         WeightKey::HandValueLate,
     ];
 
@@ -256,7 +260,7 @@ mod tests {
                     // across 180 driven games, without the cost of a full
                     // `features()` call (which itself recomputes `effects::
                     // compute`) after every single move.
-                    if moves % 7 == 0 {
+                    if moves.is_multiple_of(7) {
                         for idx in 0..n {
                             let f = features(&state, idx, None, None, false);
                             for &k in WeightKey::ALL {
@@ -304,9 +308,8 @@ mod tests {
         // `features()` to write.
         (WeightKey::CardBoardCredit, "cards.rs board-credit multiplier"),
         (WeightKey::CardBoardLeader, "cards.rs board-credit multiplier"),
-        (WeightKey::CardBoardGovernment, "cards.rs board-credit multiplier"),
-        (WeightKey::CardBoardAction, "cards.rs board-credit multiplier"),
-        (WeightKey::CardBoardWonder, "cards.rs board-credit multiplier"),
+        // `CardBoardGovernment`/`CardBoardAction`/`CardBoardWonder` retired
+        // 2026-08-13 (SIGNAUDIT.txt) -- see `weights::RETIRED_KEYS`.
         (WeightKey::CardBoardBonus, "cards.rs board-credit multiplier"),
         (WeightKey::CardRateCredit, "cards.rs static-table rate multiplier"),
         (WeightKey::UnitStrengthCredit, "cards.rs static-table unit multiplier"),
@@ -369,18 +372,16 @@ mod tests {
         // Not board features at all.
         (WeightKey::EndTurnBias, "eval::WeightedBot's search bias, not a board feature"),
         (WeightKey::RateHorizon, "horizon::rate_multiplier reads this directly"),
-        // The four PHASE_KEYS' *_early/*_late partners -- blended
-        // dynamically off the BASE key's raw feature value (which
-        // `features()` DOES set), never written under their own suffixed
-        // name. Same eight keys as `PHASE_SUFFIXED_NO_LITERAL_READER`
-        // above, for the same underlying reason.
-        (WeightKey::WorkersEarly, "phase blend off Workers"),
+        // The PHASE_KEYS' `_late`/`_early` partners -- blended dynamically
+        // off the BASE key's raw feature value (which `features()` DOES
+        // set), never written under their own suffixed name. Same five
+        // keys as `PHASE_SUFFIXED_NO_LITERAL_READER` above (not eight --
+        // `WorkersEarly`/`TechLevelsEarly`/`HandValueEarly` no longer exist,
+        // PHASECUT.txt T1-A/C/D), for the same underlying reason.
         (WeightKey::WorkersLate, "phase blend off Workers"),
         (WeightKey::StrengthRelEarly, "phase blend off StrengthRel"),
         (WeightKey::StrengthRelLate, "phase blend off StrengthRel"),
-        (WeightKey::TechLevelsEarly, "phase blend off TechLevels"),
         (WeightKey::TechLevelsLate, "phase blend off TechLevels"),
-        (WeightKey::HandValueEarly, "phase blend off HandValue"),
         (WeightKey::HandValueLate, "phase blend off HandValue"),
     ];
 

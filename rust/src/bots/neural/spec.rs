@@ -260,7 +260,7 @@ impl Spec {
         let kind = Kind::parse(kind_str)?;
 
         let path = match path_str {
-            Some(p) if p.is_empty() => {
+            Some("") => {
                 return Err(format!("{kind_str}: the ':' is there but the path after it is empty"))
             }
             Some(p) => Some(PathBuf::from(p)),
@@ -524,6 +524,14 @@ fn build_classical(
 ///
 /// No `Debug`: [`PyRandom`] has none, matching `greedy::Bot`, which is not
 /// `Debug` either for the same reason.
+// Boxing `Quiescent`'s or `Plan`'s fields (clippy's usual fix) would mean
+// every match arm across the crate that destructures those variants
+// directly -- already fully enumerated per this crate's wildcard-match ban
+// -- has to change shape too (an extra deref, or a new intermediate struct).
+// That is a real structural refactor touching many call sites, not a
+// lint-only fix, so it is out of scope for a CI-green pass that must not
+// change behaviour.
+#[allow(clippy::large_enum_variant)]
 pub enum ClassicalPlayer {
     Random(RandomBot),
     Greedy(GreedyBot),
@@ -806,7 +814,7 @@ mod tests {
                 assert_eq!(width, plan::PlanConfig::default().width);
                 assert_ne!(width, 2, "the league's training width must not leak in here");
             }
-            _ => panic!("a classical spec must load as a classical contender"),
+            Contender::Neural { .. } | Contender::NeuralPlan { .. } => panic!("a classical spec must load as a classical contender"),
         }
     }
 

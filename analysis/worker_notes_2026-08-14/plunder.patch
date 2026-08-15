@@ -1,0 +1,196 @@
+diff --git i/rust/src/bin/replaystats.rs w/rust/src/bin/replaystats.rs
+index 4c36e54..efdc96f 100644
+--- i/rust/src/bin/replaystats.rs
++++ w/rust/src/bin/replaystats.rs
+@@ -348,6 +348,15 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             if std::env::var("REPLAY_DEBUG").is_ok() {
+                 eprintln!("DEBUG completed: {}", meta.id);
+             }
++            // A dedicated gate for JUST the completed-game IDs. `REPLAY_DEBUG`
++            // above also turns on the engine's whole per-action trace, which is
++            // far too much output to sit through merely to learn which games
++            // finished. This list is the input to the replay-completion
++            // regression guard: a fix may only be landed if every ID printed
++            // here before the change is still printed after it.
++            if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
++                println!("SCOREDIV_COMPLETED_ID {}", meta.id);
++            }
+             if let Some(engine) = &result.engine_scores {
+                 n_score_checked += 1;
+                 let mut a = engine.clone();
+diff --git i/rust/src/replay_common.rs w/rust/src/replay_common.rs
+index 1d96ea8..7178e14 100644
+--- i/rust/src/replay_common.rs
++++ w/rust/src/replay_common.rs
+@@ -4554,6 +4554,26 @@ fn prescan_flip_wonders(lines: &[Line], card_index: &HashMap<&'static str, CardI
+ /// still in that player's hand at the time of the discard, so it cannot
+ /// have been the card discarded there -- see that module's doc for the full
+ /// argument this pre-scan supplies the raw facts for.
++///
++/// The `PlayAggression` case corrects an Aggression: PLUNDER `card` (base
++/// name match, nothing broader) with [`best_age_sibling`], bounded on this
++/// line's OWN journal age column (`parse_age(line.age)`), exactly mirroring
++/// `apply_one`'s `ActionClass::PlayAggression` arm -- see that arm's own doc
++/// comment for why (both the correction and its Plunder-only scope; a
++/// general Aggression-wide version of this correction was tried and
++/// regressed 21 corpus games via `DiscardSolver`'s simulated-filler-hand
++/// bookkeeping, unrelated to Plunder). Without this, a `FutureNeed` entry
++/// here would protect the WRONG `CardId` (the arbitrary same-name pick
++/// `corpus::build_card_index` produces, never corrected) from
++/// `DiscardSolver`'s hand-limit picks, while the actual `Move::Aggression`
++/// this same line resolves to plays the CORRECTED, real age's copy -- a
++/// silent split-brain between "what this pre-scan promised is needed later"
++/// and "what actually got played" that stalls or misdirects a discard
++/// several lines earlier. Every other Aggression card, and `DeclareWar`/
++/// `ProposePact`/`PlayTactic`, are left uncorrected: `apply_one` does not
++/// correct their own card resolution either, so leaving them as they were
++/// keeps this pre-scan consistent with EVERY consumer, not just the one
++/// this pass touched.
+ fn prescan_future_military_needs(
+     lines: &[Line],
+     card_index: &HashMap<&'static str, CardId>,
+@@ -4570,6 +4590,11 @@ fn prescan_future_military_needs(
+             ActionClass::TakeCard | ActionClass::BuildBuilding | ActionClass::BuildUnit | ActionClass::BuildWonderStage | ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::DevelopTechnology | ActionClass::ElectLeader | ActionClass::ChangeGovernment | ActionClass::WinWar | ActionClass::AcceptPact | ActionClass::Colonize | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PlayActionCard | ActionClass::PutBack | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => false,
+         };
+         if consumes_own_hand_card {
++            let card = if class == ActionClass::PlayAggression && card.get().base_name == "Aggression: Plunder" {
++                parse_age(line.age).map_or(card, |age| best_age_sibling(card, age))
++            } else {
++                card
++            };
+             out.entry(actor.seat()).or_default().push(FutureNeed { lineno: line.lineno, card });
+         }
+     }
+@@ -6832,6 +6857,49 @@ fn apply_one(
+         ActionClass::WinWar => Ok(()), // automatic (game::resolve_war_outcome); validation checkpoint only
+         ActionClass::PlayAggression => {
+             let card = card.ok_or_else(|| MismatchKind::ParserGap("aggression with no resolved card".into()))?;
++            // `card` is `corpus::build_card_index`'s arbitrary same-name pick
++            // (`best_age_sibling`'s own doc comment) -- Aggression: Plunder
++            // prints the SAME bare name once per age with a stronger effect
++            // each time (`TakeFromOpponentBlock.food_and_or_resources` is
++            // 3/5/7 across its three copies), and BGO's `"plays Plunder"`
++            // text never carries an age tag any more than `"takes ... in
++            // hand"` did. Left uncorrected, a low-age pick here grounds the
++            // WRONG card's weaker effect into the resolved `Move::
++            // Aggression` -- e.g. game 7523357's Age III Plunder ("up to 7
++            // resource and/or food" per the journal's own printed text) got
++            // silently resolved as the Age I copy ("up to 3"), so `combat::
++            // finish_aggression`'s later `PlunderSplit` choice offered
++            // totals that could never match the journal's real "Purple
++            // produces 7 resources; Grey spends 7 resources" resolution
++            // line, deadlocking the replay on a StuckPending that had
++            // nothing to do with the split logic itself.
++            //
++            // SCOPED TO PLUNDER ONLY, not every multi-age Aggression card
++            // (Raid is the other common one) -- tried the general
++            // `best_age_sibling` correction for the whole `PlayAggression`
++            // class first (bounded on `age_civil`, keeping it consistent
++            // with `prescan_future_military_needs`'s own identical
++            // correction, see that function's doc) and it REGRESSED 21
++            // corpus games that never touch Plunder at all, e.g. `7521683`:
++            // correcting a `"plays Raid"` line's `CardId` there (Age I ->
++            // III) changed which of `DiscardSolver`'s SIMULATED filler cards
++            // `ground_for_consumption` treats as already-satisfying-a-need
++            // vs. needing a swap, which is enough to flip which card a
++            // LATER, unrelated hand-limit discard picks (`ground_for_
++            // consumption`'s `needed_later`-guided victim search is
++            // order-sensitive over the whole simulated hand) -- a real but
++            // much deeper card-identity/discard-solver interaction this
++            // pass did not have the budget to fix for every Aggression
++            // family at once. Gating on Plunder's own base name keeps this
++            // fix inside the `PlunderSplit` bucket it was found for and
++            // proven safe against (see `PLUNDER.txt`'s guard-check section);
++            // `prescan_future_military_needs` gates its own mirrored
++            // correction the identical way, for the identical reason.
++            let card = if card.get().base_name == "Aggression: Plunder" {
++                best_age_sibling(card, r.state.age_civil)
++            } else {
++                card
++            };
+             let target = color_after(rest, " against ").ok_or_else(|| MismatchKind::ParserGap("could not parse aggression target colour".into()))?;
+             r.consume_named_military_card(actor, card, Move::Aggression { card, target: target.seat() }, true)?;
+             resolve_aggression_defense(r, next_text)
+@@ -10529,6 +10597,82 @@ mod tests {
+         assert_eq!(p.techs.workers(drama), 1);
+     }
+ 
++    /// REGRESSION (found chasing the `PlunderSplit` StuckPending bucket,
++    /// real game `7523357`): `"plays Plunder"` (an `ActionClass::
++    /// PlayAggression` line) used to resolve the card AGE-BLIND --
++    /// `corpus::build_card_index`'s arbitrary same-name pick, with no
++    /// `best_age_sibling` correction at all (unlike `ActionClass::TakeCard`,
++    /// which has always corrected against `age_civil`). Aggression: Plunder
++    /// prints `TakeFromOpponentBlock.food_and_or_resources` as 3/5/7 for its
++    /// I/II/III copies; picking the wrong one changes the printed amount the
++    /// later `PlunderSplit` choice offers, which can never then match the
++    /// journal's real resolution line -- exactly what deadlocked 7523357 at
++    /// journal line 506 (StuckPending, no matching split in the FIFO).
++    /// Confirmed via `REPLAY_DEBUG`: the printed journal age was already
++    /// `III` at the point "Plunder" was played, but the arbitrary pick
++    /// resolved to the Age I copy anyway. Fixed by mirroring `TakeCard`'s
++    /// own correction, bounded on `age_civil` (NOT `age_military` -- tried
++    /// first, regressed 21 corpus games via a `DiscardSolver`/simulated-
++    /// hand interaction, see the fix site's own doc comment), and SCOPED TO
++    /// PLUNDER ONLY (matched by base name), not every multi-age Aggression
++    /// card -- same doc comment covers why. This test gives the defender
++    /// only resources (no food), so
++    /// `interact::plunder_split_options` offers exactly one option
++    /// (`auto: true` skips opening a real `Pending::Choice` for a single
++    /// option) -- letting this assert directly on `p.resources` post-effect
++    /// without needing to drive a `Move::Choose`.
++    #[test]
++    fn play_aggression_resolves_the_journal_observed_age_not_an_arbitrary_same_name_sibling() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        // Aggression cards are played in the Political Phase (`legal.rs`'s
++        // own `politics_moves`, `CardType::Aggression` arm), not Actions.
++        r.state.phase = Phase::Politics;
++        r.state.round = 2; // round 1 legally offers only `Take`/`EndTurn` (§1.9)
++        r.state.age_civil = crate::cards::Age::III;
++        let plunder_i = CardId::by_name("Aggression: Plunder (I)").expect("in the table");
++        let warriors = CardId::by_name("Warriors").expect("in the table");
++        {
++            let attacker = &mut r.state.players[0];
++            attacker.military_actions = 1;
++            // `legal::legal_moves` only offers `Move::Aggression` when the
++            // attacker is STRICTLY stronger (`combat::attack_strength` >
++            // `combat::defense_strength`, both 0 by default) -- give the
++            // attacker some real strength via built Warriors (already in
++            // every new game's starting tableau, `game::new_game`, so this
++            // sets its worker count rather than re-inserting it).
++            attacker
++                .techs
++                .get_mut(warriors)
++                .expect("Warriors is in every new game's starting tableau")
++                .workers = 3;
++        }
++        {
++            let defender = &mut r.state.players[1];
++            // No `hand_military` at all -- `interact::start_defense` then
++            // finishes the aggression immediately with no `Pending::Defense`
++            // (§budget/hand-empty short-circuit), keeping this test focused
++            // on the age-sibling resolution, not defense-card bookkeeping.
++            defender.hand_military = CardList::new();
++            defender.resources = 20;
++            defender.food = 0;
++        }
++
++        let raw = "Orange plays Plunder against Purple Your rival loses a total of up to 7 resource and/or food (your choice). You gain that many resource and food.; ; Orange uses 1 military action";
++        // `card` is `plunder_i` -- the same arbitrary same-name pick
++        // `corpus::classify` would have produced from the bare "Plunder"
++        // text with no age tag, exactly as it does for every other
++        // multi-age family.
++        let out = apply_one(&mut r, 0, ActionClass::PlayAggression, Some(plunder_i), "plays Plunder against Purple Your rival loses a total of up to 7 resource and/or food (your choice). You gain that many resource and food.; ; Orange uses 1 military action", raw, None);
++
++        assert!(out.is_ok(), "{out:?}");
++        assert!(r.state.pending.is_empty(), "a single-option PlunderSplit auto-resolves, no pending should remain");
++        let defender = &r.state.players[1];
++        assert_eq!(defender.resources, 13, "Age III's printed take (7 of 20), not Age I's wrong one (3 of 20 -> 17)");
++        let attacker = &r.state.players[0];
++        assert_eq!(attacker.resources, 7, "the attacker must gain the same Age III amount the defender lost");
++    }
++
+     /// REGRESSION (found chasing the Build/Upgrade/WonderStep "resources
+     /// short by a small amount" cluster, real game `7521776`): a `"takes
+     /// Patriotism in hand"` line earlier in the same game resolves the card

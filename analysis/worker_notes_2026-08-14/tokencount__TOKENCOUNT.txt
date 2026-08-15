@@ -1,0 +1,301 @@
+TOKENCOUNT worker -- 2026-08-14 -- clone /private/tmp/tokencount (deleted at
+end of pass per cleanup rule if it holds no unlanded work; tokencount.patch
+in analysis/worker_notes_2026-08-14/ is the full diff, `git diff` run inside
+the clone against the post-tokenbank3-apply commit).
+
+TASK: explain and fix why the engine's reconstructed blue-token COUNT drifts
+above the real game's, blocking tokenbank3.patch (per-denomination TokenBank)
+from landing. Three named completion regressions: 7521459, 7522402 (same
+shape), 7522796 (different, smaller, unexplained).
+
+===========================================================================
+[0] SETUP
+===========================================================================
+cp -Rc /private/tmp/base0816 /private/tmp/tokencount, then `git apply --3way
+tokenbank3.patch` -- FAILED as a plain `git apply` (13 "does not match
+index" errors) but `git apply --check --3way` reported "Applied patch ...
+cleanly" for every file. Re-running the same `git apply --3way` command a
+second time (no `--check`) applied it for real, cleanly, with the SAME
+verbatim exit code 0 the first invocation also reported -- the first run's
+stderr was misleading (possibly a transient issue with the sandboxed
+environment's first invocation; the second attempt, byte-identical command,
+worked). Grepped for `<<<<<<<` after: zero real conflict markers (the hits
+that came back were `// ====...` comment banners, a false-positive match).
+Committed immediately as commit 0ca7a11 ("Apply tokenbank3.patch") so `git
+diff 0ca7a11` shows only my own work. `cargo test --profile fasttest --lib`
+on this base: 1448/1448 passing, matching the task's stated starting point.
+
+===========================================================================
+[1] INVESTIGATION -- WHERE DOES THE COUNT ACTUALLY INFLATE?
+===========================================================================
+Reproduced 7521459 with a one-row index.tsv and REPLAY_DEBUG_ALL=1, hand-
+traced the full round-1-through-17 history of player Grey's (idx=3)
+food_tokens/resource_tokens counts and values via the existing "DEBUG
+blue_used" instrumentation. Confirmed the task's own trace: at round 17,
+mine_tokens=8 for resources=31 with mine_denoms=[5,2,1] -- but the MINIMAL
+packing of 31 over [5,2,1] is only 7 tokens (6x5+1x1). One token more than
+minimal. This is not automatically a bug (the whole point of TokenBank is
+that a real placement history need NOT be minimal, since tokens never move
+up) -- but it needed a cause.
+
+Went through the five ranked hypotheses:
+
+1. Change-making eagerness: hand-traced `bank_debit_lowest_first`'s
+   ascending-order spend loop across several rounds (13-17, food side, which
+   shows a recurring "+1 net token" pattern from breaking a denom-3 token to
+   pay 1 food when no denom-1 token exists). Verified algebraically on
+   several small examples that this "spend lowest first even if it forces a
+   break" policy never produces a WORSE (higher) final token count than the
+   alternative of preserving low tokens and breaking a higher one instead --
+   value is conserved and `bank_credit_greedy`'s change-packing is itself
+   minimal, so a forced break's net token delta is bounded by the SAME
+   minimal packing of the leftover value regardless of which token got
+   broken. Not a bug; this is CoL p.11's "spend from the lower ones" working
+   as intended and as Paul specified.
+
+2. Spend policy direction: confirmed `bank_debit_lowest_first` sorts
+   ascending (`order[..len].sort_unstable_by_key(|&i| bank.denoms[i])`) and
+   drains lowest denominations first, genuinely draining the low-token tail,
+   not the reverse.
+
+3. Non-production gain placement (assumption: highest-available-denom-first,
+   i.e. count-minimizing): traced this game's own non-production gains
+   (round 2 `apply_gains_block`, round 4, round 7, and the round-12 Foray
+   event). The round-12 Foray ("Green and Grey each produce 3 resources
+   and/or food; Grey choses first" -> journal "Grey produces 1 food; Grey
+   produces 2 resources") is the interesting one: it resolves through
+   `interact.rs`'s `ChoiceKind::FoodOrResSplit` arm, which correctly
+   dispatches to `economy::gain_food`/`gain_resources` for whatever split
+   the replayer matched from the journal -- already bank-aware, no bug here.
+   Tried an ascending-order experiment for `gain_food`/`gain_resources`
+   (swap `Denoms::as_slice()`'s descending order for an ascending one in
+   `gain()`/`bank_credit_greedy`) to test the "lowest available first"
+   alternative the task names. This is DEGENERATE: a greedy `while amount >=
+   d` loop over ascending denoms, with `1` always present, can never advance
+   past the first (smallest) denom before `amount` hits 0 -- it collapses to
+   "always N tokens of value 1," never touching any higher card. That is not
+   a meaningful reading of "lowest available first" and is not physically
+   sensible for a GAIN either: a rational player minimizes token count when
+   gaining, to conserve their finite blue-token supply, the same as the
+   existing "highest available first" assumption already does -- there is no
+   strategic reason to deliberately fragment a gain. Reverted this
+   experiment; did not land it (see economy.rs is UNCHANGED in the final
+   diff -- confirmed with `git diff --stat`).
+
+4. Tokens not being removed on some path (card destroyed/worker
+   removed/replaced by upgrade/corruption/war loss): checked `do_upgrade`
+   (apply.rs) -- it only decrements the lo card's `workers` field, never
+   removes the card from `p.techs` (the Tableau), so the lo card's
+   denomination stays in `Denoms::of`'s returned set forever, and its
+   tracked bank tokens (if any) stay valid. No stranding found for the
+   Iron->Oil / Agriculture->Selective Breeding upgrades this game exercises.
+   HOWEVER, while grepping every non-test site in rust/src that writes
+   `p.resources`/`p.food` directly (bypassing the `gain_food`/
+   `gain_resources`/`pay_food`/`pay_resources`/`clear_food` chokepoints
+   `crate::state::TokenBank`'s own doc says must be the ONLY writers), found
+   two REAL bypasses, both in replay_common.rs (see [2] below). This is
+   squarely hypothesis 4's territory even though the doc-comment framing
+   ("card destroyed") didn't anticipate the exact shape.
+
+5. blue_total itself: not touched; the task's own hard rules forbid
+   reopening `gain_resources`/`gain_food`'s production-cap question, and
+   nothing in this trace suggested `blue_total` was wrong (it stayed
+   consistent with `p.blue_total`'s existing, already-fitted derivation).
+
+===========================================================================
+[2] THE TWO REAL BUGS FOUND AND FIXED
+===========================================================================
+Both are the SAME bug class: a "journal is ground truth, retroactively
+correct the reconstruction" mechanism that fixes up `p.food`/`p.resources`
+directly, without touching `p.food_tokens`/`p.resource_tokens`. Once the
+scalar is corrected but the bank is not, `economy::occupied_tokens`'s
+reconciliation (see its own doc) either:
+  - silently drops the excess when the corrected total ends up BELOW what
+    the (stale) bank still tracks (it only tops up on an INCREASE), leaving
+    the bank permanently holding tokens the corrected value no longer
+    justifies -- inflating the tracked COUNT relative to the true value; or
+  - freshly re-packs a phantom top-up on top of an already-wrong bank when
+    the correction goes the other way.
+
+  (a) `replay_common.rs`, `resolve_political_decision`'s
+      `triggers_food_or_resources` block (~line 2305): corrects a
+      Foray/Raiders-shaped `StrongestPlayers`/`WeakestPlayers` "gain/lose N
+      food and/or resources" resolution against the journal's own per-player
+      split when `events::food_or_resources`'s deterministic default guess
+      (mirroring the Python reference bot's "resources first" policy)
+      disagrees. Extracted the fix into a new, directly-testable free
+      function `apply_journal_food_or_res_correction` (economy.rs is
+      untouched; this all lives in replay_common.rs): roll the GUESSED
+      gain/loss back out by restoring a full pre-`apply_move` snapshot of
+      `p.food`/`p.resources`/`p.food_tokens`/`p.resource_tokens` (captured
+      right before `self.apply_move(mv)` runs), then apply the JOURNAL's own
+      true `(jf, jr)` split through the real `gain_food`/`gain_resources`/
+      `pay_food`/`pay_resources` chokepoints. Restoring the FULL snapshot
+      (not `pay_food`/`pay_resources`-ing the guessed delta back out) is
+      load-bearing: those spend LOWEST denomination first, which would strip
+      pre-existing OLDER tokens instead of undoing the exact ones the guess
+      just placed.
+
+      CONFIRMED THIS PATH IS DEAD FOR 7521459: added a temporary debug print
+      inside the `triggers_food_or_resources` block and reran the one-game
+      repro -- it fires once (for the round-12 Foray reveal) but with
+      delta_food=0, delta_res=0 for every player, because THIS game's Foray
+      resolves through the newer `QueueItem::FoodOrResSplit` real-choice
+      mechanism (interact.rs, already correctly bank-aware -- see its own
+      doc, "chasing IllegalMove: Pop... this parser instead lets the
+      REPLAYER read the human's ACTUAL split"), which supersedes the older
+      `events::food_or_resources`-guess-then-correct path for any card that
+      reaches it. The `produces_grants`/`spends_grants`-driven correction
+      this fixes is still real, load-bearing code (it's what made games
+      7523052/7523357 work per its own doc history), just not exercised by
+      3 (or fully superseded for this specific card, or the specific split
+      that arises) 7521459/7522402/7522796.
+
+  (b) `replay_common.rs`, `flush_pending_resource_corrections` (~line 3157):
+      applies BGO's own rare "GAME DATA UPDATED <Color> Bronze: N -> M" admin
+      corrections (the doc's own example: game 7521364 line 22-23). Same
+      bug: `p.resources = new.max(0) as u16` directly. Fixed by computing
+      `delta = new - old` (old is guaranteed to equal live `p.resources` by
+      the surrounding filter) and routing it through `gain_resources`/
+      `pay_resources` instead. This IS capped by `blue_available` now
+      (whereas the old bare overwrite was unconditional) -- verified this
+      does not regress the existing test for game 7521364's own scenario
+      (`flush_pending_resource_corrections_applies_the_bronze_clause_that_
+      unblocks_a_wonder_step`, still passes: the fresh test player's default
+      `blue_total` has enough headroom for the +4 in that fixture) and does
+      not regress game 7523085 (the OTHER named game for this mechanism,
+      re-ran a one-row repro: still completes and matches index.tsv exactly).
+      Only 6 games in the whole corpus carry a "GAME DATA UPDATED" line at
+      all (grepped `sources/bgo/journals`); none of the 3 target regressions
+      do.
+
+===========================================================================
+[3] WHY NEITHER FIX MOVES THE NEEDLE
+===========================================================================
+To directly test whether 7521459 has ANY scalar/bank desync anywhere in its
+own replay (not just at the two sites found above), added a temporary
+invariant check inside `economy::blue_used` (gated on `replay_debug_all()`,
+same as the existing instrumentation): compare `p.food`/`p.resources`
+against `bank_total_value(&p.food_tokens)`/`bank_total_value(&p.resource_
+tokens)` on every call, for every player, and print a `TOKENCOUNT_MISMATCH`
+line on any disagreement. Reran the full one-game REPLAY_DEBUG_ALL=1 trace
+for 7521459: ZERO mismatches, for the entire game, every player, every
+round. (This experiment was reverted -- `git diff` against economy.rs is
+empty in the final patch; it was diagnostic only.)
+
+This means 7521459's token-count inflation is NOT caused by a scalar/bank
+desync anywhere in its own replay. Given `credit_production` (worker-count-
+capped, one token per worker at that worker's own card -- mandated, no
+freedom), `bank_debit_lowest_first` (mandated: spend lowest first, verified
+correct in [1].1/[1].2 above), and `corruption`'s own debit (same
+lowest-first mechanism) are ALL fully deterministic under the ruled physical
+model, the only remaining source of divergence from the true game's token
+COUNT is the non-production-gain DENOMINATION CHOICE itself (not just
+ordering, which the degenerate ascending-order experiment in [1].3 already
+ruled out as a non-starter) -- i.e., WHICH specific card among several
+viable options a gained token lands on when the packing is not forced. This
+is a genuinely harder, evidence-thin question (the journal never records
+per-card breakdowns) that I did not resolve with the remaining budget: doing
+it properly would mean building a non-degenerate alternative placement rule
+(e.g. "prefer the denomination the player's tokens already sit on," per the
+task's own suggestion) that keeps `tokens_for`'s affordability check
+consistent with whatever placement it authorizes, and then measuring it
+honestly against the corpus -- more design and testing than remained time
+for, and NOT something to ship as a guess (hard rule: no replacing a fitted
+parameter with a hardcoded, unverified formula).
+
+Measured impact of the two real fixes landed:
+  - Guard sweep (comm -23/comm -13 against the frozen 734-ID guard set):
+    BYTE-IDENTICAL before and after -- same 3 regressions (7521459,
+    7522402, 7522796), same 5 wins (7520999, 7522236, 7522673, 7523203,
+    7523634). 736/1011 completed both times, 709/736 exact both times.
+  - RESOURCE_ORACLE: BYTE-IDENTICAL before and after -- 41256/41581 (99.2%)
+    both times, 114/1011 diverging games both times. (Re-derived fresh both
+    ways: stashed my changes, clean-rebuilt replaystats against the pure
+    tokenbank3-applied base, ran RESOURCE_ORACLE=1, then popped the stash,
+    rebuilt, ran again -- both runs against the identical index.tsv/
+    journals args.)
+
+Both bugs are real, well-evidenced, fixed, and tested -- but too rare in
+this 1011-game corpus sample to move any tracked metric. This is a CLEAN
+NEGATIVE on the actual assignment (unblock tokenbank3.patch): the 3 named
+regressions remain, unchanged, for a reason this pass narrowed but did not
+resolve.
+
+===========================================================================
+[4] TESTS
+===========================================================================
+- `apply_journal_food_or_res_correction_rolls_back_the_wrong_guess_and_
+  resyncs_the_bank` (replay_common.rs, new free function
+  `apply_journal_food_or_res_correction` given its own doc + test): directly
+  exercises the extracted correction helper -- applies a wrong "resources
+  first" guess (gain_resources(3)), then the journal's true split (1 food, 2
+  resources), and asserts BOTH scalars AND the tracked bank end up in sync.
+  CONFIRMED RED: reverted the function body to the old
+  `p.food = pre_food + jf as i32 (etc)` bare-scalar shape -- test fails with
+  `food_tokens must account for the corrected food, not the guess's zero:
+  left: 0, right: 1`.
+
+- `flush_pending_resource_corrections_keeps_the_token_bank_in_sync_with_the_
+  corrected_scalar` (replay_common.rs): exercises the real
+  `flush_pending_resource_corrections` method through a `Replayer` fixture
+  (same construction pattern as the existing Bronze-clause test), reaching
+  resources=2 through a REAL `gain_resources` call first (not a bare
+  `p.resources = 2`, which per `TokenBank`'s own doc is the "never tracked"
+  hand-built-test convention every other test in this file uses for
+  brevity, and would make this specific assertion vacuous -- caught this
+  the hard way: my first draft used the bare-`=2` fixture and the test
+  legitimately failed for the WRONG reason, an untracked starting value, not
+  the bug the fix addresses). CONFIRMED RED: reverted
+  `flush_pending_resource_corrections` to the old bare
+  `p.resources = new.max(0) as u16` -- test fails with
+  `left: 2, right: 6` (tracked bank stuck at the pre-correction value while
+  the scalar jumps to 6).
+
+Both reverts were applied, tests re-run to confirm the failure, then
+reverted back to the fix (`cp` from a saved backup, verified diff-clean
+restoration by rerunning both tests green again).
+
+Full suite: `cargo test --profile fasttest --lib`: 1450/1450 passing (1448
+base + 2 new). `cargo clippy --all-targets -- -D warnings`: clean, zero
+warnings.
+
+===========================================================================
+[5] WHAT I DID NOT ESTABLISH / NEXT STEPS
+===========================================================================
+- The actual cause of 7521459/7522402/7522796's token-count inflation is
+  STILL OPEN. Given [3]'s invariant-check result, it is very likely a
+  non-production-gain denomination CHOICE question (not order, not a
+  bypass), but I did not build or test a sound alternative policy.
+- 7522796's own (smaller, +1, opposite-sign) divergence was not
+  investigated further this pass at all (no budget left after 7521459's
+  deep dive); the original writeup's own note that it "may well" be driven
+  by assumption 3 rather than the mechanism 7521459/7522402 share is still
+  the best lead, unconfirmed.
+- Whether "prefer the denomination the player's existing tokens already sit
+  on" (the task's second named alternative) is implementable without
+  breaking `tokens_for`'s affordability-check consistency, and whether it
+  would actually fix these 3 games, is untested.
+- Did not check `docs/RULES_SPEC.md`/`sources/faq_v15.pdf`/`sources/
+  cge_code_of_laws.pdf` for a citation on non-production-gain placement --
+  per the task's own hint and the prior corrskip2 pass's own citation
+  search (referenced in TOKENBANK3.txt), this does not appear to be a rules
+  question with a textual answer; it is a genuine reconstruction-from-
+  aggregates ambiguity.
+
+===========================================================================
+VERDICT
+===========================================================================
+Two real, RED-confirmed, tested TokenBank-desync bugs fixed (both in
+replay_common.rs's journal-correction paths, the same bug class: a bare
+scalar overwrite bypassing the TokenBank chokepoints). Tests: 1450/1450.
+Clippy: clean. Guard sweep: comm -23 NOT EMPTY, byte-identical to the
+pre-fix baseline (7521459, 7522402, 7522796 still regress; same 5 wins).
+RESOURCE_ORACLE: byte-identical before/after, 99.2%/114 diverging both ways.
+tokenbank3.patch does NOT clear the landing bar with this pass's additions
+on top -- the 3 named regressions remain, for a cause this pass narrowed
+(confirmed NOT a scalar/bank desync in 7521459's own replay, confirmed NOT
+the change-making/spend-order hypotheses, confirmed NOT a card-removal
+stranding for this game's upgrades) but did not resolve (most likely the
+non-production-gain denomination CHOICE, needing a properly-designed and
+corpus-tested alternative policy this pass did not have budget to build).

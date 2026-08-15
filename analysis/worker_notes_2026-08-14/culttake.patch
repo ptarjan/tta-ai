@@ -1,0 +1,233 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index b57eaf6..3ef56ba 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -677,6 +677,23 @@ struct Replayer<'a> {
+     /// case: an ordinary `EndTurn` compares immediately, never touching this
+     /// field at all).
+     pending_culture_check: Option<PendingCultureCheck>,
++    /// A `"GAME DATA UPDATED"` culture clause (`parse_game_data_updated_
++    /// culture`'s own doc) not yet applied because its stated `old` did not
++    /// match this reconstruction's live value the moment the line was read.
++    /// Not a symptom of a wrong `old`: BGO's own admin correction can land
++    /// while a war's spoils are themselves still deferred on OUR side (war
++    /// resolution fires at `game::start_turn`, itself only reached once a
++    /// blocked `EndTurn`'s own discard/production catches up -- the exact
++    /// cascade `docs/REPLAY.md`'s "second-order artifact" section already
++    /// documents for the culture-oracle checkpoint itself). Retried on every
++    /// subsequent line (`flush_pending_game_data_updates`) until the live
++    /// value catches up and matches, exactly the same self-deferring shape
++    /// as `pending_culture_check` above -- confirmed necessary by tracing
++    /// `7523809` line 344: Orange's live culture there is 64 (this turn's
++    /// own War-over-Culture win, +22, not yet cascaded in), not BGO's stated
++    /// 86, and only reaches 86 a few lines later once Purple's own blocked
++    /// `EndTurn` (line 343) finally resolves and hands the turn to Orange.
++    pending_culture_corrections: Vec<(Color, i32, i32)>,
+     /// A structural "false skip" instrument -- see [`GameResult::
+     /// politics_false_skips`]'s own doc for the full mechanism this counts.
+     /// Incremented at most once per `plan.preparations` entry (tracked via
+@@ -899,6 +916,7 @@ impl<'a> Replayer<'a> {
+             culture_oracle_checked: 0,
+             culture_oracle_agreed: 0,
+             pending_culture_check: None,
++            pending_culture_corrections: Vec::new(),
+             politics_false_skips: 0,
+             false_skip_flagged_prep: None,
+             politics_false_skips_unrecovered: 0,
+@@ -2609,6 +2627,38 @@ impl<'a> Replayer<'a> {
+         self.record_culture_check(pending.lineno, pending.actor_seat, pending.journal_now, pending.last_action_class);
+     }
+ 
++    /// Flushes every [`Replayer::pending_culture_corrections`] entry whose
++    /// stated `old` NOW matches this reconstruction's live culture for that
++    /// player -- see that field's own doc for why a `"GAME DATA UPDATED"`
++    /// clause can't always apply the instant its own line is read (a war's
++    /// spoils, deferred on our side until `game::start_turn`'s cascade,
++    /// hadn't landed yet). Called unconditionally at the top of every
++    /// line's own dispatch, same SELF-DEFERRING convention as `flush_
++    /// pending_culture_check` just above: entries that still don't match are
++    /// put straight back, tried again next line, for as long as the game
++    /// runs. A no-op the overwhelming majority of the time -- this field is
++    /// empty for every game but the two sampled corpus journals that carry
++    /// a `"GAME DATA UPDATED ... culture: ..."` line at all.
++    fn flush_pending_culture_corrections(&mut self) {
++        if self.pending_culture_corrections.is_empty() {
++            return;
++        }
++        let still_pending: Vec<(Color, i32, i32)> = self
++            .pending_culture_corrections
++            .drain(..)
++            .filter(|&(color, old, new)| {
++                let p = &mut self.state.players[color.seat() as usize];
++                if p.culture as i32 == old {
++                    p.culture = new.max(0) as u16;
++                    false // applied -- drop from the pending list
++                } else {
++                    true // still doesn't match -- keep trying
++                }
++            })
++            .collect();
++        self.pending_culture_corrections = still_pending;
++    }
++
+     /// Resolve exactly the CURRENTLY open `Pending::Choice(DiscardMilitary)`
+     /// -- `c` must be that pending's own snapshot, read by the caller just
+     /// before calling this (`resolve_intervening` and `resolve_discard`
+@@ -4775,6 +4825,56 @@ fn find_after<'a>(text: &'a str, needle: &str) -> Option<&'a str> {
+     Some(&text[pos + needle.len()..])
+ }
+ 
++/// Parses a `"GAME DATA UPDATED <Color> <stat>: <old> -> <new>[; <Color>
++/// <stat>: <old> -> <new> ...]"` line -- BGO's own admin correction, rare (6
++/// of 1,011 sampled journals) but real: it rewrites a player's stat mid-game
++/// with no player-facing action of its own to replay. `classify` (`corpus.
++/// rs`) files the whole line as `LineOutcome::Bookkeeping` (a deliberate,
++/// documented no-op for "an admin correction BGO occasionally injects"), so
++/// nothing ever applied it -- confirmed by hand-tracing the culture oracle's
++/// dominant `TakeCard`-bucket example (`docs/REPLAY.md`, game `7523809` line
++/// 353): this reconstruction's own Orange culture reaches 86 right where
++/// BGO's `"GAME DATA UPDATED Orange culture: 86 -> 80; Purple culture: 65 ->
++/// 71"` line lands, and every later checkpoint is off by exactly the 6 this
++/// binary never subtracted. Scoped to `culture` ONLY -- the same line shape
++/// also corrects `science`/`Bronze` production track in other sampled
++/// games, out of scope for the culture oracle this fixes and left exactly as
++/// `Bookkeeping` as it was (no oracle currently reads either, so there is no
++/// known-wrong instrument to correct there the way there is for culture).
++///
++/// Returns one `(Color, old, new)` triple per `"<Color> culture: X -> Y"`
++/// clause found, empty when the line is not this shape at all or carries no
++/// culture clause. Deliberately returns `old` too, not just the delta: the
++/// SAME `7523809` line's Purple clause ("65 -> 71") turned out NOT to be
++/// safe to apply blindly -- Purple's own reconstructed culture at that exact
++/// journal position is 74 (mid-deferred-production, `flush_pending_culture_
++/// check`'s own pending discard not yet resolved), not 65 at all, so BGO's
++/// stated `old` and this reconstruction's own live value are answering two
++/// different questions at that moment (confirmed by tracing: applying the
++/// +6 delta unconditionally there landed on Purple's live culture BEFORE her
++/// turn's own deferred production ran, so the later snapshot double-counted
++/// it, turning an exact match at line 343 into a new 87-vs-93 divergence).
++/// Orange's OWN clause on the very same line ("86 -> 80"), by contrast, DOES
++/// match this reconstruction's live value exactly at that position. The
++/// caller applies the delta only when `old` matches its own tracked value
++/// for that player, skipping (not guessing at) the clauses where it does
++/// not -- conservative by construction, and exactly why this returns `old`
++/// instead of pre-computing just a delta.
++fn parse_game_data_updated_culture(text: &str) -> Vec<(Color, i32, i32)> {
++    let Some(after) = text.strip_prefix("GAME DATA UPDATED ") else {
++        return Vec::new();
++    };
++    let mut out = Vec::new();
++    for clause in after.split("; ") {
++        let Some((color, rest)) = actor_and_rest(clause) else { continue };
++        let Some(nums) = rest.strip_prefix("culture: ") else { continue };
++        let Some((old_str, new_str)) = nums.split_once(" -> ") else { continue };
++        let (Ok(old), Ok(new)) = (old_str.trim().parse::<i32>(), new_str.trim().parse::<i32>()) else { continue };
++        out.push((color, old, new));
++    }
++    out
++}
++
+ /// Pre-scans the whole journal once for every [`parse_infiltrate_line`]
+ /// match into a per-attacker FIFO, mirroring [`prescan_plunder_splits`] --
+ /// see `Replayer::infiltrates`'s doc and `resolve_intervening`'s
+@@ -5943,6 +6043,38 @@ pub fn replay_game(
+         // checkpoint is still waiting on a discard decision to resolve --
+         // see `PendingCultureCheck`'s own doc.
+         r.flush_pending_culture_check();
++        // Self-deferring the same way: a no-op unless an earlier `"GAME
++        // DATA UPDATED"` culture clause is still waiting for this
++        // reconstruction's own live value to catch up -- see `Replayer::
++        // pending_culture_corrections`'s own doc.
++        r.flush_pending_culture_corrections();
++        // BGO's own admin correction (`parse_game_data_updated_culture`'s
++        // own doc: rare, real, and previously silently dropped as
++        // `Bookkeeping`) -- apply every culture clause it carries directly
++        // to `state.players[_].culture` before anything else touches this
++        // line. No `Move` models this (there is no player action to
++        // replay), so it cannot go through `classify`'s ordinary
++        // `ActionClass` dispatch below -- checked here, first, same as the
++        // "Last turn"/"End of game" special lines just above. Only applied
++        // when the clause's own stated `old` agrees with this
++        // reconstruction's live value for that player RIGHT NOW; otherwise
++        // queued onto `pending_culture_corrections` and retried on later
++        // lines (see that field's own doc for why: BGO's `old` and our live
++        // value can be answering different questions mid-deferred-cascade,
++        // and applying a mismatched delta there would corrupt a checkpoint
++        // that already agreed rather than fix one that didn't).
++        let culture_corrections = parse_game_data_updated_culture(line.text);
++        if !culture_corrections.is_empty() {
++            for (color, old, new) in culture_corrections {
++                let p = &mut r.state.players[color.seat() as usize];
++                if p.culture as i32 == old {
++                    p.culture = new.max(0) as u16;
++                } else {
++                    r.pending_culture_corrections.push((color, old, new));
++                }
++            }
++            continue;
++        }
+         let outcome = classify(card_index, line.text);
+         let LineOutcome::Action(Classified { class, card }) = outcome else {
+             continue; // bookkeeping / unclassified: no move to apply
+@@ -8499,6 +8631,61 @@ mod tests {
+         );
+     }
+ 
++    /// `parse_game_data_updated_culture`'s own doc, real game `7523809` line
++    /// 344: a single admin-correction line can carry more than one player's
++    /// clause, and can also carry OTHER stats (science/Bronze in other
++    /// sampled games) this function must ignore -- only `culture` clauses
++    /// are this oracle's business.
++    #[test]
++    fn parse_game_data_updated_culture_reads_every_culture_clause_and_ignores_other_stats() {
++        assert_eq!(
++            parse_game_data_updated_culture("GAME DATA UPDATED Orange culture: 86 -> 80; Purple culture: 65 -> 71"),
++            vec![(Color::Orange, 86, 80), (Color::Purple, 65, 71)],
++        );
++        assert_eq!(
++            parse_game_data_updated_culture("GAME DATA UPDATED Green science: 2 -> 5; Green Bronze: 0 -> 2"),
++            Vec::new(),
++            "science/Bronze corrections are a different, out-of-scope oracle -- must not be misread as culture"
++        );
++        assert_eq!(parse_game_data_updated_culture("Orange builds Swordsmen Orange spends 3 resources"), Vec::new());
++    }
++
++    /// The actual bug this fixes (`docs/REPLAY.md`'s "Culture oracle"
++    /// section, game `7523809` line 344): BGO's own admin correction
++    /// ("Orange culture: 86 -> 80") can land on a journal line BEFORE this
++    /// reconstruction's own Orange culture has caught up to 86 at all --
++    /// Orange's War-over-Culture win (+22) is itself deferred on our side
++    /// until `game::start_turn`'s cascade, which has not run yet the
++    /// instant this line is read (live culture is still 64). Applying the
++    /// -6 delta THEN would land on the wrong baseline (64, not 86) and
++    /// silently corrupt state. `flush_pending_culture_corrections` must
++    /// defer, not guess, the same self-deferring shape as `flush_pending_
++    /// culture_check` above.
++    #[test]
++    fn flush_pending_culture_corrections_defers_until_the_live_value_matches_bgos_own_old_baseline() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.players[0].culture = 64; // Orange's live total: the war win has not cascaded in yet
++        r.pending_culture_corrections.push((Color::Orange, 86, 80));
++
++        r.flush_pending_culture_corrections();
++        assert_eq!(r.state.players[0].culture, 64, "old (86) does not match live (64) yet -- must NOT guess and apply anyway");
++        assert_eq!(
++            r.pending_culture_corrections,
++            vec![(Color::Orange, 86, 80)],
++            "the correction must be put back, not dropped, while still unmatched"
++        );
++
++        // A few journal lines later, `game::start_turn`'s cascade has now
++        // run and Orange's live culture has caught up to BGO's own stated
++        // baseline (64 + 22 from the war win = 86) -- the SAME deferred
++        // correction now applies correctly.
++        r.state.players[0].culture = 86;
++        r.flush_pending_culture_corrections();
++        assert_eq!(r.state.players[0].culture, 80, "86 == 86: now safe to apply BGO's own -6 correction");
++        assert!(r.pending_culture_corrections.is_empty(), "consumed, not left pending forever");
++    }
++
+     #[test]
+     fn top_up_civil_deck_is_a_no_op_once_already_at_the_floor() {
+         let mut state = game::new_game(2, 1);

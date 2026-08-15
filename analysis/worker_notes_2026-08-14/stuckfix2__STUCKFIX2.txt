@@ -1,0 +1,208 @@
+STUCKFIX2 -- third worker on the Aggression age-sibling fix, chasing the
+final 2 regressions (7522053, 7522290)
+Session 2026-08-14, clone /private/tmp/stuckfix2, base commit 628c0dd
+(cp -Rc of /private/tmp/stuckfix, 2 commits ahead: 9c210f6 the original
+stuckdecider patch, 2796ab9 stuckfix's own Raid-decline fix).
+============================================================================
+LANDING OUTCOME: (c) REGRESSIONS REMAIN -- DO NOT LAND.
+
+NO code change was kept this session (patch is byte-identical to stuckfix's
+own, `git diff 628c0dd HEAD` still shows exactly the 2 inherited commits,
+9c210f6 + 2796ab9). I made one temporary diagnostic edit, measured its
+effect, and reverted it -- see "WHAT I TRIED AND WHY IT'S NOT IN THE PATCH"
+below. Current state: 34 wins, 2 regressions (7522053, 7522290), reconfirmed
+by a fresh full-corpus sweep at the end of this session -- identical to what
+stuckfix left. /private/tmp/stuckfix2 is LEFT IN PLACE (not deleted): the
+patch does capture the full committed diff, but per the task's own
+instruction a patch with remaining regressions must not be described as
+ready to land, and the built difftest binary is warm for whoever picks this
+up next.
+
+THE ASSIGNED LEAD ("DeclareWar's card resolution has no age-sibling
+correction") -- CHECKED AND RULED OUT
+--------------------------------------------------------------------------
+Verified directly against `rust/src/card_table.rs`: every War card
+("War over Territory", "War over Technology", "War over Culture") has its
+OWN unique `name`/`base_name` -- there is exactly ONE `Card` table entry per
+War card, at a single fixed age (II, II, III respectively). Unlike
+Aggression families (Raid/Enslave/Plunder/...), which share one `base_name`
+across 2-3 age-tiered entries, `corpus::build_card_index`'s bare-name
+lookup for a War card has nothing to disambiguate -- it resolves to the
+correct, unique `CardId` on the first try, every time. `resolve_aggression_
+age`-style age-sibling correction would be a no-op if bolted onto
+`ActionClass::DeclareWar`/`ProposePact`; there is no bug to fix there. This
+was the task's own explicit hypothesis to check first, and it does not
+survive contact with the card table. I did not add anything to
+`ActionClass::DeclareWar`.
+
+ROOT CAUSE, ACTUALLY FOUND (confirmed by hand-tracing both games with
+REPLAY_DEBUG_ALL=1 against a pristine, unpatched 628c0dd clone at
+/private/tmp/base0815, and against `discard_solver.rs`'s own documented
+design)
+--------------------------------------------------------------------------
+Both games share the same shape: a Raid play whose card the fix now
+CORRECTLY resolves to the actually-played age-sibling (matching the
+journal's own "uses N military action" clause, RULES_SPEC.md 5.5's Raid
+I/II/III MA-cost table) -- immediately followed, one to three rounds later,
+by a `DeclareWar` play, landing on a `discard_phase_oracle` checkpoint
+(BGO's own literal "Discard Phase N cards must be discarded" text, ground
+truth, not a derived guess) that this binary's own reconstruction now
+computes as 0 excess when the true game shows 2.
+
+7522290 (Purple, round 13): before the fix, Purple's simulated hand held
+THREE ambiguous "Aggression: Raid" family cards simultaneously -- two
+"Aggression: Raid (I)" and one "Aggression: Raid (II)" -- all three
+independently, genuinely drawn by this binary's own SIMULATED (seeded-RNG)
+deck-draw order, well before the Raid was ever played (confirmed identical,
+byte-for-byte, between the pristine 628c0dd trace and the patched trace up
+to the play itself -- the deck/RNG stream is untouched by this fix, only
+WHICH already-drawn sibling gets treated as "the played card" differs).
+  - OLD code (628c0dd, always-oldest-sibling guess): the Raid play
+    consumes a stray "Aggression: Raid (I)", leaving 1x RaidI + 1x RaidII
+    in hand. At the Age II->III transition (RULES_SPEC.md 12.2, "cards of
+    ages OLDER than the age that just ended become antiquated"), only the
+    1 remaining RaidI (Age I) antiquates; RaidII (Age II) correctly
+    survives. Net: hand ends up 1 card "too high" relative to the fix's own
+    accounting, which happens to be enough slack to trigger a real (if
+    undercounted, 1-not-2) discard choice -- enough to avoid getting stuck.
+  - NEW code (this fix, cost-matched to the journal's own "2 military
+    action" text): the Raid play correctly consumes the actually-played
+    "Aggression: Raid (II)", leaving BOTH "Aggression: Raid (I)" copies
+    untouched. Both are genuinely Age I, so BOTH legitimately antiquate at
+    the same Age II->III transition -- a RULES_SPEC-correct application of
+    12.2, not a bug in `game::antiquate` itself (read and confirmed
+    correct: `cutoff = ended as u8`, keeps `age >= cutoff`, i.e. keeps the
+    just-ended age's own cards and only culls strictly older ones -- exact
+    match for "War over Technology" (Age II) correctly surviving the same
+    transition in both traces). The extra antiquated card is exactly the
+    1-card gap between this binary's computed excess (0) and the journal's
+    stated excess (2) at the very next discard checkpoint.
+Full arithmetic (round-12 hand 6, +3 drawn, -2 antiquated, -1 DeclareWar
+consumption = 6, matching what the trace shows) is in the working notes;
+solving backwards from the journal's OWN stated excess (2) implies the
+TRUE antiquation loss at that transition was ~0, i.e. real Purple most
+likely never simultaneously held two live copies of "Aggression: Raid (I)"
+at that point at all -- an artifact of this binary's necessarily-guessed
+deck shuffle order, not a rule violation.
+
+7522053 (Orange, round 14 Raid II -> round 16 DeclareWar) shows the SAME
+surface shape (a discard-phase-oracle checkpoint the fix now under-counts
+by 2) but does NOT go through antiquation at all -- Orange's whole span
+from the Raid play to the stop is already inside Age III (no age
+transition occurs). The round-15/16 hand arithmetic (checkpoint hand 3,
++3 drawn, -1 DeclareWar consumption = 5, matches the trace exactly) fully
+explains the computed 5 with no unaccounted step -- meaning THIS game's
+2-card shortfall against the journal's true excess must have already been
+present in the hand size at or before the round-15 checkpoint, i.e. earlier
+than the Raid play itself. This confirms the underlying issue is NOT one
+single discrete mechanism (antiquation) but the general class of problem:
+this binary's simulated, seeded-RNG deck-draw order is an approximation
+that mostly agrees with the true game (measured: 25/26, 96.2%, of
+discard-phase-oracle checkpoints match exactly across just these two
+games' journals) but is not guaranteed to, and the Raid fix's correction of
+WHICH sibling gets consumed changes which of several indistinguishable
+(by journal text) simulated cards survives to interact with a LATER,
+independently-correct rule (antiquation here; something upstream and not
+further traced for 7522053) in a way that happens to erase the very
+excess a real discard-phase checkpoint needed to see.
+
+WHAT I TRIED AND WHY IT'S NOT IN THE PATCH
+--------------------------------------------------------------------------
+Empirically tested excluding "Aggression: Raid" from `resolve_aggression_
+age` entirely (the same one-line change stuckfix's own session already
+tried and abandoned, re-tried here to get a fresh, correctly-baselined
+measurement against the CURRENT 2-commit patch rather than an intermediate
+commit): full-corpus sweep, `SCOREDIV_DUMP_COMPLETED=1`, against
+`/tmp/tu_ids.txt` (582 IDs):
+    === REGRESSIONS ===
+    7522864
+    === WINS ===
+    1
+This is NOT the "0 wins, 0 regressions complete no-op" stuckfix's own notes
+describe -- that earlier measurement was taken at a DIFFERENT commit
+(9c210f6, before the Raid-decline interact.rs fix existed) and is not
+reproducible against the current patch; do not trust it as a statement
+about the current code. Excluding Raid from THIS patch is a strongly
+NEGATIVE trade: it drops from 34 wins to 1 win (i.e. the overwhelming
+majority of this fix's value comes specifically from Raid, not from the
+other Aggression families) and swaps the 2 known regressions for a
+DIFFERENT single regression, 7522864, not otherwise investigated. This
+confirms Raid's correction must stay in `resolve_aggression_age` -- I
+reverted the exclusion immediately after this measurement; it is not part
+of the committed patch and never was.
+
+Considered and rejected without implementing: adding an age-aware secondary
+sort key to `interact::discard_options` (currently `(defense_points, name)`,
+an arbitrary alphabetical tiebreak with no rules justification) to bias
+earlier, unrelated discard choices toward shedding old-age filler sooner,
+which might reduce how often stale same-family siblings survive to an
+antiquation event at all. Rejected because `discard_options`'s own doc
+comment states it is NOT presentation-only: `effects::state_stats`'s
+weighted-family bot evaluator is "documented-blind to military card
+identity beyond age, so same-age options tie and every argmax in the
+project falls back to option 0" -- i.e. this exact ordering is load-bearing
+for actual BOT GAMEPLAY, not just replay reconstruction. Changing it risks
+altering self-play/training behavior, which is squarely inside "do not
+touch rust/src/bots/" territory even though the function itself lives in
+interact.rs. Not attempted.
+
+No other candidate fix was found that is both (a) grounded in a spec rule
+rather than a guess about "what a rational player would do", and (b)
+provably narrower than "exclude Raid entirely" (already shown to be a bad
+trade) without also touching bot-affecting shared code.
+
+WHY THIS ISN'T FURTHER ROOT-CAUSABLE WITHIN THIS SESSION'S SCOPE
+--------------------------------------------------------------------------
+Every card sitting in a simulated hand that was NEVER named by the journal
+(never played, never revealed) is, by this binary's own design
+(`discard_solver.rs`'s module doc: "no card sitting in hand at a discard
+decision ever carries a journal-verified identity of its own") a guess --
+a real card drawn from a correctly-sized, correctly-aged deck pool, at a
+RANDOM position this binary's seeded shuffle assigned, which cannot be
+checked against the true game's own (unknown, unrecorded) shuffle except at
+the sparse points the journal happens to name a card explicitly. `game::
+antiquate` (game.rs ~595) and the Raid fix (`resolve_aggression_age`,
+replay_common.rs ~3699) are each independently correct against their own
+inputs; the 2-card gap comes from those correct inputs occasionally
+disagreeing with the true game's actual (unknowable from the journal
+alone) card identities. Fixing this in general would mean improving deck-
+shuffle/hand-composition fidelity itself -- a materially larger, riskier
+undertaking than a 90-tool-call regression chase, with no guarantee of not
+trading these 2 games for others (as the Raid-exclusion experiment above
+already demonstrates happens easily: 7522864 appeared the moment Raid's
+identity resolution changed at all).
+
+BEFORE/AFTER COMPLETED COUNTS (unchanged from stuckfix's own; reconfirmed
+this session with a fresh sweep against /tmp/tu_ids.txt, 582 IDs)
+--------------------------------------------------------------------------
+    === REGRESSIONS (must be EMPTY) ===
+    7522053
+    7522290
+
+    === WINS ===
+    (34 total -- identical list to stuckfix__STUCKFIX.txt's own "WINS"
+    section; not re-pasted here, see that file)
+
+CLIPPY / TESTS
+-----------------
+NOT RUN this session (out of scope: no code change survived to test).
+STILL outstanding from both prior sessions: no `#[cfg(test)]` unit test
+exists for `resolve_aggression_age` or the Raid-decline `Stop` mechanism;
+`cargo test --profile fasttest` and `cargo clippy --all-targets --profile
+difftest -- -D warnings` have never been run against this patch. Both
+remain required before landing, IN ADDITION to resolving (or knowingly
+narrowing past) the 2 regressions above.
+
+PATCH CONTENTS
+------------------
+Unchanged from stuckfix's own: `rust/src/interact.rs` (Raid-decline `Stop`
+option) and `rust/src/replay_common.rs` (`resolve_aggression_age` +
+`resolve_intervening`'s `ChoiceKind::Raid` handling). Diff is
+`analysis/worker_notes_2026-08-14/stuckfix2.patch` (`git diff 628c0dd HEAD`
+from `/private/tmp/stuckfix2`, same 2 commits as stuckfix: 9c210f6, 2796ab9).
+
+CLONE STATUS
+---------------
+/private/tmp/stuckfix2 LEFT IN PLACE (not deleted) -- 2 commits ahead of
+628c0dd, working tree clean, difftest binary built and warm. Do not delete
+until this patch either lands or is explicitly abandoned.

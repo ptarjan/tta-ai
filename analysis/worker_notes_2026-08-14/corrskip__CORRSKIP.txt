@@ -1,0 +1,201 @@
+CORRSKIP worker -- 2026-08-14 -- clone /private/tmp/corrskip (deleted at end of
+this pass per cleanup rule; corrskip.patch in this directory is the full diff).
+
+TASK: find and fix why Group A (166 of RESDRIFT's 315 RESOURCE_ORACLE
+divergences -- delta EXACTLY equals the journal's stated corruption amount,
+always positive, engine never applies the deduction) skips the end-of-turn
+corruption deduction. Repro games: 7522658 (round 7, Orange, journal line
+201), 7522639.
+
+RESULT: condition found, cited, and fixed with a passing regression test --
+but the fix as implemented FAILS the bar (6 completion regressions) and does
+NOT land. Reported here as a measured negative, per the task's own explicit
+allowance for that outcome. See "WHY IT DOES NOT LAND" below before anyone
+reuses this patch.
+
+===========================================================================
+THE CONDITION (confirmed, hand-verified against real journal numbers)
+===========================================================================
+`economy::end_of_turn` step 3b computes `corr = corruption(blue_available(p))`,
+and `blue_available`/`blue_used` (economy.rs ~546-572) recompute the number of
+occupied blue tokens FROM SCRATCH every call, using `Denoms::of(&p.techs, ..)`
+-- the farm/mine denominations read LIVE off the player's CURRENT tableau --
+combined with `tokens_for`, which finds the MINIMAL token count for the
+current stock using ALL currently-available denominations (deliberately: this
+greedy "always find the cheapest packing" behavior is exactly what
+`gain_food`/`gain_resources`/`tokens_for`'s own tests, e.g.
+`gain_food_consolidates_into_a_higher_denomination`, want and test for a GAIN
+action).
+
+The bug: this same greedy recompute is *also* what `blue_used` uses for the
+CORRUPTION check, and corruption runs AFTER a player's own civil actions this
+turn (§6.6 step 3b, after all of Actions phase). If a Farm or Mine card with a
+HIGHER printed value is DEVELOPED mid-turn (`Move::DevelopTechnology`) while
+the tableau already had a DIFFERENT, lower-valued card of the same kind, food
+or resources gained BEFORE this turn (necessarily placed on the OLD,
+lower-value card, since the new one did not exist yet) get counted by the
+live recompute as though they were already sitting on the NEW higher-value
+card -- a "free" consolidation nobody actually performed. RULES_SPEC.md
+§6.4 (CoL p.11) is explicit that a token's value is whatever card it is
+ACTUALLY placed on, and that consolidating ("making change") only ever moves
+DOWNWARD during a payment, "NEVER move tokens to higher-value cards" -- so a
+live recompute that credits an upward move for free, with no payment/gain
+action to justify it, directly contradicts the cited rule.
+
+HAND-VERIFIED on 7522658 (round 7, Orange, journal line 201,
+`REPLAY_DEBUG_ALL=1 REPLAY_DEBUG_TECHS=1`): right before EndTurn, Orange has
+`resources=3 food=2 blue_total=16`, with Agriculture (denom 1, in play since
+before this turn) AND Irrigation (denom 2, just developed THIS turn via
+"Orange discovers Irrigation Orange loses 3 science", 3 lines earlier).
+- Live: food_denoms=[2,1] -> tokens_for(2,[2,1])=1 token (the 2 food read as
+  ALREADY sitting on Irrigation). mine_denoms=[1] (only Bronze, denom 1) ->
+  tokens_for(3,[1])=3. blue_used=1+3=4+1(wonder step)=5 -> available=11 ->
+  corruption(11)=0. This is what the ENGINE actually computed (confirmed via
+  the `pre-corruption` debug line: `corr=0`).
+- Reality: the 2 food were placed on Agriculture (denom 1, the only farm card
+  that existed when they were gained) and Irrigation was developed only 3
+  lines before EndTurn -- nothing paid or gained food since, so the true
+  board still has 2 tokens on Agriculture. True blue_used=2+3+1=6 ->
+  available=10 -> corruption(10)=2 (RULES_SPEC §6.2: band 6..=10 -> 2).
+- Journal line 201: "CORRUPTION! Orange loses 2 resources" -- exactly 2,
+  exactly matching the true (not the live-recomputed) count.
+
+Persistence matches RESDRIFT's step 3 exactly: this is a ONE-TURN
+miscount. Step 3c/3e (food/resource PRODUCTION, later in the SAME
+end_of_turn call) legitimately runs `gain_food`/`gain_resources` with the
+LIVE (now-correct-to-use) denominations -- gaining IS the real consolidation
+point the rules allow -- so by the NEXT turn the representation is
+naturally back in sync, and the resource-total offset this turn's missed
+deduction created just rides along as a flat constant for the rest of the
+game (both sides keep applying subsequent turns' math correctly from here).
+
+===========================================================================
+THE FIX AS IMPLEMENTED
+===========================================================================
+Added `PlayerState::turn_start_denoms: TurnStartDenoms` (state.rs), a plain
+snapshot of `economy::Denoms::of(&p.techs, Farm/Mine)` taken once per player
+turn at the TOP of `game::start_turn` (game.rs), i.e. BEFORE that player's own
+Politics/Actions phases can develop or upgrade a card -- so it always holds
+"denominations as of the end of this player's PREVIOUS turn's own production
+step", which is exactly the committed/true representation. `_len == 0` means
+"never snapshotted" (any hand-built `PlayerState` in a unit test, or round 1
+before the first `start_turn`, which RULES_SPEC's own note already exempts
+from corruption) and falls back to the OLD live recompute -- so nothing that
+never drives the full turn loop changes behavior; only real `replay`/
+self-play games do.
+
+`economy::end_of_turn` step 3b now calls a new `blue_available_committed`/
+`blue_used_committed` (reads `p.turn_start_denoms` instead of live `p.techs`,
+stock levels and wonder steps still read live) instead of `blue_available`.
+`replay_common.rs`'s `record_corruption_check` (the `cardblame` tool's own
+independent reproduction of step 3b, which its own doc comment promises stays
+byte-for-byte identical to what `end_of_turn` is about to compute) was
+updated to match. `gain_food`/`gain_resources`/`corruption_headroom`/
+`worker_capped_production` and every other `blue_available`/`blue_used`
+caller are UNTOUCHED -- this is scoped to the corruption check alone.
+
+Test: `economy::tests::end_of_turn_corruption_ignores_a_farm_card_developed_
+this_same_turn` (economy.rs), full-sentence name, sets up the exact 7522658
+shape (2 food on a frozen denom-1-only snapshot, then Irrigation added
+mid-"turn"), asserts `blue_used` (live) = 5 vs `blue_used_committed` = 6, and
+that `end_of_turn` actually charges the 2 corruption. CONFIRMED RED by
+reverting the `let corr = ...` line back to plain `blue_available(p)` and
+re-running just this test (failed: `left: 4, right: 2`, i.e. corruption
+skipped) -- then restored and reconfirmed GREEN.
+
+Gotcha for whoever picks this up: after a `sed`-and-restore round-trip on a
+source file within the SAME build, always `touch` the file before the next
+`cargo test`/`build` -- if the restored content is byte-identical to an
+EARLIER build but has an OLDER mtime than the intervening (reverted) build,
+cargo's incremental cache silently reuses the stale (reverted) binary and the
+"confirm GREEN again" step lies to you. Cost me one full debugging loop here.
+
+===========================================================================
+WHY IT DOES NOT LAND -- confirmed real regressions, not a maybe
+===========================================================================
+Bar check 1 (regression list) FAILED:
+  guard list: /private/tmp/guard_ids.txt, 731 IDs.
+  built via: `SCOREDIV_DUMP_COMPLETED=1 RESOURCE_ORACLE=1 ./target/difftest/
+    replaystats <index> <journals> | grep '^SCOREDIV_COMPLETED_ID' | awk
+    '{print $2}' | sort > /tmp/corrskip_ids.txt` -> 728 IDs.
+  `comm -23 /private/tmp/guard_ids.txt /tmp/corrskip_ids.txt` -> 6 games,
+  NOT empty:
+    7522077
+    7522552
+    7522685
+    7523072
+    7523437
+    7523491
+  (3 other games newly complete that didn't before -- `comm -13` -- so the
+  net completed count only drops by 3, 731->728, but the bar is "zero
+  regressions", not "net positive", and 6 concrete games broke.)
+
+Traced 3 of the 6 (7522077, 7522552, 7522685): every one now STOPS on an
+`IllegalMove` a couple of actions after an `UpgradeProduction` (Agriculture
+-> Irrigation, or similar) mid-turn, because the engine now believes it owes
+MORE corruption than the journal ever charged (no "CORRUPTION!" clause on
+that end-turn line at all, in at least 7522077's case), leaving it short on
+resources for a build/upgrade the human player made legally. Concretely
+opposite in sign from Group A's problem: this is now OVER-charging, not
+under-charging.
+
+The likely reason: `Move::UpgradeProduction` REPLACES a card in place (same
+tableau slot, workers migrate automatically) rather than adding a distinct
+NEW card the way `Move::DevelopTechnology` did in the confirmed 7522658
+case. The evidence here suggests an in-place upgrade's existing tokens DO
+travel with it in the real game (i.e. the live recompute was already right
+for that case), while `Move::DevelopTechnology` adding a genuinely SEPARATE
+second card of the same type (7522658: Agriculture stays in play, Irrigation
+is a new, additional card) is the one case where old stock is stuck on the
+OLD card. My second "repro", 7522639, also happens to contain an Upgrade
+line in the same turn as a Develop+Build line, so I mis-generalized from it
+without hand-verifying it the way I did 7522658 -- in hindsight its true
+corruption may come from a different mechanism entirely (its mine_denoms
+were ALREADY [2,1] before this turn in the trace, i.e. not a same-turn
+change), and I did not catch that before implementing the general fix. A
+narrower fix scoped to "denominations gained via DevelopTechnology adding a
+genuinely new distinct card, not via UpgradeProduction/BuildBuilding
+replacing one in place" would need `PlayerState` to snapshot which CardIds
+(not just which denomination values) were present at turn start, so it can
+tell "a new card entered the tableau" apart from "an existing card's
+printed value changed" -- real design work, not something to guess at with
+the budget remaining on this pass.
+
+Bar checks 2-4, run anyway for the record (fix was IN PLACE, not reverted,
+for these):
+  2. `cargo test --profile fasttest --lib`: 1434 passed; 0 failed (1433
+     baseline + this pass's 1 new test). PASSES on its own, but check 1 above
+     is the one that blocks landing.
+  3. `cargo clippy --all-targets -- -D warnings`: 0 warnings. PASSES.
+  4. Resource-divergence count: 315 -> 272 (RESOURCE_ORACLE checkpoint
+     agreement 40344/41403 = 97.4%, up from 40123/41518 = 96.6%). A real
+     43-game improvement in the raw metric -- but per the task's own hard
+     rule, "A fix that reduces resource divergence but causes ANY completion
+     regression does NOT land."
+
+===========================================================================
+DELIVERABLE
+===========================================================================
+`corrskip.patch` in this directory is the FULL attempted diff (`git diff` of
+the clone, `rust/` paths), left non-empty deliberately -- per the task's own
+"a measured negative is a perfectly good deliverable" -- so a future worker
+has the hand-verified condition, the citation, and a concrete near-miss fix
+to start from, instead of re-deriving 7522658 from scratch. DO NOT apply this
+patch to master as-is: it is confirmed to regress 7522077, 7522552, 7522685
+(and presumably 7523072/7523437/7523491, not individually traced) from
+completing to a legal replay at all. The next worker's first move should be
+hand-verifying 7522077's line 217 (or one of the other 5) the same way this
+pass hand-verified 7522658, to nail down exactly what distinguishes a
+same-turn Upgrade that DOES carry its tokens forward from a same-turn
+Develop that does not, before generalizing again.
+
+FILES IN THE PATCH: rust/src/state.rs (new `TurnStartDenoms` type + field),
+rust/src/economy.rs (`Denoms::from_raw`/`snapshot`, `turn_start_denoms_
+snapshot`, `blue_used_committed`/`blue_available_committed`, the step-3b
+call site, the new test), rust/src/game.rs (`start_turn` snapshot call),
+rust/src/replay_common.rs (`record_corruption_check` kept in sync), and one
+mechanical `turn_start_denoms: crate::state::TurnStartDenoms::default(),`
+line added to each of the 12 `PlayerState { .. }` struct literals across
+apply.rs/combat.rs/costs.rs/effects.rs/events.rs/interact.rs/legal.rs/
+advisor/state_io.rs/bots/weighted/events.rs (test/tooling fixtures --
+`PlayerState` derives no `Default`, so every literal needs every field).

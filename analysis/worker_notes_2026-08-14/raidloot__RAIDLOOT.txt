@@ -1,0 +1,268 @@
+RAIDLOOT worker notes -- Aggression: Raid loot bug
+====================================================
+
+PRINTED CARD TEXT
+------------------
+sources/bga_throughtheages_material.inc.php:
+  Raid I  (id 87,  Age I):  aggressor = "Produces resources equal to half the
+    building's cost, rounded up" (singular -- only 1 building destroyed).
+  Raid II (id 162, Age II): aggressor = "Your civilization produces resources
+    equal to half their costs, rounded up" (2 buildings: one Age II+, one
+    Age I+).
+  Raid III (id 244, Age III): same shape, Age III+/Age II+ tiers.
+
+data/cards_military_actions.json (sourced from the digital edition, already
+cross-referenced by RULES_SPEC.md note 6):
+  RAID_2: "Destroy 2 urban buildings: one of Age II or older and one of Age
+  I or older. Gain half the resources needed to build THEM (rounded up)."
+  RAID_3: same shape.
+
+BEST EVIDENCE -- the LIVE BGO JOURNAL prints the card's full effect text
+verbatim every time it is played, and it settles this beyond any doubt
+(game 7521462 line 489, also 7522967 line 730, etc.):
+  "Orange plays Raid against Purple Destroy up to 2 of your rival's urban
+  buildings: one of age III or older and one of age II or older. You gain
+  resources equal to half their TOTAL COST, rounded up."
+"Half their TOTAL cost, rounded up" is explicit and unambiguous: sum the
+printed costs of every building this raid destroys, then round up ONCE.
+RULES_SPEC.md item 6's own summary prose ("half the build cost PER
+DESTROYED BUILDING, rounded up (a cost-3 building yields 2 resources)") is
+written against the Raid-I single-building example; it never actually
+resolves the 2-building case, and where it generalizes to "per building" it
+is simply wrong for Raid II/III -- superseded here by the game's own
+printed text.
+
+BOTH CLAIMED DEFECTS, VERIFIED
+--------------------------------
+
+DEFECT 1 (rounding): REAL. Confirmed against multiple real BGO games where
+the SAME card was destroyed twice in one raid (so per-casualty cost was
+identical on both sides, isolating the rounding question):
+  - game 7523072 line 154: "Raid casualties 1 Philosophy; 1 Philosophy;
+    Orange produces 3 resources" (Philosophy costs 3). Total-then-round:
+    ceil(6/2)=3 -- MATCHES. Per-card-then-sum (old code):
+    ceil(3/2)+ceil(3/2)=4 -- WRONG.
+  - Organized Religion x2 (cost 7 each), 3 real games e.g. "...Orange
+    produces 7 resources": total-then-round ceil(14/2)=7 MATCHES; per-card
+    ceil(7/2)*2=8 WRONG.
+  - Theology x2 (cost 5 each), 2 real games, "...produces 5 resources":
+    total-then-round ceil(10/2)=5 MATCHES; per-card ceil(5/2)*2=6 WRONG.
+  Even-total pairs (Alchemy x2 cost 6, Scientific Method x2 cost 8, Drama x2
+  cost 4) don't distinguish the two formulas (both give the same answer when
+  each individual cost is already even), which is presumably why this
+  survived undetected for two-of-a-kind cases with even printed costs.
+
+DEFECT 2 (silent no-op on a duplicate destroy): NOT REPRODUCIBLE as
+literally described. I read `QueueItem::Raid`'s handler (interact.rs, was
+lines 1089-1121, now ~1108-1141): each age-tier bracket's candidate list is
+recomputed FRESH from `state.players[victim].techs.iter()` filtered on
+`slot.workers > 0` at the moment THAT bracket is dequeued -- which is always
+AFTER the previous bracket's choice has fully resolved and mutated state
+(the engine drains `state.queue` strictly in order, blocking on any
+`Pending::Choice` until a `Move::Choose` arrives). A card already destroyed
+to `workers == 0` by an earlier bracket is therefore never re-offered to a
+later bracket, so `techs.get_mut(id)` can never legitimately return
+`workers == 0` for an option a player was validly offered. `TechSlot.workers`
+also does double duty as "how many copies of this card the player owns with
+a worker on it" (never removed from the tableau on destroy, just
+decremented -- confirmed via `Tableau::remove` not being called from either
+`ChoiceKind::Raid` or `ChoiceKind::DestroyOwn`), so the real "two casualties,
+same card name" case (proven common in the corpus above) is naturally
+handled: workers=2 lets both brackets independently succeed. I could not
+construct a legal path that hits the `if !ok { return; }` guard with a
+validly-offered option. Left UNCHANGED except that it now also flushes any
+ALREADY-accumulated loot from an earlier bracket before returning (see
+below) -- a robustness improvement, not a functional behavior change, since
+I could not prove this branch reachable.
+
+THE FIX
+--------
+Files touched (see /private/tmp/raidloot.patch, 13 files / 375 lines):
+  rust/src/state.rs        -- new `PlayerState::raid_loot_pending: u16`
+                               field; `is_last: bool` added to both
+                               `ChoiceKind::Raid` and `QueueItem::Raid`.
+  rust/src/combat.rs       -- `finish_aggression`'s per-age-tier enqueue
+                               loop now marks the LAST bracket.
+  rust/src/interact.rs     -- `ChoiceKind::Raid` accumulates each
+                               destroyed building's PRINTED cost into
+                               `raid_loot_pending` instead of granting
+                               resources immediately; new `flush_raid_loot`
+                               helper converts the accumulated TOTAL to
+                               resources with ONE `div_ceil(2)`, called
+                               exactly once when the last bracket resolves
+                               (destroy, decline via Stop, or an invalid
+                               pick alike, so an earlier bracket's loot is
+                               never stranded). New regression test (see
+                               below).
+  rust/src/events.rs       -- Terrorism's `QueueItem::Raid` call site
+                               updated for the new field (`is_last: true`,
+                               `no_loot: true` so it never reaches the loot
+                               path regardless).
+  rust/src/replay_common.rs -- 3 test-only `ChoiceKind::Raid`/pending
+                               literals updated for the new field.
+  rust/src/advisor/state_io.rs, rust/src/apply.rs,
+  rust/src/bots/weighted/events.rs, rust/src/costs.rs,
+  rust/src/economy.rs, rust/src/effects.rs, rust/src/game.rs,
+  rust/src/legal.rs -- MECHANICAL ONLY: each has its own `blank_player()`
+                               test/production helper that spells out every
+                               `PlayerState` field by name (deliberately no
+                               `Default` impl -- game.rs's own doc comment:
+                               "a state type with a Default invites a
+                               partially-initialised player"). Each got one
+                               new line, `raid_loot_pending: 0,`, right
+                               after its existing `workers_free:` line. No
+                               other change in any of these 8 files.
+
+*** apply.rs, costs.rs, effects.rs, legal.rs ARE in this diff ***
+Per the hard constraint about the missing commit f2dff03 (which also
+touches these same four files): my only change to each is the single
+mechanical `raid_loot_pending: 0,` line inside that file's OWN
+`blank_player()` test helper, to keep it compiling against the new
+`PlayerState` field. Nothing else in these four files was read or touched.
+The coordinator should be able to hand-apply this one line to each
+regardless of how f2dff03 reshapes the rest of the file, but flagging it
+explicitly as instructed.
+
+Design note: I first considered NOT persisting anything in `PlayerState`,
+but `QueueItem::Raid`'s two brackets are enqueued BOTH AT ONCE, upfront, by
+`combat::finish_aggression`, before either bracket's choice is answered --
+so the second bracket's `QueueItem` cannot be given the first bracket's
+actual outcome at construction time. Some form of state that outlives one
+`resolve_choice` call and survives across the intervening player decision
+was unavoidable; a small persistent per-player field, always fully drained
+(`std::mem::take`) the moment the raid's last bracket resolves, was the
+least invasive option that keeps `economy::gain_resources` itself
+untouched (called with a different amount, never a different formula).
+
+RED-CONFIRMATION
+------------------
+New test in rust/src/interact.rs (`interact::tests` module):
+  raid_ii_rounds_the_combined_printed_cost_of_both_casualties_once_not_each_casualty_separately
+Gives a defender 2 copies of Philosophy (printed cost 3, Age A -- eligible
+for both Raid II brackets), runs a full "Aggression: Raid (II)" through
+`start_defense`, destroys both copies across the two brackets, and asserts
+the attacker ends with exactly 3 resources (matching real game 7523072),
+plus an intermediate assertion that resources are still 0 after the FIRST
+bracket alone (loot must not be granted until the raid's last bracket
+settles).
+
+I confirmed RED by temporarily reverting JUST the `if loot { ... }` body in
+`ChoiceKind::Raid` back to the original per-bracket `gain_resources(...,
+printed.div_ceil(2))` call (backed up the fixed files first, restored them
+after). Re-running the test against that reverted code failed exactly as
+expected:
+  thread '...raid_ii_rounds...' panicked at src/interact.rs:2302:9:
+  assertion `left == right` failed: loot is not granted until the LAST bracket settles
+    left: 2
+   right: 0
+i.e. the OLD code granted `ceil(3/2)=2` resources immediately after the
+FIRST bracket alone, instead of waiting for the total. Restored the fix;
+re-ran green (see below).
+
+TEST / CLIPPY RESULTS
+------------------------
+`cargo test --profile fasttest --lib`: 1434 passed, 0 failed (1433 existing
++ the 1 new test). Note: the task brief's stated baseline was "1443
+passing" -- this clone (one commit behind the live tree per the setup
+instructions) starts from 1433 before my change, not 1443; I did not
+investigate the 10-test gap since it predates anything I touched (plausibly
+from the missing commit f2dff03, which is out of scope here).
+`cargo clippy --all-targets -- -D warnings`: clean, no warnings.
+
+CORPUS GUARD SWEEP
+---------------------
+Guard frozen: `cp /private/tmp/guard_ids.txt /tmp/raid_guard.txt` -- 732 IDs.
+Sweep header:
+  # replaystats: 1011 games sampled, 733 completed to state.game_over
+  733/733 completed games actually flipped state.game_over ...; 706/733 of
+  those matched index.tsv exactly.
+(baseline stated in the brief: 732 completed / 705 exact -- this run: 733
+completed / 706 exact, i.e. +1/+1 net.)
+
+  comm -23 /tmp/raid_guard.txt /tmp/raid_ids.txt   # REGRESSIONS
+  7521462
+  7522967
+
+  comm -13 /tmp/raid_guard.txt /tmp/raid_ids.txt   # WINS
+  7522520
+  7522729
+  7523520
+
+REGRESSIONS ARE NOT EMPTY -- investigated both, in full:
+
+  7521462: NOT caused by my fix. Isolated this one game (built a one-row
+  index) and ran it through the UNMODIFIED base0815 binary directly (not
+  through my clone) -- it ALSO fails, identically, at the identical journal
+  line (line 364, round 12, "IllegalMove: Develop"), a full 3 rounds before
+  this game's own Raid even happens (line 489, round 15). I then reran the
+  UNMODIFIED base0815 binary over the FULL 1011-game corpus a second time
+  (same index.tsv, same journals, nothing changed) and it produced 731
+  completed, not 732 -- missing exactly 7521462 relative to the frozen
+  `guard_ids.txt`. So the frozen guard file itself does not reproduce on a
+  plain rerun of the untouched baseline: 7521462 is pre-existing run-to-run
+  flake in the replay harness (unrelated to Raid, unrelated to my change),
+  not a regression I introduced. (I did not chase the flake itself -- out
+  of scope for this bug.)
+
+  7522967: a REAL regression, but a consequence of correctness, not a new
+  bug in my code. This game has TWO Raid uses. The second (line 730, round
+  20): "Green plays Raid against Orange ... Raid casualties 1 Organized
+  Religion; 1 Organized Religion; Green produces 7 resources" -- printed
+  cost 7 each, total 14, ceil(14/2)=7 (my fix matches this exactly). The
+  OLD buggy code would have computed ceil(7/2)+ceil(7/2)=8, one resource
+  too many. Isolating this game: BOTH the unmodified base0815 binary and my
+  fixed binary already report an identical, PRE-EXISTING, already-flagged
+  "SimulatorBug" (their own diagnostic category) at line 579/round 17 --
+  "ledger agrees with journal; forward simulator's own hand_military is
+  wrong" -- i.e. this game was already silently running on a wrong
+  hand_military count before either version reaches the Raid at line 730.
+  baseline's build simply happens to still limp to completion after that
+  (1/1 completed, exact-match not reached), while my fix -- which now
+  grants Green exactly 1 resource LESS than baseline's inflated total at
+  line 730-732 -- pushes Green's tableau state (via the pre-existing
+  divergence) into an "IllegalMove: Build" at line 740 ("Green builds Tanks
+  Green spends 7 resources") that baseline's OVER-crediting happened to
+  paper over. In short: fixing the Raid rounding bug removed an accidental
+  compensating error that was propping up this one already-broken game.
+  I did not attempt to fix the pre-existing hand_military SimulatorBug --
+  it is a separate, already-tracked defect, well outside this task's scope
+  and budget.
+
+  The 3 WINS are clean, direct confirmations of the fix: 7522520 (Multimedia
+  + Religion, produces 7, matches total-then-round), 7522729 and 7523520
+  (both Philosophy x2, produces 3 each, exactly the repro case above).
+
+Given the above, my honest read: net completed/exact both improved (+1/+1),
+the 2 apparent regressions are (a) a proven pre-existing harness flake
+unrelated to Raid and (b) a game already broken by an unrelated,
+already-flagged bug whose accidental error-cancellation my (objectively
+correct, journal-verified) fix disturbs. I am reporting this rather than
+declaring the guard clean, per instructions -- the literal bar
+("regressions EMPTY") is not met and I am not overriding that judgment
+myself.
+
+WHAT I DID NOT ESTABLISH
+---------------------------
+- Whether defect 2 is reachable through some path I didn't think of (e.g. a
+  REPLAY-side mismatch feeding an option not currently valid) -- I found no
+  such path but did not exhaustively enumerate every `resolve_intervening`
+  branch that could construct a `Move::Choose` against a `ChoiceKind::Raid`.
+- The pre-existing hand_military "SimulatorBug" behind game 7522967's
+  regression -- not investigated beyond confirming it predates my change
+  and is identical in baseline.
+- The 10-test gap between this clone's baseline (1433) and the brief's
+  stated 1443 -- plausibly from the missing commit f2dff03, not
+  investigated.
+- The 7521462 harness flake's root cause -- confirmed it is pre-existing
+  and reproduces on an untouched binary, not investigated further.
+
+DIFF
+-----
+/private/tmp/raidloot.patch was generated with `diff -ru
+base0815/rust/src raidloot/rust/src` rather than `git diff` inside
+raidloot: base0815's own working tree already carries substantial
+uncommitted changes relative to its own git HEAD (confirmed identical
+`git status --short` output in both base0815 and raidloot before I touched
+anything), so a plain `git diff` in my clone would have included all of
+that pre-existing, unrelated content. The `diff -ru` against the untouched
+template isolates exactly what I changed: 13 files, 375 lines.

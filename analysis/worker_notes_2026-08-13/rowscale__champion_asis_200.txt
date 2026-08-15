@@ -1,0 +1,117 @@
+games        200
+players      2
+weights      /private/tmp/ipadgame/champion_2p_game.json
+seeds        1..200
+elapsed      11.8s  (17.0 games/s)
+
+## 2p (n=200 games, 400 player-games)
+
+### Openings
+
+First card taken while in Age A (top 10 by frequency, 400 player-games):
+- Colossus: 85 (21.2%)
+- Cultural Heritage (A): 72 (18.0%)
+- Engineering Genius (A): 40 (10.0%)
+- Library of Alexandria: 35 (8.8%)
+- Hammurabi: 28 (7.0%)
+- Stock Pile: 25 (6.2%)
+- Aristotle: 24 (6.0%)
+- Pyramids: 24 (6.0%)
+- Hanging Gardens: 19 (4.8%)
+- Moses: 13 (3.2%)
+
+First technology developed (top 10 by frequency):
+- Masonry: 85 (21.2%)
+- Drama: 83 (20.8%)
+- Cartography: 55 (13.8%)
+- Warfare: 44 (11.0%)
+- Alchemy: 31 (7.8%)
+- Irrigation: 20 (5.0%)
+- Theocracy: 19 (4.8%)
+- Printing Press: 12 (3.0%)
+- Code of Laws: 5 (1.2%)
+- Bread and Circuses: 4 (1.0%)
+
+Round of first Develop: min=3 p25=4 median=5 p75=6 max=20 mean=5.43 n=381
+Round of first wonder-stage build (only among player-games that ever built one): min=3 p25=4 median=5 p75=8 max=20 mean=6.52 n=386
+Player-games with NO wonder step by end of round 4: 258/400 (64.5%)
+
+### Wonders
+
+Wonders completed per player-game: min=0 p25=1 median=1 p75=2 max=4 mean=1.18 n=400
+Wonders started per player-game: min=0 p25=2 median=2 p75=3 max=5 mean=2.16 n=400
+Wonders started-but-abandoned per player-game: min=0 p25=0 median=1 p75=1 max=3 mean=0.98 n=400
+Distribution of wonders completed (count -> player-games): 0->98 1->157 2->120 3->24 4->1 
+
+Wonders completed by name (most to least, top 16):
+- Transcontinental Railroad: 108
+- Colossus: 61
+- Great Wall: 60
+- St. Peter's Basilica: 60
+- Eiffel Tower: 37
+- Kremlin: 31
+- Taj Mahal: 28
+- Ocean Liners: 26
+- Fast Food Chains: 20
+- Hollywood: 14
+- Hanging Gardens: 10
+- First Space Flight: 6
+- Pyramids: 4
+- Internet: 3
+- Library of Alexandria: 3
+- Universitas Carolina: 2
+
+Fate of every distinct wonder that ever occupied a `wonder` slot (864 total):
+- Completed: 473 (54.7%)
+- Destroyed by Infiltrate: 31 (3.6%)
+- Destroyed by antiquation (§12.2, age-end): 226 (26.2%)
+- Destroyed, unexplained (engine cleared `.wonder` from a fourth site the rulebook does not sanction -- a real bug, not a census gap; see WonderFate::DestroyedUnexplained's doc comment): 0 (0.0%)
+- Still in progress at game end: 134 (15.5%)
+
+### Government
+
+Final government (all player-games):
+- Theocracy: 158 (39.5%)
+- Despotism: 145 (36.2%)
+- Fundamentalism: 90 (22.5%)
+- Communism: 4 (1.0%)
+- Constitutional Monarchy: 2 (0.5%)
+- Democracy: 1 (0.2%)
+
+Stayed in Despotism the entire game: 189/400 (47.2%)
+Government changes per player-game: min=0 p25=0 median=1 p75=1 max=2 mean=0.61 n=400
+Round of first government change (only player-games with >=1 change): min=3 p25=4 median=6 p75=8 max=20 mean=7.64 n=211
+
+### Military
+
+Wars declared per player-game: min=0 p25=0 median=0 p75=2 max=6 mean=1.02 n=400
+Aggressions played per player-game: min=0 p25=0 median=2 p75=4 max=10 mean=2.38 n=400
+Strict-weakest military strength at end of Age II: 190/400 player-games with a sample (47.5%; baseline under identical self-play is 1/players, so deviation from that flags asymmetric outcomes even among identical weights, e.g. seating order)
+
+### Economy / culture / science by age
+
+| age boundary | farm workers | mine workers | lab workers | food stock | resource stock | military strength | culture/turn | science/turn |
+|---|---|---|---|---|---|---|---|---|
+| end of Age A | min=2 p25=2 median=2 p75=2 max=2 mean=2.00 n=400 | min=2 p25=2 median=2 p75=2 max=2 mean=2.00 n=400 | min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=400 | min=0 p25=0 median=2 p75=2 max=2 mean=1.00 n=400 | min=0 p25=0 median=2 p75=2 max=2 mean=1.00 n=400 | min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=400 | min=0 p25=0 median=0 p75=0 max=0 mean=0.00 n=400 | min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=400 |
+| end of Age I | min=1 p25=2 median=2 p75=2 max=2 mean=1.89 n=400 | min=2 p25=2 median=3 p75=3 max=5 mean=2.81 n=400 | min=0 p25=1 median=1 p75=1 max=2 mean=1.20 n=400 | min=0 p25=2 median=3 p75=5 max=14 mean=3.72 n=400 | min=0 p25=1 median=3 p75=4 max=10 mean=2.79 n=400 | min=0 p25=2 median=3 p75=5 max=15 mean=3.68 n=400 | min=0 p25=1 median=2 p75=3 max=7 mean=2.27 n=400 | min=0 p25=1 median=1 p75=1 max=2 mean=1.21 n=400 |
+| end of Age II | min=0 p25=1 median=2 p75=2 max=4 mean=1.52 n=400 | min=1 p25=2 median=3 p75=3 max=7 mean=2.99 n=400 | min=0 p25=1 median=1 p75=2 max=3 mean=1.38 n=400 | min=0 p25=1 median=2 p75=4 max=20 mean=2.56 n=400 | min=0 p25=2 median=4 p75=7 max=16 mean=4.67 n=400 | min=0 p25=3 median=5 p75=8 max=20 mean=5.87 n=400 | min=0 p25=2 median=4 p75=5 max=13 mean=4.15 n=400 | min=0 p25=1 median=1 p75=2 max=5 mean=1.45 n=400 |
+| end of Age III | min=0 p25=1 median=1 p75=2 max=3 mean=1.31 n=400 | min=0 p25=2 median=3 p75=3 max=6 mean=2.77 n=400 | min=0 p25=1 median=1 p75=2 max=4 mean=1.42 n=400 | min=0 p25=0 median=1 p75=3 max=17 mean=1.90 n=400 | min=0 p25=2 median=4 p75=7 max=26 mean=4.55 n=400 | min=0 p25=5 median=8 p75=12 max=25 mean=8.26 n=400 | min=0 p25=3 median=5 p75=6 max=14 mean=5.05 n=400 | min=0 p25=0 median=1 p75=2 max=5 mean=1.29 n=400 |
+| end of Age IV (game end) | min=0 p25=1 median=1 p75=2 max=3 mean=1.27 n=400 | min=0 p25=2 median=3 p75=3 max=6 mean=2.69 n=400 | min=0 p25=1 median=1 p75=2 max=4 mean=1.43 n=400 | min=0 p25=0 median=1 p75=3 max=19 mean=1.99 n=400 | min=0 p25=3 median=5 p75=8 max=22 mean=5.28 n=400 | min=0 p25=5 median=9 p75=12 max=25 mean=8.96 n=400 | min=0 p25=3 median=5 p75=6 max=14 mean=5.12 n=400 | min=0 p25=0 median=1 p75=2 max=6 mean=1.23 n=400 |
+  proxy at end of Age A: food stock == 0 in 200/400 (50.0%); resource stock == 0 in 200/400 (50.0%)
+  proxy at end of Age I: food stock == 0 in 17/400 (4.2%); resource stock == 0 in 93/400 (23.2%)
+  proxy at end of Age II: food stock == 0 in 79/400 (19.8%); resource stock == 0 in 43/400 (10.8%)
+  proxy at end of Age III: food stock == 0 in 156/400 (39.0%); resource stock == 0 in 64/400 (16.0%)
+  proxy at end of Age IV (game end): food stock == 0 in 182/400 (45.5%); resource stock == 0 in 45/400 (11.2%)
+
+### Score
+
+Final score (= culture stock, the engine's only scoring quantity): min=0 p25=61 median=95 p75=121 max=219 mean=90.60 n=400
+
+No per-source score decomposition (wonders/culture buildings/leaders/etc.) is available: `game::scores` returns `PlayerState::culture`, a single accumulating stock with no source-tagged ledger anywhere in the engine -- see this file's module doc.
+
+### Take cost (civil-action price band of the row slot every Take drew from)
+
+Takes total: 7031 (400 player-games, 17.58 takes/player-game)
+- 1 civil action (slots 0-4):  1821 (25.9%)
+- 2 civil actions (slots 5-8): 1803 (25.6%)
+- 3 civil actions (slots 9-12): 3407 (48.5%)

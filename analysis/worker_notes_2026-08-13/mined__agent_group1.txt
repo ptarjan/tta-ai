@@ -1,0 +1,67 @@
+## Source: 32d3d871-b76e-406b-b9a2-93aa7b399ee2.jsonl, mtime Aug 12 09:07
+## Measurement: NONE FOUND
+## Data:
+This file's cwd values are exclusively /Users/pt, cryptic-teacher (+worktrees),
+ingglish, discord-claude, nerdiversary/worker, ptarjan.github.io — no
+/Users/pt/tta-ai cwd anywhere. Grep hits for "tta-ai"/"through the ages"
+(8 hits) are only incidental mentions inside an `ls ~` directory listing
+(sibling dir name), not tta-ai work. "win rate"/"gauntlet" hits (7) and
+census-keyword hits (60) all trace to cryptic-teacher puzzle-grading/blind-solve
+content, not the TTA-AI simulator project. "diverg/failing/mismatch" hits (503)
+were spot-checked and are cryptic-teacher/general-chat noise. No score-check
+tables, no diverging-game-ID lists, no replay failure-bucket counts
+(IllegalMove/StuckPending/ParserGap/UnrecoverableHiddenInfo/EventPlanInfeasible:
+0 hits), no n=1011 census, no win-rate/gauntlet tables. This transcript is not
+a TTA-AI session.
+
+---
+
+## Source: 9a77303b-a86d-4f5c-9f79-9da4745be181.jsonl, mtime Jul 31 09:10
+## Measurement: NONE FOUND
+## Data:
+cwd values are /Users/pt, /Users/pt/github/nerdiversary, /Users/pt/patio-timelapse,
+and an internal scratchpad path — no /Users/pt/tta-ai cwd. Zero hits for
+tta-ai / "through the ages" / IllegalMove / StuckPending / ParserGap /
+UnrecoverableHiddenInfo / EventPlanInfeasible. This transcript is unrelated to
+the TTA-AI project; nothing to mine.
+
+---
+
+## Source: 87768226-0b52-472c-87a3-d79ac38f086d.jsonl, mtime Aug 13 22:14
+## Measurement: NONE FOUND (real TTA-AI session, but content is infra/ops, not measurement data)
+## Data:
+This is the one file of the three with a genuine /Users/pt/tta-ai cwd (10 of
+2811 lines). However the session's actual content is almost entirely about
+troubleshooting Paul's Windows desktop (paul-desktop, #wow Discord channel):
+a recurring console-flash bug, the Windows session-0 SSH trap, and gpu_guard.py
+(the PAUSE-flag "gaming guard" that pauses TTA-AI training when Paul games).
+The tta-ai-cwd portions are a git-forensics side-quest recovering orphaned
+commits/bundles (handfix.bundle, handfix2.bundle, handfix3.bundle) that had
+gone MISSING from ~/tta-ai — e.g.:
+
+  f815664b   MISSING from ~/tta-ai
+  5af81cea   MISSING from ~/tta-ai
+  f70866c3   MISSING from ~/tta-ai
+
+and commit-subject / diffstat listings such as:
+
+  5af81ce 2026-07-30 Paul Tarjan: Measure the hand double-count fix: a well-powered null, and an exact control
+  2898c27 2026-07-30 Paul Tarjan: A hand of leaders is one replacement, not N; the type knob becomes weights
+   analysis/handfix/ab_leader_prefix.jsonl    |   8 +
+   analysis/handfix/results.txt               |  95 +++++++++++
+   ...
+
+These confirm that files like analysis/handfix/results.txt and
+docs/WAR_RATE_CENSUS.md exist/existed in the repo, but the transcript never
+cats their contents — only diffstats (line-count deltas) and "present in HEAD"
+checks appear, no actual score/p-value/census numbers. Explicitly searched and
+came up empty: n_score_checked/n_score_exact/exact-match/score_check (0),
+IllegalMove/StuckPending/ParserGap/UnrecoverableHiddenInfo/EventPlanInfeasible
+(0), win rate/gauntlet (0). "census" hits (26) are all either the word
+"devicecensus.exe" (Windows scheduled task) or the doc filename
+WAR_RATE_CENSUS.md mentioned in a dirty-worktree `git status` listing, never
+with accompanying numbers. Conclusion: no recoverable lost measurement data
+in this file — any real TTA-AI results live only on disk (or were never
+printed into this transcript).
+
+---

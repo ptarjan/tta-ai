@@ -1,0 +1,220 @@
+CIFIX.txt -- making the new CI workflow (.github/workflows/ci.yml) actually GREEN
+====================================================================================
+
+Starting point (from LINTGATE.txt, the previous worker's own honest gap #1):
+the wildcard-match gate (rust/Cargo.toml's [lints.clippy]: wildcard_enum_
+match_arm / match_wildcard_for_single_variants / wildcard_in_or_patterns, all
+`deny`) was already fully clean. But ci.yml runs `cargo clippy --all-targets
+-- -D warnings`, which promotes EVERY clippy/rustc warning (not just the
+wildcard family) to a hard error, and ~72 pre-existing, unrelated findings
+were red from day one. This task's job was to clear those without touching
+the wildcard gate or changing program behaviour.
+
+Commit landed: 1e97600 "Make rust CI green: fix the ~72 pre-existing clippy
+findings under -D warnings" (43 files changed, on top of 50d6c85/9691e61).
+
+
+1. METHOD
+---------
+
+- `cargo clippy --all-targets --fix --allow-dirty --allow-staged`, run
+  repeatedly until it stopped changing anything -- fixed one real compile
+  blocker (erasing_op false structure) after a manual one-line fix let it
+  proceed further, plus a handful of trivial suggestions.
+- For everything --fix declined to touch: parsed `cargo clippy --all-targets
+  --message-format=json`, grouped by lint code + deduplicated by (file,
+  byte_start, byte_end) primary span, and applied every MachineApplicable
+  suggested_replacement by direct byte substitution (same technique
+  LINTGATE.txt used for the wildcard enumeration) -- 48 edits across 16
+  files in one pass. This is compiler-verified text, not paraphrase.
+- One of those machine-applicable edits (blocks_in_conditions in
+  replay_common.rs) omitted required braces around an `else` arm and broke
+  compilation; fixed by hand (added the two missing braces, no logic
+  change) -- see section 2.
+- Everything else (needless_range_loop's HasPlaceholders suggestions,
+  type_complexity, too_many_arguments, large_enum_variant, module_inception,
+  a few others with no machine suggestion at all) was read and fixed or
+  `#[allow]`'d by hand, one group at a time, largest first.
+- Verified after every group: `cargo build --all-targets` (fast fail on
+  anything broken), full `cargo clippy --all-targets -- -D warnings` at the
+  end, then `cargo test`.
+
+
+2. FIXED BY LINT GROUP
+-----------------------
+
+Machine-applicable / mechanical (behaviour-preserving by construction --
+compiler-suggested replacement text, or a trivial equivalent rewrite):
+
+  doc_lazy_continuation      (18 sites) -- doc-comment indentation only, zero
+                                 code risk.
+  needless_range_loop        (5 of 13 -- see allows below for the rest) --
+                                 bots/counting.rs x2 (single-array
+                                 iter().enumerate()), human_policy.rs x1
+                                 (test code, iter_mut().zip()).
+  unnecessary_sort_by        (7 sites) -- all were the literal
+                                 `sort_by(|a,b| b.field.cmp(&a.field))`
+                                 shape; rewritten to
+                                 `sort_by_key(|x| Reverse(x.field))`.
+  type_complexity            (6 sites) -- real type aliases added
+                                 (ThreadDuelResults, StatsFeature,
+                                 RootCountsRef/RootCounts, PanelRowLocal,
+                                 RivalAnswers) instead of inlining the
+                                 tuple soup; no behaviour change, just names.
+  manual_clamp                (3 sites) -- `x.max(a).min(b)` / the three-arm
+                                 if/else-if/else clamp idiom -> `x.clamp(a,b)`,
+                                 after checking each site's min<=max order
+                                 and that NaN handling is equivalent (it is:
+                                 f64::clamp's self-NaN behaviour matches the
+                                 manual chains it replaced).
+  manual_is_multiple_of, manual_repeat_n, question_mark, derivable_impls,
+  unnecessary_map_or, needless_option_as_deref, collapsible_str_replace,
+  redundant_closure, excessive_precision, neg_multiply, map_identity,
+  field_reassign_with_default, redundant_guards -- all applied via the
+  compiler-suggested text (byte-exact) or, where trivial, by hand
+  (map_identity's `.map(|(k,v)|(k,v))` -> drop the no-op `.map`).
+
+Real restructuring (not risky, but not a single suggested-text swap either):
+
+  module_inception -- `src/advisor/advisor.rs` (module `advisor::advisor`)
+    renamed to `src/advisor/session.rs` (`advisor::session`). Updated every
+    `use`/qualified-path reference across 8 files (sed on the literal
+    `advisor::advisor` substring, then fixed one un-aliased `use ...::
+    {self, ...}` in bin/advisor.rs that needed `{self as advisor, ...}` to
+    keep the local name after the rename). Pure rename, compiler-checked at
+    every use site -- no behaviour change.
+  if_same_then_else x2 (bin/advisor.rs, costs.rs) -- both arms did the exact
+    same thing under different conditions; merged the conditions with `||`.
+    Same boolean logic, same short-circuit order, same action.
+  inherent_to_string (fixtures::Json) -- replaced the inherent `to_string`
+    method with a real `impl Display for Json` that calls the same private
+    `write` helper. Every existing `.to_string()` call site is unaffected
+    (blanket ToString-via-Display covers it) -- confirmed by build. This
+    incidentally exposed one MORE warning (to_string_in_format_args in
+    harness/record.rs's `writeln!(f, "{}", rec.to_string())`, now redundant
+    since Json has Display) -- fixed by changing it to `writeln!(f, "{rec}")`.
+  assertions_on_constants (bots/neural/dump.rs) -- a compile-time-constant
+    `assert!` moved into a `const { assert!(...) }` block per clippy's own
+    suggestion. Behaviour-neutral for the passing case (the assert is true
+    today either way); strictly earlier/stricter failure mode if the
+    invariant ever breaks (compile error instead of a runtime test panic),
+    which is a genuine improvement, not a risk.
+  unused_mut (harness/mirror.rs round_check) / dead_code
+    (bin/humanwinners.rs PlayerAgg::color) -- see allow list below for
+    color; the `mut` was just dropped (unused after an earlier
+    needless_option_as_deref auto-fix removed the only mutation).
+
+
+3. EVERY #[allow] ADDED, AND WHY
+----------------------------------
+
+Each is scoped to a single item (function, loop, or enum) with an inline
+comment explaining the specific conflict -- never a file- or crate-level
+blanket allow.
+
+  clippy::large_enum_variant x2
+    - bots/greedy.rs `Search` enum: boxing the large variant would make
+      `Search` (and therefore `Seat`, which embeds it) no longer `Copy` --
+      and `Seat`'s own doc comment right above documents that `Copy`-ness as
+      load-bearing ("should not cost a `.clone()` at every call site").
+      Trading that away is a real behaviour/API change.
+    - bots/neural/spec.rs `ClassicalPlayer` enum: boxing `Quiescent`'s or
+      `Plan`'s fields would require touching every match arm across the
+      crate that destructures those variants directly -- already fully
+      enumerated per the wildcard-match ban, so this ripples further than a
+      lint-only fix should.
+
+  clippy::too_many_arguments x13 (bots/neural/policy_train.rs,
+    bots/neural/train.rs x2, bots/plan.rs x6, bots/quiescent.rs,
+    harness/play.rs, harness/record.rs, replay_common.rs)
+    Grouping into a config struct is the real fix clippy wants, but it's a
+    cross-cutting refactor -- every call site of each function would need
+    updating too. Out of scope for a lint-gate pass that must not change
+    behaviour; each argument list is otherwise stable and unambiguous at
+    every call site.
+
+  clippy::needless_range_loop x8 (bots/neural/train.rs x6,
+    bots/neural/policy_train.rs x2, bin/agreefit.rs x2 -- 8 distinct
+    #[allow] sites, agreefit counted separately below)
+    Actually: bots/neural/train.rs (6) + policy_train.rs (2) + agreefit.rs
+    (2) = 10 sites total allowed (the other 3 of the original 13 were fixed
+    for real -- see section 2). These are dense training-math loops
+    (forward/backward pass, layer-norm stats, dropout masks, softmax
+    gradient descent) indexing several parallel arrays or self-fields
+    together (some behind `&mut self.field[i]` on two different fields at
+    once). A hand-written zip rewrite here is real engineering with a real
+    failure mode: a misaligned index would silently produce wrong gradients
+    with no compiler error and no likely test failure (the test suite
+    checks pass/fail behaviour, not exact gradient values at this
+    granularity). Not worth that risk for a style lint on numerically
+    sensitive code with no reference to check against.
+
+  clippy::while_let_loop x1 (interact.rs settle_war_spoils)
+    The suggested `while let Some(...) = state.pending.top() { ... }`
+    rewrite keeps the immutable borrow from `top()` alive across the loop
+    body, but the body calls `apply_pending(state, ...)` which needs `state`
+    mutably -- this does not actually compile as clippy suggests. The
+    existing `loop { match ... { Some(...) => n, _ => break }; ... }` shape
+    exists specifically to extract just the `usize` and drop the borrow
+    before the mutable call.
+
+  clippy::neg_cmp_op_on_partial_ord x1 (stats.rs Estimate::p_against)
+    `if !(self.se > 0.0) { return 1.0; }` is a deliberate NaN guard: for
+    `se.is_nan()`, `!(se > 0.0)` is true (correctly triggers the early
+    return), but clippy's suggested `se <= 0.0` would be FALSE for NaN
+    (comparisons against NaN are always false), silently changing behaviour
+    by falling through to divide by a NaN `se`. Kept the negated form,
+    allowed the lint, documented why.
+
+  dead_code x1 (bin/humanwinners.rs PlayerAgg::color)
+    Genuinely unread today (every reader gets the colour from the
+    `HashMap<Color, PlayerAgg>` key instead) but removing it means dropping
+    the `new(color: Color)` parameter too -- churn with no behavioural
+    upside for a lint-only pass. Allowed with a comment.
+
+
+4. FINAL VERIFICATION
+------------------------
+
+  cd rust && cargo clippy --all-targets -- -D warnings
+  -> exit 0, zero warnings, zero errors (checked explicitly: "CLIPPY EXIT
+     CODE: 0")
+
+  cd rust && cargo test
+  -> 1546 passed; 0 failed; 1 ignored (the same pre-existing
+     #[bench]-shaped ignored test LINTGATE.txt recorded) -- IDENTICAL count
+     to the baseline recorded before this change.
+
+  grep -rn "<<<<<<<" rust/src/ rust/Cargo.toml .github/workflows/ci.yml
+  -> no matches.
+
+  rust/Cargo.toml's [lints.clippy] section: unchanged, all three wildcard
+  lints still `deny`.
+
+
+5. CI WORKFLOW ITSELF
+------------------------
+
+Checked, not just assumed: .github/workflows/ci.yml already had
+`working-directory: rust` under `defaults.run` (LINTGATE.txt's own author
+got this right the first time), so both `cargo clippy` and `cargo test`
+steps run from the correct directory. No changes needed to the workflow
+file itself.
+
+
+6. HONEST STATUS
+-------------------
+
+CI is green: `cargo clippy --all-targets -- -D warnings` exits 0 and
+`cargo test` passes all 1546 tests with the same count as before this
+change. Nothing known to still be red. The workflow file was already
+correctly configured (rust/ working directory) and needed no changes.
+
+Everything landed in one commit (1e97600) rather than incrementally per
+lint group -- the individual fixes were interleaved (fixing one lint's
+suggestion sometimes shifted line numbers or exposed a new warning
+elsewhere, e.g. the Display-impl fix exposing to_string_in_format_args),
+so splitting cleanly after the fact wasn't worth the risk of a broken
+intermediate commit. If bisectability across lint groups matters later,
+the "FIXED BY LINT GROUP" and "#[allow] ADDED" sections above give the
+file-level breakdown needed to re-split it.

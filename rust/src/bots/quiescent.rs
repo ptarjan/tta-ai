@@ -210,6 +210,12 @@ where
 /// [`crate::apply::apply`] panic on an invariant violation instead, matching
 /// this codebase's fail-loud convention elsewhere (e.g. `counting.rs::
 /// homer()`) rather than silently masking a legality bug in the caller.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 fn pick_one<E>(
     state: &GameState,
     moves: &[Move],

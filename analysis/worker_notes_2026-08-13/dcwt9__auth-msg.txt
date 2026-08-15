@@ -1,0 +1,44 @@
+Stop the harness reimplementing four production rules
+
+A mutation audit found four rules that ran in no test at all, three of
+them because tests/harness.py kept its own copy of the thing under test
+and every assertion was made against the copy.
+
+reauth.submit_code had zero coverage, and `return rc == 0` could be
+mutated to `return True` with the suite green: a login that FAILED
+reported as one that worked, so the bad-code notice is never posted, the
+recycle state is cleared, and every agent is rebuilt against the same
+dead credential while the channel is told it is signed in. The PTY makes
+it look untestable, but that half touches only self.proc, self._master
+and os.write, so a stub process over a real pty pair pins clean exit,
+non-zero exit and timeout — plus the caller's two branches, neither of
+which had ever run.
+
+Redacting the pasted code from the log tail came out of writing those:
+a terminal echoes what is typed into it, so the "for the log trail" tail
+carried the single-use credential into bot.log at INFO.
+
+FakeAuth's copies of request_recycle and note_ok are deleted, not
+wrapped — the real ones only touch pending/retry/recycles, all of which
+the double already had. That makes _recycle observable, which is where
+the rule the docstring cares about lives: a recycle that heals the
+credentials but drops what the user asked is a fix nobody can see. Two
+tests assert on bridge.auth.pending now instead of a `requested` list
+that only the double kept.
+
+FakeLimits.limit_reset_human returned "", so every assertion about a
+usage-limit message was made with the reset clause missing — the one
+thing the method exists to add. Borrowed, and the convention its
+docstring argues about at length (h.clock's 24-hour wall time, behind a
+~) is now pinned once, including the copy the model reads in
+notices.budget_note.
+
+FakeClient always supplied a `percentage` consistent with
+totalTokens/maxTokens, so no test could tell which field compaction read
+and the fallback deriving one from the cap was unobservable — a CLI that
+stops sending `percentage` would read as 0% everywhere, nothing would be
+due, and conversations would grow until a turn hit the window and died.
+
+14 mutations across the four sites, all now caught. 1030 -> 1044 tests.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

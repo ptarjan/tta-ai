@@ -1,0 +1,161 @@
+HANDMIL worker notes -- Through The Ages Rust engine, military hand-size SimulatorBug
+Target: game 7522967, flagged as "SimulatorBug" (forward simulator's own hand_military
+disagrees with both the journal and the independent text-only ledger) at journal line 579
+(round 17 age III, Green): journal excess 0, simulator excess 1 (hand_military_len 4, limit 3).
+Game then dies later at line 740 on IllegalMove: Build.
+
+===========================================================================
+PART 1 -- A REAL BUG FOUND AND FIXED (does not resolve 7522967 itself)
+===========================================================================
+
+Root cause: rust/src/replay_common.rs, `Replayer::resolve_political_decision`.
+
+This function grounds a player's about-to-be-prepared event/territory card into
+their simulated hand_military (evicting a filler "victim" card, or recording a
+signed `military_hand_deficit` debt when no disposable filler exists), pushes
+the card, then calls `apply::apply` DIRECTLY (not through `Self::try_apply`)
+because `events::reveal_current_event` can resolve the newly revealed card's
+own immediate effect *synchronously*, inside that same apply call -- for an
+`AllPlayers`/`StrongestPlayer` "drawMilitaryCards" block (Development of
+Politics, Politics of Strength, ...) this can grow the DECIDER's own hand a
+second time in the same call.
+
+To let that immediate draw repay any `military_hand_deficit` debt, the
+function snapshots every seat's hand_military length, calls `apply_move`, and
+repays `after - before` growth per seat. The bug: the snapshot
+(`hand_military_len_before`) was taken AFTER the grounding push of the
+prepared card, not before it. For every OTHER seat this is harmless (their
+hand isn't touched by the decider's own grounding push), but for the DECIDER
+itself, the snapshot baseline already includes the +1 phantom push -- which
+`apply_move`'s own `h_prepare_event` cancels right back out a few lines later.
+Net effect: the decider's own measured "growth" for this call is undercounted
+by exactly 1 whenever their own revealed card's immediate effect ALSO draws
+for them. `repay_military_hand_deficit` then credits one fewer unit of debt
+than the decider actually just received, deferring (not permanently losing --
+see below) the correction to whatever pays down the remainder.
+
+Fix: moved the `hand_military_len_before` snapshot to the top of the function,
+before ANY mutation (before the victim-eviction/deficit-increment/push
+sequence), so it captures every seat's TRUE pre-preparation length, decider
+included.
+
+File:line changed: rust/src/replay_common.rs, `Replayer::resolve_political_decision`
+(the `hand_military_len_before` snapshot moved from just before `self.apply_move(mv)`
+to just after the `on_top` pile-consistency check, before the grounding/push block).
+
+Test: `a_preexisting_deficit_is_fully_repaid_by_a_preparations_own_immediate_all_players_draw`
+(rust/src/replay_common.rs, #[cfg(test)] mod tests). Gives the decider a
+pre-existing debt of 2 (on top of the 1 fresh unit this call's own empty-hand
+grounding adds -- total owed 3) plus a "Development of Politics"-shaped
+preparation that draws 3 for everyone including the decider (net growth for
+the decider is +3 raw draws - 1 net spent grounding the preparation = +2...
+correction: net growth actually works out to 3 with the fix applied, since the
+grounding's own -1(evict)+1(push) washes to 0 when a filler IS available, but
+with an EMPTY hand (no filler) it's 0(no evict)+1(push)-1(apply's removal)+3(draw)=+3
+from the call's true start; the buggy code measures growth from a baseline
+that already includes the +1 push, giving 3-1=2 instead of 3-0=3). Asserts the
+debt clears to 0 and the hand ends up empty (all 3 drawn cards spent repaying
+debt), not the buggy 1-remaining-debt / 1-card-left outcome.
+
+RED/GREEN confirmation: manually reverted the snapshot back to its old
+(post-push) position, reran `cargo test --profile fasttest --lib
+a_preexisting_deficit_is_fully_repaid_by_a_preparations_own_immediate_all_players_draw`,
+confirmed it FAILS (left: 1, right: 0 -- one unit of debt stranded, exactly as
+predicted). Restored the fix, reran, confirmed it PASSES.
+
+Full test suite: `cargo test --profile fasttest --lib` -> 1445 passed, 0
+failed (base was 1444 + this 1 new test).
+Clippy: `cargo clippy --all-targets -- -D warnings` -> clean, no warnings.
+
+Full corpus sweep (SCOREDIV_DUMP_COMPLETED=1 against the whole index.tsv,
+734-ID frozen guard list):
+  regressions (comm -23 guard vs after): EMPTY
+  wins        (comm -13 guard vs after): EMPTY
+734/734 completed both before and after -- the fix is real (proven by its own
+unit test) but did not flip any game's completion status in this corpus,
+7522967 included. It closes a genuine, narrow correctness gap (a decider who
+both (a) already owes deficit debt from an earlier no-filler grounding wash
+AND (b) reveals a card whose own immediate effect draws for themselves) that
+apparently isn't the dominant driver of any currently-failing game in this
+sample.
+
+===========================================================================
+PART 2 -- 7522967 ITSELF: NOT RESOLVED. Honest negative report.
+===========================================================================
+
+I could not find the root cause of 7522967's own SimulatorBug despite an
+extremely thorough investigation. Ruled out, with evidence:
+
+1. The growth-snapshot bug above (Part 1) -- confirmed via full corpus sweep,
+   7522967 output is byte-identical before/after the fix (still "hand_military_len 4
+   limit 3" at line 579). Green never has an outstanding `military_hand_deficit`
+   at the one point in this game (round 4's "Development of Politics" reveal,
+   lineno 98) where the buggy undercount actually fires for Green -- confirmed
+   by re-running with debug instrumentation (temporarily added, since removed)
+   on every `ground_for_consumption` / `ground_auction_winner_hand` /
+   `resolve_political_decision` grounding call for actor 2 across the whole
+   game: `deficit_now=0` after every single one, start to finish.
+
+2. Manually reconstructed Green's (seat 2) hand_military SIZE round-by-round
+   from journal line 1 to line 579, cross-validating every single checkpoint
+   against BGO's own literal "Discard Phase N cards must be discarded" /
+   "No Discard Phase" / "<Color> discards N cards" text (never against our own
+   reconstruction) at rounds 4, 6, 7, 9, 10, 11, 12 -- EXACT discard-count
+   matches every time (1, 1, 1, 1, 2, 2 cards respectively), not just
+   masked "both sides say 0" agreement. This proves no phantom card existed in
+   Green's hand as of round 12's checkpoint (hand=3, confirmed exact).
+2a. Also independently confirmed, via this same round11 exact match (needs
+   exactly 2 discards, hand 5->3), that RULES_SPEC's own §5.9 citation
+   ("Partner refuses -> back to your hand") is correctly modelled by the
+   engine's `interact.rs` `ChoiceKind::PactOffer::Refuse` handler (`state.
+   players[owner].hand_military.push(card)`) -- a refused pact offer's card
+   really does return to the offering player's hand in this game (Green's
+   "Promise of Military Protection", declined by Orange at line 342): without
+   crediting that card back, round 11 would only have needed 1 discard, not
+   the 2 BGO's own journal explicitly shows.
+3. Propagating forward from the round-12 baseline using ONLY confirmed exact
+   draw counts (matching "<Color> draws N military cards" journal text
+   exactly at every round through 16) and confirmed real consuming plays
+   (a genuine PlayTactic at round 15, a genuine PrepareEvent -- "Impact of
+   Agriculture" -- at round 17) gives a computed TRUE hand size of 4 at the
+   round-17 checkpoint (journal line 579), the SAME value the simulator
+   computes and flags as buggy. This computation CONTRADICTS BGO's own
+   "No Discard Phase" text at line 580, which asserts true excess is 0 (hand
+   <= 3) at that exact checkpoint.
+4. Checked for a missing military_hand_limit source (only "Library of
+   Alexandria" grants one in the whole card table; Green has held it in play,
+   unchanged, since round 2 -- ruled out as a round-17-specific cause).
+   Checked for a missed government change for Green (none anywhere in the
+   journal before round 18's Democracy, well after the flagged checkpoint --
+   ruled out). Checked Grey's War over Technology on Green (rounds 12-13) for
+   an unaccounted defense-card spend by Green -- none logged in the journal
+   (no "Green defends"/"tries to defend" line) and none in the simulator's own
+   trace (no DefenseConsume/ground event fires for actor 2 in that window) --
+   ruled out.
+
+I am reporting this as an unresolved, genuine contradiction between (a) a
+pure hand-count reconstruction built ONLY from BGO's own journal text (draws,
+discards, and unambiguous named consuming plays), which computes true excess
+1 at the flagged checkpoint, and (b) BGO's own literal "No Discard Phase"
+announcement at that same checkpoint, which asserts true excess 0. I was
+unable to close this gap with the remaining budget. Either my count-based
+reconstruction is missing one more event class I haven't identified (my
+strongest remaining suspicion, given the extreme rigor of the arithmetic
+above, is some interaction with the round-17 "Impact of Agriculture"
+PrepareEvent / "Developed Territory" territory-reveal / auction sequence that
+I have not yet isolated -- I did NOT get to add per-line instrumentation
+tracing EVERY hand_military.push/remove_first call site across apply.rs /
+economy.rs / combat.rs / events.rs / interact.rs for this specific game, only
+for replay_common.rs's grounding routines), or there is a genuinely deeper
+bug in how the discard-phase oracle's own journal-text extraction handles
+this specific game's line ordering (BGO's "No Discard Phase" / "Discard Phase
+N" announcement line appears BEFORE "End turn" on some rounds and AFTER it on
+others in this game's own journal -- noted but not conclusively tied to the
+discrepancy; RULES_SPEC's own §6.6/§6.7 citations are unambiguous that the
+check happens pre-draw, and `prescan_discard_phase_oracle`'s own cross-
+validation against the independent "<Color> discards N cards" resolution line
+is exactly the kind of check that would catch a misread announcement, and
+that same methodology is what proved rounds 4-12 correct here).
+
+DID NOT weaken any check, coerce the replayer, or special-case game 7522967 to
+manufacture a completion. The IllegalMove: Build failure at line 740 remains.

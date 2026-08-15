@@ -1,0 +1,134 @@
+WARGAP -- Game 7522009, War over Culture, defender strength gap (26 vs 28)
+Worker clone: /private/tmp/wargap, branched from d68eeb3, landed commit dcaeb0a on branch base0814.
+
+TASK
+Engine computed the DEFENDER's (Orange's) military strength at War over
+Culture resolution as 26; the journal's own resolution line implies 28.
+Named lead: Orange played the "Fortifications" tactic between the war's
+DECLARATION and its RESOLUTION -- is the engine evaluating at the wrong
+moment (declaration vs resolution), or not counting the tactic bonus at
+all?
+
+RAW JOURNAL, /private/tmp/bgo-journals/journals/7522009.tsv (line numbers):
+  280  Purple (III, round 15) declares War over Culture on Orange.
+  291-305  Orange's full round-16 turn: colonizes, discovers Air Forces,
+           builds Air Forces, THEN "Orange sets up new tactics II /
+           Fortifications" (line 302), more civil actions after.
+  306  "Purple wins War over Culture Attacker's strength: 37; Defender's
+       strength: 28" -- logged at the exact same timestamp as line 307
+       "End turn Orange", i.e. right at the Orange-turn/Purple-turn
+       boundary.
+
+RULE DETERMINATION (verbatim from /Users/pt/tta-ai/docs/RULES_SPEC.md):
+  5.7 "Resolve a war -- at the start of the ATTACKER's next turn, after
+       replenishing the card row, before Make Tactics Available /
+       Politics [CoL p.3]:
+       1. Compare current strengths (include when-attacking bonuses of
+          the declarer). No bonus cards, no discards, no sacrifices --
+          only the table state counts [RB p.22, CoL p.3]."
+  "4. If a pact granting strength is accepted after declaration but
+      before resolution, it counts [FAQ p.11-12]."
+This is a general timing rule, not specific to this game: strength is
+evaluated at RESOLUTION (start of the attacker's next turn), and anything
+that changes the table state in the interim -- including a tactic the
+DEFENDER plays on their own intervening turn -- counts. 2p turn order
+(Purple round15 -> Orange round16 -> Purple's next turn) puts a full
+Orange turn between declaration and resolution, exactly when Orange set
+up Fortifications.
+
+ENGINE TIMING WAS ALREADY CORRECT.
+rust/src/combat.rs::resolve_war_outcome reads
+`effects::state_stats(state, ...).strength` live, at the moment it's
+called (start-of-attacker's-next-turn per apply.rs's own comment at line
+1175). It does NOT snapshot at declaration. Verified by instrumenting it
+with a temporary eprintln (removed before committing) and running just
+game 7522009 through replaystats:
+  DEBUGWAR round=16 attacker_idx=1 a=37 target_idx=0 d=26
+attacker (Purple) = 37 exactly matches the journal's "Attacker's
+strength: 37" -- only the defender side was wrong. That ruled out a
+timing bug (a timing bug would also perturb which state fields is being
+read, but here the ONLY discrepancy is a fixed 2-point gap on one side).
+
+ROOT CAUSE: card_table.rs's baked Fortifications entry (Age II tactic,
+composition = 2 artillery) had `effects.strength: 4` / `obsolete_strength:
+2`. Cross-checked against sources/bga_throughtheages_material.inc.php
+(the actual BGA game-data dump that produced this journal): Fortifications'
+own `artybon`/`artybonplus` = 5/3, NOT 4/2. Every *other* Age II tactic in
+card_table.rs bakes its PHP artybon/artybonplus pair verbatim:
+  Conquistadors    PHP 5/3  engine 5/3  OK
+  Defensive Army   PHP 6/3  engine 6/3  OK
+  Mobile Artillery PHP 5/3  engine 5/3  OK
+  Napoleonic Army  PHP 7/4  engine 7/4  OK
+  Classic Army     PHP 8/4  engine 8/4  OK
+  Fortifications   PHP 5/3  engine 4/2  MISMATCH (only one)
+data/cards_military_actions.json (the repo's own source-of-truth JSON that
+card_table.rs is baked from, checked by the existing test
+`every_field_of_every_baked_card_matches_the_value_recomputed_from_data`)
+had the SAME wrong 4/2 pair with a self-consistent but wrong description
+("+4 strength per army (+2 if outdated)") -- so this was a transcription
+error baked into the data file itself, not a divergence between the data
+file and the generated table.
+
+Orange's army at resolution: 2 Cannon (Age II artillery, exactly fresh for
+a level-2 tactic) + 1 Air Forces (doubles one army's tactic bonus). With
+the wrong 4/2: 1 fresh army * 4 = 4, doubled = +4, tactic contribution 8.
+With the correct 5/3: 1 fresh army * 5 = 5, doubled = +5, tactic
+contribution 10. Difference: exactly 2 -- matches the observed gap.
+
+FIX (both kept in sync, per the existing baked-vs-data consistency test):
+  data/cards_military_actions.json: Fortifications strength 4->5,
+    obsoleteStrength 2->3, effects.tacticBonus 4->5,
+    effects.tacticBonusObsolete 2->3, text description updated.
+  rust/src/card_table.rs: Fortifications effects.strength 4->5,
+    obsolete_strength 2->3.
+
+TEST (rust/src/effects.rs, #[cfg(test)] mod tests):
+  fortifications_grants_five_strength_per_army_matching_bgas_printed_card_not_four
+  Builds a player with tactic=Fortifications, 2 Cannon, 1 Air Forces;
+  asserts total strength == 21 (11 base unit strength + 10 tactic/air
+  bonus). Confirmed RED by reverting card_table.rs's Fortifications entry
+  to 4/2 and re-running just this test: computed 19, not 21 (`assertion
+  left == right failed: left: 19, right: 21`). Restored the fix, reran:
+  passes.
+
+VERIFICATION -- direct game replay (temporary instrumentation, not kept):
+  Before fix: DEBUGWAR round=16 attacker_idx=1 a=37 target_idx=0 d=26
+  After fix:  DEBUGWAR round=16 attacker_idx=1 a=37 target_idx=0 d=28
+  d=28 now matches the journal's "Defender's strength: 28" exactly;
+  attacker unaffected (37 both times, matches journal).
+
+CI / BAR
+  cargo test --profile fasttest --lib: 1410 passed, 0 failed.
+  cargo clippy --all-targets -- -D warnings: clean, no warnings.
+  Mandatory sweep bar (SCOREDIV_DUMP_COMPLETED=1, full index.tsv):
+    674 -> 687 completed, 632 -> 651 exact-match (both header lines from
+    the sweep's own output, `/tmp/wargap_after.txt`).
+    comm -23 guard_ids.txt wargap_ids.txt (REGRESSIONS): EMPTY.
+    comm -13 guard_ids.txt wargap_ids.txt (WINS -- 13 games newly reaching
+      state.game_over that did not before):
+        7521963 7522506 7523022 7523069 7523132 7523200 7523239 7523438
+        7523493 7523542 7523648 7523652 7523818
+    Note: 7522009 itself was ALREADY in the baseline guard set (it already
+    reached state.game_over before this fix) -- its problem was a score
+    MISMATCH (the war's culture-spoils formula used the wrong advantage,
+    37-26=11 instead of 37-28=9, so Purple over-took 2 extra culture),
+    which the separate Final-score cross-check oracle counts, not the
+    completed-ID guard. That oracle's own count (632 -> 651 exact matches)
+    is where 7522009's fix shows up; the 13 IDs above are additional,
+    unrelated games that also happen to have used Fortifications and
+    could not even reach state.game_over correctly before this fix.
+
+COMMIT
+  Clone: /private/tmp/wargap, branch base0814 (branched from d68eeb3).
+  Commit dcaeb0a: "Fix Fortifications tactic strength: 4/2 to 5/3,
+  matching BGA's own data" -- data/cards_military_actions.json,
+  rust/src/card_table.rs, rust/src/effects.rs (33 insertions, 7
+  deletions across 3 files).
+
+PATCH
+  /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/wargap.patch is the
+  diff of the above three files against d68eeb3 (non-empty -- this is a
+  landed fix, not a measured negative).
+
+CLEANUP
+  /private/tmp/wargap deleted after this patch was written.

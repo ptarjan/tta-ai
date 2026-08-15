@@ -1,0 +1,347 @@
+diff --git a/rust/src/corpus.rs b/rust/src/corpus.rs
+index a48fb6f..627d8a6 100644
+--- a/rust/src/corpus.rs
++++ b/rust/src/corpus.rs
+@@ -753,6 +753,41 @@ pub fn classify(index: &HashMap<&'static str, CardId>, text: &str) -> LineOutcom
+         });
+         return LineOutcome::Action(Classified { class: ActionClass::ColumbusColonize, card });
+     }
++    // International Agreement (Code of Laws p.12): "The strongest
++    // civilization may immediately take up to 5 civil actions in cards...".
++    // BGO logs the FIRST pick right on the event's own name --
++    // "International Agreement <Color> takes <Card> in hand" -- with any
++    // FURTHER picks the same civilization makes tacked onto the SAME line
++    // as additional ";"-joined "<Color> takes <Card> in hand" clauses
++    // (`replay_common::replay_game`'s own dedicated branch walks those,
++    // mirroring how it already walks Barbarossa/Alexander/Columbus's other
++    // "no leading colour" shapes). Checked before this function's generic
++    // "a known card name leads the line" `Bookkeeping` catch-all below for
++    // the same reason Columbus is, just above: "International Agreement"
++    // is itself a card name and would otherwise be silently swallowed
++    // there, discarding whatever card it hands the taker -- found chasing
++    // the `IllegalMove: WonderStep` bucket (game `7522543`: Kremlin arrives
++    // this way, and BGO never logs any OTHER line naming it in Purple's
++    // hand before the build this bucket refused). A bare "International
++    // Agreement" line, or one ending "declines international agreement",
++    // is a genuine decline with no state of its own -- falls through to
++    // the generic catch-all below, `Bookkeeping` either way.
++    if let Some(after) = text.strip_prefix("International Agreement ") {
++        for color in [Color::Orange, Color::Purple, Color::Green, Color::Grey] {
++            let Some(take_rest) =
++                after.strip_prefix(color.as_str()).and_then(|r| r.strip_prefix(' ')).and_then(|r| r.strip_prefix("takes "))
++            else {
++                continue;
++            };
++            return match take_rest.find(" in hand") {
++                Some(card_end) => match longest_known_card_prefix(index, &take_rest[..card_end]) {
++                    Some((id, _)) => LineOutcome::Action(Classified { class: ActionClass::TakeCard, card: Some(id) }),
++                    None => LineOutcome::Unclassified,
++                },
++                None => LineOutcome::Unclassified,
++            };
++        }
++    }
+     // J. S. Bach's leader ability (a free tech upgrade each round) is the
+     // one line BGO prints with NO space at all between the leader's name
+     // and the verb -- "Johannes Sebastian Bachupgrades Religion to Opera
+@@ -1594,6 +1629,42 @@ mod tests {
+         assert_eq!(c.card, index.get("Vast Territory (II)").copied());
+     }
+ 
++    #[test]
++    fn international_agreement_take_line_is_a_take_card_action_not_bookkeeping() {
++        // Regression: "International Agreement" is itself a known card
++        // name, so this line used to match the generic "known card name
++        // leads the line" `Bookkeeping` catch-all and get silently dropped
++        // -- the SAME shape as Columbus above -- discarding whatever card
++        // it hands the taker. Chasing the `IllegalMove: WonderStep` bucket:
++        // game `7522543`'s Kremlin arrives this way, with no other journal
++        // line ever naming it in Purple's hand before the build this bucket
++        // refused.
++        let index = idx();
++        let line = "International Agreement Purple takes Kremlin in hand; Purple takes Efficient Upgrade in hand";
++        let LineOutcome::Action(c) = classify(&index, line) else {
++            panic!("expected an action, not bookkeeping");
++        };
++        assert_eq!(c.class, ActionClass::TakeCard);
++        assert_eq!(c.card, index.get("Kremlin").copied());
++    }
++
++    #[test]
++    fn international_agreement_decline_line_is_bookkeeping() {
++        // "<Color> declines international agreement" and a bare
++        // "International Agreement" line (nobody eligible, or the whole
++        // offer silently declined) carry no state of their own -- the
++        // `Pending::Choice(TakeRow)` the event's own resolution already
++        // opened drains itself via `resolve_intervening`'s own decider-
++        // mismatch/no-upcoming-match fallback, the same "no journal trace
++        // for a silent decline" precedent as `FreeBuild`.
++        let index = idx();
++        assert!(matches!(
++            classify(&index, "International Agreement Orange declines international agreement"),
++            LineOutcome::Bookkeeping
++        ));
++        assert!(matches!(classify(&index, "International Agreement"), LineOutcome::Bookkeeping));
++    }
++
+     #[test]
+     fn barbarossa_enlist_line_is_a_barbarossa_action_not_bookkeeping() {
+         // Regression: this line used to be treated as flavour text and
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 3e746a8..3c8ebce 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -1276,10 +1276,42 @@ impl<'a> Replayer<'a> {
+                         let matches_upcoming = c.player == expected_actor
+                             && upcoming.0 == ActionClass::TakeCard
+                             && upcoming.1.is_some_and(|want| {
+-                                c.options
+-                                    .as_slice()
+-                                    .iter()
+-                                    .any(|o| matches!(o, ChoiceOption::Slot(slot) if self.state.card_row[*slot as usize] == want))
++                                c.options.as_slice().iter().any(|o| match o {
++                                    // Either this slot is ALREADY grounded to
++                                    // `want` by identity (the coincidence
++                                    // check `ground_row_slot`'s own first
++                                    // branch trusts for the same reason), OR
++                                    // it is still ungrounded -- i.e. still
++                                    // holding `new_game`'s fictional filler,
++                                    // free to be forced into `want` the same
++                                    // "believe the journal" way every OTHER
++                                    // take on this file ultimately resolves
++                                    // ambiguity (`ground_row_slot`'s own doc:
++                                    // "placing the card in whichever slot
++                                    // happens to be cheapest anyway... is the
++                                    // honest report", just applied one level
++                                    // up here). Required for a card this
++                                    // binary has never grounded ANYWHERE yet
++                                    // -- routinely true for a WONDER taken
++                                    // via International Agreement, which
++                                    // `card_row` never held before this exact
++                                    // pick (no earlier "takes"/"builds" line
++                                    // to have grounded it against) -- without
++                                    // this, `matches_upcoming` was always
++                                    // false for such a card, silently
++                                    // auto-declining the whole choice via
++                                    // `Stop` before `apply_one`'s own
++                                    // `TakeCard` arm (which DOES know how to
++                                    // ground an ungrounded slot) ever ran.
++                                    // Corpus-confirmed regression: games
++                                    // `7522957`/`7523114` (`Reserves`/`First
++                                    // Space Flight`), caught by this bucket's
++                                    // own regression bar.
++                                    ChoiceOption::Slot(slot) => {
++                                        self.state.card_row[*slot as usize] == want || !self.row_grounded[*slot as usize]
++                                    }
++                                    ChoiceOption::Card(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => false,
++                                })
+                             });
+                         if matches_upcoming {
+                             return Ok(());
+@@ -5784,6 +5816,162 @@ pub fn replay_game(
+                 r.actions_consumed += 1;
+                 continue;
+             }
++            // International Agreement (Code of Laws p.12), also no leading
++            // colour on BGO's own first-pick line -- `corpus::classify`'s
++            // own doc comment on this shape. Column 2 (`Line::color`) names
++            // the taking civilization reliably (every sampled game: it
++            // always matches the colour embedded in the take clause
++            // itself), the same source `ColumbusColonize` just above
++            // already trusts for the same reason. Not a political action of
++            // the taker's own (the event interrupts WHOEVER played it, not
++            // the taker's own political phase), so
++            // `next_line_explains_own_politics: false`, same as
++            // `Barbarossa` below.
++            //
++            // Unlike every other shape this file replays (one action per
++            // JOURNAL LINE), BGO logs EVERY pick the civilization makes on
++            // ONE line, ";"-joined ("International Agreement <Color> takes
++            // <A> in hand; <Color> takes <B> in hand; ..."). `corpus::
++            // classify` only ever resolves the FIRST pick (`<A>`, `card`
++            // below); this loop applies it, then walks the line's own
++            // remaining ";"-clauses for any further picks, applying each
++            // the same way.
++            //
++            // Each pick is translated into a `Move::Choose` naming the open
++            // `Pending::Choice(TakeRow)`'s matching `Slot` option directly
++            // (rather than routed through `apply_one`'s generic `TakeCard`
++            // arm) because that arm prices the take via `observed_take_cost`
++            // -- BGO's `"uses N civil action"` clause -- which International
++            // Agreement's own picks NEVER carry (paid from the event's own
++            // budget, not the player's civil-action pool; `interact.rs`'s
++            // `ChoiceKind::TakeRow` handler bills `budget`, not
++            // `p.civil_actions`). Feeding that missing clause's default (0)
++            // into `ground_row_slot`'s cost-matching search would demand a
++            // slot whose ORDINARY position price happens to be exactly 0,
++            // which is true for at most one row slot and wrong for every
++            // other real pick -- so this calls `ground_row_slot` with
++            // `None` (its own forgiving "already grounded, else first
++            // ungrounded slot" fallback) instead.
++            if class == ActionClass::TakeCard && line.text.starts_with("International Agreement ") {
++                let Some(actor_color) = Color::parse(line.color) else {
++                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("column 2 {:?} is not a known colour", line.color))));
++                    break 'lines;
++                };
++                let actor = actor_color.seat();
++                if actor >= meta.players {
++                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("actor colour {actor_color:?} outside {}p seating", meta.players))));
++                    break 'lines;
++                }
++                let Some(first_pick) = card else {
++                    mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("International Agreement take line's card did not resolve to a known card".into())));
++                    break 'lines;
++                };
++                // Re-resolved to the age copy actually in the row, same as
++                // `apply_one`'s ordinary `TakeCard` arm does for every other
++                // take (`best_age_sibling`'s own doc comment on the nine
++                // card families BGO's text never tags with an age --
++                // `Reserves` among them). Skipping this left `first_pick`/
++                // `picks` pointing at `corpus::build_card_index`'s arbitrary
++                // same-name pick, which then matched NO row slot at all
++                // (wrong age = different `CardId`) -- `resolve_intervening`'s
++                // own `matches_upcoming` read that as a silent decline and
++                // drained the just-opened `TakeRow` via `Stop`, corpus-
++                // confirmed as this bucket's own two regressions
++                // (`StuckPending`/`ParserGap: ... no open TakeRow choice`
++                // for `Reserves`/`First Space Flight`, games `7522957`/
++                // `7523114`).
++                let first_pick = best_age_sibling(first_pick, r.state.age_civil);
++                let mut picks = vec![first_pick];
++                for clause in line.text.split("; ").skip(1) {
++                    let Some(take_rest) =
++                        clause.strip_prefix(actor_color.as_str()).and_then(|r| r.strip_prefix(' ')).and_then(|r| r.strip_prefix("takes "))
++                    else {
++                        break;
++                    };
++                    let Some(card_end) = take_rest.find(" in hand") else { break };
++                    let Some((id, _)) = longest_known_card_prefix(card_index, &take_rest[..card_end]) else { break };
++                    picks.push(best_age_sibling(id, r.state.age_civil));
++                }
++                // `resolve_intervening` is called ONCE, for the FIRST pick
++                // only -- it drains the `QueueItem::TakeRow` the event's own
++                // resolution enqueued (`events.rs`'s `optional_take_cards_
++                // with_civil_actions` arm), which is what actually
++                // materialises the `Pending::Choice(TakeRow)` this loop reads
++                // below. Every LATER pick's own re-offer is already
++                // synchronous (`interact.rs`'s `ChoiceKind::TakeRow` match
++                // arm calls `offer_take_row` inline, not through the queue),
++                // so calling it again per pick was a bug in its own right,
++                // independent of the slot-matching one above: with no
++                // ungrounded slot of THIS card's identity anywhere yet (it
++                // is not grounded until the loop body below places it), its
++                // own `matches_upcoming` check always reads false and drains
++                // the just-reopened choice via `Stop` -- corpus-confirmed
++                // (`ParserGap: International Agreement pick with no open
++                // TakeRow choice`, 42/1,011 games with the per-pick call).
++                if let Err(kind) = r.resolve_intervening(actor, (ActionClass::TakeCard, Some(first_pick)), false) {
++                    mismatch = Some(mk_mismatch(line, kind));
++                    break 'lines;
++                }
++                for pick in picks {
++                    let Some(Pending::Choice(c)) = r.state.pending.top() else {
++                        mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("International Agreement pick with no open TakeRow choice".into())));
++                        break 'lines;
++                    };
++                    if !matches!(c.kind, ChoiceKind::TakeRow { .. }) {
++                        mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("expected an open TakeRow choice, found {:?}", c.kind))));
++                        break 'lines;
++                    }
++                    // Ground `pick` against one of THIS CHOICE'S OWN offered
++                    // `Slot` options, not `ground_row_slot`'s generic "first
++                    // ungrounded slot anywhere" fallback -- `offer_take_row`
++                    // (`interact.rs`) filters its `opts` down to slots that
++                    // are both affordable within the event's own budget AND
++                    // `costs::can_take`-legal, a STRICT subset of all 13 row
++                    // slots. Forcing `pick` into an arbitrary ungrounded slot
++                    // outside that subset (the bug this replaced) reliably
++                    // named a slot the choice never offered at all --
++                    // `ParserGap: open TakeRow choice does not offer slot #`,
++                    // 14/1,011 games once `corpus::classify` started
++                    // resolving these lines instead of dropping them. Prefers
++                    // a slot ALREADY grounded to `pick` (by identity, the
++                    // same coincidence `ground_row_slot`'s own first branch
++                    // guards against trusting blindly) over forcing a fresh
++                    // one, for the same reason that branch exists there.
++                    let options: Vec<ChoiceOption> = c.options.as_slice().to_vec();
++                    let mut chosen: Option<(u8, usize)> = None;
++                    for (oi, opt) in options.iter().enumerate() {
++                        if let ChoiceOption::Slot(s) = opt {
++                            if r.row_grounded[*s as usize] && r.state.card_row[*s as usize] == pick {
++                                chosen = Some((*s, oi));
++                                break;
++                            }
++                        }
++                    }
++                    if chosen.is_none() {
++                        for (oi, opt) in options.iter().enumerate() {
++                            if let ChoiceOption::Slot(s) = opt {
++                                if !r.row_grounded[*s as usize] {
++                                    chosen = Some((*s, oi));
++                                    break;
++                                }
++                            }
++                        }
++                    }
++                    let Some((slot, n)) = chosen else {
++                        mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("open TakeRow choice offers no ungrounded slot for {}", pick.get().name))));
++                        break 'lines;
++                    };
++                    r.state.card_row[slot as usize] = pick;
++                    r.row_grounded[slot as usize] = true;
++                    if let Err(kind) = r.try_apply(Move::Choose { n: n as u8 }, true) {
++                        mismatch = Some(mk_mismatch(line, kind));
++                        break 'lines;
++                    }
++                    r.row_grounded[slot as usize] = false;
++                    r.actions_consumed += 1;
++                }
++                continue;
++            }
+             // Frederick Barbarossa's leader ability, also no leading colour
+             // -- the actor is named only in the trailing "<Color> spends
+             // ..." clause(s) (`corpus::classify`'s own comment on
+@@ -10200,6 +10388,43 @@ mod tests {
+         );
+     }
+ 
++    /// Companion: a card this binary has never grounded ANYWHERE in
++    /// `card_row` yet -- no earlier "takes"/"builds" line ever named it, the
++    /// routine shape for a WONDER taken via International Agreement, which
++    /// `card_row` never held before this exact pick -- still defers, even
++    /// though no offered `Slot` holds it by IDENTITY. Regression: the
++    /// original `matches_upcoming` check required an identity match, so it
++    /// always read false for this shape and silently declined the whole
++    /// `TakeRow` via `Stop` before `apply_one`'s own `TakeCard` arm (which
++    /// DOES know how to ground an ungrounded slot) ever got a chance to run
++    /// -- corpus-confirmed against real games `7522957`/`7523114`
++    /// (`Reserves`/`First Space Flight`), caught by the `IllegalMove:
++    /// WonderStep` bucket's own regression bar.
++    #[test]
++    fn resolve_intervening_defers_a_take_row_pending_for_a_card_never_before_grounded_in_the_row() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        let iron = CardId::by_name("Iron").expect("Iron is in the table");
++        let first_space_flight = CardId::by_name("First Space Flight").expect("First Space Flight is in the table");
++        // Slot 2 holds a DIFFERENT card, ungrounded -- `first_space_flight`
++        // is not present anywhere in `card_row` at all.
++        r.state.card_row[2] = iron;
++        let mut options = crate::state::OptionList::new();
++        options.push(ChoiceOption::Slot(2));
++        options.push(ChoiceOption::Word(Keyword::Stop));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options }));
++
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, Some(first_space_flight)), false);
++
++        assert!(result.is_ok(), "{result:?}");
++        assert!(
++            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::TakeRow { .. })),
++            "deferring must leave the pending untouched for apply_one to resolve: {:?}",
++            r.state.pending.top()
++        );
++    }
++
+     /// Companion: when the upcoming line does NOT match any of the open
+     /// `TakeRow` choice's `Slot` options (a different actor's own line, or
+     /// this same actor's line but for an unrelated action/card), a human

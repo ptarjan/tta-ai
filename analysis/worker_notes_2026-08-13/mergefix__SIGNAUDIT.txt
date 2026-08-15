@@ -1,0 +1,523 @@
+SIGNAUDIT -- weight-sign structural audit
+===========================================
+Scope: rust/src/bots/weighted/weights.rs (WeightKey, 162 variants before this
+audit, 159 after 3 retirements), eval.rs (dominance_repair and its gate
+tables), cards.rs (card_potential_core / board_credit_key), bin/climb.rs
+(the hillclimb mutation-time guard).
+
+Why this exists: three sign-inversion bugs of the identical shape
+(card_board_leader, card_board_wonder's dead gate, hand_value_early) were
+found in one day. The project owner asked for a structural fix, not a
+fourth patch. Sections below, in order:
+
+  (1) THE HEADLINE NUMBERS
+  (2) THE STRUCTURAL FIX (part C of the task)
+  (3) INSTANCE 2 FIX -- retiring card_board_wonder/government/action
+  (4) INSTANCE 3 FIX -- hand_value_early/late
+  (5) TWO NEW BUGS FOUND BY THIS AUDIT (pop_cost, tactic_gain/tactic_short)
+  (6) FULL AUDIT TABLE (part A)
+  (7) CORPUS DAMAGE -- how many champion snapshots on disk violated each gate
+  (8) VERBATIM RED TEST FAILURES
+  (9) FULL TEST SUITE RESULT
+  (10) WHAT WAS NOT DONE / FOLLOW-UPS
+
+
+(1) THE HEADLINE NUMBERS
+-------------------------
+- 162 WeightKey variants audited.
+- 31 were ALREADY correctly sign-gated before this audit (from the prior
+  card_board_leader fix's tables: BENEFIT_GATES, SHORTFALL_GATES, LOSS_GATES,
+  WONDER_DEBT_GATES, PERISHABLE_GATES, REDUNDANCY_NONNEG_GATES,
+  STOCK_NONNEG_GATES, WONDER_VALUE_GATES).
+- 5 NEW simple sign gates added this audit: TacticGain (NonNegative),
+  TacticShort and PopCost (NonPositive), plus HandValue's phase pair joining
+  the existing (empty) NET_NONNEG_PHASE composite mechanism.
+- 3 WeightKey variants RETIRED (removed from the enum entirely, unrepresentable
+  from here on): CardBoardGovernment, CardBoardAction, CardBoardWonder -- each
+  was permanently dead code, shadowed by a dedicated pricing function that
+  intercepts first.
+- 5 keys are Free at the simple-per-key level but constrained by a COMPOSITE
+  mechanism (a sum or a phase-net), unaffected in direction by this audit:
+  CardBoardLeader, CardBoardBonus (existing), HandValue/HandValueEarly/
+  HandValueLate (new, this audit).
+- 120 keys are classified Free (a genuine trade-off/preference the league
+  prices empirically, or a coordinate this pass could not establish a
+  rules-forced direction for -- see section 6 and 10).
+- Structural guard: every WeightKey variant now MUST be classified by
+  WeightKey::sign_intent(), an exhaustive match with no wildcard arm. Adding
+  a 163rd variant without extending that match is a Rust COMPILE ERROR, not
+  a silent gap a hand-typed list could leave open.
+
+
+(2) THE STRUCTURAL FIX (part C)
+---------------------------------
+File: rust/src/bots/weighted/weights.rs
+
+Added `SignIntent` (an enum: NonNegative(&'static str), NonPositive(&'static
+str), Free) and `WeightKey::sign_intent(self) -> SignIntent`, a single
+exhaustive `match` over all 159 live WeightKey variants, with NO trailing
+`_ =>` arm -- same shape as the pre-existing `WeightKey::group()` (which this
+audit used as its literal precedent) and the pre-existing
+`DELIBERATELY_UNPRICED`/`PRICED_ELSEWHERE` "every printed card effect is
+either priced or explicitly declared unpriced" pattern in cards.rs (the
+precedent named in the task brief). The reason string travels WITH the
+classification (not a second, parallel lookup table), so direction and
+diagnostic text can never drift apart.
+
+Consequence: adding a 163rd WeightKey variant and forgetting to classify it
+is a `cargo build` failure -- "non-exhaustive patterns" -- at the exact
+line `sign_intent()` lives on, not a silent gap five months and one lost
+league run later.
+
+File: rust/src/bots/weighted/eval.rs
+
+The EIGHT hand-typed `&[WeightKey]` lists that used to exist here
+(BENEFIT_GATES, SHORTFALL_GATES, LOSS_GATES, REDUNDANCY_NONNEG_GATES,
+STOCK_NONNEG_GATES, WONDER_DEBT_GATES, PERISHABLE_GATES, WONDER_VALUE_GATES),
+fed into two wrapper tables (NON_POSITIVE_GATES / NON_NEGATIVE_GATES) that
+`dominance_repair` and `bin/climb.rs`'s under-mutation guard both iterated,
+are DELETED. In their place: two functions,
+
+    pub fn non_positive_gates() -> impl Iterator<Item = (WeightKey, &'static str)>
+    pub fn non_negative_gates() -> impl Iterator<Item = (WeightKey, &'static str)>
+
+which simply filter `WeightKey::ALL` through `k.sign_intent()`. There is
+exactly ONE place left to edit a key's sign classification (`sign_intent`'s
+match in weights.rs); `dominance_repair` and `bin/climb.rs`'s guard both read
+these two functions directly, not a copy, so a reclassification is armed at
+load time AND mutation time automatically -- confirmed by a NEW climb.rs test
+rather than assumed (section 8).
+
+This is exactly the failure this task was opened to close: card_board_leader
+was gated in ONE table (BENEFIT_GATES, on card_board_credit) while its actual
+effective sign lived in a DIFFERENT, ungated coordinate
+(card_board_leader) -- a hand-typed list is a classification a new variant,
+or a variant nobody thought to add to the RIGHT list, can silently miss.
+There is now exactly one classification per key, checked by the compiler for
+completeness, not by a human remembering to update eight lists.
+
+The composite mechanisms (NET_NONNEG_PHASE, the card_board_credit_keys()
+per-type-offset sum, DOMINATES orderings) are NOT folded into sign_intent --
+they are relational constraints between TWO coordinates, not a single key's
+sign, and forcing them into a 3-way per-key enum would either be wrong
+(over-constraining a base term that is legally negative as long as the SUM
+isn't) or would need a 4th enum variant carrying a second WeightKey, which is
+more machinery than the two cases in this codebase justify. Both existing
+composite mechanisms are left in place, extended by the addition of a new
+member (HandValue) using the EXISTING NET_NONNEG_PHASE array precedent
+per the task's own instruction to extend rather than duplicate.
+
+
+(3) INSTANCE 2 FIX -- retiring card_board_wonder/government/action
+----------------------------------------------------------------------
+The task named card_board_wonder as unreachable. Auditing `cards.rs`'s
+`card_potential_core` dispatch chain found the identical shape applies to
+TWO MORE keys the task did not name:
+
+    kind.is_government() -> if gov_board_credit != 0.0 { return gov_value(...) }
+    kind.is_action()     -> if action_board_credit != 0.0 { return action_value(...) }
+    kind == Wonder        -> if wonder_board_credit != 0.0 { if let Some(swap)=... { return ... } }
+
+`board_credit_key(id)` used to return `Some(CardBoardGovernment)` /
+`Some(CardBoardAction)` / `Some(CardBoardWonder)` for these three types, an
+OFFSET the generic swap-diff fallback at the bottom of `card_potential_core`
+would add to `card_board_credit` -- but that fallback is only ever reached
+when the DEDICATED branch above did not already `return`. `gov_board_credit`
+and `action_board_credit` default NONZERO (1.0, "measured effective from the
+start" per their own weights.rs comment), so `card_board_government` and
+`card_board_action` were dead on EVERY trained champion by construction, not
+merely by drift -- there was never a champion where the dedicated branch
+could have been skipped by accident. `wonder_board_credit` defaults 0.0 but
+is climbed away from it in every champion sampled (see section 7), making
+`card_board_wonder` dead the same way once trained.
+
+This is the same failure shape the codebase's OWN precedent already
+retired a static formula for: `cards.rs::tests::
+card_yields_never_reprices_the_action_boards_ring_fenced_coordinates`'s doc
+comment records "the fix was to delete the static formula rather than pin
+agreement, because it was provably unreachable on every trained champion."
+
+Fix: all three retired --
+  - Removed from the WeightKey enum (weights.rs).
+  - Added to RETIRED_KEYS ("card_board_government", "card_board_action",
+    "card_board_wonder") so old champion JSON files on disk keep loading
+    (the field is silently dropped, exactly like the 12 pre-existing
+    retirements).
+  - `cards::board_credit_key`'s match updated: Government/Action/Wonder move
+    from `Some(WeightKey::CardBoard*)` arms into the `None` bucket, alongside
+    Farm/Mine/Tactic/etc -- the SAME bucket for the SAME reason ("a dedicated
+    board-aware function already owns this type's pricing").
+  - `eval::card_board_credit_keys()` needed NO code change: it is DERIVED
+    from `board_credit_key` (a pre-existing structural precedent from the
+    card_board_leader fix), so it shrank from 5 entries to 2
+    (CardBoardLeader, CardBoardBonus -- the two types with no dedicated
+    top-level branch) automatically.
+  - `cards::swap_slot` (hand-collapsing logic for Leader/Government cards
+    in hand) had a genuine BUG surfaced by the retirement: it called
+    `board_credit_key(id).expect(...)` for Government, which now panics
+    (board_credit_key answers None). Investigation found `swap_slot`'s
+    PRE-EXISTING check (`card_board_credit + card_board_government != 0.0`)
+    was already the WRONG condition for whether a Government card is priced
+    board-aware -- it never looked at `gov_board_credit`, the actual gating
+    coefficient for the dedicated branch that fires first on every real
+    champion. Rewritten to check `gov_board_credit != 0.0 ||
+    card_board_credit != 0.0` for Government (the true routing condition in
+    card_potential_core), Leader's check is unchanged. This was a genuine,
+    separate latent bug this audit's retirement exposed rather than caused;
+    full test suite now green with this fix in place (section 9).
+
+Government/Action's dead weight was WORSE than Wonder's in one sense (100%
+dead on trained champions by construction, since the credit defaults
+nonzero, vs. Wonder's "dead once climbed away from its 0.0 default") --
+see section 7 for the corpus numbers.
+
+
+(4) INSTANCE 3 FIX -- hand_value_early/late
+----------------------------------------------
+`features.rs`'s `hand_value` feature is `Σ (level()+1)` over the civil hand
+-- always >= 0 (every card contributes at least 1). `evaluate` applies it
+through the flat WeightKey::ALL loop (the base `hand_value` coefficient) AND
+a SEPARATE PHASE_KEYS loop (`+ (1-lateness)*hand_value_early +
+lateness*hand_value_late`), so the EFFECTIVE coefficient on this always-
+nonnegative feature is `hand_value + (1-lateness)*hand_value_early +
+lateness*hand_value_late` -- an affine blend between the two endpoints
+`hand_value + hand_value_early` (round 1) and `hand_value + hand_value_late`
+(late game).
+
+Fix: `WeightKey::HandValue` added to `eval::NET_NONNEG_PHASE` (the exact
+pre-existing mechanism this audit's task explicitly pointed at: "check
+whether it should simply be extended rather than duplicated" -- it was
+extended, not duplicated; the array had been empty since 2026-08-04 after
+its previous two members' phase pairs were deleted outright). This requires
+BOTH `hand_value + hand_value_early >= 0` and `hand_value + hand_value_late
+>= 0`; because the blend is a convex combination of the two endpoints, both
+endpoints being non-negative guarantees the whole affine curve is.
+
+Two new dedicated tests pin the exact repair (eval.rs,
+`a_deeply_negative_hand_value_early_is_repaired_even_though_the_base_is_
+legal` and `the_repaired_vector_no_longer_prices_a_full_hand_worse_than_an_
+empty_one_in_the_opening`), plus a mutation-survival test in bin/climb.rs
+(`no_mutant_ever_leaves_a_net_nonneg_phase_pair_net_negative`) that is the
+FIRST test to ever exercise NET_NONNEG_PHASE's mutation-time arming at all
+(it was empty until this audit, so nothing had proven the loop actually ran
+under `mutate()` rather than only at load).
+
+
+(5) TWO NEW BUGS FOUND BY THIS AUDIT
+---------------------------------------
+Neither was named in the task brief. Both were found by systematically
+checking every remaining WeightKey's consuming code for a provably
+one-signed feature, then cross-checking the corpus for real drift.
+
+pop_cost (NEW NonPositive gate). `economy::pop_food_cost(...)` is the
+RULEBOOK's own cost table for the next population increase -- always >= 0
+by construction. Exactly the same shape LOSS_GATES already documents for
+corruption/consumption (both of which were netted OUT of separate weights
+for this identical confound: "a big civilization pays more of a rulebook
+cost than a small one, so a strictly-bad coordinate correlates with
+strength, and a climb chasing win rate charges the correlation to the
+penalty"). `pop_cost` is still a LIVE, separate WeightKey (never netted like
+its two siblings), so it still needed the gate they no longer do. Found
+POSITIVE (+13.34, authored default -0.4) in
+analysis/frozen/gauntlet/champion_4p_gen4034_140key_2026-08-08.json -- a
+player paying MORE food to grow was being scored as a large improvement.
+
+tactic_gain / tactic_short (NEW NonNegative / NonPositive gate pair).
+`cards::tactic_terms` returns `(gain, short)` from `effects::tactic_
+outlook`: `gain = max(0, best_army - army_strength(p))` (an available
+army-strength IMPROVEMENT, never negative) and `short` (the per-type
+shortfall to the NEXT army, never negative -- the whole-hand analogue of the
+already-priced `tactic_shortfall_cost`, whose OWN weights.rs doc comment
+already names `tactic_short` as "the same shape"). Both were the MOST
+widely wrong-signed coordinates found in this audit: `tactic_gain` negative
+in 8 of 10 real champion files (as low as -60.0, `champ_backup/
+rust_champion_4p.json`), `tactic_short` positive in 6 of 10 (as high as
++10.8, scratch/champion_2p_frozen.json and scratch/champion_2p_civilnonzero.
+json). Both are more thoroughly wrong-signed across the corpus than the
+originally-reported card_board_leader bug.
+
+
+(6) FULL AUDIT TABLE
+-----------------------
+See the attached table (reproduced verbatim below) for all 162 keys, their
+classification, and the evidence. Source of truth for the CODE is
+rust/src/bots/weighted/weights.rs's `WeightKey::sign_intent` match, which
+carries this same reasoning as inline comments per arm -- this table is a
+flattened transcription of it, not a second copy that can drift (if it ever
+disagrees with sign_intent's own match, the match wins; re-generate this
+table from it, don't hand-edit both).
+
+--- BEGIN TABLE ---
+[see /tmp/audit_table.txt content inlined below]
+--- END TABLE ---
+
+====================================================================================================
+NonNegative (coefficient must never be < 0; repaired UP to 0.0) -- 16 keys
+====================================================================================================
+  BuildDiscount                scales a printed benefit (BuildDiscount card effect)
+  CardBoardCredit              scales the generic swap-diff; base of the leader/bonus composite gate
+  DefenseBonus                 scales a printed benefit
+  FreeCivilAction              scales a printed benefit
+  HandLimit                    scales a printed benefit
+  ResourceDiscount             scales a printed benefit
+  RestrictedResources          scales a printed benefit
+  UnitStrengthCredit           scales a printed benefit
+  WonderStagesPerAction        scales a printed benefit
+  TechRedundancyDiscount       redundancy discount, never a reward
+  WonderPotential               gains-only in-progress wonder completion value
+  WonderPromise                gains-only in-progress wonder completion value (take-time share)
+  CivilActions                 stock the rules never subtract for (RULES_SPEC)
+  CivilActionSurplus           stock the rules never subtract for (RULES_SPEC)
+  Wonders                      completed-wonder stock the rules never subtract for (RULES_SPEC)
+  TacticGain                   NEW: available army-strength improvement, max(0, best-current) >= 0
+
+====================================================================================================
+NonPositive (coefficient must never be > 0; repaired DOWN to 0.0) -- 18 keys
+====================================================================================================
+  FoodGap                      marginal-need shortfall max(0, need-have)
+  ResourceGap                  marginal-need shortfall
+  ScienceGap                   marginal-need shortfall
+  CultureGap                   marginal-need shortfall
+  CivilActionGap               marginal-need shortfall
+  MilitaryActionGap            marginal-need shortfall
+  WorkerGap                    marginal-need shortfall
+  Discontent                   penalty the rules impose, max(0,-happy_margin)
+  Uprising                     penalty the rules impose, 0/1 indicator
+  StrengthDeficit               penalty the rules impose, max(0,-relative_strength)
+  WonderRemaining               unpaid wonder debt, non-negative magnitude
+  WonderStagesLeft              unpaid wonder debt
+  WonderTurnsToFinish           unpaid wonder debt
+  WonderOverrun                 unpaid wonder debt
+  WonderAgeOverrun              unpaid wonder debt (rules deadline variant)
+  HandPerishable                hand about to expire, non-negative magnitude
+  PopCost                       NEW: rulebook pop-growth cost table, corruption/consumption-shaped confound
+  TacticShort                   NEW: per-type shortfall to next army, SHORTFALL-shaped
+
+====================================================================================================
+RETIRED (WeightKey variant removed entirely) -- 3 keys
+====================================================================================================
+  CardBoardGovernment           RETIRED: permanently shadowed by GovBoardCredit's dedicated gov_value branch
+  CardBoardAction                RETIRED: permanently shadowed by ActionBoardCredit's dedicated action_value branch
+  CardBoardWonder                RETIRED: permanently shadowed by WonderBoardCredit's dedicated swap-diff branch
+
+====================================================================================================
+Free but composite-constrained by a DIFFERENT mechanism (not a simple per-key sign) -- 5 keys
+====================================================================================================
+  CardBoardLeader                Free (simple); composite: CardBoardCredit+CardBoardLeader >= 0 via card_board_credit_keys()
+  CardBoardBonus                 Free (simple); composite: CardBoardCredit+CardBoardBonus >= 0 via card_board_credit_keys()
+  HandValue                      Free (simple); composite: HandValue+HandValueEarly>=0 and HandValue+HandValueLate>=0 via NET_NONNEG_PHASE (NEW)
+  HandValueEarly                 Free (simple); see HandValue composite constraint above
+  HandValueLate                  Free (simple); see HandValue composite constraint above
+
+====================================================================================================
+Free -- genuine trade-off / no arithmetic-forced direction found -- 120 keys, grouped by reason
+====================================================================================================
+
+[40 keys] Raw economy/board magnitudes & rates (no RULES_SPEC citation forces a direction; matches this project's own existing STOCK_NONNEG_GATES conservatism re: science_rate):
+  RateHorizon, Culture, CultureRate, Science, ScienceRate, FoodRate, ResourceRate, FoodStock, ResourceStock, BlueFree, YellowBank, FreeWorkers, Workers, ProdWorkers, UrbanWorkers, UnitWorkers, HappyMargin, MilitaryActions, TechLevels, GovLevel, BestFarm, BestMine, BestLab, BestTemple, BestTheater, BestLibrary, BestArena, BestUnit, NumTechs, SpecialTechs, WonderProgress, Leader, Strength, StrengthRel, StrengthLead, TacticLevel, HasUnit, Colonies, Pacts, PactBlocksAttack
+
+[2 keys] CorruptionHeadroom/ConsumptionHeadroom -- deterministic function of BlueFree/YellowBank, features.rs's own comment: 'good all else equal is vacuous here':
+  CorruptionHeadroom, ConsumptionHeadroom
+
+[2 keys] CaLeft/MaLeft -- CaLeft explicitly out of scope this task (own VERDICT doc comment, mid-turn option value, no rulebook conversion); MaLeft's end-of-turn draw capped elsewhere:
+  CaLeft, MaLeft
+
+[2 keys] TakeCostPaid/TakeCostShare -- already explicitly declared Free by TakeCostShare's own doc comment ('not a rules-level loss'):
+  TakeCostPaid, TakeCostShare
+
+[5 keys] Row/rival-row preference coordinates -- RowLastCopy explicitly out of scope this task ('its defect is units, not sign'):
+  RowUrgency, RowBargainForgone, RowLastCopy, RivalDesire, RivalTakeShare
+
+[17 keys] Raw RIVAL board facts -- whether more of a rival's stock is good or bad for ME is the strategic judgement itself:
+  RivalFreeCa, RivalHandCivil, RivalWonders, RivalHandPotential, RivalScienceStock, RivalFoodStock, RivalResourceStock, RivalFreeWorkers, RivalYellowBank, RivalColonies, RivalMilActions, RivalBuildingWonder, RivalCulture, RivalMeanCulture, RivalCultureRate, RivalScienceRate, RivalStrength
+
+[5 keys] Event-timing / targeting comparisons -- signed differences by construction:
+  MySeededPending, MyEventThreat, AttackTargetLead, AttackTargetWeakness, PactPartnerLead
+
+[2 keys] Auction bidding -- genuine trade-off, not a rules-imposed penalty:
+  AuctionCommitted, AuctionBid
+
+[3 keys] Board-state indicator features -- not a per-card printed benefit in BuildDiscount's sense; no citation established this pass, flagged as follow-up:
+  ColonizeBonus, UrbanLimit, NoAggression
+
+[1 key] GovActionCost -- docs/OPEN_ITEMS.md item 1, signal-vs-noise undetermined, not concluded rules-forced:
+  GovActionCost
+
+[1 key] EventScoringMargin -- a scoring margin, signed by construction:
+  EventScoringMargin
+
+[1 key] HandSwapExtra -- own doc comment: 'a free 0.0-default WEIGHT, not a constant':
+  HandSwapExtra
+
+[18 keys] Credit/trust-multiplier family -- 'how much to trust this dedicated function's estimate' (registry.rs), NOT a printed-benefit magnitude; NOT verified gains-only this pass -- TOP FOLLOW-UP CANDIDATE:
+  CardRateCredit, UnitTechCredit, TechBoardCredit, ActionBoardCredit, GovBoardCredit, WonderBoardCredit, BuildFreshCredit, RestrictedResourceCredit, FreeActionCredit, TerritoryCredit, BonusCardCredit, TacticBoardCredit, AggressionBoardCredit, WarBoardCredit, PactBoardCredit, EventBoardCredit, TacticShortfallCost, TacticReachCredit
+
+[5 keys] Hand-content magnitudes other than HandValue -- plausible NonNegative candidates, NOT individually verified this pass:
+  HandCivil, HandPotential, HandMilitary, HandMilValue, HandMilPotential
+
+[1 key] EndTurnBias -- WeightedBot::choose's own doc comment: 'DO NOT fix this asymmetry ... measured twice':
+  EndTurnBias
+
+[2 keys] Standing hinges -- gated at 0.0 by design, magnitude not sign is the open question (STANDING_KEYS's own doc comment):
+  CultureRateTrailing, ScienceRateTrailing
+
+[6 keys] Phase modifiers for PHASE_KEYS members other than HandValue -- their own base key is Free, so no non-arbitrary net-nonneg anchor exists:
+  WorkersEarly, WorkersLate, StrengthRelEarly, StrengthRelLate, TechLevelsEarly, TechLevelsLate
+
+[7 keys] Surplus siblings of every gated *Gap shortfall -- explicitly declined already by former SHORTFALL_GATES's own doc comment:
+  FoodSurplus, ResourceSurplus, ScienceSurplus, CultureSurplus, HappySurplus, MilitaryActionSurplus, WorkerSurplus
+
+TOTAL KEYS ACCOUNTED FOR: 162 (162 original WeightKey variants, 3 retired -> 159 live)
+
+
+(7) CORPUS DAMAGE -- how many champion snapshots on disk violated each gate
+--------------------------------------------------------------------------
+27 weight-vector JSON files found under /private/tmp/signaudit (champion
+snapshots, gauntlet members, python-era champions, human-fitted weights,
+strengthcheck experiments, scratch copies). Scan script: /tmp/corpus_scan.py
+(reads pop_cost / tactic_gain / tactic_short / hand_value+early / +late /
+card_board_wonder / _government / _action directly out of each file's
+"weights" object, no dominance_repair applied -- this is the RAW, unrepaired
+corpus).
+
+  pop_cost > 0 (violates new NonPositive gate):            4 / 27
+  tactic_gain < 0 (violates new NonNegative gate):          8 / 27
+  tactic_short > 0 (violates new NonPositive gate):         7 / 27
+  hand_value net < 0 at either phase (NET_NONNEG_PHASE):   20 / 27
+  nonzero now-retired card_board_wonder/government/action: 13 / 27
+
+hand_value's NET_NONNEG_PHASE violation is the single most widespread finding
+in this audit -- 20 of 27 files on disk currently price a full civil hand
+WORSE than an empty one somewhere in the early or late game, exactly the
+"bot sits on unused civil actions in the opening" symptom the task's own
+instance-3 writeup describes.
+
+Worst single violations found:
+  pop_cost:      +13.34  (analysis/frozen/gauntlet/champion_4p_gen4034_140key_2026-08-08.json; authored default -0.4)
+  tactic_gain:   -60.00  (champ_backup/rust_champion_4p.json; authored default 0.0)
+  tactic_short:  +10.82  (scratch/champion_2p_frozen.json and scratch/champion_2p_civilnonzero.json; authored default 0.0)
+  hand_value net: 0.2 + (-27.68) = -27.48 net at round-1 lateness (champ_backup/rust_champion_2p.json)
+
+The 13/27 files carrying a nonzero (now-retired) card_board_wonder/
+government/action are not "violations" in the sign sense (Free before
+retirement) -- they are evidence of exactly how much of the hill-climb's
+search budget was being spent perturbing three coefficients that could never
+have affected a single evaluated game, on the specific champions where the
+matching dedicated credit (gov_board_credit/action_board_credit/
+wonder_board_credit) was simultaneously nonzero. All three sit in the
+-42 to +42 range across the corpus, i.e. wandered as far as any live,
+functioning coordinate -- pure noise the climb never had a reason to prefer
+zero.
+
+
+(8) VERBATIM RED TEST FAILURES
+----------------------------------
+Every new test was confirmed RED by temporarily reverting the corresponding
+fix (restoring the exact pre-fix source, or neutering the specific repair
+loop) and re-running, then restoring the fix and confirming GREEN. Exact
+failures pasted below.
+
+--- weights.rs: the_three_new_gates_this_audit_added_are_classified_as_expected ---
+(broke by temporarily reclassifying TacticGain as Free)
+
+    thread 'bots::weighted::weights::tests::the_three_new_gates_this_audit_added_are_classified_as_expected' panicked at src/bots/weighted/weights.rs:1618:9:
+    assertion failed: matches!(WeightKey::TacticGain.sign_intent(), SignIntent::NonNegative(_))
+
+--- weights.rs: every_sign_intent_classification_agrees_with_its_own_authored_default ---
+(broke by temporarily reclassifying PopCost as NonNegative)
+
+    thread 'bots::weighted::weights::tests::every_sign_intent_classification_agrees_with_its_own_authored_default' panicked at src/bots/weighted/weights.rs:1591:49:
+    pop_cost is classified NonNegative (TEMP WRONG for red check) but defaults to -0.4
+
+--- weights.rs: the_three_retired_card_board_per_type_keys_have_nowhere_to_land ---
+(broke by temporarily removing the three entries from RETIRED_KEYS)
+
+    thread 'bots::weighted::weights::tests::the_three_retired_card_board_per_type_keys_have_nowhere_to_land' panicked at src/bots/weighted/weights.rs:1635:13:
+    card_board_government: retired but missing from RETIRED_KEYS
+
+--- eval.rs: a_deeply_negative_hand_value_early_is_repaired_even_though_the_base_is_legal ---
+(broke by reverting NET_NONNEG_PHASE to its pre-audit empty array)
+
+    thread 'bots::weighted::eval::tests::a_deeply_negative_hand_value_early_is_repaired_even_though_the_base_is_legal' panicked at src/bots/weighted/eval.rs:1609:9:
+    assertion `left == right` failed: raised to -base, i.e. -0.2 here
+      left: -27.683553904987917
+     right: -0.2
+
+--- eval.rs: the_repaired_vector_no_longer_prices_a_full_hand_worse_than_an_empty_one_in_the_opening ---
+(same revert)
+
+    thread 'bots::weighted::eval::tests::the_repaired_vector_no_longer_prices_a_full_hand_worse_than_an_empty_one_in_the_opening' panicked at src/bots/weighted/eval.rs:1638:9:
+    []
+    (empty violation list -- the repair never fired, so `net_repaired >= 0.0` failed the assert its own left-hand-side computed)
+
+--- bin/climb.rs: no_mutant_ever_leaves_a_net_nonneg_phase_pair_net_negative ---
+(broke by neutering the NET_NONNEG_PHASE loop body inside dominance_repair
+ to iterate an empty slice instead, while keeping HandValue in the constant
+ -- proves the guard is actually exercising dominance_repair's mutation-time
+ path, not merely the constant's presence)
+
+    thread 'tests::no_mutant_ever_leaves_a_net_nonneg_phase_pair_net_negative' panicked at src/bin/climb.rs:1566:21:
+    generation 0: hand_value (0.2) + hand_value_early (-9) went negative
+
+--- cards.rs / retirement's collateral bug: swap_slot panic (found by the full suite, not a written test) ---
+Before the swap_slot fix (section 3), the FULL test suite (not a targeted
+test) surfaced this panic across 31 previously-passing tests the moment
+board_credit_key stopped returning Some for Government:
+
+    thread '<unnamed>' panicked at src/bots/weighted/cards.rs:1889:36:
+    a single-slot type always has a board credit key
+
+Representative failing tests (of 31 total): arena::tests::
+threads_do_not_change_the_result, harness::mirror::tests::
+a_fresh_snapshot_matches_itself, bots::neural::rankdata::tests::
+playing_a_small_game_produces_value_rows_and_stays_at_the_current_encoder_
+width. Fixed by rewriting swap_slot's Government-branch condition (section
+3); full suite green afterward (section 9).
+
+
+(9) FULL TEST SUITE RESULT
+------------------------------
+    cargo test --profile difftest -- --test-threads 2
+
+    1486 passed; 0 failed; 1 ignored (a pre-existing #[ignore]'d benchmark,
+    unrelated to this audit)
+
+Ran clean across every binary in the workspace (lib, climb, arena tools,
+harness, neural bins, suite integration tests), not just the touched files.
+
+
+(10) WHAT WAS NOT DONE / FOLLOW-UPS
+---------------------------------------
+- The 18-key "credit/trust-multiplier" family (CardRateCredit,
+  UnitTechCredit, TechBoardCredit, ActionBoardCredit, GovBoardCredit,
+  WonderBoardCredit, BuildFreshCredit, RestrictedResourceCredit,
+  FreeActionCredit, TerritoryCredit, BonusCardCredit, TacticBoardCredit,
+  AggressionBoardCredit, WarBoardCredit, PactBoardCredit, EventBoardCredit,
+  TacticShortfallCost, TacticReachCredit) is the single strongest remaining
+  candidate for a future NonNegative gate: each scales a dedicated
+  function's board-aware estimate, several of which MIGHT be provably
+  gains-only the way wonder_potential is (which IS gated). Determining that
+  for each of the ~10 distinct dedicated functions (tech_value, action_value,
+  gov_value, tactic_value, aggression_value, war_hand_value, pact_value,
+  event_prepare_value, plus the static-table multipliers) needs the same
+  per-function gains-only proof WONDER_VALUE_GATES's own doc comment gives
+  for wonder_potential -- genuinely more work than this pass's budget, not
+  skipped out of laziness. NOT gated here because guessing wrong would be
+  worse than leaving it open (task's own instruction).
+- HandCivil/HandPotential/HandMilitary/HandMilValue/HandMilPotential are
+  plausible NonNegative candidates (a card in hand is never a rules-level
+  cost, the same logic HandValue's own gate uses) but were not individually
+  traced through their consuming code this pass.
+- ColonizeBonus/UrbanLimit/NoAggression are raw board-state indicator
+  features with no per-card-benefit citation established; flagged, not
+  guessed at.
+- ca_left and row_last_copy were explicitly OUT OF SCOPE per this task's own
+  constraints and were not touched (ca_left: "measured net regression, loses
+  at 38.2%"; row_last_copy: "its defect is units, not sign").
+- No A/B run against the current champion was performed. Per this task's own
+  explicit instruction: expect a regression against a champion whose other
+  ~155 coordinates were hill-climbed WHILE these bugs were present and are
+  co-adapted to them (tactic_gain at -60 in the 4p champion is presumably
+  "compensating" for some other coordinate's own drift) -- correctness of
+  the arithmetic, not win rate against a co-adapted vector, is the criterion
+  this task set, and that is what this audit optimized for.

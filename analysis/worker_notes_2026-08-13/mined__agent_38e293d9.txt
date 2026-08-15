@@ -1,0 +1,182 @@
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Replay depth push and per-bucket failure-fix worklist (status snapshot, ~2026-08-07 08:57 local)
+## Data:
+=== STATUS MESSAGE ===
+>>> Human bot needs full-length games, so I'm pushing replay depth (now 8.75 rounds / 25.1% late-game). Five workers on the five biggest remaining walls; climb running on the tie-break fix.
+Check if weakest/strongest tie-breaks are backwards - DONE
+Restart the climb on the tie-break fix - DONE
+Fix take (204) and population (152) - in progress
+Crack the colonization-bid wall (101) - in progress
+Fix build/upgrade/wonder costs (~275) - in progress
+Fix develop and action-card costs (~128) - in progress
+Get games running to the end, then train the human bot - todo
+Settle whether forced losses are deferred or logged late - paused
+Decide what to do about the saturated benchmark - paused
+• develop & actions worker plan:
+  Clone repo, build release
+  Dump & sub-categorize IllegalMove Develop/PlayAction + ParserGap failures
+  Check card-age resolution on Breakthrough(I/II), Urban Growth(II)
+  Find root cause(s), fix in Rust
+  Add tests, verify by reverting
+  Measure before/after with replaystats, commit+push
+• build & upgrade costs worker plan:
+  Clone repo, build replaystats
+  Dump & sub-categorize failing cases
+  Find root cause(s)
+  Implement fix(es) with tests
+  Measure before/after replaystats
+  Commit & push
+
+Note: the failure-bucket sizes shown (take=204, population=152, colonization-bid=101, build/upgrade/wonder=~275, develop/action-card=~128) appear to be counts of failing/divergent replay games per category, at the point this status was captured.
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Overnight hill-climb health check (Mac mini vs desktop), 2026-08-06 ~16:34-16:48
+## Data:
+Mac mini: healthy. Since the 02:05 restart, ~8.5 hours on the fixed pricing:
+
+| arm | generations | accepted |
+|---|---|---|
+| 2p | 73 -> 82 | 2 |
+| 3p | 2 -> 11 | 2 |
+| 4p | 1 -> 4 | 1 |
+
+All three arms alive, last generations landing within the past ten minutes. 5 accepted out of 21 tried is described as "a normal-looking rate for a climb that isn't stuck."
+
+Desktop: did nothing at all — zero iterations in 13.5 hours. GPU sat at 0% the entire time (cause: a stuck process, GoWSyncApp.exe, held a GPU context after WoW/Overwolf exited, defeating the pause-guard's resume logic).
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Rust evaluator port — differential verification against Python (2026-08-06 01:01-02:07)
+## Data:
+[2026-08-06T01:18:23] "the features vector, the part that reads the board and turns it into the 86 numbers the bot actually scores... The sibling ports each spot-checked a handful of representative numbers against Python. This one compared every number, in both directions, on every sampled position — 25[0,560? see below] ..."
+
+[2026-08-06T01:43:41] "Both evaluator workers came back and both are verified on master. Seven of the eight modules were already done; card valuation was the eighth, and it landed clean — 474,000-odd comparisons against Python, no disagreements."
+
+[2026-08-06T02:07:06] "The evaluator is done. All 4,553 lines of it — the biggest single file in the project — now exist in Rust and agree with Py[thon]"
+
+Corroborating exact count from a status-bar line (2026-08-05T ~19:17-20:15 window):
+"features port — Ported features() (weighted.py 1445-1756) to rust/src/bots/weighted/features.rs. Committed and pushed as 08e72690. Differential test: 250,560 checks, 0 mismatches."
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Old (pre-Rust) self-play training loop diagnostics pulled from desktop log (reported 2026-08-06 13:06)
+## Data:
+"Each iteration took ~53 minutes (iteration 98 at 5:01pm, 99 at 5:53, 100 at 6:47, 101 at 7:41 — like clockwork). ... 180 games to test the new net against itself, plus 240 games against the champion, every iteration, each game running a search 1,200 nodes deep per move... training step on a 700k-weight network — is a rounding error inside that 53 minutes."
+
+Log line quoted verbatim:
+> STALL it101  66 iterations without a promotion; arm A pooled win=0.4666 over 66 of them
+> ~0.50 => converged: the gate is right, change the training, not the threshold
+
+"66 consecutive iterations — roughly 58 hours of continuous training — produced nothing... the newly trained net averaged a 46.7% win rate against the one it was trying to beat."
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Deck-shuffle / discard-fix status snapshot (2026-08-05 09:26)
+## Data:
+STATUS channel=1530812348934393894 >>> waiting on 3 background workers
+- Port the turn loop (full game playable) - DONE
+- Port the mid-move decision queue - DONE
+- Implement 4 dead politics-phase leader abilities - in progress
+- Remove duplicate end-of-turn discard (crashes games) - in progress
+- Fix deck-shuffle mismatch at age transitions - in progress
+- Implement Barbarossa, Bach, Cook abilities - todo
+- Fix frozen event-age input to the neural net - todo
+- Benchmark vs Python, report speedup - todo
+"discard fix" — Done: economy::end_of_turn now calls interact::discard_excess_military; duplicate impl and test shim deleted; full games complete at 2p/3p/4p; pushed d2824de to origin/master.
+running cargo test: cargo test --test random_game a_random_game_plays_to_the_end -- --nocapture 2>&1 | grep -c "DEBUG_CHOOSE_HIT"
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Rust port progress + "Benchmark vs Python" speedup figure, open-items count (status range 2026-07-29 -> 2026-08-06)
+## Data:
+2026-08-05T15:59 status block:
+- Four politics leaders (Caesar, Alexander, Columbus, Joan) - DONE
+- Fix frozen event-age input to the neural net - DONE
+- Benchmark vs Python (14-16x) - DONE
+- Implement Barbarossa, Bach, Cook abilities - in progress
+- Close the last two cost gaps in the Rust port - in progress
+- Empty the open-items register (72 items) - todo
+- Port the remaining engine gaps: events, war, wonders - todo
+- Delete the Python engine - todo
+"dead leaders 2" — Done: Barbarossa, Bach and Cook are implemented, tested and pushed as ded32dd. Champion self-play measurements confirm the trained evaluator actually plays all three.
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Michelangelo culture-oracle bug: match-rate before/after, remaining mismatch count, and traced game IDs (2026-08-08 22:37-22:40)
+## Data:
+"Culture grind landed a real engine bug: Michelangelo's culture wasn't seeing two happy-face modifiers. Match rate 95.0% -> 99.4%, 167 fewer broken games."
+"Michelangelo culture bug found, fixed, tested and merged into the live tree — culture match 95.0% -> 99.4%, and it was an engine bug so the bot was mis-valuing him too. Round two of the grind is now chasing the remaining 86 games."
+
+culture grind 2 worker plan / traced example games:
+  Verify clone state & build
+  Trace EndTurn game 7522152 L340 delta -19
+  Trace WinWar game 7523079 L211 delta -12
+  Rate-rank buckets, find shared cause
+
+Progress checklist at this point:
+- Diagnose why the hill-climb is capped - DONE
+- Audit the neural stack in the repo - DONE
+- Find the Python-era desktop artifacts - DONE
+- Build Rust engine on the desktop - DONE
+- Culture oracle baseline, fix, merge (95.0% -> 99.4%) - DONE
+- Grind remaining 86 culture mismatches - in progress
+- Train + gate first clean net (mini) - in progress
+- Generate 30k-game corpus on the desktop - in progress
+neural train sub-steps: rankdata 4000 games generated (done); Train neuraltrain epoch 5/25, val_pair_acc 0.77 (in progress); Gate: head-to-head vs linear champion (todo); Final report with win rate + CI (todo)
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Culture-oracle baseline measurement task list snapshot, first-net training pipeline (2026-08-08 21:39-22:37, earlier in same run)
+## Data:
+- Diagnose why the hill-climb is capped - DONE
+- Lay out the staged ML plan - DONE
+- Audit what the neural side already has - DONE
+- Search desktop properly for the Python-era net - DONE
+- Generate first self-play training corpus - in progress
+- Train first net + gate vs linear champion - todo
+neural train sub-steps: Wait for rankdata (4000 games) - DONE; Train neuraltrain -> checkpoints/first_2p.ckpt (25 epochs, ~15-20min/epoch) - in progress; Gate: neuraleval/arena head-to-head vs linear champion - todo; Final report with win rate + CI - todo
+
+Measure culture oracle baseline (95.0%) recorded as a completed checklist item in the immediately-following status block (22:37:56):
+- Measure culture oracle baseline (95.0%) - DONE
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: Bid-shortlist A/B test results — 2p, 600 seat-paired games per comparison arm (status snapshot 2026-08-13 18:43-18:44)
+## Data:
+"The bid shortlist doesn't survive measurement. I told you it was one of two concrete wins — it isn't, and I'd rather say so than land it. Tested at 2p, 600 seat-paired games per comparison:"
+
+| shortlist | win rate vs default 8 | verdict |
+|---|---|---|
+| 4 | 51.0% ±3.9 | inconclusive |
+| 12 | 43.3% ±3.9 | worse |
+| 16 | 47.6% ±3.6 | inconclusive |
+| 20 | 48.0% ±3.6 | inconclusive |
+| uncap Bid decisions only | 48.5% ±1.4 | worse |
+
+Adjacent checklist items in the same status block:
+- Stop corpus fitting (your call) - DONE
+- Colony sign — declared a benefit, clamped - DONE
+- 68 truncated replays recovered (+32% rows) - DONE
+- Food/resources rules bug — fixing - in progress
+- Bid shortlist — wrapping up, partial results - in progress
+"shortlist width" worker — Code committed (d6239ad), report written to /private/tmp/shortwidth/SHORTWIDTH.txt, 1528 tests green.
+
+---
+
+## Source: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl, mtime 2026-08-13 22:17
+## Measurement: rng persistent-stream bug fix — root cause of all 218 replay divergences (reported afternoon, worker "fixtures", commit b4ebd0f)
+## Data:
+Timeline reconstructed from bot.log (this is a Claude-Code-bridge-status narrative, not raw replaystats output, but it cites a specific worker completion message):
+"...at 13:57:25 finished: 'Pushed b4ebd0f to master: fixed the rng persistent-stream bug (root cause of all 218 divergences)...'"
+The worker plan step being executed at the time: "Rewrite dump_fixtures.py to use derived streams" (step 1 of 5), followed by step 4/5 "Land via scratch clone".
+
+---

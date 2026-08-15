@@ -107,6 +107,7 @@ use std::str::FromStr;
 use crate::apply;
 use crate::economy;
 use crate::effects;
+use crate::human_policy;
 use crate::legal;
 use crate::moves::Move;
 use crate::rng::PyRandom;
@@ -453,15 +454,11 @@ pub fn evaluate(state: &GameState, idx: u8, w: &GreedyWeights) -> f64 {
 /// fingerprint CONTROL. See this module's top doc comment for the Python
 /// mechanisms this struct does not carry and why each omission is safe.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
 pub struct GreedyBot {
     pub weights: GreedyWeights,
 }
 
-impl Default for GreedyBot {
-    fn default() -> Self {
-        GreedyBot { weights: GreedyWeights::default() }
-    }
-}
 
 impl GreedyBot {
     pub fn new(weights: GreedyWeights) -> GreedyBot {
@@ -738,7 +735,18 @@ impl Bot {
 
     pub fn pick(&mut self, state: &GameState) -> Move {
         let moves = legal::legal_moves(state);
-        let moves = moves.as_slice();
+        self.pick_from(state, moves.as_slice())
+    }
+
+    /// Same dispatch as [`Self::pick`], but over a caller-supplied move list
+    /// instead of generating one from [`legal::legal_moves`] internally --
+    /// the seam `opening_force`'s forced-opening wrapper needs: narrow
+    /// `moves` down to whichever human-opening category is under test (a
+    /// SUBSET of the real legal moves, so this can never produce an illegal
+    /// move), then hand that subset to this exact same per-kind dispatch, so
+    /// every kind's own unmodified `choose`/search still does the actual
+    /// picking among them -- the champion evaluator itself is never touched.
+    pub fn pick_from(&mut self, state: &GameState, moves: &[Move]) -> Move {
         match self {
             Bot::Random(bot) => bot.choose(moves),
             Bot::Greedy(bot) => bot.choose(state, moves),
@@ -818,8 +826,59 @@ pub fn make_bots(spec: &str, num_players: u8, seed: i64) -> Result<Vec<Bot>, Str
     Ok(build_bots(&seats, seed))
 }
 
-/// One seat's assignment: which kind sits there, and which weight vector its
-/// evaluator reads.
+/// A seat's real-lookahead behaviour on top of [`Seat::kind`]'s own plain
+/// `pick` -- the construct [`Seat::search`] exists to make expressible
+/// outside `bin/kindmatch.rs`'s own hand-built `Bot::HumanPlan` bypass (see
+/// that variant's doc comment for the "no second `Weights` slot" problem
+/// this enum solves the same way: by giving [`Seat`] its second slot,
+/// scoped to exactly the one case that needs it).
+///
+/// `Search::None` is every seat before this field existed, and stays the
+/// overwhelming common case -- [`build_bots`] plays `seat.kind`'s ordinary
+/// `pick`, byte-for-byte what it always did, whenever this is `None`.
+///
+/// [`Search::HumanShortlistBeam`] is ONLY valid on a [`BotKind::Human`]
+/// seat -- [`build_bots`] panics if it finds this on any other kind (a
+/// caller bug: the two flags that construct one, `bin/kindmatch.rs`'s
+/// `--a-search`/`--b-search` and `bin/climb.rs`'s `--gauntlet-search`, both
+/// reject the combination at parse time, before a `Seat` carrying it is
+/// ever assembled, the same way `--a-policy`'s own kind check does for a
+/// different flag). This is not fully unrepresentable in the type system
+/// (that would need `BotKind` itself to stop being a fieldless, `Copy`,
+/// `Hash`-able registry key, which every other caller of `BotKind::ALL`/
+/// `BotKind::name`/`BotKind::from_str` depends on) -- see this crate's
+/// `Match::validate`/`.expect("duel was validated at start-up")` for the
+/// same "checked once at the boundary, trusted after" shape used elsewhere
+/// in this port for a precondition the type system cannot carry.
+// Boxing `HumanShortlistBeam`'s field (clippy's usual fix for this lint)
+// would make `Search` no longer `Copy` -- and `Seat`, which embeds it,
+// documents its own `Copy`-ness right above as load-bearing ("making a duel
+// spec `Copy` the way it always has been should not cost a `.clone()` at
+// every call site that builds one"). Trading that guarantee away to shrink
+// one enum would be a real behaviour/API change, not a lint-only fix.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
+pub enum Search {
+    /// Play [`Seat::kind`]'s own ordinary `pick`, unmodified.
+    #[default]
+    None,
+    /// `human_policy::rank` narrows the legal moves at the root to the
+    /// `ROOT_SHORTLIST` most human-plausible candidates using [`Seat::
+    /// weights`] (the human-imitation ranking vector -- same field, same
+    /// loader, a plain `Human` seat with `Search::None` would read), then
+    /// [`plan::pick`]'s ordinary beam -- scored at every node by
+    /// `eval_weights`, a REAL gameplay evaluator vector, deliberately NOT
+    /// [`Seat::weights`] -- picks the line to play among what survives.
+    /// See [`super::human::choose_with_search`]'s own doc comment for the
+    /// honesty note: this is a hybrid, not a stronger human imitator.
+    HumanShortlistBeam { eval_weights: weighted::weights::Weights },
+}
+
+
+/// One seat's assignment: which kind sits there, which weight vector its
+/// evaluator reads, and whether real lookahead is layered on top
+/// ([`Search`]).
 ///
 /// The kind and its weights travel together in one struct rather than in two
 /// lists indexed by seat, because the arena's whole job is to sit two
@@ -828,8 +887,9 @@ pub fn make_bots(spec: &str, num_players: u8, seed: i64) -> Result<Vec<Bot>, Str
 /// score under the champion's name. See [`Bot::kind`] for the same argument
 /// applied to reading a seat back out.
 ///
-/// `Copy`: both fields are (`BotKind` is a plain enum, `Weights` is a fixed
-/// array of `f64`), and `arena::Match` holds one per side by value -- making
+/// `Copy`: every field is (`BotKind` is a plain enum, `Weights` is a fixed
+/// array of `f64`, and [`Search`] is a small enum over those same two
+/// `Copy` shapes), and `arena::Match` holds one per side by value -- making
 /// a duel spec `Copy` the way it always has been should not cost a `.clone()`
 /// at every call site that builds one.
 #[derive(Clone, Copy, Debug)]
@@ -848,6 +908,9 @@ pub struct Seat {
     /// `bin/selfplay.rs`'s `--weights` handling already picks the right
     /// loader when `--bots` is exactly `human`.
     pub weights: weighted::weights::Weights,
+    /// Real lookahead on top of `kind`'s own `pick` -- see [`Search`]'s own
+    /// doc comment. `Search::None` for every seat that predates this field.
+    pub search: Search,
 }
 
 /// Parse a spec into one [`Seat`] per player, all sharing `weights`.
@@ -872,7 +935,7 @@ pub fn make_seats(
         return Err("make_bots: spec has no kinds".to_string());
     }
     Ok((0..num_players)
-        .map(|i| Seat { kind: kinds[(i as usize) % kinds.len()], weights })
+        .map(|i| Seat { kind: kinds[(i as usize) % kinds.len()], weights, search: Search::None })
         .collect())
 }
 
@@ -880,7 +943,23 @@ pub fn make_seats(
 ///
 /// Seeding is per seat (`seed * 131 + i`, as Python's `make_bots` does), so
 /// two seats of the same kind at one table do not draw the same numbers.
+///
+/// # Panics
+/// If any seat carries [`Search::HumanShortlistBeam`] on a kind other than
+/// [`BotKind::Human`] -- see [`Search`]'s own doc comment for why this is a
+/// caller-bug precondition validated at the two flag-parsing sites that
+/// construct one (`bin/kindmatch.rs`'s `--a-search`/`--b-search`,
+/// `bin/climb.rs`'s `--gauntlet-search`), not something this function's
+/// caller should ever be able to trigger from real command-line input.
 pub fn build_bots(seats: &[Seat], seed: i64) -> Vec<Bot> {
+    for seat in seats {
+        assert!(
+            matches!(seat.search, Search::None) || seat.kind == BotKind::Human,
+            "Seat::search::HumanShortlistBeam is only valid on a BotKind::Human seat, got {:?} with {:?}",
+            seat.kind,
+            seat.search
+        );
+    }
     let mut out = Vec::with_capacity(seats.len());
     for (i, seat) in seats.iter().enumerate() {
         let player_seed = seed.wrapping_mul(131).wrapping_add(i as i64);
@@ -914,7 +993,14 @@ pub fn build_bots(seats: &[Seat], seed: i64) -> Vec<Bot> {
             | BotKind::Tempo => Bot::Variant(super::variants::VariantBot::new(
                 seat.kind.archetype().expect("BotKind::archetype covers every variant BotKind"),
             )),
-            BotKind::Human => Bot::Human(HumanBot::new(&seat.weights)),
+            BotKind::Human => match seat.search {
+                Search::None => Bot::Human(HumanBot::new(&seat.weights)),
+                Search::HumanShortlistBeam { eval_weights } => Bot::human_plan(
+                    eval_weights,
+                    human_policy::vector_from_weights(&seat.weights),
+                    player_seed,
+                ),
+            },
         });
     }
     out
@@ -1098,7 +1184,7 @@ mod tests {
         let bots = make_bots("plan", 1, 0).unwrap();
         match &bots[0] {
             Bot::Plan { cfg, .. } => assert_eq!(cfg.width, 2),
-            other => panic!("expected Bot::Plan, got a different kind: {}", matches_name(other)),
+            other @ Bot::Random(_) | other @ Bot::Greedy(_) | other @ Bot::Weighted(_) | other @ Bot::Quiescent { .. } | other @ Bot::Book(_) | other @ Bot::Variant(_) | other @ Bot::Human(_) | other @ Bot::HumanPlan { .. } | other @ Bot::PlanWithPolicy { .. } => panic!("expected Bot::Plan, got a different kind: {}", matches_name(other)),
         }
     }
 
@@ -1115,5 +1201,49 @@ mod tests {
             let mv = bots[0].pick(&state);
             assert!(moves.as_slice().contains(&mv), "{}: {mv:?} was not offered", k.name());
         }
+    }
+
+    // -------------------------------------------------- Seat::search
+
+    /// A plain `BotKind::Human` seat with `Search::None` must still build
+    /// the ordinary searchless `Bot::Human` -- adding the `search` field to
+    /// `Seat` must not change what every existing `Human` caller (e.g.
+    /// `humanpaired`'s imitation-accuracy measurement) gets.
+    #[test]
+    fn a_human_seat_with_no_search_builds_the_plain_searchless_bot() {
+        let seat = Seat { kind: BotKind::Human, weights: weighted::weights::Weights::defaults(), search: Search::None };
+        let bots = build_bots(&[seat], 0);
+        assert!(matches!(bots[0], Bot::Human(_)), "expected a plain Bot::Human");
+    }
+
+    /// The whole point of `Search::HumanShortlistBeam`: a `BotKind::Human`
+    /// seat carrying it must build `Bot::HumanPlan` (real lookahead), not
+    /// the plain no-lookahead `Bot::Human` -- otherwise the flag would be
+    /// silently a no-op and the gauntlet's hybrid opponent would just be
+    /// the searchless `HumanBot` it exists to replace.
+    #[test]
+    fn a_human_seat_with_a_shortlist_beam_search_builds_the_lookahead_bot() {
+        let seat = Seat {
+            kind: BotKind::Human,
+            weights: weighted::weights::Weights::defaults(),
+            search: Search::HumanShortlistBeam { eval_weights: weighted::weights::Weights::defaults() },
+        };
+        let bots = build_bots(&[seat], 0);
+        assert!(matches!(bots[0], Bot::HumanPlan { .. }), "expected a lookahead Bot::HumanPlan");
+    }
+
+    /// `Search::HumanShortlistBeam` is only meaningful on a `BotKind::Human`
+    /// seat (see `Search`'s own doc comment) -- `build_bots` must refuse to
+    /// silently ignore it on any other kind rather than quietly building a
+    /// plain `Bot::Weighted` as though `search` had never been set.
+    #[test]
+    #[should_panic(expected = "HumanShortlistBeam is only valid on a BotKind::Human seat")]
+    fn build_bots_panics_on_a_shortlist_beam_search_bound_to_a_non_human_kind() {
+        let seat = Seat {
+            kind: BotKind::Weighted,
+            weights: weighted::weights::Weights::defaults(),
+            search: Search::HumanShortlistBeam { eval_weights: weighted::weights::Weights::defaults() },
+        };
+        let _ = build_bots(&[seat], 0);
     }
 }

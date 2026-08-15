@@ -1,0 +1,187 @@
+REPLAY OF PAUL'S REAL 4-TURN 2P GAME (2015 base, seat 0 first, Hard AI opponent)
+workspace: /private/tmp/replay4   binary: ./rust/target/difftest/advisor (run from repo root)
+all runs printed "search: human (root shortlist from analysis/frozen/human_weights.json + beam)" -- no greedy fallback.
+
+================================================================================
+JOB 1 -- RECONSTRUCTION: IT CLOSES, EXACTLY, CARD FOR CARD
+================================================================================
+Row mechanics used: refill always brings the row back to 13; sweeps take from the
+LEFT, new cards append on the RIGHT; between two consecutive turns of the same
+player in a 2p game there are TWO start-of-turn sweeps + TWO refills.
+
+Counting identity used at each gap (no guessing):
+  after my take the row holds 12; rival's turn sweeps k1 and refills (1+k1 new);
+  rival takes one -> 12; my turn sweeps k2 and refills (1+k2 new).
+  => total new cards = 2 + k1 + k2, and old survivors = 13 - (new).
+
+GAP 1 (Paul T1 -> Paul T2): Paul reported 5 new cards => k1+k2 = 3.
+  Old survivors = 8. Swept = leftmost 3 (Eng Genius A, Rich Land A, Hammurabi);
+  Library of Alexandria removed by the rival. 8 + 5 = 13. CLOSES.
+
+GAP 2 (Paul T2 -> Paul T3): Paul reported 7 new cards => k1+k2 = 5.
+  Old survivors = 6. Removed = original positions 1,2,3,4,6 (sweeps) + 5 (Alexander,
+  taken and played by the rival). 6 + 7 = 13. CLOSES.
+
+GAP 3 (Paul T3 -> Paul T4): Paul reported 8 new cards => k1+k2 = 6.
+  Old survivors = 5. All six Age-A leftovers swept; rival took Engineering Genius (I),
+  Paul took Theocracy. 5 + 8 = 13. CLOSES ONTO THE AUTHORITATIVE T4 ROW,
+  IN ORDER: Patriotism (I), Cultural Heritage (I), Columbus, Reserves (I), Irrigation.
+
+RECONSTRUCTED ROWS (1-based positions; the advisor prints 0-based slots)
+
+T1 (given, 13):
+   1 Engineering Genius (A)   2 Rich Land (A)        3 Hammurabi
+   4 Cultural Heritage (A)    5 Urban Growth (A)     6 Library of Alexandria
+   7 Hanging Gardens          8 Moses                9 Rich Land (A)
+  10 Alexander the Great     11 Urban Growth (A)    12 Frugality (A)
+  13 Colossus
+  Paul took Cultural Heritage (A) = position 4 = advisor slot 3.
+
+T2 (RECONSTRUCTED):
+   1 Urban Growth (A)         2 Hanging Gardens      3 Moses
+   4 Rich Land (A)            5 Alexander the Great  6 Urban Growth (A)
+   7 Frugality (A)            8 Colossus             9 Frugality (A)
+  10 Patriotism (A)          11 Pyramids            12 Julius Caesar
+  13 Stock Pile
+  ("stock pile" is a real card: "Stock Pile", an Age A action card. All five new
+   cards -- Frugality (A), Patriotism (A), Pyramids, Julius Caesar, Stock Pile --
+   are Age A; the Age A deck had not yet run out.)
+  Paul took Pyramids = position 11 = advisor slot 10.
+
+T3 (RECONSTRUCTED):
+   1 Frugality (A)            2 Colossus             3 Frugality (A)
+   4 Patriotism (A)           5 Julius Caesar        6 Stock Pile
+   7 Patriotism (I)           8 Cultural Heritage (I) 9 Engineering Genius (I)
+  10 Christopher Columbus    11 Reserves (I)        12 Irrigation
+  13 Theocracy
+  Paul took Theocracy = position 13 = advisor slot 12.
+
+T4 (authoritative, matched exactly by the forward reconstruction):
+   1 Patriotism (I)   2 Cultural Heritage (I)  3 Christopher Columbus
+   4 Reserves (I)     5 Irrigation             6 Warfare
+   7 Irrigation       8 Urban Growth (I)       9 Leonardo da Vinci
+  10 Great Wall      11 Rich Land (I)         12 Iron
+  13 Monarchy
+
+WHY THE THREE AMBIGUOUS T3 ARRIVALS ARE THE (I) VARIANTS -- DEDUCED, NOT GUESSED
+The 2p Age A civil deck (card_table count[0]) contains exactly ONE copy each of
+Engineering Genius (A), Patriotism (A) and Cultural Heritage (A). All three copies
+were already accounted for before the T3 deal (Eng Genius A was swept before T2;
+Cultural Heritage A was taken by Paul on T1; Patriotism A sat at T2 position 10 and
+was swept before T4). So the "patriotism / cultural heritage / eng genius" that
+arrived at T3 MUST be Patriotism (I), Cultural Heritage (I), Engineering Genius (I).
+This is also consistent with the four cards that follow them in the same deal
+(Columbus, Reserves I, Irrigation, Theocracy) all being Age I.
+
+THE "SLOT 10 / SLOT 12" DISCREPANCY: THE OLD ADVISOR WAS RIGHT, AND SO IS THE
+NAIVE FORWARD RECONSTRUCTION. THEY ARE THE SAME NUMBERS IN DIFFERENT BASES.
+The advisor indexes the row 0-based everywhere ("row slot {n} does not exist
+(0..12)", "take p1 7 -- a rival took the card in row slot 7 (0-based)"). Pyramids at
+1-based position 11 IS advisor slot 10; Theocracy at 1-based position 13 IS advisor
+slot 12. There is no off-by-one and no corruption to resolve -- the old numbers agree
+with the reconstruction once you read them 0-based. The live run confirms it: the
+advisor itself printed "TAKE 'Theocracy' (Government, age I) from row slot 12".
+
+INDEPENDENT CONFIRMATION FROM PAUL'S CIVIL-ACTION SPEND (row cost bands 1/2/3):
+  T2: took Pyramids (3 CA, expensive band) + played Cultural Heritage (1 CA) = 4 CA. Exact.
+  T3: took Theocracy (3 CA, expensive band) + increase population (1 CA) = 4 CA. Exact.
+Both cards were in the 3-CA band, which is where the reconstruction puts them.
+
+ONE LEFTOVER OBSERVATION (does not affect the reconstruction)
+Our engine's 2p Age A civil deck is 20 cards; the game only ever revealed 18 of them
+before crossing to Age I. The two never seen are the leaders ARISTOTLE and HOMER.
+Either the app's 2p Age A deck is 18 civil cards, or those two were removed at setup.
+Flagged, not patched -- every row above is fed to the advisor verbatim, so it does not
+change any result here.
+
+================================================================================
+JOB 2/3 -- REPLAY, PER TURN: PAUL vs ADVISOR (a) CHAMPION vs ADVISOR (b) SIGN-REPAIRED
+================================================================================
+(a) = /private/tmp/ipadgame/champion_2p_game.json copied to champ_a.json
+(b) = champ_b.json, identical except civil_actions -0.5197 -> 0.0,
+      civil_action_surplus -1.3242 -> 0.0, wonders -0.0548 -> 0.0 (all three were negative)
+State chained with --load/--save; before T3 and T4 the saved board was rewritten by hand
+to Paul's TRUE position (techs, hand, leader, tokens) so both weight vectors score the
+same real board. Scratch: /private/tmp/replay4/states/.
+
+TURN 1  (CA 1, MA 0)
+  Paul:  take Cultural Heritage (A) [slot 3], end turn.
+  (a):   SAME -- take Cultural Heritage (A) from slot 3, then end turn.
+  (b):   DIFFERENT -- END TURN immediately, taking no card. Cultural Heritage drops to
+         #2 (-0.8). Reason line: "+3 unspent civil actions".
+  => the sign repair makes turn 1 strictly worse than what Paul and the champion both played.
+
+TURN 2  (CA 4, MA 2, f2 r2 s1)
+  Paul:  pass politics; build Warriors [2 res, 1 MA]; take Pyramids (slot 10, 3 CA);
+         play Cultural Heritage [1 CA, +4 culture]; end turn.
+  (a):   pass politics; BUILD BRONZE; INCREASE POPULATION; TAKE ALEXANDER THE GREAT
+         (slot 4, 1 CA); PLAY ALEXANDER; end turn.
+  (b):   IDENTICAL TO (a), move for move. Only the runner-up ordering shifts
+         (e.g. Julius Caesar slot 11 rises to #3 at move 2 under (b)).
+  => (a) and (b) agree; both differ from Paul. Neither takes Pyramids on the corrected row.
+
+TURN 3  (CA 4, MA 2, f4 r2 s3)
+  Paul:  prepare event 'Scientific Breakthrough'; take Theocracy (slot 12);
+         increase population [2 food, 1 CA]; build Warriors [2 res, 1 MA]; end turn.
+  (a):   prepare event 'Scientific Breakthrough'; increase population; build Warriors;
+         take Theocracy (slot 12); end turn.  -- SAME MOVE SET AS PAUL, different order.
+  (b):   IDENTICAL TO (a).
+  => full agreement with Paul on turn 3 under both vectors.
+
+TURN 4  (CA 4, MA 2, f3 r2 s4; event Development of Settlement; Uncertain Borders in hand)
+  Paul:  (the turn under review -- the old buggy mirror advised revolution to Theocracy)
+  (a):   prepare event 'Uncertain Borders'; increase population [3 food]; build Agriculture;
+         take Christopher Columbus (slot 2); play Columbus; end turn.
+  (b):   IDENTICAL TO (a).
+  => (a) and (b) agree.
+
+SUMMARY: the sign repair changes exactly ONE of the four turns -- TURN 1 -- and changes
+it for the worse (it stops taking a card and banks the unspent civil actions instead).
+Turns 2, 3 and 4 are move-for-move identical under both vectors.
+
+================================================================================
+THE TURN-4 "REVOLUTION TO THEOCRACY" BLUNDER
+================================================================================
+It does NOT happen under (b). It also does NOT happen under (a). On the corrected
+board it is the #2 candidate at move 2 in both runs, never the pick:
+    (a) REVOLUTION to 'Theocracy' [1 science, all civil actions]   -24.1
+    (b) REVOLUTION to 'Theocracy' [1 science, all civil actions]   -22.9
+Note the direction: zeroing the civil-action penalties made the revolution slightly
+MORE attractive, not less (gap narrows from 24.1 to 22.9). So the sign gates are not
+what suppresses this blunder.
+
+What actually suppressed it was fixing the BOARD, not the weights. Control run with the
+old buggy mirror's food value (f=6 instead of Paul's true f=3), same everything else:
+    (a) f=6: still increase population #1, revolution #2 (-29.6)
+    (b) f=6: still increase population #1, revolution #2 (-28.4)
+So even f=6 alone does not reproduce it; the original blunder came from a board that was
+wrong in more than food -- consistent with the note that the old mirror applied the
+reported row and then ran its own sweep-and-refill on top of it, so it was scoring a row
+(and a hand) that was not on the table.
+
+Likewise the "took Pyramids at the expensive slot over Hanging Gardens at the cheap one
+purely because it cost more" behaviour does NOT reproduce on the corrected T2 row: (a)
+takes Alexander the Great at slot 4 for 1 CA, and ranks Hanging Gardens (slot 1) #2 at
+move 5. So that specific accusation against the champion is not confirmed by this replay.
+
+================================================================================
+CRASHES / ANOMALIES
+================================================================================
+No crashes. The advisor accepted every update line and never panicked.
+
+One thing that LOOKED like a bug and is not: at turn 3 the mirror's food jumped 4 -> 6
+across PREPARE EVENT 'Scientific Breakthrough'. That is correct rules, not a bug --
+apply.rs::h_prepare_event calls events::reveal_current_event, i.e. preparing an event
+reveals and resolves the top current-events card. In the mirror that card was
+Development of Agriculture (+2 food; it shows up as `pastev Development of Agriculture`
+in the saved state). In Paul's real game a different event was on top -- he reported
+"Development of Settlement" resolving in that window. LESSON FOR FUTURE REPLAYS: an
+`event <card>` line is needed before a turn in which the human prepares an event, not
+only before an end-of-turn reveal. This mis-resolved event is very likely where the old
+mirror's phantom "food 6" came from.
+
+Residual 1 food still unexplained: Paul's true f=3 at T4 vs 4 by arithmetic
+(4 - 2 for the T3 population increase + 2 production). Our card table models
+Development of Settlement as a FREE +1 population for every player; the app appears to
+have charged food for it (or given a discount rather than a free increase). Recorded,
+not chased -- f=3 was fed as authoritative.

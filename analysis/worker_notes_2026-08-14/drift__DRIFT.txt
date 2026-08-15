@@ -1,0 +1,276 @@
+DRIFT AUDIT -- measurement pass, 2026-08-14
+=============================================
+
+MANDATE: measure only, no fixes. Answer: what diverges FIRST between the
+reconstructed GameState and the BGO journal's own asserted quantities, and
+how often -- so the next fix targets the shared cause instead of another
+symptom bucket. This is a MEASUREMENT deliverable; it does not fix anything.
+
+Clone: /private/tmp/drift (branched from commit 58e4cd9, itself several
+commits ahead of the task's suggested f7f121f -- diff accordingly, see
+"Resume pointers" at the bottom).
+Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/drift.patch
+        (git diff 58e4cd9 HEAD, i.e. exactly this pass's instrumentation)
+
+INSTRUMENTATION (env-gated, DRIFT_AUDIT=1, inert otherwise)
+-------------------------------------------------------------
+Added `debugflags::drift_audit()` (same LazyLock-env-read pattern as the
+existing REPLAY_DEBUG* flags). Added `Replayer::drift_first: Option<
+DriftDivergence>` and a `maybe_record_drift(quantity, lineno, actor,
+journal_value, reconstructed)` helper that records this game's FIRST
+divergence across every tracked quantity, first-wins, never overwritten.
+Threaded into:
+  - the pre-existing, always-on culture oracle (`record_culture_check`)
+  - the pre-existing, always-on discard-phase hand-size oracle
+    (`check_discard_phase_oracle` -- quantity tag "hand_military_excess")
+  - the pre-existing but previously PRINT-ONLY science/resources debug
+    checks at the "End turn" checkpoint (upgraded to structured recording;
+    ALSO fixed to share the SAME `discard_blocked` guard the resources
+    check already had but science did not -- see "false start" below)
+`GameResult::drift_first` carries it out of the replayer. `replaystats.rs`
+collects one `DriftRecord` (id, quantity, lineno, round, age, delta,
+completed) per game when `DRIFT_AUDIT=1` is set, and prints a "## Drift
+audit" report section (quantity histogram, delta/round/age histograms for
+the top-2 quantities with example ids+linenos, and the completion
+correlation). Zero cost when `DRIFT_AUDIT` is unset: every new code path is
+behind `if crate::debugflags::drift_audit() { ... }`.
+
+FALSE START, CAUGHT BEFORE REPORTING (worth recording, since a fixer will
+hit the same trap): the pre-existing `REPLAY_DEBUG` science check at the
+"End turn" checkpoint never had the `discard_blocked` guard the neighbouring
+`resources` check has (both read the SAME class of quantity at the SAME
+point, one is guarded, one is not -- an inconsistency that was silently
+invisible while both were merely eprintln'd). Naively promoting it to
+structured recording made SCIENCE look like the dominant divergence in
+990/1011 games, always at Age I round ~4, delta -1 or -2 -- which is exactly
+what a checkpoint fired BEFORE a still-open `DiscardMilitary` pending
+resolves looks like (production hasn't run yet, so our own science reads
+short by whatever this turn's production would have added; the journal's
+own "(now M)" already reflects the POST-production total on the same line).
+Hand-traced the very first example (game 7523818, line 84 = "Orange End
+turn ... 2 science (now 6)"; line 85, the very next line, is "Orange
+discards 1 card" -- confirming the discard was still pending when the
+checkpoint fired) and confirmed it structurally: game 7523818's own
+Discard-Phase announcement precedes its EndTurn line ("Discard Phase 1
+military card must be discarded" at line 83, before the EndTurn at 84).
+Added the same `discard_blocked` guard to the science check (matching
+`resources`'s pre-existing one) before trusting ANY of these numbers. This
+is the single most important caution for whoever re-runs this: an
+"always-on except for one inconsistently-applied guard" checkpoint will
+silently manufacture a 98%-prevalence false signal. All numbers below are
+POST-fix.
+
+===========================================================================
+1. HOW MANY GAMES DIVERGE AT ALL
+===========================================================================
+803/1011 games (79.4%) diverge on at least one asserted quantity (culture,
+science, resources, or discard-phase military-hand excess) at some point.
+558 of those 803 (69.5%) still reach `completed` anyway -- divergence is
+common enough, and recoverable enough, that it is NOT itself a strong
+predictor of a stopped replay (see section 4).
+
+===========================================================================
+2. WHICH QUANTITY DIVERGES FIRST -- corpus-wide table
+===========================================================================
+| games (first-divergence quantity) | quantity              |
+|---|---|
+| 624 | hand_military_excess (discard-phase hand-size oracle) |
+| 131 | resources                                              |
+|  30 | science                                                 |
+|  18 | culture                                                 |
+
+hand_military_excess dominates by a wide margin (77.7% of all first
+divergences) -- this is the shared cause the three dead-ended workers were
+each circling from a different symptom (their "multi-turn simulation
+drift" / "deck-order approximation noise" / "unexplained 2-resource gap"
+language all fits a hand that's silently 1 card wrong well before whatever
+symptom they were chasing actually fired).
+
+EXCLUSION LIST (quantities the task named that are NOT included above, and
+why): food, happiness, worker/population counts, civil-action counts,
+military-action counts, and military strength were checked against the
+corpus's own journal text (`grep`-swept every `*.tsv`) and EXCLUDED as not
+independently comparable:
+  - food/happiness/population/civil-actions: the journal states these only
+    as event-triggered DELTAS ("<Color> loses N population", "<Color>
+    scores N culture per happy face", "N civil actions on his next turn",
+    etc.), never as a cross-validated running TOTAL the way science,
+    resources, and culture get a "(now M)" clause on every single "End
+    turn" line (verified: `grep -oE "[a-zA-Z]+ \(now [0-9-]+\)"` across the
+    whole corpus returns ONLY "science (now N)", "resources (now N)",
+    "culture (now N)" -- 46,990 each, nothing else). Comparing a delta
+    against our own state would just be re-deriving our own number, not
+    checking it against an independent truth.
+  - military strength: DOES appear as an absolute ("<Color> strength: N")
+    on combat-resolution lines, which in principle IS comparable -- but
+    only during active wars, an order of magnitude fewer checkpoints than
+    the always-present per-turn "(now M)" triad, and hooking it needed
+    locating the specific combat-strength computation in combat.rs, which
+    the time budget did not allow. Flagged here as the one deferred,
+    plausibly-easy addition for a future pass, not silently dropped.
+  - hand size, specifically: the pre-existing "discard-phase hand-size
+    oracle" this pass reuses does NOT compare raw hand size directly; it
+    compares the derived EXCESS (`max(0, hand_len - limit)`) against the
+    journal's own cross-validated "Discard Phase N ... must be discarded"
+    announcement (itself cross-checked against the sum of that round's
+    "<Color> discards N card(s)" resolutions -- see
+    `prescan_discard_phase_oracle`). Reported here as "hand_military_excess"
+    rather than a literal "hand size" to be precise about what is actually
+    being asserted and compared.
+
+===========================================================================
+3. TOP-2 QUANTITIES -- delta and round/age distribution
+===========================================================================
+
+--- hand_military_excess (624 games), delta = reconstructed - journal ---
+| games | delta |
+|---|---|
+| 481 | +1 |
+|  69 | -1 |
+|  65 | +2 |
+|   5 | +3 |
+|   3 | -2 |
+|   1 | -3 |
+NOT always +1, but heavily concentrated there (77% of this bucket) and
+small in magnitude (|delta| <= 3 for 623/624 games) -- a small, mostly-1-2
+card miscount, not an unbounded runaway. The sign skew (555 positive vs 73
+negative) says our reconstruction is far more often OVER-counting the
+military hand than under-counting it -- consistent with "a card that should
+have left hand_military doesn't" rather than "a card we think left, didn't
+really."
+
+first-divergence age: age III 371, age II 128, age IV 73, age I 52 --
+overwhelmingly a mid-to-late-game phenomenon, NOT an early-game one.
+first-divergence round: peaks hard at round 13 (163 games) and round 14
+(110), with a long tail from round 5 through round 20 -- consistent with
+"hand pressure builds up over many turns before the excess computation
+first gets caught out," not a single fixed trigger round.
+
+--- resources (131 games), delta = reconstructed - journal ---
+| games | delta |
+|---|---|
+|  78 | +2 |
+|  25 | +1 |
+|  15 | -1 |
+|  11 | -2 |
+|   2 | -4 |
+Also small and mostly-bounded (|delta| <= 4 for all 131), skewed positive
+(103 positive vs 26 negative) -- same "we think we have more than the
+journal says" shape as hand_military_excess, though this is a MUCH smaller
+bucket (131 vs 624) and was not deep-dived this pass.
+first-divergence age: age II 85, age III 22, age I 18, age IV 6 -- earlier
+than hand_military_excess's own age distribution.
+first-divergence round: broad spread, round 10 the single biggest (23
+games), otherwise no sharp peak.
+
+===========================================================================
+4. CORRELATION WITH LATER COMPLETION (against /tmp/rd_ids.txt, 644 ids)
+===========================================================================
+rate of completing AMONG games that diverge:  558/803 = 69.5%
+rate of completing OVERALL (all 1011 sampled): 644/1011 = 63.7%
+
+Plainly: divergence is barely correlated with failing to complete -- if
+anything, diverging games complete SLIGHTLY more often than the corpus
+average (69.5% vs 63.7%), the opposite of what "drift causes the eventual
+stop" would predict. Read this as: divergence is so common (79.4% of the
+whole corpus) that the diverging set is nearly the whole corpus, so its
+completion rate can't help but track close to the overall rate. This is
+itself informative -- it means hand_military_excess drift, in particular,
+is NOT the direct proximate cause of most `StuckPending`/`IllegalMove`
+stops (the stop-reason histogram's own top bucket, "StuckPending: decider #
+!= expected actor #", 96 games, is a DIFFERENT, disjoint symptom from this
+one). Whatever downstream damage a 1-2-card hand miscount does, it is
+subtle enough to coexist with a game finishing cleanly two-thirds of the
+time.
+
+===========================================================================
+5. DEEP DIVE -- the single most common (quantity, delta) pair:
+   (hand_military_excess, +1), 481 games
+===========================================================================
+3 example games (id, lineno of the first-divergence "End turn" checkpoint):
+  - 7523791, line 447 (round 14, age III, Purple) -- traced below
+  - 7523357, line 173 (round 6, age I, Orange)
+  - 7523335, line 214 (round 9, age II)  [id/lineno pair also recurs for
+    delta -1's own examples at a different actor -- not traced this pass]
+
+TRACE: game 7523791, Purple, round 14, journal line 447:
+  "End turn Purple scores:; ; 4 culture (now 45); 5 science (now 13); 0
+   food - consumption: 2 (now 3); 6 resources (now 12); Purple draws 3
+   military cards"
+Checkpoint: `Replayer::check_discard_phase_oracle`
+  (rust/src/replay_common.rs:2369-2405, the comparison itself at
+  rust/src/replay_common.rs:2373-2377 -- `let limit = s.military_actions +
+  s.military_hand_limit; let reconstructed_excess = (hand_len as i32 -
+  limit).max(0) as u32;`).
+At this checkpoint: journal_excess = 2 (BGO's own cross-validated "Discard
+Phase 2 military cards must be discarded" / sum of that round's "Purple
+discards 1 card" x2 resolutions, one BEFORE this EndTurn line at journal
+line 446, one AFTER it at line 448 -- BGO logs a discard-blocked EndTurn's
+second discard resolution AFTER printing the turn's own scores line, same
+established pattern `PendingCultureCheck`'s own doc documents for culture).
+This binary computes reconstructed_excess = 3, from hand_military_len = 6,
+limit = 3.
+
+Ruled OUT a limit-computation bug before concluding it's a count bug:
+  - `effects.rs:1919` -- Theocracy (Purple's government since round 8,
+    "Purple revolutions Change government to Theocracy") is table-defined
+    as `("Theocracy", 4, 3, 3)` i.e. 3 military actions -- confirmed
+    correct, not a stale-government read.
+  - `card_table.rs` -- grepped every card's `military_hand_limit` field
+    corpus-wide; the ONLY nonzero one in the whole card table is Library of
+    Alexandria (`military_hand_limit: 1`), which Purple never built this
+    game (Purple's wonders were Great Wall, Universitas Carolina, Ocean
+    Liner). So `limit = 3 + 0 = 3` is very likely CORRECT, and the journal's
+    own implied hand_len (limit + journal_excess = 3 + 2 = 5) is the true
+    number -- our reconstruction's hand_len = 6 has one phantom card.
+
+Narrowed but NOT pinned with certainty (ran out of budget before a final
+single-line answer): walked every Purple action between round 13's own
+discard-phase checkpoint (which DID match -- journal_excess and
+reconstructed_excess agreed there) and round 14's line-447 divergence:
+draws 3 (round-13-end), "Purple plays event ... Emigration" (PrepareEvent,
+-1), "Purple elects Isaac Newton" (PlayLeader, does not touch
+hand_military), "Purple takes Cannon in hand" (+1), "Purple takes
+Cavalrymen in hand" (+1), "Purple discards 1 card" (line 446, -1). Net
++3-1+1+1-1 = +3, taking round 13's own (matching) post-discard hand size of
+exactly `limit`=3 up to 3+3=6 -- EXACTLY this binary's own reconstructed
+value, with no arithmetic slip in between. That means every action in this
+window nets out consistently with our own bookkeeping; the phantom card was
+ALREADY present, uncounted as excess, AT OR BEFORE round 13's own
+checkpoint -- round 13 "agreeing" was a coincidence of the hand happening to
+land exactly at the limit that round, not proof the count was actually
+right. The strongest remaining suspect going further back is Purple's round
+10 colonization ("Purple colonizes a Wealthy Territory Sacrificed Units:; 1
+Warrior; 1 Colonization card +1; 1 Colonization card +2; Total force: 4"),
+parsed by `parse_sacrifice_clauses` (rust/src/replay_common.rs:4986-5013)
+into `SacrificeClause::Bonus` entries via `colonization_bonus_card` -- the
+only multi-bonus-card-consuming mechanism in Purple's whole game history
+before round 13, and worth checking FIRST by whoever picks this up: does
+sacrificing TWO DIFFERENT-VALUE Colonization bonus cards ("+1" and "+2") in
+the same colonize actually remove both from `hand_military` in
+`apply.rs`'s own colonize handler, or does the queue/consumption logic
+silently keep one? Not confirmed this pass -- name it as the next concrete
+step, not as a diagnosed bug.
+
+===========================================================================
+RESUME POINTERS
+===========================================================================
+- Clone base commit: 58e4cd9 ("Unit tests for the four PlayAction fixes").
+  `git diff 58e4cd9 HEAD` in /private/tmp/drift/rust is this pass's whole
+  instrumentation (verified non-empty before writing this file).
+- Re-run: `export PATH="$HOME/.cargo/bin:$PATH"; cd <clone>/rust && cargo
+  build --profile difftest --bin replaystats && DRIFT_AUDIT=1
+  ./target/difftest/replaystats /Users/pt/tta-ai/sources/bgo/index.tsv
+  /private/tmp/bgo-journals/journals` (or wherever the journals corpus
+  lives) -- look for the "## Drift audit" section.
+- The very next actionable step is NOT another measurement: it's finishing
+  the section-5 trace (does `apply.rs`'s colonize handler actually drop
+  BOTH sacrificed Colonization bonus cards from `hand_military` when they
+  have different face values?), then, if that's clean, walking the SAME
+  window one round further back (round 9-10) since a coincidental
+  round-13-limit match only proves the phantom card predates round 13, not
+  that round 10 is where it entered.
+- The military-strength "(N strength: M)" combat-resolution oracle
+  (section 2's exclusion list) is the one cheap addition worth doing before
+  the next full pass -- same shape as the existing three, just needs the
+  right hook in combat.rs.

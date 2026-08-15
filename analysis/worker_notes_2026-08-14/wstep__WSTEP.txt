@@ -1,0 +1,261 @@
+TARGET: IllegalMove: WonderStep bucket, 23 games, human-replay corpus (BGO)
+Baseline: 648 completed / 604 exact (guard_ids.txt, 648 lines)
+Clone: /private/tmp/wstep (cp -Rc of /private/tmp/base0815, base commit 8113a15)
+
+============================================================
+STEP 1: enumerate the 23 games (done BEFORE writing any code)
+============================================================
+
+Built src/bin/replaystats.rs (already in the tree) and used its existing
+REPLAY_DUMP_BUCKET env hook to dump every game/line in the
+"IllegalMove: WonderStep" bucket:
+
+  cd /private/tmp/wstep/rust
+  SCOREDIV_DUMP_COMPLETED=1 REPLAY_DUMP_BUCKET="IllegalMove: WonderStep" \
+      ./target/difftest/replaystats sources/bgo/index.tsv /tmp/bgo-journals/journals \
+      > /tmp/wstep_baseline.txt 2>/tmp/wstep_dump.txt
+
+23 distinct game IDs (verified count, listed in /tmp/wstep_games.txt at the
+time, reproduced here):
+  7521364 7521365 7521689 7521783 7521849 7522047 7522236 7522348 7522350
+  7522455 7522509 7522512 7522652 7522729 7522756 7522762 7522795 7522936
+  7523070 7523085 7523242 7523537 7523583
+
+Shapes observed in the raw dump: both single-stage builds ("builds 1 stage
+of X ... spends N resources") and multi-stage builds in one action
+("builds 4 stages of First Space Flight ... spends 16 resources; Wonder
+completed"), some completing the wonder, some not. This ruled out "it's
+always a multi-stage-cap bug" as a blanket explanation before writing code
+(per the task's own instruction to hand-trace before guessing).
+
+============================================================
+STEP 2: hand-trace 3 games against RULES_SPEC / CoL / FAQ
+============================================================
+
+Game 7521364, line 23: "Orange builds 1 stage of Colossus Orange spends 3
+resources" (round 2, single stage, NOT a multi-stage-cap case).
+REPLAY_DEBUG=1 ./target/difftest/replay ... 7521364 shows:
+  DEBUG cost detail: wonder_stage_cost(steps=1)=3 wonder=Colossus wonder_steps=0
+  resources=2 (in the try_apply-fail dump)
+So the engine's own cost formula (3) is right; the reconstruction's own
+resources (2) are one short. Looking at the raw journal one line earlier:
+  line 22: "GAME DATA UPDATED Orange Bronze: 2 -> 6"
+This is BGO's own admin-correction line shape (already handled for
+`culture` -- see `parse_game_data_updated_culture`'s doc, added in an
+earlier pass for game 7523809). `corpus::classify` files EVERY
+"GAME DATA UPDATED" line as Bookkeeping regardless of which stat it names,
+so this "Bronze: 2 -> 6" correction was silently dropped -- the
+reconstruction's own resources stayed at 2 forever, one short of the
+WonderStep's cost of 3.
+
+"Bronze" is BGO's own internal label for the player's RESOURCE stockpile,
+not a reference to the Bronze tech card: confirmed by scanning every
+"GAME DATA UPDATED" line in the full 1,011-game corpus
+(`grep -h "GAME DATA UPDATED" journals/*.tsv | sed ... | sort -u`) --
+every "Bronze: X -> Y" clause has the exact same shape as the "science:
+X -> Y" and "culture: X -> Y" clauses on the same or sibling lines (e.g.
+"GAME DATA UPDATED Green science: 2 -> 5; Green Bronze: 0 -> 2"), and the
+values move independently of whether that player has built/upgraded an
+actual Bronze mine card that game.
+
+Game 7523085, line 245: "Green builds 2 stages of Great Wall Green spends
+5 resources; ; Wonder completed" (round 8, a real multi-stage build, but
+NOT limited by the stage cap -- wonder_stage_cost(steps=2)=5, matching the
+journal exactly). REPLAY_DEBUG shows resources=0 at the point of failure.
+Five lines earlier:
+  line 240: "GAME DATA UPDATED Green Bronze: 4 -> 9"
+old=4 does not match the reconstruction's own resources (0) AT THAT EXACT
+LINE (this is why the fix defers rather than force-applies -- same
+self-deferring shape already established for culture corrections), but by
+the time line 245 is reached the reconstruction's own resources DO reach 4
+(matches "old"), so the deferred correction (+5) applies and covers the
+5-resource cost exactly.
+
+Third trace (7521689, "builds 4 stages of First Space Flight ... spends 16
+resources") turned out to be a DIFFERENT, much deeper mechanism -- see
+"RULED OUT / LEFT OPEN" below. This is the "at least one more root cause"
+already flagged by a prior pass (see docs/REPLAY.md's "Open, with a
+concrete next lead" section) -- confirmed independently here, not
+re-guessed.
+
+============================================================
+STEP 3: the fix (ENGINE-ADJACENT: the replayer/parser, not the rules
+engine itself -- the rules engine's cost/legality check was already
+correct; the bug was that the parser dropped BGO's own admin correction)
+============================================================
+
+File: rust/src/replay_common.rs
+
+1. New field `Replayer::pending_resource_corrections: Vec<(Color, i32,
+   i32)>` -- the resources twin of the existing
+   `pending_culture_corrections`, same self-deferring semantics.
+2. New function `parse_game_data_updated_resources(text) -> Vec<(Color,
+   i32, i32)>` -- the resources twin of
+   `parse_game_data_updated_culture`, reading "<Color> Bronze: <old> ->
+   <new>" clauses instead of "<Color> culture: <old> -> <new>".
+3. New method `Replayer::flush_pending_resource_corrections` -- the
+   resources twin of `flush_pending_culture_corrections`.
+4. In the main line-dispatch loop: call
+   `r.flush_pending_resource_corrections()` alongside the existing
+   `r.flush_pending_culture_corrections()`, and extend the "GAME DATA
+   UPDATED" handling block to ALSO parse and apply/queue
+   `resource_corrections`, gated on EITHER culture or resource clauses
+   being present (a single real line carries both a science and a Bronze
+   clause together, e.g. "Green science: 2 -> 5; Green Bronze: 0 -> 2" --
+   verified in the corpus scan above) before falling through to
+   `classify`.
+
+This mirrors an ALREADY-PROVEN pattern (the culture-correction fix from an
+earlier pass, landed for game 7523809) applied to the second stat BGO's
+own admin-correction lines carry that this codebase tracks as a plain
+scalar (`p.resources`, like `p.culture`) -- no new mechanism invented, no
+speculation about corruption/production internals required to fix this
+specific pair of games.
+
+Unit tests added (in the same file's existing `#[cfg(test)] mod tests`
+block):
+  - parse_game_data_updated_resources_reads_every_bronze_clause_and_ignores_other_stats
+  - flush_pending_resource_corrections_applies_the_bronze_clause_that_unblocks_a_wonder_step
+    (the actual 7521364 scenario: resources=2, correction old=2 new=6,
+    must apply immediately)
+  - flush_pending_resource_corrections_defers_until_the_live_value_matches_bgos_own_old_baseline
+    (mirrors the culture test's own deferred-cascade regression)
+
+Confirmed RED: temporarily made `flush_pending_resource_corrections` a
+no-op, re-ran `cargo test --profile fasttest --lib
+flush_pending_resource_corrections` -- the "applies" test failed exactly
+as expected ("old (2) matches live (2): the correction must apply at
+once", left=2 right=6). Restored the fix, re-ran -- both tests GREEN.
+
+============================================================
+STEP 4: measurement
+============================================================
+
+cargo test --profile fasttest: 1398 passed (1395 baseline + 3 new), 0 failed.
+cargo clippy --all-targets --profile fasttest -- -D warnings: clean, no warnings.
+
+Corpus sweep (full 1,011-game corpus):
+  Before: 648 completed / 604 exact
+  After:  649 completed / 605 exact
+
+  comm -23 /private/tmp/guard_ids.txt /tmp/wstep_ids.txt   (REGRESSIONS)
+    <empty>
+
+  comm -13 /private/tmp/guard_ids.txt /tmp/wstep_ids.txt   (WINS)
+    7523085
+
+Bucket-size check (REPLAY_DUMP_BUCKET="IllegalMove: WonderStep", before vs
+after, distinct game IDs hitting this specific bucket):
+  Before: 23 games
+  After:  21 games
+  Dropped out of the bucket: 7521364, 7523085
+  Newly entered the bucket: none
+
+7523085 is a full completion win (+1 completed, +1 exact). 7521364 left
+the WonderStep bucket (the fix does make that exact WonderStep move legal
+-- traced with `./target/difftest/replay ... 7521364`, which now
+progresses from 11 actions/line 23 to 50 actions/line 72 before stopping
+on an UNRELATED `IllegalMove: Develop` for "Warfare" at round 3) but does
+not reach full completion because of that separate, out-of-scope bug. This
+is expected and correct: the task is to make the ENGINE agree with real
+human WonderStep moves, not to complete every game in one pass.
+
+============================================================
+RULED OUT / LEFT OPEN (honest negative, not "seems like drift")
+============================================================
+
+The remaining 21 games in the bucket do NOT share the GAME DATA
+UPDATED/Bronze mechanism (none of them carry a "GAME DATA UPDATED ...
+Bronze:" line in their journal at all -- checked by grep across all 21).
+
+Hand-traced one of them in full (7521689, Orange, round 16-17, leader Bill
+Gates, "builds 4 stages of First Space Flight ... spends 16 resources"):
+using the existing (already-instrumented) REPLAY_DEBUG_ALL=1
+REPLAY_DEBUG_TECHS=1 output, the reconstruction's own resources fall
+short of the journal's own "(now M)" running total starting at the round-16
+End Turn (delta -4), growing to -8 by round 17's End Turn -- BEFORE the
+WonderStep line is ever reached, i.e. this is a downstream symptom of an
+earlier economy divergence, not a WonderStep-specific bug (same shape the
+existing code comments already warn about for this whole bucket family).
+
+Traced the exact mechanism: `economy::gain_resources`/`gain_food`
+(economy.rs) cap production by `blue_available(p)`, computed via
+`tokens_for(value, denoms)` -- a DENOMINATION/VALUE-based token count
+(minimum tokens to represent a given total value, "making change"). This
+is the CORRECT model for the general "gain food or resources" rule from
+card effects (CoL p.11: "move one or more blue tokens... resulting total
+must be exactly the amount... if not enough tokens, gain the nearest lower
+achievable value"). But CoL p.6's End-of-Turn "Resource Production" step
+is worded differently: "For each WORKER on your mine technology cards,
+move ONE blue token from the blue bank to that card... if not enough
+tokens, move all you can, beginning with those of the highest level." That
+is a WORKER-COUNT-based token cost (one token per producing worker,
+regardless of that worker's own per-level value), not a VALUE-based token
+cost. For a player whose only resource-track cards are all denomination-1
+(e.g. un-upgraded Bronze) the two models coincide, but for
+`Special::ResourcesPerLabEqualToLevel` (Bill Gates: "each of your labs
+ALSO produces resources equal to its level") a single worker on a level-3
+lab contributes 3 to `s.resources` under today's model at a cost of 3
+value-based tokens, when the CoL-p.6-worded rule (if it even applies to a
+leader-ability bonus stacked onto a lab at all, which is itself unverified
+-- Bill Gates' bonus is not literally "a mine technology card") would cost
+at most 1.
+
+Traced the arithmetic through by hand (pre-corruption resources=7,
+corr=2 -- matches the journal's own "CORRUPTION! Orange loses 2
+resources" exactly, ruling out the corruption FORMULA itself) and even a
+fully-uncapped model (7 - 2 + 10 = 15) still falls 2 short of the
+journal's own final total of 17, so simply removing the cap is not a
+complete fix either -- there is a second, unidentified discrepancy beyond
+the token-cost model. This is the SAME "blue_total/blue_used, not the
+corruption formula" lead a PRIOR pass already flagged and explicitly left
+open (docs/REPLAY.md, "Seventeenth pass" section, game 7522625,
+"NOT yet checked: whether blue_total's starting value of 16 is even the
+right constant per player count, and whether some OTHER effect should be
+adding to it by this point... ran low on context before finishing this
+trace").
+
+NOT attempted in this pass: rewriting `economy::end_of_turn`'s resource/
+food production to be worker-count-based (rather than value-based) for
+the plain mine/farm case, and/or exempting non-mine/farm production
+sources (Bill Gates, DoubleBestMine, SciencePerBestLabOrLibraryLevel-style
+bonuses) from the blue-bank cap entirely. Both are plausible partial fixes
+by the CoL p.6 text quoted above, but:
+  (a) this touches the CORE production loop every single game runs through
+      every single turn (`economy::end_of_turn`), so a wrong or partial
+      fix risks corpus-wide regressions, not just missing a further win;
+  (b) my own hand-trace above did NOT fully reconcile the numbers even
+      after the most obvious partial fix (uncapping non-mine/farm bonus
+      production) -- a second, still-unidentified gap remains;
+  (c) this is NOT a WonderStep-specific mechanism -- it is a general
+      economy/corruption discrepancy that would resurface across many
+      IllegalMove buckets (Build/Upgrade/Develop, per the existing
+      "Build/Upgrade/WonderStep 'resources short by 1-2' cluster" comments
+      already in apply.rs and corpus.rs), so it deserves its own dedicated
+      pass with a full budget, not a bolt-on inside this one.
+
+HANDOFF for whoever picks this up next:
+  - Re-run REPLAY_DEBUG_ALL=1 REPLAY_DEBUG_TECHS=1 against 7521689 (or any
+    of the remaining 21 WonderStep-bucket games) and grep for
+    "end_of_turn pre-corruption"/"end-turn resources drift" to reproduce
+    the trace above from scratch.
+  - Start from CoL p.6's exact "Resource/Food Production" wording (quoted
+    above, sources/cge_code_of_laws.pdf page 6) -- the fix is almost
+    certainly in `economy::gain_resources`/`gain_food`/`blue_used`
+    (economy.rs) needing a WORKER-COUNT-based token model for the
+    end-of-turn production steps specifically, distinct from the
+    VALUE-based model that stays correct for card-triggered "gain X
+    resources" effects (CoL p.11, already correctly modelled).
+  - Bill Gates' `ResourcesPerLabEqualToLevel` (effects.rs) is a good first
+    test case since it's the cleanest divergent example (1 worker, 3
+    value, from a card that isn't literally a "mine technology card").
+  - Budget a FULL pass for this (like the existing "Seventeenth pass" did)
+    -- do not bolt it onto a narrower bucket's fix. Re-verify against the
+    corpus-wide regression guard before landing, since this is a
+    hot-path/every-turn code change.
+
+============================================================
+FILES CHANGED
+============================================================
+rust/src/replay_common.rs only (see wstep.patch, git diff against 8113a15).
+No RULES_SPEC.md changes needed (existing citations already cover this).

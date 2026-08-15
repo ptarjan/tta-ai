@@ -1,0 +1,36 @@
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index ae8227b..f7f6a04 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -1502,6 +1502,15 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
+         }
+     }
+     stats.happy = stats.happy.clamp(0, 8);
++    if state.game_over && std::env::var("SCOREDIV_TECHS_DUMP").is_ok() {
++        eprintln!(
++            "SCOREDIV_TECHS player={} workers_free={} yellow_bank={}",
++            p.idx, p.workers_free, p.yellow_bank
++        );
++        for (id, slot) in p.techs.iter() {
++            eprintln!("  SCOREDIV_TECH {} workers={}", id.name(), slot.workers);
++        }
++    }
+     stats
+ }
+ 
+diff --git a/rust/src/game.rs b/rust/src/game.rs
+index c3ef4b2..a350cac 100644
+--- a/rust/src/game.rs
++++ b/rust/src/game.rs
+@@ -970,6 +970,11 @@ fn finish_game(state: &mut GameState) {
+     // 236-card table (same reasoning `legal.rs::politics_moves` already
+     // documents for the identical guard), so there is no `state.has_military`
+     // field to read here and the call is unconditional.
++    if std::env::var("SCOREDIV_EVENT_DEBUG").is_ok() {
++        for p in state.players.iter() {
++            eprintln!("SCOREDIV_PRECULTURE player={} culture={}", p.idx, p.culture);
++        }
++    }
+     events::evaluate_final_events(state);
+ 
+     for idx in 0..state.num_players as usize {

@@ -1,0 +1,13 @@
+games        480 (120 deals x 4 seats)
+players      4
+kind         weighted
+A            rust_champion_4p
+B            champion_4p_pre_headroom
+mean moves   596.9
+elapsed      33.1s  (14.5 games/s)
+
+win rate     22.4%  +/- 3.8   (null 25.0%)   p = 0.1717
+             [naive +/- 3.7, rho +0.00, deff 1.02, 120 deals]
+culture      A 50.3   best other 112.3   lead -62.0 +/- 7.8
+
+verdict      inconclusive -- the interval still straddles the null

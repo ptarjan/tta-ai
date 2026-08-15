@@ -1,0 +1,385 @@
+diff --git a/rust/src/discard_solver.rs b/rust/src/discard_solver.rs
+index 4268408..5ed4815 100644
+--- a/rust/src/discard_solver.rs
++++ b/rust/src/discard_solver.rs
+@@ -107,11 +107,47 @@ impl DiscardSolver {
+         DiscardSolver { future_needs, solved: 0, chosen: 0, forced_collisions: 0 }
+     }
+ 
+-    /// Every card `actor` is observed playing out of their own military
+-    /// hand at some journal line AFTER `at_lineno` -- so, every identity
+-    /// that provably still sits in their hand right now and must not be
+-    /// spent, overwritten or otherwise assumed away by anything resolving a
+-    /// hidden hand card at this point.
++    /// Every card FAMILY (`Card::base_name`) `actor` is observed playing out
++    /// of their own military hand at some journal line AFTER `at_lineno` --
++    /// so, every family that provably still has a live copy sitting in
++    /// their hand right now and must not be spent, overwritten or otherwise
++    /// assumed away by anything resolving a hidden hand card at this point.
++    ///
++    /// Returns a set of FAMILIES (`base_name`), not exact [`CardId`]s. This
++    /// used to return exact `CardId`s, matched one-for-one against
++    /// `FutureNeed::card` -- which is only ever an EDUCATED GUESS at which
++    /// age-sibling BGO meant (`corpus::build_card_index`'s bare-name lookup
++    /// picks one arbitrarily; `replay_common.rs`'s own `best_age_sibling`/
++    /// `resolve_named_card_by_effect` corrections narrow that guess, but
++    /// still only ever narrow it). Protecting by the exact guessed `CardId`
++    /// meant that CORRECTING a future need's age-sibling guess (e.g. fixing
++    /// `ActionClass::PlayAggression` to resolve "Plunder" to the Age III
++    /// copy the journal's own text proves, instead of the Age I copy
++    /// `build_card_index` picked arbitrarily) changed WHICH exact identity
++    /// this method protected, which could silently un-protect (or newly
++    /// protect) a candidate at an EARLIER, unrelated discard decision --
++    /// `interact::discard_options`' candidates are themselves simulated
++    /// filler with no journal-verified identity of their own (this module's
++    /// own doc, above), so whether one of them happened to collide with the
++    /// old vs. the new guessed `CardId` was pure accident. That accident is
++    /// exactly what turned a same-day age-sibling fix into 8 unrelated
++    /// corpus regressions (`analysis/worker_notes_2026-08-14/
++    /// plunder__PLUNDER.txt`) -- flip the exact identity a future need
++    /// points at, and the set of candidates it happens to protect flips
++    /// with it, even though the JOURNAL FACT underneath ("a card of this
++    /// family is played later, so it wasn't discarded here") never changed
++    /// at all. Matching by family instead makes protection invariant to
++    /// which age-sibling a future need's `CardId` guess ends up being: any
++    /// candidate sharing that family is protected regardless, so refining
++    /// the guess elsewhere in the replayer can no longer move this set.
++    ///
++    /// This is strictly MORE conservative than exact-identity matching (a
++    /// superset of what it used to protect), never less: it can turn a
++    /// `Solved` discard into a `Chosen` or `ForcedCollision` one in the rare
++    /// case a player's simulated hand holds two different-age siblings of
++    /// the same family at once, but it can never let a genuinely-needed
++    /// family through unprotected, and `choose` (below) still always picks
++    /// a legal candidate either way.
+     ///
+     /// Exposed (rather than left inline in [`DiscardSolver::choose`])
+     /// because a forced discard is not the only place this file's replayer
+@@ -120,13 +156,13 @@ impl DiscardSolver {
+     /// question. Same predicate, one copy -- and unlike `choose`, this is a
+     /// pure query and moves none of the solved/chosen/forced-collision
+     /// counters, which mean "a forced DISCARD was resolved" specifically.
+-    pub fn needed_after(&self, actor: u8, at_lineno: usize) -> HashSet<CardId> {
++    pub fn needed_after(&self, actor: u8, at_lineno: usize) -> HashSet<&'static str> {
+         self.future_needs
+             .get(&actor)
+             .into_iter()
+             .flatten()
+             .filter(|need| need.lineno > at_lineno)
+-            .map(|need| need.card)
++            .map(|need| need.card.get().base_name)
+             .collect()
+     }
+ 
+@@ -143,7 +179,8 @@ impl DiscardSolver {
+     pub fn choose(&mut self, actor: u8, at_lineno: usize, options: &[CardId]) -> (usize, DiscardCertainty) {
+         assert!(!options.is_empty(), "DiscardSolver::choose called with no candidates to pick from");
+         let needed_later = self.needed_after(actor, at_lineno);
+-        let safe: Vec<usize> = (0..options.len()).filter(|&i| !needed_later.contains(&options[i])).collect();
++        let safe: Vec<usize> =
++            (0..options.len()).filter(|&i| !needed_later.contains(options[i].get().base_name)).collect();
+         match safe.len() {
+             0 => {
+                 self.forced_collisions += 1;
+@@ -318,6 +355,40 @@ mod tests {
+         assert_eq!(cert, DiscardCertainty::Chosen);
+     }
+ 
++    /// `FutureNeed::card` is only ever an educated GUESS at which
++    /// age-sibling BGO's bare-name journal text meant
++    /// (`corpus::build_card_index`'s doc comment) -- `replay_common.rs`'s
++    /// own age-sibling corrections (`best_age_sibling`, or Plunder's exact
++    /// "up to N" text match) can and do refine that guess to a DIFFERENT
++    /// exact `CardId` than whatever the prescan originally recorded.
++    /// Protection must survive that: a candidate sharing the SAME FAMILY
++    /// (`base_name`) as a future need must be ruled out, even when its
++    /// exact `CardId` differs from `FutureNeed::card`'s own guess.
++    ///
++    /// This is the RED/GREEN target for the DiscardSolver robustness fix:
++    /// reverting `needed_after`/`choose` to compare exact `CardId`s again
++    /// (as they did before this session) makes this fail, because
++    /// `plunder_iii != plunder_i` and the old code protected only the exact
++    /// guessed identity -- `plunder_iii` would incorrectly survive as
++    /// `Solved` instead of being ruled out as a `ForcedCollision`.
++    #[test]
++    fn a_future_need_protects_every_age_sibling_of_its_family_not_just_the_exact_guessed_card_id() {
++        let plunder_i = card("Aggression: Plunder (I)");
++        let plunder_iii = card("Aggression: Plunder (III)");
++        assert_ne!(plunder_i, plunder_iii, "sanity check: these really are two distinct CardIds");
++        // The prescan recorded the Age I guess (whatever `build_card_index`
++        // happened to pick); the discard decision offers only the Age III
++        // sibling -- a different exact identity, same family.
++        let mut s = solver(&[(0, 100, plunder_i)]);
++        let (idx, cert) = s.choose(0, 50, &[plunder_iii]);
++        // Family-based protection rules the only offered candidate out --
++        // a forced collision, not a false "Solved".
++        assert_eq!(cert, DiscardCertainty::ForcedCollision);
++        assert_eq!(idx, 0);
++        assert_eq!(s.forced_collisions, 1);
++        assert_eq!(s.solved, 0);
++    }
++
+     #[test]
+     #[should_panic(expected = "no candidates")]
+     fn choosing_with_no_candidates_panics_rather_than_silently_picking_nothing() {
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 1d96ea8..1b424c6 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -1785,7 +1785,7 @@ impl<'a> Replayer<'a> {
+             .hand_military
+             .as_slice()
+             .iter()
+-            .find(|id| !needed_later.contains(id))
++            .find(|id| !needed_later.contains(id.get().base_name))
+         {
+             self.state.players[decider as usize].hand_military.remove_first(victim);
+         } else {
+@@ -2022,7 +2022,7 @@ impl<'a> Replayer<'a> {
+                 .as_slice()
+                 .iter()
+                 .copied()
+-                .filter(|id| id.kind() != CardType::Bonus && !needed_later.contains(id))
++                .filter(|id| id.kind() != CardType::Bonus && !needed_later.contains(id.get().base_name))
+                 .collect();
+             filler.sort_by_key(|id| (crate::interact::defense_points(*id), id.name()));
+             let Some(&victim) = filler.first() else { return false };
+@@ -2100,7 +2100,7 @@ impl<'a> Replayer<'a> {
+                     .as_slice()
+                     .iter()
+                     .copied()
+-                    .find(|id| !needed.contains_key(id) && !needed_later.contains(id));
++                    .find(|id| !needed.contains_key(id) && !needed_later.contains(id.get().base_name));
+                 let hand = &mut self.state.players[actor as usize].hand_military;
+                 if let Some(victim) = victim {
+                     hand.remove_first(victim);
+@@ -2234,7 +2234,7 @@ impl<'a> Replayer<'a> {
+         }
+         let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+         let hand = &mut self.state.players[actor as usize].hand_military;
+-        if let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id)) {
++        if let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id.get().base_name)) {
+             hand.remove_first(victim);
+         }
+         hand.push(card);
+@@ -2282,7 +2282,7 @@ impl<'a> Replayer<'a> {
+         let needed_later = self.discard_solver.needed_after(actor, self.current_lineno);
+         for _ in 0..owed {
+             let hand = &mut self.state.players[actor as usize].hand_military;
+-            let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id)) else {
++            let Some(&victim) = hand.as_slice().iter().find(|id| !needed_later.contains(id.get().base_name)) else {
+                 break;
+             };
+             hand.remove_first(victim);
+@@ -3431,6 +3431,74 @@ fn trailing_gets_civil_action(text: &str) -> Option<i32> {
+     before[gets_pos + " gets ".len()..].parse().ok()
+ }
+ 
++/// The `"up to N resource and/or food"` clause anywhere in `text` --
++/// Plunder's own printed cap (`"<Color> plays Plunder against <Color> Your
++/// rival loses a total of up to N resource and/or food (your choice). ...`),
++/// which pins down EXACTLY which of Plunder's three age-siblings (I/II/III,
++/// `TakeFromOpponentBlock.food_and_or_resources` 3/5/7 respectively,
++/// `card_table.rs`) was actually played -- confirmed corpus-wide: every
++/// `"plays Plunder"` line prints exactly one of `3`/`5`/`7` here, with no
++/// other occurrence of the phrase on the same line to collide with. Unlike
++/// [`best_age_sibling`]'s "highest age not exceeding the current one" bound,
++/// this is the exact printed number, not a guess bounded by `state.
++/// age_military` -- which matters because `age_military` can be AHEAD of
++/// the copy actually in a player's hand (a card drawn at an earlier age and
++/// never played survives an age transition unplayed), so the bound can
++/// overshoot as easily as `corpus::build_card_index`'s arbitrary pick can
++/// undershoot (`analysis/worker_notes_2026-08-14/discardsolve__
++/// DISCARDSOLVE.txt`, game `7521906`: the bound picked Age II when the
++/// journal's own "up to 3" proves Age I).
++fn trailing_up_to_resource_and_or_food(text: &str) -> Option<i32> {
++    let suffix = " resource and/or food";
++    let suffix_pos = text.find(suffix)?;
++    let before = &text[..suffix_pos];
++    let marker = "up to ";
++    let marker_pos = before.rfind(marker)?;
++    before[marker_pos + marker.len()..].parse().ok()
++}
++
++/// Plunder's own printed cap for `id`, or `None` for every other card --
++/// the field [`trailing_up_to_resource_and_or_food`]'s parsed number is
++/// matched against to pick the correct age-sibling.
++fn plunder_food_and_or_resources(id: CardId) -> Option<i16> {
++    // `if let`, not a `match` with a wildcard arm over `Special` -- this
++    // project's lint gate denies `_ =>` over an enum (`cargo clippy
++    // --all-targets -- -D warnings`), and `Special` has ~80 variants.
++    id.get().special.iter().find_map(|s| {
++        if let crate::cards::Special::TakeFromOpponent(block) = s {
++            Some(block.food_and_or_resources)
++        } else {
++            None
++        }
++    })
++}
++
++/// Resolves `card` (a "plays Plunder"/"plays Aggression: Plunder" line's
++/// `corpus::build_card_index`-arbitrary same-name pick) to the age-sibling
++/// the journal's OWN "up to N resource and/or food" text proves was
++/// actually played. A no-op for every other Aggression card (`card`'s
++/// family is not Plunder) and a safe no-op (returns `card` unchanged) if
++/// `raw_text` carries no such clause or no sibling's printed number matches
++/// -- never worse than the pre-correction guess.
++///
++/// Deliberately NOT `best_age_sibling(card, state.age_military)`: that
++/// bound is "highest age not exceeding the current one", which is wrong
++/// whenever a card drawn at an earlier age survives an age transition
++/// unplayed -- `state.age_military` can already be ahead of the copy
++/// actually still sitting in the hand. Confirmed on game `7521906` (line
++/// 135, journal's own "up to 3" proving Age I): the bound picked the
++/// wrong-NEWER Age II sibling instead. The journal's printed cap pins the
++/// age down exactly, with no guessing in either direction, so read that
++/// instead of bounding a guess.
++fn resolve_plunder_age(card: CardId, raw_text: &str) -> CardId {
++    if card.get().base_name != "Aggression: Plunder" {
++        return card;
++    }
++    trailing_up_to_resource_and_or_food(raw_text)
++        .and_then(|n| family_siblings(card).into_iter().find(|&id| plunder_food_and_or_resources(id) == Some(n as i16)))
++        .unwrap_or(card)
++}
++
+ /// Resolves which age-sibling of `named` (`corpus::build_card_index`'s
+ /// necessarily arbitrary same-name pick -- see `best_age_sibling`'s doc
+ /// comment) actually produced `wanted`'s observed cost on THIS journal line,
+@@ -6832,6 +6900,35 @@ fn apply_one(
+         ActionClass::WinWar => Ok(()), // automatic (game::resolve_war_outcome); validation checkpoint only
+         ActionClass::PlayAggression => {
+             let card = card.ok_or_else(|| MismatchKind::ParserGap("aggression with no resolved card".into()))?;
++            // `corpus::build_card_index`'s bare-name lookup for "Plunder" is
++            // an arbitrary same-name pick (`best_age_sibling`'s own doc
++            // comment) -- Plunder prints a different "up to N resource
++            // and/or food" per age (3/5/7), and `combat::finish_aggression`
++            // opens the `PlunderSplit` choice capped at THAT printed number,
++            // so resolving the wrong age caps the choice too low (or, just
++            // as easily, too high -- see below) to ever match the journal's
++            // own resolution line (analysis/worker_notes_2026-08-14/
++            // plunder__PLUNDER.txt, game 7523357).
++            //
++            // `best_age_sibling(card, r.state.age_military)`'s "highest age
++            // not exceeding the current one" bound was tried first and
++            // rejected: confirmed on game `7521906` (line 135, "up to 3" --
++            // Age I) that a card DRAWN at an earlier age and never played
++            // survives an age transition unplayed, so `age_military` can
++            // already be II by the time it is finally played, and the bound
++            // then picks the WRONG-NEWER Age II sibling -- the exact
++            // opposite failure from the original bug, caused by the same
++            // guess. The journal's own "up to N" clause pins the age down
++            // exactly, with no guessing in either direction, so read that
++            // instead.
++            //
++            // Scoped to Plunder only, not every Aggression card (Raid,
++            // Enslave, Spy, Annex, Infiltrate, ...) -- those share the same
++            // age-blind shape in principle but were not verified against
++            // their own card data this session; see the pickup plan in
++            // `analysis/worker_notes_2026-08-14/discardsolve__
++            // DISCARDSOLVE.txt`.
++            let card = resolve_plunder_age(card, raw_text);
+             let target = color_after(rest, " against ").ok_or_else(|| MismatchKind::ParserGap("could not parse aggression target colour".into()))?;
+             r.consume_named_military_card(actor, card, Move::Aggression { card, target: target.seat() }, true)?;
+             resolve_aggression_defense(r, next_text)
+@@ -8522,6 +8619,100 @@ mod tests {
+         assert_eq!(trailing_gets_military_resource("Orange elects Hammurabi Orange gets 1 civil action"), None);
+     }
+ 
++    #[test]
++    fn trailing_up_to_resource_and_or_food_reads_plunders_own_printed_cap() {
++        // Real corpus line shape (game `7523357`, line 503): Age III's own
++        // printed cap is 7, not the Age I default `build_card_index` would
++        // otherwise arbitrarily resolve "Plunder" to.
++        let text = "Purple plays Plunder against Grey Your rival loses a total of up to 7 resource \
++                     and/or food (your choice). You gain that many resource and food.; ; Purple uses \
++                     1 military action";
++        assert_eq!(trailing_up_to_resource_and_or_food(text), Some(7));
++    }
++
++    #[test]
++    fn trailing_up_to_resource_and_or_food_reads_every_real_printed_amount() {
++        for (n, text) in [
++            (3, "plays Plunder against Grey Your rival loses a total of up to 3 resource and/or food (your choice)."),
++            (5, "plays Plunder against Grey Your rival loses a total of up to 5 resource and/or food (your choice)."),
++            (7, "plays Plunder against Grey Your rival loses a total of up to 7 resource and/or food (your choice)."),
++        ] {
++            assert_eq!(trailing_up_to_resource_and_or_food(text), Some(n));
++        }
++    }
++
++    #[test]
++    fn trailing_up_to_resource_and_or_food_is_none_with_no_such_clause() {
++        assert_eq!(trailing_up_to_resource_and_or_food("plays Aggression: Raid against Grey"), None);
++    }
++
++    #[test]
++    fn plunder_food_and_or_resources_reads_each_age_siblings_own_printed_number() {
++        assert_eq!(plunder_food_and_or_resources(CardId::by_name("Aggression: Plunder (I)").unwrap()), Some(3));
++        assert_eq!(plunder_food_and_or_resources(CardId::by_name("Aggression: Plunder (II)").unwrap()), Some(5));
++        assert_eq!(plunder_food_and_or_resources(CardId::by_name("Aggression: Plunder (III)").unwrap()), Some(7));
++    }
++
++    #[test]
++    fn plunder_food_and_or_resources_is_none_for_a_card_with_no_takefromopponent_block() {
++        assert_eq!(plunder_food_and_or_resources(CardId::by_name("Aggression: Raid (I)").unwrap()), None);
++    }
++
++    /// `resolve_plunder_age` is the EXACT function `ActionClass::
++    /// PlayAggression`'s arm calls (`apply_one`, `let card =
++    /// resolve_plunder_age(card, raw_text);`) -- this test calls it
++    /// directly rather than driving the full journal-line dispatch, but it
++    /// is the real code path, not a re-implementation of it.
++    ///
++    /// This is the RED/GREEN target for this session's fix: reverting
++    /// `resolve_plunder_age`'s body to `card` (a bare no-op, i.e. keeping
++    /// `build_card_index`'s arbitrary pick) makes this fail, because that
++    /// arbitrary pick for "Plunder" is Age I (`food_and_or_resources: 3`),
++    /// not the Age III the "up to 7" text proves.
++    #[test]
++    fn play_aggression_resolves_plunders_age_from_the_journals_own_up_to_n_text_not_an_arbitrary_same_name_sibling() {
++        let index = build_card_index();
++        let (arbitrary_pick, _) = longest_known_card_prefix(&index, "Plunder").expect("Plunder is in the card index");
++        // Sanity check on the premise: the arbitrary pick really is the
++        // "wrong" (Age I, value 3) sibling this test needs to prove gets
++        // corrected -- if `build_card_index`'s own iteration order ever
++        // changes to prefer a different sibling, this assertion (not
++        // `resolve_plunder_age` itself) is what should fail first.
++        assert_eq!(plunder_food_and_or_resources(arbitrary_pick), Some(3));
++
++        let text = "Purple plays Plunder against Grey Your rival loses a total of up to 7 resource \
++                     and/or food (your choice). You gain that many resource and food.; ; Purple uses \
++                     1 military action";
++        let resolved = resolve_plunder_age(arbitrary_pick, text);
++        assert_eq!(
++            resolved.get().name,
++            "Aggression: Plunder (III)",
++            "must resolve to Age III (printed cap 7, matching the journal's own text), not Age I (printed cap 3, `build_card_index`'s arbitrary pick)"
++        );
++        assert_eq!(plunder_food_and_or_resources(resolved), Some(7));
++    }
++
++    #[test]
++    fn resolve_plunder_age_is_a_no_op_for_a_different_aggression_card_family() {
++        // `resolve_plunder_age` must not touch Raid/Enslave/Spy/Annex/
++        // Infiltrate -- those are explicitly out of scope this session (see
++        // the pickup plan), and misreading a stray "up to N" from some
++        // OTHER card's text must never redirect a non-Plunder identity.
++        let raid = CardId::by_name("Aggression: Raid (I)").unwrap();
++        assert_eq!(resolve_plunder_age(raid, "Purple plays Raid against Grey destroys a building"), raid);
++    }
++
++    #[test]
++    fn resolve_plunder_age_falls_back_to_the_arbitrary_pick_when_the_text_has_no_up_to_clause() {
++        // Never worse than the pre-correction guess: a Plunder line whose
++        // text this binary cannot parse (should not happen for a real
++        // corpus line, but this is a total function) keeps the original
++        // pick rather than panicking or silently discarding it.
++        let index = build_card_index();
++        let (arbitrary_pick, _) = longest_known_card_prefix(&index, "Plunder").expect("Plunder is in the card index");
++        assert_eq!(resolve_plunder_age(arbitrary_pick, "Purple plays Plunder against Grey (garbled text)"), arbitrary_pick);
++    }
++
+     #[test]
+     fn correct_hand_family_swaps_a_wrong_age_sibling_for_the_evidence_backed_one() {
+         // The scenario `free_civil_action_move`/`ActionClass::PlayActionCard`

@@ -211,6 +211,17 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // matters as much as the discard-phase oracle's own.
     let mut culture_oracle_checked_total = 0u64;
     let mut culture_oracle_agreed_total = 0u64;
+    // `GameResult::science_oracle_checked`/`_agreed`'s twin -- SCIDRIFT
+    // 2026-08-14 pass, `SCIENCE_ORACLE`-gated (see `debugflags::
+    // science_oracle`'s own doc): both stay 0 unless that env var is set for
+    // this run, guaranteeing a plain `replaystats` invocation is unaffected.
+    let mut science_oracle_checked_total = 0u64;
+    let mut science_oracle_agreed_total = 0u64;
+    let mut n_science_diverging_games = 0u32;
+    // `GameResult::resource_oracle_checked`/`_agreed`'s twin, `RESOURCE_ORACLE`-gated.
+    let mut resource_oracle_checked_total = 0u64;
+    let mut resource_oracle_agreed_total = 0u64;
+    let mut n_resource_diverging_games = 0u32;
     // The task's own deliverable: FIRST-divergence-per-game, ranked by the
     // `ActionClass` of whatever the last classified action line was
     // strictly before the diverging checkpoint. `None` keys (no prior
@@ -222,6 +233,13 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // why the two are not the same number on purpose). Should read 0.
     let mut n_false_skips_unrecovered_total: u64 = 0;
     let mut n_games_with_unrecovered_false_skip: u32 = 0;
+    // `GameResult::final_event_award_divergences`'s own corpus-wide ranking:
+    // per-card (count of diverging (game, seat) pairs, one example line),
+    // ranked so the single highest-impact `scoring_culture` formula bug
+    // (§12.5.2) reads first -- the "which final-scoring CARD is wrong"
+    // deliverable `docs/REPLAY.md`'s "Final scores" section still needed.
+    let mut final_event_award_buckets: HashMap<&'static str, (u32, String)> = HashMap::new();
+    let mut n_games_with_final_event_award_divergence: u32 = 0;
 
     for meta in &games {
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -264,7 +282,7 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
                     d.journal_excess,
                     d.reconstructed_excess,
                     d.ledger_excess,
-                    d.ledger_last_event.map(|(kind, lineno)| (kind, lineno))
+                    d.ledger_last_event
                 );
                 if std::env::var("REPLAY_DUMP_BUCKET").is_ok_and(|want| key.contains(&want)) {
                     eprintln!("DUMP {example}");
@@ -292,6 +310,49 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
             let entry = culture_cause_buckets.entry(key).or_insert_with(|| (0, example.clone()));
             entry.0 += 1;
         }
+        // Science/resource oracle twins of the culture block just above --
+        // SCIDRIFT 2026-08-14 pass. Printed unconditionally whenever `Some`
+        // (which itself only happens when `SCIENCE_ORACLE`/`RESOURCE_ORACLE`
+        // was set for this run -- the caller already opted into the
+        // diagnostic, unlike `SCOREDIV_DUMP_IDS`, which gates an
+        // always-computed culture check that would otherwise flood every
+        // ordinary run).
+        science_oracle_checked_total += result.science_oracle_checked as u64;
+        science_oracle_agreed_total += result.science_oracle_agreed as u64;
+        if let Some(d) = &result.science_oracle_divergence {
+            n_science_diverging_games += 1;
+            println!("SCIENCE_DIVERGING_ID {}", meta.id);
+            println!(
+                "SCIENCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
+                 reconstructed={} delta={}",
+                meta.id,
+                d.lineno,
+                d.round,
+                d.actor,
+                d.last_action_class,
+                d.journal_now,
+                d.reconstructed,
+                d.reconstructed - d.journal_now
+            );
+        }
+        resource_oracle_checked_total += result.resource_oracle_checked as u64;
+        resource_oracle_agreed_total += result.resource_oracle_agreed as u64;
+        if let Some(d) = &result.resource_oracle_divergence {
+            n_resource_diverging_games += 1;
+            println!("RESOURCE_DIVERGING_ID {}", meta.id);
+            println!(
+                "RESOURCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
+                 reconstructed={} delta={}",
+                meta.id,
+                d.lineno,
+                d.round,
+                d.actor,
+                d.last_action_class,
+                d.journal_now,
+                d.reconstructed,
+                d.reconstructed - d.journal_now
+            );
+        }
         if let Some(p) = &result.civil_deck_premature_advance {
             n_premature += 1;
             if premature_examples.len() < 10 {
@@ -309,6 +370,24 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
             n_false_skips_unrecovered_total += result.politics_false_skips_unrecovered as u64;
             n_games_with_unrecovered_false_skip += 1;
         }
+        if !result.final_event_award_divergences.is_empty() {
+            n_games_with_final_event_award_divergence += 1;
+            for d in &result.final_event_award_divergences {
+                let example = format!(
+                    "{} seat {}: journal says {}, this binary computes {} (delta {})",
+                    meta.id,
+                    d.seat,
+                    d.journal_amount,
+                    d.engine_amount,
+                    d.engine_amount - d.journal_amount
+                );
+                if std::env::var("REPLAY_DUMP_BUCKET").is_ok_and(|want| d.card.contains(&want)) {
+                    eprintln!("DUMP {example}");
+                }
+                let entry = final_event_award_buckets.entry(d.card).or_insert_with(|| (0, example.clone()));
+                entry.0 += 1;
+            }
+        }
 
         for d in &result.decisions {
             decisions_total += 1;
@@ -323,6 +402,19 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
             if std::env::var("REPLAY_DEBUG").is_ok() {
                 eprintln!("DEBUG completed: {}", meta.id);
             }
+            // A dedicated gate for JUST the completed-game IDs. `REPLAY_DEBUG`
+            // above also turns on the engine's whole per-action trace, which is
+            // far too much output to sit through merely to learn which games
+            // finished. This list is the input to the replay-completion
+            // regression guard: a fix may only be landed if every ID printed
+            // here before the change is still printed after it. `replay`'s own
+            // per-game COMPLETE/STOPPED verdict is NOT a substitute -- the two
+            // binaries do not resolve hidden information the same way and
+            // disagree on ~68 games, so a guard list built from `replay` silently
+            // under-protects the games only `replaystats` finishes.
+            if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
+                println!("SCOREDIV_COMPLETED_ID {}", meta.id);
+            }
             if let Some(engine) = &result.engine_scores {
                 n_score_checked += 1;
                 let mut a = engine.clone();
@@ -333,6 +425,38 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
                     n_score_exact += 1;
                 } else {
                     score_deltas.extend(a.iter().zip(b.iter()).map(|(x, y)| x - y));
+                    // `experiments/measure_replaystats.sh`'s own diverging-ID
+                    // artifact and this file's cause-ranking investigation
+                    // both read this line -- gated behind an env var (not
+                    // printed by default) so a plain `replaystats` run's
+                    // output stays exactly what it always was. Printed to
+                    // stdout as a single grep-able prefix per game, plus the
+                    // diagnostics needed to tell an accumulated-culture bug
+                    // (this game's OWN culture_oracle_divergence is Some)
+                    // apart from an end-of-game-only scoring bug (every "End
+                    // turn" in this game matched, so the drift is entirely
+                    // in `events::evaluate_final_events` /
+                    // `game::end_of_game_bonus`, which run strictly after the
+                    // last checkpoint the oracle above ever sees).
+                    if std::env::var("SCOREDIV_DUMP_IDS").is_ok() {
+                        println!("SCOREDIV_DIVERGING_ID {}", meta.id);
+                        println!(
+                            "SCOREDIV_DETAIL {} engine={:?} index={:?} culture_drifted_in_play={} \
+                             final_event_cards={:?} first_culture_divergence={:?}",
+                            meta.id,
+                            a,
+                            b,
+                            result.culture_oracle_divergence.is_some(),
+                            result.final_event_cards,
+                            result.culture_oracle_divergence.as_ref().map(|d| format!(
+                                "lineno={} actor={} last_action_class={:?} delta={}",
+                                d.lineno,
+                                d.actor,
+                                d.last_action_class,
+                                d.reconstructed - d.journal_now
+                            ))
+                        );
+                    }
                 }
             }
             continue;
@@ -356,7 +480,7 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     }
 
     let mut ranked: Vec<(&String, &Bucket)> = buckets.iter().collect();
-    ranked.sort_unstable_by(|a, b| b.1.count.cmp(&a.1.count));
+    ranked.sort_unstable_by_key(|x| std::cmp::Reverse(x.1.count));
 
     println!("# replaystats: {n_games} games sampled, {n_completed} completed to state.game_over\n");
     println!("## Final-score cross-check\n");
@@ -409,6 +533,28 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
          here means the override is too loose)\n"
     );
 
+    // `GameResult::final_event_award_divergences` -- ranks WHICH §12.5.2
+    // "Impact of ..." card's `scoring_culture` formula disagrees with BGO's
+    // own journal-stated award most often, independent of grounding-order
+    // noise (see that field's own doc). This is the cause-ranking instrument
+    // the final-score cross-check above names a need for but cannot itself
+    // supply (a final total is a SUM across every pending card; this breaks
+    // it back out by card).
+    println!("## Final-scoring award oracle (which \"Impact of ...\" card's formula is wrong)\n");
+    println!(
+        "{} games had at least one (card, seat) whose journal-stated §12.5.2 award this binary's own \
+         `scoring_culture` disagreed with:\n",
+        n_games_with_final_event_award_divergence
+    );
+    let mut final_event_ranked: Vec<(&&str, &(u32, String))> = final_event_award_buckets.iter().collect();
+    final_event_ranked.sort_unstable_by_key(|b| std::cmp::Reverse(b.1.0));
+    println!("| (game,seat) pairs | card | example |");
+    println!("|---|---|---|");
+    for (card, (count, example)) in &final_event_ranked {
+        println!("| {count} | {card} | {} |", example.replace('|', "\\|"));
+    }
+    println!();
+
     println!("## Discard-phase hand-size oracle\n");
     println!(
         "{discard_oracle_checked_total} `(actor, round)` checkpoints had a cross-validated journal count to check \
@@ -438,7 +584,7 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
     // read first, per this file's own "measure first" convention.
     println!("## Military hand ledger: classifying WHY the discard-phase oracle diverges\n");
     let mut ledger_ranked: Vec<(&String, &(u32, String))> = ledger_verdict_buckets.iter().collect();
-    ledger_ranked.sort_unstable_by(|a, b| b.1.0.cmp(&a.1.0));
+    ledger_ranked.sort_unstable_by_key(|x| std::cmp::Reverse(x.1.0));
     println!("| games | reason | example |");
     println!("|---|---|---|");
     for (key, (count, example)) in &ledger_ranked {
@@ -467,13 +613,37 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
         culture_cause_buckets.values().map(|(n, _)| *n as u64).sum::<u64>()
     );
     let mut culture_ranked: Vec<(&String, &(u32, String))> = culture_cause_buckets.iter().collect();
-    culture_ranked.sort_unstable_by(|a, b| b.1.0.cmp(&a.1.0));
+    culture_ranked.sort_unstable_by_key(|x| std::cmp::Reverse(x.1.0));
     println!("| games | preceding ActionClass | example |");
     println!("|---|---|---|");
     for (key, (count, example)) in &culture_ranked {
         println!("| {count} | {key} | {} |", example.replace('|', "\\|"));
     }
     println!();
+
+    // `GameResult::science_oracle_divergence`/`resource_oracle_divergence` --
+    // SCIDRIFT 2026-08-14 pass, `docs/REPLAY.md` never had a SCIENCE or
+    // RESOURCE cross-check before this: this whole section reads 0/0 (NaN%
+    // guarded to 0.0% by the `.max(1)` below) unless `SCIENCE_ORACLE`/
+    // `RESOURCE_ORACLE` was set for this run -- see `debugflags::
+    // science_oracle`/`resource_oracle`'s own docs for why that is the point,
+    // not a bug.
+    println!("## Science oracle (SCIENCE_ORACLE=1 to populate; 0/0 otherwise)\n");
+    println!(
+        "{science_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` science running total to \
+         check this binary's own reconstructed `state.players[_].science` against; {science_oracle_agreed_total} \
+         ({:.1}%) matched exactly. {n_science_diverging_games}/{n_games} games sampled had at least one checkpoint \
+         disagree (FIRST divergence only; see SCIENCE_DETAIL lines above).\n",
+        100.0 * science_oracle_agreed_total as f64 / science_oracle_checked_total.max(1) as f64
+    );
+    println!("## Resource oracle (RESOURCE_ORACLE=1 to populate; 0/0 otherwise)\n");
+    println!(
+        "{resource_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` resources running total to \
+         check this binary's own reconstructed `state.players[_].resources` against; {resource_oracle_agreed_total} \
+         ({:.1}%) matched exactly. {n_resource_diverging_games}/{n_games} games sampled had at least one checkpoint \
+         disagree (FIRST divergence only; see RESOURCE_DETAIL lines above).\n",
+        100.0 * resource_oracle_agreed_total as f64 / resource_oracle_checked_total.max(1) as f64
+    );
 
     // `GameResult::civil_deck_premature_advance` -- docs/REPLAY.md's "civil
     // deck model" handoff. Zero here is the invariant `top_up_civil_deck`

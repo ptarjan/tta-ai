@@ -99,7 +99,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use tta::bots::greedy::{build_bots, BotKind, Seat};
+use tta::bots::greedy::{build_bots, BotKind, Search, Seat};
 use tta::bots::weighted::eval::load_weights;
 use tta::bots::weighted::weights::Weights;
 use tta::effects;
@@ -291,9 +291,9 @@ fn classify_choose(pending: &Pending, n: u8) -> Option<BotClass> {
                 _ => None,
             },
             ChoiceKind::DiscardMilitary => Some(BotClass::Discard),
-            _ => None,
+            ChoiceKind::GainBlock | ChoiceKind::FreeCivil { .. } | ChoiceKind::FoodOrRes { .. } | ChoiceKind::FreeBuild | ChoiceKind::DestroyOwn | ChoiceKind::LosePop | ChoiceKind::LoseColony | ChoiceKind::FlipWonder | ChoiceKind::Raid { .. } | ChoiceKind::Annex { .. } | ChoiceKind::Infiltrate { .. } | ChoiceKind::TakeRow { .. } | ChoiceKind::WarTech { .. } | ChoiceKind::PlunderSplit { .. } | ChoiceKind::FoodOrResSplit { .. } => None,
         },
-        _ => None,
+        Pending::Auction(_) | Pending::Defense(_) | Pending::Colonize(_) => None,
     }
 }
 
@@ -382,7 +382,8 @@ impl Bucket {
 /// same shape (`pick` -> `game::step`, capped at [`MOVE_CAP`]) plus the
 /// instrumentation.
 fn play_one(players: u8, weights: Weights, seed: u64) -> (Bucket, bool) {
-    let seats: Vec<Seat> = (0..players).map(|_| Seat { kind: BotKind::Weighted, weights }).collect();
+    let seats: Vec<Seat> =
+        (0..players).map(|_| Seat { kind: BotKind::Weighted, weights, search: Search::None }).collect();
     let mut bots = build_bots(&seats, seed as i64);
     let mut state = game::new_game(players, seed);
 
@@ -767,7 +768,7 @@ mod tests {
         options.push(ChoiceOption::Word(Keyword::Refuse));
         let n = match offered {
             Keyword::Accept => 0,
-            _ => 1,
+            Keyword::Stop | Keyword::Skip | Keyword::Science | Keyword::Food | Keyword::Resources | Keyword::Refuse | Keyword::Leader | Keyword::Wonder => 1,
         };
         let choice =
             Choice { player: 1, kind: ChoiceKind::PactOffer { owner, card, a: 0, b: 1 }, options };

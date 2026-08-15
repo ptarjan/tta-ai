@@ -36,6 +36,10 @@ fn flag(name: &str) -> bool {
 static REPLAY_DEBUG: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG"));
 static REPLAY_DEBUG_ALL: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_ALL"));
 static REPLAY_DEBUG_TECHS: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_TECHS"));
+static COLONIZE_FALLBACK_DUMP: LazyLock<bool> = LazyLock::new(|| flag("COLONIZE_FALLBACK_DUMP"));
+static TIE_CENSUS: LazyLock<bool> = LazyLock::new(|| flag("TIE_CENSUS"));
+static SCIENCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("SCIENCE_ORACLE"));
+static RESOURCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("RESOURCE_ORACLE"));
 
 /// `REPLAY_DEBUG`: per-game replay tracing.
 pub fn replay_debug() -> bool {
@@ -52,6 +56,44 @@ pub fn replay_debug_all() -> bool {
 /// `REPLAY_DEBUG_TECHS`: technology-progress tracing specifically.
 pub fn replay_debug_techs() -> bool {
     *REPLAY_DEBUG_TECHS
+}
+
+/// `COLONIZE_FALLBACK_DUMP`: one stderr line per `Replayer::
+/// approximate_colonize` fire, naming the journal's own next sacrifice
+/// clause the fallback could not honour. Measurement-only scaffolding for
+/// the colonize-sacrifice reconstruction fidelity pass; inert (one static
+/// bool read) otherwise.
+pub fn colonize_fallback_dump() -> bool {
+    *COLONIZE_FALLBACK_DUMP
+}
+
+/// `TIE_CENSUS`: one stderr row per superlative-target selection
+/// (`events.rs`'s `apply_single_target`/`conditional_target`/
+/// `resolve_count_targets`), naming every candidate's ranked value, whether
+/// a tie sat at the selection cutoff, and who the engine picked -- the
+/// oracle census for the "how does BGA break a tie" measurement (see
+/// `analysis/worker_notes_2026-08-14/ties__TIES.txt`). Measurement-only;
+/// inert (one static bool read) otherwise.
+pub fn tie_census() -> bool {
+    *TIE_CENSUS
+}
+
+/// `SCIENCE_ORACLE`: the science twin of the always-on culture-oracle
+/// checkpoint (`replay_common.rs`'s `CultureOracleDivergence`), gated behind
+/// its own env var per this pass's own task ("DIAGNOSTIC-ONLY code: it must
+/// not change any replay outcome") -- unlike culture, never on by default, so
+/// a plain `replaystats` run's output and every replay decision it makes stay
+/// byte-identical whether or not this module exists. Measurement-only; inert
+/// (one static bool read) otherwise.
+pub fn science_oracle() -> bool {
+    *SCIENCE_ORACLE
+}
+
+/// [`science_oracle`]'s resources twin -- same checkpoint shape, same
+/// env-var gate, `state.players[_].resources` /
+/// `GameState::last_end_of_turn_resources` in place of science's.
+pub fn resource_oracle() -> bool {
+    *RESOURCE_ORACLE
 }
 
 // ============================================================== tests ====

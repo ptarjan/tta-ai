@@ -24,7 +24,8 @@
 //! III scoring-event modelling `features`/`row.rs`'s row terms both lean on;
 //! and [`features`], `evaluate`'s raw feature vector. [`eval`] is now landed
 //! too -- `evaluate` itself, `WeightedBot`, and the dominance guard
-//! (`dominance_repair`/`NET_NONNEG_PHASE`/`DOMINATES`/`BENEFIT_GATES`) -- and
+//! (`dominance_repair`/`NET_NONNEG_PHASE`/`DOMINATES`/`weights::WeightKey::
+//! sign_intent`) -- and
 //! is the module every other one in this file exists to feed; see its own
 //! top doc comment for the handful of Python-only mechanisms (the journalled
 //! search path, a per-candidate exception guard, `load_weights`/

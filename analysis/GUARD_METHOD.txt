@@ -1,0 +1,630 @@
+=========================================================================
+CURRENT BASELINE  (supersedes every count and commit named further down)
+    updated 2026-08-15 (fourteenth update)
+    base commit ....... d4130c1  (LIVE tree /Users/pt/tta-ai)
+      TWO LANDINGS TOOK 734/707 TO 748/721, regressions EMPTY, 14 wins:
+        d164f25  The per-denomination TokenBank, finally unblocked. Blue
+          tokens are GENERIC -- a token's value is the printed value of the
+          card it sits on -- and the supply is LIMITED, so production you
+          cannot place is LOST. The cap was right all along; the ORDER was
+          wrong. end_of_turn credited the mandatory per-worker production
+          BEFORE flat wonder bonuses (Transcontinental Railroad's
+          DoubleBestMine), both drawing on the same shrinking pool, so on a
+          tight round the whole bonus was silently dropped. 734/707 -> 739/712.
+          RESOURCE_ORACLE 96.8% -> 99.2%, diverging games 299 -> 111.
+          Wins 7520999 7522236 7522673 7523203 7523634.
+          The three blockers 7521459 7522402 7522796 now complete AND match.
+        d4130c1  The colonize-sacrifice queue is popped at the COMPLETING BID,
+          not at the confirmation line. A "not open" Pending::Colonize was read
+          as "already auto-resolved", but it equally means "this auction has
+          not settled yet" (same-timestamp WinAuction/forced-BidPass). The
+          premature pop stole the entry, drain_colonize fed the NEXT
+          territory's clauses against the wrong pending, failed, and fell back
+          to approximate_colonize -- losing a Swordsmen sacrifice that fed the
+          Population, Competition AND Variety awards at once. 739/712 ->
+          748/721. Fixing this only at the confirmation line caused 6
+          regressions (7521853 7522034 7522051 7522219 7522621 7522979),
+          because some colonizes complete AFTER their own confirmation line
+          with no second line to catch them; hooking apply_move cleared them.
+      WHEN THE SUPPLY CANNOT COVER A ROUND, WHICH PRODUCTION YOU DROP IS THE
+      PLAYER'S CHOICE (owner, 2026-08-14): "you choose which things to produce
+      and not. But you can't move existing tokens." No rearranging to make
+      room. This is ALREADY CORRECT and must not be "fixed": production_pairs
+      sorts descending by printed value, so credit_production fills the
+      highest-value cards first and forgoes the cheapest, which is the
+      value-maximising choice because every token yields its card's printed
+      value; and flat non-worker bonuses are credited first and land greedily
+      on the top denomination, so they are weakly optimal too.
+      RULED OUT ALONG THE WAY, do not re-attempt: largest-denomination-first
+      for non-production gains (already implemented and verified correct); the
+      worker-relocation/upgrade hypothesis (Grey's Bronze->Iron->Oil mine line
+      hand-traced against the journal, 1-for-1 with do_upgrade/do_build).
+      a64a18e snapshots hand_military length BEFORE the grounding push in
+      resolve_political_decision. It is a correctness-only landing: 734/707
+      unchanged, regressions EMPTY, wins EMPTY. It kills a PERMANENT phantom
+      card -- once the military-hand debt was stranded it stayed stranded for
+      the rest of the replay -- so it flips no game today but unblocks traces.
+      Everything below measured on a7e7f90 remains valid: a64a18e is
+      replayer-only and changes no game's outcome.
+    completing games .. 748 of 1011   (721 of those match index.tsv exactly)
+    frozen id list .... /private/tmp/guard_ids.txt   (= guard_ids_748.txt)
+    committed copy .... analysis/guard_ids_748.txt
+                        (731, 732 and 734 survive under their own names)
+
+    WARNING ABOUT /private/tmp/base0815: that warm template stops at 898f552
+    and is now THREE commits behind. Two separate workers independently
+    reported game 7521462 as a "pre-existing baseline flake" because it does
+    not complete there. It is not a flake -- 7521462 is exactly the game
+    f2dff03 wins, and the template predates it. If you measure on a stale
+    template, every game the live tree has since won will read as a phantom
+    regression against the current guard list. Refresh the template's rust/src
+    from the live tree before trusting a guard comparison, or state plainly
+    which commit you measured on.
+
+      a7e7f90  interact.rs's ChoiceKind::Raid arm called economy::gain_resources
+               ONCE PER DESTROYED CARD with that card's own printed.div_ceil(2).
+               The BGO journal prints the card's own text on every play: "You
+               gain resources equal to half their TOTAL COST, rounded up." So
+               every raid destroying two odd-cost cards over-paid the raider by
+               one. Isolated by finding real games that destroy the SAME card
+               twice: Philosophy x2 (cost 3 each) -> journal says 3, old code
+               computed ceil(3/2)+ceil(3/2)=4; Organized Religion x2, 7 vs 8;
+               Theology x2, 5 vs 6. PlayerState.raid_loot_pending accumulates
+               printed cost across the nested casualty brackets and flushes with
+               ONE div_ceil(2) when the last resolves. 732->734, 705->707, wins
+               7522520 7522729 7523520.
+               ACCEPTED REGRESSION 7522967 -- it had been completing through a
+               compensating error between the raid over-payment and the
+               pre-existing SimulatorBug hand_military miscount the same sweep
+               already self-flags at its line 579. Same shape as 7521974.
+               Fixing hand_military should hand it back.
+               NOT REAL, do not re-attempt: the "duplicate same-card casualty
+               silently no-ops on a failed techs.get_mut" defect. Each bracket's
+               option list is recomputed from live tableau state when dequeued,
+               always after the previous bracket resolved, so a card already
+               exhausted to workers == 0 is never re-offered.
+
+    THE TOKEN BANK IS BLOCKED ON A TOKEN *COUNT* BUG, NOT ON ITS OWN MODEL
+    (tokenbank3__TOKENBANK3.txt + tokenbank3.patch, measured on a7e7f90).
+    Re-applying the per-denomination TokenBank on the Raid-fixed base scores
+    736 completed / 709 exact -- wins 7520999 7522236 7522673 7523203 7523634,
+    regressions 7521459 7522402 7522796. RESOURCE_ORACLE 96.8% -> 99.2%,
+    diverging games 299 -> 114. Tests 1448, clippy clean.
+    TWO of the five regressions the FIRST pass reported (7523072, 7523510) were
+    fixed by the Raid correction underneath, with no change to the patch: the
+    ordering prediction held exactly.
+    THE REMAINING THREE ARE A DIFFERENT CAUSE. Round 17 of 7521459:
+    credit_production correctly caps new tokens at blue_total - blue_used, but
+    the reconstructed placement history had already consumed 15 of 18 physical
+    token slots, so production was capped 3 short of the journal's stated +12.
+    The reconstruction matches the real game in token VALUE but not in token
+    COUNT, and ONLY THE COUNT BINDS THE CEILING. Since tokens only ever move
+    DOWN and making change turns one token into several, an over-count means
+    change is being made where it need not be, or tokens are never removed on
+    some path. 7522796 is a smaller (+1) divergence, still unexplained.
+    Ruled out for 7521459: the Raid bug (fixed) and non-production gain
+    placement (no such event in its causal chain).
+    NOTE THE MEASUREMENT TRAP: 99.2% agreement reads as a clean win on any
+    averaged metric. The three-game ID set is what says no.
+
+    THE TWO OPEN RULES ARE NOW ANSWERED (user, 2026-08-14):
+      * The blue supply is LIMITED and production you cannot physically place
+        is simply LOST. The cap at blue_total - blue_used is CORRECT. Never
+        weaken it to manufacture a completion.
+      * NON-production gains ("gain 3 resources") ARE a free choice of both
+        denomination and target card, and "in practice you always want to take
+        the highest denomination". Largest-first, greedily, as the SINGLE
+        behaviour -- not a policy knob.
+    So the cap is not the bug; the over-count is. An earlier LOWEST-first
+    experiment degenerated to all denom-1 tokens and was the wrong direction.
+
+    BILL GATES IS A CONFOUND, NOT A CAUSE (gateslab__GATESLAB.txt). The census
+    below found 31 Group C games where Bill Gates is in play and the resource
+    delta is exactly -2, at 81.6% against a 30.6% base rate. His
+    Special::ResourcesPerLabEqualToLevel is CORRECT: the level*workers formula
+    matches the FAQ's worked example for the identical Sid Meier mechanic, and
+    in all three repros (7521657, 7523101, 7523624) the engine's production
+    number matches BGO's stated production number exactly. The -2 is a
+    corruption OVER-charge at that checkpoint with no CORRUPTION! tag in the
+    journal, and it traces to economy::blue_used's derived token count -- the
+    same defect described below. Gates' players lean on labs over mines, which
+    shapes their blue-token profile and trips the bug more often. DO NOT CHASE
+    GATES AGAIN.
+
+      f2dff03  apply::h_revolution charged the FULL printed Card::revolution_cost
+               with zero pact discount, while the peaceful h_develop path has
+               always read Stats::tech_discount through costs::tech_cost. Game
+               7523162 line 292: Grey revolutions to Constitutional Monarchy
+               under a Scientific Cooperation pact accepted at line 266 --
+               printed revolutionCost 6, the journal's own "4 science points
+               spent" proves the true cost is 4. A silent 2-science overcharge,
+               every violent revolution under a pact, since the pact code was
+               written. New costs::revolution_cost applies the same discount and
+               is wired into BOTH the charge (h_revolution) and legality
+               (legal::can_revolt plus the duplicate site in the Breakthrough
+               branch), so the two can no longer disagree. 731->732, 704->705,
+               regressions EMPTY, win 7521462.
+               THE SCIENTIFIC COOPERATION GATE LANDED IN THE SAME COMMIT and the
+               old "8 regressions / 0 wins, do not re-attempt" note below is
+               OBSOLETE. effects::science_pact_partners_can_pay (legality) and
+               apply::charge_science_pact_partners (the 1-science charge to the
+               other party) are now wired into h_develop, h_revolution and all
+               five real move-generation sites in legal.rs. It adds no wins on
+               its own -- it was never wrong, it was standing on a science total
+               the overcharge above had corrupted. Fix the foundation first, then
+               the gate: that ORDERING was the whole reason it landed.
+               14 tests, every one confirmed RED by reverting.
+
+    898f552 is the biggest single jump this project has recorded: +33
+    completions, +33 exact, zero regressions, from three workers verified
+    TOGETHER before any of them landed. Both fixes were in the REPLAYER, and
+    both were pairing bugs in prescan/resolve over BGO's journal grammar --
+    not engine rules bugs. See the commit message for the full accounting.
+
+      898f552  WarTech split spoils (+24) and FIFO undo pairing (+8), both in
+               rust/src/replay_common.rs, plus the SCIENCE_ORACLE /
+               RESOURCE_ORACLE checkpoints (0 delta, inert by default).
+               THE STANDING LESSON: resolve_intervening's WarTech arm carried
+               a comment saying the case "ha[d] not been needed by any corpus
+               game sampled so far". That was true when written and false by
+               the time it was read -- 82 games needed it. A no-op fallthrough
+               justified by a past sample is a bug with a timer on it; re-run
+               the sample before trusting one.
+               THE OTHER STANDING LESSON: the undo fix is the SECOND instance
+               of the identical bug (5ed0f20 fixed the other arm of the same
+               function the same day). When a pairing bug is found in one arm
+               of a prescan, audit every sibling arm immediately.
+
+    NEW PERMANENT TOOLING: science and resource checkpoint oracles now exist
+    alongside the culture one (SCIENCE_ORACLE=1, RESOURCE_ORACLE=1), built the
+    same way (snapshot before advance_turn, discard-blocked turns deferred).
+    Until 2026-08-14 CULTURE WAS THE ONLY QUANTITY THE CORPUS EVER CHECKED,
+    which is why the drift below survived every sweep ever run.
+
+    THE LIVE LEAD, first reading (analysis/worker_notes_2026-08-14/scidrift__SCIDRIFT.txt):
+        science ..... 70 of 1011 games diverge, 98.4% of 40958 checkpoints
+                      agree, 53 over / 17 under, concentrated rounds 9-13
+        resources ... 312 of 1011 diverge (4.5x more), 96.7% agree,
+                      245 over / 67 under, spread rounds 3-19
+    Read this as TWO populations, not one bug. Only 35 games show both, and of
+    those just 31% share an actor at the first divergence -- so resources has
+    a large problem of its own with a smaller shared hazard layered on it.
+    Do NOT go looking for one shared cause (see the drift-is-a-long-tail rule).
+    Corrects the earlier PACTS trace of 7523162: the divergence is already
+    present at journal line 296, inside round 9's own production step, NOT at
+    the round 9->10 boundary.
+
+    NO LONGER BLOCKED: the Scientific Cooperation gate used to sit here as
+    "written, rules-correct, 8 regressions / 0 wins, do not re-attempt". It
+    landed clean in f2dff03 above once the revolution overcharge under it was
+    fixed. Stats::science_partners now has real consumers.
+
+    THE SCIENCE POPULATION IS *GROWING*, THE RESOURCE ONE IS FLAT -- they are
+    opposite bugs and must not be merged (scidrift2__SCIDRIFT2.txt). 70.4% of
+    diverging science games see the offset GROW: a recurring per-turn charge.
+    Resource offsets appear once and stay flat forever: one missed event per
+    game. In the growing-OVER subgroup a Scientific Cooperation pact is present
+    in 38 of 38 games against a 1.7% corpus base rate -- that is what f2dff03
+    acted on. Flat-OVER is 3/13 and UNDER is 7/18, so the pact explains the
+    growing arm and nothing else.
+
+    THE RESOURCE ARM'S BIGGEST GROUP IS A REPRESENTATION BUG, not an event bug.
+    PlayerState stores only the scalars p.food/p.resources, and economy::blue_used
+    re-derives the token count on every call with economy::tokens_for -- a greedy
+    minimal-token representation over the denominations available RIGHT NOW. That
+    assumes perfect consolidation onto the best cards currently in play, which no
+    real player can achieve: blue tokens are BOUND TO THE CARD they were placed
+    on and never move UP, by any mechanism. So blue_used undercounts,
+    blue_available overstates, and corruption is understated or skipped outright
+    in 166 of the 1011 games. There is NO Develop-vs-Upgrade distinction to
+    build; the rule is uniform (a worker inferred one from 6 regressions and it
+    was retracted). Production placement is not a choice either -- one token per
+    producing worker at that worker's own card's value. Only SPENDING is a
+    choice. See the tta-blue-tokens-are-placed-not-derived memory.
+
+      89b41b6  TIE_CENSUS (rust/src/tie_context.rs, new): dumps the RAW
+               per-player values behind every superlative-target selection
+               (events::apply_single_target, conditional_target,
+               resolve_count_targets) instead of a precomputed verdict, so a
+               candidate tie-break rule can be scored over the whole corpus
+               WITHOUT recompiling. It immediately falsified the coordinator's
+               own hypothesis -- see the tie-break entry under CLOSED QUESTIONS
+               below. No behaviour change.
+
+      ffa8a2f  replay_common::apply_move now records every card that LEFT
+               state.current_events while a move was applied, into
+               GameResult::events_resolved. Move::PrepareEvent's CardId argument
+               is the card being PUSHED onto future_events, not the one
+               reveal_current_event pops and resolves inside the same call --
+               two different cards from one move. Event cards never enter a
+               tableau either, so before this the entire Age A military deck and
+               every other resolved event was invisible to all of cardblame's
+               attribution paths. cardblame coverage 226 -> 236 of 236.
+
+      54a45fb  prescan_putback_skips paired a BGO client-side PutBack with the
+               MOST RECENTLY opened TakeCard of the same card+actor. Wrong for
+               multi-copy yellow action cards: Frugality has count [2,2,2], so a
+               player can hold two same-named copies taken at different civil
+               action costs. Game 7522905 took two (2 CA then 1 CA) and put one
+               back for a 2 CA refund; cancelling the wrong take overcounted
+               that turn's CA spend by 1 and manufactured a Budget rejection.
+               Now matched by refund AMOUNT, falling back to most-recent only
+               when no cost matches. Zero wins -- 7522905 goes round 1 -> round
+               6 and then stops on an unrelated Plunder choice -- landed because
+               the pairing rule was simply wrong.
+
+      570479a  cardblame rewritten for TOTAL structural coverage (see the
+               cardblame entry below, which replaces the old coverage-gap note).
+
+      9860400  legal.rs's CardType::Aggression generation refused to emit a
+               move when combat::defense_strength >= combat::attack_strength,
+               enforcing CoL p.4's printed "you cannot attack a player whose
+               strength equals or exceeds yours". BGO does not enforce that
+               half of the rule. Nine of the ten Plunder games in the bucket
+               show the human declaring against a tied (7521259, 9 v 9) or
+               strictly stronger (7523613, 7 v 22) rival, with the defender's
+               "defends" line showing zero bonus cards played -- genuine
+               pre-declaration numbers, not post-defense swings. BGO enforces
+               only the resolution-time half, which combat::finish_aggression
+               already implements correctly. 690->698, 663->671, zero
+               regressions.
+               NOTE for bot work: legal.rs is shared with move generation, so
+               the bot can now generate a strictly losing aggression. The
+               evaluator is expected to price it out; do NOT reinstate the
+               gate as a hardcoded shortcut.
+
+      b5b3d9a  game::antiquate's own private copy of on_leave_play stopped at
+               blue/yellow token bookkeeping and never gave back a leader's
+               flat civil_actions/military_actions bonus when the leader
+               antiquated out at an age transition (RULES_SPEC:244). The bonus
+               survived as a permanent ghost in the live per-turn pool;
+               electing a later leader into the now-empty slot added its bonus
+               on top, and legal::revolt_pool_ok rejects a revolution whenever
+               the live pool disagrees with a fresh recompute -- so every
+               later revolution that turn was wrongly refused. on_leave_play
+               now returns the bonus, and antiquate's leader removal wraps it
+               in apply::carry_over_action_pool (now pub(crate)) exactly as
+               h_play_leader already does for mid-turn replacement, so
+               already-spent actions are not clawed back. 687->690, 661->663.
+               ACCEPTED regression 7521974: it now stops two rounds later on a
+               discard-phase StuckPending inside the off-limits discard
+               machinery -- it had been completing through a compensating
+               error, not through correctness.
+
+    cardblame's COVERAGE GAP IS CLOSED (570479a + ffa8a2f). It used to
+      attribute a failing game only to each player's techs, leader and tactic
+      as of where the replay STOPPED, which made all 55 event cards, every
+      one-shot Action/military card that was played, and wonders, governments
+      and colonies invisible. Attribution is now "ever exercised", from five
+      independent sources: cards in play at the stop, every CardId argument of
+      every applied Move (exhaustive move_card_args, no wildcard arm), every
+      resolved event (ffa8a2f), and two happenings cuts keyed on Move variant
+      and ActionClass. Every one of the 236 cards in tta::CARDS prints in every
+      cut; nothing is capped to a top-N. 236/236 observed, 223 clear the
+      20-game cutoff, 35/37 Move variants and 27/31 ActionClass variants fire.
+      DO NOT READ ANY PRE-570479a cardblame RANKING AS EVIDENCE: widening
+      attribution collapsed all ten "perfect 3.15x / 100% failure" leaders to
+      1.0-1.24x, which means trap 1 below was the entire signal. Same for
+      Despotism, which is simply the starting government.
+      Also settled by that run, do not re-open: the ten "Development of X"
+      cards are the real Age A military deck (RULES_SPEC item 8), seeded
+      players+2 at a time by game::new_game and resolved progressively; they
+      appear in 430-497 journals each and the engine handles them correctly.
+      They looked absent only because of the PrepareEvent argument mismatch.
+      55bbca5  combat::resolve_war_outcome fires synchronously inside
+               game::start_turn, as a side effect of applying the defender's
+               own last old-age EndTurn line -- BEFORE replay_common's loop
+               reaches the WinWar confirmation that triggers
+               catch_up_civil_age. A leader BGA had already antiquated was
+               still on the board, still contributing strength. game::antiquate
+               splits into antiquate_hands and
+               antiquate_leader_wonder_and_pacts; only the second half runs
+               early, via an upcoming_confirmed_winwar_age lookahead.
+               age_civil, civil_deck and the 12.2.4 deduction stay deferred.
+               651->661 exact, completions unchanged, zero regressions.
+               A "no older age immediately after WinWar" guard was tried and
+               DROPPED: two genuine transitions have the identical adjacency
+               shape as the false positive, so they are indistinguishable from
+               the journal text. What makes the early half safe is that
+               leader/wonder/pact removal touches ONE player and has no
+               cross-player blast radius -- not any property of the line order.
+      d6a9fa3  the Age II Fortifications tactic was baked 4/2; BGA's own card
+               data prints 5/3. 674->687, 632->651, zero regressions. When a
+               trace lands on a specific card, diff its constants against
+               sources/bga_throughtheages_material.inc.php BEFORE tracing the
+               mechanism.
+      a9aea83  rust/src/bin/cardblame.rs ranks cards by how much they enrich
+               replay failure. READ ITS round_with/round_without COLUMNS: an
+               early leader is definitionally absent from any full-length
+               completed game, so all ten top leaders scored a meaningless
+               100% failure. And re-derive after every landing -- the military
+               score cluster (war odds ratio 2.72x) survived in the ranking
+               after 55bbca5 removed its actual cause, but the census
+               collapsed to 1.14x.
+      TWO BUCKETS ARE NOW RETIRED AS SINGLE-FIX TARGETS:
+        - the 97-game "decider != expected actor" bucket. 268 genuine
+          discard-count disagreements exist corpus-wide (actual is ALWAYS
+          higher than announced; the resolution line is ground truth), but a
+          fix confined to exactly that self-flagged subset still measured
+          687->686 with 0 wins: those games each carry SEVERAL independent
+          small divergences stacked, so fixing one completes none of them.
+        - the 36 score-mismatch games as a "military card" cluster; it was
+          this same war antiquation-timing bug.
+      A MEASUREMENT TRAP, found the hard way: hand-size delta is NOT a valid
+      way to count discards. resolve_discard can resume the rest of
+      economy::end_of_turn -- including that turn's own military draw -- inside
+      the same call, so hand size can RISE across a discard. Count decisions.
+      d68eeb3  Immigration ("all civilizations with the most happy faces gain
+               1 population") must affect every tied civilization even when
+               the tie is at ZERO. `events::apply_tied_targets` is shared with
+               "most discontent workers", where the `if top <= 0 { return }`
+               gate IS correct, and both were gated. A `require_positive`
+               parameter now separates them. 671->674, 630->632, wins
+               7521849 7522756 7523355. 7521849 was separately on the backlog
+               as an `uprising()` false trigger blamed on multi-turn drift.
+    THREE RULES QUESTIONS ARE NOW CLOSED BY MEASUREMENT -- do not re-open them:
+      - WEAKEST-civilization targeting: current tactic-inclusive strength
+        agrees 320/324 (98.8%) vs 244/324 for a no-tactic alternative.
+      - STRONGEST-civilization targeting: 935/948 (98.6%) vs 778/948 (82.1%).
+        Tie-break "favour the revealing player" 132/135 (97.8%).
+      - Economic Progress corruption timing: evaluating against a ROUND-START
+        snapshot instead of live state costs 14 completions and wins 0. Live
+        state, which the engine already does, is correct.
+      - The TIE-BREAK ASYMMETRY in events::conditional_target. It looks wrong:
+        the culture rank uses the plain unreversed order (current player picked
+        FIRST) while the strength cutoff four lines below uses
+        protect_current_from_bad_tie (current player sorts LAST), and the whole
+        function's outcome is a penalty. TIE_CENSUS scored six candidate rules
+        over 281 clean Barbarians resolutions (73 tied at a boundary):
+            shipped asymmetric rule ...... 279/281 99.3%  (tied 72/73 98.6%)
+            also reverse the culture rank  266/281 94.7%  (tied 59/73 80.8%)
+            favour-current on both .......  83.3%          (tied 37.0%)
+            both reversed ................  81.5%          (tied 30.1%)
+            exclude current from both ....  47.7%
+            nobody picked on a cutoff tie   88.3%
+        Reversing the culture half breaks 14 more games than it fixes. A
+        penalty's OVERALL sign says nothing about the direction of an
+        intermediate ranked step: the culture rank picks a QUALIFYING target,
+        only the cutoff is the harm. Special::StrongestPlayers is printed by
+        exactly two base-game cards (Foray, Cold War), both paired with Gain and
+        never Lose, so resolve_count_targets' unreversed strongest path has no
+        failing case either. LIVE LEAD, not yet actionable:
+        PlayerWithLeastCulture (Terrorism, the only base-game card using that
+        key) is 0/3 on its own culture ties -- the same shape as the
+        WeakestPlayer fix, but n=3 needs more exposure before acting.
+    Two earlier commits sit between 491c153 (651/613) and 791150f:
+      613ff6c  production phase moves one blue token per WORKER on a farm/mine
+               card (Code of Laws p.6), not one per unit of VALUE. Corrects an
+               every-turn rule the bot plays; ZERO corpus wins, zero regressions.
+               Do not re-open economy::gain_resources/gain_food for this.
+      791150f  two build-PAYMENT reconstruction bugs: a build paid entirely in
+               Trade-Routes-converted food parsed as a FREE build, and Raid
+               II/III's NESTED casualty brackets were resolved by blind FIFO,
+               permanently undercounting workers_free. 651->671, 613->630.
+    The 20 IDs 791150f added are 7520722 7521365 7521378 7521449 7521738
+    7521763 7521782 7521787 7521847 7522357 7522509 7522512 7522513 7522518
+    7522733 7522815 7522890 7523070 7523427 7523456.
+    The culture-checkpoint figures below the 651 baseline (40145/40337, 65
+    diverging games) are STALE -- 23 more games now run to the end. Re-derive
+    them before quoting them.
+
+    A BUCKET DEFINITION TRAP, found the hard way (noworker__NOWORKER.txt):
+    "no legal Build at all" is NOT the same as "workers_free == 0". Of 15
+    games with that signature, only 7 truly lack a worker; the other 8 have a
+    free worker but 0-1 resources, so every option is unaffordable. Identical
+    symptom, opposite cause. Split the bucket on `workers_free` before
+    assigning it, or two workers will chase each other.
+
+    TO ISOLATE ONE GAME, build a one-row index (header + that row) and run
+    replaystats on it. This WORKS -- it is the supported workflow. Grepping a
+    full-sweep dump for a game ID finds almost nothing because those sections
+    are histograms naming ONE example game per bucket; that is what made an
+    earlier worker report a nonexistent "cannot isolate" tooling quirk. See
+    isoquirk__ISOQUIRK.txt.
+Earlier sections of this file still name base 9f6104d and 509 games. That is
+history, not instruction. The METHOD below is unchanged and still correct;
+only the numbers moved.
+
+KNOWN ACCEPTED REGRESSIONS -- these are NOT in the frozen list and must not be
+treated as fresh damage by a later worker:
+  7522053, 7522290  dropped by 5f9df7b (Raid declinable bracket)
+  7523376           dropped by 2bc2e4c (auction-hand deficit). It was only
+                    completing because of a phantom military card; removing it
+                    exposes the pre-existing ~100-game
+                    `StuckPending("decider N != expected actor M")` bucket.
+                    Fixing THAT bucket should hand this game back.
+=========================================================================
+
+REPLAY-COMPLETION REGRESSION GUARD -- the cheap, correct method
+================================================================
+
+WHY THIS FILE EXISTS
+--------------------
+To say what a fix must clear before it lands: every game that completed before
+your change still completes after it, judged as an ID SET.
+
+An earlier version of this file opened by telling you NOT to run the full
+1011-game sweep. That advice was wrong and is retracted -- it was written before
+anyone measured, and the sweep turns out to cost 8.7 seconds (see below). RUN
+THE FULL SWEEP. The subset index in STEP 2 is now only worth building if you
+want a bucket-focused readout, not as a way to save time.
+
+WHERE THE TIME ACTUALLY GOES (measured 2026-08-14, this box, warm target dir)
+-----------------------------------------------------------------------------
+    replaystats over all 1011 journals ................  8.7s
+    cargo test --lib --test suite: RUNNING the tests ..  4.1s (1359 + 10 tests)
+    cargo test --lib --test suite: COMPILING, after
+        touching ONE central src file ................  2m26s
+    the same, plus all 30 bin test harnesses .........  +5.5s
+
+Read those numbers before optimising anything. The corpus replay is nearly free
+and the test suite is nearly free; the entire edit-test cycle is the `tta`
+library crate's own compile, because `[profile.difftest]` inherits
+`opt-level = 3` from release. The 30 binary test harnesses -- the obvious
+suspect -- cost 3.6% of the cycle and are not worth touching. If you catch
+yourself avoiding a measurement to save time, you are almost certainly avoiding
+the wrong thing: run the corpus, and batch your COMPILES instead.
+
+SO: RUN TESTS WITH `--profile fasttest`, BUILD ANALYSIS BINARIES WITH `difftest`
+--------------------------------------------------------------------------------
+    cargo test --profile fasttest                 <-- 46s cycle, not 116s
+    cargo build --profile difftest --bin replaystats   <-- corpus stays 8.7s
+
+`[profile.fasttest]` (opt-level 0, codegen-units 256) exists only for the
+edit-test loop. Do NOT build `replaystats` or any other analysis binary with it:
+the same 1011-game sweep takes 46.7s there instead of 8.7s -- identical results
+(310 completed, 281 exact), 5.4x the wall clock. The two profiles have opposite
+needs, which is why there are two. Full numbers are in rust/Cargo.toml.
+
+Also do NOT use the `replay` binary's per-game COMPLETE/STOPPED verdict as your
+regression guard. It is NOT equivalent to `replaystats`: the two binaries do not
+resolve hidden information the same way, and they disagree on 68 games (`replay`
+finishes 222 of the corpus, `replaystats` finishes 290, and 8 of the 28
+score-diverging games that `replaystats` completes and scores are called STOPPED
+by `replay`). A guard list built from `replay` silently under-protects every game
+only `replaystats` can finish. The headline metric is `replaystats`, so the guard
+must be `replaystats` too.
+
+THE AUTHORITATIVE BASELINE (already generated, do not regenerate)
+-----------------------------------------------------------------
+    /private/tmp/guard_ids.txt     509 sorted IDs: every game that completes at
+                                   base 9f6104d (base0815), per `replaystats`.
+                                   Also kept under its own versioned name,
+                                   /private/tmp/guard_ids_509.txt -- see the
+                                   note below on why the versioned copy exists.
+    /private/tmp/guard_index.tsv   index.tsv header + exactly those 509 rows
+    /private/tmp/full_baseline_0814.txt
+                                   full raw `replay` dump -- use ONLY to enumerate
+                                   your bucket's game IDs by grepping its
+                                   stop-reason text, never as a guard
+
+THE GUARD LIST IS LIVE STATE -- DO NOT RE-BASELINE IT MID-BATCH
+----------------------------------------------------------------
+On 2026-08-14 the coordinator rewrote `guard_ids.txt` from 310 to 350 IDs after
+landing a fix, while three workers were mid-run using it as their baseline. One
+noticed the file had grown under it; the other two were silently comparing
+against a list that no longer described the commit they branched from. That does
+not cause false regressions (the old set is a subset), but it makes a worker's
+quoted numbers untraceable, and it breaks outright if a re-baseline ever SHRINKS
+the list.
+
+So: when a fix lands while workers are still running, write the new list to a
+NEW file (`guard_ids_<n>.txt`) and swap it into `guard_ids.txt` only once every
+running worker has reported. Bump the count and base commit in the section above
+at that same moment, never separately. The whole history of a session's
+baselines stays on disk under its versioned names.
+
+STEP 1 -- add the completed-ID dump to YOUR clone (one edit, ~30 seconds)
+-------------------------------------------------------------------------
+In your clone's rust/src/bin/replaystats.rs, find this existing block (grep for
+`DEBUG completed`):
+
+            if std::env::var("REPLAY_DEBUG").is_ok() {
+                eprintln!("DEBUG completed: {}", meta.id);
+            }
+
+and insert immediately after it:
+
+            // A dedicated gate for JUST the completed-game IDs. `REPLAY_DEBUG`
+            // above also turns on the engine's whole per-action trace, which is
+            // far too much output to sit through merely to learn which games
+            // finished. This list is the input to the replay-completion
+            // regression guard: a fix may only be landed if every ID printed
+            // here before the change is still printed after it.
+            if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
+                println!("SCOREDIV_COMPLETED_ID {}", meta.id);
+            }
+
+Commit that on its own. (It is already landed in the live tree, so it will merge
+cleanly; if your clone already has it, skip this step.)
+
+STEP 2 -- build your check index: the 509 guard games + your own bucket
+-----------------------------------------------------------------------
+    cd <your clone>
+    cp /private/tmp/guard_index.tsv /tmp/<name>_check.tsv
+    # append your bucket's rows (BUCKET_IDS = a file of your bucket's game IDs,
+    # one per line, that are NOT already in guard_ids.txt)
+    awk 'NR==FNR{k[$1];next} FNR>1 && ($1 in k)' BUCKET_IDS sources/bgo/index.tsv \
+        >> /tmp/<name>_check.tsv
+
+STEP 3 -- run it, once, at the end
+-----------------------------------
+    cd rust
+    PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+        /tmp/<name>_check.tsv /private/tmp/bgo-journals/journals \
+        > /tmp/<name>_after.txt 2>&1
+    grep '^SCOREDIV_COMPLETED_ID' /tmp/<name>_after.txt | awk '{print $2}' | sort \
+        > /tmp/<name>_completed_after.txt
+
+NEVER pipe replaystats through `head` -- SIGPIPE truncates or kills the run.
+Redirect to a file, then grep the file.
+
+STEP 4 -- the bar
+------------------
+    # REGRESSIONS: must be EMPTY. Any ID here is a game that completed before
+    # your change and does not now. That blocks landing, full stop.
+    comm -23 /private/tmp/guard_ids.txt /tmp/<name>_completed_after.txt
+
+    # WINS: games from your bucket that now complete.
+    comm -13 /private/tmp/guard_ids.txt /tmp/<name>_completed_after.txt
+
+Judge by these two ID SETS. Never by a mean, an average, or any aggregate --
+positive and negative errors cancel and a mean can improve while the fix is
+wrong. Quote both `comm` outputs verbatim in your notes.
+
+`cargo test --profile fasttest` and `cargo clippy --all-targets -- -D warnings`
+still run as before -- those are fast and stay local.
+
+FOOD-VS-IRON IS A PLAYER CHOICE THE ENGINE DOES NOT OFFER  (2026-08-15, d4130c1)
+    Paul: "But you can choose food or iron."  One shared blue supply; when it is
+    short the choice spans the food/resource boundary, not just cards within a
+    kind.  economy::end_of_turn credits food bonus + food production BEFORE
+    resource bonus + resource production, all off the same blue_available pool,
+    so food can never be what gets dropped.
+    MEASURED over all 1011 games with a temporary PRODCAP probe (reverted):
+        farm production starved ....  0 events
+        mine production starved .... 23 events in 22 games
+    Entirely one-sided.  8 of the 22 do not complete today; base rate predicts
+    ~5.7, so that is NOT a significant enrichment -- do not sell this as 8 wins.
+    Full ID set with want=/got= per event:
+        analysis/worker_notes_2026-08-14/prodcap_mine_starved.txt
+    A chooser needs a single rules-motivated behaviour, not a policy knob, and
+    "match the journal" is banned (replayer coercion).  Question is out to Paul;
+    do not build one before the answer lands.  Do NOT weaken the cap itself.
+    FOLLOW-UP: Paul says the food/iron split is situational ("it depends"), so it
+    is a VALUE decision for the evaluator, NOT a rule to hardcode.  The single
+    strict-dominance clause (empty population reserve => food beyond consumption is
+    dead) was measured and fires 0 of 23 times (min yellow_bank observed = 2).
+    DO NOT BUILD THE DOMINANCE RULE, and do not hardcode any preference order.
+    The real fix is a priced decision point; until then food-first stands as a
+    known one-sided approximation worth at most 23 events in 1011 games.
+
+================================================================================
+2026-08-15 -- NEVER RESET THIS REPO AGAINST ORIGIN
+================================================================================
+/Users/pt/tta-ai is NOT a normal checkout. Its local master is deliberately
+unrelated to origin's tip, and the league runs the WORKING TREE, most of which
+is untracked.
+
+  origin/master tracks 112 files under rust/.  The local line tracks 19.
+
+So `git reset --hard origin/master` (a) reverts those 19 to origin's older
+parallel Rust port and (b) CLOBBERS ~93 untracked live source files.  A
+`git clean -fd` under origin's non-whitelist .gitignore additionally DELETED,
+permanently:  rust/tools/  rust/logs/  rust/pgo/
+              experiments/champ_backup_2026-08-14/
+
+This happened on 2026-08-15.  It cost the TokenBank landing and the
+colonize-queue fix -- the corpus went 748 -> 734 -- and NOTHING looked wrong:
+the tree compiled, all 1452 tests passed.  Only the guard sweep sees it.
+
+RULES
+  - NEVER reset/pull/rebase/clean this repo against origin.  Land by hand.
+  - Before any git op that can move HEAD or touch the working tree:
+        cp -Rc /Users/pt/tta-ai/rust/src /private/tmp/live_src_backup_<date>
+  - After any such op, prove the tree with the FULL guard sweep:
+        748 completed / 721 exact, and BOTH comm sides empty.
+    A clean build and green tests prove nothing here.
+  - The rsync-from-origin sync recipe with --delete has the same effect as a
+    reset.  Establish the DIRECTION of every diff before copying anything in.

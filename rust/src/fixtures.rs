@@ -47,35 +47,35 @@ impl Json {
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
             Json::Obj(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
-            _ => None,
+            Json::Null | Json::Bool(_) | Json::Num(_) | Json::Str(_) | Json::Arr(_) => None,
         }
     }
 
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Json::Str(s) => Some(s),
-            _ => None,
+            Json::Null | Json::Bool(_) | Json::Num(_) | Json::Arr(_) | Json::Obj(_) => None,
         }
     }
 
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Json::Num(n) => Some(*n),
-            _ => None,
+            Json::Null | Json::Bool(_) | Json::Str(_) | Json::Arr(_) | Json::Obj(_) => None,
         }
     }
 
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Json::Bool(b) => Some(*b),
-            _ => None,
+            Json::Null | Json::Num(_) | Json::Str(_) | Json::Arr(_) | Json::Obj(_) => None,
         }
     }
 
     pub fn as_arr(&self) -> Option<&[Json]> {
         match self {
             Json::Arr(a) => Some(a),
-            _ => None,
+            Json::Null | Json::Bool(_) | Json::Num(_) | Json::Str(_) | Json::Obj(_) => None,
         }
     }
 
@@ -94,12 +94,6 @@ impl Json {
     /// deliberately empty), and a JSONL writer needs SOME serializer, so this
     /// reader grows the matching writer rather than a second, parallel one
     /// living in `harness` alone.
-    pub fn to_string(&self) -> String {
-        let mut out = String::new();
-        self.write(&mut out);
-        out
-    }
-
     fn write(&self, out: &mut String) {
         use std::fmt::Write as _;
         match self {
@@ -143,6 +137,20 @@ impl Json {
                 out.push('}');
             }
         }
+    }
+}
+
+// clippy::inherent_to_string wants a real `Display` impl instead of an
+// inherent `to_string` (the two aren't equivalent to the compiler: an
+// inherent method silently shadows the blanket `ToString` impl a `Display`
+// impl would give for free). This preserves every existing `.to_string()`
+// call site byte-for-byte -- same `write` helper, same output -- while
+// making `Json` a normal `Display` type too.
+impl std::fmt::Display for Json {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = String::new();
+        self.write(&mut out);
+        f.write_str(&out)
     }
 }
 

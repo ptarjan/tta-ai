@@ -1,0 +1,44 @@
+Test the entry points, and stop testing this developer's .env
+
+Six lines the whole suite did not depend on. Each was mutated to nothing
+and the 1030 tests stayed green; each now has a test that goes red.
+
+The four gateway/bridge entry points, all zero-coverage before this:
+
+- `on_raw_reaction_add`. Its one line is the only caller of `rx.deliver`
+  anywhere, so reactions.py could stay 89% covered while every reaction on
+  the machine went in the bin — the exact bug test_reactions.py was written
+  for. Two tests, through the handler rather than past it.
+- `on_thread_create`. A thread the bot never joins delivers no messages at
+  all, and "we were never in the room" is indistinguishable from "nobody
+  said anything" from every side.
+- `request_session_reset`. The harness reimplemented it, so the production
+  method ran in no test and the double recorded the reset it no longer did.
+  Borrowed instead — same rule as `say`, `schedule_api_retry` and the
+  `Meter` — which deletes the copy and puts the real line under the three
+  test_api_error_text tests that were already asserting on its effect.
+- `_resume_pending`. The loop that spends the notice file, and the reason
+  a deploy does not cost a turn. test_handoff.py's 370 lines all judge a
+  resumed turn; nothing checked that any resume is ever attempted. Iterate
+  an empty set instead and auto-resume is simply gone, on a 04:30 schedule
+  nobody watches, looking exactly like a quiet night.
+
+`run_ask_user` was the one MCP tool entry point that ran in no test: every
+other test drives `_run_button_prompt` directly, so the trampoline and the
+dict-to-positional unpacking above it were never executed. Drop
+`multi_select` there and the user gets a single-select with no Done button
+and no way to pick two things, while the model is told what they chose.
+
+And `ALLOWED_USER_IDS` is now pinned in `tests/__init__.py` beside the
+other three, to an id that is obviously nobody. Five tests were doing
+`next(iter(cfg.ALLOWED_USER_IDS))` — "the allowed user", meaning whichever
+account this developer has in `.env`. Empty on CI or a fresh clone, that is
+21 StopIterations; on a machine naming somebody else it is 21 tests quietly
+clicking buttons as a different person than the one they read as allowed.
+Exactly what this file's docstring is already about, applied to the other
+half of `may_speak`'s inputs.
+
+Seven mutations run — the six lines plus a swapped question/options — and
+all seven now fail a test.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

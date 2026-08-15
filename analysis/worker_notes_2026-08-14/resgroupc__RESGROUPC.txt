@@ -1,0 +1,256 @@
+RESGROUPC -- Group C resource-divergence characterisation
+Worker: RESGROUPC, measurement only, no code changes.
+Binary measured on: /private/tmp/base0815/rust/target/difftest/replaystats (commit 898f552,
+one behind live tree; missing commit f2dff03 is a SCIENCE-only fix and does not touch
+resources, so it is irrelevant here).
+Date: 2026-08-14
+
+=== COMMANDS RUN ===
+
+1. Full sweep:
+   RESOURCE_ORACLE=1 /private/tmp/base0815/rust/target/difftest/replaystats \
+       /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+       > /tmp/rgc_sweep.txt 2>&1
+   -> 315 RESOURCE_DIVERGING_ID lines, each followed by one RESOURCE_DETAIL line giving
+      lineno= (1-indexed line number INTO THE GAME'S JOURNAL FILE, verified by sed -n
+      '<lineno>p'), round=, actor=, last_action_class=, journal_now=, reconstructed=,
+      delta= (delta = reconstructed - journal_now). Each of the 315 diverging ids appears
+      exactly once in the sweep output, confirming the oracle reports only the FIRST
+      divergence per game (consistent with the documented "flat offset" behaviour).
+
+2. Group C definition (re-derived, NOT trusted from the prior pass). I tried two
+   definitions and only one reproduces the stated split sizes:
+
+   (a) WRONG / too strict: "journal contains the string CORRUPTION! anywhere in the
+       whole file" -> only 168/1011 games have zero CORRUPTION! anywhere, and
+       intersecting with the 315 diverging ids gives only 20 games. This does not
+       match the expected ~124 and is NOT what Group A/B/C used.
+
+   (b) CORRECT: for each diverging game, look at the journal line named by the
+       oracle's own lineno= for that game's first divergence, and test whether THAT
+       SPECIFIC LINE contains the substring "CORRUPTION!". This is the natural reading
+       of "the journal contains a corruption clause AND the engine's delta equals
+       exactly the stated corruption amount" from the brief -- it's a per-checkpoint
+       test, not a per-game test.
+       Result: 191 games have CORRUPTION! on the divergence line (these are Group
+       A+B1+B2 = 166+17+8 = 191, exact match), and 124 games do not (Group C).
+       This exact 124 == the number quoted in the brief, so I'm confident (b) is the
+       right definition and is what I used throughout.
+
+   Script (python3, reads /tmp/rgc_sweep.txt RESOURCE_DIVERGING_ID/RESOURCE_DETAIL
+   pairs, opens /private/tmp/bgo-journals/journals/<id>.tsv, checks
+   'CORRUPTION!' in lines[lineno-1]) -> group C list saved to
+   /tmp/rgc_groupC_precise.txt (124 ids) and full per-game detail table to
+   /tmp/rgc_groupC_details.tsv (id, lineno, round, actor, last_action_class,
+   journal_now, reconstructed, delta).
+
+=== GROUP C SIZE ===
+
+124 games (exact match to the brief's ~124 estimate, using definition (b) above).
+
+First 30 ids (sorted numerically), full list of 124 is in
+/tmp/rgc_groupC_precise.txt (not copied into the repo, but reproducible with the
+commands above -- ids are BGO game_ids, cross-reference against
+/Users/pt/tta-ai/sources/bgo/index.tsv):
+
+7520999 7521072 7521344 7521361 7521377 7521619 7521653 7521657 7521658 7521660
+7521695 7521711 7521724 7521738 7521758 7521783 7521791 7521802 7521805 7521832
+7521847 7521920 7521935 7521956 7521995 7522024 7522047 7522066 7522101 7522168
+
+=== HISTOGRAM 1: first-divergence ROUND (Group C, n=124) ===
+
+round | count
+------|------
+   3  |   3
+   4  |   4
+   5  |   3
+   6  |   3
+   7  |   5
+   8  |   4
+   9  |   4
+  10  |   7
+  11  |   6
+  12  |   7
+  13  |   2
+  14  |   8
+  15  |   8
+  16  |  21
+  17  |  24
+  18  |  13
+  19  |   2
+
+Rounds 16+17 together = 45/124 = 36.3%. This CONFIRMS the prior pass's "~36%
+cluster in rounds 16-17" claim almost exactly -- it is real, not an artifact of my
+re-derivation.
+
+=== HISTOGRAM 2: signed DELTA at first divergence (Group C, n=124) ===
+
+delta | count
+------|------
+ -12  |   1
+  -5  |   1
+  -4  |   4
+  -3  |   1
+  -2  |  41
+  -1  |  14
+  +1  |  32
+  +2  |  29
+  +3  |   1
+
+delta=-2 is the single largest bucket (41/124 = 33%), but note +1 (32) and +2 (29)
+together (61/124 = 49%) actually outnumber all the negative buckets combined
+(63/124 = 51%) -- it's close to a wash. So "delta=-2" alone is NOT obviously the
+dominant story until you cross it with round.
+
+Cross tab: of the 45 round-16/17 games, deltas split as:
+  -4:2  -2:25  -1:1  +1:3  +2:13  +3:1
+So the round-16/17 cluster is NOT uniformly delta=-2 -- 25/45 are -2, but 13/45 are
+the OPPOSITE sign (+2). Two different mechanisms plausibly land in the same two
+rounds. This refines (does not fully confirm) the prior pass's claim: the
+"rounds16-17, delta=-2" cell (25 games) is real and is the largest single
+(round,delta) cell, but it is a MINORITY of the round-16/17 population, not the
+whole thing.
+
+=== CAUSAL DRILL-DOWN: Bill Gates / ResourcesPerLabEqualToLevel ===
+
+I read journal context around the checkpoint for 3 of the 25 round16/17-delta=-2
+repro games: 7521657 (Purple, TakeCard-adjacent, round16), 7523101 (Purple,
+DevelopTechnology-adjacent, round16), 7523624 (Orange, WinWar-adjacent, round17).
+
+All three had the leader "Bill Gates" elected by the diverging actor before the
+checkpoint (7521657 round15, 7523101 round14, 7523624 earlier). Internal journal
+arithmetic (previous "now" + this round's stated production - stated spends) is
+self-consistent in all three -- the BGO-reported total is not itself weird, the
+engine is just short by 2.
+
+Bill Gates' rules text (confirmed from rust/src/effects.rs and card_table.rs, NOT
+guessed): while in play, "every lab produces resources equal to its level" --
+implemented as Special::ResourcesPerLabEqualToLevel in
+rust/src/effects.rs (apply_special, ~line 1036):
+
+    ResourcesPerLabEqualToLevel => {
+        for (id, slot) in p.techs.iter() {
+            if id.kind() == CardType::Lab {
+                stats.resources += id.level() as i32 * slot.workers as i32;
+            }
+        }
+    }
+
+Given this pattern held for all 3 read-in-detail repros, I tested it quantitatively
+against the full 124-game Group C set: for every diverging (game, actor, checkpoint
+lineno) triple, I scanned the journal up to that line for "<actor> elects Bill
+Gates" / "Bill Gates dies" to determine whether Bill Gates was the diverging
+player's OWN leader and still alive at the checkpoint (script embedded in the
+tool-call history; logic: track elected=True on "<actor> elects Bill Gates", reset
+to False on "Bill Gates dies" seen after election).
+
+Results (all counts are exact id-set counts, not means):
+  - Group C overall: 38/124 (30.6%) have Bill Gates in play at the checkpoint.
+  - Of the 41 delta=-2 games: 31/41 (75.6%) have Bill Gates in play.
+  - Of the 38 Bill-Gates-in-play games: 31/38 (81.6%) have delta EXACTLY -2.
+    (Other 7: -12 x1, -4 x2, -1 x1, +2 x2, +3 x1 -- so Bill-Gates-in-play is not a
+    100% predictor of exactly -2, but -2 is overwhelmingly the modal outcome when
+    he's in play.)
+  - Of the 45 round-16/17 games: 29/45 (64.4%) have Bill Gates in play.
+  - The intersection round-16/17 AND delta=-2 AND Bill-Gates-in-play = 23/25 (92%)
+    -- i.e. the round-16/17 delta=-2 cell is almost entirely the Bill Gates
+    population; it is not a separate "era transition" effect. The round clustering
+    is very plausibly just WHEN Bill Gates tends to be elected/producing in these
+    Emperor-level 4-player games (age III, mid-late game), not a round-boundary
+    recompute bug. I did not find an age-transition (III->IV) at the checkpoint in
+    2 of 3 hand-read repros, which argues against the "era-transition recompute"
+    theory from the prior pass.
+
+Baseline check (to rule out "Bill Gates is just a popular leader" confound): across
+ALL 1011 games (not just Group C) 461/1011 (45.6%) mention "Bill Gates" at all;
+within Group C, 78/124 (62.9%) mention him anywhere in the journal. Both of these
+are much looser tests (mention anywhere vs. "elected by the diverging actor and
+alive at the exact checkpoint line") -- the tight test (38/124, 30.6%) is already
+lower than the loose Group-C rate, which is expected since most Bill-Gates games do
+NOT diverge at all; the point of the tight test is the 81.6% hit-rate for
+delta=-2 conditional on him being in play, which is far above any of these base
+rates and is the real signal.
+
+WHAT THIS IS: 31/124 (25%) of Group C consists of games where the diverging
+player has Bill Gates as leader and the divergence is exactly delta=-2. This is my
+LARGEST identified sub-cluster and by a comfortable margin (next largest
+attributable grouping I found was the ambiguous +1/+2 tail, not a mechanism).
+
+WHAT I DID NOT ESTABLISH (mechanism-level): I did NOT pin down the exact code path
+that causes ResourcesPerLabEqualToLevel to under-count by exactly 2. Candidate
+sub-hypotheses I did not get to test against the corpus:
+  - a timing bug where a lab's workers/level used by apply_special is read before
+    a same-turn lab build/upgrade/worker-assignment lands (so it uses last turn's
+    lab state) -- consistent with "always short by the SAME small amount" if the
+    typical miss is one level x one or two workers, but I did not confirm a lab
+    build/upgrade actually happened on the diverging turn in my 3 read repros (in
+    7521657 and 7523101 no explicit lab-affecting action appears in that turn's
+    logged lines, which argues AGAINST a same-turn-edit race and FOR something
+    structural, e.g. Bill Gates's bonus being computed against a stale/partial view
+    of p.techs, or one specific lab card being silently excluded from the
+    CardType::Lab match).
+  - whether the -2 is literally "one level-2 lab, 1 worker, double-counted-out" or
+    "one level-1 lab with 2 workers" or "two level-1 single-worker labs, one
+    dropped" -- I did not cross-reference the repro games' actual lab tableau
+    (level + worker count per lab) against the -2 magnitude to distinguish these.
+  - I did not check whether the 7 Bill-Gates-in-play games with delta != -2 (the
+    -12/-4/-4/-1/+2/+2/+3 outliers) share a distinguishing feature (e.g. multiple
+    labs, a second leader-adjacent card) that would explain the different
+    magnitude/sign -- if so it may be the SAME bug scaling with lab count/level
+    rather than a second bug.
+  - I have NOT looked at effects.rs's call sites closely enough to say whether
+    apply_special(ResourcesPerLabEqualToLevel) is even reachable at the right point
+    in the per-turn recompute vs. some other snapshot; I only confirmed the
+    match-arm's arithmetic reads current p.techs, which looks correct in isolation.
+  - This is circumstantial/statistical, not a reproduced-in-debugger root cause. A
+    fix-oriented follow-up worker should NOT skip straight to "this line is the
+    bug" -- confirm by instrumenting one repro (e.g. 7521657) and comparing engine's
+    computed Bill Gates contribution against what the lab tableau implies by hand.
+
+=== THE REMAINING 93 (124 - 31 Bill-Gates/delta=-2) ===
+
+After removing the 31-game Bill-Gates/delta=-2 cluster, the remaining 93 Group C
+games show NO comparably strong single cluster:
+
+Round histogram of the remaining 93 (still mildly enriched at 16-18, 13+9+7=29/93=
+31%, but much less peaked than before):
+  3:3 4:4 5:3 6:3 7:5 8:4 9:4 10:7 11:6 12:7 13:2 14:8 15:6 16:13 17:9 18:7 19:2
+
+Delta histogram of the remaining 93 (note the sign flips: now dominated by
+POSITIVE deltas, i.e. the engine OVER-counts relative to the journal once the
+Bill-Gates-negative cluster is pulled out):
+  -12:1 -5:1 -4:4 -3:1 -2:10 -1:14 +1:32 +2:29 +3:1
+
++1 and +2 together are 61/93 (66%) of what's left. This is consistent with the
+"open long tail, do not go hunting one shared cause" warning in the brief -- I did
+NOT find a second dominant mechanism inside this remainder within budget. It is
+plausible +1 and +2 are themselves 1-2 more distinct causes each worth their own
+worker, but I have not fingerprinted them (no leader/card/action-class enrichment
+check was run against this remainder -- see below).
+
+=== WHAT I DID NOT ESTABLISH (population-level) ===
+
+  - I did NOT run the same leader/card enrichment test (elected-by-actor-and-alive-
+    at-checkpoint) for any leader OTHER than Bill Gates against the +1/+2 remainder.
+    It is very possible another leader with a per-turn special (Sid Meier
+    CulturePerLabEqualToLevel's resource-analog, Leonardo/Newton/Einstein
+    SciencePerBestLabOrLibraryLevel, DoubleBestMine, etc.) explains a chunk of the
+    +1/+2 tail the same way Bill Gates explains the -2 cluster. This is the most
+    promising next step and I ran out of budget before trying it.
+  - I did not check whether last_action_class enrichment (TakeCard is 42/124 = 34%
+    of ALL of Group C, and also the modal class inside the round16/17 delta=-2
+    cluster at 10/25 = 40%) is causal or just reflects TakeCard being the most
+    common last-logged action before an End Turn generally. I believe it is the
+    latter (not causal) but did not rule it out rigorously.
+  - I did not check 2-player vs 3-player vs 4-player game mix for enrichment.
+  - I did not check whether the -4 and -12 outliers among the Bill-Gates-in-play
+    set are actually 2x and 6x repeats of the same -2-per-lab bug (i.e. players
+    with 2 or 6 labs), which would mean the "cause" count is really the SAME single
+    bug and the true blast radius could be larger than 31 if I mis-scored some
+    non--2 Bill-Gates games as a different bug rather than the same bug with a
+    bigger lab tableau. Worth 10 minutes of follow-up: pull the lab tableau
+    (level, worker count) for those 7 outliers.
+
+=== CLEANUP ===
+No /private/tmp/resgroupc copy was created -- this was a read-only/measurement task,
+no build was needed, the prebuilt base0815 binary sufficed for everything.

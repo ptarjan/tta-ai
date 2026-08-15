@@ -1,0 +1,198 @@
+WASTED OPENING CIVIL ACTIONS -- MECHANISM DIAGNOSIS
+=====================================================
+Scope: 2p champion self-play, /private/tmp/rowdig/frozen_champion_2p.json,
+Search::None (matches how behavcensus.rs's own self-play census runs the
+champion). Question: why does the bot end 63.8% of its rounds-1-3 opening
+player-games with at least one civil action unspent (OPENINGS.txt section
+2), against ~0.8% for humans on the same corpus.
+
+Tool built for this pass: rust/src/bin/wastedca.rs (new binary in this
+scratch clone only). For every self-play move where the bot's OWN chosen
+move is `Move::EndTurn` with `civil_actions > 0` in round <= 3 -- the exact
+event `behavcensus.rs`'s `ca_unused_r3` counter counts (behavcensus.rs:
+619-636) -- it captures the FULL legal-move list at that decision
+(`legal::legal_moves`, the same function `Bot::pick` itself calls, so
+nothing is truncated relative to what the bot actually saw) and, for a
+sample, the real `WeightedBot::rank_moves` scores plus a full per-`WeightKey`
+contribution diff between the chosen EndTurn and the best-scoring
+alternative (`eval::candidate_features`, the same trial/root/ctx machinery
+`rank_moves` itself uses -- not a second reimplementation).
+
+Run: `cargo run --profile difftest --bin wastedca -- --games 200 --weights
+/private/tmp/rowdig/frozen_champion_2p.json` (threads irrelevant, single
+process, ~200 games ran in well under a minute).
+
+
+1. AFFORDABILITY TEST (hypothesis 1) -- RESULT: NOT BENIGN
+------------------------------------------------------------------------
+313 EndTurn-with-ca_before>0 events across 200 games (matches OPENINGS.txt's
+scale: 400 player-games, ~63.8% waste rate).
+
+  zero-alternative (EndTurn was the ONLY legal move):  0 / 313  (0.0%)
+  some-alternative (>=1 non-EndTurn move was legal):  313 / 313 (100.0%)
+
+alt_count histogram (number of non-EndTurn legal moves available at the
+moment the bot chose to end its turn instead): 2->1 3->2 5->3 6->4 7->3
+8->17 9->10 10->11 11->18 12->30 13->32 14->29 15->51 16->46 17->41 18->8
+19->4 20->1 21->1 22->1. Median alternative count is 13-15 -- typically a
+dozen-plus legal `Take`/`PlayTactic`/`PlayAction` moves were on the table,
+most of them affordable Take moves off the current row (that is what
+`legal::legal_moves`'s `Take` branch already gates on: `costs::
+can_take_gated`, cost-and-legality-checked, not merely "in the row").
+
+This rules out hypothesis 1 cleanly: in every single sampled instance the
+bot had cards it could legally afford to take and chose not to. The
+question is a real preference, not an affordability artifact. Investigation
+continues to hypothesis 2/3.
+
+
+2. THE MECHANISM (hypothesis 2, confirmed; hypothesis 3, ruled out)
+------------------------------------------------------------------------
+Hypothesis 3 (search/candidate-set artifact) is ruled out by construction:
+the candidate list scored is `legal::legal_moves` verbatim -- the identical
+list `Bot::pick` itself iterates -- and the champion runs `Search::None`
+(one-ply `evaluate`, no deeper tree to prune candidates out of). EndTurn is
+not winning because the alternatives were never generated or were pruned;
+it wins a fair, full-field, one-ply score comparison.
+
+Ten representative real positions, chosen move EndTurn vs. best-scoring
+Take alternative (raw `rank_moves` scores, from the run above):
+
+  seed=0  round=2  EndTurn 208.09  vs  best Take 204.20  (gap +3.89)
+  seed=1  round=3  EndTurn 208.53  vs  best Take 206.12  (gap +2.41)
+  seed=3  round=1  EndTurn 179.27  vs  best Take 178.99  (gap +0.28)
+  seed=3  round=3  EndTurn 187.24  vs  best Take 183.93  (gap +3.31)
+  seed=6  round=3  EndTurn 228.01  vs  best Take 226.84  (gap +1.17)
+  seed=7  round=3  EndTurn 252.34  vs  best Take 249.54  (gap +2.80)
+  seed=8  round=3  EndTurn 241.52  vs  best Take 238.06  (gap +3.46)
+
+Full per-`WeightKey` contribution diff (EndTurn score minus Take score,
+decomposed as `w.get(k) * (f_end[k] - f_alt[k])`) for these same positions
+shows ONE term dominating every single Take comparison, by a wide margin
+over every other term including `ca_left`:
+
+  seed=0:  HandValueEarly +10.45   (next largest: CaLeft -6.32, BlueFree -6.03, Science -5.50)
+  seed=1:  HandValueEarly +18.93   (next largest: CaLeft -8.42, BlueFree -7.54, Science -5.50)
+  seed=3 r1: HandValueEarly +11.34 (next largest: CaLeft -8.42, BlueFree -6.03, Science -5.50)
+  seed=3 r3: HandValueEarly +19.10 (next largest: CaLeft -6.32, Science -5.50, BlueFree -4.52)
+  seed=6:  HandValueEarly +9.88   (next largest: Science -5.50, MaLeft +4.88, BlueFree -4.52)
+  seed=7:  HandValueEarly +20.08  (next largest: RowBargainForgone -10.28, CaLeft -8.42)
+  seed=8:  HandValueEarly +10.04  (next largest: CaLeft -6.32, Science -5.50, MaLeft +4.88)
+
+Confirmatory negative control: in the two sampled positions where the best
+alternative was NOT a card-taking move (`PlayTactic { Medieval Army }`,
+seeds 2 and 4), `HandValueEarly` does not appear in the diff at all (that
+move does not touch `p.hand_civil`), and the EndTurn-vs-alternative gap
+collapses to 0.1-2.9 points, driven instead by military-side terms
+(`MaLeft`, `HandMilitary`) -- exactly what should happen if `HandValueEarly`
+is specifically a per-card-taken effect, not a generic EndTurn preference.
+
+Note on `ca_left`, per the task's own flag: it is NOT the driver here. In
+every sampled diff `CaLeft`'s contribution runs -4.2 to -10.3, i.e. it
+consistently favours the Take/alternative move over EndTurn, exactly as the
+weights.rs:451-471 comment documents (a `Move::EndTurn` trial's
+`p.civil_actions` is pre-loaded to the FRESH next-turn allotment, priced
+negatively at `ca_left`'s -2.106, so ending turn early is the WORSE choice
+on this one axis specifically). `ca_left` is working as intended and, if
+anything, is fighting the observed behaviour, not causing it. Confirms the
+task brief's own note that `ca_left` is "the main thing making the bot
+spend actions at all" -- it is just being overpowered by something else.
+
+### The mechanism itself
+
+`rust/src/bots/weighted/features.rs:360`:
+    let hand_value: f64 = p.hand_civil.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();
+
+This is exactly what a `Move::Take` exists to increase: taking a card adds
+exactly one entry to `p.hand_civil`, raising `hand_value` by `level + 1`
+(>= 1) every single time. `Move::EndTurn`'s trial does not add a card, so
+its `hand_value` is unchanged (or lower).
+
+`rust/src/bots/weighted/eval.rs`'s `linear_features` (~line 493-498) phase-
+blends this raw feature by `lateness` into two weighted slots:
+    let late = horizon::lateness(state);
+    let early = 1.0 - late;
+    ... out[k.early()] = v * early;   // HandValue -> HandValueEarly
+    out[k.late()]  = v * late;        // HandValue -> HandValueLate
+In round <= 3, `lateness` is near 0 and `early` near 1, so almost the whole
+raw `hand_value` delta from a Take flows into the `HandValueEarly` slot.
+
+`rust/src/bots/weighted/weights.rs:652-653` declares the DESIGNED defaults:
+    HandValueEarly => "hand_value_early", 0.2;
+    HandValueLate  => "hand_value_late", -0.2;
+i.e. the intent is: cards in hand are worth a small POSITIVE amount early
+(they're future options), and a small NEGATIVE amount late (hoarding near
+the end is bad -- an unplayed card is wasted potential/an antiquation risk).
+
+The frozen champion vector in actual use for this self-play,
+`/private/tmp/rowdig/frozen_champion_2p.json`, has:
+    hand_value_early = -12.405219547382893     (design default: +0.2)
+    hand_value_late  = -0.078056603691360...   (design default: -0.2, same sign, right order of magnitude)
+
+`hand_value_early` alone is not just off-default, it is SIGN-FLIPPED and
+~60x oversized relative to its own designed value, and is the 7th-largest-
+magnitude weight in the entire ~180-key vector -- immediately behind the
+already-known-and-repaired "leadersign" bug (`card_board_leader`, -15.003,
+OPENINGS.txt section 2's note on `dominance_repair`). Nothing in this
+codebase currently detects or repairs `hand_value_early` the way
+`dominance_repair` (`eval.rs:934`) repairs `card_board_leader` -- grepped
+`docs/` and `registry.rs` for it; only a one-line "phase blend off
+HandValue" note, no anomaly flag.
+
+Net effect, every single Take/Develop candidate in rounds 1-3: the
+newly-added card's `level + 1` value gets multiplied by roughly -12.4 (vs.
+the intended +0.2), producing a synthetic 10-20 point penalty on the SAME
+move that is supposed to be the bot's bread-and-butter opening action --
+large enough to swamp `ca_left`'s correctly-signed -4 to -10 point pull
+toward spending, `end_turn_bias`'s own -0.1499 penalty on ending turn (also
+far too small on its own to matter, but not the culprit either), and every
+other term in the vector. `Move::EndTurn` simply never triggers this
+penalty because it never adds a card to hand.
+
+This is NOT unique to this one frozen vector -- checked four other champion
+snapshots on disk (`/private/tmp/openca/champion_2p_now.json`,
+`champion_2p_fixed.json`, `champ_backup/rust_champion_{2p,3p,4p}.json`):
+`hand_value_early` is NEGATIVE in every one of them (-1.61, -2.16, -27.68,
+-0.38, -0.76 respectively), always opposite its designed +0.2 sign, though
+the magnitude swings by more than an order of magnitude between
+independently-fit vectors. (`end_turn_bias` shows the same pattern of wild,
+sign-varying, magnitude-varying values across vectors: -0.15 to -1.46 to
+-32.4.) This looks like a structurally under-anchored coordinate of
+whatever fitting/climbing process produces these vectors -- something that
+drifts wherever gradient noise pushes it rather than one measured against a
+stable target the way e.g. `science_rate`/`strength_rel` are -- not a
+one-off fluke of this specific frozen file. The -12.4 value used in THIS
+run's self-play sits toward the higher-magnitude end of that spread but is
+squarely inside the pattern, not an outlier from it.
+
+Was `row_last_copy` (the task's own flagged suspect, row.rs ~460) checked?
+Yes -- it appears in several diffs above (`RowLastCopy` -4.97, -0.95,
++2.52, +2.00) but with inconsistent sign and magnitude an order smaller
+than `HandValueEarly`; it is a secondary contributor at most in these
+positions, not the dominant one.
+
+
+3. RECOMMENDATION (diagnosis only -- no fix implemented, per instructions)
+------------------------------------------------------------------------
+Do not touch `ca_left` (it is not the cause, and the task rules it out
+regardless) and do not add or strengthen anything that pays the bot for
+spending a civil action -- both `hand_value_early`'s poisoned sign and
+`end_turn_bias`'s own separately-observed volatility point at the SAME
+underlying problem: at least these two phase/search-adjacent coordinates
+are effectively unconstrained during whatever process fits/climbs these
+vectors, drifting to wherever noise pushes them rather than being anchored
+to their own designed intent (`+0.2`/`-3.0` respectively) or to a
+cross-validated stable value the way the corpus's better-behaved economic
+weights (`science_rate`, `strength_rel`, etc.) are. The fix that respects
+"don't pay the bot to act, make the alternatives correctly attractive"
+is to re-anchor `hand_value_early` specifically -- e.g. bound/regularize it
+toward its designed positive-early sign during fitting, or re-derive it
+from the same `dominance_repair`-style audit that already caught
+`card_board_leader`'s sign flip -- so that taking a card in the opening
+prices as the modest, genuine option-value gain it is, rather than as a
+~60x-inflated, sign-inverted penalty that currently makes "do nothing"
+outscore "take a card" in the overwhelming majority of rounds-1-3
+decisions. `end_turn_bias`'s own volatility across vectors is the same
+class of problem and is worth the same treatment, though it was confirmed
+here to be a minor contributor (-0.15) next to `hand_value_early`'s
+dominant one in the specific gap this pass measured.

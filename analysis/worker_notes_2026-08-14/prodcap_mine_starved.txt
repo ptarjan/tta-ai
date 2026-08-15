@@ -1,0 +1,108 @@
+PRODCAP -- who actually loses production when the blue supply runs short
+measured 2026-08-15 on live master d4130c1, full 1011-game replaystats sweep
+
+WHY
+    Paul, 2026-08-15: "But you can choose food or iron."  The blue tokens are ONE
+    shared supply.  When it cannot cover a round, the player chooses which
+    production to forgo -- and that choice spans the food/resource boundary, not
+    just which cards within a kind.
+
+    economy::end_of_turn hardcodes the order:
+        3c  food bonus (gain_food)      -> food production (credit_production)
+        3d  food consumption (pay_food, which RETURNS tokens to the supply)
+        3e  resource bonus              -> resource production
+    Every one of those four draws on the same blue_available(p) pool.  Food is
+    therefore credited first unconditionally, so food can never be the thing that
+    gets dropped.  That is not a player choice, it is an arbitrary tie-break.
+
+METHOD
+    Temporary env-gated probe (PRODCAP=1), reverted immediately after measuring:
+      * economy.rs, both production blocks: eprintln when `got < full`, i.e. when
+        the cap actually cut this kind's production.
+      * bin/replaystats.rs: eprintln "PRODCAP_GAME <id>" per game, to attribute
+        stderr events to a game.  replaystats is SERIAL (no rayon/par_iter), and
+        Rust's stderr is unbuffered, so the interleaving is trustworthy.
+    Sweep was a no-op on the numbers: still 748 completed / 721 exact.
+
+RESULT -- the bias is entirely one-sided
+    farm production starved ....  0 events
+    mine production starved .... 23 events, in 22 distinct games
+
+    So the food-first order never costs the player food.  It ONLY ever costs iron.
+
+THE 22 GAMES (want= uncapped worker production, got= what the cap allowed)
+
+    not completing today -- 8 (candidate wins if this is fixed):
+        7521689  want=4 got=2   AND  want=4 got=0   (two separate rounds)
+        7521829  want=12 got=10     (also a known resource-drift repro)
+        7522211  want=3 got=2       (also the discard-solver non-determinism game)
+        7522242  want=6 got=4
+        7522347  want=7 got=6
+        7522365  want=6 got=4
+        7522595  want=4 got=2
+        7523123  want=6 got=4
+
+    completing today -- 14:
+        7521459 (the PRODTRACE repro) want=9 got=7
+        7521775 want=6 got=2
+        7521986 want=8 got=6
+        7522146 want=9 got=0
+        7522278 want=6 got=4
+        7522402 want=11 got=9
+        7522532 want=8 got=6
+        7522786 want=6 got=4       (also a known base-culture score mismatch)
+        7522796 want=9 got=8
+        7522822 want=16 got=13
+        7523065 want=8 got=7
+        7523069 want=6 got=4
+        7523223 want=3 got=0
+        7523531 want=2 got=1
+
+    Base rate check, so nobody over-reads this: 748/1011 = 74% of the corpus
+    completes, so 22 games would be expected to yield ~5.7 non-completers; we see
+    8.  That is NOT a significant enrichment on n=22.  The lead's value is the
+    two total-wipeouts (7522146 want=9 got=0, 7523223 want=3 got=0) and 7521689's
+    two events, not the count.
+
+WHAT IS NOT YET DECIDED
+    A cross-kind chooser needs a RULE, and it must be a single behaviour, not a
+    policy knob (see the standing "no policy knobs, no hardcoded formulas"
+    constraint).  "Match whatever the journal says" is NOT available: that is
+    coercing the replayer to manufacture a completion, which is banned.
+    Question is out to Paul.  Do not build a chooser before that answer lands.
+
+DO NOT
+    Do not "fix" this by weakening the blue_total - blue_used cap.  The supply is
+    LIMITED and unplaceable production is LOST (Paul, 2026-08-14); the cap is
+    correct.  The defect, if any, is purely WHICH production the cap eats.
+    Do not re-derive production_pairs' within-kind order -- descending printed
+    value is already the value-maximising choice and is settled.
+
+FOLLOW-UP 2026-08-15: the one STRICT-DOMINANCE rule fires ZERO times
+    Paul, asked what he actually does when the supply is short: "It depends. If you
+    are out of yellow people to birth then only take what you can eat. If you have
+    too much production and need more people then take food. If you don't care for
+    more people then take only enough to eat then iron. Maybe take less this turn
+    and more next turn."
+
+    So the cross-kind split is a VALUE decision, not a rules fact -- it belongs to
+    the evaluator, not to a hardcoded order.  Exactly ONE clause is strict
+    dominance and needs no judgement: with an EMPTY population reserve, food beyond
+    consumption can never be spent, so taking it instead of iron is dominated.
+
+    Re-measured all 23 events with yellow_bank/food/need attached:
+        yellow_bank == 0 ....  0 of 23 events
+        minimum observed ....  2  (7522822, food=17 need=4)
+    The dominance rule would never fire on this corpus.  DO NOT BUILD IT.
+
+    What the numbers DO show is food hoarding while mines starve, e.g.
+        7521459 food=27 need=2 | 7522786 food=26 need=3 | 7522402 food=23 need=2
+        7522822 food=17 need=4 | 7522796 food=16 need=3 | 7523223 food=14 need=2
+    but "that food is surplus" is a judgement about future turns -- Paul explicitly
+    said "maybe take less this turn and more next turn" -- so it is a heuristic, not
+    a dominance bound, and must NOT be hardcoded.
+
+    CONCLUSION: the real fix is to make short-supply production an actual decision
+    point the evaluator prices, alongside the existing move choices.  That is a
+    design change, not a patch.  Until then the food-first order stands as a known,
+    measured, one-sided approximation costing at most 23 events in 1011 games.

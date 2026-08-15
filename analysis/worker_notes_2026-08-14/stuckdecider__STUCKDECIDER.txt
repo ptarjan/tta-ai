@@ -1,0 +1,345 @@
+STUCKDECIDER BUCKET -- "decider # != expected actor #, phase Actions, no pending"
+Session 2026-08-14, clone /private/tmp/stuckdecider, base commit 9f6104d.
+============================================================================
+STATUS: FIX IMPLEMENTED, DIAGNOSED, BUT NOT LANDABLE -- 3 unresolved
+regressions. Committed to the clone (commit ea78ce5) for a fresh worker to
+finish, NOT merged/landed. Read the "3 REGRESSIONS" section before doing
+anything else with this patch.
+
+BUCKET CENSUS (measured at base 9f6104d)
+------------------------------------------
+Exact bucket key (from replaystats' own aggregated table):
+    "StuckPending: decider # != expected actor #, phase Actions, no pending"
+    122 games, 12.1% of the corpus.
+Exact IDs: REPLAY_DUMP_BUCKET='phase Actions, no pending' gave 122 unique
+DUMP ids (saved at /tmp/mybucket_ids.txt in the clone's /tmp, not preserved
+outside it -- regenerate with the command below if needed):
+    cd rust && REPLAY_DUMP_BUCKET='phase Actions, no pending' \
+        ./target/difftest/replaystats ../sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals >/dev/null 2>dump.err
+    grep '^DUMP' dump.err | awk '{print $2}' | sort -u
+(NOTE: REPLAY_DUMP_BUCKET='decider' alone over-matches -- 128 ids, 6 extra
+from other phase/pending combinations also containing the substring
+"decider". Use the longer substring above.)
+
+Guard baseline at 9f6104d: /private/tmp/guard_ids.txt, 509 completed IDs,
+FROZEN, matches this session's own from-scratch sweep exactly (comm -3
+empty) -- i.e. this base commit's replay is fully deterministic run-to-run
+(confirmed by running the sweep twice, byte-identical ID sets both times --
+the OLDER "NONDETERMINISM" finding from a PRIOR decider session, quoted
+below, may already be stale at this commit; not reinvestigated).
+
+There is a PRIOR session's notes file for this exact bucket at
+analysis/worker_notes_2026-08-14/decider__DECIDER.txt (branch `decider` off
+an OLDER base 3fc32b5, 102 games at that base -- natural corpus/fix drift
+explains the 102 -> 122 difference). That session did NOT land a fix; it
+diagnosed the dominant sub-cause as a `HandLedgerVerdict::SimulatorBug`
+signature covering ~76% of ITS bucket, ruled out two mechanisms
+(`military_hand_deficit` incur/repay, `ground_for_consumption`'s victim-swap
+arithmetic), and flagged -- but explicitly did NOT verify or fix -- the
+exact bug this session chased down and fixed: wrong Aggression-card
+age-sibling resolution (their STEP 1, game 7523354, is the SAME game and
+SAME wrong-age-sibling finding this session started from). This session
+picked up exactly where they left off ("NEXT STEPS FOR A FUTURE SESSION",
+item 3 of that file) and pushed it to a working (but regression-blocked)
+fix. Read that file too; it is not superseded, it is a prerequisite.
+
+ROOT CAUSE
+-----------
+`corpus::build_card_index` (corpus.rs ~118-134) maps every BGO-printed bare
+card name to a CardId via `.entry(name).or_insert(id)`, walking `CARDS` in
+array order -- so an ambiguous family name that BGO always prints WITHOUT
+its age suffix (Aggression cards: "Raid", "Enslave", "Infiltrate", ...;
+Territory cards likewise, out of scope here) ALWAYS resolves to that
+family's FIRST (oldest-age) table entry, no matter which age was actually
+in play. This is already known and already partially fixed for ONE family
+(Plunder, via `resolve_plunder_age`, replay_common.rs ~3612-3630, matched
+against the card's own printed "up to N resource and/or food" cap) -- but
+every OTHER Aggression family (Raid, Enslave, Infiltrate, Annex, Armed
+Intervention, Spy, ...) had no equivalent correction, so
+`ActionClass::PlayAggression`'s dispatch (apply_one, replay_common.rs, the
+"ActionClass::PlayAggression =>" arm) was consuming a systematically wrong
+card identity whenever a multi-age family's OLDER-age default (cheaper MA
+cost) did not match the age actually printed on the journal line.
+
+Concretely, game 7523354 line 233: BGO's own text is Raid's Age II wording
+("...2 urban buildings: one of Age II or older and one of Age I or
+older...", 2 MA -- confirmed against RULES_SPEC.md 5.5's own table: Raid I
+"destroy a level 0-1 building" 1 MA, Raid II "up to a level 0-1 and a level
+0-2 building" 2 MA, Raid III 3 MA), but `card_index["Raid"]` always resolves
+to `"Aggression: Raid (I)"` (1 MA). `combat::start_aggression` (combat.rs
+~260-266) deducts `card.get().military_action_cost` -- the WRONG card's
+field -- so it only spends 1 of Purple's military actions instead of the
+true 2, leaving `military_actions` (the live per-turn remaining budget,
+`PlayerState.military_actions`) 1 too HIGH for the rest of the turn. This
+inflated value feeds two downstream computations:
+  1. `economy::draw_military_step`'s `military_actions_unused` -> one extra
+     end-of-turn military card drawn beyond what the journal shows;
+  2. `interact::discard_excess_military`'s `limit = military_actions +
+     military_hand_limit` -- inflated by 1, so a hand that genuinely
+     exceeds the TRUE limit by 1 (per journal, which announces a real
+     discard) computes NO excess in this binary's own reconstruction --
+     eventually, several rounds later, landing exactly on this bucket's
+     shape: `state.current` has already legally advanced past the player
+     the journal's next line names, with nothing pending to explain the gap.
+
+CORPUS-WIDE SCOPE: the `HandLedgerVerdict::SimulatorBug` diagnostic
+(replaystats' own `REPLAY_DUMP_BUCKET=SimulatorBug`) intersects this
+session's 122-game bucket in 91 games (75%) -- the dominant single
+explanation, consistent with the prior session's 76% finding on their
+102-game bucket. NOTE: that diagnostic's own NAME is misleading here -- see
+"A DIAGNOSTIC RED HERRING" below; do not trust it at face value for this
+bucket without re-deriving.
+
+A DIAGNOSTIC RED HERRING (worth an hour of anyone's future time to avoid
+repeating): `prescan_military_hand_ledger` (replay_common.rs ~4200-4270,
+purely a JOURNAL-TEXT reconstruction used only for the `SimulatorBug`
+classification, never consulted by the real replay logic) does NOT model
+Rule Spec section 12.2 antiquation -- "on an age ending, all players discard
+antiquated cards from HANDS (civil and military)" (RULES_SPEC.md line
+297-299, confirmed against CoL p.3 / RB p.21). `game::antiquate` (game.rs
+~595-621) DOES correctly implement this for the real simulator, discarding
+hand_military cards whose age is older than the age that just ended. This
+session spent a long time hand-tracing game 7523354 believing a spuriously
+"vanishing" Aggression: Raid (I) card (round 13, between lines 217 and 218)
+was itself the bug, before discovering it was CORRECT antiquation (Age II
+ending, Raid I correctly discarded) that the ledger's own text-scan simply
+never accounts for -- so `SimulatorBug`'s classification ("ledger agrees
+with journal; forward simulator's own hand_military is wrong") is
+BACKWARDS whenever antiquation participates: the ledger is the one that's
+wrong, not the simulator. This did NOT block finding the real bug (the
+antiquation trace is what led, by elimination, back to the actually-wrong
+Raid MA-cost deduction one round earlier) but a future worker chasing
+`SimulatorBug`-tagged games should verify against `game::antiquate`
+BEFORE assuming the simulator itself is at fault. Fixing the ledger to
+model antiquation would only fix diagnostic LABELS -- it is not used by
+the real replay path and would not by itself resolve any StuckPending.
+
+THE FIX (committed, replay_common.rs)
+---------------------------------------
+New function `resolve_aggression_age(card, raw_text) -> CardId`
+(replay_common.rs, right after `resolve_plunder_age`), wired into
+`ActionClass::PlayAggression`'s dispatch in `apply_one` immediately after
+the existing `resolve_plunder_age` call:
+    let card = resolve_plunder_age(card, raw_text);
+    let card = resolve_aggression_age(card, raw_text);
+Parses the journal's own trailing "uses N military action" clause (reusing
+the existing `civil_and_military_uses` helper, already used elsewhere for a
+civil-action-total cross-check) and re-resolves `card` to the UNIQUE
+family_siblings() member whose OWN printed `military_action_cost` matches
+N. A safe no-op (returns `card` unchanged) for: Plunder (all 3 ages tie at
+1 MA -- explicitly excluded so it never fights `resolve_plunder_age`'s own,
+already-correct, cap-based resolution), a missing/unparseable clause, or a
+tie/zero-match on cost (never worse than the pre-correction guess).
+
+Diagnostic/hand-verified BEFORE landing: `Special::DestroyUrbanBuildings`
+already correctly loops per age within a SINGLE special variant
+(`combat::finish_aggression`, "for &age in ages { enqueue Raid{...} }") --
+the prior session's note that Raid II/III's "special list needs 2
+DestroyUrbanBuildings entries, not 1" is WRONG / already-fixed independent
+of this session; do not re-do that work. Similarly, the prior session
+flagged the "half of DOUBLE cost" resource-gain formula as suspect --
+VERIFIED CORRECT per RULES_SPEC.md line 353 ("half the resources needed to
+build it (rounded up)" -- explicitly PER destroyed building, not summed
+first; the code's `printed.div_ceil(2)` per building in
+`interact.rs`'s `ChoiceKind::Raid` handling already matches this exactly).
+Do not "fix" this rounding -- it is already right.
+
+3 REGRESSIONS -- ROOT-CAUSE STARTED, NOT FINISHED
+----------------------------------------------------
+Full-corpus regression bar (SCOREDIV_DUMP_COMPLETED=1, difftest profile,
+1011-game sweep, guard = /private/tmp/guard_ids.txt, 509 IDs, frozen):
+
+    === REGRESSIONS (MUST BE EMPTY) ===
+    7521946
+    7522072
+    7522647
+
+    === WINS ===
+    7520707
+    7521213
+    7521243
+    7521833
+    7521915
+    7521922
+    7521943
+    7521971
+    7521996
+    7522037
+    7522074
+    7522272
+    7522331
+    7522726
+    7522773
+    7522977
+    7523072
+    7523073
+    7523091
+    7523127
+    7523159
+    7523193
+    7523198
+    7523338
+    7523402
+    7523510
+    (26 wins total)
+
+Net +23 (26 wins - 3 regressions), but the 3 regressions BLOCK LANDING per
+this project's hard rule -- do not merge this patch as-is.
+
+Confirmed DETERMINISTIC (reran the identical sweep twice, byte-identical ID
+sets both times) -- these are real, reproducible consequences of the fix,
+not HashMap-iteration noise (a PRIOR session on an older base flagged
+exactly this kind of noise as a live risk; it does not appear to apply at
+this commit, but was only checked this one way, not exhaustively).
+
+Root-cause progress on 7522072 (the furthest-diagnosed of the three, and
+the clearest -- start here):
+  Stop shape (WITH the fix): `IllegalMove { attempted: Upgrade { from:
+  Warriors, to: Swordsmen }, ... }` at journal line 175 ("Orange upgrades
+  Warrior to Swordsmen Orange spends 1 resource"), debug dump shows
+  `military_actions=0` at that exact point (REPLAY_DEBUG=1 ./target/
+  difftest/replay ... 7522072, "DEBUG try_apply fail" line).
+  `legal.rs`'s Upgrade-move generation (~line 479-501) gates a UNIT
+  upgrade (Warriors/Swordsmen are `CardType::Infantry`, `kind.is_unit()`)
+  on `have_ma` (a military action available), NOT `have_ca` -- confirmed
+  this is correct per this engine's own existing rule, not something to
+  change.
+  Line 167 (round 11): "Orange plays Raid against Purple ... Orange uses 2
+  military action" -- Raid II, CORRECTLY resolved to 2 MA by this
+  session's fix (previously wrongly resolved to Raid I, 1 MA). Orange's
+  government is Despotism (`military_actions: 2` per turn, card_table.rs
+  ~838) -- so if the ENTIRE per-turn budget is exactly 2 and the Raid
+  spends all of it, `military_actions` should legitimately be 0 for the
+  rest of the turn under BOTH the old and new resolution... except BGO's
+  OWN journal shows Orange successfully performing the Warriors->Swordsmen
+  upgrade a few lines later (line 175), which BGO's own engine would only
+  have allowed if Orange genuinely had >=1 military action left at that
+  point in the REAL game -- i.e. real Orange must have had a per-turn MA
+  budget > 2 (3, most likely), NOT just 2 from Despotism alone.
+  UNRESOLVED: what grants Orange the extra military action(s) this
+  reconstruction is missing between line 167 (Raid, 2 MA cost) and line
+  175 (Upgrade)? Checked and RULED OUT: leader Isaac Newton (elected at
+  line 170, card_table.rs ~1762 -- `military_actions: 0` on its
+  `CardEffects`, only grants `CivilActionBackOnTechDevelop(1)`, a CIVIL
+  refund, and `SciencePerBestLabOrLibraryLevel`; neither touches military
+  actions). NOT checked: whether Orange's tableau (Warriors, Agriculture,
+  Bronze, Philosophy, Religion, Irrigation, Iron, Knights, Scientific
+  Method, Organized Religion, per the debug dump's own `tableau=[...]`
+  field) contains a technology whose `CardEffects.military_actions` field
+  is nonzero that this reconstruction is failing to COUNT into
+  `effects::state_stats`'s military_actions sum (as opposed to a rule this
+  binary is simply missing entirely) -- this is the most likely single
+  next step: grep `card_table.rs` for each of those exact names' own
+  `military_actions:` field and cross-check against whatever `effects::
+  state_stats` actually sums. If EVERY one of them is genuinely 0, the gap
+  is a missing RULE (e.g. a leader ability list this binary has not ported,
+  a start-of-turn bonus, or -- most interesting if true -- evidence that
+  `combat::start_aggression`'s MA deduction for Raid is ALSO wrong in a
+  different way this session did not catch, e.g. Raid should not cost the
+  full printed amount under some condition present in this exact game).
+  Given this session's fix is what NEWLY exposes this gap (previously the
+  wrong, too-cheap 1-MA Raid resolution accidentally left enough MA
+  headroom to paper over it), whatever the true missing +1 MA source is,
+  it was ALSO real and ALSO missing before this session's fix -- this
+  fix did not introduce a new bug, it removed a compensating error that
+  was masking a pre-existing one, exactly the shape the task's own
+  governing principle warns to expect ("a regression is usually a second
+  real bug your change exposed").
+
+7521946 and 7522647 were NOT individually root-caused beyond the raw
+symptom (both are large "arbitrary discard" games -- 54 and 20 discards
+respectively resolved by unconstrained tie-breaking, so any upstream MA/
+draw-count change is expected to ripple through many downstream arbitrary
+choices; a fresh worker should check whether they share 7522072's exact
+"missing +1 MA source" shape, or are independent). Both also have Raid
+plays in their own journals (7521946 line 119 Raid I 1MA -- looks like a
+correct no-op change; line 395 Raid III 3MA -- resolved differently than
+before, same "family" of risk as 7522072). 7522647 stop shape is the same
+`IllegalMove { Upgrade }` shape as 7522072 (line 221, Philosophy ->
+Scientific Method, also gated on `have_ma` since Scientific Method's
+`CardType`... NOT actually verified to be a unit -- worth double-checking
+this is really the SAME `have_ma` gate and not a coincidentally-similar
+error message before assuming it shares 7522072's cause).
+
+WHAT I DID NOT GET TO
+------------------------
+- Never wrote or ran the required `#[cfg(test)]` unit test for
+  `resolve_aggression_age` (RED-confirmed-then-fixed per this project's
+  testing discipline) -- ran out of budget mid-regression-chase. The
+  function itself is short and pure (`card: CardId, raw_text: &str ->
+  CardId`); a test should cover at minimum: (a) Raid II's real line 233
+  text from 7523354 resolves "Raid" to "Aggression: Raid (II)"; (b) a bare
+  Plunder line is left untouched (still `resolve_plunder_age`'s job); (c) a
+  single-age family (e.g. "Aggression: Spy") is a no-op regardless of the
+  clause. Revert the `fn resolve_aggression_age` body to `card` (a bare
+  passthrough) to confirm each assertion goes RED before re-adding the real
+  body, per this project's rule.
+- Never ran `cargo test --profile fasttest` or `cargo clippy --all-targets
+  --profile difftest -- -D warnings` this session (explicitly told to skip
+  both during wind-down) -- MUST be run before this patch can land, in
+  addition to fixing the 3 regressions.
+- Did not investigate whether the SAME wrong-age-sibling bug also affects
+  `ActionClass::DeclareWar` / `ActionClass::ProposePact` (both also route
+  through `consume_named_military_card` with no age-sibling correction at
+  all, per this file's own doc comments on that function) -- out of scope
+  for this session, flagged for a future one; War/Pact card families may or
+  may not vary by MA cost across ages the same way Aggression does, not
+  checked.
+- Did not re-run the corpus-wide `SimulatorBug` intersection AFTER this
+  session's fix to see how much of the 91/122 "red herring" overlap shrinks
+  once the real Raid-cost bug is corrected -- would be informative for
+  scoping how much of the remaining ~25% non-`SimulatorBug` bucket needs an
+  entirely different cause once this fix (or its corrected successor) lands
+  cleanly.
+
+FALSE STARTS (for anyone re-deriving)
+----------------------------------------
+- Spent significant effort hand-tracing game 7523354's "vanishing"
+  Aggression: Raid (I) card as if it were itself a bug, before realizing it
+  was correct §12.2 antiquation the diagnostic ledger simply doesn't model
+  (see "A DIAGNOSTIC RED HERRING" above). The actual bug (wrong MA
+  deduction from the WRONG Raid resolution one round earlier) was found by
+  continuing to trace backward past the antiquation event, not by chasing
+  the antiquation itself.
+- Initially suspected `military_hand_deficit` (incur/repay) and
+  `repay_military_hand_deficit`'s usize-subtraction-then-cast-to-u32 growth
+  computation (replay_common.rs ~2746, `(after - before) as u32`) as a
+  possible silent-wraparound bug -- read the code carefully: `after >
+  before` is checked BEFORE the subtraction, so no wraparound is possible;
+  ruled out by inspection, not by running anything.
+- Initially suspected the "Development of Civil Life" `civil_life_move`
+  early-exit branch (replay_common.rs, gated on `actor != r.state.decider()
+  && r.state.pending.is_empty()`) might be mis-firing for a leading-colour
+  Aggression line -- traced and ruled out: the branch's own guard already
+  correctly requires `actor != decider()`, which is false for an actor's
+  own ordinary action line, including Aggression.
+- Considered whether the "half of DOUBLE cost" Raid resource-gain rounding
+  (per-building vs summed-then-rounded) needed a companion fix alongside
+  the MA-cost correction -- RULES_SPEC.md line 353 already resolves this in
+  favour of the EXISTING code (per-building rounding is correct); do not
+  revisit this.
+
+CLIPPY / TESTS
+-----------------
+NOT RUN this session (explicit wind-down instruction). MUST run both
+`cargo test --profile fasttest` and `cargo clippy --all-targets --profile
+difftest -- -D warnings` before landing, in addition to writing the missing
+unit test and fixing the 3 regressions above.
+
+PATCH CONTENTS
+------------------
+rust/src/replay_common.rs only: new `fn resolve_aggression_age` (~46 new
+lines, doc comment included) plus its one-line call site inside
+`ActionClass::PlayAggression`'s arm in `apply_one`. No test changes (test
+not yet written -- see "WHAT I DID NOT GET TO"). Diff is otherwise clean --
+all diagnostic `eprintln!`s used during this session's investigation were
+stripped back out before committing; none are in the patch.
+
+CLONE STATUS
+---------------
+/private/tmp/stuckdecider left IN PLACE, NOT deleted -- it holds one
+committed-but-unlanded commit (ea78ce5, "Correct Aggression card
+age-sibling resolution via printed MA-cost clause") beyond base 9f6104d.
+Do not delete this clone until the fix above either lands (regressions
+fixed, tests written, clippy clean) or is explicitly abandoned.

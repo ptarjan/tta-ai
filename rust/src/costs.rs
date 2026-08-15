@@ -235,7 +235,7 @@ fn leader_replacement_take_discount(card: &Card, p: &PlayerState) -> i32 {
         .iter()
         .find_map(|s| match s {
             Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(n) => Some(*n as i32),
-            _ => None,
+            Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
         })
         .unwrap_or(0)
 }
@@ -537,9 +537,9 @@ pub fn build_cost_for(state: &GameState, p: &PlayerState, id: CardId) -> Option<
             // helper -- this was the one place that didn't match it.
             let has_library = p.techs.iter().any(|(t, slot)| t.kind() == CardType::Library && slot.workers > 0);
             let has_theater = p.techs.iter().any(|(t, slot)| t.kind() == CardType::Theater && slot.workers > 0);
-            if card.kind == CardType::Theater && has_library {
-                cost -= 1;
-            } else if card.kind == CardType::Library && has_theater {
+            if (card.kind == CardType::Theater && has_library)
+                || (card.kind == CardType::Library && has_theater)
+            {
                 cost -= 1;
             }
         }
@@ -706,6 +706,31 @@ pub fn tech_cost_net(state: &GameState, p: &PlayerState, id: CardId) -> Option<i
     }
 }
 
+/// Science cost to seize a government by VIOLENT revolution (§8.3.4,
+/// `Move::Revolution`), with the same standing pact discount (`Stats::
+/// tech_discount`, e.g. Scientific Cooperation's "pays 2 science less")
+/// [`tech_cost`] already applies to the PEACEFUL path -- `apply.rs::
+/// h_revolution` used to read `Card::revolution_cost` completely
+/// undiscounted, a real 2-science overcharge confirmed against BGO journal
+/// `7523162` (line 292: Grey revolutions to Constitutional Monarchy --
+/// printed `revolutionCost` 6, journal's own "4 science points spent" --
+/// while Scientific Cooperation's pact was active). The pact's own card
+/// text ("every time one of the civilizations plays a technology...") does
+/// not carve out violent revolutions, and this game is direct human-play
+/// proof that BGO doesn't either.
+///
+/// Returns `None`, exactly like `Card::revolution_cost == 0`, when the
+/// government prints no revolution cost at all (Despotism) -- the discount
+/// must never be applied to that sentinel, or a real-but-fully-discounted
+/// cost would be indistinguishable from "cannot revolt to this government".
+pub fn revolution_cost(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32> {
+    let raw = id.get().revolution_cost as i32;
+    if raw == 0 {
+        return None;
+    }
+    Some((raw - effects::state_stats(state, p).tech_discount).max(0))
+}
+
 /// Consume as much of the military-tech science discount pool as this
 /// development uses; returns the science actually still owed. Mutates `p`
 /// -- unlike every cost function above, this is a SPEND, not a query, which
@@ -794,6 +819,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -811,6 +837,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            breakthrough_ma_funded: false,
             replaced_leader_this_turn: false,
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
@@ -827,6 +854,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
             war_target: 0,
@@ -883,6 +912,8 @@ mod tests {
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+            last_end_of_turn_science: [None; MAX_PLAYERS],
+            last_end_of_turn_resources: [None; MAX_PLAYERS],
         }
     }
 
@@ -1561,6 +1592,41 @@ mod tests {
         p.one_time_discount.develop_science = 1;
         let state = one_player_state(p);
         assert_eq!(tech_cost(&state, &state.players[0], card("Monarchy")), Some(7));
+    }
+
+    /// ENGINE BUG regression: `revolution_cost` (the VIOLENT path,
+    /// `Move::Revolution`) is a completely separate cost number from
+    /// `tech_cost` (the peaceful path above), and used to be read as a bare
+    /// `Card::revolution_cost` with no pact discount at all -- confirmed
+    /// against BGO journal `7523162` (Grey revolutions to Constitutional
+    /// Monarchy under an active Scientific Cooperation pact: printed
+    /// `revolutionCost` 6, journal's own "4 science points spent").
+    #[test]
+    fn revolution_cost_applies_the_pact_science_discount() {
+        let state = state_with_science_pact();
+        // Constitutional Monarchy's printed revolutionCost is 6, minus the
+        // pact's 2.
+        assert_eq!(revolution_cost(&state, &state.players[0], card("Constitutional Monarchy")), Some(4));
+    }
+
+    /// `revolution_cost == 0` is the "not printed" sentinel (only Despotism
+    /// prints none) -- the discount must never turn a REAL, nonzero cost
+    /// into that same sentinel by flooring it to zero, so the `None` check
+    /// has to run on the RAW cost, before the discount is subtracted.
+    #[test]
+    fn revolution_cost_stays_none_for_despotism_even_under_a_pact_discount() {
+        let state = state_with_science_pact();
+        assert_eq!(revolution_cost(&state, &state.players[0], card("Despotism")), None);
+    }
+
+    /// A discount that meets or exceeds the printed cost floors at zero, the
+    /// same clamp `tech_cost` uses -- it does not go negative or carry a
+    /// credit anywhere else.
+    #[test]
+    fn revolution_cost_floors_at_zero_when_the_discount_exceeds_the_printed_cost() {
+        let state = state_with_science_pact();
+        // Monarchy's printed revolutionCost is 2, less than the pact's 2.
+        assert_eq!(revolution_cost(&state, &state.players[0], card("Monarchy")), Some(0));
     }
 
     /// The one-time develop discount is gated on NOTHING -- not a type set,

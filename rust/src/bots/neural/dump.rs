@@ -409,7 +409,7 @@ mod tests {
                 Move::Choose { n: 2 },
             ],
             chosen: 2,
-            result: if seed % 2 == 0 { 1.0 } else { 0.0 },
+            result: if seed.is_multiple_of(2) { 1.0 } else { 0.0 },
         }
     }
 
@@ -574,6 +574,6 @@ mod tests {
         let with_5 = record_bytes(5);
         let with_6 = record_bytes(6);
         assert_eq!(with_6 - with_5, MOVE_BYTES);
-        assert!(MOVE_BYTES < ACTION_DIM * 4, "compact move must be far smaller than one dense f32 action vector");
+        const { assert!(MOVE_BYTES < ACTION_DIM * 4, "compact move must be far smaller than one dense f32 action vector") };
     }
 }

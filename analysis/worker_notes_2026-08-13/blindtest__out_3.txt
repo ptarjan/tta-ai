@@ -1,0 +1,13 @@
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            ca_left__neg8
+B            base
+mean moves   245.9
+elapsed      8.7s  (22.9 games/s)
+
+win rate     25.0%  +/- 5.7   (null 50.0%)   p = 0.0000
+             [naive +/- 6.0, rho -0.12, deff 0.91, 100 deals]
+culture      A 61.7   best other 96.2   lead -34.5 +/- 6.2
+
+verdict      reject -- ca_left__neg8 is WORSE than base

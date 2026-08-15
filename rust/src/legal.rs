@@ -312,9 +312,32 @@ fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
                     if combat::pact_forbids_attack(state, p, q) {
                         continue;
                     }
-                    if combat::defense_strength(state, p, q) >= combat::attack_strength(state, p, q) {
-                        continue;
-                    }
+                    // CoL p.4 prints a declare-time gate here ("You cannot
+                    // attack a player whose strength equals or exceeds
+                    // yours"), and this function used to enforce it with
+                    // `combat::defense_strength(..) >= combat::attack_
+                    // strength(..) => continue`. BGO's own journals refute
+                    // it outright: 9 real games in the corpus's `IllegalMove:
+                    // Aggression` bucket (its largest group, by card) show a
+                    // human declaring a Plunder against a rival whose
+                    // strength was TIED (e.g. `7521259` line 136, 9 vs 9) or
+                    // even STRICTLY HIGHER (e.g. `7523613` line 385, attacker
+                    // 7 vs defender 22; `7521515` line 590, attacker 7 vs
+                    // defender 27) than the attacker's own -- with the
+                    // defender's `"defends"` line showing zero bonus cards
+                    // played, so these are not post-defense swings, they are
+                    // the PRE-declaration numbers. BGO evidently never
+                    // enforces this half of the printed rule; it only
+                    // enforces the OTHER half, the FAQ's "ties during Wars
+                    // and Aggressions" / CoL's "if your rival matches or
+                    // exceeds your strength, the aggression is unsuccessful"
+                    // -- which is exactly `combat::finish_aggression`'s own
+                    // `if ctx.dfn >= ctx.atk { return false; }`, downstream
+                    // of this move actually being offered. Removing the
+                    // gate here does not weaken that: a hopeless aggression
+                    // is still legal to declare (spending the card and the
+                    // MA, exactly as BGO logs it) and still fails with no
+                    // effect on resolution.
                     // Annex/Infiltrate against a target they cannot affect
                     // are legal moves that resolve to nothing: `combat::
                     // finish_aggression` enqueues `QueueItem::Annex`/
@@ -355,7 +378,7 @@ fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
                     moves.push(Move::War { card: id, target: q.idx });
                 }
             }
-            _ => {}
+            CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::Government | CardType::SpecialTech | CardType::Wonder | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Bonus => {}
         }
     }
     // The two leaders whose ability IS a political action (§5.0, 2015 text),
@@ -510,7 +533,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
             barbarossa_moves(state, p, names, res, disc, &mut moves);
         }
     } else if leader_is(p, "J. S. Bach") && have_ca && !p.bach_upgrade_used {
-        bach_moves(state, p, names, res, &s, &mut moves);
+        bach_moves(state, p, names, res, 0, &s, &mut moves);
     }
 
     // destroy / disband (§3.6, §4.3)
@@ -558,6 +581,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 // hand to begin with).
                 if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.develop_science))
                     && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                    && effects::science_pact_partners_can_pay(state, p)
                 {
                     moves.push(Move::Develop { card: id });
                 }
@@ -571,18 +595,20 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 // lock up the copy that was already in hand.
                 let held = p.hand_civil.as_slice().iter().filter(|&&c| c == id).count();
                 let taken = p.taken_this_turn.as_slice().iter().filter(|&&c| c == id).count();
-                if ca >= 1 && held > taken && action_card_playable(state, p, id) {
+                let affordable = ca >= 1 || breakthrough_robespierre_ma_fundable(state, p, id);
+                if affordable && held > taken && action_card_playable(state, p, id) {
                     moves.push(Move::PlayAction { card: id });
                 }
             }
-            k if k.takes_workers() || k == CardType::SpecialTech => {
+            k @ CardType::Farm | k @ CardType::Mine | k @ CardType::Lab | k @ CardType::Temple | k @ CardType::Library | k @ CardType::Arena | k @ CardType::Theater | k @ CardType::Infantry | k @ CardType::Cavalry | k @ CardType::Artillery | k @ CardType::Air | k @ CardType::SpecialTech | k @ CardType::Wonder | k @ CardType::Tactic | k @ CardType::Aggression | k @ CardType::War | k @ CardType::Pact | k @ CardType::Bonus | k @ CardType::Territory | k @ CardType::Event if k.takes_workers() || k == CardType::SpecialTech => {
                 if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.develop_science))
                     && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                    && effects::science_pact_partners_can_pay(state, p)
                 {
                     moves.push(Move::Develop { card: id });
                 }
             }
-            _ => {} // Wonder/other military-deck types never sit in hand_civil.
+            _k @ CardType::Farm | _k @ CardType::Mine | _k @ CardType::Lab | _k @ CardType::Temple | _k @ CardType::Library | _k @ CardType::Arena | _k @ CardType::Theater | _k @ CardType::Infantry | _k @ CardType::Cavalry | _k @ CardType::Artillery | _k @ CardType::Air | _k @ CardType::SpecialTech | _k @ CardType::Wonder | _k @ CardType::Tactic | _k @ CardType::Aggression | _k @ CardType::War | _k @ CardType::Pact | _k @ CardType::Bonus | _k @ CardType::Territory | _k @ CardType::Event => {} // Wonder/other military-deck types never sit in hand_civil.
         }
     }
 
@@ -641,7 +667,7 @@ pub(crate) fn barbarossa_discounts(p: &PlayerState) -> (i32, i32) {
             match s {
                 Special::ComboFoodDiscount(v) => food = *v as i32,
                 Special::ComboResourceDiscount(v) => resources = *v as i32,
-                _ => {}
+                Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => {}
             }
         }
     }
@@ -722,7 +748,13 @@ fn barbarossa_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i
 /// urban building -- but it is the plain `Upgrade` move at an identical
 /// civil action and an identical cost, so offering it here would be a
 /// strictly dominated duplicate that also burns the once-per-turn.
-fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, s: &effects::Stats, moves: &mut MoveList) {
+/// `discount` is 0 for Bach's own bare, CA-costing use (this function's
+/// only caller until the fix below); [`free_action_moves`]'s urban-upgrade
+/// arms pass a REAL discount because a yellow action card's "using
+/// Efficient Upgrade"/"using Urban Growth" clause can ALSO fund this same
+/// cross-kind privilege at a discount -- see that call site's own doc
+/// comment for the citation.
+fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, discount: i32, s: &effects::Stats, moves: &mut MoveList) {
     let has_theater = names.iter().any(|id| id.kind() == CardType::Theater);
     if !has_theater || costs::urban_count(p, CardType::Theater) >= s.urban_limit {
         return;
@@ -737,7 +769,7 @@ fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, s:
             if hi.level() < lo_level {
                 continue;
             }
-            let cost = (costs::build_cost_for(state, p, hi).unwrap_or(0) - lo_cost).max(0);
+            let cost = ((costs::build_cost_for(state, p, hi).unwrap_or(0) - lo_cost) - discount).max(0);
             if res >= cost {
                 moves.push(Move::BachTheater { from: lo, to: hi });
             }
@@ -754,8 +786,20 @@ fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, s:
 /// print a `revolutionCost` prints a nonzero one, 1 through 9; only
 /// Despotism prints `null`).
 pub(crate) fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
-    let card = id.get();
-    if card.revolution_cost == 0 || (p.science as i32) < card.revolution_cost as i32 {
+    // `costs::revolution_cost` folds in the standing pact discount (`Stats::
+    // tech_discount`) -- a bare `card.revolution_cost` comparison here used
+    // to reject a revolution the player could actually afford once the
+    // discount is applied (`costs::revolution_cost`'s own doc has the
+    // confirmed case).
+    let Some(cost) = costs::revolution_cost(state, p, id) else { return false };
+    if (p.science as i32) < cost {
+        return false;
+    }
+    // BGA card text: "If the other cannot pay 1 science, then the
+    // technology cannot be developed" -- a revolution is the same
+    // "develops a technology" trigger (`costs::revolution_cost`'s own doc
+    // has the confirmed BGO case).
+    if !effects::science_pact_partners_can_pay(state, p) {
         return false;
     }
     revolt_pool_ok(state, p)
@@ -790,6 +834,38 @@ pub(crate) fn revolt_pool_ok(state: &GameState, p: &PlayerState) -> bool {
     p.civil_actions as i32 == costs::ca_total(state, p) && p.civil_actions > 0
 }
 
+/// RB p.15 attributes Breakthrough's own "1 CA" specifically to FUNDING THE
+/// REVOLUTION ("Breakthrough may pay for the revolution with its 1 CA +
+/// revolution science cost"), not to an ordinary, order-independent §3.11
+/// action-card-play fee. Maximilien Robespierre's own exception (CoL p.12:
+/// "pay with all military actions instead of civil") therefore reaches this
+/// cost too, the same way it already reaches the revolution's own
+/// science-cost step (`apply::h_revolution`'s `via_ordered_action &&
+/// robespierre` branch, which assumes Breakthrough's 1 CA was paid and only
+/// refunds the carry-over -- this is the missing other half: letting that 1
+/// CA be a military action to begin with when civil is already exhausted).
+///
+/// Gated on a revolution actually being one of Breakthrough's legal ordered
+/// outcomes right now (not just "any" order) so this never lets Breakthrough
+/// fund an ordinary Develop off a military action -- only the branch RB
+/// p.15's own wording names as "the revolution".
+///
+/// Confirmed against 5 real BGO games sharing the identical shape (take
+/// Robespierre, take a government, elect Robespierre, revolt via
+/// Breakthrough, all in the SAME turn -- civil hits 0 before the revolution
+/// line runs): 7522616, 7523206, 7523163, 7522793 (game `IllegalMove:
+/// PlayAction` bucket).
+pub(crate) fn breakthrough_robespierre_ma_fundable(state: &GameState, p: &PlayerState, id: CardId) -> bool {
+    if id.get().base_name != "Breakthrough" || !leader_is(p, "Maximilien Robespierre") || p.military_actions < 1 {
+        return false;
+    }
+    let revolt_ok = revolt_pool_ok(state, p);
+    free_action_moves(state, p, FreeActionKind::DevelopTechnology, 0, revolt_ok)
+        .as_slice()
+        .iter()
+        .any(|m| matches!(m, Move::Revolution { .. }))
+}
+
 /// §3.11: a yellow card that orders an action needs that action to be legal.
 ///
 /// Mirrors `engine/actions.py::_action_card_playable`. For the 18 cards that
@@ -806,7 +882,7 @@ fn action_card_playable(state: &GameState, p: &PlayerState, id: CardId) -> bool 
     let card = id.get();
     if let Some(value) = card.special.iter().find_map(|s| match s {
         Special::FreeCivilAction(v) => Some(*v),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     }) {
         let kind = free_action_kind_of(value);
         // RB p.15: Breakthrough may spend its order on a revolution instead,
@@ -947,7 +1023,9 @@ pub fn free_action_moves(
                 if !card.kind.is_developable() {
                     continue;
                 }
-                if p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0) {
+                if p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
+                    && effects::science_pact_partners_can_pay(state, p)
+                {
                     out.push(Move::Develop { card: id });
                 }
                 // RB p.15: Breakthrough may also pay for a revolution --
@@ -961,9 +1039,12 @@ pub fn free_action_moves(
                 // part, matching Python's `_action_card_playable` passing
                 // `p.civil_actions == ca_total(state, p)` in as a bool.
                 if revolt_ok && card.kind == CardType::Government {
-                    let rc = card.revolution_cost as i32;
-                    if rc != 0 && p.science as i32 >= rc {
-                        out.push(Move::Revolution { card: id });
+                    // Same pact-discounted cost `can_revolt` now reads --
+                    // see `costs::revolution_cost`'s own doc.
+                    if let Some(rc) = costs::revolution_cost(state, p, id) {
+                        if p.science as i32 >= rc && effects::science_pact_partners_can_pay(state, p) {
+                            out.push(Move::Revolution { card: id });
+                        }
                     }
                 }
             }
@@ -1007,6 +1088,27 @@ pub fn free_action_moves(
                     }
                 }
             }
+            // J. S. Bach's own cross-kind "upgrade any urban building to a
+            // theater" exception (RB p.24, `bach_moves`'s own doc comment)
+            // is not limited to his bare, CA-costing use of it -- BGO logs
+            // it glued onto a yellow action card's "using Efficient
+            // Upgrade"/"using Urban Growth" clause too (`"<leader name>
+            // upgrades <temple/library/...> to <theater> using <card>"`,
+            // the leader's own name substituted for the color exactly the
+            // way a bare Bach use also prints), discounted the same way an
+            // ordinary same-kind `Move::Upgrade` is here. Without this, a
+            // Bach player whose ONLY affordable upgrade candidate is a
+            // cross-kind theater one saw `free_action_moves` return empty
+            // and the whole action card rejected as unplayable. Confirmed
+            // against 5 real BGO games: 7521377, 7521798, 7523221,
+            // 7521653, 7523392 (`IllegalMove: PlayAction` bucket). Gated on
+            // `!p.bach_upgrade_used` the same as his bare use -- it is the
+            // SAME once-per-turn privilege, just a different funding
+            // source, and `apply::h_bach_theater` sets that flag
+            // regardless of which path reached it.
+            if matches!(kind, BuildOrUpgradeUrbanBuilding | UpgradeFarmMineOrUrbanBuilding) && leader_is(p, "J. S. Bach") && !p.bach_upgrade_used {
+                bach_moves(state, p, names, p.resources as i32, discount, &s, &mut out);
+            }
         }
     }
     out
@@ -1047,6 +1149,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -1064,6 +1167,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            breakthrough_ma_funded: false,
             replaced_leader_this_turn: false,
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
@@ -1080,6 +1184,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
             war_target: 0,
@@ -1136,6 +1242,8 @@ mod tests {
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+            last_end_of_turn_science: [None; MAX_PLAYERS],
+            last_end_of_turn_resources: [None; MAX_PLAYERS],
         }
     }
 
@@ -1366,17 +1474,29 @@ mod tests {
     }
 
     #[test]
-    fn politics_aggression_not_generated_when_attacker_cannot_win() {
-        // No strength at all on either side: defense_strength (0) >=
-        // attack_strength (0) blocks the move -- an attack that cannot
-        // possibly succeed is not offered as a choice.
+    fn politics_aggression_generated_even_when_attacker_cannot_win() {
+        // Both sides have 0 strength here (tied), which per CoL p.4's
+        // printed rule ("You cannot attack a player whose strength equals
+        // or exceeds yours") would make this illegal to even declare -- but
+        // BGO's own journals refute that half of the rule outright: 9 real
+        // games in the corpus's `IllegalMove: Aggression` bucket show a
+        // human declaring a Plunder against a rival whose PRE-declaration
+        // strength was tied or strictly higher (`7521259` line 136, 9 vs 9;
+        // `7523613` line 385, attacker 7 vs defender 22), with the
+        // defender's `"defends"` line showing zero bonus cards played. BGO
+        // only enforces the OTHER half of the rule -- "if your rival
+        // matches or exceeds your strength, the aggression is unsuccessful"
+        // -- which is `combat::finish_aggression`'s own `dfn >= atk => no
+        // effect`, downstream of the move being offered at all. So a
+        // hopeless aggression is still a legal move: it spends the card and
+        // the MA and simply resolves to nothing, exactly as BGO logs it.
         let (agg, cost) = aggression_card_and_cost();
         let mut p = blank_player(0, card("Despotism"));
         p.military_actions = cost as i8 + 2;
         p.hand_military.push(agg);
         let state = one_player_state(p);
         let moves = politics_moves(&state, &state.players[0]);
-        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })));
+        assert!(moves.as_slice().contains(&Move::Aggression { card: agg, target: 1 }));
     }
 
     #[test]
@@ -1469,6 +1589,86 @@ mod tests {
         assert!(moves.as_slice().contains(&Move::Aggression { card: infiltrate, target: 1 }));
     }
 
+    /// `WeightKey::HasColony` (`bots/weighted/weights.rs`'s own doc comment)
+    /// exists to price exactly the fact THIS module's `aggression_target_
+    /// qualifies` already gates Annex on: `q.colonies.is_empty()`. This
+    /// checks the feature and the legality gate cannot drift onto two
+    /// different notions of "annexable" -- reusing the same `politics_moves`
+    /// surface the two `annex_is_*` tests above use as the ground truth for
+    /// "is this player a legal Annex target", rather than re-deriving that
+    /// boolean locally where a copy-paste mistake could agree with itself
+    /// but not with `legal.rs`.
+    #[test]
+    fn has_colony_feature_agrees_with_annex_targeting_legality() {
+        let annex = card("Aggression: Annex");
+        let mut state = one_player_state(attacker_ready_to_win(annex));
+
+        let no_colony = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            no_colony.get(crate::bots::weighted::weights::WeightKey::HasColony),
+            0.0,
+            "target 1 starts with no colonies"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            !moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })),
+            "has_colony == 0.0 must agree with Annex not being offered"
+        );
+
+        state.players[1].colonies.push(card("Vast Territory (I)"));
+        let has_colony = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            has_colony.get(crate::bots::weighted::weights::WeightKey::HasColony),
+            1.0,
+            "target 1 now owns a colony"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            moves.as_slice().contains(&Move::Aggression { card: annex, target: 1 }),
+            "has_colony == 1.0 must agree with Annex being offered"
+        );
+    }
+
+    /// `WeightKey::WonderInProgress` (`bots/weighted/weights.rs`'s own doc
+    /// comment) exists to price the wonder half of the SAME OR clause
+    /// `has_colony_feature_agrees_with_annex_targeting_legality` above
+    /// checks the colony half of for Annex: `aggression_target_qualifies`
+    /// gates Infiltrate on `q.leader.is_none() && q.wonder.is_none()`. This
+    /// pins the feature and `politics_moves` (via `infiltrate_is_offered_
+    /// against_a_target_with_an_unfinished_wonder`'s own ground truth) to
+    /// the same notion of "targetable", with no leader in play at all so
+    /// only the wonder half is in play.
+    #[test]
+    fn wonder_in_progress_feature_agrees_with_infiltrate_targeting_legality() {
+        let infiltrate = card("Aggression: Infiltrate");
+        let mut state = one_player_state(attacker_ready_to_win(infiltrate));
+
+        let no_wonder = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            no_wonder.get(crate::bots::weighted::weights::WeightKey::WonderInProgress),
+            0.0,
+            "target 1 starts with no wonder and no leader"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            !moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })),
+            "wonder_in_progress == 0.0 (and no leader) must agree with Infiltrate not being offered"
+        );
+
+        state.players[1].wonder = card("Pyramids");
+        let has_wonder = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            has_wonder.get(crate::bots::weighted::weights::WeightKey::WonderInProgress),
+            1.0,
+            "target 1 now has an unfinished wonder"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            moves.as_slice().contains(&Move::Aggression { card: infiltrate, target: 1 }),
+            "wonder_in_progress == 1.0 must agree with Infiltrate being offered"
+        );
+    }
+
     // ---------------------------------------------------------------- war
 
     fn war_card_and_cost() -> (CardId, i32) {
@@ -1516,6 +1716,91 @@ mod tests {
         state.last_round = true;
         let moves = politics_moves(&state, &state.players[0]);
         assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::War { .. })));
+    }
+
+    /// `WeightKey::WarImmune` (`bots/weighted/weights.rs`'s own doc comment)
+    /// exists to price exactly the fact `combat::war_forbidden` ORs in on
+    /// top of `pact_forbids_attack`: `effects::state_stats(..,
+    /// defender).war_immune`. This checks the feature and the legality gate
+    /// cannot drift apart, the same shape `has_colony_feature_agrees_with_
+    /// annex_targeting_legality` already uses for Annex.
+    #[test]
+    fn war_immune_feature_agrees_with_war_targeting_legality() {
+        let (war, cost) = war_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost as i8 + 2;
+        p.hand_military.push(war);
+        let mut state = one_player_state(p);
+
+        let no_immunity = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            no_immunity.get(crate::bots::weighted::weights::WeightKey::WarImmune),
+            0.0,
+            "target 1 starts with no pacts at all"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            moves.as_slice().contains(&Move::War { card: war, target: 1 }),
+            "war_immune == 0.0 must agree with War being offered"
+        );
+
+        // "Loss of Sovereignty" B side prints `cannotBeDeclaredWarOnByAnyone`
+        // (combat.rs's own `war_forbidden_true_when_defender_is_war_immune`
+        // fixture) -- b == 1 makes target 1 the immune party.
+        state.players[1]
+            .pacts
+            .push(crate::state::Pact { card: card("Loss of Sovereignty"), owner: 1, partner: 0, a: 0, b: 1 });
+        let immune = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            immune.get(crate::bots::weighted::weights::WeightKey::WarImmune),
+            1.0,
+            "target 1 now holds the war-immunity pact side"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            !moves.as_slice().contains(&Move::War { card: war, target: 1 }),
+            "war_immune == 1.0 must agree with War no longer being offered against target 1 specifically (fillers 2/3 are untouched and stay legal targets)"
+        );
+    }
+
+    /// `WeightKey::AttackCostDoubled` (`bots/weighted/weights.rs`'s own doc
+    /// comment) exists to price Gandhi's `opponentsPayDoubleMilitaryActionsToAttackYou`:
+    /// `legal.rs`'s own `mult` doubling (both the Aggression and War
+    /// branches read `leader_is(q, "Mahatma Gandhi")` identically; War is
+    /// exercised here). An attacker funded for exactly `cost` MA, no more,
+    /// can afford a plain target but not a Gandhi-led one.
+    #[test]
+    fn attack_cost_doubled_feature_agrees_with_war_cost_legality() {
+        let (war, cost) = war_card_and_cost();
+        let mut p = blank_player(0, card("Despotism"));
+        p.military_actions = cost as i8; // funded for cost*1, NOT cost*2
+        p.hand_military.push(war);
+        let mut state = one_player_state(p);
+
+        let no_double = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            no_double.get(crate::bots::weighted::weights::WeightKey::AttackCostDoubled),
+            0.0,
+            "target 1 starts with no leader at all"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            moves.as_slice().contains(&Move::War { card: war, target: 1 }),
+            "attack_cost_doubled == 0.0 must agree with War being affordable at cost*1"
+        );
+
+        state.players[1].leader = card("Mahatma Gandhi");
+        let doubled = crate::bots::weighted::features::features(&state, 1, None, None, false);
+        assert_eq!(
+            doubled.get(crate::bots::weighted::weights::WeightKey::AttackCostDoubled),
+            1.0,
+            "target 1 is now led by Gandhi"
+        );
+        let moves = politics_moves(&state, &state.players[0]);
+        assert!(
+            !moves.as_slice().contains(&Move::War { card: war, target: 1 }),
+            "attack_cost_doubled == 1.0 must agree with War no longer being affordable at cost*1 against target 1 specifically (fillers 2/3 are untouched and stay affordable)"
+        );
     }
 
     // ------------------------------------------------------------ action_moves
@@ -1783,6 +2068,36 @@ mod tests {
             .as_slice()
             .iter()
             .any(|m| matches!(m, Move::BachTheater { .. })));
+    }
+
+    /// RB p.24: J. S. Bach's cross-kind theater-upgrade privilege is a
+    /// single once-per-turn ability, fundable EITHER bare (his own 1 CA,
+    /// the `action_moves` arm the two tests above exercise, `discount: 0`)
+    /// OR by a yellow action card's discount ("Efficient Upgrade"/"Urban
+    /// Growth") -- real BGO journals print both the same way ("Johannes
+    /// Sebastian Bach upgrades X to Y[ using <Card>]"). Before this fix,
+    /// `free_action_moves`'s `BuildOrUpgradeUrbanBuilding`/
+    /// `UpgradeFarmMineOrUrbanBuilding` arm never called `bach_moves` at
+    /// all, so a Bach player whose ONLY affordable upgrade was this
+    /// cross-kind one saw an EMPTY move list from THIS function and the
+    /// whole action card rejected as unplayable (`IllegalMove: PlayAction`,
+    /// games 7521377, 7521798, 7523221, 7521653, 7523392).
+    #[test]
+    fn free_action_moves_offers_a_cross_kind_bach_theater_upgrade_for_an_action_cards_discount() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("J. S. Bach");
+        // Same same-level temple/theater pair the bare-use test above uses.
+        p.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
+        p.resources = 10;
+        let state = one_player_state(p);
+        let out = free_action_moves(&state, &state.players[0], FreeActionKind::BuildOrUpgradeUrbanBuilding, 0, false);
+        assert!(
+            out.as_slice().contains(&Move::BachTheater { from: card("Theology"), to: card("Drama") }),
+            "an action card's own ordered urban-upgrade must also offer Bach's cross-kind \
+             theater upgrade, not just a bare same-kind Upgrade: {:?}",
+            out.as_slice()
+        );
     }
 
     #[test]
@@ -2182,6 +2497,35 @@ mod tests {
         assert!(!can_revolt(&state, &state.players[0], card("Despotism")), "revolutionCost: null");
     }
 
+    /// ENGINE GAP closed: `action_moves` used to offer `Move::Develop` even
+    /// when Scientific Cooperation's own card text ("If the other cannot
+    /// pay 1 science, then the technology cannot be developed") makes that
+    /// develop illegal -- `Stats::science_partners` was computed but had no
+    /// legality consumer anywhere in the crate before this pass.
+    #[test]
+    fn action_moves_excludes_develop_when_the_pact_partner_cannot_pay_its_science() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 10;
+        p.hand_civil.push(card("Irrigation"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 0; // cannot pay its own 1
+        assert!(
+            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation") }),
+            "the partner cannot pay -- the develop is illegal"
+        );
+
+        state.players[1].science = 1; // now it can
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation") }));
+    }
+
     #[test]
     fn can_revolt_needs_enough_science_and_every_civil_action_unspent() {
         let mut p = blank_player(0, card("Despotism"));
@@ -2201,6 +2545,38 @@ mod tests {
         spent.science = 2;
         let state_spent = one_player_state(spent);
         assert!(!can_revolt(&state_spent, &state_spent.players[0], card("Monarchy")));
+    }
+
+    /// ENGINE BUG regression: `can_revolt` used to compare `p.science`
+    /// against the bare printed `Card::revolution_cost`, ignoring a
+    /// standing pact's science discount -- rejecting a revolution a real
+    /// BGO human could and did afford (journal `7523162`, Grey revolutions
+    /// to Constitutional Monarchy for the pact-discounted 4, not the
+    /// printed 6, while Scientific Cooperation is active).
+    #[test]
+    fn can_revolt_true_under_a_pact_discount_that_a_bare_printed_cost_would_reject() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 4; // short of the printed 6, exactly enough for the discounted 4
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 1; // the partner must also be able to pay its own 1
+        assert!(can_revolt(&state, &state.players[0], card("Constitutional Monarchy")));
+
+        // Without the pact, the same 4 science is NOT enough for the
+        // printed 6 -- the discount, not a general loosening, is what
+        // makes the difference above.
+        let mut under = blank_player(0, card("Despotism"));
+        under.civil_actions = 4;
+        under.science = 4;
+        let state_under = one_player_state(under);
+        assert!(!can_revolt(&state_under, &state_under.players[0], card("Constitutional Monarchy")));
     }
 
     #[test]

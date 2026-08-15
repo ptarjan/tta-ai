@@ -287,7 +287,7 @@ pub fn increase_population(p: &mut PlayerState, cost: u16, consume_one_time: boo
     if p.food < cost {
         return false;
     }
-    p.food -= cost;
+    pay_food(p, cost);
     p.yellow_bank -= 1;
     p.workers_free += 1;
     // Development of Civil Life's grant is ONE mutually-exclusive choice
@@ -372,12 +372,7 @@ impl Denoms {
         let mut d = Denoms { values: [0; 8], len: 0 };
         d.push(1);
         for (id, _) in techs.of_type(kind) {
-            let prod = id.get().production;
-            let v = match kind {
-                CardType::Farm => prod.food,
-                CardType::Mine => prod.resources,
-                _ => 0,
-            };
+            let v = production_denom(kind, &id.get().production);
             if v > 0 && v <= u8::MAX as i16 {
                 d.push(v as u8);
             }
@@ -397,6 +392,142 @@ impl Denoms {
     fn as_slice(&self) -> &[u8] {
         &self.values[..self.len as usize]
     }
+}
+
+/// A farm/mine card's blue-token denomination: printed `food` for a farm,
+/// `resources` for a mine (§6.4), `0` for anything else. Shared by
+/// [`Denoms::of`] and [`worker_capped_production`] so a newly added
+/// `CardType` variant only ever needs handling in one exhaustive match
+/// (clippy denies `_ =>` wildcards -- DESIGN.md).
+fn production_denom(kind: CardType, prod: &crate::cards::Production) -> i16 {
+    match kind {
+        CardType::Farm => prod.food,
+        CardType::Mine => prod.resources,
+        CardType::Lab
+        | CardType::Temple
+        | CardType::Library
+        | CardType::Arena
+        | CardType::Theater
+        | CardType::Infantry
+        | CardType::Cavalry
+        | CardType::Artillery
+        | CardType::Air
+        | CardType::Government
+        | CardType::SpecialTech
+        | CardType::Wonder
+        | CardType::Leader
+        | CardType::Action
+        | CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => 0,
+    }
+}
+
+/// §6.6 steps 3c/3e ("Food Production"/"Resource Production"): Code of Laws
+/// p.6's EXACT wording is WORKER-COUNT-based, not value-based -- "For each
+/// worker on your [farm/mine] technology cards, move ONE blue token from the
+/// blue bank to that card. If there are not enough tokens, move all that you
+/// can to the [farm/mine] technology cards, beginning with those of the
+/// highest level." This is a DIFFERENT rule from CoL p.11's general "gain N
+/// food/resources" (implemented by [`gain`]/[`tokens_for`], still correct
+/// for card/tactic effects -- see [`gain_food`]/[`gain_resources`]): once
+/// placed, a token on a level-L card is worth L regardless of how many
+/// workers or tokens are involved, but the number of NEW tokens the bank
+/// must supply this step is bounded by the WORKER count, not by the minimal
+/// token representation of the resulting total. The two models coincide for
+/// an all-denomination-1 tableau (a lone un-upgraded Bronze/Agriculture,
+/// where 1 worker always costs exactly 1 token either way) but diverge once
+/// a card is upgraded past level 1 with several workers on it, or when
+/// producing cards of different levels compete for a short bank -- see the
+/// `#[cfg(test)]` cases below and
+/// `analysis/worker_notes_2026-08-14/econcap__ECONCAP.txt`.
+///
+/// Returns the VALUE gained: at most `free` tokens are spent, one per
+/// worker, offered to cards in DESCENDING level order first (CoL p.6:
+/// "beginning with those of the highest level" -- when tokens are short,
+/// this is also the value-maximizing allocation, since moving a token to a
+/// lower-level card instead of a higher one still wanting tokens can only
+/// lose value).
+fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
+    let (pairs, len) = production_pairs(techs, kind);
+    let mut remaining = free;
+    let mut value: u16 = 0;
+    for &(denom, workers) in &pairs[..len] {
+        if remaining == 0 {
+            break;
+        }
+        let take = workers.min(remaining);
+        value += take * denom;
+        remaining -= take;
+    }
+    value
+}
+
+/// (denomination, summed worker count) pairs, one per DISTINCT denomination
+/// actually printed on a `kind` card in the tableau -- multiple cards
+/// sharing a level pool their workers (the base game never actually has two
+/// simultaneously-owned farm or mine cards at the same printed level, but
+/// nothing here assumes that). Sorted DESCENDING by denomination (CoL p.6:
+/// "beginning with those of the highest level"). Same fixed 8-slot capacity
+/// as [`Denoms`] (DESIGN.md rule 3): at most four levels per card type exist
+/// in the base game today. Shared by [`worker_capped_production`] (the
+/// scalar VALUE this step produces) and [`credit_production`] (the same
+/// traversal, but also committing the resulting tokens into a
+/// [`crate::state::TokenBank`]) so the two never drift out of sync.
+fn production_pairs(techs: &Tableau, kind: CardType) -> ([(u16, u16); 8], usize) {
+    let mut pairs: [(u16, u16); 8] = [(0, 0); 8];
+    let mut len = 0usize;
+    for (id, slot) in techs.of_type(kind) {
+        if slot.workers == 0 {
+            continue;
+        }
+        let v = production_denom(kind, &id.get().production);
+        if v <= 0 || v > u8::MAX as i16 {
+            continue;
+        }
+        let v = v as u16;
+        let workers = slot.workers as u16;
+        if let Some(ix) = pairs[..len].iter().position(|&(d, _)| d == v) {
+            pairs[ix].1 += workers;
+        } else {
+            debug_assert!(len < pairs.len(), "production_pairs overflow");
+            pairs[len] = (v, workers);
+            len += 1;
+        }
+    }
+    pairs[..len].sort_unstable_by_key(|&(denom, _)| std::cmp::Reverse(denom));
+    (pairs, len)
+}
+
+/// [`worker_capped_production`]'s twin for when the caller is actually
+/// committing this step, not just sizing it: places exactly one NEW token
+/// per producing worker, valued at THAT worker's own card (§6.1c/e, CoL
+/// p.6) -- not a scalar amount re-packed for minimal token count afterward.
+/// The owner's own words on this (2026-08-14): "during production you
+/// produce wherever your yellow tokens are." Reuses [`production_pairs`]'s
+/// traversal so the capped total this returns is byte-identical to
+/// [`worker_capped_production`]'s; the only new work is committing the
+/// per-denomination breakdown into `bank` as it goes.
+fn credit_production(techs: &Tableau, kind: CardType, free: u16, bank: &mut crate::state::TokenBank) -> u16 {
+    let (pairs, len) = production_pairs(techs, kind);
+    let mut remaining = free;
+    let mut value: u16 = 0;
+    for &(denom, workers) in &pairs[..len] {
+        if remaining == 0 {
+            break;
+        }
+        let take = workers.min(remaining);
+        if take > 0 {
+            bank_add(bank, denom as u8, take as u8);
+        }
+        value += take * denom;
+        remaining -= take;
+    }
+    value
 }
 
 /// Minimal number of blue tokens holding `amount`, greedy over `denoms`
@@ -424,14 +555,143 @@ pub fn tokens_for(mut amount: u16, denoms: &[u8]) -> u16 {
     n + amount
 }
 
+/// Add `n` new tokens at `denom` into `bank`, creating a new entry if this
+/// denomination has never held a tracked token before ([`Denoms::push`]'s
+/// dedup, mirrored here since [`crate::state::TokenBank`] is the same
+/// fixed-8-slot shape, for the same DESIGN.md reason).
+fn bank_add(bank: &mut crate::state::TokenBank, denom: u8, n: u8) {
+    if n == 0 {
+        return;
+    }
+    if let Some(ix) = bank.denoms[..bank.len as usize].iter().position(|&v| v == denom) {
+        bank.counts[ix] = bank.counts[ix].saturating_add(n);
+    } else {
+        debug_assert!((bank.len as usize) < bank.denoms.len(), "TokenBank overflow");
+        let ix = bank.len as usize;
+        bank.denoms[ix] = denom;
+        bank.counts[ix] = n;
+        bank.len += 1;
+    }
+}
+
+fn bank_total_tokens(bank: &crate::state::TokenBank) -> u16 {
+    bank.counts[..bank.len as usize].iter().map(|&c| c as u16).sum()
+}
+
+fn bank_total_value(bank: &crate::state::TokenBank) -> u16 {
+    (0..bank.len as usize).map(|i| bank.denoms[i] as u16 * bank.counts[i] as u16).sum()
+}
+
+/// Commit `amount` into `bank` using the FEWEST new tokens possible over
+/// `denoms_desc` (sorted descending, e.g. [`Denoms::as_slice`]) -- the same
+/// packing [`tokens_for`] counts, but actually placing the tokens rather
+/// than just sizing them. Used for (a) non-production gains, see
+/// [`gain_food`]'s doc, and (b) "making change" when
+/// [`bank_debit_lowest_first`] breaks a token and must re-represent the
+/// unspent remainder at smaller denominations.
+fn bank_credit_greedy(bank: &mut crate::state::TokenBank, denoms_desc: &[u8], mut amount: u16) {
+    for &d in denoms_desc {
+        if d == 0 {
+            continue;
+        }
+        let dd = d as u16;
+        let mut n = 0u8;
+        while amount >= dd {
+            amount -= dd;
+            n = n.saturating_add(1);
+        }
+        if n > 0 {
+            bank_add(bank, d, n);
+        }
+    }
+    debug_assert_eq!(amount, 0, "bank_credit_greedy: denom 1 is always present, amount must fully pack");
+}
+
+/// Remove `amount`'s worth of value from `bank`, LOWEST denomination first
+/// (Code of Laws p.11; the project owner's own words, 2026-08-14: "when you
+/// spend resources you can choose to spend from whatever farm you want (you
+/// usually want to spend from the lower ones)"), breaking ("making change")
+/// only the one token that must be broken when the exact lower tokens alone
+/// fall short -- the change is re-represented using `denoms_desc` values
+/// STRICTLY BELOW the broken token, never at or above it (tokens never move
+/// UP, RULES_SPEC §6.4). Returns the amount actually removed: `amount`
+/// clamped to what `bank` holds (callers already clamp against
+/// `p.food`/`p.resources`, so a real shortfall here would mean the two had
+/// already drifted apart).
+fn bank_debit_lowest_first(bank: &mut crate::state::TokenBank, denoms_desc: &[u8], amount: u16) -> u16 {
+    let available = bank_total_value(bank);
+    let mut remaining = amount.min(available);
+    let removed_total = remaining;
+    let len = bank.len as usize;
+    let mut order: [usize; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+    order[..len].sort_unstable_by_key(|&i| bank.denoms[i]);
+    for &i in &order[..len] {
+        let d = bank.denoms[i] as u16;
+        while remaining >= d && bank.counts[i] > 0 {
+            bank.counts[i] -= 1;
+            remaining -= d;
+        }
+    }
+    if remaining > 0 {
+        if let Some(&i) = order[..len].iter().find(|&&i| bank.counts[i] > 0 && (bank.denoms[i] as u16) > remaining) {
+            let d = bank.denoms[i];
+            bank.counts[i] -= 1;
+            let change = d as u16 - remaining;
+            remaining = 0;
+            let mut lower = [0u8; 8];
+            let mut lower_len = 0usize;
+            for &v in denoms_desc {
+                if v < d {
+                    lower[lower_len] = v;
+                    lower_len += 1;
+                }
+            }
+            // `denoms_desc` is sorted descending and `1` is always present
+            // (`Denoms::of`), so `lower` is never empty when `d > 1`.
+            bank_credit_greedy(bank, &lower[..lower_len], change);
+        }
+    }
+    removed_total - remaining
+}
+
+/// See [`blue_used`]'s own doc for the reconciliation this implements: any
+/// part of `total` the TRACKED bank does not already account for is packed
+/// fresh with [`tokens_for`], exactly the old (pre-fix) formula.
+fn occupied_tokens(bank: &crate::state::TokenBank, denoms: &Denoms, total: u16) -> u16 {
+    let tracked_value = bank_total_value(bank);
+    let tracked_tokens = bank_total_tokens(bank);
+    if total > tracked_value {
+        tracked_tokens + tokens_for(total - tracked_value, denoms.as_slice())
+    } else {
+        tracked_tokens
+    }
+}
+
 /// Blue tokens currently occupied: stored food, stored resources, and any
 /// wonder-construction steps already paid for (§6.4; a wonder step is
 /// worth one blue token, same as any other card slot).
+///
+/// Reads the TRACKED token banks (`p.food_tokens`/`p.resource_tokens`, the
+/// actual placement history -- see [`crate::state::TokenBank`]'s own doc)
+/// rather than re-deriving a minimal packing from the scalar totals every
+/// call: RULES_SPEC §6.4/Code of Laws p.11 forbid moving a token to a
+/// higher-value card, which a from-scratch greedy repacking silently did
+/// every time a higher farm/mine card entered play after older stock was
+/// already placed -- RESOURCE_ORACLE Group A, 166 games, corruption skipped
+/// entirely, see `analysis/worker_notes_2026-08-14/corrskip2__CORRSKIP2.txt`.
+/// Any part of `p.food`/`p.resources` the tracked banks do not account for
+/// (always true for a hand-built `PlayerState` that sets `p.food` directly
+/// and never drives a real gain/pay path) still falls back to that old
+/// greedy formula (`occupied_tokens`'s own doc) -- so every pre-existing
+/// test that never touches the token banks keeps its already-asserted
+/// behavior; only real `replay`/self-play games, which always drive the
+/// full `gain_food`/`gain_resources`/`pay_food`/`pay_resources`/
+/// `credit_production` chokepoints, see the new, path-dependent behavior.
 pub fn blue_used(p: &PlayerState) -> u16 {
     let food_denoms = Denoms::of(&p.techs, CardType::Farm);
     let mine_denoms = Denoms::of(&p.techs, CardType::Mine);
-    let food_tokens = tokens_for(p.food, food_denoms.as_slice());
-    let mine_tokens = tokens_for(p.resources, mine_denoms.as_slice());
+    let food_tokens = occupied_tokens(&p.food_tokens, &food_denoms, p.food);
+    let mine_tokens = occupied_tokens(&p.resource_tokens, &mine_denoms, p.resources);
     let mut used = food_tokens + mine_tokens;
     if !p.wonder.is_none() {
         used += p.wonder_steps as u16;
@@ -454,20 +714,22 @@ pub fn blue_available(p: &PlayerState) -> u16 {
 
 /// Shared body of `gain_food`/`gain_resources` (Python `effects._gain`):
 /// searches DOWNWARD from `n` for the largest amount that can be gained
-/// without the token cost exceeding what is free in the bank. Downward,
-/// not upward, because [`tokens_for`] is not monotonic (see there) -- the
-/// marginal cost of gaining `want` can be NEGATIVE (a consolidation), so
-/// the search must start at the player's actual desired amount and only
-/// give up on it in favour of a smaller one, never the reverse.
-fn gain(cur: u16, n: u16, free: u16, denoms: &[u8]) -> u16 {
+/// without the NEW tokens it needs exceeding what is free in the bank.
+/// Unlike the old scalar-total model, the cost of gaining `want` no longer
+/// depends on what is already stored -- existing tokens are bound to their
+/// cards and never move ([`crate::state::TokenBank`]'s own doc) -- so it is
+/// simply [`tokens_for`]`(want, denoms)`, the fewest NEW tokens `want` alone
+/// packs into. [`tokens_for`] is still not monotonic in `want` (e.g.
+/// denominations `[3, 1]`: 2 costs two tokens, 3 costs only one), which is
+/// exactly why the search still starts at `n` and only gives up in favour
+/// of a smaller amount, never the reverse.
+fn gain(n: u16, free: u16, denoms: &[u8]) -> u16 {
     if n == 0 || free == 0 {
         return 0;
     }
-    let base = tokens_for(cur, denoms) as i32;
     let mut want = n;
     while want > 0 {
-        let delta = tokens_for(cur + want, denoms) as i32 - base;
-        if delta <= free as i32 {
+        if tokens_for(want, denoms) <= free {
             return want;
         }
         want -= 1;
@@ -477,28 +739,73 @@ fn gain(cur: u16, n: u16, free: u16, denoms: &[u8]) -> u16 {
 
 /// Gain up to `n` food, limited by the blue bank (§6.4). Returns the amount
 /// actually gained (may be less than `n`, or `0` with an empty bank).
+///
+/// Not a producing-worker gain (§6.1c; see [`credit_production`] for that,
+/// used by `end_of_turn` step 3c) -- this is for a card/event/tactic effect
+/// with no worker attached, so unlike production, RULES_SPEC/Code of Laws
+/// do not say which specific card the new tokens land on. ASSUMPTION (see
+/// `corrskip2__CORRSKIP2.txt` for the citation search that did not resolve
+/// it): this engine takes the count-minimizing choice, i.e. the highest
+/// available denomination first -- the same representation [`tokens_for`]'s
+/// own search already assumes when sizing what fits the bank.
 pub fn gain_food(p: &mut PlayerState, n: u16) -> u16 {
     let denoms = Denoms::of(&p.techs, CardType::Farm);
-    let got = gain(p.food, n, blue_available(p), denoms.as_slice());
-    p.food += got;
+    let got = gain(n, blue_available(p), denoms.as_slice());
+    if got > 0 {
+        bank_credit_greedy(&mut p.food_tokens, denoms.as_slice(), got);
+        p.food += got;
+    }
     got
 }
 
-/// Gain up to `n` resources, limited by the blue bank (§6.4).
+/// Gain up to `n` resources, limited by the blue bank (§6.4) -- see
+/// [`gain_food`]'s doc for the shared model and its documented assumption.
 pub fn gain_resources(p: &mut PlayerState, n: u16) -> u16 {
     let denoms = Denoms::of(&p.techs, CardType::Mine);
-    let got = gain(p.resources, n, blue_available(p), denoms.as_slice());
-    p.resources += got;
+    let got = gain(n, blue_available(p), denoms.as_slice());
+    if got > 0 {
+        bank_credit_greedy(&mut p.resource_tokens, denoms.as_slice(), got);
+        p.resources += got;
+    }
     got
 }
 
-/// Pay `n` resources. Food covering any shortfall is NOT done here -- the
-/// caller (§6.6 step 3b in `end_of_turn`) falls back to food itself.
+/// Pay up to `n` food, LOWEST denomination first, making change on
+/// overshoot -- see [`bank_debit_lowest_first`]. Returns the amount
+/// actually paid (clamped to what `p.food` holds; never negative). Every
+/// direct "lose N food" site in the engine (corruption shortfall,
+/// consumption, event losses, trade, Trade Routes) routes through this, not
+/// a bare `p.food -=`, so the tracked bank never drifts from the scalar.
+pub(crate) fn pay_food(p: &mut PlayerState, n: u16) -> u16 {
+    let paid = p.food.min(n);
+    if paid > 0 {
+        let denoms = Denoms::of(&p.techs, CardType::Farm);
+        bank_debit_lowest_first(&mut p.food_tokens, denoms.as_slice(), paid);
+        p.food -= paid;
+    }
+    paid
+}
+
+/// Pay `n` resources, LOWEST denomination first, making change on
+/// overshoot. Food covering any shortfall is NOT done here -- the caller
+/// (§6.6 step 3b in `end_of_turn`) falls back to [`pay_food`] itself.
 /// Returns the amount actually paid (may be less than `n`).
 pub fn pay_resources(p: &mut PlayerState, n: u16) -> u16 {
     let paid = p.resources.min(n);
-    p.resources -= paid;
+    if paid > 0 {
+        let denoms = Denoms::of(&p.techs, CardType::Mine);
+        bank_debit_lowest_first(&mut p.resource_tokens, denoms.as_slice(), paid);
+        p.resources -= paid;
+    }
     paid
+}
+
+/// A full, unconditional loss of ALL stored food (e.g. a card/event's "lose
+/// all stored food" clause) -- clears the TRACKED bank alongside the
+/// scalar, not just the scalar, so no phantom occupied tokens survive it.
+pub(crate) fn clear_food(p: &mut PlayerState) {
+    p.food = 0;
+    p.food_tokens = crate::state::TokenBank::default();
 }
 
 // ---------------------------------------------------- military deck I/O
@@ -530,10 +837,10 @@ pub fn discard_civil(state: &mut GameState, card: CardId) {
 
 /// The RNG `draw_military` reshuffles with: `random.Random(state.seed * 7919
 /// + state.turn)`, constructed FRESH at every reshuffle (`engine/economy.py::
-/// _rng`). It is deliberately not the `rng` argument `game.py` threads into
+///   _rng`). It is deliberately not the `rng` argument `game.py` threads into
 /// `economy.end_of_turn` -- that argument is never read by the Python
 /// `end_of_turn` at all, which is why this port's [`end_of_turn`] takes no
-/// rng parameter (see its doc comment).
+///   rng parameter (see its doc comment).
 ///
 /// `state.seed` is a `u64` and `PyRandom` takes an `i128` -- see `rng.rs`'s
 /// doc comment on `PyRandom::new` for why `i128` is permanent headroom for a
@@ -692,11 +999,49 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
         let paid = pay_resources(p, corr);
         let short = corr - paid;
         if short > 0 {
-            p.food = p.food.saturating_sub(short);
+            pay_food(p, short);
         }
 
         // ---- 3c. food production --------------------------------------
-        gain_food(p, s.food as u16);
+        // CoL p.6 caps this step by WORKER count on farm cards, not by
+        // `gain_food`'s value/denomination model -- see
+        // `worker_capped_production`. Anything `s.food` carries beyond the
+        // farm cards' own printed production (leader/wonder/government/
+        // special flat bonuses -- none of them are literally "a worker on a
+        // farm technology card") stays under the general CoL p.11 "gain"
+        // rule, spent from whatever blue tokens the farm-card production
+        // above didn't use.
+        //
+        // `credit_production`, not `worker_capped_production`, for the
+        // ACTUAL placement: production places tokens WHERE THE WORKERS ARE
+        // (§6.1c, CoL p.6; the owner's own words, 2026-08-14: "during
+        // production you produce wherever your yellow tokens are"), one
+        // token per producing worker at that worker's own card -- see
+        // `credit_production`'s own doc. `worker_capped_production` (the
+        // uncapped `farm_full` call just below) stays a pure sizing query,
+        // no bank mutation, since it exists only to compute `bonus_food`.
+        {
+            let farm_full = worker_capped_production(&p.techs, CardType::Farm, u16::MAX);
+            // PRODTRACE (2026-08-14): credit the non-worker bonus (leader/
+            // wonder/government flat food, e.g. Transcontinental Railroad's
+            // `DoubleBestMine` sibling on the resource side) BEFORE the
+            // mandatory per-worker `credit_production` step, not after.
+            // Both draw from the SAME shrinking `blue_available` pool this
+            // turn; crediting the forced per-worker placement first (the old
+            // order) can exhaust the pool and silently drop the entire flat
+            // bonus even though it is real, rules-correct income the true
+            // game received -- see game 7521459 round 17, where Grey's
+            // Transcontinental Railroad (`DoubleBestMine`) bonus vanished
+            // this way every round the bank was tight, compounding into an
+            // eventual illegal Build. See
+            // analysis/worker_notes_2026-08-14/prodtrace__PRODTRACE.txt.
+            let bonus_food = (s.food as u16).saturating_sub(farm_full);
+            if bonus_food > 0 {
+                gain_food(p, bonus_food);
+            }
+            let farm_got = credit_production(&p.techs, CardType::Farm, blue_available(p), &mut p.food_tokens);
+            p.food += farm_got;
+        }
         if crate::debugflags::replay_debug_all() {
             eprintln!("DEBUG end_of_turn post-production: idx={idx} food={} yellow_bank={}", p.food, p.yellow_bank);
         }
@@ -704,15 +1049,33 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
         // ---- 3d. food consumption -------------------------------------
         let need = consumption(p.yellow_bank) as u16;
         if p.food >= need {
-            p.food -= need;
+            pay_food(p, need);
         } else {
             let missing = need - p.food;
-            p.food = 0;
+            clear_food(p);
             p.culture = p.culture.saturating_sub(4 * missing);
         }
 
         // ---- 3e. resource production ----------------------------------
-        gain_resources(p, s.resources as u16);
+        // Same CoL p.6 worker-count split as 3c's food production above --
+        // see `credit_production`'s own doc for why this is NOT
+        // `worker_capped_production` (that stays a pure sizing query, used
+        // only for the uncapped `mine_full` call just below).
+        {
+            let mine_full = worker_capped_production(&p.techs, CardType::Mine, u16::MAX);
+            // PRODTRACE (2026-08-14): same reordering as 3c's food step
+            // above -- see that comment. `DoubleBestMine` (Transcontinental
+            // Railroad) is the concrete repro: it adds the best staffed
+            // mine's own printed value once more, flat, not tied to any
+            // worker, so it is entirely a `bonus_resources` credit here, not
+            // part of `credit_production`'s forced per-worker placement.
+            let bonus_resources = (s.resources as u16).saturating_sub(mine_full);
+            if bonus_resources > 0 {
+                gain_resources(p, bonus_resources);
+            }
+            let mine_got = credit_production(&p.techs, CardType::Mine, blue_available(p), &mut p.resource_tokens);
+            p.resources += mine_got;
+        }
         if crate::debugflags::replay_debug_all() {
             eprintln!(
                 "DEBUG end_of_turn POST: idx={idx} resources={} food={} science={} culture={}",
@@ -760,6 +1123,7 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
     p.tactic_action_used = false;
     p.hammurabi_used = false;
     p.hammurabi_replaced_this_turn = false;
+    p.breakthrough_ma_funded = false;
     p.replaced_leader_this_turn = false;
     p.trade_food_as_resource_used_this_turn = 0;
     p.trade_resource_as_food_used_this_turn = 0;
@@ -947,6 +1311,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -964,6 +1329,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            breakthrough_ma_funded: false,
             replaced_leader_this_turn: false,
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
@@ -980,6 +1346,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
             war_target: 0,
@@ -1036,6 +1404,8 @@ mod tests {
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+            last_end_of_turn_science: [None; MAX_PLAYERS],
+            last_end_of_turn_resources: [None; MAX_PLAYERS],
         }
     }
 
@@ -1320,11 +1690,20 @@ mod tests {
         assert_eq!(p.food, 7);
         assert_eq!(blue_used(&p), 4); // 3x2 + 1x1
 
-        // Exhaust the bank: only 13 more food fits in the remaining 6 tokens
-        // (denominations [2,1]) before the 10-token bank runs out.
+        // Exhaust the bank: the first 7 food is now TRACKED (3 denom-2
+        // tokens + 1 denom-1 token, 4 tokens spent) and stays exactly there
+        // -- it can no longer be "re-packed" as part of a bigger total to
+        // free up tokens (RULES_SPEC §6.4: tokens never move to a
+        // higher-value card). Only the 6 tokens still free in the bank are
+        // available to the SECOND gain, and packing fresh new food alone
+        // into denominations [2, 1] costs `ceil(want/2)` tokens (12 food ->
+        // 6 tokens exactly; 13 would need a 7th), so the second gain caps
+        // at 12, not the pre-fix 13 a from-scratch repack of the full
+        // 7+13=20 total used to allow by crediting a "free" consolidation
+        // of the already-placed first 7 nobody actually performed.
         let got2 = gain_food(&mut p, 100);
-        assert_eq!(got2, 13);
-        assert_eq!(p.food, 20);
+        assert_eq!(got2, 12);
+        assert_eq!(p.food, 19);
         assert_eq!(blue_used(&p), 10);
         assert_eq!(blue_available(&p), 0);
 
@@ -1343,21 +1722,29 @@ mod tests {
         assert_eq!(p.food, 5);
     }
 
+    /// Superseded 2026-08-14 (CORRSKIP2): the ORIGINAL version of this test
+    /// asserted that gaining 1 more food onto an already-placed 2 (held as
+    /// two denom-1 tokens) "consolidated" all 3 into a single denom-3 token
+    /// -- i.e. that the two OLD tokens moved to a higher-value card for
+    /// free. RULES_SPEC §6.4/Code of Laws p.11 forbid exactly that ("NEVER
+    /// move tokens to higher-value cards"), and the project owner confirmed
+    /// it in person: existing tokens stay at their old denomination:
+    /// "during production you produce wherever your yellow tokens are" /
+    /// "if you develop a new farm all the tokens stay on the old farm."
+    /// Rewritten to test the behavior that replaced it: a single gain_food
+    /// CALL of 3 (not two calls of 2-then-1) legitimately places all 3 as
+    /// one fresh denom-3 token, since none of it is old, already-placed
+    /// stock -- see `gain_food`'s own doc for the count-minimizing
+    /// (highest-available-denomination) placement non-production gains use.
     #[test]
-    fn gain_food_consolidates_into_a_higher_denomination() {
-        // Denominations {3, 1}: 2 food costs 2 tokens (two 1s); gaining 1
-        // more consolidates to a single 3-token, so the MARGINAL cost is
-        // negative and the gain is allowed even though the bank is nearly
-        // exhausted.
+    fn gain_food_places_newly_gained_food_on_the_highest_available_denomination() {
         let mut p = blank_player(0);
         p.techs.insert(card("Selective Breeding"), TechSlot { workers: 0, stored: 0 }); // denom 3
         p.blue_total = 10;
-        p.food = 2;
-        assert_eq!(blue_used(&p), 2);
-        let got = gain_food(&mut p, 1);
-        assert_eq!(got, 1);
+        let got = gain_food(&mut p, 3);
+        assert_eq!(got, 3);
         assert_eq!(p.food, 3);
-        assert_eq!(blue_used(&p), 1); // one 3-token replaces two 1-tokens
+        assert_eq!(blue_used(&p), 1, "a single denom-3 token covers all 3 food gained in one call");
     }
 
     #[test]
@@ -1376,6 +1763,52 @@ mod tests {
         p.wonder_steps = 3;
         assert_eq!(blue_used(&p), 3);
         assert_eq!(blue_available(&p), 7);
+    }
+
+    // ------------------------------------------- worker_capped_production
+    //
+    // THE BUG (analysis/worker_notes_2026-08-14/econcap__ECONCAP.txt): CoL
+    // p.6's "Resource/Food Production" step is WORKER-COUNT-based ("for each
+    // worker on your mine/farm technology cards, move ONE blue token ...
+    // beginning with those of the highest level"), not the VALUE/
+    // denomination-based `gain`/`tokens_for` model that (correctly) governs
+    // CoL p.11's general "gain N resources" card effects. These two tests
+    // exercise `worker_capped_production` directly; the integration test
+    // below (`end_of_turn_resource_production_caps_by_worker_count_not_the_
+    // minimal_token_representation`) confirms it is actually wired into
+    // `end_of_turn`'s step 3e.
+
+    /// A card's value is irrelevant to how many tokens IT can absorb: a
+    /// level-2 mine with 3 workers can only ever receive 3 tokens (one per
+    /// worker), no matter how many more sit free in the bank. The old
+    /// value-based model had no such notion of "workers" at all -- it would
+    /// have kept granting value for as long as the bank could represent a
+    /// bigger total, i.e. unboundedly with enough free tokens.
+    #[test]
+    fn worker_capped_production_is_bounded_by_worker_count_not_by_free_tokens() {
+        let mut techs = Tableau::new();
+        techs.insert(card("Iron"), TechSlot { workers: 3, stored: 0 }); // level 2
+        assert_eq!(
+            worker_capped_production(&techs, CardType::Mine, 10),
+            6,
+            "3 workers * level 2 = 6, capped by workers even though 10 tokens are free"
+        );
+    }
+
+    /// CoL p.6, verbatim: "If there are not enough tokens, move all that you
+    /// can to the [farm/mine] technology cards, beginning with those of the
+    /// highest level." With only 2 free tokens and workers on both a
+    /// level-3 and a level-2 card, the level-3 card's worker must be
+    /// serviced first.
+    #[test]
+    fn worker_capped_production_services_the_highest_level_card_first_when_short() {
+        let mut techs = Tableau::new();
+        techs.insert(card("Iron"), TechSlot { workers: 3, stored: 0 }); // level 2
+        techs.insert(card("Coal"), TechSlot { workers: 1, stored: 0 }); // level 3
+        // Coal's 1 worker takes the first token (value 3), Iron's takes the
+        // second (value 2): 3 + 2 = 5. Servicing Iron first instead would
+        // still spend 2 tokens but only realize 2 + 2 = 4.
+        assert_eq!(worker_capped_production(&techs, CardType::Mine, 2), 5);
     }
 
     // =================================================== end-of-turn tests
@@ -1588,6 +2021,45 @@ mod tests {
         assert_eq!(
             st.players[0].resources, 5,
             "corruption was 0 -- assessed before the new food took a token"
+        );
+    }
+
+    /// THE BUG, wired end-to-end: reproduces the exact numbers found
+    /// hand-tracing BGO game 7521775 (round 15, Purple) --
+    /// `analysis/worker_notes_2026-08-14/econcap__ECONCAP.txt`. After
+    /// corruption (6) and food production leave exactly 1 free blue token,
+    /// a level-2 mine (Iron) staffed by 3 workers can supply only ONE of
+    /// those workers a token -- worth 2 -- per CoL p.6 ("for each worker...
+    /// move one blue token... if not enough, move all you can"). The OLD
+    /// value/denomination-based model (still correct for CoL p.11's general
+    /// "gain N resources" -- see the `gain_food`/`gain_resources` tests
+    /// above) wrongly allowed 3 there: reasoning about the SCALAR total (23
+    /// -> 26 needs only one more token in `tokens_for`'s minimal
+    /// representation) rather than which worker's token can actually move.
+    #[test]
+    fn end_of_turn_resource_production_caps_by_worker_count_not_the_minimal_token_representation() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.techs.insert(card("Iron"), TechSlot { workers: 3, stored: 0 }); // level 2
+            p.techs.insert(card("Selective Breeding"), TechSlot { workers: 2, stored: 0 }); // level 3
+            p.resources = 29;
+            p.food = 4;
+            p.blue_total = 17;
+            p.yellow_bank = 9; // consumption(9)=2, happy_required(9)=3
+            p.workers_free = 3; // >= discontent(3): no uprising
+        }
+        assert!(!uprising(&st, &st.players[0]), "the scenario must reach step 3 to exercise production");
+        assert!(end_of_turn(&mut st, 0));
+
+        // 29 - 6 (corruption) + 2 (1 of Iron's 3 workers gets the lone free
+        // token, worth its level, 2) = 25. The old model reached 26 here
+        // (see the doc comment above and the .txt handoff for the by-hand
+        // trace) -- reverting `worker_capped_production`'s call sites back
+        // to a plain `gain_resources(p, s.resources as u16)` turns this RED.
+        assert_eq!(
+            st.players[0].resources, 25,
+            "worker-count cap: only 1 free token this step, 1 worker's-worth of value (2), not the value-based 3"
         );
     }
 
@@ -2035,5 +2507,135 @@ mod tests {
         st.discarded_military[Age::A as usize].push(CardId(3));
         assert_eq!(draw_military(&mut st), None, "another age's pile is not the deck");
         assert_eq!(st.discarded_military[Age::A as usize].len(), 1);
+    }
+
+    // ------------------------------------------------- TokenBank (CORRSKIP2)
+
+    /// Corpus regression, RESOURCE_ORACLE Group A (166 games, corruption
+    /// skipped entirely, always by exactly the journal's stated amount) --
+    /// hand-verified against BGO journal 7522658 (round 7, Orange, line
+    /// 201): 2 food gained while only Agriculture (denom 1) is in play must
+    /// stay tracked as 2 separate blue tokens even after Irrigation (denom
+    /// 2) is developed later the SAME turn. RULES_SPEC §6.4 / Code of Laws
+    /// p.11 forbid moving an already-placed token to a higher-value card,
+    /// and the project owner's own words (2026-08-14) confirm it for this
+    /// exact shape: "if you develop a new farm all the tokens stay on the
+    /// old farm." Before this fix, `blue_used` re-derived a from-scratch
+    /// minimal packing every call, which silently "consolidated" the 2
+    /// existing food tokens onto Irrigation for free (1 token instead of 2)
+    /// the moment it entered play, undercounting occupied tokens by 1 and
+    /// therefore skipping the corruption this turn owed. Confirmed RED by
+    /// reverting `occupied_tokens` to ignore the tracked bank (`tokens_for
+    /// (total, denoms)` unconditionally, i.e. the old formula) and
+    /// re-running: fails with `left: 5, right: 6`.
+    #[test]
+    fn a_farm_card_developed_after_food_was_already_gained_does_not_retroactively_consolidate_it() {
+        let mut st = duel();
+        let p = &mut st.players[0];
+        p.blue_total = 16;
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Bronze"), TechSlot { workers: 1, stored: 0 });
+        assert_eq!(gain_food(p, 2), 2, "2 food gained while only denom-1 Agriculture is in play");
+        assert_eq!(gain_resources(p, 4), 4, "4 resources gained while only denom-1 Bronze is in play");
+        assert_eq!(blue_used(p), 6, "2 food tokens + 4 resource tokens, all denom 1, before Irrigation exists");
+
+        // Irrigation (denom 2) enters play mid-turn -- `Move::Develop` adds
+        // a SEPARATE second card, it never removes/replaces Agriculture.
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
+
+        assert_eq!(
+            blue_used(p), 6,
+            "the 2 food tokens already sitting on Agriculture must stay put, not collapse to 1 token on Irrigation just because a higher card entered play"
+        );
+    }
+
+    /// The owner's own words on gaining AFTER a higher card already exists:
+    /// new tokens DO use it (nothing here contradicts "never move up" --
+    /// only NEWLY placed tokens may use a newly available denomination).
+    /// Paired with the test above, this is the full round-trip: old stock
+    /// frozen at its old denomination, new stock free to use the new one.
+    #[test]
+    fn a_farm_card_developed_before_gaining_lets_the_new_food_use_it() {
+        let mut st = duel();
+        let p = &mut st.players[0];
+        p.blue_total = 16;
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
+        assert_eq!(gain_food(p, 2), 2);
+        assert_eq!(blue_used(p), 2, "2 tokens at denom 1");
+
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
+        assert_eq!(gain_food(p, 2), 2, "2 MORE food, gained after Irrigation exists");
+        assert_eq!(
+            blue_used(p), 3,
+            "the old 2 food stay at 2 tokens (denom 1, untouched); the NEW 2 food use the now-available denom-2 Irrigation as a single token -- 2 + 1 = 3, not 4"
+        );
+    }
+
+    /// Code of Laws p.11 / the owner's own words (2026-08-14): "when you
+    /// spend resources you can choose to spend from whatever farm you want
+    /// (you usually want to spend from the lower ones). You can also make
+    /// change when you spend." `pay_resources` must remove from the LOWEST
+    /// tracked denomination first, breaking ("making change" into smaller
+    /// denominations) only the one token it must break to cover the rest.
+    #[test]
+    fn pay_resources_spends_the_lowest_denomination_first_and_makes_change_on_overshoot() {
+        let mut st = duel();
+        let p = &mut st.players[0];
+        p.blue_total = 16;
+        p.techs.insert(card("Bronze"), TechSlot { workers: 1, stored: 0 }); // denom 1
+        // 1 resource gained while only Bronze existed (1 token, denom 1),
+        // then Iron enters, then 4 more gained (2 tokens, denom 2): true
+        // resources = 1 + 4 = 5, held as one denom-1 token and two denom-2
+        // tokens (3 tokens total, not the 3-token minimal packing of 5
+        // itself -- that would be a single denom-... no denom exists for 5,
+        // so minimal packing is also 1+2+2, same token count here by
+        // coincidence; the SHAPE (which specific tokens) is what this test
+        // checks via the pay-down behaviour below, not the count alone).
+        assert_eq!(gain_resources(p, 1), 1);
+        p.techs.insert(card("Iron"), TechSlot { workers: 1, stored: 0 });
+        assert_eq!(gain_resources(p, 4), 4);
+        assert_eq!(p.resources, 5);
+
+        // Pay 2: the lowest tracked denomination (the single denom-1 token)
+        // covers only 1 of it, so a denom-2 token must be broken, making 1
+        // change back at denom 1 -- NOT spending straight from the denom-2
+        // tokens and leaving the denom-1 token untouched (which would also
+        // total 2 spent, but is not "lowest first").
+        assert_eq!(pay_resources(p, 2), 2);
+        assert_eq!(p.resources, 3);
+        // After paying 2 lowest-first-with-change: the original denom-1
+        // token is gone (spent), one denom-2 token is gone (broken to pay
+        // the remainder), and 1 unit of change came back at denom 1 -- one
+        // denom-2 token (value 2) and one denom-1 token (value 1) remain,
+        // 2 tokens total, matching the remaining value of 3.
+        assert_eq!(blue_used(p), 2, "1 remaining denom-2 token + 1 change token at denom 1");
+    }
+
+    /// §6.1c/e (CoL p.6) / the owner's own words (2026-08-14): "during
+    /// production you produce wherever your yellow tokens are." A worker on
+    /// a LOW-value farm still produces a token AT THAT CARD'S OWN VALUE, not
+    /// a token borrowed from a higher-value card elsewhere in the tableau --
+    /// `credit_production` must place tokens per-worker, per-card, not
+    /// re-derive a scalar total's minimal packing across every denomination
+    /// the player happens to own.
+    #[test]
+    fn production_places_one_token_per_worker_at_that_workers_own_card() {
+        let mut st = duel();
+        let p = &mut st.players[0];
+        p.blue_total = 16;
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 }); // denom 1
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 1, stored: 0 }); // denom 2
+        let got = credit_production(&p.techs, CardType::Farm, blue_available(p), &mut p.food_tokens);
+        p.food += got;
+        assert_eq!(got, 3, "1 worker * denom 1 + 1 worker * denom 2 = 3 food");
+        assert_eq!(
+            blue_used(p), 2,
+            "one token at denom 1 (Agriculture's own worker) and one token at denom 2 (Irrigation's own worker) -- 2 tokens, not `tokens_for(3, [2, 1])`'s minimal packing of 2 either way by coincidence of these numbers, but for the RIGHT reason: verified against the bank contents, not just the count"
+        );
+        assert_eq!(p.food_tokens.len, 2, "two distinct tracked denominations");
+        let ix1 = p.food_tokens.denoms[..2].iter().position(|&d| d == 1).unwrap();
+        let ix2 = p.food_tokens.denoms[..2].iter().position(|&d| d == 2).unwrap();
+        assert_eq!(p.food_tokens.counts[ix1], 1, "exactly one denom-1 token, from Agriculture's own worker");
+        assert_eq!(p.food_tokens.counts[ix2], 1, "exactly one denom-2 token, from Irrigation's own worker");
     }
 }

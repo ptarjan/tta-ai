@@ -1,0 +1,330 @@
+cardblame -- group replay failures by CARD instead of by symptom
+====================================================================
+Worker: cardblame, 2026-08-14. Clone: /private/tmp/cardblame (deleted at
+end per instructions), branched from c772970.
+
+WHAT WAS BUILT
+--------------
+rust/src/bin/cardblame.rs, a new permanent analysis binary, plus two small
+additive extensions to rust/src/replay_common.rs that it depends on:
+
+  - GameResult::cards_in_play: Vec<&'static str> -- the SET of card ids in
+    play (all players' tableaus, plus leaders and tactics in force),
+    snapshotted from the replayer's own final GameState at the point a
+    game's replay stopped OR completed. Computed unconditionally (helper
+    `game_cards_in_play`), so it is available for both a clean completion
+    and a mid-game Mismatch stop.
+
+  - GameResult::corruption_checks: Vec<CorruptionCheck> -- one entry per
+    journal "End turn" line: whether this reconstruction's own
+    `economy::corruption(economy::blue_available(..))` (recomputed
+    independently, NOT by letting economy::end_of_turn run and reading a
+    mutated field back -- see Replayer::record_corruption_check's doc for
+    why that is safe) agrees with whether BGO's own journal line for that
+    turn carries a "CORRUPTION!" marker. Each entry also carries the
+    ACTING PLAYER's own broader card set (tableau + government + leader +
+    wonder + tactic + territories won at colonization) via the
+    `player_cards_in_play` helper -- broader than `cards_in_play` on
+    purpose, because the standing hypothesis under test is a TERRITORY
+    card, which lives in PlayerState::colonies, not techs.
+
+Neither field changes anything any existing binary reads or computes --
+replaystats' own output is byte-identical before/after (see BAR below).
+
+cardblame itself replays the same corpus the same way as replaystats
+(tta::replay_common::replay_game, same sampling convention) and does THREE
+enrichment cuts:
+
+  1. Completion-failure enrichment: for every card, of the games it was in
+     play for, what share failed vs the corpus base failure rate.
+  2. Score-mismatch enrichment, same cut restricted to games that DID
+     complete (a different failure mode -- no engine stop to blame, so a
+     scoring-formula bug is the likelier culprit).
+  3. Corruption cross-check enrichment, the owner's specific sub-question:
+     run the same enrichment math over the (engine-charges vs
+     journal-charges) agreement/disagreement population instead of over
+     game completion.
+
+STATISTICS DISCIPLINE, AS IMPLEMENTED
+--------------------------------------
+- enrichment = card's own rate / corpus base rate. 1.0 = no signal.
+  Printed alongside the raw games/failures count and the rate itself, not
+  instead of them.
+- MIN_EXPOSURE = 20 games/checkpoints gates the ranked table. Cards below
+  it are NOT dropped -- they print in a separate "low exposure" section,
+  sorted by exposure, explicitly labelled as noise.
+- Confound visibility: every ranked row in cuts 1/2 prints round_with
+  (mean stop-round for games WITH the card) and round_without (mean
+  stop-round for games WITHOUT it). This is the tool ACTUALLY catching the
+  confound in practice, see finding #1 below -- it is not a hypothetical
+  caveat, it is what separated real candidates from an artifact.
+- What this does NOT control for (stated in the binary's own module doc):
+  no round-matched control group. A big round_with/round_without gap
+  means "treat this enrichment as partly a game-length proxy"; it cannot
+  by itself distinguish that from a genuinely broken late-game card. The
+  BGA-source diff is what actually discriminates the two, and that's what
+  I did for the top candidates (see below).
+- Cut 3's "games" column is CHECKPOINTS, not games (one per "End turn"
+  line) -- documented in the printed header so a reader doesn't misread
+  40790 as a games-sampled figure.
+
+TOOL OUTPUT
+-----------
+Full output of the run this worker used for the findings below is at
+cardblame_ranking.txt (top-20 tables) in this same directory. Corpus
+headline: 1011 games sampled, 687 completed, 651/687 exact-score -- matches
+the project's own stated baseline exactly.
+
+FINDING #1 (the tool doing its job): single-slot cards structurally cannot
+be read from a "cards in play at the end" snapshot without being
+confounded, and the round_with/without columns show it immediately.
+--------------------------------------------------------------------------
+Every one of the top-10 completion-failure entries (enrichment exactly
+3.12x = 1/base_rate, i.e. literally EVERY game with that card in play
+failed) is a NAMED LEADER: Robespierre, Newton, Joan of Arc, Shakespeare,
+Napoleon, Hammurabi, da Vinci, James Cook, Genghis Khan, Michelangelo (plus
+8 more below the exposure cutoff, also all leaders, also all 100%).
+
+This is NOT evidence any of these leaders are broken. `PlayerState::leader`
+is a SINGLE slot -- a player who takes an early leader typically replaces
+it with a better one later. In a COMPLETED (full-length) game, whichever
+leader is present at the final snapshot is definitionally the LAST one
+taken -- an early/mid leader can only ever show up in `cards_in_play` for a
+game that never reached the point of being superseded, which for a
+completed game essentially never happens (confirmed directly: 0 of 687
+completed games have Napoleon, Newton, etc. in their final leader slot; the
+completed-game leader list is dominated by Age III/IV leaders -- Churchill,
+Einstein, Gandhi, Bill Gates, Chaplin, Sid Meier). The round_with column
+makes this legible without needing to read code: every one of these
+"broken" leaders has round_with 5-14 against round_without ~17.5-17.7 --
+i.e. they are systematically present only in SHORT/stopped games, which is
+exactly the single-slot-supersession signature, not a card-correctness
+signature.
+
+The exact same mechanism, weaker, explains the next tier down: Age I
+TACTICS (Phalanx 1.88x/98 games, Medieval Army 1.79x/187, Legion 1.69x/164,
+Heavy Cavalry 1.59x/57) -- `PlayerState::tactic` is also a single slot,
+upgraded over the game. round_with for these (14.7-15.5) vs round_without
+(~17.4-17.7) shows the same, smaller version of the same artifact.
+
+TAKEAWAY FOR FUTURE READERS OF THIS TOOL: any row where round_with is
+noticeably below round_without AND the card occupies a known single/
+replaceable slot (leader, tactic, government, wonder-under-construction) is
+this artifact, not a lead, UNLESS the BGA-source diff also turns up a
+transcription error (checked below -- it did not, for any of these).
+
+TOP ~20, CUT 1 (completion failure), with denominators
+--------------------------------------------------------
+(leaders/tactics flagged [SLOT] per finding #1 above; real candidates are
+the non-slot cards further down)
+  3.12x Robespierre (leader) [SLOT]         48 games, 48 failures
+  3.12x Newton (leader) [SLOT]              82 games, 82 failures
+  3.12x Joan of Arc (leader) [SLOT]         37 games, 37 failures
+  3.12x Shakespeare (leader) [SLOT]         29 games, 29 failures
+  3.12x Napoleon (leader) [SLOT]           125 games, 125 failures
+  3.12x Hammurabi (leader) [SLOT]           20 games, 20 failures
+  3.12x da Vinci (leader) [SLOT]            37 games, 37 failures
+  3.12x James Cook (leader) [SLOT]          32 games, 32 failures
+  3.12x Genghis Khan (leader) [SLOT]        36 games, 36 failures
+  3.12x Michelangelo (leader) [SLOT]        35 games, 35 failures
+  1.88x Phalanx (tactic) [SLOT]             98 games, 59 failures (60.2%)
+  1.79x Medieval Army (tactic) [SLOT]      187 games, 107 failures (57.2%)
+  1.69x Legion (tactic) [SLOT]             164 games, 89 failures (54.3%)
+  1.59x Heavy Cavalry (tactic) [SLOT]       57 games, 29 failures (50.9%)
+  1.23x Warfare                            224 games, 88 failures (39.3%)
+  1.21x Fighting Band                      201 games, 78 failures (38.8%)
+  1.08x Masonry                            259 games, 90 failures (34.7%)
+  1.05x Bread and Circuses                 200 games, 67 failures (33.5%)
+  1.04x Code of Laws                       437 games, 146 failures (33.4%)
+  1.02x Defensive Army (tactic) [SLOT]      98 games, 32 failures (32.7%)
+Base rate: 324/1011 = 32.0%.
+(8 more leaders below the 20-game cutoff, all also 100% -- Aristotle,
+Julius Caesar, Barbarossa, Bach, Homer, Moses, Columbus, Alexander --
+same [SLOT] artifact.)
+
+Once the [SLOT] rows are set aside, cut 1 has NO standout: everything from
+Warfare down is within ~1.0-1.2x of base rate, i.e. noise. Cut 1 alone did
+not surface a card worth fixing this pass.
+
+TOP ~20, CUT 2 (score mismatch, completing games only)
+---------------------------------------------------------
+This cut is NOT confounded by round length the way cut 1 is -- restricting
+to completed games means every row's round_with/round_without sit within
+~0.3 rounds of each other (~19.0-19.5) across the whole table. That makes
+this cut's ranking cleaner to trust at face value.
+  2.73x Heavy Cavalry            28 games,  4 mismatches (14.3%)
+  2.31x Defensive Army           66 games,  8 mismatches (12.1%)
+  1.81x Winston Churchill (ldr) 232 games, 22 mismatches (9.5%)
+  1.73x Fortifications           55 games,  5 mismatches (9.1%)
+  1.65x Shock Troops             58 games,  5 mismatches (8.6%)
+  1.64x Code of Laws            291 games, 25 mismatches (8.6%)
+  1.44x Entrenchments            53 games,  4 mismatches (7.5%)
+  1.43x Medieval Army            80 games,  6 mismatches (7.5%)
+  1.43x Air Forces              400 games, 30 mismatches (7.5%)
+  1.42x Navigation              296 games, 22 mismatches (7.4%)
+  1.20x Albert Einstein (ldr)   302 games, 19 mismatches (6.3%)
+  1.20x Napoleonic Army         159 games, 10 mismatches (6.3%)
+  1.19x Team Sports             128 games,  8 mismatches (6.2%)
+  1.19x Rockets                 176 games, 11 mismatches (6.2%)
+  1.19x Swordsmen               483 games, 30 mismatches (6.2%)
+  1.18x Satellites              306 games, 19 mismatches (6.2%)
+  1.18x Cavalrymen              355 games, 22 mismatches (6.2%)
+  1.17x Engineering             407 games, 25 mismatches (6.1%)
+  1.17x Mahatma Gandhi (ldr)     98 games,  6 mismatches (6.1%)
+  1.16x Modern Army              148 games,  9 mismatches (6.1%)
+Base rate: 36/687 = 5.2%. No cards below the 20-game cutoff (every card
+common enough to matter for scoring cleared it).
+
+CHEAP CHECK ON THE TOP CANDIDATES (cuts 1 + 2 combined; the whole point of
+this pass)
+--------------------------------------------------------------------------
+Every Age I/II/III tactic that ranked -- Legion, Medieval Army, Phalanx,
+Heavy Cavalry, Defensive Army, Fortifications, Shock Troops -- diffed field
+by field (strength, composition inf/cav/arty, obsolete_strength) against
+/Users/pt/tta-ai/sources/bga_throughtheages_material.inc.php's own printed
+inf/cav/arty/artybon/artybonplus values:
+
+  Legion:          BGA inf3 cav0 arty0 artybon2            -- MATCHES
+  Medieval Army:   BGA inf1 cav1 arty0 artybon2             -- MATCHES
+  Phalanx:         BGA inf2 cav1 arty0 artybon3             -- MATCHES
+  Heavy Cavalry:   BGA inf0 cav3 arty0 artybon4              -- MATCHES
+  Defensive Army:  BGA inf2 cav0 arty1 artybon6 bonplus3     -- MATCHES
+  Fortifications:  BGA inf0 cav0 arty2 artybon5 bonplus3     -- MATCHES
+                   (this is the ALREADY-FIXED value from earlier today's
+                   accidental win; confirms the fix is correctly in this
+                   corpus's own baseline)
+  Shock Troops:    BGA inf1 cav3 arty0 artybon11 bonplus6    -- MATCHES
+
+Also checked Code of Laws (techcost/CA) against BGA -- MATCHES exactly.
+
+RESULT: no transcription error found in any top-ranked card this pass. The
+Fortifications-style cheap win already happened (it's baked into this
+corpus's own baseline, 687/651). What cut 1's ranking is actually showing,
+once the single-slot artifact (finding #1) is set aside, is NOISE -- no
+card clears both "high enrichment" and "not explained by the slot
+artifact" and "wrong against BGA" simultaneously this pass. Cut 2's
+ranking (Heavy Cavalry/Defensive Army standing out even with the round
+confound controlled for) is a smaller, real-looking signal but the
+underlying card DATA is correct, so if it's real the bug is in how
+military strength is fed into final SCORING (there is at least one §12.5.2
+"Impact of Warfare"-style event that scores off army strength) -- not
+something a data fix addresses, and out of scope for a "diff the
+constants" cheap check. Flagging for whoever picks up final-event scoring
+next: Heavy Cavalry (2.73x/28 games) and Defensive Army (2.31x/66 games)
+are the two cleanest cut-2 candidates once cut-1's leader/tactic noise is
+excluded.
+
+SUB-QUESTION: does a CARD explain the corruption/journal disagreement?
+------------------------------------------------------------------------
+357/40790 "End turn" checkpoints disagree on whether corruption was
+charged (0.9% base rate). Full population (agreements AND disagreements)
+was dumped and cut the same way, keyed on the ACTING PLAYER's own broader
+card set (tableau + government + leader + wonder + tactic + territories),
+since the standing hypothesis is specifically a TERRITORY card
+(colonization prize, lives in PlayerState::colonies, not techs).
+
+THE HYPOTHESIS: cards that permanently adjust blue-token capacity by -1
+(the territory printed "+3 yellow tokens & -1 blue token"). Found it:
+"Vast Territory (I)" and "Vast Territory (II)" both carry blue_tokens: -1
+in card_table.rs, confirmed against BGA source exactly
+(bonus_per "+3 yellow tokens & -1 blue token" / "+4 yellow tokens & -1 blue
+token", tokendelta blue=>-1 -- both ages MATCH card_table.rs exactly, no
+transcription error there either).
+
+RESULT OF THE CONTROL-GROUP TEST: the hypothesis does NOT hold up as THE
+explanation.
+  - Vast Territory (II) (-1 blue): 3.14x, 838 checkpoints, 23 disagreements
+  - Vast Territory (I)  (-1 blue): 1.89x, 2787 checkpoints, 46 disagreements
+  - Historic Territory (II) (NO blue effect at all, +2 happy/+11 culture
+    only): 2.75x, 664 checkpoints, 16 disagreements -- nearly as enriched
+    as Vast Territory (II), MORE enriched than Vast Territory (I), despite
+    touching zero blue tokens.
+  - Historic Territory (I) (also no blue effect): only 1.10x -- the SAME
+    card design one age tier down reads as noise, while its own age-II
+    sibling reads at 2.75x. That inconsistency within one card FAMILY that
+    has no blue-token mechanic at all is itself evidence the ranking here
+    is dominated by something else (age/round position, general economy
+    complexity) rather than a specific token mechanic.
+  - Developed Territory (+2 blue, the OPPOSITE direction from the
+    hypothesis) is INCONSISTENT too: age I reads 1.57x, age II reads
+    0.45x (UNDER base rate).
+  - The single highest-enrichment cards in this whole cut have nothing to
+    do with blue tokens at all: Bill Gates (6.02x, a leader whose special
+    is a per-turn resource/culture formula unrelated to corruption),
+    Transcontinental Railroad (4.98x), Shock Troops (4.71x, a military
+    tactic), First Space Flight (2.97x), Internet (2.78x), Computers
+    (2.67x) -- all rank above or comparable to Vast Territory.
+
+Pooled for completeness: the two -1-blue territories combined = 3625
+checkpoints / 69 disagreements = 1.90% (enrichment ~2.17x); the other four
+territory variants (0 or +2 blue) combined = 6998 checkpoints / 83
+disagreements = 1.19% (enrichment ~1.36x). There IS a small directional
+gap in the pooled numbers, but it is far smaller than, and dominated by,
+unrelated top-ranked cards, and it does not survive the same-family
+control comparison above (Historic Territory (II), zero blue effect,
+matches or beats Vast Territory's own enrichment).
+
+CONCLUSION: no single card explains the corruption/journal disagreement
+population. The -1-blue-token territory hypothesis is NOT dead outright
+(there's a small pooled directional signal), but it is clearly NOT the
+dominant or sole cause -- the ranking is dominated by cards spanning every
+mechanism (leaders, tactics, urban buildings, territories in both
+directions), which is the signature of a shared, general confound (most
+likely: later-round/more-complex-economy turns are simply more likely to
+disagree, for reasons unrelated to any one card) rather than a specific
+card bug. NOT fixing anything here per the task's own instruction --
+reporting the control-group result as requested.
+
+METHODOLOGY NOTES / WHAT THIS DOES NOT COVER
+----------------------------------------------
+- cards_in_play (cuts 1/2) is a SNAPSHOT at the stop/end point, not
+  "ever in play this game" -- a card built and later antiquated away
+  before the game ended will NOT show up, even though it may have caused
+  the very failure being counted. This under-counts exposure for any card
+  whose bug manifests, then the card leaves play before the game stops.
+  Not fixed this pass; flagged for whoever extends this tool next (an
+  "ever seen" variant would need a per-line rather than end-of-game hook).
+- The single-slot artifact (finding #1) applies to leader/tactic/
+  government/wonder-under-construction cards in cuts 1 and 2 alike. Read
+  round_with/round_without before trusting a high-enrichment SLOT card.
+- Cut 3's checkpoint-level "games" column deliberately does NOT get a
+  round-reached confound column (a per-checkpoint binary doesn't have a
+  single meaningful "round reached" the way a per-game outcome does) --
+  documented directly in the tool's own printed header, not just here.
+
+VERIFICATION (THE BAR)
+-----------------------
+  cd /private/tmp/cardblame/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats --bin cardblame
+    -> compiles clean, no warnings.
+  cargo test --profile fasttest --lib
+    -> 1410 passed, 0 failed.
+  cargo test --profile fasttest --bin cardblame
+    -> 8 passed, 0 failed (cardblame's own unit tests: CardCounter::rate/
+       mean_round, rank_cards's exposure-cutoff routing, enrichment math,
+       descending sort, round_without complement/NaN-when-universal).
+  cargo clippy --all-targets --profile fasttest -- -D warnings
+    -> clean.
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+    -> "# replaystats: 1011 games sampled, 687 completed to state.game_over"
+  comm -23 /private/tmp/guard_ids_687.txt /tmp/cb_ids.txt  (regressions) -> EMPTY
+  comm -13 /private/tmp/guard_ids_687.txt /tmp/cb_ids.txt  (wins)        -> EMPTY
+  i.e. replaystats' own completed-game set is BYTE IDENTICAL before/after
+  this change -- confirms cards_in_play/corruption_checks are additive
+  and touch no existing behaviour.
+  ./target/difftest/cardblame /Users/pt/tta-ai/sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals
+    -> "# cardblame: 1011 games sampled, 687 completed, 651/687 exact"
+       (matches the project's own stated baseline exactly)
+
+No card was changed this pass -- the deliverable is the tool itself
+(cardblame.rs, plus the two additive GameResult fields it needs), meant to
+be re-run after every future fix so the next transcription-slip win (like
+today's accidental Fortifications one) shows up in a ranked list instead
+of by hand.
+
+Files in this directory from this pass:
+  cardblame__CARDBLAME.txt   -- this file
+  cardblame_ranking.txt      -- full tool output (top-20 tables, all 3 cuts)
+  cardblame.patch            -- diff against c772970, the actual deliverable

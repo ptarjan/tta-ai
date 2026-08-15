@@ -1,0 +1,370 @@
+=== opponent pool task -- verification (step 1) ===
+
+Clone: /private/tmp/pooldiverse (cp -Rc from /private/tmp/actionprice). Never touching
+/Users/pt/tta-ai. cargo from /private/tmp/pooldiverse/rust, --profile difftest, <=2 threads.
+
+--- Claim 1: Seat has no search field ---
+CONFIRMED. src/bots/greedy.rs:835-851 (before my edit):
+    #[derive(Clone, Copy, Debug)]
+    pub struct Seat {
+        pub kind: BotKind,
+        pub weights: weighted::weights::Weights,
+    }
+Exactly two fields. `Weights` is `#[derive(Clone, Copy, Debug, PartialEq)] pub struct Weights([f64; N])`
+(src/bots/weighted/weights.rs:1037-1038) -- Copy, so Seat is Copy purely because both its fields are.
+
+--- Claim 2: kindmatch enables the hybrid outside Seat/build_bots ---
+CONFIRMED. src/bin/kindmatch.rs:363-393 (play_one): builds `seats: Vec<Seat>` and calls the
+generic `build_bots(&seats, seed)` UNCONDITIONALLY first, then for any seat with
+`--a-search`/`--b-search` set, OVERWRITES `bots[i]` by hand with
+`Bot::human_plan(eval_weights, human_weights, player_seed)` -- a `Bot` variant
+(`Bot::HumanPlan`, greedy.rs:667-673) built directly, bypassing `Seat`/`build_bots` entirely,
+because `Bot::human_plan` needs TWO `Weights` vectors (the human ranking vector AND a separate
+gameplay-evaluator vector for `plan::pick`'s beam) and `Seat` only ever carried one. Confirmed by
+the doc comment on `Bot::HumanPlan` itself (greedy.rs:656-666): "Seat carries exactly one Weights
+slot per seat, already spent... so there is no second slot here for a human ranking vector to
+travel through make_bots's generic per-kind construction. Built by hand... bin/kindmatch.rs's
+--a-search/--b-search flags are its one caller."
+`eval_weights` in kindmatch = "the OTHER side's own weight vector" (kindmatch.rs:385-389), i.e.
+whatever `--b-weights`/`--a-weights` resolved to for the non-searching side -- in the measured
+65.62% run this was a frozen champion vector. `human_weights` = `human_policy::vector_from_weights(&s.weights)`
+where `s.weights` is the searching seat's OWN weights (loaded via `human_policy::load_weights`,
+i.e. the human-imitation fit).
+
+--- Claim 3: climb's gauntlet builds seats only through arena::loader_for / Seat ---
+CONFIRMED. src/bin/climb.rs Config::gauntlet is `Vec<(String, Seat)>` (line 671). Every
+`--gauntlet` entry is resolved (parse_args, ~866-881) as
+`a.cfg.gauntlet.push((label, Seat { kind, weights }))` where `weights = loader_for(kind)(&p)?`
+(arena::loader_for, arena.rs:54-70, exhaustive match: Human -> human_policy::load_weights, every
+other kind -> the champion loader). `measure_gauntlet` (climb.rs:472-487) and `pool_members`
+(climb.rs:516-522) both consume `cfg.gauntlet` as plain `Seat`s and feed them straight into
+`measure_against` -> `Match { a, b, .. }` -> `arena::build_bots(&seats, seed)`. There is no path
+from `--gauntlet`/`--gauntlet-kind` to `Bot::human_plan`/`Bot::HumanPlan` at all today: a `Seat`
+with `kind: BotKind::Human` always becomes a plain searchless `Bot::Human` (greedy.rs build_bots,
+`BotKind::Human => Bot::Human(HumanBot::new(&seat.weights))`). So the claim is correct: the
+strongest opponent (65.62% hybrid) is structurally unreachable from climb's gauntlet/pool veto as
+the code stood at HEAD (d04acfa in the source tree this clone started from).
+
+Verdict: all three claims verified as stated. Proceeding to build on this premise.
+
+=== step 2: Seat/Search construct ===
+
+Added `bots::greedy::Search` (Clone/Copy/Debug/PartialEq enum):
+    None
+    HumanShortlistBeam { eval_weights: weighted::weights::Weights }
+`Seat` gained a third field `search: Search`, stays `Copy` (Weights and Search are both
+Copy). `build_bots` asserts up front that `HumanShortlistBeam` only ever rides a
+`BotKind::Human` seat (panic with a clear message otherwise) -- this is NOT fully
+type-unrepresentable (that would need `BotKind` to stop being the fieldless, `Copy`,
+`Hash`-able registry key `BotKind::ALL`/`from_str`/`name` all depend on), so it is the same
+"checked once at the boundary (the flag parser), trusted after" shape this file already uses
+elsewhere (`Match::validate().expect(...)`, kindmatch's own `--a-policy` kind check). Both
+flag parsers that can construct a `HumanShortlistBeam` seat (`kindmatch.rs`'s
+`--a-search`/`--b-search`, `climb.rs`'s new `--gauntlet-search`) validate the combination
+before it is ever assembled.
+
+`kindmatch.rs`'s `--a-search`/`--b-search` now build the seat's `search` field UP FRONT and
+call the ordinary `build_bots` -- the old "build every seat plain, then overwrite bots[i] by
+hand with Bot::human_plan" loop is GONE. `--a-policy`/`--b-policy` (needs an `Arc<ValueNet>`,
+not `Copy`-friendly) is untouched, still its own hand-built path -- out of scope, task only
+asked to unify the search-hybrid flags.
+
+`climb.rs` gained `--gauntlet-search PATH`: applies to the NEXT `--gauntlet` member only,
+same deferred-resolution shape as `--gauntlet-kind` (a `pending_gauntlet_search: Option<PathBuf>`
+alongside `pending_gauntlet_kind`). Rejected at parse time if that member's resolved kind is
+not `human`. `eval_weights` is read with the CHAMPION loader (`bots::weighted::eval::load_weights`,
+dominance_repair included) -- it is a real gameplay evaluator for `plan::pick`'s beam, not a
+human-imitation ranking vector.
+
+New/updated tests (all confirmed RED by reverting the fix and rerunning, verbatim failures
+below), plus the pre-existing `a_gauntlet_kind_override_applies_to_only_the_next_gauntlet_member`
+which this mirrors:
+
+  bots::greedy::tests::a_human_seat_with_a_shortlist_beam_search_builds_the_lookahead_bot
+  bots::greedy::tests::build_bots_panics_on_a_shortlist_beam_search_bound_to_a_non_human_kind
+  bots::greedy::tests::a_human_seat_with_no_search_builds_the_plain_searchless_bot (regression)
+  climb::tests::a_gauntlet_search_flag_gives_that_member_the_shortlist_beam_hybrid
+  climb::tests::a_gauntlet_search_flag_is_rejected_when_the_member_is_not_human_kind
+  climb::tests::a_gauntlet_search_override_applies_to_only_the_next_gauntlet_member
+
+RED confirmation #1 (build_bots's precondition assert removed):
+  test bots::greedy::tests::build_bots_panics_on_a_shortlist_beam_search_bound_to_a_non_human_kind - should panic ... FAILED
+  note: test did not panic as expected at src/bots/greedy.rs:1222:8
+
+RED confirmation #2 (Human arm reverted to always Bot::Human, ignoring seat.search):
+  test bots::greedy::tests::a_human_seat_with_a_shortlist_beam_search_builds_the_lookahead_bot ... FAILED
+  thread '...' panicked at src/bots/greedy.rs:1214:9:
+  expected a lookahead Bot::HumanPlan
+
+RED confirmation #3 (climb.rs's --gauntlet-search resolution stubbed to always Search::None):
+  test tests::a_gauntlet_search_flag_gives_that_member_the_shortlist_beam_hybrid ... FAILED
+    panicked: "--gauntlet-search must not leave the member at Search::None"
+  test tests::a_gauntlet_search_flag_is_rejected_when_the_member_is_not_human_kind ... FAILED
+    panicked: parse_args returned Ok(...) instead of Err (flag became a silent no-op)
+  test tests::a_gauntlet_search_override_applies_to_only_the_next_gauntlet_member ... FAILED
+    panicked: "the first member must have the hybrid search"
+All three fixes restored; full RED->GREEN cycle confirmed for each.
+
+Sanity smoke test (not a unit test, a real end-to-end run of the refactored kindmatch binary,
+confirming the Seat/Search unification didn't silently change kindmatch's own behaviour):
+  kindmatch --a human --a-search --b weighted \
+    --a-weights analysis/frozen/human_weights.json --b-weights analysis/frozen/champion_2p.json \
+    --games 24 --players 2 --threads 2 --seed 1
+  -> A win rate 100.00% +/- 0.00 (null 50.00%), no panic, ran to completion. (n=24 is small and
+  champion_2p.json is the STALE 78-key vector -- see below -- so the number itself is not
+  meaningful, only "it ran end to end through the new Seat/Search path with no behavioural
+  regression" is being checked here.)
+
+=== step 4: pool-veto measurement ===
+
+Question: with the human+search hybrid (`Search::HumanShortlistBeam`, ROOT_SHORTLIST=8,
+plan::pick beam, default max_nodes=4000) as a `--gauntlet`/pool member instead of the plain
+searchless `HumanBot`, does the pool veto (`Anchor::clearly_worse_than`: disjoint 90% CIs at
+`pool_games=60`) reject essentially every mutant candidate, freezing the climb?
+
+Method: a temporary #[ignore]-marked test in climb.rs (`measure_pool_veto_pass_rate_against_
+the_human_search_hybrid`, DELETED before landing -- this is a one-off measurement, not a
+correctness pin) generated 15 real mutants of a real 2p champion via climb's own `mutate`
+function at sigma=0.25 (the climb default initial step), then measured EACH of the SAME 15
+mutants (paired, not resampled) plus the champion itself ("incumbent"), each at pool_games=60
+(the production default), against three opponent seats in turn: `anchor` (built-in default
+weights, cfg.kind=weighted -- what the anchor veto already uses), `plain_human` (the
+searchless HumanBot the gauntlet uses today), and `hybrid_search` (the new
+Search::HumanShortlistBeam seat, eval_weights = the same champion vector). threads=2 throughout
+(box-sharing rule).
+
+Attempt 1 (DISCARDED, see below) used `analysis/frozen/champion_2p.json` as both the
+champion-under-test and the hybrid's eval_weights. That file turned out to be the STALE
+78-key, gen-220, 2026-07-26-era vector `analysis/frozen/README.md` explicitly warns is not
+representative of the current bot ("do not read them as describing the current bot") -- it
+lost EVERY SINGLE game (0.000 +/- 0.000, a literal 0/60) to the hybrid, and every one of the
+15 mutants also lost 94-100% of their games to it. That is a degenerate floor effect (you
+cannot be "clearly worse than" an incumbent that already lost 100% of its games -- 0 vetoes
+fired for that opponent for a reason that says nothing about the hybrid, only about the stale
+reference vector). This result (lines just below this note in the raw log) should be
+disregarded; recorded here only so the mistake and why it was wrong are not silently lost.
+
+Attempt 2 (the real answer) used `analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json`
+-- the 140-key, gen-19554, 2026-08-08 "LATE" cut `experiments/rust_league.sh` already feeds
+every live arm's own gauntlet (`GAUNTLET_2P_LATE`), and the date that matches this project's
+own "measured 2026-08-08" 65.62% hybrid-vs-champion figure this whole task started from --
+for both the champion-under-test AND the hybrid's eval_weights. Results (full per-candidate
+detail is the second `--- opponent=... ---` block above, appended by the test itself):
+
+    opponent        incumbent win rate      vetoes / 15 candidates
+    anchor          75.8% +/- 11.1%         1/15  (6.7%)
+    plain_human     87.5% +/- 9.4%          0/15  (0.0%)
+    hybrid_search   67.5% +/- 10.7%         1/15  (6.7%)
+
+Findings:
+1. The hybrid does NOT reject essentially every mutant. Its veto rate (1/15, one candidate)
+   is indistinguishable from the anchor's own rate (1/15) on the SAME 15 candidates, and both
+   are well short of "always fires" -- 14/15 candidates PASSED against the hybrid.
+2. It is not a floor effect this time either: the champion (a real, current, 140-key,
+   gen-19554 vector) wins 67.5% of its games against the hybrid -- a real, live contest, not
+   a wipeout in either direction. (The 65.62%-hybrid-wins figure this task cites was measured
+   against a DIFFERENT, presumably earlier, champion snapshot on 2026-08-08 -- the live
+   champion moves ~9,000 generations between the "early" and "late" 08-06/08-08 gauntlet cuts
+   per `analysis/frozen/gauntlet/README.md`'s own account of a nearly identical reversal for
+   the 3p arm, so two measurements days or generations apart landing on opposite sides of 50%
+   is exactly the kind of drift that README already documents, not a contradiction in this
+   measurement.)
+3. The ONE candidate the hybrid vetoed (candidate #12: 35.8% vs the champion's 67.5%) is the
+   SAME candidate the anchor also vetoed (30.0% vs the champion's 75.8%) -- both opponents
+   agree it is a genuinely bad mutation, not two independent false positives from noise. The
+   `plain_human` opponent almost caught it too (67.5% vs its own incumbent's 87.5%) but the
+   interval was 1.9 points too wide to be disjoint -- consistent with this file's own module
+   doc comment on the two-stage veto being generally underpowered at pool_games=60 (that is
+   a property of the STATISTICAL TEST at n=60, true for every pool member, not specific to
+   the hybrid).
+4. n=15 is a pilot, not a large sample -- but the fact that its anchor-vs-hybrid veto rates
+   land on the SAME count (1/15 each) on the SAME paired candidates, and that production's own
+   already-live anchor veto is independently known to fire "zero times across 2,075 real
+   generations" (this file's module doc comment, section 2) -- i.e. rare but nonzero over a
+   much bigger sample -- means this pilot's magnitude is not an outlier against known
+   production behaviour for an ordinary, already-trusted pool member.
+
+Recommendation: wire `--gauntlet-search` into production (`experiments/rust_league.sh`'s three
+`climb` invocations are OUT OF SCOPE for this task/clone -- that file lives outside `rust/` and
+the task said centre changes on greedy.rs/arena.rs/climb.rs; recommending the exact flags is as
+far as this task goes) as an ADDITIONAL gauntlet member alongside the existing ones, e.g.:
+
+    --gauntlet-kind human --gauntlet-search analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json \
+        --gauntlet analysis/frozen/human_weights.json
+
+using the EXISTING, UNCHANGED default thresholds (`--pool-games 60`, `--pool-confirm-games 300`,
+`POOL_CONFIRM_TRIGGER = -0.05`, `--accept-z 1.2816`) -- no new threshold or scoring change is
+justified by this measurement. The existing two-stage disjoint-CI design already treats the
+hybrid the same as every other pool member and produces a comparable, non-freezing veto rate;
+inventing a hybrid-specific threshold would be exactly the "silently pick a threshold and ship
+it" the task says not to do, and the data does not support one being necessary. Keep the plain
+searchless `--gauntlet` human member too (do not replace it) -- the pool veto's whole design
+principle is diversity of opponents, and losing the cheap, already-informative searchless
+member for the more expensive hybrid buys nothing.
+
+=== What changed vs. what did not ===
+Changed: `bots::greedy::Seat`/`Search` (new field/enum), `bots::greedy::build_bots` (Human-kind
+branch + precondition assert), `bin/kindmatch.rs`'s `--a-search`/`--b-search` construction path
+(now via Seat/Search, behaviourally unchanged -- confirmed by the smoke test above),
+`bin/climb.rs` (`--gauntlet-search` flag, `Config::gauntlet` entries can now carry search),
+plus the mechanical `search: Search::None`/`search: SeatSearch::None` field addition at every
+other pre-existing `Seat { ... }` literal in the crate (arena.rs, botcensus.rs, dump_selfplay.rs,
+behavcensus.rs) so the crate still compiles -- no behaviour change at any of those sites.
+Did NOT change: any existing default flag value, `experiments/rust_league.sh` or any other
+file outside `rust/`, the pool veto's threshold constants, `--a-policy`/`--b-policy`'s own
+separate construction path. `--gauntlet-search` is opt-in per `--gauntlet` member; omitting it
+(every existing invocation, including the three live `rust_league.sh` arms) is byte-for-byte
+unaffected.
+
+--- opponent=anchor incumbent=0.200+/-0.108 vetoes=1/15 --- (DISCARDED -- see note above; stale champion_2p.json)
+    candidate 0: mean=0.417 half=0.130 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 1: mean=0.233 half=0.117 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 2: mean=0.242 half=0.105 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 3: mean=0.283 half=0.127 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 4: mean=0.217 half=0.117 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 5: mean=0.208 half=0.115 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 6: mean=0.275 half=0.126 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 7: mean=0.250 half=0.127 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 8: mean=0.200 half=0.116 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 9: mean=0.200 half=0.093 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 10: mean=0.225 half=0.111 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 11: mean=0.233 half=0.095 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 12: mean=0.367 half=0.129 vs incumbent mean=0.200 half=0.108 -> pass
+    candidate 13: mean=0.000 half=0.000 vs incumbent mean=0.200 half=0.108 -> VETO
+    candidate 14: mean=0.200 half=0.116 vs incumbent mean=0.200 half=0.108 -> pass
+--- opponent=plain_human incumbent=0.500+/-0.147 vetoes=1/15 ---
+    candidate 0: mean=0.583 half=0.163 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 1: mean=0.567 half=0.153 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 2: mean=0.433 half=0.145 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 3: mean=0.550 half=0.133 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 4: mean=0.567 half=0.145 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 5: mean=0.600 half=0.114 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 6: mean=0.483 half=0.151 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 7: mean=0.567 half=0.136 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 8: mean=0.700 half=0.144 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 9: mean=0.583 half=0.163 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 10: mean=0.467 half=0.153 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 11: mean=0.442 half=0.129 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 12: mean=0.725 half=0.131 vs incumbent mean=0.500 half=0.147 -> pass
+    candidate 13: mean=0.192 half=0.103 vs incumbent mean=0.500 half=0.147 -> VETO
+    candidate 14: mean=0.683 half=0.134 vs incumbent mean=0.500 half=0.147 -> pass
+--- opponent=hybrid_search incumbent=0.000+/-0.000 vetoes=0/15 ---
+    candidate 0: mean=0.033 half=0.047 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 1: mean=0.025 half=0.038 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 2: mean=0.033 half=0.047 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 3: mean=0.067 half=0.065 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 4: mean=0.050 half=0.057 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 5: mean=0.033 half=0.047 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 6: mean=0.033 half=0.047 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 7: mean=0.083 half=0.086 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 8: mean=0.067 half=0.065 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 9: mean=0.017 half=0.034 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 10: mean=0.017 half=0.034 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 11: mean=0.000 half=0.000 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 12: mean=0.033 half=0.047 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 13: mean=0.000 half=0.000 vs incumbent mean=0.000 half=0.000 -> pass
+    candidate 14: mean=0.033 half=0.047 vs incumbent mean=0.000 half=0.000 -> pass
+--- attempt 2 (the real answer) -- current gen-19554 2p champion, raw per-candidate log ---
+--- opponent=anchor incumbent=0.758+/-0.111 vetoes=1/15 ---
+    candidate 0: mean=0.592 half=0.140 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 1: mean=0.717 half=0.144 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 2: mean=0.650 half=0.111 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 3: mean=0.658 half=0.135 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 4: mean=0.600 half=0.142 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 5: mean=0.700 half=0.093 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 6: mean=0.767 half=0.127 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 7: mean=0.717 half=0.106 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 8: mean=0.783 half=0.094 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 9: mean=0.758 half=0.119 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 10: mean=0.667 half=0.123 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 11: mean=0.667 half=0.111 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 12: mean=0.300 half=0.126 vs incumbent mean=0.758 half=0.111 -> VETO
+    candidate 13: mean=0.517 half=0.134 vs incumbent mean=0.758 half=0.111 -> pass
+    candidate 14: mean=0.783 half=0.106 vs incumbent mean=0.758 half=0.111 -> pass
+--- opponent=plain_human incumbent=0.875+/-0.094 vetoes=0/15 ---
+    candidate 0: mean=0.825 half=0.102 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 1: mean=0.967 half=0.047 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 2: mean=0.875 half=0.080 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 3: mean=0.967 half=0.047 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 4: mean=0.900 half=0.076 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 5: mean=0.917 half=0.071 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 6: mean=0.942 half=0.058 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 7: mean=0.900 half=0.076 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 8: mean=0.933 half=0.065 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 9: mean=0.925 half=0.082 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 10: mean=0.942 half=0.058 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 11: mean=0.858 half=0.097 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 12: mean=0.675 half=0.125 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 13: mean=0.900 half=0.076 vs incumbent mean=0.875 half=0.094 -> pass
+    candidate 14: mean=0.950 half=0.057 vs incumbent mean=0.875 half=0.094 -> pass
+--- opponent=hybrid_search incumbent=0.675+/-0.107 vetoes=1/15 ---
+    candidate 0: mean=0.783 half=0.103 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 1: mean=0.875 half=0.080 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 2: mean=0.633 half=0.109 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 3: mean=0.725 half=0.116 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 4: mean=0.700 half=0.126 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 5: mean=0.783 half=0.127 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 6: mean=0.783 half=0.106 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 7: mean=0.683 half=0.130 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 8: mean=0.717 half=0.127 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 9: mean=0.725 half=0.099 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 10: mean=0.808 half=0.114 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 11: mean=0.767 half=0.117 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 12: mean=0.358 half=0.106 vs incumbent mean=0.675 half=0.107 -> VETO
+    candidate 13: mean=0.650 half=0.111 vs incumbent mean=0.675 half=0.107 -> pass
+    candidate 14: mean=0.808 half=0.097 vs incumbent mean=0.675 half=0.107 -> pass
+
+=== step 5: full suite ===
+
+The temporary measurement test (`measure_pool_veto_pass_rate_against_the_human_search_hybrid`)
+was DELETED after this run -- it was a one-off experiment, not a correctness pin (its
+numbers are recorded above); it is not part of what `cargo test --profile difftest` runs.
+
+`cargo test --profile difftest -j 2 -- --test-threads=2` from rust/, full crate (lib + every
+bin's own tests + tests/suite integration tests + doctests):
+
+    1473 passed, 0 failed, 1 ignored (bench_playout::bench_random_playouts -- pre-existing,
+    unrelated to this change, an explicit #[ignore] benchmark not a skipped test)
+
+No conflict markers found in src/ before committing.
+
+=== summary ===
+
+Verified (step 1): Seat had exactly {kind, weights}, no search field. kindmatch's
+--a-search/--b-search bypassed Seat/build_bots entirely via a hand-built Bot::human_plan
+overwrite, because Bot::human_plan needs two Weights vectors and Seat only carried one.
+climb's --gauntlet/--gauntlet-kind built every gauntlet member through arena::loader_for into
+a plain Seat, which build_bots could only ever turn into a searchless Bot::Human. All three
+confirmed correct; built directly on this premise.
+
+Built (steps 2-3): bots::greedy::Search (None | HumanShortlistBeam{eval_weights}), added as a
+third Seat field (Seat stays Copy). build_bots asserts the precondition (HumanShortlistBeam
+only on a Human-kind seat) instead of silently ignoring it. kindmatch's --a-search/--b-search
+now construct the Seat's search field up front and go through the ordinary build_bots -- no
+more hand-built bypass for that pair of flags (--a-policy/--b-policy, which need a non-Copy
+Arc<ValueNet>, are untouched, out of scope). climb gained --gauntlet-search PATH, applying to
+only the NEXT --gauntlet member, mirroring --gauntlet-kind's own semantics exactly, with a
+parse-time rejection if that member's kind isn't human. Six new/updated tests, each confirmed
+RED by reverting its fix and pasting the failure.
+
+Measured (step 4): with a real, current 2p champion (gen19554, 140-key, 2026-08-08 -- the same
+snapshot family production's own gauntlet already uses), the hybrid opponent's pool-veto fire
+rate on 15 real mutants (sigma=0.25) was 1/15 (6.7%) -- statistically indistinguishable from
+the anchor's own rate on the SAME 15 candidates (also 1/15), and the one candidate it did veto
+was the same one the anchor independently flagged. It does not freeze the climb. (An earlier
+attempt using a stale, superseded 78-key/gen-220 champion file produced a degenerate 0%
+result and was discarded -- see the "DISCARDED" note above; the mistake is left in the log on
+purpose.)
+
+Recommendation: no new threshold or scoring change. Wire the hybrid in as an ADDITIONAL
+--gauntlet member (keep the existing plain searchless one too) using the existing default
+--pool-games/--pool-confirm-games/POOL_CONFIRM_TRIGGER/--accept-z, unchanged. The concrete
+flags: `--gauntlet-kind human --gauntlet-search analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json
+--gauntlet analysis/frozen/human_weights.json`. This is a recommendation for whoever edits
+`experiments/rust_league.sh` (outside rust/, outside this task's scope) to act on -- not
+applied here.
+
+Default behaviour: --gauntlet-search is opt-in per --gauntlet member. Every existing
+invocation of climb (including production's three live rust_league.sh arms) that does not
+pass it is byte-for-byte unaffected -- this is the explicit, documented default this change
+ships with, not a silent no-op nor a silent behaviour change.

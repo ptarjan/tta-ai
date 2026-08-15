@@ -32,7 +32,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::bots::greedy::{build_bots, BotKind, Seat};
+use crate::bots::greedy::{build_bots, BotKind, Search, Seat};
 use crate::bots::weighted::weights::Weights;
 use crate::game::{self, MOVE_CAP};
 use crate::human_policy;
@@ -122,7 +122,7 @@ impl Match {
     /// A duel of the built-in vector against itself -- the shape every caller
     /// starts from and overwrites the fields it cares about.
     pub fn new(players: u8) -> Match {
-        let defaults = Seat { kind: BotKind::Weighted, weights: Weights::defaults() };
+        let defaults = Seat { kind: BotKind::Weighted, weights: Weights::defaults(), search: Search::None };
         Match { a: defaults, b: defaults, games: players as usize * 20, players, seed: 0, threads: 1 }
     }
 
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn a_same_kind_configuration_seats_every_player_with_that_one_kind() {
         let kind = BotKind::Greedy;
-        let seat = Seat { kind, weights: Weights::defaults() };
+        let seat = Seat { kind, weights: Weights::defaults(), search: Search::None };
         for players in [2u8, 3, 4] {
             let m = Match { a: seat, b: seat, ..Match::new(players) };
             for i in 0..players as usize {
@@ -357,8 +357,8 @@ mod tests {
     /// vice versa).
     #[test]
     fn a_mixed_kind_match_seats_each_side_with_its_own_kind() {
-        let a = Seat { kind: BotKind::Human, weights: Weights::defaults() };
-        let b = Seat { kind: BotKind::Weighted, weights: Weights::defaults() };
+        let a = Seat { kind: BotKind::Human, weights: Weights::defaults(), search: Search::None };
+        let b = Seat { kind: BotKind::Weighted, weights: Weights::defaults(), search: Search::None };
         let m = Match { a, b, ..Match::new(3) };
         for seat in 0..3 {
             for (i, s) in m.seats_for(seat).iter().enumerate() {

@@ -753,6 +753,41 @@ pub fn classify(index: &HashMap<&'static str, CardId>, text: &str) -> LineOutcom
         });
         return LineOutcome::Action(Classified { class: ActionClass::ColumbusColonize, card });
     }
+    // International Agreement (Code of Laws p.12): "The strongest
+    // civilization may immediately take up to 5 civil actions in cards...".
+    // BGO logs the FIRST pick right on the event's own name --
+    // "International Agreement <Color> takes <Card> in hand" -- with any
+    // FURTHER picks the same civilization makes tacked onto the SAME line
+    // as additional ";"-joined "<Color> takes <Card> in hand" clauses
+    // (`replay_common::replay_game`'s own dedicated branch walks those,
+    // mirroring how it already walks Barbarossa/Alexander/Columbus's other
+    // "no leading colour" shapes). Checked before this function's generic
+    // "a known card name leads the line" `Bookkeeping` catch-all below for
+    // the same reason Columbus is, just above: "International Agreement"
+    // is itself a card name and would otherwise be silently swallowed
+    // there, discarding whatever card it hands the taker -- found chasing
+    // the `IllegalMove: WonderStep` bucket (game `7522543`: Kremlin arrives
+    // this way, and BGO never logs any OTHER line naming it in Purple's
+    // hand before the build this bucket refused). A bare "International
+    // Agreement" line, or one ending "declines international agreement",
+    // is a genuine decline with no state of its own -- falls through to
+    // the generic catch-all below, `Bookkeeping` either way.
+    if let Some(after) = text.strip_prefix("International Agreement ") {
+        for color in [Color::Orange, Color::Purple, Color::Green, Color::Grey] {
+            let Some(take_rest) =
+                after.strip_prefix(color.as_str()).and_then(|r| r.strip_prefix(' ')).and_then(|r| r.strip_prefix("takes "))
+            else {
+                continue;
+            };
+            return match take_rest.find(" in hand") {
+                Some(card_end) => match longest_known_card_prefix(index, &take_rest[..card_end]) {
+                    Some((id, _)) => LineOutcome::Action(Classified { class: ActionClass::TakeCard, card: Some(id) }),
+                    None => LineOutcome::Unclassified,
+                },
+                None => LineOutcome::Unclassified,
+            };
+        }
+    }
     // J. S. Bach's leader ability (a free tech upgrade each round) is the
     // one line BGO prints with NO space at all between the leader's name
     // and the verb -- "Johannes Sebastian Bachupgrades Religion to Opera
@@ -1121,6 +1156,84 @@ pub fn classify_tactic(index: &HashMap<&'static str, CardId>, after: &str) -> Li
         }
         None => LineOutcome::Unclassified,
     }
+}
+
+// ---------------------------------------------------------------------
+// End-of-game "WINNER IS ..." line parsing -- moved here (from
+// `bin/humanwinners.rs`, its original and still only caller) so a second
+// binary (`bin/humanopenings.rs`, the canonical-openings measurement pass)
+// can determine per-seat win/loss from the SAME text-only parse instead of
+// gating outcome on full engine-replay completion (`GameResult::
+// engine_scores`, `Some` only for the ~20% of games whose reconstruction
+// reaches the literal end -- see `docs/CHAMPION_VS_HUMANS.md`'s
+// "Completion" note). Text coverage is far higher: nearly every journal
+// carries its own "WINNER IS ... AS <COLOR> (<N> PTS); 2nd is ... ..." line
+// regardless of whether this crate's replay can reconstruct that far.
+// ---------------------------------------------------------------------
+
+/// Case-insensitive byte-level search for a pure-ASCII marker. Never
+/// lowercases `text` itself (which may contain multi-byte UTF-8 names, e.g.
+/// "PLAYER") -- only compares fixed-width ASCII windows, so the
+/// returned offset is always a valid char boundary in the ORIGINAL string
+/// (an ASCII byte can only ever match itself, never a UTF-8 continuation
+/// byte).
+pub fn find_ascii_ci(text: &str, marker: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let m = marker.as_bytes();
+    if bytes.len() < m.len() {
+        return None;
+    }
+    for i in 0..=(bytes.len() - m.len()) {
+        if bytes[i..i + m.len()].eq_ignore_ascii_case(m) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Uppercases the first char, lowercases the rest -- normalises BGO's
+/// "ORANGE" (the winner clause is upper-case) and "Green" (every other rank
+/// clause is title-case) to the one spelling `Color::parse` accepts.
+pub fn title_case(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+        None => String::new(),
+    }
+}
+
+/// Leading run of ASCII digits (optionally preceded by whitespace), parsed
+/// as `i32`. `None` if the trimmed text does not start with a digit.
+pub fn leading_int(s: &str) -> Option<i32> {
+    let s = s.trim_start();
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    if end == 0 {
+        return None;
+    }
+    s[..end].parse().ok()
+}
+
+/// One rank-clause from the "End of game" line: `"WINNER IS <NAME> AS
+/// <COLOR> (<N> PTS)"` (rank 1, always upper-case "AS") or `"2nd/3rd/4th is
+/// <name> as <Color> (<n> pts)"` (rank 2-4, title-case "as"). Parsed by
+/// scanning for the `" as "` marker (case-insensitive) rather than the
+/// ordinal text, since the marker is what's common to every clause. Caller
+/// passes the substring starting at `"WINNER IS"` (or wherever the whole
+/// rank-clause list begins); clauses are `"; "`-separated.
+pub fn parse_winner_line(s: &str) -> Vec<(u8, Color, i32)> {
+    let mut out = Vec::new();
+    let mut rank: u8 = 0;
+    for clause in s.split("; ") {
+        let Some(as_pos) = find_ascii_ci(clause, " as ") else { continue };
+        let after = &clause[as_pos + 4..];
+        let word: String = after.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+        let Some(color) = Color::parse(&title_case(&word)) else { continue };
+        let Some(paren) = after.find('(') else { continue };
+        let Some(score) = leading_int(&after[paren + 1..]) else { continue };
+        rank += 1;
+        out.push((rank, color, score));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------
@@ -1517,6 +1630,42 @@ mod tests {
     }
 
     #[test]
+    fn international_agreement_take_line_is_a_take_card_action_not_bookkeeping() {
+        // Regression: "International Agreement" is itself a known card
+        // name, so this line used to match the generic "known card name
+        // leads the line" `Bookkeeping` catch-all and get silently dropped
+        // -- the SAME shape as Columbus above -- discarding whatever card
+        // it hands the taker. Chasing the `IllegalMove: WonderStep` bucket:
+        // game `7522543`'s Kremlin arrives this way, with no other journal
+        // line ever naming it in Purple's hand before the build this bucket
+        // refused.
+        let index = idx();
+        let line = "International Agreement Purple takes Kremlin in hand; Purple takes Efficient Upgrade in hand";
+        let LineOutcome::Action(c) = classify(&index, line) else {
+            panic!("expected an action, not bookkeeping");
+        };
+        assert_eq!(c.class, ActionClass::TakeCard);
+        assert_eq!(c.card, index.get("Kremlin").copied());
+    }
+
+    #[test]
+    fn international_agreement_decline_line_is_bookkeeping() {
+        // "<Color> declines international agreement" and a bare
+        // "International Agreement" line (nobody eligible, or the whole
+        // offer silently declined) carry no state of their own -- the
+        // `Pending::Choice(TakeRow)` the event's own resolution already
+        // opened drains itself via `resolve_intervening`'s own decider-
+        // mismatch/no-upcoming-match fallback, the same "no journal trace
+        // for a silent decline" precedent as `FreeBuild`.
+        let index = idx();
+        assert!(matches!(
+            classify(&index, "International Agreement Orange declines international agreement"),
+            LineOutcome::Bookkeeping
+        ));
+        assert!(matches!(classify(&index, "International Agreement"), LineOutcome::Bookkeeping));
+    }
+
+    #[test]
     fn barbarossa_enlist_line_is_a_barbarossa_action_not_bookkeeping() {
         // Regression: this line used to be treated as flavour text and
         // silently dropped, discarding both the free population increase
@@ -1654,5 +1803,27 @@ mod tests {
         let mut names: Vec<&str> = family_siblings(card("Rich Land (A)")).iter().map(|id| id.get().name).collect();
         names.sort_unstable();
         assert_eq!(names, ["Rich Land (A)", "Rich Land (I)", "Rich Land (II)"]);
+    }
+
+    /// A real 2p BGO "End of game" clause list, rank-1 upper-case "AS",
+    /// rank-2 title-case "as" -- both shapes must parse in one call, in
+    /// clause order, since `parse_game`/`parse_winner_line`'s only caller
+    /// relies on the first tuple in the output being rank 1 (the winner).
+    #[test]
+    fn parse_winner_line_reads_both_rank_1_upper_and_rank_2_title_case_as_clauses() {
+        let line = "WINNER IS PLAYER AS ORANGE (195 PTS); 2nd is PLAYER as Purple (160 pts)";
+        let ranks = parse_winner_line(line);
+        assert_eq!(ranks, vec![(1, Color::Orange, 195), (2, Color::Purple, 160)]);
+    }
+
+    /// A clause with no recognisable colour word after `" as "` (e.g. a
+    /// display name that happens to contain the literal substring) must be
+    /// skipped rather than panicking or miscounting rank for the clauses
+    /// that follow it.
+    #[test]
+    fn parse_winner_line_skips_an_unparseable_clause_without_breaking_rank_count_for_the_rest() {
+        let line = "WINNER IS Nobody AS Nowhere (0 PTS); 2nd is Real Player as Green (12 pts)";
+        let ranks = parse_winner_line(line);
+        assert_eq!(ranks, vec![(1, Color::Green, 12)]);
     }
 }

@@ -1,0 +1,196 @@
+BOARDSCALED.txt -- pricing the 17 "board-scaled" DELIBERATELY_UNPRICED effects
+================================================================================
+Scratch clone: /private/tmp/actionprice, starting HEAD b075860 (do not revert
+c94ce90 or b075860).
+
+CENTRAL FINDING (2026-08-13, confirmed empirically before writing any new
+code): all 17 effects are ALREADY priced by existing machinery. No new rider
+functions, no new WeightKeys were needed. Here is why.
+
+  * Every carrier card for all 17 keys is a Leader or a Wonder (never an
+    Action/Tech/Government/etc).
+  * `effects::compute` (rust/src/effects.rs:1324) calls
+    `apply_special(&mut stats, p, sp)` for EVERY `Special` on the player's
+    government, tableau, wonders, leader, and colonies -- and
+    `apply_special` (effects.rs:980) already has a correct, well-commented
+    match arm for every one of the 17 Special variants (CulturePerTheater,
+    CulturePerLabEqualToLevel, SciencePerLab, CulturePerLibraryTheaterPair,
+    CulturePerHappyFromTemplesTheatersWonders, BestTheaterDoubleCulture,
+    SciencePerBestLabOrLibraryLevel, ResourcesPerLabEqualToLevel,
+    DoubleBestMine, ExtraHappyPerHappySource, StrengthPerInfantry,
+    StrengthPerArtillery, StrengthPerMilitaryUnit, StrengthPerUnitType,
+    StrengthPerTempleOrGovernmentHappy, CultureFirstColony,
+    CulturePerAdditionalColony) -- each folding straight into
+    `Stats.culture`/`.science`/`.strength`/`.resources`/`.happy`.
+  * `board_yields::board_yields` (board_yields.rs:778) already runs a
+    GENERIC swap diff for any Leader/Government/Wonder: clone the player,
+    swap the card in, `effects::compute` the clone, and `delta_triples`
+    (board_yields.rs:353) reads `STATS_FEATURES` (culture -> CultureRate,
+    science -> ScienceRate, strength -> Strength, resources -> ResourceRate,
+    happy -> HappyMargin, ...) before/after. Since `apply_special` already
+    wrote the board-scaled contribution into those exact `Stats` fields, the
+    diff picks it up with ZERO extra code -- exactly the same path a leader's
+    flat printed `effects.culture` goes through.
+  * `card_potential_core` (weighted/cards.rs:1730) dispatches Leader cards
+    through this generic path when `WeightKey::CardBoardLeader != 0.0`, and
+    Wonder cards through the same `board_yields::board_yields` call when
+    `WeightKey::WonderBoardCredit != 0.0` (cards.rs:1758-1781). Both credits
+    are live coordinates the hill climb already trains.
+
+PROOF (before touching any pricing code): added a throwaway test to
+board_yields.rs -- 2p fresh game, player 0 given 3 workers on "Drama"
+(a Theater), then `board_yields(CardId::by_name("J. S. Bach"), &baseline)`.
+Result:
+    [(CultureRate, 3.0, Gain), (Leader, 1.0, Gain)]
+3 theater workers x Bach's printed CulturePerTheater(1) = 3.0 CultureRate,
+already correct, before any of my changes. Probe deleted after confirming.
+
+CONSEQUENCE FOR THE TASK: this is bookkeeping + test coverage, not new
+pricing code. The task's HARD CONSTRAINT ("no new WeightKeys, no flat
+per-card weights, price through existing feature/WeightKey coordinates") is
+satisfied trivially because the existing generic diff already routes through
+CultureRate/ScienceRate/Strength/ResourceRate/HappyMargin.
+
+WORK DONE:
+  1. Removed all 17 keys from `DELIBERATELY_UNPRICED`
+     (rust/src/bots/weighted/cards.rs), rewrote bucket 8's doc comment to
+     explain the reclassification.
+  2. Added all 17 to `PRICED_ELSEWHERE`, each citing the exact
+     `apply_special` match arm and the scaling test that pins it (see below).
+  3. Added scaling tests to `rust/src/bots/board_yields.rs`'s `#[cfg(test)]`
+     mod, one per card (grouping keys that share a carrier: Sid Meier x2,
+     Great Wall x2, James Cook x2) -- 14 tests covering all 17 keys.
+
+REUSED FUNCTIONS (rules-engine computation cited per effect, per task step 1):
+  culturePerTheater                        -> effects::apply_special (CulturePerTheater arm)
+  culturePerLabEqualToLevel                -> effects::apply_special (CulturePerLabEqualToLevel arm)
+  sciencePerLab                            -> effects::apply_special (SciencePerLab arm, negative coefficient)
+  culturePerLibraryTheaterPair             -> effects::apply_special (CulturePerLibraryTheaterPair arm)
+  culturePerHappyFromTemplesTheatersWonders-> effects::apply_special (+ effects::temple_theater_wonder_happy_source_count)
+  bestTheaterDoubleCulture                 -> effects::apply_special (BestTheaterDoubleCulture arm, uses effects::best_staffed)
+  sciencePerBestLabOrLibraryLevel          -> effects::apply_special (SciencePerBestLabOrLibraryLevel arm)
+  resourcesPerLabEqualToLevel              -> effects::apply_special (ResourcesPerLabEqualToLevel arm)
+  doubleBestMine                           -> effects::apply_special (DoubleBestMine arm)
+  extraHappyPerHappySource                 -> effects::apply_special (+ effects::happy_source_count)
+  strengthPerInfantry                      -> effects::apply_special (StrengthPerInfantry arm)
+  strengthPerArtillery                     -> effects::apply_special (StrengthPerArtillery arm)
+  strengthPerMilitaryUnit                  -> effects::apply_special (StrengthPerMilitaryUnit arm)
+  strengthPerUnitType                      -> effects::apply_special (StrengthPerUnitType arm)
+  strengthPerTempleOrGovernmentHappy       -> effects::apply_special (StrengthPerTempleOrGovernmentHappy arm)
+  cultureFirstColony                       -> effects::apply_special (CultureFirstColony arm)
+  culturePerAdditionalColony               -> effects::apply_special (CulturePerAdditionalColony arm)
+
+All 17 dispatched to the evaluator through the SAME generic mechanism:
+board_yields::board_yields -> swap_stats -> effects::compute -> apply_special,
+then board_yields::delta_triples reading STATS_FEATURES. No bespoke rider
+function was written for any of the 17 (unlike Genghis/Churchill/Hammurabi,
+whose effects live OUTSIDE Stats/compute entirely, in economy.rs/combat.rs
+one-shot triggers -- genuinely different shape, genuinely needed a rider).
+
+STATUS: DONE. All 17 effects reclassified and tested; full suite green;
+sanity check confirms no behaviour change (as expected, since no pricing
+logic was touched).
+
+RED CONFIRMATION (task step 5)
+-------------------------------
+Confirmed RED for 3 representative effects by temporarily neutering the
+corresponding `apply_special` match arm in rust/src/effects.rs (replacing
+the body with a comment, so the Special variant still matches but adds
+nothing to Stats), then re-running `cargo test --profile difftest
+board_yields::` and capturing the failures verbatim, then reverting
+(`git checkout -- rust/src/effects.rs`, since it was clean/committed).
+
+1. CulturePerTheater (Bach) disabled:
+
+thread 'bots::board_yields::tests::bachs_culture_per_theater_scales_with_theater_workers' (48782715) panicked at src/bots/board_yields.rs:1159:9:
+assertion `left == right` failed: 1 theater worker: [(Leader, 1.0, Gain)]
+  left: 0.0
+ right: 1.0
+
+2. CulturePerLabEqualToLevel (Sid Meier) disabled:
+
+thread 'bots::board_yields::tests::sid_meiers_culture_and_science_per_lab_scale_with_lab_level_and_count' (48782729) panicked at src/bots/board_yields.rs:1196:9:
+assertion `left == right` failed: 2 labs x level 1: [(ScienceRate, -2.0, Gain), (Leader, 1.0, Gain)]
+  left: 0.0
+ right: 2.0
+
+3. StrengthPerMilitaryUnit (Alexander) disabled:
+
+thread 'bots::board_yields::tests::alexanders_strength_scales_with_total_military_units' (48782714) panicked at src/bots/board_yields.rs:1460:9:
+2 unit workers must be a real gain, not just a tautological 0 == 0: [(Leader, 1.0, Gain)]
+
+Bug found and fixed while doing this: disabling StrengthPerMilitaryUnit
+initially left alexanders_strength_scales_with_total_military_units GREEN
+(a false pass) because the test only asserted `strength_at(&s4) == 2.0 *
+strength_at(&s2)` -- with the arm disabled both sides went to 0 and the
+tautology "0 == 2*0" passed. Same bug in
+napoleons_strength_scales_with_distinct_unit_types, which compared a value
+to `.max(0.0)` of ITSELF (always true). Fixed both by adding an explicit
+`assert!(... > 0.0, ...)` before the ratio check; re-ran with the arm
+disabled again and got the real failure shown above. Committed separately
+(6ce8e00) since it was found and fixed after the main commit landed.
+
+Other 12 board-scaled tests were not individually RED-confirmed by
+disabling their own apply_special arm (budget), but all assert a strict
+scaling relationship (either an exact multiple, or a `>` between two
+distinct board configurations, all with an explicit nonzero floor after
+the tautology sweep above) against a REAL board-derived value pulled out
+of `board_yields()`'s actual return -- not a hand-computed expected
+constant that could silently drift from the rule. The tautology bug found
+above was specific to the two "> and self-referential" test shapes; the
+rest use either an exact `assert_eq!` against an independently-derived
+expected value (e.g. `movies.get().production.culture as f64`) or a
+strict inequality between two non-identical scenarios, neither of which
+can pass on an accidental 0.
+
+FULL SUITE (task step 7)
+-------------------------
+`cargo test --profile difftest` (backgrounded, polled, EXIT appended):
+  lib: 1286 passed; 0 failed; 0 ignored
+  every other test binary (advisor, agreefit, ..., tests/suite/main.rs):
+    0 failures across all of them
+  EXIT=0
+No newly failing test at any point; the ONE failure seen mid-session
+(every_weight_key_is_named_by_production_source_outside_its_own_declaration,
+"gov_action_cost" false negative) was self-inflicted by a doc comment of
+mine that spelled out the literal `#[cfg(test)]` token (see commit
+8070678's message) and was fixed before the first commit landed -- it
+never reached a commit.
+
+SANITY READ (task step 8)
+---------------------------
+Copied /private/tmp/ipadgame/champion_2p_game.json (a climb-arm weights
+snapshot: gen/players/sigma/since_accept/vs_anchor/weights, NOT a saved
+board) to a scratch path, never touching /Users/pt/tta-ai. Loaded those
+weights via `eval::load_weights`, built a fresh round-1 2p game, and
+scored `card_potential` for the 5 named cards (using the Age-A printed
+names: "Engineering Genius (A)", "Rich Land (A)", "Hammurabi",
+"Cultural Heritage (A)", "Urban Growth (A)") in a throwaway test
+(not committed -- removed after reading the result).
+
+Ranking observed: Cultural Heritage (A) > Engineering Genius (A) >
+Rich Land (A) = Urban Growth (A) > Hammurabi.
+
+Result: NO CHANGE, and provably so, not just empirically so -- diffed
+`git diff b075860 HEAD -- rust/src/bots/weighted/cards.rs
+rust/src/bots/board_yields.rs` and every added line is either a string
+literal inside the DELIBERATELY_UNPRICED/PRICED_ELSEWHERE audit tables
+(data consumed only by the coverage test, never by card_potential/
+board_yields/apply_special at runtime) or a new `#[test]` fn inside an
+existing `#[cfg(test)] mod`. Zero lines of the actual pricing code
+(board_yields(), delta_triples(), apply_special(), card_potential_core())
+changed between b075860 and HEAD, so this ranking is byte-identical to
+what b075860 would have produced -- there was no code path by which it
+COULD have moved. Matches the task's expectation exactly (none of the 5
+carries any of the 17 reclassified effects).
+
+COMMITS
+-------
+8070678 Reclassify 17 "board-scaled" effects: already priced, not unpriced
+         (the 17-key move from DELIBERATELY_UNPRICED to PRICED_ELSEWHERE,
+         14 new scaling tests in board_yields.rs, BOARDSCALED.txt)
+6ce8e00 Fix two tautological assertions found while confirming RED
+         (alexanders_.../napoleons_... nonzero-floor fix)
+
+Starting HEAD was b075860, per the task's constraint; neither b075860 nor
+c94ce90 was reverted or amended.

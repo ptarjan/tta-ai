@@ -40,7 +40,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use tta::bots::greedy::{build_bots, BotKind, Seat};
+use tta::bots::greedy::{build_bots, BotKind, Search, Seat};
 use tta::bots::weighted::eval::load_weights;
 use tta::bots::weighted::weights::Weights;
 use tta::cards::Special;
@@ -234,6 +234,22 @@ struct Report {
     n_player_games_no_wonder_by_round4: u64,
     n_player_games: u64,
 
+    // ---- opening, human-comparable schema (`bin/humanopenings.rs`'s
+    // schema -- see `PlayerTrack`'s own doc). Each map's value is (wins,
+    // total) so a win-rate can be printed next to every count, matching
+    // `docs/OPENINGS.txt`'s own requirement that a rate always carry its
+    // sample size.
+    opening_first_take: HashMap<&'static str, (u64, u64)>,
+    opening_first_build_kind: HashMap<&'static str, (u64, u64)>,
+    opening_leader_r3: HashMap<bool, (u64, u64)>,
+    opening_pop_r3: HashMap<bool, (u64, u64)>,
+    opening_ca_unused: HashMap<i32, u64>,
+    /// Player-games excluded from every win-rate map above because this
+    /// game hit `MOVE_CAP` (`play_one`'s `cap_hit`) rather than reaching a
+    /// real `state.game_over` -- there is no winner to attribute, matching
+    /// how `bin/humanopenings.rs` reports `"unknown"` rather than guessing.
+    opening_outcome_unknown: u64,
+
     // ---- wonders ----
     wonders_completed_per_playergame: Vec<i32>,
     wonders_started_per_playergame: Vec<i32>,
@@ -273,6 +289,13 @@ impl Report {
         self.n_player_games_no_wonder_by_round4 += other.n_player_games_no_wonder_by_round4;
         self.n_player_games += other.n_player_games;
 
+        merge_pair_map(&mut self.opening_first_take, other.opening_first_take);
+        merge_pair_map(&mut self.opening_first_build_kind, other.opening_first_build_kind);
+        merge_pair_map(&mut self.opening_leader_r3, other.opening_leader_r3);
+        merge_pair_map(&mut self.opening_pop_r3, other.opening_pop_r3);
+        merge_count_map(&mut self.opening_ca_unused, other.opening_ca_unused);
+        self.opening_outcome_unknown += other.opening_outcome_unknown;
+
         self.wonders_completed_per_playergame.extend(other.wonders_completed_per_playergame);
         self.wonders_started_per_playergame.extend(other.wonders_started_per_playergame);
         self.wonders_abandoned_per_playergame.extend(other.wonders_abandoned_per_playergame);
@@ -291,13 +314,33 @@ impl Report {
         self.n_playergames_with_age2_sample += other.n_playergames_with_age2_sample;
 
         for i in 0..5 {
-            self.age_samples[i].extend(other.age_samples[i].drain(..));
+            self.age_samples[i].append(&mut other.age_samples[i]);
         }
         self.final_score.extend(other.final_score);
     }
 }
 
 fn merge_map(a: &mut HashMap<&'static str, u64>, b: HashMap<&'static str, u64>) {
+    for (k, v) in b {
+        *a.entry(k).or_insert(0) += v;
+    }
+}
+
+/// Generic (wins, total) accumulator merge -- shared by every
+/// `opening_*` map in [`Report`], whose keys differ (`&'static str`,
+/// `bool`) but whose value shape (a running win/total pair, so a win-rate
+/// can be printed with its own sample size) does not.
+fn merge_pair_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, (u64, u64)>, b: HashMap<K, (u64, u64)>) {
+    for (k, (w, t)) in b {
+        let e = a.entry(k).or_insert((0, 0));
+        e.0 += w;
+        e.1 += t;
+    }
+}
+
+/// Generic plain-count map merge (no win/total pairing) -- used by
+/// [`Report::opening_ca_unused`], keyed by `i32`.
+fn merge_count_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, u64>, b: HashMap<K, u64>) {
     for (k, v) in b {
         *a.entry(k).or_insert(0) += v;
     }
@@ -319,6 +362,27 @@ struct PlayerTrack {
     first_gov_change_round: Option<u16>,
     wars_declared: u32,
     aggressions: u32,
+
+    // ---- opening, human-comparable schema (`bin/humanopenings.rs`'s own
+    // 10-column TSV: game_id/seat/first_take_name/first_take_cost/
+    // first_build_kind/first_build_name/leader_by_r3/pop_by_r3/
+    // ca_unused_by_r3/outcome) -- kept as SEPARATE fields from the ones
+    // above (rather than reusing `first_take`/`first_wonder_round`) so this
+    // binary's pre-existing opening report is untouched and the new
+    // divergence-table comparison reads off an identical definition on both
+    // sides, not two definitions that happen to look similar.
+    /// Separate from `first_take` above on purpose: `first_take` is gated
+    /// on `pre_age == Age::A` (this file's own pre-existing convention),
+    /// while this one matches `bin/humanopenings.rs`'s gate exactly
+    /// (`round_before <= 3`, no age restriction) -- Age A can end before
+    /// round 3 in a fast game, so the two conditions are NOT the same set
+    /// of moves and must not share a field.
+    first_take_name: Option<&'static str>,
+    first_take_cost: Option<i32>,
+    first_build: Option<(&'static str, &'static str)>,
+    took_leader_r3: bool,
+    increased_pop_r3: bool,
+    ca_unused_r3: i32,
 }
 
 impl PlayerTrack {
@@ -333,7 +397,32 @@ impl PlayerTrack {
             first_gov_change_round: None,
             wars_declared: 0,
             aggressions: 0,
+            first_take_name: None,
+            first_take_cost: None,
+            first_build: None,
+            took_leader_r3: false,
+            increased_pop_r3: false,
+            ca_unused_r3: 0,
         }
+    }
+}
+
+/// Maps a built/developed/upgraded-into card's [`CardType`] to the same
+/// coarse bucket names `bin/humanopenings.rs::build_kind` uses, so the two
+/// binaries' "first build kind" distributions are directly comparable.
+fn opening_build_kind(kind: tta::CardType) -> &'static str {
+    use tta::CardType;
+    match kind {
+        CardType::Farm => "Farm",
+        CardType::Mine => "Mine",
+        CardType::Temple => "Temple",
+        CardType::Lab => "Lab",
+        CardType::Library => "Library",
+        CardType::Arena => "Arena",
+        CardType::Theater => "Theater",
+        CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => "Military",
+        CardType::Wonder => "WonderStage",
+        CardType::Government | CardType::SpecialTech | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => "Other",
     }
 }
 
@@ -381,7 +470,7 @@ fn infiltrate_candidate_victim(state: &tta::GameState, mv: Move) -> Option<u8> {
         Some(Pending::Defense(d)) if d.card.get().special.contains(&Special::RemoveFromGame) => Some(d.player),
         Some(Pending::Choice(c)) => match c.kind {
             ChoiceKind::Infiltrate { victim, .. } => Some(victim),
-            _ => None,
+            ChoiceKind::GainBlock | ChoiceKind::FreeCivil { .. } | ChoiceKind::FoodOrRes { .. } | ChoiceKind::FreeBuild | ChoiceKind::DestroyOwn | ChoiceKind::LosePop | ChoiceKind::LoseColony | ChoiceKind::FlipWonder | ChoiceKind::DiscardMilitary | ChoiceKind::Raid { .. } | ChoiceKind::Annex { .. } | ChoiceKind::PactOffer { .. } | ChoiceKind::TakeRow { .. } | ChoiceKind::WarTech { .. } | ChoiceKind::PlunderSplit { .. } | ChoiceKind::FoodOrResSplit { .. } => None,
         },
         _ => None,
     }
@@ -410,7 +499,8 @@ fn classify_wonder_change(
 }
 
 fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
-    let seats: Vec<Seat> = (0..players).map(|_| Seat { kind: BotKind::Weighted, weights }).collect();
+    let seats: Vec<Seat> =
+        (0..players).map(|_| Seat { kind: BotKind::Weighted, weights, search: Search::None }).collect();
     let mut bots = build_bots(&seats, seed as i64);
     let mut state = game::new_game(players, seed);
 
@@ -432,8 +522,17 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // pre-move info needed for classification
         let taken_card = match mv {
             Move::Take { slot } => Some(state.card_row[slot as usize]),
-            _ => None,
+            Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
         };
+        // Cost must be read PRE-move (`tta::costs::take_cost` reads the
+        // row/player state a `Move::Take` is about to consume) -- same
+        // reason `bin/humanopenings.rs` reads it off `d.state` before
+        // applying the human's move, not after.
+        let taken_card_cost = match mv {
+            Move::Take { slot } => Some(tta::costs::take_cost(&state, &state.players[actor as usize], slot as usize)),
+            Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+        };
+        let ca_before_move = state.players[actor as usize].civil_actions;
         let pre_govt = state.players[actor as usize].government;
         let pre_age = state.age_civil;
 
@@ -505,6 +604,40 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             tracks[actor as usize].aggressions += 1;
         }
 
+        // ---- opening, human-comparable schema (round_before <= 3 only,
+        // matching `bin/humanopenings.rs`'s own `d.state.round > 3`
+        // filter -- both read the round the decision was MADE in, not the
+        // round it resolved in) ----
+        if round_before <= 3 {
+            let t = &mut tracks[actor as usize];
+            if let (Move::Take { .. }, Some(card), Some(cost)) = (mv, taken_card, taken_card_cost) {
+                if !card.is_none() && t.first_take_name.is_none() {
+                    t.first_take_name = Some(card.get().name);
+                    t.first_take_cost = Some(cost);
+                }
+            }
+            match mv {
+                Move::Build { card } | Move::Develop { card } => {
+                    if t.first_build.is_none() {
+                        t.first_build = Some((opening_build_kind(card.get().kind), card.get().name));
+                    }
+                }
+                Move::Upgrade { to, .. } => {
+                    if t.first_build.is_none() {
+                        t.first_build = Some((opening_build_kind(to.get().kind), to.get().name));
+                    }
+                }
+                Move::PlayLeader { .. } => t.took_leader_r3 = true,
+                Move::Pop | Move::PopFree => t.increased_pop_r3 = true,
+                Move::EndTurn => {
+                    if ca_before_move > 0 {
+                        t.ca_unused_r3 += ca_before_move as i32;
+                    }
+                }
+                Move::Take { .. } | Move::WonderStep { .. } | Move::Revolution { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::PolPass | Move::Resign => {}
+            }
+        }
+
         // ---- wonder-in-progress tracking (post-move state) ----
         for i in 0..players {
             let w = state.players[i as usize].wonder;
@@ -526,9 +659,63 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
     let final_snapshots: Vec<AgeSample> = (0..players).map(|i| sample_player(&state, i)).collect();
     report.age_samples[final_idx].extend(final_snapshots);
 
+    // Win/loss for the opening win-rate maps below: the STRICT max of
+    // `PlayerState::culture` (this file's own final-score field, see
+    // `report.final_score.push` below) among this game's seats, unknown
+    // (excluded) on a `cap_hit` game (no `state.game_over`, so there is no
+    // real winner) or an exact tie -- matching `bin/humanopenings.rs`'s own
+    // "unknown" bucket for a game its outcome parse could not resolve.
+    let final_culture: Vec<i32> = (0..players).map(|i| state.players[i as usize].culture as i32).collect();
+    let max_culture = final_culture.iter().copied().max();
+    let is_winner = |i: usize| -> Option<bool> {
+        if cap_hit {
+            return None;
+        }
+        let max_c = max_culture?;
+        if final_culture.iter().filter(|&&c| c == max_c).count() != 1 {
+            return None; // tie -- no single winner, matching humanopenings' "tie" exclusion
+        }
+        Some(final_culture[i] == max_c)
+    };
+
     for i in 0..players {
         let p = &state.players[i as usize];
         report.n_player_games += 1;
+
+        // ---- opening, human-comparable schema: record into (wins, total)
+        // maps, or the unknown-outcome counter, per player-game.
+        {
+            let t = &tracks[i as usize];
+            let win = is_winner(i as usize);
+            match win {
+                Some(w) => {
+                    let take_key = t.first_take_name.unwrap_or("none");
+                    let e = report.opening_first_take.entry(take_key).or_insert((0, 0));
+                    e.1 += 1;
+                    if w {
+                        e.0 += 1;
+                    }
+                    let build_key = t.first_build.map(|(k, _)| k).unwrap_or("none");
+                    let e = report.opening_first_build_kind.entry(build_key).or_insert((0, 0));
+                    e.1 += 1;
+                    if w {
+                        e.0 += 1;
+                    }
+                    let e = report.opening_leader_r3.entry(t.took_leader_r3).or_insert((0, 0));
+                    e.1 += 1;
+                    if w {
+                        e.0 += 1;
+                    }
+                    let e = report.opening_pop_r3.entry(t.increased_pop_r3).or_insert((0, 0));
+                    e.1 += 1;
+                    if w {
+                        e.0 += 1;
+                    }
+                }
+                None => report.opening_outcome_unknown += 1,
+            }
+            *report.opening_ca_unused.entry(t.ca_unused_r3).or_insert(0) += 1;
+        }
 
         if let Some(card) = tracks[i as usize].first_take {
             *report.first_take_card.entry(card.name()).or_insert(0) += 1;
@@ -679,6 +866,17 @@ fn top_n(map: &HashMap<&'static str, u64>, n: usize) -> Vec<(&'static str, u64)>
     v
 }
 
+/// [`top_n`]'s twin for the `opening_*` (wins, total) maps -- ranked by
+/// TOTAL (frequency), not by win-rate, matching every other ranking in this
+/// file (a rare, high-win-rate line should not out-rank a common,
+/// average-win-rate one in a "most common opening lines" table).
+fn top_pair_n(map: &HashMap<&'static str, (u64, u64)>, n: usize) -> Vec<(&'static str, (u64, u64))> {
+    let mut v: Vec<(&'static str, (u64, u64))> = map.iter().map(|(&k, &c)| (k, c)).collect();
+    v.sort_unstable_by(|a, b| b.1 .1.cmp(&a.1 .1).then(a.0.cmp(b.0)));
+    v.truncate(n);
+    v
+}
+
 fn print_report(players: u8, r: &Report) {
     println!("\n## {players}p (n={} games, {} player-games)\n", r.games, r.n_player_games);
 
@@ -702,6 +900,55 @@ fn print_report(players: u8, r: &Report) {
         r.n_player_games,
         100.0 * r.n_player_games_no_wonder_by_round4 as f64 / r.n_player_games.max(1) as f64
     );
+
+    // ---- opening, human-comparable schema -- directly diffable against
+    // `bin/humanopenings.rs`'s TSV, aggregated the same way: count, share
+    // of player-games, and win-rate with its own sample size (only
+    // player-games with a resolvable winner -- see `is_winner` in
+    // `play_one` -- count toward a win-rate; `opening_outcome_unknown`
+    // reports how many did not).
+    println!(
+        "\n### Opening (human-comparable schema: first take name+build kind+leader/pop by round 3)\n"
+    );
+    println!(
+        "Outcome unknown (cap_hit or tie, excluded from every win-rate below): {}/{} ({:.1}%)",
+        r.opening_outcome_unknown,
+        r.n_player_games,
+        100.0 * r.opening_outcome_unknown as f64 / r.n_player_games.max(1) as f64
+    );
+    println!("\nFirst card taken by round 3 (top 15), count/share/win-rate:");
+    for (name, (w, t)) in top_pair_n(&r.opening_first_take, 15) {
+        println!(
+            "- {name}: {t} ({:.1}%)  win-rate {:.1}% ({w}/{t})",
+            100.0 * t as f64 / r.n_player_games.max(1) as f64,
+            100.0 * w as f64 / t.max(1) as f64
+        );
+    }
+    println!("\nFirst build/develop/upgrade kind by round 3, count/share/win-rate:");
+    for (name, (w, t)) in top_pair_n(&r.opening_first_build_kind, 15) {
+        println!(
+            "- {name}: {t} ({:.1}%)  win-rate {:.1}% ({w}/{t})",
+            100.0 * t as f64 / r.n_player_games.max(1) as f64,
+            100.0 * w as f64 / t.max(1) as f64
+        );
+    }
+    for (label, map) in [("Elected >=1 leader by round 3", &r.opening_leader_r3), ("Increased population by round 3", &r.opening_pop_r3)] {
+        for val in [true, false] {
+            let (w, t) = map.get(&val).copied().unwrap_or((0, 0));
+            println!(
+                "{label} = {val}: {t} ({:.1}%)  win-rate {:.1}% ({w}/{t})",
+                100.0 * t as f64 / r.n_player_games.max(1) as f64,
+                100.0 * w as f64 / t.max(1) as f64
+            );
+        }
+    }
+    let mut ca_keys: Vec<i32> = r.opening_ca_unused.keys().copied().collect();
+    ca_keys.sort_unstable();
+    print!("\nCivil actions left unused across rounds 1-3 (count -> player-games): ");
+    for k in ca_keys {
+        print!("{k}->{} ", r.opening_ca_unused[&k]);
+    }
+    println!();
 
     println!("\n### Wonders\n");
     println!("Wonders completed per player-game: {}", percentiles_i32(r.wonders_completed_per_playergame.clone()));
@@ -1067,11 +1314,9 @@ mod tests {
 
     #[test]
     fn merge_combines_two_reports_games_and_score_vectors() {
-        let mut a = Report::default();
-        a.games = 1;
+        let mut a = Report { games: 1, ..Default::default() };
         a.final_score.push(10);
-        let mut b = Report::default();
-        b.games = 1;
+        let mut b = Report { games: 1, ..Default::default() };
         b.final_score.push(20);
         a.merge(b);
         assert_eq!(a.games, 2);

@@ -1,0 +1,361 @@
+TAKEUPGRADE WORKER NOTES -- 2026-08-14
+Clone: /private/tmp/takeupgrade (base commit 9f6104d)
+Buckets: IllegalMove: Upgrade (34 games) + IllegalMove: Take (33 games)
+Result: 2 landed, verified, zero-regression fixes. Upgrade bucket 34 -> 32.
+Take bucket 33 -> 15. Guard set 509 -> 537 completions (28 new wins, 0
+regressions).
+
+=====================================================================
+1. BUCKET CENSUS (measured at base commit 9f6104d)
+=====================================================================
+
+REPLAY_DUMP_BUCKET='IllegalMove: Upgrade' -> 34 games. First lines:
+  DUMP 7523347 line 468: Grey upgrades Bronze to Coal Grey spends 6 resources
+  DUMP 7522665 line 218: Orange upgrades Religion to Organized Religion Orange spends 4 resources
+  DUMP 7522614 line 268: Purple upgrades Warrior to Riflemen Purple spends 3 resources
+  DUMP 7520722 line 409: Orange upgrades Warrior to Swordsmen Orange spends 1 food
+  ... (34 total, full list in /tmp/upgrade_dump.err if still present, else
+  regenerate: REPLAY_DUMP_BUCKET='IllegalMove: Upgrade' ./target/difftest/replaystats ...)
+
+REPLAY_DUMP_BUCKET='IllegalMove: Take' -> 33 games. First lines:
+  DUMP 7523341 line 462: Orange takes Military Theory in hand Orange uses 1 civil action
+  DUMP 7523330 line 91: Purple takes Taj Mahal in hand
+  DUMP 7521828 line 381: Orange takes First Space Flight in hand Orange uses 2 civil action
+  ... (33 total)
+
+=====================================================================
+2. FIX #1 (Upgrade bucket): Revolution never fires Leonardo da
+   Vinci's / Albert Einstein's develop-triggered leader ability
+=====================================================================
+
+FILE: rust/src/apply.rs, fn h_revolution (Move::Revolution handler)
+
+ROOT CAUSE:
+h_revolution() hand-rolled ONLY Isaac Newton's leader trigger inline
+(civil_actions += 1 on revolution) instead of calling the shared
+on_develop() helper that h_develop()'s PEACEFUL government-change path
+already calls unconditionally at the end of every develop (including
+Government-kind cards, via set_government). on_develop() is the single
+place that fires Leonardo da Vinci's "+1 resource" and Albert Einstein's
+"+3 culture" triggers -- h_revolution() never called it, so a player
+using violent Revolution (not peaceful Develop) to seize a government
+never got Leonardo's or Einstein's bonus.
+
+docs/RULES_SPEC.md line 232 confirms this is one mechanic: "Newton:
+regain 1 CA after a revolution (revolution counts as developing a
+technology)" -- the citation is about Newton specifically but the
+underlying fact ("revolution counts as developing a technology") is
+general, and on_develop() already treats all three leaders uniformly
+for the peaceful path.
+
+TRACE (game 7522665, round 11):
+Journal line 164: "Orange revolutions Change government to Constitutional
+Monarchy; 6 science points spent; Orange loses 6 science; Leonardo Da
+Vinci gives 1 resource" -- Orange's leader is Leonardo da Vinci, and BGO's
+own line explicitly names the leader trigger firing. Our engine silently
+dropped it. This 1-resource deficit is PERMANENT and UNCORRECTED for the
+rest of the game (there is no per-turn resource oracle correction the way
+science/culture get REPLAY_DEBUG drift checks -- see "false starts"
+below) -- confirmed by diffing every subsequent "(now N)" resource total
+in the journal against our engine's own end_of_turn POST value: both
+sequences matched EXACTLY for 10 consecutive end-of-turn checkpoints,
+then diverged by exactly -1 starting at the revolution's own end-of-turn
+line and stayed at -1 for every following checkpoint I checked. 7 rounds
+later (line 218, round 14) the accumulated 1-resource deficit finally
+starves an Upgrade: "Orange upgrades Religion to Organized Religion
+Orange spends 4 resources" -- our engine had exactly 3 resources at that
+point (upgrade_cost computed correctly as 4; the shortfall is entirely
+upstream in the missing +1 from round 11).
+
+FIX: replace the Newton-only inline block in h_revolution with a call to
+the shared on_develop(state, idx), mirroring h_develop's own peaceful
+path exactly (same computation for Newton, now ALSO firing for Leonardo/
+Einstein).
+
+TEST: apply.rs, h_revolution_triggers_leonardo_da_vincis_develop_bonus.
+RED (fix reverted): panicked at src/apply.rs:2881:9:
+  assertion `left == right` failed: Leonardo da Vinci's +1 resource must
+  fire on a revolution, not just a peaceful develop
+    left: 0
+   right: 1
+GREEN (fix restored): test result: ok. 1 passed; 0 failed.
+
+=====================================================================
+3. FIX #2 (Take bucket): replayer trusted "whichever move is legal"
+   over BGO's own "Ocean Liner Service used" text
+=====================================================================
+
+FILE: rust/src/replay_common.rs, fn apply_one, ActionClass::IncreasePopulation arm
+
+ROOT CAUSE:
+When BGO logs "<Color> increases population Ocean Liner Service used",
+this is the wonder's once-per-turn FREE population increase
+(Move::PopFree / h_pop_free, no CA spent). The dispatcher used to try
+Move::Pop FIRST whenever it happened to be legal (spare CA + enough
+food), only falling back to Move::PopFree if Pop was illegal. When BOTH
+were simultaneously legal (a player who still had a spare civil action
+AND their once-per-turn free Ocean Liners increase available), the code
+silently chose the PAID Move::Pop even though the journal explicitly
+says the FREE option was used. This overcharges p.civil_actions by 1 for
+the rest of that turn.
+
+TRACE (game 7523341, round 14):
+Line 458-461: Orange takes Eiffel Tower (3 CA), upgrades Bronze to Coal
+(1 CA -- via the Upgrade branch, non-unit), "Orange increases population
+Ocean Liner Service used" (should be free), takes Urban Growth (1 CA).
+Constitutional Monarchy's ca_total is 6; 3+1+1 = 5 real CA spent, leaving
+1 spare -- but the buggy Pop dispatch consumed a 6th, phantom CA on the
+"Ocean Liner Service used" line, so by the time "Orange takes Military
+Theory in hand Orange uses 1 civil action" (line 462) is reached,
+civil_actions=0 instead of 1 and the take is rejected (reason=Budget,
+gate_have=0). Confirmed via REPLAY_DEBUG that the IDENTICAL text
+"Orange increases population Ocean Liner Service used" correctly
+resolved to Move::PopFree EARLIER in the SAME game (round 13, where
+Move::Pop happened not to be legal) -- proving the dispatcher is
+move-legality-order-dependent, not text-aware, which is the bug.
+
+FIX: apply_one's IncreasePopulation arm now checks
+raw_text.contains("Ocean Liner Service used") FIRST and takes
+Move::PopFree whenever that's true and PopFree is legal, falling back to
+the old "whichever is legal" logic only when the text does not name the
+free source.
+
+TEST: replay_common.rs,
+a_pop_line_naming_ocean_liner_service_used_takes_the_free_move_even_when_a_paid_pop_is_also_legal
+RED (fix reverted): panicked at src/replay_common.rs:9272:9:
+  assertion `left == right` failed: the free Ocean Liners move must not
+  spend a civil action
+    left: 3
+   right: 4
+GREEN (fix restored): test result: ok. 1 passed; 0 failed.
+
+IMPACT: this single fix was much bigger than its trigger game -- the
+Ocean-Liner-plus-spare-CA ambiguity recurs across many games in the
+corpus (any Ocean Liners owner who ever has a spare CA on a Pop turn),
+so it cleared 28 games total (guard set 509 -> 537), collapsing the
+IllegalMove: Take bucket from 33 games to 15.
+
+=====================================================================
+4. REGRESSION BAR (final, both fixes applied, verbatim)
+=====================================================================
+
+  cd /private/tmp/takeupgrade/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats ../sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals > /tmp/takeupgrade_after.txt 2>&1
+  grep '^SCOREDIV_COMPLETED_ID' /tmp/takeupgrade_after.txt | awk '{print $2}' | sort \
+      > /tmp/takeupgrade_ids.txt
+  comm -23 /private/tmp/guard_ids.txt /tmp/takeupgrade_ids.txt   # regressions
+  comm -13 /private/tmp/guard_ids.txt /tmp/takeupgrade_ids.txt   # wins
+
+=== REGRESSIONS (MUST BE EMPTY) ===
+(empty)
+
+=== WINS ===
+7521113
+7521603
+7521681
+7521825
+7521923
+7521966
+7521992
+7522053
+7522146
+7522392
+7522436
+7522471
+7522482
+7522516
+7522665
+7522694
+7522767
+7522814
+7522837
+7523047
+7523087
+7523125
+7523341
+7523421
+7523468
+7523578
+7523647
+7523791
+
+Counts: guard_ids.txt = 509, takeupgrade_ids.txt = 537 (28 new, 0 lost).
+
+cargo test --profile fasttest: 1382 passed (was 1381, +1 for the first
+fix's test before the second fix's test was added; both fixes' tests are
+in the final 1382), 0 failed, all suites green. Full re-run after both
+fixes: "test result: ok. 1382 passed; 0 failed" for the lib target, all
+other targets (selfplay, strengthrelab, suite, doctests) also green.
+
+cargo clippy --all-targets --profile difftest -- -D warnings: clean,
+no warnings.
+
+=====================================================================
+5. FALSE STARTS / DEAD ENDS
+=====================================================================
+
+- Initially suspected the Raiders event's FoodOrResSplit resolution
+  (`spends_grants` FIFO matching in replay_common.rs ~line 1150-1200) was
+  the source of game 7522665's resource shortfall, since that mechanism
+  is genuinely subtle (a prior worker's own doc comments flag it as a
+  repeat source of bugs). Traced it in full via REPLAY_DEBUG and
+  REPLAY_DEBUG_ALL and confirmed it resolved CORRECTLY (matched the
+  journal's own "Orange spends 2 resources" resolution exactly,
+  7 -> 5). Not the bug -- just adjacent to it in the same turn.
+
+- Considered that `costs::take_gate`'s `>=` comparison might be
+  involved in the Take bucket bug -- per the task's own hard rule this
+  was NOT touched, and in the end the Take bucket's root cause was
+  entirely upstream (a CA phantom-charge from the Pop/PopFree dispatch
+  bug), never reaching take_gate's own comparison logic at all.
+
+- There is no per-turn RESOURCE drift oracle (REPLAY_DEBUG has one for
+  science -- `trailing_now_science`/"DEBUG end-turn science drift" -- and
+  a structural one for culture, but none for food or resources). Diagnosing
+  fix #1 required manually cross-referencing the journal's own "(now N)"
+  resource total against `grep "end_of_turn POST: idx=0"` from
+  REPLAY_DEBUG_ALL output turn-by-turn to find exactly which end-of-turn
+  the drift started at. A `trailing_now_resources` parser + drift
+  eprintln (mirroring `trailing_now_science`) would make this class of
+  bug much faster to localize next time; I did not add it since it's
+  tooling, not a bug fix, and the task scoped me to landing fixes with
+  tests, not diagnostics -- but it is a natural next addition for
+  whoever picks up the remaining Upgrade games below.
+
+=====================================================================
+6. DIAGNOSED BUT NOT FIXED -- for the next worker
+=====================================================================
+
+UPGRADE BUCKET (32 games remain, REPLAY_DUMP_BUCKET='IllegalMove: Upgrade'):
+
+- Game 7523347, line 468 (also present at base: line 467 is a duplicate
+  successful upgrade of a second Bronze worker, line 468 is the same
+  upgrade attempted again and fails). REPLAY_DEBUG trace:
+  "civil_actions=1 resources=2 ... upgrade_cost(Bronze->Coal)=6" -- the
+  shortfall is 4 resources, not a simple off-by-one like fix #1's shape.
+  Did not trace further; likely a distinct, larger bug (possibly a
+  missed discount, or a genuinely wrong resource total several turns
+  upstream -- same class of investigation as fix #1 but a bigger gap).
+  Reached: apply.rs h_revolution/on_develop area was already checked and
+  is NOT the cause here (leader is Napoleon Bonaparte, not Leonardo/
+  Einstein/Newton).
+
+- Game 7523347 (and others), "Grey upgrades Bronze to Coal" pattern
+  where legal_moves shows Build{Bronze} and Destroy{Coal} but no
+  Upgrade{Bronze->Coal} option at all in some cases -- worth checking
+  whether Coal was ever actually `Develop`ed (science-researched) for
+  that player; if not, the "Coal" appearing in Destroy{} implies it IS
+  in the player's tech tableau (contradiction) -- needs a closer look at
+  `legal.rs`'s tableau_names_sorted / Destroy legality gate to confirm
+  whether Destroy and Upgrade read the SAME tableau membership check (if
+  not, that asymmetry is itself worth checking, though it may just be
+  workers_free/have_ma gating for the unit-vs-non-unit split).
+
+- Game 7522614, line 268 "Purple upgrades Warrior to Riflemen": legal_
+  moves shows Upgrade{Alchemy->Scientific Method} and
+  Upgrade{Bronze->Iron} as legal (the Upgrade code path clearly works in
+  general this turn) but NEITHER Destroy{Warriors} NOR Destroy{Riflemen}
+  appear in the list, suggesting our engine thinks Purple has ZERO
+  workers on Warriors at that point -- reached apply.rs's do_upgrade /
+  legal.rs's Upgrade loop (`p.techs.workers(lo) == 0` continue check) as
+  the exact gate that's filtering this out, but did NOT trace why the
+  worker count itself might be wrong (could be a missing Build{Warriors}
+  application earlier in the turn via an action-card combo BGO logs as
+  one line that this binary splits differently, or a genuine engine
+  under-count).
+
+- Game 7520722, line 409 "Orange upgrades Warrior to Swordsmen Orange
+  spends 1 FOOD" (not resources!) -- legal_moves includes
+  TradeFoodAsResource as an option but no Upgrade at all. This looks
+  like BGO silently letting the upgrade cost be paid via the Trade
+  Routes Agreement's food-as-resource conversion as PART of a single
+  logged line, the same shape `convert_trade_food_shortfall` already
+  handles for Move::Pop/Move::WonderStep (replay_common.rs ~line 3189)
+  but evidently NOT for Move::Upgrade -- worth checking whether
+  Move::Upgrade needs the same shortfall-conversion treatment those two
+  already got. Did not implement; flagging the exact mechanism to reuse.
+
+- The remaining ~29 games in this bucket were not individually traced;
+  census and first-failure lines are captured in section 1 above and are
+  reproducible any time via:
+    REPLAY_DUMP_BUCKET='IllegalMove: Upgrade' \
+      PATH=$HOME/.cargo/bin:$PATH ./target/difftest/replaystats \
+      ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+
+TAKE BUCKET (15 games remain, REPLAY_DUMP_BUCKET='IllegalMove: Take'):
+
+- WonderInProgress ordering bug, confirmed in at least 3 games (7523330,
+  7521828, 7521751): BGO logs "<Color> takes <NewWonder> in hand"
+  IMMEDIATELY BEFORE a same-timestamp "<Color> builds 1 stage of
+  <CurrentWonder> ... Wonder completed" line for the SAME actor, even
+  though causally the completion must happen FIRST (you cannot take a
+  second wonder while one is unfinished -- docs/RULES_SPEC.md line 67/
+  248, confirmed correct, do not relax `can_take_gated`'s
+  `p.wonder.is_none()` check). This is a pure JOURNAL EXPORT ORDERING
+  artifact (same shape as the already-documented `is_trustworthy_age_line`
+  "same timestamp, wrong order" class in replay_common.rs, just for a
+  different pair of action classes). Confirmed via
+  `REPLAY_DEBUG=1 ./target/difftest/replay ... 7523330` showing
+  "TAKE REJECT ... reason=WonderInProgress" and cross-referencing the raw
+  journal: line 91 "Purple takes Taj Mahal in hand" and line 92 "Purple
+  builds 1 stage of Hanging Gardens Purple spends 2 resources; ; Wonder
+  completed" share the identical timestamp 11:06:23. FIX SHAPE (not
+  implemented): in apply_one's ActionClass::TakeCard arm, when a Wonder
+  take fails specifically with TakeRejection::WonderInProgress AND
+  `next_text` (already threaded into apply_one's signature) names a
+  same-actor BuildWonderStage completing the CURRENT `p.wonder`, apply
+  that wonder step first (reusing the ActionClass::BuildWonderStage
+  handling, ~line 6760 in replay_common.rs) before retrying the take --
+  then the main dispatch loop must be told to SKIP re-applying that same
+  BuildWonderStage line when it's reached in its own turn (treat it as
+  an already-satisfied confirmation, the same pattern
+  `is_pure_confirmation_line`/`r.auto_passed` already use elsewhere in
+  this file for other out-of-order journal lines). This needs care: the
+  loop's line-advancement and `resolve_intervening`'s `expected_actor`
+  bookkeeping both assume strictly in-order consumption, so this is a
+  real (if narrow) structural change, not a one-line fix -- did not
+  attempt it given the remaining time budget.
+
+- Budget-reason rejections (at least 1 game, one of: 7522200 /
+  7522905 -- exact mapping not double-checked, see section 1's raw dump)
+  and HandFull-reason rejections (at least 2 games) also appear among the
+  15 remaining TAKE REJECT traces -- these were enumerated via a batch
+  REPLAY_DEBUG run over the 15 remaining IDs but NOT individually root-
+  caused. Reproduce with:
+    for id in 7521828 7522200 7522905 7522102 7521751 7523393 7522427 \
+      7522411 7522321 7522304 7522993 7522987 7522010 7523278; do
+      REPLAY_DEBUG=1 PATH=$HOME/.cargo/bin:$PATH ./target/difftest/replay \
+        ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals $id \
+        2>&1 | grep "TAKE REJECT" | tail -1
+    done
+  (note: this loop's game-id-to-output correspondence was not verified
+  1:1 against section 1's DUMP list line-for-line -- treat the id list as
+  "known to be in the remaining 15", not as a verified per-id reason
+  table; re-run individually to confirm which id produced which reason
+  before trusting it.)
+
+=====================================================================
+7. FILES CHANGED
+=====================================================================
+
+rust/src/apply.rs
+  - h_revolution(): replaced the Newton-only inline leader-trigger block
+    with a call to the shared on_develop() helper.
+  - added test h_revolution_triggers_leonardo_da_vincis_develop_bonus.
+
+rust/src/replay_common.rs
+  - apply_one()'s ActionClass::IncreasePopulation arm: check raw_text for
+    "Ocean Liner Service used" and prefer Move::PopFree when present and
+    legal, before falling back to the old Move::Pop-if-legal-else-
+    PopFree order.
+  - added test
+    a_pop_line_naming_ocean_liner_service_used_takes_the_free_move_even_when_a_paid_pop_is_also_legal.
+
+Full diff: takeupgrade.patch (git diff 9f6104d HEAD), in this same
+directory.
+
+Commits (in the clone, base0814 branch, on top of 9f6104d):
+  ece4549 Fix Revolution to fire Leonardo da Vinci/Einstein develop triggers
+  e3b10f8 Fix replayer to trust "Ocean Liner Service used" over a guessed Pop/PopFree pick

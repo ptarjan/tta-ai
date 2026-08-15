@@ -1,0 +1,168 @@
+SCOPEFIX AUDIT -- STATUS: STOPPED EARLY, SCOPE CHANGED BY PAUL MID-TASK
+========================================================================
+
+Paul's actual ask turned out to be a different bug class: the SCORE
+COMPUTATION on replayed human games (engine computing a different final
+score than the game log records), not evaluator weight units/scope. This
+audit was redirected before it produced or landed any fix. No code was
+changed in this workspace; nothing was committed.
+
+What follows is the systematic review completed before the stop, kept
+because the reading is still valid and worth reusing whenever the
+weight-units/scope audit resumes.
+
+FILES READ
+----------
+- rust/src/bots/weighted/features.rs -- READ IN FULL, both passes
+  (lines 1-1002 and 1003-1349). This is the entire file: the `features()`
+  function body (lines 278-780) plus its `#[cfg(test)] mod tests` block
+  (782-1349). No other function exists in this file beyond `sweep_tableau`
+  and the small `Features`/`TableauSweep`/`BestTypes` types.
+- rust/src/bots/weighted/weights.rs -- PARTIAL. Read the `WeightKey` table
+  entries and doc comments roughly lines 520-610 (HasUnit, HasColony, Pacts,
+  WarImmune, AttackCostDoubled, AuctionCommitted/AuctionBid neighborhood),
+  plus grepped for HasUnit's other references (group()/sign_intent() match
+  arms at lines 948 and 1179 confirm HasUnit is grouped/signed like the
+  other military cliff flags -- did not read those match blocks in full).
+- rust/src/bots/weighted/eval.rs -- NOT READ. This was the next step
+  (confirming how `HasUnit`'s weight*feature term is combined -- whether it
+  is dotted into every evaluate() call unconditionally, same as every other
+  coordinate in this linear model, or gated some other way) when the stop
+  landed. Nobody should assume eval.rs was checked.
+- docs/RULES_SPEC.md section 11 (Colonies, 11.1-11.6) and 10.7
+  (Colonization uses armies) -- read to check the "has a military unit"
+  scope lead against the actual rule text.
+
+EVERY WeightKey `features()` WRITES (examined as part of the full-file
+read, i.e. "which weights you examined" per the task's own accounting --
+this is the complete list `features()` sets, matching one-for-one with
+what the tests in the same file pin):
+Culture, CultureRate, Science, ScienceRate, FoodRate, ResourceRate,
+FoodStock, ResourceStock, BlueFree, CorruptionHeadroom, ConsumptionHeadroom,
+PopCost, YellowBank, FreeWorkers, Workers, ProdWorkers, UrbanWorkers,
+UnitWorkers, HappyMargin, Discontent, Uprising, CivilActions,
+MilitaryActions, CaLeft, MaLeft, TakeCostPaid, TakeCostShare, Strength,
+StrengthRel, StrengthDeficit, StrengthLead, TacticLevel, HasUnit, Colonies,
+HasColony, Pacts, PactBlocksAttack, WarImmune, AttackCostDoubled,
+AuctionCommitted, AuctionBid, TechLevels, GovLevel, BestFarm, BestMine,
+BestLab, BestTemple, BestTheater, BestLibrary, BestArena, BestUnit,
+NumTechs, SpecialTechs, Wonders, WonderProgress, WonderRemaining,
+WonderStagesLeft, WonderTurnsToFinish, WonderOverrun, WonderAgeOverrun,
+WonderStagesPerAction, Leader, WonderInProgress, HandLimit, ColonizeBonus,
+BuildDiscount, UrbanLimit, NoAggression, HandCivil, HandValue,
+HandPerishable, HandMilitary, HandMilValue, EventScoringMargin,
+RivalCulture, RivalMeanCulture, RivalCultureRate, RivalScienceRate,
+RivalStrength, RivalFreeCa, RivalHandCivil, RivalWonders, MySeededPending,
+AttackTargetLead, AttackTargetWeakness, PactPartnerLead,
+RivalScienceStock, RivalFoodStock, RivalResourceStock, RivalFreeWorkers,
+RivalYellowBank, RivalColonies, RivalMilActions, RivalBuildingWonder,
+FoodGap, FoodSurplus, ResourceGap, ResourceSurplus, ScienceGap,
+ScienceSurplus, CultureGap, CultureSurplus, HappySurplus, CivilActionGap,
+CivilActionSurplus, MilitaryActionGap, MilitaryActionSurplus, WorkerGap,
+WorkerSurplus.
+
+(~104 keys. The remaining ~56 of the ~160-entry WeightKey table -- RowUrgency,
+CardBoardCredit, every *_early/*_late phase pair, RowLastCopy [see below],
+RowBargainForgone, RivalDesire, RivalTakeShare, RivalHandPotential,
+MyEventThreat, TacticGain, TacticShort, etc. -- are documented at this
+file's own top doc comment (features.rs:25-29) as intentionally left at
+zero default here: priced by the cards-valuation layer or by `evaluate`
+itself, never by `features()`. Confirmed by grep: none of those keys
+appear as an `f.set(...)` target anywhere in this file.)
+
+ALREADY-FIXED (today, before this session; visible in the base tree as
+comments, listed here only for context, NOT re-verified in this session):
+- WeightKey::Uprising (features.rs:511-535) -- UNITS fix. Was a bare 0/1
+  indicator; now scaled by `s.science + s.culture + s.food + s.resources`
+  (the RULES_SPEC 6.3 production actually forfeited). Has an in-file test,
+  `uprising_scales_with_the_production_actually_at_stake_not_a_flat_0_1`
+  (features.rs:923-953), which itself documents the RED failure text this
+  session did not re-run: "revert to the bare 0/1 formula: both boards read
+  exactly 1.0, this test's inequality failed with small=1 big=1."
+- WeightKey::RowLastCopy -- mentioned in this task's brief as fixed
+  (a weighted-composite-fed-into-a-second-weight DOUBLE-COUNTING-shaped
+  units bug), but RowLastCopy is NOT set anywhere in features.rs (grep
+  confirms; it is one of the zero-default keys per the list above). Its
+  fix therefore lives in cards.rs or board_yields.rs -- both explicitly
+  off-limits to this session per the CONCURRENCY section (another worker
+  is editing them). Not read, not touched.
+
+THE ONE LEAD ACTUALLY CHECKED: "has a military unit" (WeightKey::HasUnit)
+--------------------------------------------------------------------------
+Task's brief: "A known lead to check FIRST: 'has a military unit' is
+reportedly applied everywhere, when it only actually matters during a live
+colony auction."
+
+Status: NOT CONFIRMED, NOT REFUTED -- stopped mid-investigation.
+
+What was found:
+- features.rs:576-580 sets `WeightKey::HasUnit` unconditionally on every
+  `features()` call, off `unit_workers > 0` (unit_workers is the sweep
+  total of staffed military-unit workers, sweep_tableau, features.rs:201-208).
+  There is no gating on "is a colony auction currently live" anywhere near
+  this line, nor on `dc` (`rivals::deferred_credit`, the module's own
+  mechanism for pending-decision facts like `AuctionCommitted`/`AuctionBid`
+  a few lines below at 605-606).
+- weights.rs's own doc comment on `HasUnit => "has_unit"` (weights.rs
+  ~552-563) argues this is INTENTIONAL, not a scope bug: "RULES_SPEC 11.3
+  cliff... colonizing requires sacrificing at least one military unit 'even
+  if other bonuses would cover the bid', so a player at zero units is
+  dropped from every aggression/colony auction before it ever reaches a
+  decision, and `unit_workers` (linear) cannot express that unit #1 is
+  worth far more than unit #5." That argument, taken at face value, is
+  that owning >=1 unit is a PERSISTENT eligibility fact (like HasColony,
+  WarImmune, WonderInProgress -- all similarly unconditional cliffs set a
+  few lines apart in the same function) that matters for as long as it
+  holds, not only in the instant an auction is live -- i.e. it reads as a
+  deliberate design choice with the same shape as the other cliff features,
+  not the SCOPE defect family this audit is hunting.
+- RULES_SPEC.md 11.3 confirms the rule itself ("printed strength of the
+  sacrificed military units (>=1 unit mandatory...)") but says nothing
+  about eligibility being scoped to only the live-auction turn -- the
+  eligibility is a standing property of the board (can this player ever
+  colonize/aggress right now), matching weights.rs's framing.
+- What was NOT done: reading eval.rs to see exactly how HasUnit's
+  weight*feature term is combined into the final score, and specifically
+  whether there is a SEPARATE decision-context evaluation path (e.g. an
+  auction-bid evaluator that should be the only place this fires) that
+  `HasUnit` is ALSO being added into outside of -- which is the concrete
+  shape the "applied everywhere" complaint would need to have to be a real
+  SCOPE bug rather than a restatement of the by-design cliff pattern. This
+  is the exact next step for whoever picks this back up: read eval.rs's
+  combination logic and grep it for any auction-specific evaluation
+  function separate from the main board `evaluate()`, then check whether
+  HasUnit's coefficient is asked to serve both roles at once.
+
+NO OTHER DEFECT CANDIDATES WERE RECORDED. The full read of features.rs did
+not surface a second SCOPE/UNITS/DOUBLE-COUNTING candidate with enough
+confidence to write down before the stop landed -- cross-referencing against
+weights.rs's `group()`/`sign_intent()` tables and eval.rs's combination
+logic (the METHOD section's required cross-reference) was not completed for
+any weight, HasUnit included. Do not read absence-of-findings here as
+"the other ~100 weights are clean" -- they were read once, not audited.
+
+FIXES MADE THIS SESSION: NONE.
+FILES CHANGED THIS SESSION: NONE.
+COMMIT MADE THIS SESSION: NONE (nothing to commit; git status in
+/private/tmp/scopefix/rust is clean relative to the base0814 snapshot).
+TESTS RUN THIS SESSION: NONE.
+
+HANDOFF FOR WHOEVER RESUMES THIS AUDIT
+---------------------------------------
+1. Read eval.rs's combination logic first (it was the next file queued).
+   Confirm/refute the HasUnit scope lead concretely: does HasUnit's
+   coefficient get charged in positions where no colony/aggression
+   opportunity exists at all, in a way that conflicts with pricing it
+   correctly for the live-auction case? Or is "persistent eligibility
+   flag" actually the correct scope, matching HasColony/WarImmune/
+   WonderInProgress's identical shape -- in which case this lead is a
+   false positive and should be written up as REFUTED with the eval.rs
+   evidence, not fixed.
+2. Cross-reference weights.rs's `group()` and `sign_intent()` match arms
+   (lines ~948 and ~1179 for HasUnit specifically; the whole table for a
+   systematic pass) against features.rs's writers -- the task's own METHOD
+   step, not yet done for any key.
+3. RowLastCopy's fix (today, in cards.rs/board_yields.rs) is off-limits to
+   this workspace's session but worth reading once the other worker's
+   changes land, as a second worked example of the DOUBLE-COUNTING
+   sub-kind alongside Uprising's UNITS example.

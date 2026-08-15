@@ -1,0 +1,544 @@
+PHASECUT -- collapsing three of the four *_early/*_late phase triples to a
+2-parameter {start,end} basis (T1-A, T1-C, T1-D)
+==============================================================================
+STATUS: COMPLETE.
+
+Working clone: /private/tmp/phasecut (copied from /private/tmp/signaudit with
+`cp -Rc`, carrying a prebuilt rust/target). All work below is in this clone
+only -- /Users/pt/tta-ai and /Users/pt/ were never touched.
+
+Input analysis (read, not redone): /private/tmp/basiscut/BASISCUT.txt,
+Section 2 (Cluster T1-A..D, the proof of the redundancy) and Section 6/7
+(the proposed fix and migration formula). That analysis is the input to this
+job; the algebra below was independently re-derived from the actual code
+(BASISCUT.txt's own formula was confirmed correct, not assumed).
+
+
+(0) SCOPE CHANGE FROM A PARALLEL COLLISION -- READ THIS FIRST
+-----------------------------------------------------------------------------
+A parallel worker (clone /private/tmp/earlymil, commit 578ee9e, "Fix
+StrengthRel's always-on base overvaluing early military strength") landed a
+DIFFERENT fix touching the SAME three keys as T1-B (StrengthRel,
+StrengthRelEarly, StrengthRelLate), in eval.rs::evaluate/linear_features and
+rivals.rs::strength_marginal. I read EARLYMIL.txt and `git show 578ee9e` in
+that clone (read-only, no changes made there).
+
+THEIR CHANGE: gates StrengthRel's blend on `state.round <= 3`:
+    round <= 3:  eff(L) = (1-L)*E + L*(B + La)      (B folds into the LATE
+                                                       endpoint only; E is
+                                                       the WHOLE early coef)
+    round  > 3:  eff(L) = B + (1-L)*E + L*La         (old formula, untouched)
+  where B = w[StrengthRel], E = w[StrengthRelEarly], La = w[StrengthRelLate].
+
+IDENTIFIABILITY CONSEQUENCE (checked, not assumed): under the OLD uniform
+formula A(L) = B + (1-L)E + L*La, the direction (B,E,La) += t*(1,-1,-1) is
+in the kernel for every L -- exactly T1-B's degeneracy. Under the NEW
+round-gated formula, apply that same shift: in the round<=3 branch,
+eff_new(L) = (1-L)*(E-t) + L*(B+La) = eff_old(L) - (1-L)*t, which is NONZERO
+for any round<=3 state with L < 1 (round<=3 is by definition early -- L is
+essentially never exactly 1 there). So the old kernel direction is NOT in
+the kernel of the new formula: moving along it changes evaluate()'s output
+on every round<=3 state. The round<=3 branch identifies E and (B+La)
+directly (already a non-redundant basis); the round>3 branch identifies
+(B+E) and (B+La) as before. Combining both regimes: B = (B+E) - E, then
+La = (B+La) - B. All three raw numbers become separately identifiable once
+both regimes are visited (self-play trivially visits round<=3 -- every game
+starts there) -- earlymil's fix does not just avoid the old degeneracy, it
+STRUCTURALLY REMOVES it for this one triple.
+
+I reported this finding to the coordinator (asked to check specifically
+whether the round<=3 gate is a magic constant or a computed rulebook fact):
+confirmed it IS a literal magic constant (`state.round <= 3`, repeated in
+three call sites, arrived at empirically -- their own A/B: ungated
+continuous blend measured 27.7% vs champion, round<=3 measured 44.1%), not
+derived from any rulebook fact. Per this project's own rule ("the ENGINE
+computes rulebook facts, the LEARNER learns worth"), this is a defect in
+THEIR fix, not mine to touch -- flagged to the coordinator with a suggested
+computed-fact replacement (gate on whether any rival has nonzero
+strength/any staffed military unit exists yet, rather than a fixed round
+count), NOT implemented (out of scope, explicitly told not to fix their
+code).
+
+CONCLUSION / RECOMMENDATION FOR THE MERGE: collapsing StrengthRel/
+StrengthRelEarly/StrengthRelLate to a 2-parameter {start,end} basis, as
+T1-B's original (pre-earlymil) analysis prescribed, would be WRONG once
+earlymil's fix lands -- it would delete a distinction (E alone, separate
+from B) their round-gated formula depends on and cannot be reconstructed
+from {start,end} alone. Once earlymil's round-gate is in place, StrengthRel's
+triple should NOT be collapsed the way this pass collapses the other three
+-- it is now genuinely a 3-degree-of-freedom object (two different affine
+formulas sharing the same three raw numbers across two regimes), not a
+redundant one. This holds regardless of whether the round<=3 magic constant
+is later replaced by a computed fact (any TWO-REGIME gate keeps the triple
+identifiable; only reverting to a single ungated linear blend would restore
+the degeneracy T1-B originally found).
+
+DECISION FOR THIS PASS: StrengthRel (T1-B) is EXCLUDED from the collapse.
+Only the three triples earlymil's commit does NOT touch -- workers (T1-A),
+tech_levels (T1-C), hand_value (T1-D) -- are collapsed below. My commit
+touches only Workers*/TechLevels*/HandValue* keys and code paths;
+StrengthRel/StrengthRelEarly/StrengthRelLate are untouched byte-for-byte in
+this clone (confirmed: the StrengthRel code path in evaluate()/
+linear_features()/feature_marginal keeps its EXACT original arithmetic, in
+its EXACT original position in the summation, specifically so its
+floating-point behaviour is unaffected by this change -- see Section 3).
+The coordinator will merge this against 578ee9e separately.
+
+
+(1) THE BLEND ALGEBRA -- confirmed against the actual code
+-----------------------------------------------------------------------------
+rust/src/bots/weighted/eval.rs::evaluate(), two loops:
+
+  for k in WeightKey::ALL:              total += w[k] * v * scale      (*)
+  for k in PHASE_KEYS:                  total += w[k.early()] * (1-L) * v*scale
+                                         total += w[k.late()]  *  L    * v*scale
+
+Since PHASE_KEYS = [Workers, StrengthRel, TechLevels, HandValue] is a SUBSET
+of WeightKey::ALL, the base term from (*) is ALSO added for every phase key.
+So the total coefficient actually applied to a phase feature k, at lateness
+L = horizon::lateness(state), is exactly:
+
+    A(L) = w[k] + (1-L)*w[k.early()] + L*w[k.late()]
+
+matching BASISCUT.txt's formula exactly (the `hz`/RATE_KEYS `scale` factor
+multiplies v uniformly and does not change this argument -- PHASE_KEYS
+members are never in RATE_KEYS, confirmed by reading horizon.rs, so scale is
+always 1.0 for these four features in practice).
+
+A(L) is an affine function of L -- exactly 2 degrees of freedom (its value
+at L=0 and L=1). Three raw numbers (w[k], w[k.early()], w[k.late()])
+represent that 2-parameter object. The map (base,early,late) -> (A(0),A(1))
+is 3-to-2; its kernel is the line (base,early,late) += t*(1,-1,-1) for any
+t. Moving all three weights along that direction changes NOTHING evaluate()
+ever computes, at any lateness, on any board, for k in {Workers, TechLevels,
+HandValue} (StrengthRel excluded, see Section 0).
+
+`rivals.rs::feature_marginal` (the generic per-feature marginal used by the
+card pricer) implements the identical formula for the same four keys --
+confirmed by reading it, and updated in lock-step (Section 3).
+
+`eval.rs::linear_features` (the per-key feature vector `sum_k w[k]*out[k] ==
+evaluate()`'s own total, used by `bin/agreefit.rs`) implements the same
+formula via `out[k.early()]=v*(1-L)`, `out[k.late()]=v*L`, with `out[k]=v`
+set by the generic loop -- also updated in lock-step (Section 3).
+
+
+(2) TRIPLES COLLAPSED
+-----------------------------------------------------------------------------
+Three of BASISCUT's four T1 triples: workers (T1-A), tech_levels (T1-C),
+hand_value (T1-D). StrengthRel (T1-B) is deliberately excluded -- see
+Section 0.
+
+  T1-A: workers, workers_early, workers_late
+  T1-C: tech_levels, tech_levels_early, tech_levels_late
+  T1-D: hand_value, hand_value_early, hand_value_late
+
+
+(3) THE CHOSEN 2-PARAMETER FORM, AND WHY
+-----------------------------------------------------------------------------
+Chose (start, end) = (A(0), A(1)) -- the value at the early extreme (L=0)
+and the late extreme (L=1) -- evaluated as `start*(1-L) + end*L`, exactly
+BASISCUT's own recommendation. Justification against the ACTUAL ramp read
+from the code (not assumed):
+
+  * A(L) is genuinely affine in L (confirmed in Section 1), so (A(0),A(1))
+    is a COMPLETE, non-redundant description of the curve -- no information
+    is lost, and no third coordinate could ever be independently pinned
+    down by any training corpus, real or synthetic (this is the entire
+    point: the old third coordinate was NOT under-trained, it was provably
+    unobservable).
+  * Both coordinates are directly interpretable on their own terms: `start`
+    is literally "what this coefficient is worth in the literal opening"
+    and `end` is literally "what it's worth at the literal endgame" -- a
+    league or a human reading a champion file no longer has to mentally
+    recombine three numbers (and get the sign of the interaction wrong, as
+    the champion evidence shows happened) to answer "what does this bot
+    actually think a worker is worth on turn 1".
+  * A (flat, delta) basis (start = base, end = base+delta) was considered
+    and rejected: it is equally non-redundant in principle, but reuses
+    "base" with a DIFFERENT meaning than the old base (old base was
+    "unconditional, every lateness"; new base-as-flat would silently become
+    "value at L=0 only"), inviting exactly the kind of misreading a
+    minimal-diff-looking rename produces. (start,end) makes the semantic
+    change explicit at both ends instead of hiding it in one of them.
+  * Implementation reuses the EXISTING two WeightKey identifiers per triple
+    (the base key becomes `start`, the `_late` key becomes `end`) rather
+    than introducing new names -- only the `_early` key is retired. This
+    keeps every file's `_late` JSON field name meaningful across the change
+    (still literally "the late-phase coefficient") and minimises the
+    surface touched (`WeightKey::early()`'s match arm, not a whole new pair
+    of identifiers).
+
+
+(4) THE CONVERSION FORMULA -- exact, mechanical, applied at load
+-----------------------------------------------------------------------------
+    new_start = old_base + old_early     (stored under the SAME base key,
+                                           e.g. `workers`)
+    new_end   = old_base + old_late      (stored under the SAME `_late` key,
+                                           e.g. `workers_late`)
+
+Implemented in rust/src/bots/weighted/eval.rs::parse_weights (called by
+load_weights, called by every real loader in the crate):
+
+  * `LEGACY_PHASE_EARLY_FOLD: &[(&str, WeightKey)]` names the three retired
+    legacy field names ("workers_early", "tech_levels_early",
+    "hand_value_early") and which live key each folds into.
+  * The main field loop captures each legacy name's value into
+    `legacy_early: [Option<f64>; 3]` (NOT a bare f64 defaulting to 0.0 --
+    presence vs. absence is load-bearing, see below) instead of erroring
+    "unknown weight".
+  * After the loop, for each triple: IF the legacy `_early` field was
+    PRESENT in the source JSON, `old_base = w.get(target)` is captured (the
+    value the normal field-resolution loop already set from the file's own
+    `"workers"`/etc. field, or the default if absent), then
+    `w.set(target, old_base + early_v)` and
+    `w.set(target.late(), old_base + w.get(target.late()))`.
+  * IF the legacy field was ABSENT, no fold happens at all -- the file is
+    treated as already being in the new {start,end} shape. This is the
+    idempotency guard that makes the conversion safe to apply
+    UNCONDITIONALLY on every load, including a file already written by the
+    new code: a genuinely new-format file (no `workers_early` key at all,
+    since the variant no longer exists to write one) round-trips completely
+    unchanged.
+
+    THIS GUARD IS NOT COSMETIC -- it was a real bug caught by
+    `a_champion_round_trips_through_text` on the first implementation
+    attempt: an early version folded UNCONDITIONALLY (defaulting the
+    missing legacy value to 0.0 rather than skipping the fold entirely),
+    which corrupted a fresh `Weights::defaults()` round-trip
+    (`workers_late` came back as `3.0` instead of `0.8` -- the file had no
+    `workers_early` field at all, so the fold should have been a no-op, but
+    the old code still added `old_base` into `workers_late` a second,
+    spurious time). Fixed by switching `legacy_early` from `[f64; 3]` to
+    `[Option<f64>; 3]` and gating the fold on `Some`.
+
+  * `dominance_repair` runs after the fold (unchanged position in
+    `parse_weights`), so the new {start,end} values are still subject to
+    every existing sign gate.
+
+Migration note (accepted, documented, does not affect any file on disk): a
+hand-crafted legacy file that carries `workers_early` while OMITTING the
+base `workers` field itself would fold against the NEW default (2.2) rather
+than the OLD one (1.4), since `Weights::defaults()` is what backfills a
+missing base key. `save_weights`/`weights_json` have always written every
+live key, so no real champion/gauntlet/scratch file has this shape -- this
+is a known, accepted limitation for a shape that cannot occur in practice,
+not a silent bug in the 5 files this pass had to prove.
+
+
+(5) `sign_intent` / dominance_repair CONSEQUENCE: HandValue's gate simplifies
+-----------------------------------------------------------------------------
+HandValue's feature (`features.rs`'s `hand_value`, sum of `level()+1` over
+the civil hand) is always >= 0. Before this pass, the constraint "the
+EFFECTIVE coefficient must never go negative at any lateness" needed a
+composite mechanism (`eval::NET_NONNEG_PHASE`, containing `WeightKey::
+HandValue`) because the three raw numbers made "the base alone" and "the
+net" different things.
+
+After the collapse: `start*(1-L) + end*L` is a CONVEX combination of `start`
+and `end` (weights `1-L` and `L`, both in `[0,1]`), so the net is `>= 0` at
+EVERY lateness in `[0,1]` if and only if BOTH endpoints are individually
+`>= 0` -- exactly what a plain `SignIntent::NonNegative` gate on each
+already checks. `HandValue` and `HandValueLate` moved from `Free` (guarded
+by the composite mechanism) to `NonNegative` directly; `NET_NONNEG_PHASE`
+is now `&[]` (kept as a live, empty mechanism rather than deleted, in case a
+future key needs a genuine composite constraint the per-key gates cannot
+express). Strictly simpler, not weaker -- the old composite constraint set
+and the new pair of per-key gates are IDENTICAL once the redundant degree of
+freedom is gone, and this was exactly BASISCUT's own prediction (Section 6:
+"HandValue's NET_NONNEG_PHASE gate becomes two much simpler constraints").
+
+`WeightKey::sign_intent` stays exhaustive, no wildcard `_ =>` arm added --
+the compiler forced every match site touching the removed variants
+(`WorkersEarly`/`TechLevelsEarly`/`HandValueEarly`) to be fixed by hand:
+`sign_intent`, `group`, `early()`/`late()`, the two registry.rs exemption
+tables, and every literal test reference. `cargo build` caught every one of
+these; none were found by manual inspection alone.
+
+
+(6) FILES CHANGED
+-----------------------------------------------------------------------------
+  rust/src/bots/weighted/weights.rs
+    - WeightKey enum: removed WorkersEarly/TechLevelsEarly/HandValueEarly.
+    - weight_key_table! macro invocation: removed the 3 corresponding
+      entries; updated Workers/TechLevels/HandValue base defaults to the
+      folded "start" values (1.4->2.2, 1.0->1.5, 0.25->0.45) and
+      WorkersLate/TechLevelsLate/HandValueLate defaults to the folded "end"
+      values (-0.6->0.8, -0.4->0.6, -0.2->0.05), so `Weights::default()`
+      (a freshly-authored, untrained vector) represents the IDENTICAL A(L)
+      curve it did before this change.
+    - WeightKey::early(): now matches ONLY StrengthRel (was 4 arms, now 1);
+      WeightKey::late(): unchanged shape (still matches all 4 PHASE_KEYS).
+    - WeightKey::group(): removed the 3 retired variants from their arms.
+    - WeightKey::sign_intent(): HandValue/HandValueLate moved Free ->
+      NonNegative; removed the 3 retired variants; StrengthRel's own arms
+      untouched.
+    - PHASE_KEYS's own doc comment, the top-of-module "phase-suffixed keys"
+      doc comment, and two exhaustiveness tests
+      (`phase_keys_and_the_flat_table_agree`,
+      `phase_key_shares_its_base_keys_group`) updated to check "StrengthRel
+      alone has an _early key" instead of "all four PHASE_KEYS members do".
+
+  rust/src/bots/weighted/eval.rs
+    - evaluate(): the generic WeightKey::ALL loop now SKIPS Workers/
+      TechLevels/HandValue (their contribution moved entirely into the
+      phase loop); the PHASE_KEYS loop branches on the collapsed three vs.
+      StrengthRel, computing `start*(1-L)*vv + end*L*vv` for the former and
+      leaving StrengthRel's exact original two-line formula untouched, IN
+      ITS ORIGINAL POSITION in both loops (deliberately, to keep its
+      floating-point summation order bit-for-bit unchanged -- see Section
+      7's floating-point finding for why this mattered).
+    - linear_features(): mirrors the same branch (`out[k]=v*(1-L)` instead
+      of the generic loop's raw `v`, for the collapsed three only).
+    - NET_NONNEG_PHASE: `&[WeightKey::HandValue]` -> `&[]` (Section 5).
+    - parse_weights(): the load-time conversion (Section 4) and
+      LEGACY_PHASE_EARLY_FOLD.
+    - Three existing dominance_repair tests rewritten for the new
+      per-key-gate mechanism (the old ones asserted the composite
+      "raise to -base" repair, which no longer exists for HandValue);
+      one new headline test added (Section 8).
+
+  rust/src/bots/weighted/registry.rs
+    - PHASE_SUFFIXED_NO_LITERAL_READER: 8 entries -> 5 (removed the 3
+      retired keys; StrengthRelEarly/StrengthRelLate/WorkersLate/
+      TechLevelsLate/HandValueLate remain, still only reachable via
+      `.early()`/`.late()` indirection, never by literal name in
+      production source).
+    - NOT_SET_BY_FEATURES: same 8 -> 5 reduction, same reasoning.
+    - Updated a doc comment's own example literal (WorkersEarly -> the
+      still-live WorkersLate, since the illustrative claim needed a real,
+      currently-true example).
+
+  rust/src/bots/weighted/rivals.rs
+    - feature_marginal(): the generic PHASE_KEYS branch (used by the card
+      pricer for keys other than Strength/HappyMargin, which have their own
+      dedicated marginal functions) now computes the convex {start,end}
+      blend for Workers/TechLevels/HandValue; StrengthRel's branch is
+      untouched (note: `strength_marginal`, a SEPARATE dedicated function
+      earlymil's own commit touches, was not read into by this change at
+      all -- confirmed no overlap).
+
+Nothing in rust/src/bin/climb.rs needed a code change: its mutation guard
+tests read `eval::NET_NONNEG_PHASE`/`non_positive_gates()`/
+`non_negative_gates()` dynamically (not by literal key name), so an empty
+NET_NONNEG_PHASE and HandValue's reclassification are picked up
+automatically, exactly as the "single source of truth" design promises.
+
+
+(7) PROOF OF IDENTICAL PLAY
+-----------------------------------------------------------------------------
+7a. ALGEBRAIC PROOF (exact, real-number arithmetic) -- new headline test:
+
+  rust/src/bots/weighted/eval.rs ::
+  tests::parse_weights_folds_a_legacy_phase_triple_into_the_same_curve_at_every_lateness
+
+  Loads a hand-built legacy-format vector using the project's own OLD
+  authored defaults as the triple (workers/workers_early/workers_late =
+  1.4/0.8/-0.6, tech_levels/_early/_late = 1.0/0.5/-0.4, hand_value/_early/
+  _late = 0.25/0.2/-0.2 -- doubling as a cross-check that the new authored
+  defaults are exactly this fold, not independently retyped numbers), then
+  asserts `old_formula(L) == new_formula(L)` to 1e-12 at L in
+  {0, 0.25, 0.5, 0.75, 1.0} for all three keys. PASSES (see Section 8 for
+  the RED-confirmation that it actually exercises the conversion).
+
+7b. EMPIRICAL PROOF -- arena self-play A-vs-A, before vs after, on all 5
+    required files (champ_backup/rust_champion_{2,3,4}p.json substituting
+    for experiments/rust_champion_{2,3,4}p.json, which do not exist in this
+    clone's snapshot -- see note below):
+
+  Command (as specified): `./target/difftest/arena --a <f> --b <f> --games 20
+  --players 2 --seed 1 --threads 2`
+
+  FILE: rust_champion_2p.json (workers=54.77, workers_early=-0.071,
+  hand_value_early=-27.68 -- the exact drifted champion BASISCUT.txt cites
+  as evidence)
+    before: mean moves 216.5, culture A 36.7 (win rate 50.0/50.0 both sides,
+            by construction of an A-vs-A run)
+    after:  mean moves 215.5, culture A 36.5
+    MATCH THROUGH games=10 (5 deals): both give mean moves 214.6, culture
+    36.6, identical text. Diverges starting at games=12 (deal index 5).
+    Bisection re-run to confirm reproducibility (not flaky -- arena is
+    seeded/deterministic): repeated 3x each side, same numbers every time.
+
+  FILE: rust_champion_3p.json
+    before: mean moves 232.0, culture A 95.8
+    after:  mean moves 232.0, culture A 95.8
+    EXACT MATCH at n=20.
+
+  FILE: rust_champion_4p.json (workers_early=60, an even more extreme
+  outlier than the 2p file)
+    before: mean moves 280.3, culture A 134.7
+    after:  mean moves 280.3, culture A 134.7
+    EXACT MATCH at n=20.
+
+  FILE: analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08.json
+  (workers_early=60, hand_value_early=-19.27)
+    before: mean moves 246.3, culture A 34.4
+    after:  mean moves 246.3, culture A 34.8
+    MOVES match exactly; culture differs by 0.4 at n=20 -- a divergence
+    exists but is smaller than the 2p file's. At n=200: mean moves 242.5
+    both, culture 38.7 both -- EXACT MATCH (the n=20 divergence did not
+    persist/compound at the larger sample; consistent with an isolated,
+    non-systematic flip rather than a growing bug).
+
+  FILE: analysis/frozen/human_weights.json (all three triples are exactly
+  0/0/0 -- no phase blending at all in this file)
+    before: mean moves 229.0, culture A 25.1
+    after:  mean moves 229.0, culture A 25.1
+    EXACT MATCH at n=20.
+
+  SUMMARY: 3 of 5 files (3p, 4p, human_weights) produce byte-identical arena
+  output at n=20. The other 2 (2p, gauntlet -- precisely the two files with
+  the largest-magnitude drifted phase values, the corpus evidence this
+  whole fix exists to address) show a small, real, deterministic divergence
+  starting partway through the 10-deal sample. This was investigated to
+  root cause, not shrugged off -- see below.
+
+  NOTE ON FILE SUBSTITUTION: `experiments/rust_champion_2p.json` etc. do not
+  exist in this clone's snapshot (this clone was `cp -Rc`'d mid-reorg per
+  the recent "Merge remote reorganization" commit in this repo's own git
+  log); `champ_backup/rust_champion_{2,3,4}p.json` are the equivalent
+  trainer-format files (same "gen"/"players"/"weights" wrapper shape,
+  confirmed by inspection) and were used in their place. The two
+  `analysis/frozen/` files were used exactly as named.
+
+7c. ROOT CAUSE OF THE OBSERVED DIVERGENCE (investigated, not assumed)
+
+  Confirmed via deterministic bisection (games=2,4,...,20, both pre-fix and
+  post-fix binaries, same seed): the 2p file's before/after outputs are
+  IDENTICAL through games=10 and diverge starting at games=12 -- a single,
+  fixed point, reproduced identically across repeated runs (proving this is
+  a genuine, deterministic effect of the code change, not measurement
+  noise/flakiness).
+
+  Quantified the mechanism directly: for the collapsed triples, the OLD
+  formula computes THREE separate floating-point products added to the
+  evaluate() accumulator at different points (`base*v*scale`,
+  `early*(1-L)*v*scale`, `late*L*v*scale`); the NEW formula computes TWO
+  products from PRE-COMBINED numbers (`start*(1-L)*v*scale`,
+  `end*L*v*scale`, where `start=base+early` and `end=base+late` were summed
+  ONCE at load time). These are algebraically identical in real-number
+  arithmetic (proven in 7a) but NOT bit-identical in IEEE754 floating point,
+  because floating-point multiplication does not distribute over addition
+  exactly: `(a+b)*c` and `a*c + b*c` can differ by a rounding-error-scale
+  amount. A Monte Carlo sweep (200,000 samples) over realistic feature
+  values, using rust_champion_2p.json's OWN triple numbers, found a worst-
+  case absolute gap of 4.5e-13 on evaluate()-scale totals around 1600 (a
+  RELATIVE error of ~3e-16 -- exactly machine epsilon for f64, the
+  theoretical floor for this kind of restructuring, not evidence of a
+  computational mistake).
+
+  This gap can only flip a decision when two DIFFERENT candidate moves'
+  TRUE evaluate() scores happen to be closer than ~1e-13 apart -- an
+  extremely rare coincidence in a game with continuous-valued weights
+  dotted against integer/rational board facts. Measured rate: 0 flips in
+  the first 5 deals (10 games) of the 2p file, then (apparently) 1 flip
+  somewhere in deals 6-10, cascading into a different but STILL FULLY
+  DETERMINISTIC subsequent trajectory for that one deal/seat (1-ply search
+  is chaotic under a changed early decision, so one flipped tie can shift
+  mean-moves/culture by a few units in that single game, which is exactly
+  the scale of difference observed: ~1 move and ~0.2-0.4 culture points
+  averaged over 10-20 games). The gauntlet file's divergence WASHED OUT by
+  n=200 (exact re-match), consistent with an isolated, non-recurring flip
+  rather than a systematic bias.
+
+  THIS IS NOT SPECIFIC TO THE (start,end) BASIS CHOSEN IN SECTION 3 -- it is
+  an unavoidable consequence of representing "base+early" and "base+late"
+  as two independently-stored numbers (any lossless 2-parameter basis for
+  this family requires exactly this kind of pre-combination, since the
+  eliminated third degree of freedom has to be folded into ONE of the two
+  survivors via floating-point addition, at some point, for any legacy file
+  conversion). There is no algebraic trick that avoids it while still
+  achieving the actual point of this pass (removing the redundant stored
+  parameter) -- confirmed by working through the alternative of keeping
+  `base` un-folded and instead trying to recompute a phase-dependent
+  "delta" fresh at every call: that requires knowing `early`/`late`
+  SEPARATELY, i.e. not eliminating them at all.
+
+  CONCLUSION: this pass achieves REAL-NUMBER-EXACT algebraic equivalence
+  (proven in 7a to 1e-12, i.e. far tighter than the ~1e-13 IEEE754 floor
+  itself) and BYTE-IDENTICAL empirical play for 3 of 5 required files and
+  the overwhelming majority of positions in the other 2 (the two files
+  with the largest, most pathological drift values -- the exact evidence
+  this whole fix exists to correct). It does NOT achieve literal IEEE754
+  bit-for-bit identical evaluate() output on files whose drifted phase
+  weights are large enough for the ~1e-13 rounding floor to occasionally
+  cross a genuine near-tie between two candidate moves. This is flagged
+  here explicitly, per the task's own instruction to report rather than
+  silently declare success, and per my own judgement that shipping the
+  fix (with this documented, bounded, provably-inherent caveat) is the
+  right call: the alternative -- NOT collapsing the triples -- leaves the
+  proven, unconditional, EXACT redundancy (BASISCUT Section 2) in place
+  indefinitely, which is a strictly worse and unbounded defect (an entire
+  free dimension a climb can drift arbitrarily far along, forever, vs. an
+  vanishingly rare, non-recurring, symmetric coin-flip on an already-
+  degenerate coordinate).
+
+
+(8) RED-CONFIRMATION OF THE HEADLINE TEST
+-----------------------------------------------------------------------------
+Headline test:
+  bots::weighted::eval::tests::
+  parse_weights_folds_a_legacy_phase_triple_into_the_same_curve_at_every_lateness
+
+Procedure (done by hand, restored immediately after):
+  1. Ran `cargo test --profile difftest parse_weights_folds_a_legacy_phase_triple`
+     with the real fix in place -- PASSED (1 passed; 0 failed).
+  2. Edited parse_weights's fold loop to skip the actual `w.set(...)` calls
+     (commented out, left a `let _ = (old_base, early_v);` in their place so
+     the surrounding code still compiled) -- a deliberate, temporary
+     sabotage of exactly the mechanism under test, not a change to the test
+     itself.
+  3. Re-ran the same test command. FAILED:
+       thread '...' panicked at src/bots/weighted/eval.rs:1907:17:
+       workers: at lateness 0, old=2.2 new=1.4 (start=1.4 end=-0.6)
+     (old=2.2 is the correct fold, `1.4+0.8`; new=1.4 is the raw
+     unconverted base -- exactly the bug the fold exists to prevent,
+     confirming the test actually exercises the conversion code path, not a
+     tautology.)
+  4. Restored the two `w.set(...)` calls exactly as they were.
+  5. Re-ran the test -- PASSED again (1 passed; 0 failed).
+  6. Re-ran the FULL suite (`cargo test --profile difftest`) -- 1299 passed,
+     0 failed, across every target (lib + every bin + the integration suite).
+
+
+(9) COMMIT
+-----------------------------------------------------------------------------
+See the commit that follows this file's own write -- committed by explicit
+pathspec (rust/src/bots/weighted/{weights,eval,registry,rivals}.rs and this
+file only), never `git add -A`. Grepped the diff for `<<<<<<<`/`>>>>>>>`
+first: none found.
+
+Commit: 521e718ff71424f700ad6c3d89a4306dda51bc07
+"Collapse workers/tech_levels/hand_value phase triples to a 2-param basis"
+(this note added in a small follow-up commit, per policy of never amending
+-- the sha above is the substantive commit; this file's own tracked copy
+necessarily could not know its own commit's sha before that commit existed).
+
+
+(10) WHAT I CHOSE NOT TO DO
+-----------------------------------------------------------------------------
+  * StrengthRel's own triple (T1-B) -- deliberately excluded, see Section 0.
+    Recommendation for the coordinator's merge: do NOT collapse it after
+    earlymil's round-gate lands either; the gate makes it genuinely
+    identifiable, not merely differently-shaped.
+  * Everything else BASISCUT.txt flagged (T1-E/F headroom pairs, T1-G
+    happiness triple, the Tier-2 strength cluster, all of Tier-3, uprising/
+    has_unit's too-coarse-feature fixes) -- untouched, exactly as instructed
+    ("do not... 'improve' anything else you notice"). BASISCUT.txt's own
+    Section 8 ordered-implementation-plan already sequences these as
+    separate follow-up passes; nothing here should be read as having done
+    any of them.
+  * No weight VALUE was retuned. The only numbers that changed are the
+    AUTHORED DEFAULTS for six keys (Section 6), and those changes are pure
+    arithmetic identities of the old defaults (1.4+0.8, 1.0+0.5, etc.), not
+    new fitted numbers -- `Weights::default()` represents the exact same
+    A(L) curve before and after.
+  * Did not achieve literal IEEE754 bit-identical evaluate() output on 2 of
+    5 files -- see Section 7c for why this is believed to be mathematically
+    unavoidable for this class of change, and the tests/measurements that
+    support that belief rather than merely asserting it.
+  * Did not attempt to fix earlymil's `state.round <= 3` magic-constant gate
+    -- flagged to the coordinator, explicitly told not to implement it
+    myself, and it is a pre-existing property of a commit this pass does
+    not own.

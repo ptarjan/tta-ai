@@ -130,7 +130,46 @@ pub fn blocked_on(mv: Move) -> Option<&'static str> {
         // it on purpose.
         Move::Resign => Some("would end the game early; tested separately"),
 
-        _ => None,
+        // Every other variant is fully ported and unblocked -- listed
+        // individually, not behind a wildcard, so a future `Move` variant
+        // fails this match at compile time instead of silently inheriting
+        // "unblocked" without anyone deciding that on purpose.
+        Move::Take { .. }
+        | Move::Build { .. }
+        | Move::Develop { .. }
+        | Move::Upgrade { .. }
+        | Move::WonderStep { .. }
+        | Move::Pop
+        | Move::PopFree
+        | Move::Revolution { .. }
+        | Move::PlayLeader { .. }
+        | Move::PlayAction { .. }
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::Churchill { .. }
+        | Move::EndTurn
+        | Move::PolPass => None,
     }
 }
 

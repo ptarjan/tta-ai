@@ -1,0 +1,55 @@
+
+===== 3p, 60 games =====
+
+FIRST PRODUCTION BUILD (60/60 games have one by round 8):
+  farm     59 (98%)  median round 2  {'build': 59}  top cards [('Agriculture', 59)]
+  mine      1 (2%)  median round 9  {'build': 1}  top cards [('Bronze', 1)]
+
+FIRST RESEARCH vs FIRST BUILD (median round; share of games):
+  type                      develop              build               take
+  action                      --                 --              1 (100%)
+  air                       19 (2%)              --              16 (13%)
+  arena                     8 (37%)           13 (17%)            8 (43%)
+  artillery                15 (15%)            19 (3%)           14 (28%)
+  cavalry                  10 (27%)           17 (17%)           11 (52%)
+  farm                     10 (40%)            2 (98%)            9 (53%)
+  government                17 (5%)              --               7 (65%)
+  infantry                  9 (23%)            5 (98%)            7 (45%)
+  lab                      10 (27%)           10 (27%)            7 (38%)
+  leader                      --                 --               2 (95%)
+  library                  10 (38%)           11 (23%)            9 (48%)
+  mine                     13 (38%)           10 (20%)           10 (60%)
+  special-tech              9 (72%)              --               6 (85%)
+  temple                    9 (38%)            7 (82%)            8 (38%)
+  theater                   9 (37%)           14 (23%)            8 (55%)
+  wonder                      --                 --              10 (48%)
+
+-- round 1 --
+  actions/game: take:action 0.60, take:leader 0.40
+  top cards   : take:Alexander the Great 0.17, take:Urban Growth (A) 0.13, take:Frugality (A) 0.13, take:Cultural Heritage (A) 0.08, take:Patriotism (A) 0.08, take:Aristotle 0.08, take:Stock Pile 0.07, take:Rich Land (A) 0.07
+  top sequence: take 100%
+
+-- round 2 --
+  actions/game: pop 1.00, build:farm 0.97, destroy 0.83, take:action 0.48, play_leader 0.28, take:leader 0.22, take:special-tech 0.12, play_action 0.08, take:cavalry 0.03, take:arena 0.03, build:infantry 0.03, take:mine 0.02
+  top cards   : build:Agriculture 0.97, play_leader:Alexander the Great 0.17, play_action:Cultural Heritage (A) 0.08, take:Urban Growth (A) 0.08, take:Rich Land (A) 0.07, take:Frugality (A) 0.07, take:Warfare 0.07, take:Stock Pile 0.05
+  top sequence: build>pop>take>destroy 63% | build>play_leader>pop>take 17% | build>play_leader>pop>take>destroy 10%
+
+-- round 3 --
+  actions/game: take:action 0.52, build:farm 0.47, build:infantry 0.37, destroy 0.30, play_tactic 0.20, prepare_event 0.18, build:temple 0.17, take:leader 0.12, take:mine 0.12, take:special-tech 0.08, take:infantry 0.08, play_leader 0.08
+  top cards   : build:Agriculture 0.47, build:Warriors 0.37, build:Religion 0.17, take:Rich Land (I) 0.15, take:Urban Growth (I) 0.12, take:Iron 0.12, take:Frugality (I) 0.08, take:Swordsmen 0.08
+  top sequence: build>take 40% | build>take>take>destroy 17% | build>take>take>play_tactic 7%
+
+-- round 4 --
+  actions/game: build:farm 0.42, build:temple 0.28, build:infantry 0.27, play_tactic 0.27, take:action 0.25, destroy 0.22, pop 0.20, take:special-tech 0.17, copy_tactic 0.17, take:government 0.15, prepare_event 0.15, take:theater 0.08
+  top cards   : build:Agriculture 0.42, build:Religion 0.28, build:Warriors 0.27, take:Monarchy 0.12, take:Drama 0.08, develop:Drama 0.08, take:Bread and Circuses 0.07, develop:Printing Press 0.07
+  top sequence: build>take 17% | build>take>play_tactic 12% | build>develop>take 10%
+
+-- round 5 --
+  actions/game: pop 0.58, copy_tactic 0.50, take:action 0.35, build:infantry 0.25, destroy 0.25, play_leader 0.15, play_action 0.13, play_tactic 0.13, revolution 0.13, take:leader 0.12, prepare_event 0.12, take:special-tech 0.10
+  top cards   : build:Warriors 0.25, revolution:Monarchy 0.10, take:Urban Growth (I) 0.10, build:Agriculture 0.10, upgrade:Irrigation 0.08, build:Religion 0.07, take:Bread and Circuses 0.07, take:Patriotism (I) 0.07
+  top sequence: take>take>copy_tactic 5% | develop>take>copy_tactic 5% | take>play_leader>copy_tactic 5%
+
+-- round 6 --
+  actions/game: pop 0.80, copy_tactic 0.62, destroy 0.30, take:action 0.28, build:infantry 0.28, build:farm 0.17, develop:special-tech 0.12, prepare_event 0.12, play_action 0.10, upgrade:farm 0.10, build:temple 0.08, play_leader 0.08
+  top cards   : build:Warriors 0.25, build:Agriculture 0.17, upgrade:Irrigation 0.10, build:Religion 0.08, take:Printing Press 0.07, take:Rich Land (I) 0.07, develop:Warfare 0.07, take:Knights 0.07
+  top sequence: take>take>copy_tactic 7% | develop>take>copy_tactic 5% | build>develop>pop>take 3%

@@ -331,7 +331,12 @@ fn for_each_output_special(p: &PlayerState, mut f: impl FnMut(Special)) {
 /// RATING versions of the same two cards -- see that match's doc comment on
 /// why this codebase, like Python, accepts that duplication rather than
 /// routing a scorer through the feed it mirrors).
-fn lab_level_workers(techs: &Tableau) -> i32 {
+///
+/// `pub(crate)` so `apply::on_leave_play` can reuse the SAME formula for
+/// `CultureOnLeaveEqualToLabResourceProduction` (also Bill Gates -- see that
+/// special's own doc) rather than re-deriving it, matching this module's own
+/// stated preference for one formula per shared arithmetic shape.
+pub(crate) fn lab_level_workers(techs: &Tableau) -> i32 {
     techs
         .iter()
         .filter(|(id, _)| id.kind() == CardType::Lab)
@@ -397,7 +402,7 @@ fn output_modifier_value(
             best_staffed(&p.techs, |k| k == CardType::Mine)
                 .map_or(0, |b| b.get().production.resources as i32),
         ),
-        _ => return 0,
+        A(_) | AllPlayers(_) | B(_) | BothPlayers(_) | BuildDiscount(_) | CancelledIfPartiesAttackEachOther | CannotPlayAggressionOrWar | CivilActionBackOnTechDevelop(_) | CivilActionUpgradeUrbanBuildingToTheater | ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | ColonyImmediateBonusApplies | ColonyPermanentBonusTransfers | ComboFoodDiscount(_) | ComboResourceDiscount(_) | Condition(_) | CultureFirstColony(_) | CultureIfTopTwoStrength(_) | CultureOnLeaveEqualToLabResourceProduction | CultureOnRevolution(_) | CultureOnTechDevelop(_) | CulturePerAdditionalColony(_) | CulturePerCivilizationWithMoreCulture(_) | CulturePerHappyFromTemplesTheatersWonders(_) | DecreasePopulation(_) | DestroyUrbanBuildings(_) | DoublesTacticBonusOfOneArmy | ExtraHappyPerHappySource(_) | FinalScoring(_) | FreeCivilAction(_) | FreePopIncreasePerTurn | Gain(_) | GainCulturePerLevelOfRemovedCard(_) | GainFoodOrResources(_) | GainResources(_) | InfantryCountsAsCavalryForTactics | LastRoundSubstitute(_) | LeaderTakeCivilActionDiscount(_) | LibraryDiscountsIfTheater | Lose(_) | MilitaryActionAsCivilPerTurn(_) | MilitaryActionCombinedPopIncreaseAndUnitBuild | NoAttacksBetweenParties | OnAttackBetweenParties(_) | OnBuildCulture(_) | OnBuildCulturePerTechLevelSum | OnReplacePutUnderCompletedWonderHappy(_) | OncePerGameTwoPoliticalActions | OpponentDecreasesPopulation(_) | OpponentsPayDoubleMilitaryActionsToAttackYou | OrTakesSpecialTechnologiesOfSameTotalScienceCost | PeekTopEventCardInPolitics | PerTurnChoice | PlayerWithLeastCulture(_) | PlayerWithMostCulture(_) | PlayersWithMostDiscontentWorkers(_) | PlayersWithMostHappyFaces(_) | PopIncreaseFoodDiscount(_) | RemoveAsPoliticalActionForYellowToken(_) | RemoveAsPoliticalActionFreeColonize | RemoveFromGame | ResourceOnMilitaryUnitBuildOrUpgrade(_) | ResourceOnTechDevelop(_) | ResourcesForMilitaryUnitsPerStrongerCivilization(_) | RevolutionUsesMilitaryActionsInstead | ScienceOnTechCardTake(_) | StealColony(_) | StrengthPerArtillery(_) | StrengthPerInfantry(_) | StrengthPerMilitaryUnit(_) | StrengthPerTempleOrGovernmentHappy(_) | StrengthPerUnitType(_) | StrongestPlayer(_) | StrongestPlayers(_) | TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | TakeFromOpponent(_) | TheaterResourceDiscountIfLibrary(_) | TheaterScienceDiscountIfLibrary(_) | TheaterTechScienceDiscount(_) | VictorTakesCulture | VictorTakesScienceUpTo(_) | VictorTakesYellowTokens | WeakestPlayer(_) | WeakestPlayers(_) | WonderTakeNoExtraCivilActions => return 0,
     };
     // A modifier counts only if EVERY building type it reads is one the
     // caller asked about (Shakespeare's pair straddles a library and a
@@ -467,9 +472,6 @@ fn happy_source_count(p: &PlayerState) -> i32 {
         }
     }
     for &w in p.completed_wonders.as_slice() {
-        if p.flipped_wonders.contains(w) {
-            continue;
-        }
         let card = w.get();
         // St. Peter's Basilica's own printed text: "Each OTHER card or
         // worker that gives you at least one happy face now gives you an
@@ -488,7 +490,24 @@ fn happy_source_count(p: &PlayerState) -> i32 {
         // card print happy. Without this, a player holding both St. Peter's
         // Basilica and a Homer-boosted wonder had that wonder's live happy
         // face silently excluded from St. Peter's own count.
-        let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;
+        //
+        // Ravages of Time flips a wonder face down and voids its OWN
+        // printed effects (`compute`'s wonders loop: `continue`s before
+        // `add_flat` on a flipped wonder) -- but Homer's tucked happy face
+        // is explicitly exempted from that (Code of Laws errata, quoted on
+        // `compute`'s own wonders loop: "If the wonder is flipped face down
+        // because of Ravages of Time, Homer's happy face is not flipped
+        // over. The ruins of the wonder continue to produce that happy
+        // face."). So a flipped wonder can still be a qualifying "source"
+        // here via Homer even though its own printed happy cannot -- this
+        // used to `continue` past EVERY flipped wonder regardless, silently
+        // dropping a live Homer face from St. Peter's own count. Traced to
+        // BGO game 7522616 (Green: Homer tucked under Pyramids, Pyramids
+        // later ravaged, round 12): this undercounted by 1, cascading into
+        // an overcounted discontent worker and a 2-culture Impact of
+        // Population shortfall.
+        let printed_happy_alive = !p.flipped_wonders.contains(w) && card.effects.happy > 0;
+        let gives_happy_now = printed_happy_alive || p.homer_wonder == w;
         if gives_happy_now && !grants_this_bonus_itself {
             n += 1;
         }
@@ -522,13 +541,15 @@ fn temple_theater_wonder_happy_source_count(p: &PlayerState) -> i32 {
         }
     }
     for &w in p.completed_wonders.as_slice() {
-        if p.flipped_wonders.contains(w) {
-            continue;
-        }
         let card = w.get();
         let grants_this_bonus_itself =
             card.special.iter().any(|sp| matches!(sp, Special::ExtraHappyPerHappySource(_)));
-        let gives_happy_now = card.effects.happy > 0 || p.homer_wonder == w;
+        // See `happy_source_count`'s matching comment: Homer's tucked happy
+        // face survives a Ravages of Time flip (CoL errata), so it must
+        // still count here even though the wonder's own printed happy does
+        // not once flipped.
+        let printed_happy_alive = !p.flipped_wonders.contains(w) && card.effects.happy > 0;
+        let gives_happy_now = printed_happy_alive || p.homer_wonder == w;
         if gives_happy_now && !grants_this_bonus_itself {
             n += 1;
         }
@@ -670,7 +691,7 @@ fn unit_slot(kind: CardType) -> Option<usize> {
         CardType::Cavalry => Some(CAVALRY),
         CardType::Artillery => Some(ARTILLERY),
         CardType::Air => Some(AIR),
-        _ => None,
+        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Government | CardType::SpecialTech | CardType::Wonder | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => None,
     }
 }
 
@@ -924,7 +945,7 @@ fn apply_pacts(stats: &mut Stats, state: &GameState, p: &PlayerState) {
                     // and the flag-only pact specials are combat.rs's
                     // resolution-time concern, not `compute`'s -- see
                     // `apply_special`'s own grouping below.
-                    _ => {}
+                    Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => {}
                 }
             }
         }
@@ -948,7 +969,7 @@ pub(crate) fn pact_military_actions_for(card: CardId, pact: &Pact, side: u8) -> 
             Special::BothPlayers(block) => total += block.military_actions as i32,
             Special::A(block) if side == pact.a => total += block.military_actions as i32,
             Special::B(block) if side == pact.b => total += block.military_actions as i32,
-            _ => {}
+            Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => {}
         }
     }
     total
@@ -1068,10 +1089,35 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         CulturePerHappyFromTemplesTheatersWonders(v) => {
             let mut happy = happy_from(&p.techs, |k| matches!(k, CardType::Temple | CardType::Theater));
             for &w in p.completed_wonders.as_slice() {
-                if p.flipped_wonders.contains(w) {
-                    continue;
+                // Michelangelo's printed text counts "1 culture per HAPPY
+                // FACE" on a temple/theater/wonder -- a happy face is a
+                // specific printed icon, and a card with a printed UNHAPPY
+                // face (negative `effects.happy`, e.g. Kremlin's -1) has
+                // zero happy faces of its own, not a negative count. FAQ
+                // v1.5 p.9 confirms this count is its own thing, exempt
+                // from the whole-civilization 0..8 happiness clamp -- so it
+                // is not "net happiness" being summed here, it is a face
+                // count, and faces cannot be negative. Traced to BGO game
+                // 7521066 (Purple: Michelangelo leader + Kremlin, round
+                // 12): this arm let Kremlin's unhappy face cancel a happy
+                // face elsewhere in the sum, undercounting Michelangelo's
+                // culture by 1 * `v`. `happy_source_count` and
+                // `temple_theater_wonder_happy_source_count` already gate
+                // on `effects.happy > 0` for the same reason; this sum must
+                // clamp each wonder's contribution the same way instead of
+                // adding the raw (possibly negative) printed value.
+                //
+                // Ravages of Time voids a flipped wonder's OWN printed happy,
+                // but not Homer's tucked happy face (CoL errata quoted on
+                // `compute`'s wonders loop and on `happy_source_count`) -- so
+                // the printed-happy term is gated on NOT flipped, while
+                // Homer's `+1` still applies regardless, same split as those
+                // two functions. This used to `continue` past a flipped
+                // wonder entirely, dropping a live Homer face same as the
+                // `happy_source_count` bug traced to BGO game 7522616.
+                if !p.flipped_wonders.contains(w) {
+                    happy += w.get().effects.happy.max(0) as i32;
                 }
-                happy += w.get().effects.happy as i32;
                 if p.homer_wonder == w {
                     happy += 1;
                 }
@@ -1122,7 +1168,7 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
                     CardType::Cavalry => 1,
                     CardType::Artillery => 2,
                     CardType::Air => 3,
-                    _ => continue,
+                    CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Government | CardType::SpecialTech | CardType::Wonder | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => continue,
                 };
                 seen[i] = true;
             }
@@ -1374,7 +1420,7 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
             CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => {
                 stats.strength += card.effects.strength as i32 * slot.workers as i32;
             }
-            other => unreachable!(
+            other @ CardType::Government | other @ CardType::Wonder | other @ CardType::Leader | other @ CardType::Action | other @ CardType::Tactic | other @ CardType::Aggression | other @ CardType::War | other @ CardType::Pact | other @ CardType::Bonus | other @ CardType::Territory | other @ CardType::Event => unreachable!(
                 "{other:?} cannot be in `p.techs` -- government/wonder/leader/action/\
                  military-deck cards live on their own `PlayerState` fields (see state.rs)"
             ),
@@ -1383,6 +1429,17 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
 
     // --- phase 2: wonders.
     for &w in p.completed_wonders.as_slice() {
+        // Homer, tucked under a completed wonder on leader replacement,
+        // grants that wonder a live +1 happy face that is NOT one of "its"
+        // (the wonder's own printed) effects -- official errata (Code of
+        // Laws, "Homer"): "If the wonder is flipped face down because of
+        // Ravages of Time, Homer's happy face is not flipped over. The
+        // ruins of the wonder continue to produce that happy face." So this
+        // check must run regardless of flip status, before the early
+        // `continue` below that only voids the wonder's OWN printed effects.
+        if p.homer_wonder == w {
+            stats.happy += 1;
+        }
         if p.flipped_wonders.contains(w) {
             // Ravages of Time: effects gone, ruins produce culture instead.
             stats.culture += 2;
@@ -1392,9 +1449,6 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
         add_flat(&mut stats, &card.effects);
         for &sp in card.special {
             apply_special(&mut stats, p, sp);
-        }
-        if p.homer_wonder == w {
-            stats.happy += 1;
         }
     }
 
@@ -1447,6 +1501,52 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
     stats.food = stats.food.max(0);
     stats.resources = stats.resources.max(0);
     stats.strength = stats.strength.max(0);
+    if state.game_over && std::env::var("SCOREDIV_HAPPY_DUMP").is_ok() {
+        eprintln!(
+            "SCOREDIV_HAPPY_PRECLAMP player={} raw_happy={} happy_extra={} homer_wonder_bonus={}",
+            p.idx,
+            stats.happy,
+            p.happy_extra,
+            if !p.homer_wonder.is_none() { 1 } else { 0 }
+        );
+        for (id, slot) in p.techs.iter() {
+            let card = id.get();
+            if card.production.happy != 0 {
+                eprintln!(
+                    "  SCOREDIV_HAPPY_SRC tech {} workers={} happy_each={}",
+                    card.name, slot.workers, card.production.happy
+                );
+            }
+        }
+        for &w in p.completed_wonders.as_slice() {
+            let card = w.get();
+            if card.effects.happy != 0 || p.homer_wonder == w {
+                eprintln!(
+                    "  SCOREDIV_HAPPY_SRC wonder {} flipped={} happy={} is_homer_home={}",
+                    card.name,
+                    p.flipped_wonders.contains(w),
+                    card.effects.happy,
+                    p.homer_wonder == w
+                );
+            }
+        }
+        if !p.leader.is_none() {
+            let card = p.leader.get();
+            if card.effects.happy != 0 {
+                eprintln!("  SCOREDIV_HAPPY_SRC leader {} happy={}", card.name, card.effects.happy);
+            }
+        }
+        let gov = p.government.get();
+        if gov.production.happy != 0 {
+            eprintln!("  SCOREDIV_HAPPY_SRC government {} happy={}", gov.name, gov.production.happy);
+        }
+        for &col in p.colonies.as_slice() {
+            let card = col.get();
+            if card.effects.happy != 0 {
+                eprintln!("  SCOREDIV_HAPPY_SRC colony {} happy={}", card.name, card.effects.happy);
+            }
+        }
+    }
     stats.happy = stats.happy.clamp(0, 8);
     stats
 }
@@ -1455,6 +1555,19 @@ pub fn compute(state: &GameState, p: &PlayerState) -> Stats {
 /// Here: just `compute` -- see this module's top doc comment "Caching".
 pub fn state_stats(state: &GameState, p: &PlayerState) -> Stats {
     compute(state, p)
+}
+
+/// Scientific Cooperation's own printed text, verbatim (`sources/
+/// bga_throughtheages_material.inc.php`, card 170/1170): "Every time one of
+/// the civilizations develop a technology, it pays 2 science less and the
+/// other civilization pays 1 science. (If the other cannot pay 1 science,
+/// then the technology cannot be developed.)" -- a real LEGALITY gate, not
+/// just a charge: `p` may not develop/revolt AT ALL while any partner
+/// `Stats::science_partners` names cannot cover their own 1. Trivially true
+/// when the bitmask is empty (no such pact, or no pact at all).
+pub fn science_pact_partners_can_pay(state: &GameState, p: &PlayerState) -> bool {
+    let mask = state_stats(state, p).science_partners;
+    (0..state.num_players).all(|i| mask & (1 << i) == 0 || state.players[i as usize].science >= 1)
 }
 
 // ----------------------------------------------------------------- snapshot
@@ -1632,6 +1745,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -1649,6 +1763,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            breakthrough_ma_funded: false,
             replaced_leader_this_turn: false,
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
@@ -1665,6 +1780,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
         }
     }
 
@@ -1721,6 +1838,8 @@ mod tests {
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+            last_end_of_turn_science: [None; MAX_PLAYERS],
+            last_end_of_turn_resources: [None; MAX_PLAYERS],
         }
     }
 
@@ -2009,6 +2128,39 @@ mod tests {
         );
     }
 
+    /// Regression for BGO game 7521066 round 12: Purple holds Michelangelo
+    /// and just completed Kremlin, whose printed effects are a genuine
+    /// UNHAPPY face (`effects.happy == -1`), not the absence of one.
+    /// Michelangelo's printed text is "1 culture per happy face from
+    /// temples, theaters and wonders" -- an unhappy face is not a happy
+    /// face, so it must contribute zero to this count, not a negative
+    /// count that cancels a happy face elsewhere. FAQ v1.5 p.9 already
+    /// establishes this per-source count is its own thing (exempt from the
+    /// whole-civilization 0..8 happiness clamp), reinforcing that it is a
+    /// face count, not a net-happiness sum. Before the fix this arm summed
+    /// Kremlin's raw -1 into `happy`, undercounting by 1 culture whenever a
+    /// staffed Temple/Theater elsewhere supplied the happy face Kremlin's
+    /// unhappy face wrongly cancelled.
+    #[test]
+    fn michelangelo_does_not_let_a_wonders_unhappy_face_cancel_a_temples_happy_face() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Michelangelo");
+        p.techs.insert(card("Religion"), TechSlot { workers: 1, stored: 0 }); // 1 happy face
+        p.completed_wonders.push(card("Kremlin")); // effects.happy == -1, an UNHAPPY face
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Religion's 1 happy face + Kremlin's 0 happy faces (its unhappy
+        // face does not subtract) = 1 face -> 1 culture via Michelangelo,
+        // plus Religion's own printed +1 culture and Kremlin's own printed
+        // +2 culture: 1 + 2 + 1 = 4.
+        assert_eq!(
+            s.culture,
+            4,
+            "Religion's own +1, Kremlin's own +2, and 1 * Michelangelo's culture-per-happy (Religion's 1 happy \
+             face; Kremlin's unhappy face must not subtract)"
+        );
+    }
+
     // ------------------------------------------------------ army strength
 
     #[test]
@@ -2067,6 +2219,32 @@ mod tests {
         // Tech-phase per-unit strength: Swordsmen 2*1 + Cannon 3*2 + Air
         // Forces 5*1 = 2+6+5 = 13. Grand total: 13 + 10 = 23.
         assert_eq!(s.strength, 23);
+    }
+
+    #[test]
+    fn fortifications_grants_five_strength_per_army_matching_bgas_printed_card_not_four() {
+        // Regression for game 7522009 (a War over Culture): the journal's own
+        // resolution line reads "Defender's strength: 28", but this table
+        // used to print `Fortifications` as strength 4 / obsolete 2 -- a
+        // transcription slip against both `sources/bga_throughtheages_material
+        // .inc.php` (`artybon` 5 / `artybonplus` 3) and every sibling Age II
+        // tactic, which all bake their PHP `artybon`/`artybonplus` pair
+        // verbatim (Conquistadors 5/3, Defensive Army 6/3, Mobile Artillery
+        // 5/3, Napoleonic Army 7/4, Classic Army 8/4). With the old 4/2
+        // values this test computed 19, two short of the correct 21 -- the
+        // same two-point gap the journal showed, because the lone Air Forces
+        // unit doubles the (wrong) tactic bonus.
+        let mut p = blank_player(0, card("Despotism"));
+        p.tactic = card("Fortifications"); // Age II, needs 2 artillery.
+        p.techs.insert(card("Cannon"), TechSlot { workers: 2, stored: 0 }); // Age II artillery
+        p.techs.insert(card("Air Forces"), TechSlot { workers: 1, stored: 0 }); // Age III air
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Cannon is exactly the tactic's own age, so the one army formed is
+        // fresh: 1 * 5 = 5, doubled by the air force: +5 = 10.
+        // Tech-phase per-unit strength: Cannon 3*2 + Air Forces 5*1 = 11.
+        // Grand total: 11 + 10 = 21.
+        assert_eq!(s.strength, 21);
     }
 
     #[test]
@@ -2152,6 +2330,37 @@ mod tests {
         let s2 = compute(&state, &state.players[2]);
         assert_eq!(s2.tech_discount, 0);
         assert_eq!(s2.science_partners, 0);
+    }
+
+    /// `science_pact_partners_can_pay` is the legality half of BGA's own
+    /// card text ("If the other cannot pay 1 science, then the technology
+    /// cannot be developed") -- `science_partners` alone (tested above) is
+    /// just the bitmask; this is what actually gates a develop/revolution.
+    #[test]
+    fn science_pact_partners_can_pay_reads_the_partners_own_science_stock() {
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.idx = 0;
+        p0.pacts.push(Pact { card: card("Scientific Cooperation"), owner: 0, partner: 1, a: 0, b: 1 });
+        let mut p1 = blank_player(1, card("Despotism"));
+        p1.science = 0; // cannot cover its own 1-science share
+        let state = two_player_state(p0.clone(), p1);
+        assert!(!science_pact_partners_can_pay(&state, &state.players[0]), "partner has 0 science");
+
+        p1 = blank_player(1, card("Despotism"));
+        p1.science = 1; // exactly enough
+        let state = two_player_state(p0, p1);
+        assert!(science_pact_partners_can_pay(&state, &state.players[0]));
+    }
+
+    /// No pact at all (or a pact with no `otherPartyPaysScience` block) means
+    /// an empty bitmask, which is trivially payable -- there is no partner to
+    /// ask.
+    #[test]
+    fn science_pact_partners_can_pay_is_true_with_no_pact_at_all() {
+        let p0 = blank_player(0, card("Despotism"));
+        let p1 = blank_player(1, card("Despotism"));
+        let state = two_player_state(p0, p1);
+        assert!(science_pact_partners_can_pay(&state, &state.players[0]));
     }
 
     #[test]
@@ -2240,6 +2449,89 @@ mod tests {
         assert_eq!(
             s.happy, 3,
             "Colossus's live Homer happy face, St. Peter's own flat +1, and +1 bonus for Colossus counting as a source"
+        );
+    }
+
+    #[test]
+    fn homer_happy_face_survives_ravages_of_time() {
+        // Official errata (Code of Laws, "Homer"): "If the wonder is flipped
+        // face down because of Ravages of Time, Homer's happy face is not
+        // flipped over. The ruins of the wonder continue to produce that
+        // happy face." So a Ravaged Homer-hosted wonder must still grant the
+        // live +1 happy face, on top of the ruin's own +2 culture -- the
+        // wonder's OWN printed effects are the only thing Ravages voids.
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Colossus"));
+        p.homer_wonder = card("Colossus");
+        p.flipped_wonders.push(card("Colossus"));
+        let state = two_player_state(p, blank_player(1, card("Despotism")));
+
+        let s = compute(&state, &state.players[0]);
+        assert_eq!(s.happy, 1, "Homer's happy face must survive the wonder being flipped by Ravages of Time");
+        assert_eq!(s.culture, 2, "the ruin still produces its own +2 culture, same as any other flipped wonder");
+    }
+
+    #[test]
+    fn st_peters_basilica_still_counts_a_homer_tucked_wonder_after_it_is_ravaged() {
+        // Combines the two fixes above: a wonder that is BOTH Homer's home
+        // AND later flipped by Ravages of Time (BGO game 7522616, Green:
+        // Homer tucked under Pyramids in round 4, Pyramids ravaged in round
+        // 17) still "gives you at least one happy face" per the CoL Homer
+        // errata, so it must still count as a qualifying source for St.
+        // Peter's Basilica's own `ExtraHappyPerHappySource` bonus --
+        // `happy_source_count` used to `continue` past EVERY flipped wonder
+        // unconditionally, before ever checking `p.homer_wonder == w`.
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Colossus"));
+        p.completed_wonders.push(card("St. Peter's Basilica"));
+        p.homer_wonder = card("Colossus");
+        p.flipped_wonders.push(card("Colossus"));
+        let state = two_player_state(p, blank_player(1, card("Despotism")));
+
+        let s = compute(&state, &state.players[0]);
+        // Colossus via Homer (survives the flip): +1. St. Peter's own flat:
+        // +1. St. Peter's bonus (1 OTHER live source -- Colossus, via
+        // Homer): +1. Total 3. Before this fix, `happy_source_count`
+        // skipped Colossus outright because it was flipped, so the bonus
+        // paid 0 and this totalled 2 -- the distinguishing number a
+        // same-total fix could not pass by accident.
+        assert_eq!(
+            s.happy, 3,
+            "Colossus's live Homer happy face survives the flip, St. Peter's own flat +1, and +1 bonus \
+             for Colossus still counting as a source despite being ravaged"
+        );
+        assert_eq!(
+            s.culture, 4,
+            "the ruin's own +2 culture plus St. Peter's Basilica's own flat +2 culture"
+        );
+    }
+
+    #[test]
+    fn st_peters_basilica_does_not_double_count_a_homer_boosted_wonder() {
+        // Official errata (Code of Laws, "Homer"): "St. Peter's Basilica adds
+        // a happy face to that wonder, but not two extra faces if the wonder
+        // already had one." A Homer-hosted wonder with ITS OWN printed happy
+        // face (Great Wall: +1 happy) plus Homer's live +1 face is still only
+        // ONE qualifying "source" for St. Peter's per-source bonus -- one
+        // extra face for the wonder, not one extra for each of its two happy
+        // faces.
+        let mut p = blank_player(0, card("Despotism"));
+        p.completed_wonders.push(card("Great Wall"));
+        p.completed_wonders.push(card("St. Peter's Basilica"));
+        p.homer_wonder = card("Great Wall");
+        let state = two_player_state(p, blank_player(1, card("Despotism")));
+
+        let s = compute(&state, &state.players[0]);
+        // Great Wall: printed +1 happy, plus Homer's live +1 = 2. St.
+        // Peter's own flat +1. St. Peter's per-source bonus: ONE extra face
+        // for Great Wall (a single qualifying source despite carrying two
+        // happy faces) = +1. Total 2 + 1 + 1 = 4. If St. Peter's instead
+        // double-counted Great Wall's two happy faces as two sources, this
+        // would total 5 -- the distinguishing number a double-counting bug
+        // could not pass by accident.
+        assert_eq!(
+            s.happy, 4,
+            "Great Wall's printed +1 and Homer's +1, St. Peter's own flat +1, and a single +1 bonus for Great Wall as one source"
         );
     }
 

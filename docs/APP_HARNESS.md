@@ -2,7 +2,7 @@
 
 Everything else we measure is our own bots playing our own bots. This is the
 only path to an **external** number, and there is no automated version of it:
-[`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) §1 established that the official app has no log export,
+[`docs/EXTERNAL_AIS.md`](EXTERNAL_AIS.md#1-the-official-cge-digital-app-steam--ios--android) §1 established that the official app has no log export,
 no API, no mod hooks and no readable saves. A human at the keyboard is the
 entire interface.
 
@@ -10,13 +10,9 @@ This document is the operator's manual. The design rationale — and the
 measured field-by-field justification for how little you type — is in §2.
 
 ```
-rust/target/release/harness fields --players 3   # what you will have to type, and why
-rust/target/release/harness --players 3 --difficulty hard --app-version 2.4.1
+python3 -m harness.fields                 # what you will have to type, and why
+python3 -m harness.play --players 3 --difficulty hard --app-version 2.4.1
 ```
-
-(Rust now; `cd rust && cargo build --release` first. Ported from
-`harness/play.py` and `harness/fields.py`, deleted once the port landed --
-see `rust/src/bin/harness.rs`, `rust/src/harness/fields.rs`.)
 
 ---
 
@@ -44,12 +40,12 @@ and the override rate is the product.
 ## 2. What you type, and what you must not
 
 The expensive part of a human-in-the-loop game is transcription.
-[`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md) records that the evaluator was measured blind to most of
+[`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) measured that the evaluator is blind to most of
 what a conscientious operator would type in. So the harness does not have a
 hardcoded input list — it **derives** one by perturbing the live position and
-watching whether the bot's decision moves (`rust/src/harness/fields.rs`).
+watching whether the bot's decision moves (`harness/fields.py`).
 
-`rust/target/release/harness fields` on the 3p champion today:
+`python3 -m harness.fields` on the 3p champion today:
 
 | you must type | why |
 |---|---|
@@ -67,7 +63,7 @@ watching whether the bot's decision moves (`rust/src/harness/fields.rs`).
 | rival military hand size, military actions, free workers, yellow bank, happiness | **inert** |
 | current events, future events, deck contents, military discards | **inert** |
 
-That table is the entire saving. §6d of [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) priced opponent turns
+That table is the entire saving. §6d of [`EXTERNAL_AIS.md`](EXTERNAL_AIS.md) priced opponent turns
 at "4–8 patch fields × 2 opponents × ~18 rounds, 20–30 s per opponent turn,
 **12–18 min/game**". Most of those fields are still in the second table.
 
@@ -80,12 +76,12 @@ starts reading something new it interrupts the game with:
 ```
 
 Nobody has to remember to update anything. If you want to know before you sit
-down, run `rust/target/release/harness fields`.
+down, run `python3 -m harness.fields`.
 
 ### The seven numbers per rival
 
 We never mirror an opponent's board. You read seven numbers off their player
-panel and `rust/src/advisor/state_io.rs` back-solves the mirror to match:
+panel and `advisor/state_io.py` back-solves the mirror to match:
 
 ```
   p1    c/cr/sr/str/ca/hc/w > 41/5/3/12/4/3/1

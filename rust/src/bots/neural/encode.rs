@@ -398,7 +398,7 @@ fn player_block(state: &GameState, idx: u8, me_idx: u8, best_rival_strength: i32
         pacts / 5.0,
         rel / 30.0,
         (-rel).max(0.0) / 30.0,
-        rel.max(0.0).min(6.0) / 6.0,
+        rel.clamp(0.0, 6.0) / 6.0,
         p.hand_size_civil() as f64 / 12.0,
         p.hand_size_military() as f64 / 12.0,
         f64::from(seeded_n) / 10.0,
@@ -423,7 +423,7 @@ fn player_block(state: &GameState, idx: u8, me_idx: u8, best_rival_strength: i32
 }
 
 fn push_empty_player_block(out: &mut Vec<f64>) {
-    out.extend(std::iter::repeat(0.0).take(PLAYER_BLOCK_DIM));
+    out.extend(std::iter::repeat_n(0.0, PLAYER_BLOCK_DIM));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,81 @@
+diff --git a/data/cards_military_actions.json b/data/cards_military_actions.json
+index 70ce25d..cc0e121 100644
+--- a/data/cards_military_actions.json
++++ b/data/cards_military_actions.json
+@@ -205,17 +205,17 @@
+    "cost": {
+     "militaryActions": 1
+    },
+-   "strength": 4,
++   "strength": 5,
+    "composition": [
+     "artillery",
+     "artillery"
+    ],
+-   "obsoleteStrength": 2,
++   "obsoleteStrength": 3,
+    "effects": {
+-    "tacticBonus": 4,
+-    "tacticBonusObsolete": 2
++    "tacticBonus": 5,
++    "tacticBonusObsolete": 3
+    },
+-   "text": "Tactic: 2 artillery. +4 strength per army (+2 if outdated)."
++   "text": "Tactic: 2 artillery. +5 strength per army (+3 if outdated)."
+   },
+   {
+    "name": "Conquistadors",
+diff --git a/rust/src/card_table.rs b/rust/src/card_table.rs
+index 02079d2..03d2b7a 100644
+--- a/rust/src/card_table.rs
++++ b/rust/src/card_table.rs
+@@ -2090,10 +2090,10 @@ pub static CARDS: [Card; NUM_CARDS] = [
+         resource_cost: 0,
+         count: [1, 1, 1],
+         production: Production { food: 0, resources: 0, culture: 0, science: 0, happy: 0, strength: 0 },
+-        effects: CardEffects { culture: 0, science: 0, strength: 4, happy: 0, civil_actions: 0, military_actions: 0, gain_culture: 0, gain_science: 0, gain_food: 0, gain_resources: 0, resource_discount: 0, resources_for_military_units: 0, defense_bonus: 0, colonization_bonus: 0, colonize_bonus: 0, blue_tokens: 0, on_build_culture: 0, wonder_stages_per_action: 0, civil_hand_limit: 0, military_hand_limit: 0, free_civil_action: 0, urban_building_limit: 0, food: 0, resources: 0, yellow_tokens: 0 },
++        effects: CardEffects { culture: 0, science: 0, strength: 5, happy: 0, civil_actions: 0, military_actions: 0, gain_culture: 0, gain_science: 0, gain_food: 0, gain_resources: 0, resource_discount: 0, resources_for_military_units: 0, defense_bonus: 0, colonization_bonus: 0, colonize_bonus: 0, blue_tokens: 0, on_build_culture: 0, wonder_stages_per_action: 0, civil_hand_limit: 0, military_hand_limit: 0, free_civil_action: 0, urban_building_limit: 0, food: 0, resources: 0, yellow_tokens: 0 },
+         military_action_cost: 1,
+         composition: Composition { infantry: 0, cavalry: 0, artillery: 2, air: 0 },
+-        obsolete_strength: 2,
++        obsolete_strength: 3,
+         special: &[],
+         stages: &[],
+         peaceful_cost: 0,
+diff --git a/rust/src/effects.rs b/rust/src/effects.rs
+index 0826896..28f49e7 100644
+--- a/rust/src/effects.rs
++++ b/rust/src/effects.rs
+@@ -2203,6 +2203,32 @@ mod tests {
+         assert_eq!(s.strength, 23);
+     }
+ 
++    #[test]
++    fn fortifications_grants_five_strength_per_army_matching_bgas_printed_card_not_four() {
++        // Regression for game 7522009 (a War over Culture): the journal's own
++        // resolution line reads "Defender's strength: 28", but this table
++        // used to print `Fortifications` as strength 4 / obsolete 2 -- a
++        // transcription slip against both `sources/bga_throughtheages_material
++        // .inc.php` (`artybon` 5 / `artybonplus` 3) and every sibling Age II
++        // tactic, which all bake their PHP `artybon`/`artybonplus` pair
++        // verbatim (Conquistadors 5/3, Defensive Army 6/3, Mobile Artillery
++        // 5/3, Napoleonic Army 7/4, Classic Army 8/4). With the old 4/2
++        // values this test computed 19, two short of the correct 21 -- the
++        // same two-point gap the journal showed, because the lone Air Forces
++        // unit doubles the (wrong) tactic bonus.
++        let mut p = blank_player(0, card("Despotism"));
++        p.tactic = card("Fortifications"); // Age II, needs 2 artillery.
++        p.techs.insert(card("Cannon"), TechSlot { workers: 2, stored: 0 }); // Age II artillery
++        p.techs.insert(card("Air Forces"), TechSlot { workers: 1, stored: 0 }); // Age III air
++        let state = one_player_state(2, p);
++        let s = compute(&state, &state.players[0]);
++        // Cannon is exactly the tactic's own age, so the one army formed is
++        // fresh: 1 * 5 = 5, doubled by the air force: +5 = 10.
++        // Tech-phase per-unit strength: Cannon 3*2 + Air Forces 5*1 = 11.
++        // Grand total: 11 + 10 = 21.
++        assert_eq!(s.strength, 21);
++    }
++
+     #[test]
+     fn genghis_khan_lets_infantry_fill_a_cavalry_slot() {
+         // Medieval Army: Age I, strength 2, needs 1 infantry + 1 cavalry.

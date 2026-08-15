@@ -1,0 +1,226 @@
+MILSCORE worker notes -- military-card score-mismatch cluster
+================================================================
+Clone: /private/tmp/milscore (still exists, clean, HEAD = 55bbca5, no
+unlanded commits of my own -- see "final state" at the bottom).
+Base as handed to me: a9aea83 ("Add cardblame").
+
+MID-TASK STEER (important -- read this before the numbers below)
+------------------------------------------------------------------
+While I was mid-trace on game 7523597, the coordinator told me a sibling
+worker's fix had landed centrally at /private/tmp/base0815 branch
+base0814, commit 55bbca5 ("War resolving one age late kept an antiquated
+leader on the board (661 exact)"). It fixes resolve_war_outcome firing
+before catch_up_civil_age's leader/wonder/pact antiquation half, so a
+leader/wonder BGA had already removed was still on the board and its
+strength bonus still counted into the war-resolution advantage. 651 exact
+-> 661 exact, 687 completions unchanged, zero regressions (their claim).
+
+I fast-forward merged that commit into my clone (`git fetch
+/private/tmp/base0815 base0814 && git merge --no-edit FETCH_HEAD`,
+clean fast-forward, no conflicts, touches only game.rs/replay_common.rs).
+Rebuilt, and reran everything below FROM SCRATCH on the new baseline.
+Everything under "PRE-MERGE (stale, for context only)" was measured
+against a9aea83 and is superseded by "POST-MERGE (current)".
+
+I independently confirmed the sibling's fix resolves the exact game I
+had been tracing (7523597) -- more on that below.
+
+One side observation, not chased (out of scope, already landed
+upstream, budget-limited): comparing my pre-merge 36-ID list to the
+post-merge 26-ID list shows 12 games newly EXACT and 2 games newly
+DIVERGING that were exact before (7521833, 7523115 -- both flag
+WinWar as their first_culture_divergence action). Net is the reported
++10 (651->661), but it is 12 wins minus 2 new misses, not 10 clean
+wins. Completed-ID SETS are identical before/after (confirmed by diff),
+so this is a real ID-level regression against the completion guard's
+sibling metric, just not against the completion-count guard the task
+asks me to enforce. Flagging for the record; not mine to fix.
+
+===================================================================
+PRE-MERGE (stale, against a9aea83, 36 diverging games, 651/687 exact)
+===================================================================
+
+STEP 1/2 -- war census, 2x2 table with denominators
+  War base rate (all 687 completed): 193 WAR / 494 NOWAR
+  Among the 36 score-mismatching games: 18 WAR / 18 NOWAR
+
+                  War    NoWar   Total
+  Diverging(36)    18      18      36
+  Non-diverging   175     476     651
+  Total           193     494     687
+
+  Rate within WAR games:   18/193 = 9.3%
+  Rate within NOWAR games: 18/494 = 3.6%
+  Odds ratio: (18*476)/(18*175) = 2.72x -- war games were ~2.7x more
+  likely to have a score mismatch. Strong enrichment.
+
+STEP 3 -- delta shape (sum(engine scores) - sum(index scores) per game)
+  13/36 exactly zero-sum (a pure transfer between two seats' totals)
+  23/36 one-sided (net creation/destruction, no offsetting seat)
+  Cross tab: zero-sum & WAR = 11/13; zero-sum & NOWAR = 2/13
+             one-sided & WAR = 7/23; one-sided & NOWAR = 16/23
+  So the zero-sum failures were overwhelmingly war-associated (11/13),
+  while the one-sided failures were mostly non-war (16/23) -- two
+  different bug populations living inside the same 36.
+
+STEP 4 -- trace of game 7523597 (2p, clean +8/-8 zero-sum, WAR)
+  engine=[135,203] index=[127,211] (sum 338 both sides, exactly zero-sum)
+  Journal: Purple declares War over Culture on Orange (III/17), resolves
+  next turn: "Purple wins War over Culture Attacker's strength: 43;
+  Defender's strength: 12." Spoils rule: victor takes 5 + advantage
+  culture. 5 + (43-12) = 36, and the journal's own running culture
+  totals for both players confirm exactly a 36-point transfer actually
+  happened (Purple's post-war checkpoint arithmetic: 80 + 36(war) +
+  3(event) + 14(end-turn) = 133, matches the printed "(now 133)";
+  symmetric check on Orange nets the same 36-point loss once you count
+  the intervening Wealthy-Territory event (+3) and Fast Food Chains
+  wonder completion (+18) between Orange's two checkpoints).
+
+  Added a temporary SCOREDIV_WAR_DEBUG env-gated eprintln in
+  combat::resolve_war_outcome (reverted before finishing -- see "final
+  state" below) and reran the isolated game. Engine's own numbers at
+  resolution: attacker_strength=43 (MATCHES journal exactly), but
+  defender_strength=20 (journal says 12 -- off by exactly +8, which is
+  exactly the game's whole score delta). Defender (Orange) had leader
+  Napoleon Bonaparte (elected turn 14, never replaced) and NO current
+  tactic (never played/copied one all game) but 4 distinct military
+  unit types on the board with workers (Warriors/Cannon/Cavalrymen/Air
+  Forces). Special::StrengthPerUnitType (Napoleon, +2 per distinct
+  type) computes +8 there unconditionally -- it does not check
+  `p.tactic.is_none()` the way `army_strength()` does.
+
+  I had built a hypothesis (raw unit strength should always count per
+  the rulebook's "a military unit always contributes its strength, even
+  if it is in an army" note, cge_code_of_laws.pdf, and 1+3+3+5=12
+  exactly matches the journal's defender strength; Napoleon's
+  per-type bonus should require a tactic/formed army the same way
+  army_strength does) but had NOT yet turned it into a tested fix when
+  the steer arrived. I did NOT land this hypothesis as a fix: 7523597
+  is now confirmed EXACT under the sibling's landed commit (see below),
+  and I have not independently verified my hypothesis is the same
+  mechanism as theirs, only that both explanations predict this one
+  game's outcome. I am not re-opening Special::StrengthPerUnitType --
+  it is on the SETTLED list, and the settled claim (that the +2-per-
+  distinct-TYPE-not-per-worker formula is correct) is not something
+  this trace contradicts; I was chasing a DIFFERENT, narrower question
+  (does it need a tactic) that this game alone cannot cleanly decide
+  once the antiquation-timing explanation is on the table too.
+
+===================================================================
+POST-MERGE (current, against 55bbca5, 26 diverging games, 661/687 exact)
+===================================================================
+
+Re-derived everything from scratch per the steer's instruction.
+
+STEP 1/2 -- war census, redone
+  War base rate unchanged (completed-ID SET is byte-identical
+  before/after, confirmed via diff): 193 WAR / 494 NOWAR of 687.
+  Among the 26 remaining score-mismatching games: 8 WAR / 18 NOWAR.
+
+                  War    NoWar   Total
+  Diverging(26)     8      18      26
+  Non-diverging   185     476     661
+  Total           193     494     687
+
+  Rate within WAR games:   8/193 = 4.1%
+  Rate within NOWAR games: 18/494 = 3.6%
+  Odds ratio: (8*476)/(18*185) = 1.14x -- essentially NO enrichment.
+  The war signal from the pre-merge census is gone.
+
+  I also checked the other obvious military hypothesis: does the game
+  having an "Impact of Strength" final-scoring event (which reads
+  strength rating directly, no war needed) enrich the 26? Base rate
+  across all 687 completed: 251/687 = 36.5%. Among the 26: 10/26 =
+  38.5%. Also flat, no real enrichment.
+
+STEP 3 -- delta shape, redone
+  Only 2/26 are exactly zero-sum now (both NOWAR games); the other
+  24/26 are one-sided, cross tab one-sided: 8 WAR / 16 NOWAR. The
+  zero-sum-and-war pattern that dominated the pre-merge 36 (11/13) is
+  gone -- exactly consistent with the sibling's fix having removed the
+  clean attacker/defender transfer bugs, leaving a diffuse tail of
+  one-sided, mostly-small (|delta| 1-3 in 17 of 24 cases; outliers
+  -9, -6, 12) single-seat drifts whose first_culture_divergence action
+  classes are heterogeneous: TakeCard, BuildBuilding, Discard (4 of
+  these -- OFF LIMITS per my brief, not touched), WinWar (the 2 new
+  ones), UpgradeUnit, UpgradeProduction, EndTurn.
+
+CARDBLAME CROSS-CHECK (why I did not stop at "no cluster")
+  Re-ran cardblame on the post-merge corpus. Its own score-mismatch cut
+  STILL ranks the same military cards at the top (Heavy Cavalry 2.83x,
+  Shock Troops 2.28x, Defensive Army 2.00x, Winston Churchill 1.82x,
+  Code of Laws 1.54x, Entrenchments 1.50x, Fortifications 1.44x, Air
+  Forces 1.39x -- all with round_with/round_without ~19.1-19.5, so
+  still no game-length confound). This looked at first like a survived
+  cluster worth tracing further. But neither of the two natural
+  military-specific hypotheses I could test against the 26-game ID list
+  (war occurred; Impact-of-Strength event fired) shows any enrichment
+  at all (1.14x and ~1.05x respectively -- noise). Given the explicit
+  instruction not to manufacture a second finding out of what's left,
+  and given the task's own repeated warning that 26-36 failures spread
+  over many overlapping cards is weak evidence per card, my read is:
+  cardblame's per-CARD ranking is picking up that players who reach
+  Age III/IV and build tactics/leaders are the same players whose games
+  are long, card-dense, and have many independent opportunities for the
+  OTHER, unrelated single-action bugs visible in the delta-shape list
+  above (TakeCard/BuildBuilding/UpgradeUnit/EndTurn drift) to fire --
+  not a shared military-specific root cause. I did not find a third
+  hypothesis that both (a) is testable cheaply against this ID list and
+  (b) is specific to the flagged cards, so I am not chasing further.
+
+CONCLUSION
+  The military cluster cardblame originally flagged is real but was
+  overwhelmingly a symptom of the war-resolution antiquation-timing bug
+  the sibling worker already found and landed (55bbca5). After merging
+  that fix, neither of the two clean military-specific hypotheses I
+  could test (war occurred anywhere in the game; an Impact-of-Strength
+  final event fired) shows any residual enrichment on the remaining 26
+  mismatches -- this is the clean, publishable negative the coordinator
+  asked me to report if I found it. I made no code changes of my own;
+  I am not re-opening Special::StrengthPerUnitType/Napoleon (settled),
+  and I did not chase the residual per-card cardblame signal further
+  because I could not turn it into a testable, non-overlapping second
+  hypothesis within budget.
+
+VERIFICATION (post-merge, clean rebuild, no edits of my own)
+  cd /private/tmp/milscore/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats --bin cardblame
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals > /tmp/mil_final.txt
+  -> "687/687 completed games actually flipped state.game_over ...
+      661/687 of those matched index.tsv exactly"
+
+  comm -23 /private/tmp/guard_ids_687.txt /tmp/mil_final_ids.txt   # REGRESSIONS
+  (empty output)
+
+  comm -13 /private/tmp/guard_ids_687.txt /tmp/mil_final_ids.txt   # WINS (completion-set diff)
+  (empty output)
+
+  Both comm outputs are empty because I made no completion-affecting
+  change of my own -- the completed-ID SET is byte-identical to the
+  guard file both before and after the merge (confirmed via `diff`).
+  The 651->661 EXACT-match improvement is entirely the sibling's
+  already-landed commit, not mine.
+
+  cargo test --profile fasttest --lib
+  -> 1418 passed; 0 failed (task's "1410" baseline plus tests the
+     sibling's fix added; all green)
+
+  cargo clippy --profile fasttest --all-targets -- -D warnings
+  -> clean, no warnings
+
+FINAL STATE OF THE CLONE
+  /private/tmp/milscore exists, HEAD = 55bbca5 (fast-forward merge of
+  the sibling's already-landed commit, zero commits of my own on top).
+  Working tree clean under rust/ (my temporary SCOREDIV_WAR_DEBUG
+  eprintln in combat.rs was reverted with `git checkout --
+  rust/src/combat.rs` before finishing). `git diff a9aea83..HEAD`
+  therefore shows exactly the sibling's own commit and nothing of mine
+  -- that diff is NOT reproduced in milscore.patch (written empty, per
+  the "if you changed nothing, write an EMPTY file" instruction) because
+  I contributed no original fix; the sibling's commit is already landed
+  upstream and does not need a second copy from me.
+
+  Since the clone holds no UNLANDED commits of my own (its one commit
+  beyond a9aea83 is already merged upstream), it is safe to delete per
+  the CLEANUP instruction, and I am deleting it after writing these
+  notes.

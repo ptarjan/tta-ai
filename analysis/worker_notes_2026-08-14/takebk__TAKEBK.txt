@@ -1,0 +1,322 @@
+TAKEBK -- "IllegalMove: Take" bucket, 15 games, mean stop round 12.8
+=====================================================================
+Worker clone: /private/tmp/takebk (base commit 9860400, branch base0814)
+Landed as commit 2c613d8 on top of 9860400 in that clone.
+
+BUCKET ENUMERATION (verbatim DUMP lines, REPLAY_DUMP_BUCKET="IllegalMove: Take")
+----------------------------------------------------------------------------
+  cd /private/tmp/takebk/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  REPLAY_DUMP_BUCKET="IllegalMove: Take" ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+      > /tmp/takebk_bucket.txt 2>&1
+
+DUMP 7523330 line 91:  Purple takes Taj Mahal in hand
+DUMP 7521828 line 381: Orange takes First Space Flight in hand Orange uses 2 civil action
+DUMP 7522200 line 332: Purple takes Selective Breeding in hand Purple uses 1 civil action
+DUMP 7522905 line 20:  Grey takes Urban Growth in hand Grey uses 2 civil action
+DUMP 7522102 line 298: Orange takes Democracy in hand Orange uses 1 civil action
+DUMP 7521751 line 486: Grey takes Ocean Liner in hand Grey uses 3 civil action
+DUMP 7523393 line 314: Purple takes Albert Einstein in hand Purple uses 1 civil action
+DUMP 7522427 line 166: Orange takes Scientific Method in hand Orange uses 1 civil action
+DUMP 7522411 line 577: Purple takes Fundamentalism in hand Purple uses 1 civil action
+DUMP 7522321 line 298: Purple takes Reserves in hand Purple uses 2 civil action
+DUMP 7522304 line 243: Purple takes Air Forces in hand Purple uses 2 civil action
+DUMP 7522993 line 266: Purple takes Military Theory in hand Purple uses 2 civil action
+DUMP 7522987 line 494: Orange takes Computers in hand Orange uses 2 civil action
+DUMP 7522010 line 336: Purple takes Coal in hand Purple uses 1 civil action
+DUMP 7523278 line 345: Purple takes Fast Food Chains in hand Purple uses 3 civil action
+
+STEP 1 -- SPLIT (mandatory, before assigning a cause)
+------------------------------------------------------
+The 15 games each name a DIFFERENT card being taken (Taj Mahal, First Space
+Flight, Selective Breeding, Urban Growth, Democracy, Ocean Liner, Albert
+Einstein, Scientific Method, Fundamentalism, Reserves, Air Forces, Military
+Theory, Computers, Coal, Fast Food Chains), at different row costs (1/2/3
+civil actions), different ages (A through IV), different player counts, and
+different actors -- "the card being taken" is NOT the shared cause; it is
+purely the stop location. Grouping by MECHANISM instead (traced per-game
+below, using `rust/src/replay_common.rs`'s own `costs::take_rejection`
+diagnostic -- see "Investigation method" below) gives a real split:
+
+  11 games -- BLOCKED BY A STUCK AGGRESSION/WAR PENDING (Annex or WarTech
+              choice) left open from an EARLIER line, never resolved, so
+              `legal::legal_moves` correctly refuses EVERY move (not just
+              Take) until it is drained. `costs::take_rejection` itself
+              returns None (the card is affordable and otherwise legal by
+              its own narrow rules) -- the real blocker is the pending gate,
+              invisible to that diagnostic. Games: 7522200 (Annex, post-tie
+              defense), 7522102 (WarTech), 7523393 (WarTech), 7522427
+              (WarTech), 7522411 (Annex), 7522321 (WarTech), 7522304
+              (WarTech), 7522993 (WarTech), 7522987 (Annex), 7522010 (Annex),
+              7523278 (Annex).
+              THIS IS EXPLICITLY OUT OF SCOPE for this pass: the task brief
+              states "Revolutions, aggressions and Build are other workers'
+              buckets right now -- do not touch legal.rs's Aggression or
+              Build generation, or game::antiquate." Whatever replay-driver
+              code is meant to drain/cancel an Annex or WarTech pending once
+              its outcome is known (e.g. a tied defense strength should
+              cancel a still-open Annex choice -- game 7522200) sits squarely
+              in that territory. NOT fixed here, reported instead.
+
+   1 game  -- 7521828 (First Space Flight): a stuck political-EVENT-selection
+              pending (`Choice { kind: DiscardMilitary, options: [Card(Impact
+              of Government), Card(Impact of Strength), ...] }`, i.e. the
+              revealed-events-pick-one shape, reusing the DiscardMilitary
+              choice machinery) opens during Purple's End Turn (which
+              synchronously starts Orange's turn via `game::start_turn`) and
+              is NEVER drained, because `ActionClass::PlayEvent` lines
+              deliberately SKIP `resolve_intervening` (a previous, documented
+              fix for a different bug: `resolve_intervening`'s one-line
+              lookahead can wrongly discard a FreeBuild/GainBlock choice --
+              see the `ActionClass::PlayEvent` arm's own doc in
+              replay_common.rs). The stuck pending then also blocks
+              `catch_up_civil_age`'s pending/queue guard, so `state.age_civil`
+              never reaches the journal's own IV, and the OLD, never-built
+              Age II wonder (Transcontinental Railroad, wonder_steps=0) never
+              antiquates -- WonderInProgress fires on the new wonder take.
+              NOT fixed here: untangling PlayEvent's resolve_intervening skip
+              without reopening the FreeBuild/GainBlock bug it was added to
+              fix needs its own careful pass, and every knob near it
+              (event resolution, antiquation timing) is either off-limits or
+              adjacent to off-limits territory this session. Reported as a
+              genuine, narrow, separately-fixable bug for a future pass.
+
+   1 game  -- 7522905 (Urban Growth): `costs::take_rejection` DOES fire, with
+              reason=Budget: Grey's own `CA_TOTAL_UNDERCOUNT` self-check
+              (already instrumented in replay_common.rs) flags a real 1-CA
+              deficit. Traced to end, see STEP 3. FIXED THIS PASS.
+
+   1 game  -- 7521751 (Ocean Liner): WonderInProgress on an Age II wonder
+              (Eiffel Tower, wonder_steps=1) that the journal itself claims
+              "Wonder completed" after a SINGLE stage costing 3 resources --
+              but Eiffel Tower's stage costs are [3, 7, 3] (confirmed
+              identical in three independent sources: this repo's own
+              card_table.rs, BGA's bga_throughtheages_material.inc.php
+              `resscost => array(3, 7, 3)`, and the namu_wonders.txt wiki
+              text "3 7 3"), and every OTHER Eiffel Tower completion in the
+              1,011-game corpus (7521072, 7521243, 7521361, 7521491,
+              7521603, 7521654, 7521689, 7521710, ...) shows the correct
+              3-stage sequence (3, then 7, then 3, or a Masonry/Engineering-
+              Genius multi-stage build summing to the same total) before
+              "Wonder completed" appears. This one game is the outlier: a
+              genuine BGO SITE anomaly for this specific game, not a rule
+              this engine has wrong. Left as a clean negative (see
+              "Anti-stall note" below on why this is not pursued further).
+
+   1 game  -- 7523330 (Taj Mahal): WonderInProgress on Hanging Gardens, which
+              the SAME turn's very next line completes ("Purple takes Taj
+              Mahal in hand" [FREE -- see STEP 2's Taj Mahal note] then
+              immediately "Purple builds 1 stage of Hanging Gardens ...
+              Wonder completed"). Per the rulebook (ubg_the-second-round.txt:
+              "You may not take a wonder from the card row if you already
+              have an unfinished wonder in play" -- no same-turn exception
+              printed anywhere) this SHOULD be illegal in strict textual
+              order, so this is most likely a BGO UI/journal ORDERING
+              artifact (the server processed the Hanging-Gardens-completing
+              build before the Taj-Mahal take; the log line order does not
+              match true execution order for this compound submission) --
+              NOT a rules bug. Reordering two adjacent same-turn lines to
+              match true execution order is a real, narrow fix in principle,
+              but touches the general "journal line order == execution
+              order" assumption this whole replayer is built on, and only
+              ONE game in the corpus shows this exact shape. Left unfixed
+              this pass as too risky for the return (1 game) given the
+              budget; reported for a future, dedicated pass if it recurs.
+
+STEP 2 -- BAKED CONSTANTS CHECK (done FIRST, per method)
+----------------------------------------------------------
+Every wonder named in this bucket (Taj Mahal, First Space Flight, Ocean
+Liner/Eiffel Tower, Fast Food Chains) was diffed against
+sources/bga_throughtheages_material.inc.php:
+
+  - Taj Mahal: `special: &[Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(2)]`
+    matches game 7523330's own observed FREE take (Purple replaced their
+    leader to Leonardo da Vinci two lines earlier in the same turn) --
+    correctly baked, not the cause.
+  - First Space Flight: baked `kind: CardType::Wonder` -- confirmed correct;
+    it genuinely is an Age III wonder in the base game (stages [1,2,4,9]),
+    not a technology as its name might suggest. Not the cause.
+  - Eiffel Tower: baked `stages: &[3, 7, 3]` matches BGA's own
+    `resscost => array(3, 7, 3)` AND the independent namu_wonders.txt text
+    "3 7 3" exactly. NOT the cause of game 7521751's anomaly (see STEP 1) --
+    that game's single 3-resource "Wonder completed" contradicts its own
+    wonder's own printed cost, which this engine, BGA's data file, and a
+    third independent source all agree on.
+
+Conclusion: no baked-constant error anywhere in this bucket. This is the
+first "IllegalMove: Take" investigation this session where the constants
+check came back clean across the board -- the bug (where one exists at all)
+is in replay-driver mechanism, not card data.
+
+STEP 3 -- TRACE: game 7522905, Urban Growth Budget rejection (FIXED)
+------------------------------------------------------------------------
+Journal (rounds trimmed to the relevant turn, /private/tmp/bgo-journals/journals/7522905.tsv):
+  16  Grey takes Rich Land in hand Grey uses 1 civil action
+  17  Grey takes Frugality in hand Grey uses 2 civil action
+  18  Grey takes Frugality in hand Grey uses 1 civil action
+  19  Grey puts Frugality back in the row Grey gets 2 civil action
+  20  Grey takes Urban Growth in hand Grey uses 2 civil action   <-- rejected
+
+This game's own `CA_TOTAL_UNDERCOUNT` self-check (already instrumented,
+`replay_common.rs` ~line 6981, doc: "civil action total" handoff) already
+flagged it independently of the bucket investigation:
+  CA_TOTAL_UNDERCOUNT game=7522905 actor=3 lineno=20 age_civil=A round=1 \
+      take_spend_this_turn=5 ca_total=4 deficit=1
+
+Root cause: Frugality (A) has TWO physical copies in the Age A deck
+(`count: [2, 2, 2]` in card_table.rs; `costs::can_take_gated`'s own doc:
+action cards are exempt from the one-per-name rule specifically because
+several copies of the same name can be in the row/hand at once). Grey took
+BOTH physical copies (line 17, cost 2 CA; line 18, cost 1 CA -- two
+different row slots, hence two different costs for the "same-named" card),
+then put ONE of them back (line 19, refund 2 CA).
+
+`prescan_putback_skips` (replay_common.rs ~line 5531) pairs a PutBack with
+an open TakeCard of the SAME card+actor using a per-card LIFO stack, popping
+the MOST RECENTLY pushed entry (`Vec::rposition`, "last matching actor").
+Its own doc comment stated the (until now unverified) premise this depends
+on outright: "every row/hand card is a unique instance in the table (the
+same name never denotes two different physical cards within one game)".
+That premise is FALSE for a multi-copy action card. Popping "most recent"
+matched the putback to line 18 (the 1-CA take) instead of line 17 (the 2-CA
+take the refund of 2 actually names), silently canceling the WRONG pair:
+line 18+19 got skipped (net contribution 0, correctly), but line 17's 2-CA
+take was left standing as Grey's "real, kept" Frugality -- when the refund
+amount is direct, unambiguous journal evidence that line 17 is the one
+being undone, not line 18.
+
+Running civil-action total with the WRONG pairing (old behaviour):
+  16 (1) + 17 (2, wrongly kept) + 20 (2) = 5   vs.  ca_total = 4   => deficit 1,
+  manufacturing the Budget rejection on line 20's Urban Growth take.
+
+With the CORRECT pairing (17+19 skipped, 18 kept):
+  16 (1) + 18 (1, correctly kept) + 20 (2) = 4   vs.  ca_total = 4   => exactly affordable.
+
+FIX: `prescan_putback_skips` now records each open take's own parsed cost
+(`civil_and_military_uses(line.text).0`) alongside `(lineno, actor)`, and a
+PutBack first tries to match an open entry whose recorded cost equals the
+putback's own refund amount (`trailing_gets_civil_action`), falling back to
+"most recent" (the original, single-copy-safe behaviour) only when no cost
+match exists or the card has just one open take (the overwhelmingly common
+case -- confirmed unchanged by a dedicated test, see below).
+
+Verified in isolation (REPLAY_DEBUG=1, one-row index for 7522905 only):
+  - Before the fix: CA_TOTAL_UNDERCOUNT fires at line 20; replay stops at
+    round 1 with IllegalMove: Take (Budget).
+  - After the fix: no CA_TOTAL_UNDERCOUNT anywhere in this game; the replay
+    proceeds to round 6 before stopping on an UNRELATED,
+    "StuckPending: PlunderSplit choice open for player # but no
+    journal-observed Plunder resolution left to resolve it with" --
+    itself a military/Plunder-resolution issue, adjacent to the same
+    off-limits Aggression territory as STEP 1's 11-game cluster. This game
+    still does not COMPLETE, hence zero net change to the completed-ID set
+    (see final counts below) -- but the fix itself is real, narrowly scoped,
+    and independently confirmed by the corpus's own CA-total oracle, not a
+    manufactured completion.
+
+INVESTIGATION METHOD NOTE (how the split was actually done)
+-------------------------------------------------------------
+`costs::take_rejection`'s own `IllegalMove: Take` diagnostic
+(`REPLAY_DEBUG=1`, "DEBUG TAKE REJECT: ...") only fires when the §2.5
+gates it checks (cost/hand_full/leader-age/duplicate) are the reason. For
+the 11 pending-blocked games it printed NOTHING at the failing line (it
+returned None -- "legal by its own rules") even though the overall move
+was still rejected as IllegalMove: Take, because the TRUE blocker
+(`r.state.pending`/`queue` nonempty) is invisible to it. This was diagnosed
+by adding a temporary, since-reverted debug print immediately before the
+`take_rejection` call showing `legal::legal_moves(&r.state).as_slice()
+.contains(&Move::Take{slot})` (false) alongside `r.state.pending.top()`
+(Some(Choice(Annex{..})) / Some(Choice(WarTech{..})) / Some(Choice{kind:
+DiscardMilitary,..})) for every game in the bucket. No dump/debug
+instrumentation was left in the tree beyond what was already there before
+this pass (the temporary prints were reverted).
+
+Also confirmed as a red herring during investigation: running a SINGLE
+isolated game (one-row index.tsv) reproduces the SAME stop line/mismatch
+as the full 1,011-game corpus run for every game checked -- the earlier
+appearance of "10 of 15 games don't reproduce their DUMP line when run
+alone" was an artifact of an early ad-hoc debug print (missing the
+game-id field, silently misattributing lines across a batched multi-game
+run), not a real per-game nondeterminism. Fixed once the print correctly
+attributed lines to games; do not re-open "isolation doesn't reproduce
+the bucket" as a real finding.
+
+FINAL COUNTS (rust/src/replay_common.rs fix only; see takebk.patch)
+------------------------------------------------------------------------
+  cd /private/tmp/takebk/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+      > /tmp/takebk_final.txt 2>&1
+
+  # replaystats: 1011 games sampled, 698 completed to state.game_over
+  698/698 completed games actually flipped state.game_over; 671/698 of
+  those matched index.tsv exactly.
+
+  grep '^SCOREDIV_COMPLETED_ID' /tmp/takebk_final.txt | awk '{print $2}' | sort > /tmp/takebk_final_ids.txt
+  wc -l /tmp/takebk_final_ids.txt        # 698
+
+  comm -23 /private/tmp/guard_ids_698.txt /tmp/takebk_final_ids.txt   # REGRESSIONS
+  <empty>
+
+  comm -13 /private/tmp/guard_ids_698.txt /tmp/takebk_final_ids.txt   # WINS
+  <empty>
+
+Baseline 698 completed / 671 exact, unchanged. Zero regressions, zero wins.
+This is a real, verified engine-correctness fix (confirmed by the corpus's
+own CA-total cross-check, confirmed RED when reverted, with two new tests)
+that happens to land on a game which still fails LATER for an unrelated,
+out-of-scope reason (military Plunder-choice resolution), so it moves no ID
+across the completed/incomplete boundary. Per the task's own "a clean
+negative is a good result" -- this is closer to a clean positive with zero
+measurable corpus delta than a negative: the bug was real, is fixed, and is
+tested, it merely doesn't complete this ONE game on its own.
+
+TESTS ADDED (rust/src/replay_common.rs, inside the existing `mod tests`)
+------------------------------------------------------------------------
+  - prescan_putback_skips_matches_a_putback_to_the_take_its_refund_actually_costs_not_the_most_recent_one
+    Reproduces game 7522905 lines 16-20 verbatim; confirmed RED (fails,
+    matches wrong pair) with the fix's cost-matching reverted to plain
+    "most recent" (`stack.iter().rposition(|&(_, a, _)| a == actor)`),
+    confirmed GREEN restored.
+  - prescan_putback_skips_still_pairs_a_lone_take_regardless_of_its_own_refund_amount
+    Single-copy-card guard: confirms the fix is a strict extension, not a
+    behaviour change, for the overwhelmingly common one-open-take case.
+
+VERIFICATION
+------------
+  cargo test --profile fasttest --lib   -> 1421 passed (baseline 1419 + 2 new), 0 failed
+  cargo clippy --all-targets            -> clean, no warnings
+
+DELIVERABLES
+------------
+  analysis/worker_notes_2026-08-14/takebk__TAKEBK.txt   (this file)
+  analysis/worker_notes_2026-08-14/takebk.patch         (git diff 9860400..HEAD, replay_common.rs only)
+  /private/tmp/takebk left in place: holds one unlanded commit (2c613d8) on
+  top of 9860400. NOT pushed/merged anywhere -- landing is the coordinator's
+  call.
+
+WHAT'S LEFT FOR A FUTURE PASS (not this worker's scope this session)
+------------------------------------------------------------------------
+  1. (Dominant, 11/15 games) A stuck Annex/WarTech pending from an
+     aggression/war resolution is never drained once its outcome is known
+     (e.g. a TIED defense should cancel a still-open Annex choice), blocking
+     every subsequent move including Take. This is THE dominant cause of
+     this bucket by far. Squarely inside "Revolutions, aggressions ... are
+     other workers' buckets right now" -- hand this off, do not reopen
+     legal.rs's Aggression generation to chase it.
+  2. (1/15) game 7521828: `ActionClass::PlayEvent` skipping
+     `resolve_intervening` leaves a political-event-selection pending open
+     indefinitely, which also blocks `catch_up_civil_age`. Needs a fix that
+     drains ONLY that specific pending kind without reopening the
+     FreeBuild/GainBlock bug PlayEvent's resolve_intervening skip exists to
+     prevent -- a real, separately-scoped fix for whoever owns event
+     resolution next.
+  3. (1/15) game 7523330: Taj Mahal / Hanging Gardens same-turn
+     take-before-complete ordering -- likely a BGO journal line-ordering
+     artifact, not a rules bug. Only one game shows this shape; not worth
+     a general "reorder adjacent same-turn lines" mechanism for one game,
+     but worth remembering if the shape recurs.
+  4. (1/15) game 7521751: genuine BGO site anomaly (Eiffel Tower completing
+     after 1 of 3 stages) -- true clean negative, do not chase.

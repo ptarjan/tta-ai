@@ -23,7 +23,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use tta::advisor::advisor::{self as advisor, Advisor};
+use tta::advisor::session::{self as advisor, Advisor};
 use tta::advisor::state_io;
 use tta::harness::fields;
 use tta::harness::mirror;

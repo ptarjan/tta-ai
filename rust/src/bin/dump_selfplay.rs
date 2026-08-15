@@ -25,7 +25,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use tta::bots::greedy::{build_bots, BotKind, Seat};
+use tta::bots::greedy::{build_bots, BotKind, Search, Seat};
 use tta::bots::neural::dump::{DecisionRecord, DumpWriter};
 use tta::bots::neural::encode;
 use tta::bots::weighted::eval::load_weights;
@@ -124,7 +124,7 @@ fn play_and_dump(
     weights: tta::bots::weighted::weights::Weights,
     writer: &mut DumpWriter,
 ) -> Result<usize, String> {
-    let seats = vec![Seat { kind: BotKind::Weighted, weights }; players as usize];
+    let seats = vec![Seat { kind: BotKind::Weighted, weights, search: Search::None }; players as usize];
     let mut bots = build_bots(&seats, seed as i64);
     let gid = game_id(players, seed);
 

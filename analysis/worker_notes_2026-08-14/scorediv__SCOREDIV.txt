@@ -1,0 +1,356 @@
+SCORE DIVERGENCE WORKER -- 2026-08-14
+======================================
+
+STATUS: no fix landed. This pass was pure diagnosis. scorediv.patch is EMPTY
+(git diff 628c0dd HEAD has zero lines) because every experimental edit was
+reverted after it either failed verification or proved too risky to land
+inside the tool-call budget. That is a real, disappointing outcome for a
+"fix the engine" task -- documented honestly below, with exact traces, so
+the next pass does not have to re-derive any of this.
+
+Before/after exact-match count: 532 -> 532 (unchanged).
+Before/after completed-game count: 582 -> 582 (unchanged).
+Regression check (`comm -23 /tmp/tu_ids.txt /tmp/sd_ids.txt`): EMPTY, both
+before and after (confirmed on the final, fully-reverted tree).
+
+/private/tmp/scorediv left in place (NOT deleted) per the instructions,
+since there is no patch content to make deletion safe -- the clone is
+exactly base0815 + a clean git history, ready for the next pass to `cd` into
+and keep working from.
+
+
+RE-TRIAGE: THE 50 DIVERGING GAMES
+==================================
+
+Command used:
+  SCOREDIV_DUMP_IDS=1 ./target/difftest/replaystats ../sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals > /tmp/sd_out.txt 2>&1
+  grep SCOREDIV_DIVERGING_ID /tmp/sd_out.txt   # 50 ids
+  grep SCOREDIV_DETAIL /tmp/sd_out.txt         # per-game engine/index score
+                                                # lists + culture-drift flag
+
+Every SCOREDIV_DETAIL line carries `culture_drifted_in_play` (whether this
+binary's own running `state.players[_].culture` ever disagreed with a BGO
+"(now N)" checkpoint anywhere in the game) and, when true,
+`first_culture_divergence` (the line/actor/ActionClass immediately before
+the FIRST such disagreement -- the symptom location, per this codebase's own
+`docs/REPLAY.md` standing warning, NOT necessarily the cause).
+
+Split:
+  10 games: culture_drifted_in_play = false  (the running total tracked
+            BGO's own checkpoints perfectly all game -- the bug is entirely
+            in the terminal Age-III event-scoring pass itself, or in some
+            state component the culture checkpoint can't see, e.g. workers/
+            happy/yellow_bank)
+  40 games: culture_drifted_in_play = true   (an earlier in-play state bug
+            already throws the running culture off before the final events
+            ever fire; the terminal event math may be 100% correct and still
+            produce a wrong number because it is reading already-wrong
+            state)
+
+Bucket by the ActionClass immediately preceding the first drift (the 40
+`true` games only -- symptom location, not cause, re-confirmed this pass by
+actually tracing three of them to real, different, non-generic root causes):
+
+  15  TakeCard
+   6  BuildWonderStage
+   5  BuildBuilding
+   3  Discard
+   2  IncreasePopulation
+   2  EndTurn
+   2  ElectLeader
+   2  BuildUnit
+   1  WinWar
+   1  UpgradeProduction
+   1  PlayTactic
+
+This is the SAME long-running "culture-oracle" histogram `docs/REPLAY.md`'s
+last two passes already worked down from 531/1011 to 337/1011 games (see
+that file's tail, "Culture-oracle ... instrument" sections) -- TakeCard has
+been the dominant bucket for three passes running and, per that file's own
+repeated finding, is NOT one single bug: every game traced this pass had a
+DIFFERENT actual cause that merely surfaced near a TakeCard line. Do not
+batch-fix on the bucket name.
+
+Full 50-ID list (from SCOREDIV_DIVERGING_ID, this run):
+7523357 7523341 7522665 7523045 7523087 7523081 7522536 7523647 7522143
+7522212 7522215 7522277 7522239 7522838 7522866 7522829 7522864 7522899
+7522075 7521790 7521789 7523367 7523360 7523364 7523474 7523473 7523441
+7522426 7522473 7522417 7522446 7523528 7522979 7522974 7523162 7523167
+7522009 7523233 7523256 7523253 7522397 7522768 7522786 7522813 7522590
+7521985 7521666 7521695 7523102 7523128
+
+Named starting points re-verified this pass:
+  7523818 (ResourcesForMilitaryUnitsPerStrongerCivilization) -- ALREADY
+      FIXED, no longer in the 50. Confirmed by grep against the current
+      SCOREDIV_DIVERGING_ID list; not investigated further.
+  7523162 (Impact of Population, "off by exactly one discontent worker's
+      culture") -- STILL DIVERGING. Deep-dived this pass, see below: real
+      root cause found, fix attempted and reverted (unsafe).
+  7521790, 7522768, 7523102 ("Michelangelo + Kremlin interaction") -- STILL
+      DIVERGING, all three still hold both cards per-journal. Investigated
+      7522768 in depth (see below): the Michelangelo/Kremlin happy-face
+      interaction itself is NOT the cause here (all nine of that game's
+      individual Age-III event-scoring formulas independently verified
+      correct against the journal's own printed per-category amounts) --
+      the "Michelangelo+Kremlin" label from the earlier census looks like a
+      coincidental leader/wonder co-occurrence, not a confirmed mechanism.
+      Whoever picks this up next should NOT assume Michelangelo/Kremlin
+      interaction is the cause without new evidence; it is a stale label.
+  7522786 ("we pick the wrong SET of final event cards") -- ALREADY FIXED
+      in that specific respect: this binary's `final_event_cards` now
+      matches BGO's own "Check the journal to get the final impacts
+      effects" list exactly (Wonders/Colonies/Agriculture/Balance, all
+      four). The game still diverges on VALUE, not SET -- see below.
+
+
+DEEP-DIVE 1: 7523162, "Impact of Population" (root-caused, NOT fixed)
+=======================================================================
+
+Symptom: engine=[173,205,228,236] index=[171,205,228,236] (sorted per-game
+score lists). culture_drifted_in_play=false -- the running culture total
+tracked every BGO checkpoint all game; the bug is purely in final-state
+worker/happiness accounting the culture checkpoint can't see.
+
+Mapped the sorted arrays back to seats via the index.tsv `results` column:
+the diverging entry is GREEN (PLAYER, 171 actual vs our 173). Green's
+"Impact of Population" journal line: "Green scores 12 culture"; this binary
+computes 14 (content-worker count off by exactly 1: (17-10)*2=14 vs
+(16-10)*2=12, `culture_per_content_worker_above_10 == 2` on that card,
+`card_table.rs` "Impact of Population" entry) -- this is the exact
+"off by one discontent worker's culture" shape the task description named.
+
+Traced backwards with temporary instrumentation (added, verified, then
+reverted -- not in the patch) on `economy::increase_population`,
+`economy::lose_population`, and `apply::grant_yellow`. Root cause: BGO's
+journal line 597 --
+
+  "Grey plays event ... II / Emigration; Each civilization loses half of
+   its discontent workers, rounded up (return them to your yellow bank).;
+   Green loses 1 population"
+
+-- fires during GREY's Age-IV political phase. `events.rs`'s
+`decrease_population_by_half_discontent_workers_rounded_up` handler (the
+Emigration mechanic) computes `n = ceil(economy::discontent(Green) / 2)`
+for EVERY active player, including Green, at the moment this event
+resolves. At that exact moment this binary's own `state.age_civil` is
+STILL "III" for the reconstruction (it lags the real Age-III->IV civil-deck
+transition, which happened for real sometime earlier in actual play but
+which this journal-driven reconstruction only ever catches up to lazily,
+via `game::force_civil_age_at_least`/`replay_common.rs::catch_up_civil_age`
+-- see that pair's own extensive doc comments, `game.rs` ~line 705 and
+`replay_common.rs` ~line 5235). Because the Age-III->IV transition removes
+2 unborn population from every player's yellow_bank (RULES_SPEC §12.2.4,
+`game::advance_age`, `game.rs:556`), Green's yellow_bank is 2 higher in
+this binary's reconstruction than in the true game at the instant
+Emigration's math runs -- `economy::discontent` reads `happy_required(5)=5,
+happy=5 -> discontent=0` here (verified via temporary
+`SCOREDIV_EMI_DEBUG`/`SCOREDIV_POP_DEBUG` prints), so `n=0` and the
+Emigration LosePop never fires for Green in this reconstruction, even
+though BGO's own journal says it did (n=1). That missing 1-population loss
+is exactly 1 content worker's worth of "Impact of Population" culture (2
+points) at game end.
+
+Why this isn't caught earlier: `replay_common.rs::is_trustworthy_age_line`
+(shared with `is_pure_confirmation_line`, by explicit design -- see that
+function's own "hidden twin" doc note) deliberately does NOT force the age
+catch-up off a `PlayEvent`-classed line's own age tag, because
+`PlayEvent`/`WinAuction`/`Colonize`/`WinWar` lines are documented,
+evidenced cases of BGO exporting a summary/confirmation line either before
+the real action that causes it, or with a timestamp that collides with an
+unrelated OTHER player's still-in-progress older-age trailing line (see
+that predicate's own doc, and the landed `WinWar` fix citing real game
+`7523079`). So the age (and its yellow_bank deduction) genuinely isn't
+caught up yet by the time Emigration's own math runs on this line.
+
+ATTEMPTED FIX (reverted, unsafe): removed `PlayEvent` from the untrusted-age
+set in `is_trustworthy_age_line` (kept `WinAuction`/`Colonize`/`WinWar`
+untrusted, since those have direct documented evidence; `PlayEvent` did
+not, on inspection of its own doc -- it was swept into the shared exclusion
+list defensively, not because of a documented age-timing collision).
+Rebuilt, ran the full regression check: introduced a REAL regression,
+`7523021`, which changed from a 582/582 completed game to a NEW
+`StuckPending: decider # != expected actor #, phase Actions, no pending`
+failure at "Orange discards 1 card" (line 241) -- i.e. forcing the age
+catch-up earlier changed some other player's hand-limit/antiquation timing
+enough to desynchronize a later decider check. This is the exact class of
+bug `is_pure_confirmation_line`'s "hidden twin" doc warns about: trusting a
+`PlayEvent` line's age tag is not safe in general, even though it clearly
+IS safe for 7523162 specifically. Reverted the edit; confirmed the tree is
+back to a clean `git diff` against 628c0dd before moving on.
+
+WHAT'S NEEDED: a fix scoped much more narrowly than "trust all PlayEvent
+lines" -- e.g. only force the catch-up when the PlayEvent line's own actor
+IS `state.current` (i.e. it's unambiguously that player's own live turn,
+not a same-timestamp confirmation collision with someone else's still-open
+turn) AND `state.pending`/`state.queue` are both empty (the existing guard
+`catch_up_civil_age` already applies). That's a testable, narrower
+predicate than blanket-trusting the class, but it needs its own regression
+sweep against all 582 completed games before landing -- not done this pass,
+ran out of budget after the one blanket attempt regressed.
+
+Pointers: `rust/src/events.rs` fn `apply_player_block`, the
+`decrease_population_by_half_discontent_workers_rounded_up` arm (~line
+1293-1298 at 628c0dd); `rust/src/game.rs` fn `force_civil_age_at_least`
+(~line 707) and fn `advance_age` (~line 547, the "-2 yellow_bank" deduction
+at line 556); `rust/src/replay_common.rs` fn `is_trustworthy_age_line`
+(~line 5319) and fn `catch_up_civil_age` (~line 5235), call site ~line 5522.
+
+
+DEEP-DIVE 2: 7522768/7522786, "Impact of Balance/Progress/Variety/Wonders/
+Colonies/Agriculture/Government/Science/Strength/Competition" (NOT root-
+caused; every individual formula independently verified CORRECT)
+=======================================================================
+
+7522768: engine=[174,193] index=[174,195]. culture_drifted_in_play=true,
+first_culture_divergence at the LAST "End turn (now 155)" checkpoint of the
+game (i.e. everything up to and including that exact checkpoint tracked
+correctly; this is functionally the terminal state).
+
+7522786: engine=[227,308] index=[230,299]. culture_drifted_in_play=false
+(clean all game). final_event_cards = [Wonders, Colonies, Agriculture,
+Balance], matching BGO's own "Check the journal..." list exactly (this is
+the "wrong SET" lead from the task description -- ALREADY FIXED, see
+above).
+
+Added temporary `SCOREDIV_EVENT_DEBUG`-gated instrumentation (reverted, not
+in the patch) to every `scoring_culture` (`events.rs`) branch that either
+game's final event set actually exercises: Balance
+(`culture_times_lowest_production`), Progress
+(`culture_per_level_of_special_techs_and_government`), Variety
+(`culture_per_distinct_type_of_unit_urban_building_and_special_tech`),
+Wonders (`culture_per_completed_wonder_by_age`), Colonies
+(`culture_per_colony`), Agriculture (`culture_per_food_produced_by_farms` +
+`bonus_if_production_exceeds_consumption`), Government
+(`culture_per_civil_action`/`culture_per_military_action`), Competition
+(`culture_per_level_of_military_units_and_arenas`), and the RANKED events
+Science/Strength (`apply_final_scoring_block_live`'s ranking-table branch,
+`rank_by_final_scoring_stat`).
+
+Result: for BOTH games, EVERY one of these -- 4 categories for 7522786, 9
+categories (4 final + 5 already-resolved-mid-game "current events") for
+7522768 -- computed the EXACT per-player amount BGO's own journal line
+prints, with zero exceptions. E.g. for 7522786: Balance 12/8 (journal
+12/8), Agriculture 10/8 (journal 10/8), Wonders 14/13 (journal 14/13),
+Colonies 3/15 (journal 3/15) -- all match. For 7522768: Variety 18/16,
+Progress 24/16 (final) and 26/14 (the earlier mid-game reveal), Balance
+6/8 -- all match.
+
+This rules out the entire `scoring_culture`/`rank_by_final_scoring_stat`
+formula set as the cause for both games. The remaining discrepancy (+9/-3
+split across the two players in 7522786; a flat -2 in 7522768) must live in
+the BASE culture total these formulas add on top of -- i.e. something in
+ordinary per-turn production/leader/wonder accounting earlier in the game
+that the culture-checkpoint oracle either can't see (7522786, which never
+drifted at any checkpoint -- suggesting the bug is in a component the
+oracle doesn't check, like a leader-swap timing edge) or that only shows up
+at the very last checkpoint (7522768).
+
+7522786 has a specific, unchased lead: Purple holds SID MEIER (elected
+round 15, replacing Isaac Newton -- `journal` line 294) whose
+`Special::CulturePerLabEqualToLevel` (`effects.rs` ~line 1007) feeds
+`stats.culture` every turn from then on. A leader-swap-timing bug in
+exactly this ability (does a lab's Sid-Meier culture apply starting the
+SAME turn Isaac Newton dies, or only from the NEXT turn?) would explain a
+persistent, compounding overcount for Purple specifically, independent of
+the checkpoint oracle if the overcount is small enough per-turn to be
+absorbed into rounding noise the oracle's exact-match check wouldn't be
+sensitive to at intermediate checkpoints but which the FINAL total exposes
+cleanly. NOT verified this pass -- ran out of budget. Whoever picks this up
+should trace `state.players[Purple].culture` turn-by-turn from round 15
+(Sid Meier's election) forward and diff against the journal's own "(now N)"
+values at every single End Turn, not just the checkpoint oracle's own
+first-divergence report (which only fires on END TURN lines and this
+game's `culture_drifted_in_play=false` means none of THOSE differed --
+so if there is a bug it's compounding by less than what shows at an
+End-Turn checkpoint, or it's in a component outside the checkpoint's own
+"(now N)" clause, e.g. workers/happy, same shape as 7523162).
+
+7522768 has a similarly unchased, narrower lead: its `first_culture_
+divergence` is the VERY LAST "End turn" line, which BGO exports as a
+DUPLICATE PAIR at the same timestamp (round 19 tag then round 18 tag, in
+that file order -- lines 350/351) immediately preceded by "Impact of
+Variety" (line 349, ALREADY verified correct above) and immediately
+followed by the terminal "Impact of Progress"/"Impact of Balance" (lines
+354-355, ALSO verified correct above). The -2 delta is therefore isolated
+to the ORDINARY per-turn production step ("13 culture (now 155)" on that
+End Turn line) or to the running total X the checkpoint accumulated BEFORE
+line 349's Variety award -- not chased further this pass.
+
+Pointers: `rust/src/events.rs` fn `scoring_culture` (~line 313) and fn
+`apply_final_scoring_block_live` (~line 1550); `rust/src/effects.rs`
+`CulturePerLabEqualToLevel` arm (~line 1007, Sid Meier).
+
+
+DEEP-DIVE 3: 7522239 (small game, empty final_event_cards, traced partway)
+=======================================================================
+
+engine=[14,54] index=[11,54]. Orange matches exactly; Purple off by +3.
+final_event_cards=[] -- no Age-III events remained at all, so this game's
+divergence has NOTHING to do with the final-scoring formulas at all; it is
+a pure running-culture-total bug.
+
+Purple's leader is Winston Churchill (`Special::PerTurnChoice`,
+`ChurchillChoice::Culture` = +3/turn, `apply.rs::h_churchill`). The game's
+last few lines are another BGO duplicate-export pair (lines 338/339, "End
+turn Winston Churchill scores 3 culture.; UPRISING - NO PRODUCTION PHASE",
+round 20 tag then round 19 tag). Hypothesized a double-apply of Churchill's
++3 across the duplicate pair; added temporary `SCOREDIV_CHURCHILL_DEBUG`
+instrumentation (reverted) and DISPROVED it -- Churchill's Culture choice
+fires exactly 6 times total for Purple across the whole game, once per
+real turn, with the existing `r.state.game_over` guard in
+`replay_common.rs` (~line 5747, "BGO logs this exact 'End turn' line
+TWICE... applying `Move::EndTurn` a second time against an already-
+`game_over` state...") correctly skipping the SECOND half of the duplicate
+pair. Confirmed via the debug trace: only ONE Churchill application at the
+very end, `culture_before=11`, giving a final total of 14 -- and BGO's own
+recorded Purple total IS 11. So the LAST Churchill application is not
+itself duplicated or wrong; Purple's culture was ALREADY at 11 (should have
+been 8) before this final +3 fired. The bug is further back in the game,
+un-located this pass. Not chased further -- ran out of budget.
+
+Pointers: `rust/src/apply.rs` fn `h_churchill` (~line 1095);
+`rust/src/replay_common.rs` ~line 5747 (the `game_over` duplicate-EndTurn
+guard, already correct, ruled out as the cause here).
+
+
+WHAT WAS NOT ATTEMPTED AT ALL THIS PASS
+=========================================
+Of the 50, only 4 games got real tracing (7523162, 7522768, 7522786,
+7522239); the other 46 were only bucketed by symptom (see the table above),
+not individually traced. In particular:
+  - The 15-game TakeCard bucket and 6-game BuildWonderStage bucket are
+    each, per `docs/REPLAY.md`'s own repeated finding, a grab-bag of
+    unrelated causes -- each of the other 44 games needs its own
+    `first_culture_divergence` trace the same way this pass did for
+    7523162, not a batch fix.
+  - The 10-game `culture_drifted_in_play=false` group (7523357, 7523087,
+    7522277, 7522239 [partly traced above], 7522864, 7522075, 7523162
+    [traced above], 7523253, 7522397, 7522786 [traced above]) is the
+    highest-leverage remaining group: for these, the running culture total
+    is PROVEN correct at every BGO checkpoint, so the bug is either in the
+    terminal event-scoring formulas (now ruled out for 7522786, and by
+    extension probably not the shape for the others either, since that
+    code path is shared) or in some non-culture state component (workers/
+    happy/yellow_bank, as found for 7523162) that the checkpoint oracle
+    can't see. Worth instrumenting a SECOND oracle (workers_free/
+    yellow_bank/happy checkpoints, not just culture) the same way the
+    existing culture-oracle was built, per `docs/REPLAY.md`'s own
+    precedent -- would likely re-surface the SAME age-catchup class of bug
+    found for 7523162 across several of these ten, faster than tracing
+    each by hand.
+
+
+TOOLING NOTE
+=============
+Every trace in this pass used the SAME technique: add a
+`std::env::var("SCOREDIV_..._DEBUG").is_ok()`-gated `eprintln!` right next
+to the suspect computation (following this codebase's own established
+pattern, e.g. `SCOREDIV_EVENT_DEBUG` already existed for the Population/
+Happiness blocks in `events.rs` before this pass), filter `index.tsv` down
+to a single game ID with `head -1 index.tsv > /tmp/one.tsv; grep
+"^$ID\t" index.tsv >> /tmp/one.tsv`, rebuild `--profile difftest`, and run
+`replaystats /tmp/one.tsv journals/`. Always revert the instrumentation
+(`git checkout -- <file>`) once the trace is captured, before moving to the
+next hypothesis -- keeps `git diff 628c0dd HEAD` meaningful at every point
+and made the final "confirm clean tree, zero regressions" check trivial.

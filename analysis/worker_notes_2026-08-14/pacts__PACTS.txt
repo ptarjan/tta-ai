@@ -1,0 +1,230 @@
+PACTS worker -- 2026-08-14 -- worker PACTS, base commit 570479a, branch base0814
+
+LEAD INVESTIGATED
+cardblame's total-coverage rebuild flagged pact cards in the score-mismatch cut
+(completed games whose final scores disagree with index.tsv), corroborated
+across 4 independent cuts with round-length flat:
+  3.83x Open Borders Agreement        60 games,  9 mismatches (15.0%)
+  3.52x Peace Treaty                  29 games,  4 mismatches (13.8%)
+  3.04x Trade Routes Agreement        42 games,  5 mismatches (11.9%)
+  2.92x Scientific Cooperation        35 games,  4 mismatches (11.4%)
+  1.85x International Trade Agreement 69 games,  5 mismatches ( 7.2%)
+plus the generic OfferPact Move (2.04x/138), matching ActionClass rows, and
+the two highest-enrichment Move rows anywhere (TradeResourceAsFood 4.09x/25,
+TradeFoodAsResource 3.52x/29 -- Trade Routes Agreement's own conversion).
+
+===========================================================================
+STEP 1: BAKED CONSTANTS -- CLEAN, NO DISCREPANCY
+===========================================================================
+Diffed every field of all 5 pact cards + War over Technology in
+rust/src/card_table.rs against sources/bga_throughtheages_material.inc.php
+(BGA's own data, the DATA oracle):
+
+  Open Borders Agreement (id 81/1081): MA:1 both, +2 attacker strength on
+    mutual attack -- matches Special::BothPlayers{military_actions:1} +
+    Special::OnAttackBetweenParties{attacker_strength:2}. count [0,1,1]
+    matches qt2/qt3/qt4.
+  Trade Routes Agreement (id 101/1101): A food_as_resource, B
+    resource_as_food, both magnitude 1 -- matches Special::A/B blocks.
+  Scientific Cooperation (id 170/1170): tech_discount 2, other-party-pays-
+    science flag -- matches Special::BothPlayers{tech_discount:2,
+    other_party_pays_science:true}.
+  International Trade Agreement (id 141/1141): A +1 resource, B +1 food --
+    matches Special::A{resources:1}/B{food:1}.
+  Peace Treaty (id 241/1241): both +1 culture, no attacks -- matches
+    Special::NoAttacksBetweenParties + BothPlayers{culture:1}.
+  War over Technology (id 179): loser loses science = strength advantage,
+    winner may steal blue techs instead -- matches
+    Special::VictorTakesScienceUpTo(StrengthAdvantage) +
+    OrTakesSpecialTechnologiesOfSameTotalScienceCost.
+
+Every card/count/age/special matched exactly. NEGATIVE on constants -- this
+is not a data-table bug.
+
+===========================================================================
+STEP 2/3: SCORE-MISMATCH SPLIT
+===========================================================================
+Built rust/target/difftest/{replaystats,cardblame}. Ran
+SCOREDIV_DUMP_COMPLETED=1 and SCOREDIV_DUMP_IDS=1 sweeps against the full
+corpus (index.tsv + bgo-journals/journals).
+
+  698/1011 completed to state.game_over (matches the known baseline).
+  671/698 exact-matched index.tsv; 27 diverged.
+
+Of the 27 diverging games, checked each journal for a REAL pact mention
+(grep -iE on the 9 pact card names, NOT a bare "pact" substring -- that
+false-positives on every "Impact of ..." final-event card name, which is
+how a naive first pass over-counted 27/27 as "pact games"). Real count:
+11/27 diverging games mention an actual pact card.
+
+Of those 11, split by SCOREDIV_DETAIL's own culture_drifted_in_play flag
+(distinguishes an in-play accumulated-culture bug from a final-event-only
+"Impact of X" scoring bug, already a separately known/tracked cause):
+  - 3 games (7523087, 7523162, 7523253) have culture_drifted_in_play=false,
+    i.e. their divergence is END-GAME "Impact of ..." scoring only --
+    unrelated to pacts by construction (pacts don't touch final-event
+    formulas).
+  - 8 games (7523341, 7520722, 7522866, 7521141, 7522473, 7522446, 7522672,
+    7521695) have culture_drifted_in_play=true, an in-play checkpoint
+    divergence.
+
+Traced each of the 8 in-play-divergent games' journal against its
+first_culture_divergence lineno/actor:
+  - 7523341: divergence actor Purple, lineno 388 (round 12). Purple is NOT
+    a party to ANY pact at that point (Peace Treaty in this game is
+    proposed only at line 522, round 15 -- after the divergence). Pacts
+    ruled out for this game's divergence.
+  - 7520722: divergence actor Orange, lineno 675 (round 18, wonder-build
+    turn). Orange IS party to Trade Routes Agreement (accepted round 5),
+    but Trade Routes grants no culture at all (food_as_resource/
+    resource_as_food only) -- can't be the direct cause of a CULTURE
+    divergence. The +4/+8 pattern across two different players (net
+    nonzero, not a transfer) points at end-of-turn wonder-completion
+    culture math, not a pact.
+  - 7522473: divergence actor Green, lineno 617 (round 17). Green's
+    Promise of Military Protection (culture-granting pact) with Grey was
+    CANCELLED at round 13 (War over Culture declared) -- 4 rounds before
+    the divergence. Checked the cancellation code path
+    (combat.rs::cancel_attack_pacts, apply.rs::h_cancel_pact) -- both are
+    well-tested (h_war_cancels_a_pact_that_ends_on_mutual_attack,
+    cancel_attack_pacts_removes_only_the_matching_pact, etc.) and correct
+    by inspection; the intervening 4 rounds carry other large culture
+    swings (an Impact/event card) that better explain the timing. Not
+    attributable to the pact-cancellation path.
+  - The remaining 5 (7522866, 7521141, 7522446, 7522672, 7521695): the
+    first-divergence actor at the flagged checkpoint is not a party to any
+    culture-granting pact at that moment either (their real pacts are
+    Open Borders/Trade Routes/Scientific Cooperation/International Trade
+    Agreement -- none of which grant culture directly -- or Peace Treaty
+    proposed strictly AFTER the flagged lineno).
+
+CONCLUSION ON THE ORIGINAL LEAD: negative. In every one of the 8 in-play
+divergent, pact-involving games, the diverging player is either not a
+party to any culture-granting pact at the moment of divergence, or the
+pact in question grants no culture at all. The pact enrichment in
+cardblame's score-mismatch cut looks like a confound of GAME COMPLEXITY
+(games that reach pact negotiation are long, multi-mechanic, wonder- and
+event-heavy games -- exactly the kind of game where an unrelated culture-
+accounting bug is more likely to manifest), not a causal pact mechanism.
+This is DISTINCT from the round-length confound cardblame's own 4-cut
+analysis already ruled out -- this is a same-length-bucket, different-axis
+confound (mechanic density / turn count of decisions), and it stands.
+
+===========================================================================
+A REAL BUG FOUND, BUT NOT LANDED (regressions)
+===========================================================================
+While tracing Scientific Cooperation's mechanics I found a genuine,
+unrelated-to-mismatches implementation gap: `effects::Stats::
+science_partners` (the bitmask marking which OTHER civilization must pay 1
+science, per the card's own text: "it pays 2 science less and the other
+civilization pays 1 science... if the other cannot pay 1 science, the
+technology cannot be developed") is COMPUTED (effects.rs:922,
+apply_pact_block) but had NO CONSUMER anywhere in the crate -- grep
+confirms its only prior read sites were unit-test assertions of the
+bitmask itself. The `tech_discount` (2 off the developer's own cost) side
+IS applied (costs.rs:582); the partner-charge side never was.
+
+I implemented the missing half: a `science_pact_partners_can_pay` legality
+gate (all 3 DevelopTechnology legality sites in legal.rs) plus the actual
+1-science charge to the partner in `h_develop` (apply.rs), with 5 new
+tests (both RED-confirmed by reverting the fix and re-running). Lib tests:
+1424 passed (1419 baseline + 5 new). Clippy: clean.
+
+BUT the full-corpus guard sweep regressed:
+  completed 698 -> 690 (-8), exact 671 -> 665 (-6), 0 wins.
+  Regressed IDs: 7521790 7522473 7522512 7522940 7523162 7523404 7523464
+  7523510
+
+Traced the regression in 7523162 (game had Scientific Cooperation between
+Orange/Grey, accepted round 9). The replay now stops at journal line 324
+("Grey discovers Scientific Method Grey loses 4 science; Orange loses 1
+science") with IllegalMove -- Grey's own tracked `science` is 3, one short
+of the discounted cost of 4, even after correctly reconstructing 6 at the
+round-9 End Turn checkpoint (verified against the journal's own "3 science
+(now 6)" line by hand: 8 pre-Riflemen-charge - 1 (Riflemen, a REAL
+Scientific-Cooperation charge my fix correctly applies) - 4 (Grey's own
+revolution cost) + 3 (production) = 6, exactly matching the journal).
+
+Between that verified-correct checkpoint (line 296, round 9 end) and the
+next relevant event (line 301, round 10, Orange discovers Strategy -- the
+next legitimate Scientific-Cooperation charge my fix applies), there is
+NO journal event that should touch Grey's science at all (only Orange's
+own Political Phase / plays Reserves / takes Strategy). Yet the engine's
+own stored `Grey.science` had already silently dropped from 6 to 4 by the
+time my code read it -- a 2-point drop with no corresponding journal
+event, entirely INSIDE the round 9->10 turn-boundary transition. This is
+a PRE-EXISTING, unrelated bug (present before my change too -- my fix
+didn't create it, it only exposed it by being the first code to ever
+check a partner's science against a real threshold). It was invisible
+before because nothing in the corpus-wide oracles checks SCIENCE in-play
+(only culture and final-award culture are cross-validated by
+replaystats' existing oracles).
+
+Because this masked bug makes the "partner cannot pay" legality gate (and
+even just the raw charge, tested standalone) trip on a false floor for
+several games, landing my rules-correct fix regresses the guard. Per this
+project's rule ("no regressions may land"), I REVERTED the fix entirely
+(rust/ has zero diff vs 570479a; pacts.patch alongside this file is
+therefore empty). The attempted fix (~15 net lines: a new
+`effects::science_pact_partners_can_pay` helper, its 3 call sites in
+legal.rs's DevelopTechnology arms, and a charge block in
+apply.rs::h_develop, plus 5 tests) is described in full above so a future
+worker can reproduce it without re-deriving the design once the blocking
+science-drift bug is fixed.
+
+NEW LEAD FOR A FUTURE WORKER: find why a player's in-play `science` field
+can silently drop by a small amount (2, here) across a round boundary with
+no journal-visible cause. Reproduction: game 7523162, Grey, between
+journal line 296 (round 9 End Turn, confirmed-correct science=6) and line
+301 (round 10, next real event touching Grey's science) -- add a temporary
+debug print of `state.players[*].science` inside `h_develop` (or at
+end-of-round processing) and diff against hand-reconstructed journal
+values as done here. Candidates to check first: round-transition
+production recompute, corruption/food-shortage interactions bleeding into
+science, or a stale `mil_sci_discount`/`one_time_discount` field not being
+cleared at the round boundary. This is NOT pact-specific (Grey's science
+drop happens while no pact effect is even being evaluated) so it likely
+affects games without any pact too, just invisibly (nothing else checks
+science in-play). Once fixed, the Scientific-Cooperation partner-charge
+fix documented above (patch content available on request / re-derivable
+from this note -- it was a ~15-line net change: a new
+`effects::science_pact_partners_can_pay` helper, 3 call sites in
+legal.rs's DevelopTechnology arms, and a charge block in apply.rs::
+h_develop) should be re-attempted and should then pass the guard cleanly.
+
+===========================================================================
+NOT CHECKED / OUT OF SCOPE
+===========================================================================
+- Did not check Acceptance of Supremacy, Promise of Military Protection,
+  Military Alliance, International Tourism, Loss of Sovereignty baked
+  constants (not in cardblame's flagged list) -- spot-checked Promise of
+  Military Protection's PactBlock incidentally while tracing 7522473 and
+  it looked consistent with BGA's text, but did not do a full line-by-line
+  diff.
+- Did not investigate the 3 final-event-only ("Impact of X") divergent
+  games further -- that's a separately-known cause (documented in
+  replaystats' own "Final-scoring award oracle" section), not pact-
+  specific.
+- Did not chase the round-transition science-drop bug beyond identifying
+  its exact reproduction window (see NEW LEAD above) -- out of budget and
+  out of this worker's assigned scope (pacts, not general science
+  tracking).
+
+===========================================================================
+CONCLUSION
+===========================================================================
+NEGATIVE on the original lead, with a named confound (game complexity/
+mechanic density, not round length) and a per-game causal trace showing
+the pact-flagged games' actual divergence timing does not align with any
+active pact's own effect window in 8/8 traced in-play cases. Baked
+constants are clean. A genuine rules gap WAS found (Scientific
+Cooperation's "other party pays 1 science" was entirely unimplemented)
+but could not be safely landed because it exposes a separate, pre-
+existing, non-pact science-tracking bug that causes real regressions in
+the completion guard -- documented above as a concrete, reproducible lead
+for whoever picks up general science-tracking next. Confidence: high on
+the "pacts are a confound, not a cause of these specific mismatches"
+conclusion (traced 8/8 in-play divergences by hand); medium-high on the
+Scientific Cooperation implementation gap being real and worth fixing
+(confirmed via grep + BGA card text + guard regression trace) but blocked
+on someone else's bug.

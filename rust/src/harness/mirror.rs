@@ -358,7 +358,7 @@ impl RivalAskKey {
                     1
                 }
             }
-            _ => unreachable!("get_checked called on a non-RIVAL_CHECKS key: {self:?}"),
+            RivalAskKey::C | RivalAskKey::Cr | RivalAskKey::Sr | RivalAskKey::Str | RivalAskKey::Ca | RivalAskKey::Hc | RivalAskKey::S | RivalAskKey::F | RivalAskKey::R | RivalAskKey::Fw | RivalAskKey::Y | RivalAskKey::Ma => unreachable!("get_checked called on a non-RIVAL_CHECKS key: {self:?}"),
         }
     }
 }
@@ -609,6 +609,14 @@ pub struct CheckResult {
     pub discrepancies: Vec<Discrepancy>,
 }
 
+/// One rival row of `CheckResult::read_the_panel`'s output: `(idx, forced
+/// numbers, name channels)`. `read_the_panel` itself is only called from
+/// `#[cfg(test)]` below, which the plain (non-test) `lib` build doesn't see
+/// -- so, unlike the function, this newly-named alias needs its own
+/// `#[allow(dead_code)]` to stay quiet in that build too.
+#[allow(dead_code)]
+type PanelRowLocal = (u8, Vec<(String, Value)>, Vec<(&'static str, Vec<String>)>);
+
 impl CheckResult {
     pub fn failed(&self) -> bool {
         self.discrepancies.iter().any(|d| d.severity == Severity::Fail)
@@ -666,13 +674,13 @@ fn get_int(vals: &[(String, Value)], key: &str) -> Option<i64> {
 pub fn round_check(
     board: &Board,
     reported: &[(String, Value)],
-    mut history: Option<&mut RivalHistory>,
+    history: Option<&mut RivalHistory>,
     rivals: &[(u8, Vec<(String, Value)>)],
 ) -> CheckResult {
     let mut ds = check_self(board, reported);
     ds.extend(check_board(board, reported));
     ds.extend(check_rivals(&board.state, rivals));
-    if let Some(hist) = history.as_deref_mut() {
+    if let Some(hist) = history {
         for (idx, vals) in rivals {
             ds.extend(hist.check(*idx, board.state.round, get_int(vals, "c"), get_int(vals, "cr")));
         }
@@ -950,7 +958,7 @@ mod tests {
     /// Exactly what the operator types, for every rival, this round: the
     /// forced numbers plus the name channels (wonders/colonies/wonder in
     /// progress). Mirrors the Python test module's `_read_the_panel`.
-    fn read_the_panel(st: &GameState, me: u8) -> Vec<(u8, Vec<(String, Value)>, Vec<(&'static str, Vec<String>)>)> {
+    fn read_the_panel(st: &GameState, me: u8) -> Vec<PanelRowLocal> {
         let mut out = Vec::new();
         for q in st.players[..st.num_players as usize].iter() {
             if q.idx == me {

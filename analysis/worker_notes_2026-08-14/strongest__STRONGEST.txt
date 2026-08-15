@@ -1,0 +1,440 @@
+STRONGEST CIVILIZATION -- investigation notes, NO FIX LANDED (measured negative)
+Worker: strongest (clone /private/tmp/strongest, base commit 791150f, branch base0815)
+Date: 2026-08-14
+
+OUTCOME
+-------
+No functional change landed. `git diff 791150f -- rust/` is EMPTY (confirmed both by
+`strongest.patch` being 0 lines and by `git status`/`git diff --stat` after reverting
+a temporary debug-only probe). This settles the open question left by resshort and
+build2: "how does an EVENT pick the STRONGEST civilization" is answered the same way
+`weakest__WEAKEST.txt` answered it for WEAKEST -- the engine's existing definition
+(`events::rank_stat_value`'s `RankStat::Strength` arm, `effects::state_stats(state,
+p).strength`, tactic-army-bonus inclusive) is CORRECT, confirmed by a full 1011-game,
+948-event corpus cross-check at 98.6% agreement, mirroring weakest's 98.8%. This is
+the first time STRONGEST has actually been measured corpus-wide -- weakest's own pass
+explicitly excluded the 4 combined "strongest and weakest" cards from ITS scan (it was
+scanning WEAKEST) because an earlier attempt mis-paired description-sentence order
+with outcome-clause order; that gap is what this pass closes for STRONGEST, using a
+different, sound pairing method (see PAIRING METHOD below).
+
+============================================================
+STEP 1: rules sources, verbatim, specifically checking for a strongest/weakest
+ASYMMETRY (especially tie-breaking)
+============================================================
+
+Read directly from the PDFs (not paraphrased), specifically hunting for anything that
+treats "strongest" differently from "weakest":
+
+- FAQ v1.5 p.11 (`pdftotext -f 11 -l 11 -layout sources/faq_v15.pdf`), verbatim, two
+  adjacent paragraphs:
+    "Ties during Wars and Aggressions: If the Military Strengths of two warring
+    Civilizations are tied at the moment of execution of a War, then there is no
+    effect from that War. The same goes for Aggressions. (Note that Military Strength
+    includes your Strength that arises from all sources, including from Wonders and
+    Leaders and Territories.)
+    Weakest/Strongest Civilization(s): When this phrase occurs, it is referring only
+    to Military Strength, not to Culture or Population or anything else."
+  These two paragraphs sit back-to-back and use the SAME term "Military Strength" for
+  both War/Aggression combat AND Weakest/Strongest event targeting -- there is no
+  textual hint of a separate, narrower "strength" concept for events, and no asymmetry
+  between "weakest" and "strongest" is stated anywhere on this page.
+
+- Code of Laws p.12 (`pdftotext -f 12 -l 12 -layout sources/cge_code_of_laws.pdf`,
+  Genghis Khan errata), verbatim: "In a two-player game, 'one of the two strongest'
+  should be read as 'the strongest'. (You still win ties.) When forming armies, each
+  infantry unit can be either cavalry or infantry (but not both) to maximize the
+  civilization's total strength rating." -- this is Genghis-Khan-specific (a leader
+  ability), not a general strongest/weakest asymmetry; it does confirm army-formation
+  bonuses are part of "total strength rating" generally, same conclusion weakest
+  reached, and applies identically to both directions.
+
+- `docs/RULES_SPEC.md` 5.3: "Statistic comparisons ('strongest/weakest' = strength
+  rating [FAQ p.11]): ties broken in favor of the current player, then proximity in
+  clockwise order after the current player". This states ONE tie-break rule for BOTH
+  words, no asymmetry.
+
+CONCLUSION: no rules source found treats STRONGEST any differently from WEAKEST --
+same underlying quantity (tactic-inclusive strength rating, same as combat), same
+tie-break direction (favor the current/revealing player). The only asymmetry visible
+anywhere is in the engine's OWN implementation of the tie-break's DIRECTION parameter
+(`apply_single_target`'s `favor_current` flag: `true`/un-reversed order for
+`StrongestPlayer` since being first-among-ties is good for a bonus; `false`/reversed
+via `protect_current_from_bad_tie` for `WeakestPlayer` since being first-among-ties is
+bad for a penalty) -- and that asymmetry is CORRECT, not a bug: it is the same "favor
+the current player" rule applied to opposite-valence effects, exactly matching
+RULES_SPEC 5.3's single stated rule. STEP 3's tie-only sub-analysis below measures
+this directly and confirms it.
+
+============================================================
+STEP 2: the six StrongestPlayer/StrongestPlayers cards in the engine, and why the
+falsified candidate (raw-unit-only) was not re-tried
+============================================================
+
+`rust/src/card_table.rs` has exactly 6 cards with `Special::StrongestPlayer(` (the
+SINGULAR key `apply_single_target` resolves) and 2 with `Special::StrongestPlayers(`
+(the TIED/plural key, a different code path -- "the two/2 strongest civilizations",
+excluded from this scan for the same reason weakest excluded "civilizations" plural:
+no single named ground-truth victim to check against, all tied-for-best players are
+affected):
+
+  Singular (this scan's universe): Uncertain Borders, Border Conflict, Crusades,
+    Refugees, International Agreement, Politics of Strength.
+  Plural/tied (excluded, not this question): Foray, Cold War.
+
+Of the 6 singular cards, 4 are COMBINED strongest+weakest cards (both
+`Special::StrongestPlayer` and `Special::WeakestPlayer` on the same card: Border
+Conflict, Crusades, Refugees, Politics of Strength) -- exactly the class weakest's own
+notes flagged as unsafely paired by sentence position. International Agreement's
+"strongest civilization" grant is optional ("may... take cards") and resolved through
+a multi-step `Choice`/`TakeRow` sequence in this replayer that frequently shows up as
+a reconstruction MISMATCH later in the same game (grep "International Agreement" in
+the debug dump against `m.mismatch`'s own printed lines) -- ground truth for it is not
+reliably extractable from this replayer's output, so it is EXCLUDED from the corpus
+count (190 games have the card; not chased further -- same "don't force an unsound
+pairing" principle weakest already established, applied to a different failure mode).
+Uncertain Borders, Border Conflict, Crusades, Refugees, Politics of Strength (5 cards,
+228+233+238+144+105 = 948 raw single-target events) form this scan's clean universe.
+
+THEORY A (raw-unit-strength-only, tactic AND flat-bonus both excluded) was ALREADY
+measured and FALSIFIED by resshort on this exact bucket's target game (7522914,
+Border Conflict) before this worker started -- see resshort__RESSHORT.txt HAND-TRACE
+2: it ranked Orange (a THIRD player, not Green the engine's actual pick, not Purple
+the journal's actual pick) strongest, and did not fix the target game. Per the task's
+explicit instruction, THIS WAS NOT RE-IMPLEMENTED OR RE-MEASURED this pass -- it is
+disqualified by direct prior measurement, not by reasoning alone.
+
+============================================================
+STEP 3: THE CORPUS MEASUREMENT (the actual point of this job)
+============================================================
+
+METHOD: `REPLAY_DEBUG=1 REPLAY_DEBUG_ALL=1 ./target/difftest/replay <index> <journals>
+<all 1011 ids>` in one invocation (28ms/game, ~2 min total for all 1011). A one-line,
+debug-print-only change was added to `events::apply_single_target` (reverted before
+this file was written -- see FILES CHANGED) to also print each player's
+`effects::army_strength(p)` alongside the existing `values` (total
+`state_stats(...).strength`) on the SAME already-existing debug line, so the
+tactic-army-bonus component could be isolated without a second probe or a second
+20-minute corpus sweep:
+
+    DEBUG apply_single_target: order=... stat=Strength best=true favor_current=true
+      ranked=... values=[...] army=[...]
+
+`resolve_event` runs this EXACT `apply_single_target` call (STRONGEST, `best=true`)
+UNCONDITIONALLY for every event revealed, immediately followed by the WEAKEST call
+(`best=false`) -- both lines are always emitted back-to-back right after the event's
+own `class=PlayEvent` journal-replay line, before any of that event's own
+resource/culture/etc. side effects are applied for the FIRST (strongest) key,
+interleaved with (for the second, weakest, key) the first key's own gains-block debug
+noise. A player-index-to-color map was built once per game from the FIRST time each
+`actor=N` index appeared in an `APPLY_ONE ENTRY` line (color name is always the first
+word of that line's own `raw_text`, e.g. "Purple builds..."), then reused for every
+event in that game.
+
+PAIRING METHOD for the 4 combined strongest+weakest cards, and how it was validated
+(the exact gap weakest's own notes flagged as unsolved):
+
+Rather than pairing by DESCRIPTION-SENTENCE POSITION (proven unsound by weakest, and
+independently re-confirmed here: Border Conflict's description lists "weakest...
+destroy" FIRST and "strongest... gains" SECOND, but the OUTCOME clauses in the
+journal's own raw text are ALSO ordered weakest-then... no, in Border Conflict they
+are actually STRONGEST-outcome-then-weakest-outcome, e.g. "Purple produces 3
+resources; Orange must destroy a mine, farm or urban building" -- reversed from
+Refugees' own outcome-clause order in weakest's example. No fixed positional rule
+holds across cards), this pass paired by CONTENT: for each of the 4 card types, the
+strongest-clause and weakest-clause use grammatically DISTINCT verbs that never
+collide with each other OR with the generic "<revealer> scores N culture" preamble
+every event reveal prints:
+
+  Border Conflict:  strongest = "<Color> produces N resources"
+                     weakest   = "<Color> must destroy..."
+  Crusades:          strongest = "<Color> scores N culture"
+                     weakest   = "<Color> loses N culture"
+  Refugees:          strongest = "<Color> gains N culture..."
+                     weakest   = "<Color> loses N culture..."
+  Politics of Strength: strongest = "<Color> draws N military cards"
+                         weakest   = "<Color> must discard N cards"
+
+These patterns are matched ONLY within the outcome-clause segments (everything after
+the card's own printed description sentence, itself located by finding the "Current
+event:" marker segment and skipping the following "<Age> / <Name>" and description
+segments) -- never against the preamble "<revealer> plays event <revealer> scores N
+culture" (which also contains the word "scores"/"culture" but is a DIFFERENT
+sentence, always appearing BEFORE "Current event:", so slicing on that marker
+excludes it structurally, not by luck).
+
+VALIDATION of this pairing method: the SAME 4 cards' WEAKEST-side outcome clauses
+were independently extracted with this content-based method and checked against the
+engine's own `best=false` resolution for the identical events -- if the pairing were
+unsound, this should NOT reproduce weakest's own already-published 98.8% number (that
+number came entirely from single-effect cards, none of these 4). It does:
+
+    WEAKEST side of the 4 combined cards (this pass's own sanity check, NOT the
+    scan's headline number): 658/665 = 98.9% (Politics of Strength 116, Crusades 277,
+    Border Conflict 272 -- Refugees' weakest clause is identical in shape to
+    Crusades' and was folded into the same regex, so its count is inside "Crusades"
+    above only where the literal card name matched Crusades; Refugees itself
+    contributed 0 extra distinguishable weakest events beyond what full-window
+    re-scanning found -- not chased further since it is a validation check, not the
+    headline result).
+
+98.9% landing within noise of weakest's own 98.8% (measured on an entirely disjoint
+set of card types) is strong, independent confirmation that the content-based pairing
+method is sound and the STRONGEST-side numbers below are not a parsing artifact.
+
+RESULTS -- STRONGEST civilization, two candidate definitions, N=948:
+
+  CURRENT definition (`state_stats(...).strength`, tactic-army-bonus inclusive --
+  what `events::rank_stat_value`'s `RankStat::Strength` arm already computes, and
+  literally what `apply_single_target`'s own live `ranked[0]` picks in-game):
+    935 / 948 = 98.6% agreement with the journal's named strongest-civilization
+    victim.
+
+  ALTERNATIVE "no-tactic" definition (same one weakest tested for WEAKEST: total
+  minus `army_strength(p)`, i.e. raw unit strength + leader/wonder/special flat
+  bonuses, tactic-formed-army bonus excluded; tie-break approximated by picking the
+  first tied color in `order_colors` among the recomputed value's own ties, same
+  direction as the engine's real `favor_current=true`):
+    778 / 948 = 82.1% agreement (135 ties encountered under this alternative
+    definition specifically -- NOT the same ties as the current definition's own 135,
+    since removing `army_strength` changes which players tie).
+
+The current (tactic-inclusive) definition wins by 16.5 points, decisively -- not a
+coin-flip margin, and it lands in the SAME 98%+ band weakest independently found for
+the mirror-image question. THEORY A (raw-unit-only, already falsified on the target
+game before this pass) would score even lower than the no-tactic figure above (Theory
+A additionally strips flat leader/wonder bonuses on top of the tactic bonus) and was
+not separately corpus-measured, per the task's explicit instruction not to re-chase a
+disproven candidate.
+
+TIE-BREAK sub-check (the "especially tie-breaking" angle STEP 1 flagged as the most
+plausible place for a strongest/weakest asymmetry): of the 948 events, 135 have an
+EXACT tie at the maximum `state_stats(...).strength` value among the ranked players.
+132/135 (97.8%) of those ties are won, per the CURRENT `favor_current=true` rule (the
+revealing/current player wins ties for a bonus, unreversed `order`), by the SAME
+player the journal names -- confirming RULES_SPEC 5.3's stated rule ("ties broken in
+favor of the current player") is correctly implemented for STRONGEST, symmetric with
+the already-landed, 62/63-corpus-confirmed `protect_current_from_bad_tie` fix for
+WEAKEST. Only 2 of the 135 ties disagree in a way actually attributable to the
+tie-break direction itself (7523341: a 3-way tie at 12 among Purple/Green/Orange,
+revealer=Purple, engine picks Purple, journal picks Green; 7522377: a 2-way tie at 9
+between Purple/Orange, revealer=Purple, engine picks Purple, journal picks Orange).
+2 tie-direction disagreements out of 135 genuine ties is NOT enough signal to
+generalize a reversed rule from (weakest's own landed fix was justified by 62/63, two
+orders of magnitude more one-sided than this) -- and reversing the direction here
+would break the other 132/135 that currently match. Not chased further; see HANDOFF.
+
+Two OTHER "tied at the max" records that superficially looked like tie-break mismatches
+(7521741, 7523098) are NOT actually tie-break disagreements at all: in both, the
+journal's named victim's OWN computed value is BELOW the tied maximum entirely (e.g.
+7523098: journal names Orange, whose engine-computed strength is 9, while Purple AND
+Grey are BOTH tied at 11 -- Orange was never a contender under this engine's own
+numbers, tie-break or not). These are ordinary value-computation anomalies, same
+shape and same rough frequency (13/948 = 1.4%, vs weakest's 4/324 = 1.2%) as the
+handful weakest already found and declined to chase further for the identical reason
+(no shared pattern across card type/player-count/round, not a productive lead without
+risking a "fit a tie-break to N corpus points" overfit).
+
+Full list of the 13 CURRENT-definition mismatches (all fields from the actual
+extraction, `/tmp/strongest_records.json`):
+  7523341 Crusades      journal=Green  engine=Purple values={Purple:12,Green:12,Grey:7,Orange:12} (3-way tie, tie-break disagreement)
+  7523069 Refugees      journal=Purple engine=Orange values={Purple:19,Orange:20}
+  7523082 Crusades      journal=Purple engine=Orange values={Purple:4,Green:4,Orange:5}   (this is build2/weakest's OWN 7523082 game, its WeakestPlayer side already documented as one of weakest's 4 anomalies; here it is ALSO a StrongestPlayer anomaly on the same event -- see below)
+  7522914 Border Conflict journal=Purple engine=Green values={Purple:7,Green:9,Orange:7}  (THE TARGET GAME -- see STEP 4)
+  7521741 Border Conflict journal=Orange engine=Green values={Green:11,Orange:10,Purple:11} (journal's pick below the tied max, not a tie-break case)
+  7522417 Crusades      journal=Purple engine=Orange values={Purple:14,Green:12,Orange:15}
+  7522283 Border Conflict journal=Orange engine=Purple values={Orange:6,Purple:7}
+  7522672 Crusades      journal=Orange engine=Green values={Orange:10,Purple:7,Green:11}
+  7523200 Politics of Strength journal=Purple engine=Orange values={Purple:21,Orange:22}
+  7523229 Uncertain Borders journal=Orange engine=Purple values={Orange:11,Purple:12}
+  7522377 Border Conflict journal=Orange engine=Purple values={Purple:9,Orange:9}        (2-way tie, tie-break disagreement)
+  7522802 Border Conflict journal=Purple engine=Orange values={Purple:6,Orange:8}
+  7523098 Border Conflict journal=Orange engine=Purple values={Orange:9,Purple:11,Green:9,Grey:11} (journal's pick below the tied max, not a tie-break case)
+
+Interesting cross-reference: game 7523082 appears in BOTH weakest's 4-anomaly list
+(WeakestPlayer, "Reign of Terror", round 9) AND this scan's 13-anomaly list (Crusades'
+StrongestPlayer resolution, values Purple=4/Green=4/Orange=5). Not chased further this
+pass (still only 1 shared game out of a combined ~17 anomalies across both scans,
+consistent with "rare unmodeled interaction in specific games", not a systemic bug) --
+flagged for whoever next investigates cross-scan anomaly overlap; see HANDOFF.
+
+============================================================
+STEP 4: hand-trace of the ORIGINAL target game, 7522914, round 9, Border Conflict
+============================================================
+
+Journal (`/private/tmp/bgo-journals/journals/7522914.tsv`, round-9 lines, verbatim):
+  "Purple plays event Purple scores 2 culture; Current event:; I / Border Conflict;
+  The weakest civilization must destroy one of its own urban building, farm, or mine.
+  The strongest civilization gains 3 resources.; Purple produces 3 resources; Orange
+  must destroy a mine, farm or urban building"
+  -> journal names PURPLE strongest (+3 resources), ORANGE weakest (destroys a
+     building).
+
+Engine's own live resolution of this exact event (this pass's extraction, matches
+resshort's own independently-hand-verified trace exactly):
+  apply_single_target: stat=Strength best=true  ranked's first = Green
+    values: Purple=7, Green=9, Orange=7
+    army:   Purple=0, Green=1, Orange=3
+  apply_single_target: stat=Strength best=false ranked's first = Orange
+    -> WEAKEST side MATCHES the journal (Orange); only STRONGEST disagrees.
+
+Per-player arithmetic (army_strength component now isolated, confirming resshort's
+manual `TMPDEBUG_WEAKEST`-probe trace from a DIFFERENT game applied the same way
+here): Purple's raw-unit-plus-flat total is 7 with ZERO tactic-army bonus (Purple's
+first-ever tactic action in this game is round 9 LINE 207, "Purple adopts existing
+tactics I / Fighting Band" -- AFTER this event resolves at line 202/13th round-9 row,
+so Purple genuinely has no active tactic yet at the moment of comparison, matching
+`army=0`). Green's total is 9, with a tactic bonus of 1 (Fighting Band, adopted round
+5, still active) on top of a raw-plus-flat component of 8. Orange's total is 7, with a
+tactic bonus of 3 (Phalanx, adopted round 5) on top of a raw-plus-flat component of 4.
+So Green (9) is the engine's own, internally-consistent, unique maximum -- not a tie,
+not a tie-break question at all. Every input number matches the journal's own build/
+tactic-adoption log at this point in the game (same cross-check resshort already ran
+against `card_table.rs`'s Heavy-Cavalry/Phalanx/Fighting-Band strength values and the
+journal's own build lines -- not independently re-derived from scratch this pass,
+since resshort's version was already hand-verified and this pass's own extraction
+reproduces its exact numbers byte-for-byte, which is itself a strong independent
+confirmation resshort's arithmetic was not the source of the anomaly).
+
+This game remains a genuine, unexplained 1-of-948 anomaly under the current
+definition -- exactly as unexplained as it was when resshort left it, but now
+demonstrably NOT representative of a systemic strongest-targeting bug: the same
+definition gets 935/948 right corpus-wide, including 132/135 real ties, including
+98.9% on the independently-recomputed weakest side of the SAME 4 combined cards. The
+two subtraction theories (raw-unit-only, raw+tactic-no-flat) resshort already tried
+and falsified ARE consistent with this scan's finding: neither alternative
+DEFINITION explains 7522914, because the true explanation (whatever it is) is a
+1-of-948 anomaly, not a systemic mis-definition that any single alternative formula
+could fix.
+
+============================================================
+STEP 5: explicitly RULED OUT / RE-CONFIRMED this pass
+============================================================
+- STRONGEST civilization's DEFINITION (full tactic-inclusive `state_stats(...).
+  strength`, same quantity WEAKEST and combat use): CONFIRMED CORRECT, by direct FAQ/
+  CoL citation (STEP 1, no stated asymmetry with WEAKEST) and by 935/948 (98.6%)
+  corpus agreement (STEP 3) -- this is the first time this specific number has been
+  measured; it was NOT previously known, only assumed-by-symmetry-with-weakest.
+- STRONGEST's tie-break direction (`favor_current=true`, un-reversed `order`,
+  current/revealing player wins ties for a BONUS): CONFIRMED CORRECT, 132/135 (97.8%)
+  of all genuine ties in the corpus. This is the "especially tie-breaking" asymmetry
+  the task flagged as the most likely place for a real difference from WEAKEST's
+  landed `protect_current_from_bad_tie` fix -- checked directly, found to be the
+  MIRROR-IMAGE of that fix (not a bug of the same shape), and confirmed correct at
+  the same order of statistical strength weakest's OWN landed fix was justified by.
+- THEORY A (raw-unit-strength-only) and THEORY B (raw+tactic, no flat bonuses):
+  re-confirmed falsified/ruled-out per resshort's prior measurement on 7522914; NOT
+  re-implemented or re-measured corpus-wide this pass, per the task's explicit
+  instruction not to repeat an already-falsified candidate.
+- The "no-tactic" alternative (total minus `army_strength`, weakest's OWN alternative
+  definition, re-tested here for STRONGEST specifically): 778/948 = 82.1%, decisively
+  worse than the current definition -- symmetric with weakest's own finding for
+  WEAKEST (244/324 = 75.3% for the same alternative, same direction of result).
+- International Agreement (6th singular StrongestPlayer card): excluded from the
+  count, not silently dropped -- its optional multi-step resolution is frequently a
+  reconstruction MISMATCH source in this replayer and its ground truth cannot be
+  reliably extracted the way the other 5 cards' can. Not investigated further as a
+  possible SEPARATE bug this pass (out of scope: the task is about the targeting
+  DEFINITION, and this card's issue looks like a resolution-mechanics problem, not a
+  targeting-definition problem -- see HANDOFF).
+- Foray, Cold War (StrongestPlayers, tied/plural key): excluded, same reasoning
+  weakest used for "civilizations" plural cards -- no single named victim to check.
+
+============================================================
+GUARD (verbatim)
+============================================================
+Baseline: 671 completed / 630 exact (`/private/tmp/guard_ids.txt`, 671 lines, base
+791150f).
+
+One temporary debug-only change was made to `events::apply_single_target` (added an
+`army=[...]` field to the ALREADY-EXISTING `DEBUG apply_single_target:` eprintln!,
+purely additive to a debug string, no logic touched) to isolate the tactic-bonus
+component for STEP 3's "no-tactic" alternative measurement, and REVERTED (`git
+checkout -- rust/src/events.rs`) before this file was written.
+
+cd /private/tmp/strongest/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/strongest_after.txt 2>&1
+grep '^SCOREDIV_COMPLETED_ID' /tmp/strongest_after.txt | awk '{print $2}' | sort \
+    > /tmp/strongest_ids.txt
+
+Header lines from /tmp/strongest_after.txt (read directly):
+  "# replaystats: 1011 games sampled, 671 completed to state.game_over"
+  "671/671 completed games actually flipped state.game_over ... 630/671 of those
+   matched index.tsv exactly (sorted per-game score-list compare)."
+
+Before: 671 completed / 630 exact.
+After:  671 completed / 630 exact (identical -- no source change, expected, since
+`git diff 791150f -- rust/` is 0 lines after the revert).
+
+comm -23 /private/tmp/guard_ids.txt /tmp/strongest_ids.txt   (REGRESSIONS):
+<empty>
+
+comm -13 /private/tmp/guard_ids.txt /tmp/strongest_ids.txt   (WINS):
+<empty>
+
+`cargo clippy`/`cargo test`: not run against a source diff since none exists (tree is
+byte-identical to 791150f after the revert, confirmed by `git diff 791150f -- rust/`
+being 0 lines); the temporary probe was confirmed to compile clean (`cargo build
+--profile difftest` succeeded with no warnings) before being reverted.
+
+============================================================
+CONCRETE HANDOFF for whoever picks this up next
+============================================================
+1. Do NOT re-try Theory A (raw-unit-only) or Theory B (raw+tactic, no flat bonuses)
+   -- both already falsified by resshort on 7522914 specifically, and this pass's own
+   "no-tactic" (total-minus-army_strength) corpus measurement independently confirms
+   any tactic-stripping theory loses badly (82.1% vs 98.6%) at full corpus scale, not
+   just on one game.
+2. Do NOT re-try reversing STRONGEST's tie-break direction (`favor_current=true` ->
+   `false`/reversed order) -- it would fix 2 games (7523341, 7522377) and break the
+   other 132 genuine ties that currently match. This is the exact "especially
+   tie-breaking" asymmetry the task flagged as worth checking; it was checked
+   directly and found NOT to be a real asymmetry.
+3. STRONGEST civilization targeting is now measured and settled, symmetric with
+   `weakest__WEAKEST.txt`'s own conclusion for WEAKEST: 935/948 (98.6%) is the
+   headline number, both scans landing in the same ~98-99% band across five
+   independent sub-checks (weakest's own 320/324, this pass's 935/948 STRONGEST
+   headline, this pass's 132/135 tie-only sub-check, this pass's 658/665 weakest-side-
+   of-combined-cards validation check). Do not re-open the STRONGEST/WEAKEST
+   DEFINITION question again without new evidence of a different shape than "one more
+   anomalous game".
+4. The 13 remaining STRONGEST anomalies (listed in full in STEP 3, `/tmp/
+   strongest_records.json` if still present, else re-run the extraction -- the method
+   is fully described in STEP 3 and is cheap: ~2 min for the full corpus trace, no
+   rebuild needed unless a debug field is added again) share no obvious pattern
+   across card type, player count, or round -- EXCEPT that game 7523082 is shared
+   with weakest's own 4-anomaly list (on a DIFFERENT event, Crusades not Reign of
+   Terror). If a future worker wants to chase this further, START by hand-tracing
+   7523082's full event history (both events in the same game disagreeing with the
+   journal on DIFFERENT resolutions is a stronger signal than any of the other 12
+   single-anomaly games) rather than 7522914 (already exhaustively hand-traced twice,
+   by resshort and again here, with no lead found).
+5. International Agreement's own resolution mechanics (not its targeting DEFINITION)
+   look like a separate, real issue in this replayer -- it shows up as a
+   reconstruction MISMATCH source in multiple games (grep "International Agreement"
+   against any REPLAY_DEBUG_ALL dump's `m.mismatch` lines). Not investigated this
+   pass since it is a resolution-mechanics question, not a targeting-definition
+   question, and the task scope was specifically the latter. Worth a dedicated pass
+   if the `IllegalMove`/mismatch bucket census ever surfaces it as a correlated
+   cause.
+6. The extraction script and its full methodology (content-based clause pairing by
+   distinguishing verb, not sentence position; the per-game `actor`-index-to-color
+   map built from each APPLY_ONE ENTRY's own raw_text; the `DEBUG apply_single_
+   target:` line's `order`/`ranked`/`values` fields as the ground truth for BOTH the
+   engine's live pick and any alternative-definition recomputation) is a reusable
+   template for any future "strongest/weakest/most-X/least-X civilization" targeting
+   question -- reuse it rather than re-inventing a positional-pairing approach that
+   both this pass and weakest's own prior attempt already found unsound.
+
+============================================================
+FILES CHANGED
+============================================================
+None landed. `strongest.patch` (`git diff 791150f -- rust/`) is 0 lines by design --
+the one functional change attempted this session (a debug-only `army=[...]` field
+added to an existing eprintln! in `events::apply_single_target`, used for STEP 3's
+"no-tactic" alternative measurement) was reverted before this file was written.
+Confirmed clean: `git -C /private/tmp/strongest diff 791150f -- rust/` is empty, and
+`git -C /private/tmp/strongest status --short` shows no changes under `rust/`.

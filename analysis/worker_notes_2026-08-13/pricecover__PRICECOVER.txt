@@ -1,0 +1,254 @@
+PRICECOVER.txt -- card-pricing coverage: what exists, what I added, what remains
+================================================================================
+
+STARTING STATE -- READ THIS FIRST
+----------------------------------
+The task briefing said "there is currently NOTHING that checks this" and gave
+three known examples (Gandhi's opponentsPayDoubleMilitaryActionsToAttackYou,
+Caesar's oncePerGameTwoPoliticalActions, two Event cards decomposing to
+zero). That premise was STALE for this snapshot. `/private/tmp/landbase`
+(the tree this clone is built from) already contains a full coverage test,
+landed in a prior session on 2026-08-13, the same day as this one:
+
+  b075860 Add coverage test: every printed card effect must be priced or declared unpriced
+  8070678 Reclassify 17 "board-scaled" effects: already priced, not unpriced
+  8ad3745 Gate CardBoardCredit's per-type leader/gov/action/wonder/bonus offsets
+  ec626cc Structural sign-intent audit: close the card_board_leader bug class for good
+  578ee9e Fix StrengthRel's always-on base overvaluing early military strength
+
+That prior session's own writeup is `/private/tmp/pricecover/COVERAGE.txt`
+(untracked, carried over from the scratch clone it was written in) -- read
+it, it is the authoritative account of that work, including its own
+self-reported false starts. All three of the briefing's "known examples" are
+already in `DELIBERATELY_UNPRICED` with real reasons (verified by grep,
+`rust/src/bots/weighted/cards.rs` lines ~691, ~707, and `allPlayers`/bucket 6
+"addressing" for the Event cards) -- there was nothing left to fix there.
+
+So this session's job became: verify that existing work, find what it is
+still honestly missing (it says so itself, see COVERAGE.txt's "WHAT THIS
+DOES AND DOES NOT CATCH"), and close the gaps that are cheap and structural.
+Two were found and closed. No pricing bugs were found -- both new checks
+came up green on the first real run, confirmed with a red/green round-trip
+(see below) so "green" means "checked", not "vacuous."
+
+THE DESIGN, AND WHY IT CANNOT BE BYPASSED
+-------------------------------------------
+Three layers now exist, all in `rust/src/bots/weighted/cards.rs`, inside
+`#[cfg(test)] mod tests`:
+
+1. `coverage_of_printed_effect_keys::
+    every_printed_card_effect_is_either_priced_or_explicitly_declared_unpriced`
+   (pre-existing). Loads the real `data/*.json`, walks every card's
+   TOP-LEVEL `effects` object, and asserts every key is in
+   `DELIBERATELY_UNPRICED` (a reason it is NOT priced) or `PRICED_ELSEWHERE`
+   (a citation of where it IS priced). A key in neither fails the build,
+   naming every card it appears on. Two reverse/anti-rot checks stop either
+   table from silently going stale (a key that stops printing on any real
+   card). Cannot be bypassed by adding a wildcard: it is data-driven, not a
+   Rust `match`, so there is no wildcard to add -- the only way to make it
+   pass is to genuinely classify the key.
+
+2. `coverage_of_printed_effect_keys::every_printed_territory_block_key_is_priced`
+   (NEW, this session). The check above only ever reads `card.get("effects")`
+   -- but a territory card's real content lives in two SIBLING top-level
+   keys, `immediateEffects`/`permanentEffects` (§11.5), and its `effects`
+   object is `{}` in the source data. So all 12 base-game territory cards
+   were silently invisible to check #1: `printed_effect_keys()` reads
+   `effects`, finds nothing, and `continue`s. This is a gap in the CHECK,
+   not the pricing -- `card_yields`'s `CardType::Territory` branch (same
+   file, lines ~246-277) already reads every one of the ten keys correctly.
+   Closed by adding `printed_territory_effect_keys()` (walks the two nested
+   objects on real territory cards) and `TERRITORY_PRICED_ELSEWHERE` (10
+   entries, one per key, each citing the exact `card_yields` push line),
+   plus the matching forward + anti-rot-reverse test pair.
+
+3. `special_effect_key` + `every_special_value_on_a_real_card_maps_to_an_accounted_for_key`
+   (NEW, this session). This is the piece the task explicitly asked for and
+   layer 1 does not provide: an EXHAUSTIVE Rust `match` over the `Special`
+   enum ITSELF (92 variants, transcribed from `card_table.rs`'s own parser
+   dispatch -- the source of truth for the variant<->JSON-key pairing,
+   verified by an automated diff against every parser arm, not hand-typed
+   guesswork), with NO wildcard arm. This is a strictly stronger guarantee
+   than layer 1: layer 1 is string/data-driven, so it only ever audits a key
+   once some real card prints it; layer 3 is a Rust match, so a NEW VARIANT
+   ADDED TO THE ENUM IN card_table.rs IS A COMPILE ERROR HERE, before any
+   card ever prints it. `special_effect_key` returns the JSON key rather
+   than duplicating a `Priced`/`Unpriced` reason a second time (which would
+   itself be the "same fact in two registries" bug class this project keeps
+   a list of) -- it feeds the SAME `is_accounted_for` / `DELIBERATELY_
+   UNPRICED` / `PRICED_ELSEWHERE` layer-1 already uses, so there is exactly
+   one place that knows WHY each key is or isn't priced. The test walks
+   every `Special` value on every real card and confirms the key it maps to
+   is registered -- the exhaustiveness guarantee is the match compiling; the
+   test additionally confirms nothing the match can currently produce slips
+   past `is_accounted_for`.
+
+WHY IT CANNOT BE BYPASSED, restated plainly: to make the build pass with a
+genuinely unpriced effect, you must either (a) actually price it, or (b) add
+a real, >20-character reason to a hand-maintained table that a separate test
+(`every_reason_is_a_real_sentence_not_a_stub`, pre-existing) rejects if it's
+a stub, and that reason is permanently visible in the diff and in this file.
+There is no `_ => {}` anywhere in this stack that would let a new effect
+(top-level, territory-nested, or a brand new `Special` variant) pass through
+silently.
+
+RED/GREEN VALIDATION (proof the new checks have teeth, not vacuous passes)
+----------------------------------------------------------------------------
+Temporarily commented out one entry from each new table and re-ran the
+single test:
+
+  DELIBERATELY_UNPRICED: removed "opponentsPayDoubleMilitaryActionsToAttackYou"
+    -> every_special_value_on_a_real_card_maps_to_an_accounted_for_key FAILED:
+       "opponentsPayDoubleMilitaryActionsToAttackYou" (Special variant on Mahatma Gandhi)
+
+  TERRITORY_PRICED_ELSEWHERE: removed "permanentEffects.strength"
+    -> every_printed_territory_block_key_is_priced FAILED:
+       "permanentEffects.strength" (on: Strategic Territory, Strategic Territory)
+
+Both restored (verified `git diff` against the committed file is empty
+after restoring -- pure round-trip, no residual change).
+
+THE COMPLETE LIST OF UNPRICED EFFECTS FOUND
+----------------------------------------------
+None, beyond what was already known and already classified before this
+session started. Specifically:
+
+ (a) Fixed by me this session: NOTHING needed a pricing fix. The two new
+     checks (territory nested blocks, enum-exhaustive Special match) both
+     came up green against the real card table on first run -- everything
+     they can see is already either priced or has a real, specific,
+     pre-existing reason in DELIBERATELY_UNPRICED / PRICED_ELSEWHERE /
+     TERRITORY_PRICED_ELSEWHERE.
+
+ (b) Needs a new feature / judgment call (pre-existing, left as-is,
+     genuinely not a "cheap gap" -- see cards.rs's own reasons, condensed):
+       - oncePerGameTwoPoliticalActions (Caesar): no Feature::PoliticalActions
+         exists in board_yields.rs at all; political actions are not a
+         tracked evaluator dimension. A real architecture extension.
+       - The 16 rank-addressed Age I/II events (allPlayers/weakestPlayer/
+         strongestPlayer/... targeting blocks other than the 15 Age III
+         "Impact of..." scoring events, which ARE priced via
+         event_scoring_margin): fire at an unpredictable future time against
+         whoever is strongest/weakest THEN, not a static per-card fact.
+       - ~8 "trigger" keys (scienceOnTechCardTake, resourceOnTechDevelop,
+         cultureOnTechDevelop, resourceOnMilitaryUnitBuildOrUpgrade,
+         cultureOnRevolution, comboFoodDiscount/comboResourceDiscount,
+         theaterTechScienceDiscount, theaterResourceDiscountIfLibrary,
+         theaterScienceDiscountIfLibrary, popIncreaseFoodDiscount,
+         civilActionBackOnTechDevelop, militaryActionCombinedPopIncrease
+         AndUnitBuild): each pays per FUTURE action, needing a measured
+         firing rate, not a static per-card number -- self-play
+         instrumentation work, not something to guess at.
+       - leaderTakeCivilActionDiscount / wonderTakeNoExtraCivilActions /
+         takeCivilActionDiscountIfLeaderReplacedThisTurn: discount a FUTURE
+         card's take-cost; no board-state fact says how many more such
+         cards this player will take before the leader/wonder leaves play.
+       - cultureOnLeaveEqualToLabResourceProduction (a leader's end-of-life
+         payout): needs a model of WHEN the leader leaves play.
+
+ (c) Genuinely not worth pricing (pre-existing, condensed to the load-
+     bearing reason -- full text is in DELIBERATELY_UNPRICED in the source,
+     grouped by bucket 1-8 with a comment per bucket):
+       - ~20 "rule change" keys (opponentsPayDoubleMilitaryActionsToAttackYou,
+         noAttacksBetweenParties, cancelledIfPartiesAttackEachOther,
+         removeAsPoliticalAction{ForYellowToken,FreeColonize},
+         peekTopEventCardInPolitics, colonizeDiscardUpTo2MilitaryCardsFor
+         Bonus, colony{Immediate,Permanent}...,
+         orTakesSpecialTechnologiesOfSameTotalScienceCost, removeFromGame,
+         onReplacePutUnderCompletedWonderHappy, libraryDiscountsIfTheater,
+         civilActionUpgradeUrbanBuildingToTheater,
+         cannotPlayAggressionOrWar): these alter what moves are LEGAL, not
+         a number to multiply a weight by -- there is nothing to price.
+       - ~8 "priced by resolution, not by table" keys (destroyUrbanBuildings,
+         opponentDecreasesPopulation, stealColony, takeFromOpponent,
+         victorTakes{YellowTokens,ScienceUpTo,Culture}, decreasePopulation):
+         quiescence plays the actual combat/aggression resolution out; a
+         static table entry would double-count against that.
+       - tacticBonus / tacticBonusObsolete: a duplicate spelling of the
+         top-level `strength` the engine already reads (see
+         `CardEffects.strength`'s own doc comment on why both aren't kept).
+       - gainCulturePerLevelOfRemovedCard: board-scaled, no swap diff reaches
+         its one carrier card.
+       - doublesTacticBonusOfOneArmy / infantryCountsAsCavalryForTactics:
+         text-effect formulas, not scalars.
+       - "note": human-readable prose, not a rule at all.
+       - Addressing wrappers (allPlayers, bothPlayers, weakestPlayer(s),
+         strongestPlayer(s), playerWithMost/LeastCulture, playersWithMost
+         HappyFaces/DiscontentWorkers, target, condition, duration,
+         lastRoundSubstitute, onAttackBetweenParties, gain, lose, A, B):
+         these name WHO an effect applies to, not a yield in themselves --
+         the yield lives one level down, inside the block.
+       - Aggression: Raid's `gainResources` value is prose ("half of each
+         destroyed building's cost"), not a number -- 3 UNPRICED_VALUES
+         entries, not a DELIBERATELY_UNPRICED key (the value is prose, the
+         KEY itself is priced on every other card that carries it).
+
+Everything else -- the large majority of the ~114 top-level keys, all 10
+territory-block keys, and every `Special` variant printed on a real base-
+game card today -- is priced, cited by the exact function/line/`WeightKey`
+in `PRICED_ELSEWHERE` / `TERRITORY_PRICED_ELSEWHERE`.
+
+WHAT THIS STILL DOES NOT CATCH (read before trusting a future green result)
+------------------------------------------------------------------------------
+Carried forward from COVERAGE.txt, still true, not something this session
+could close within budget:
+  - "Priced" means "some function turns this into a WeightKey contribution",
+    not "prices it correctly" or "prices it well" -- a pricing BUG on an
+    already-registered key is out of scope for all three layers.
+  - PRICED_ELSEWHERE / TERRITORY_PRICED_ELSEWHERE are hand-audited citations,
+    not mechanically re-derived from the pricing code the way
+    card_table.rs's baked_table_matches_source_data re-derives CARDS from
+    JSON. A future refactor that silently stops reading a cited field would
+    not be caught by these three tests -- it would need a behavioural check
+    per entry (call card_yields on a real card, assert a specific WeightKey
+    shows up), which is real, separate, larger work.
+  - Nested blocks one level further down still aren't walked: a pact's
+    A/B/bothPlayers sub-keys, an event's targeting sub-keys, buildDiscount's
+    per-age sub-keys, etc. Those wrapper keys are themselves accounted for
+    (bucket 6, "addressing"), but a NEW key added inside one of those blocks
+    in the future would not be audited by any of the three layers. Same
+    scope DELIBERATELY_UNPRICED itself has always had.
+
+TEST COMMAND AND REAL NUMBERS
+--------------------------------
+  $ cd /private/tmp/pricecover/rust
+  $ PATH=$HOME/.cargo/bin:$PATH cargo test --profile difftest
+
+  Result: 1533 passed, 0 failed, 1 ignored, across 33 "test result: ok"
+  blocks (lib: 1340 passed; tests/suite integration harness: 10 passed, 1
+  ignored; every src/bin/* binary: 0 failed). Zero "test result: FAILED"
+  blocks. Ran the full suite TWICE (once before, once after the red/green
+  validation round-trip above) -- identical result both times.
+
+  The three new tests specifically:
+    $ cargo test --profile difftest --lib coverage_of_printed_effect_keys
+      -> 6 passed (2 new: every_printed_territory_block_key_is_priced,
+         every_territory_priced_elsewhere_key_still_prints_on_a_real_card)
+    $ cargo test --profile difftest --lib every_special_value_on_a_real_card
+      -> 1 passed (every_special_value_on_a_real_card_maps_to_an_accounted_for_key)
+
+FILES CHANGED
+---------------
+  rust/src/bots/weighted/cards.rs
+    - `is_accounted_for` widened from private to `pub(super)` so the new
+      enum-exhaustive test (outside the `coverage_of_printed_effect_keys`
+      submodule) can call it -- no other behaviour change to that function.
+    - Added, inside `mod coverage_of_printed_effect_keys`:
+      `printed_territory_effect_keys`, `TERRITORY_PRICED_ELSEWHERE`,
+      `every_printed_territory_block_key_is_priced`,
+      `every_territory_priced_elsewhere_key_still_prints_on_a_real_card`.
+    - Added, as a sibling to that submodule (inside the outer `mod tests`):
+      `special_effect_key` (the exhaustive `Special` match) and
+      `every_special_value_on_a_real_card_maps_to_an_accounted_for_key`.
+
+  Committed: 46a8d7a "Extend card-pricing coverage: territory nested blocks
+  + enum-exhaustive Special match" (pathspec-only commit, single file).
+
+COORDINATOR NOTE
+-------------------
+This clone's `master`-equivalent branch is `landbase-base`, currently at
+1374995 before my commit (46a8d7a on top). That branch already carries
+substantial unrelated work (WeightKey::HasColony, human-game recovery, the
+whole card-pricing-coverage foundation this session extended) that is not
+mine and I have not touched. My commit is additive and scoped to the one
+file above.

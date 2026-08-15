@@ -1,0 +1,394 @@
+FOODCHOICE -- does the LIVE ENGINE, not just the replayer, misplay the
+"strongest/weakest civilization gains/loses N food and/or resources" event?
+=============================================================================
+ANSWER: NO, this is NOT purely a replay-side gap. The LIVE ENGINE plays this
+rule wrong during ordinary self-play too. `events::food_or_resources`
+(rust/src/events.rs:216) is a fixed deterministic formula ("resources
+first") called unconditionally from `apply_gains_block` -- the SAME
+core-engine function path self-play uses, not a replay-only shim. Verified
+two ways: (a) reading the call graph (resolve_event -> resolve_count_targets
+-> apply_gains_block -> food_or_resources, with zero Pending::Choice branch,
+unlike the sibling `decrease_population` block three lines below it, which
+DOES open one); (b) directly instrumenting real `selfplay` runs (no journal,
+no replay code involved at all) and observing the formula fire 1,819 times
+across 300 self-play games. A prior pass already fixed the REPLAYER's own
+reconstruction to read the journal's real split (commits deea9a0/5154e08)
+but explicitly left `events::food_or_resources` itself unchanged, flagging
+the engine-side fix as "out of this bucket's scope, flagged not fixed"
+(docs/REPLAY.md line ~4592). Every self-play game since this function was
+written has silently played a fixed-formula variant of two Age II event
+cards (Raiders, Foray) instead of Through the Ages' real per-player choice.
+=============================================================================
+
+Working copy: /private/tmp/foodchoice (cp -Rc of /private/tmp/gamedrop).
+Never touched /Users/pt/tta-ai or /Users/pt -- forbidden, confirmed not
+done (no git command run outside this tree). /private/tmp/bgoholdout never
+read, listed, or referenced. NO CODE CHANGED this pass -- `git status
+--short` on this checkout shows zero tracked-file modifications; all
+measurement used pre-existing binaries (`selfplay`) and a pre-existing
+`REPLAY_DEBUG_ALL`-gated eprintln! already in events.rs
+(`"DEBUG food_or_resources AFTER: ..."`, events.rs:1099-1104) -- I added no
+diagnostic code, just set the env var that was already there for this
+exact purpose. Cargo: `--profile difftest` only, confirmed (grep the
+commands below). Corpus is confirmed 2015 base game only (GAMEDROP.txt's
+own edition_verified_by finding, inherited not re-derived).
+
+-----------------------------------------------------------------------
+1. WHAT THE RULES ACTUALLY SAY (MEASURED -- every claim below is quoted)
+-----------------------------------------------------------------------
+
+RULES_SPEC.md line 119, §5.3 "Evaluating events" [RB p.16, CoL p.7]:
+  "Multiple-player decisions resolve clockwise from the revealing player."
+This is the formal rules-spec anchor for ORDER: when an event affects
+several players' own individual resolutions, each affected player resolves
+their own piece of it in turn, clockwise from whoever revealed the card --
+i.e. an ORDER of individual decisions, not a single shared formula applied
+identically to everyone.
+
+RULES_SPEC.md does not carry a line specifically glossing the "and/or"
+gain/lose wording as a per-player CONTENT choice (it is silent on that
+point) -- so the CONTENT half of the finding rests on the primary evidence
+already gathered by a prior pass (docs/REPLAY.md, ~line 5005-5157), which I
+verified by reading rather than re-deriving from a fresh log:
+  Game 7522886 (BGO human journal), Raiders event: "Each of the two weakest
+  civilizations lose a total of 2 resources and/or food.; Green and Orange
+  each lose 2 resources and/or food; Green choses first" -- then the SAME
+  journal logs each player's OWN, DIFFERENT resolution: "Green spends 1
+  food; Green spends 1 resource" (a 1/1 split) vs "Orange spends 2 food"
+  (all-food, zero resources) for an IDENTICAL total-2 loss. The Foray gain
+  two lines earlier shows the identical shape on the gain side: "Purple
+  produces 3 resources" vs "Grey produces 3 food" for an identical
+  gain-3 block. Cross-checked against a THIRD, independent number (round
+  7's own running resource total, matching Orange's real round-7 spend
+  lines) in docs/REPLAY.md -- not just the two conflicting clause texts.
+  The literal journal word is "choses" (chooses).
+
+Cross-reference, BGA's own card text (sources/bga_throughtheages_material.
+inc.php, the only BGA implementation artifact present in sources/ -- it is
+card-text/material data, not executable game logic; no BGA server-side
+event-resolution code is present in this tree to cross-check against
+directly):
+  line 990, Foray: "Each of the two strongest civilizations gains a total
+  of 3 food and/or resources."
+  line 1561, Raiders: "The 2 weakest civilizations each lose a total of 2
+  resources/food"
+Neither BGA card-text string says "(aggressor choice)" or names any actor
+-- contrast with Plunder's OWN BGA text at the same file, lines 1511-1512:
+"Loses a total of up to 3 resources and/or food (aggressor choice) ...
+Gain that many resources and food", which explicitly names the choice-maker
+(the attacker). Foray/Raiders' silence on WHO chooses is exactly why BGO's
+own journal text ("<Color> choses first") is the load-bearing evidence, not
+the card text alone -- the card text only establishes the TOTAL, and the
+journal is what proves the split is player-directed. This is consistent
+with, not contradicted by, RULES_SPEC's §5.3 ordering rule above.
+
+CONCLUSION on the rule itself: the choice has TWO parts, both genuine:
+  - ORDER: who resolves first is fixed by rule (clockwise from the
+    revealing player, RULES_SPEC §5.3, confirmed by "Green choses first"
+    naming a specific seat first).
+  - CONTENT: each affected player independently picks their OWN
+    food/resources split summing to the block's stated total (MEASURED
+    from the journal's differing real splits on identical totals, prior
+    pass's finding, verified by me by reading, not re-derived).
+This is the SAME shape as Plunder's already-correctly-implemented
+`ChoiceKind::PlunderSplit` (interact::offer_plunder_split), except
+self-directed (each targeted player chooses for themselves) rather than
+attacker-directed (one player chooses for a victim).
+
+-----------------------------------------------------------------------
+2. WHAT THE ENGINE DOES (MEASURED -- file:line, quoted)
+-----------------------------------------------------------------------
+
+`events::food_or_resources`, rust/src/events.rs:216-226:
+
+    pub(crate) fn food_or_resources(p: &mut PlayerState, amount: i32, sign: i32) {
+        let amount = amount.max(0) as u16;
+        if sign > 0 {
+            let got = economy::gain_resources(p, amount);
+            economy::gain_food(p, amount - got);
+        } else {
+            let take = p.resources.min(amount);
+            p.resources -= take;
+            p.food = p.food.saturating_sub(amount - take);
+        }
+    }
+
+Its own doc comment (events.rs:197-215) is candid about being a
+placeholder: "move `amount` between food and resources, preferring
+resources both ways ... Mirrors `engine/events.py::_food_or_resources`."
+and explicitly contrasts itself with Plunder, which USED to route through
+this same function but was moved OFF it once FAQ p.7 established Plunder's
+split is the attacker's real choice: "This function is unchanged and still
+correct for the cases that ARE a fixed order (an event's own gain/lose
+block has no 'attacker' to ask)." That reasoning is the bug: Foray/Raiders
+DO have someone to ask -- the affected player themselves, per the journal
+evidence in section 1 -- the doc comment's own premise ("no attacker to
+ask") conflates "no ATTACKER" with "no DECIDER," which is the wrong
+inference for a self-directed choice.
+
+Call site, unconditional, no choice branch: rust/src/events.rs:1097-1105,
+inside `apply_gains_block` (called once per targeted player, in `targets`
+order, from `resolve_count_targets`, events.rs:988-1040+):
+
+    if block.food_and_or_resources != 0 {
+        food_or_resources(&mut state.players[idx as usize], block.food_and_or_resources as i32, sign);
+        ...
+    }
+
+Contrast, THREE LINES LATER in the exact same function, events.rs:1116-1120
+(`decrease_population`), which DOES open a real choice for an analogous
+"the affected player decides" rule:
+
+    if block.decrease_population != 0 {
+        // §6.5/FAQ p.15: the OWNER chooses which worker to lose.
+        interact::enqueue(
+            state,
+            ...
+
+This is the clearest structural evidence available: the engine's own
+authors already know how to model "the owner chooses" for one clause in
+this exact function, and did not do it for the clause two calls above it.
+
+Reachability in NORMAL self-play (not log-specific): `resolve_event`
+(events.rs:631) has exactly one caller in the whole crate outside its own
+unit tests -- `reveal_current_event` (events.rs:530, `resolve_event(state,
+card, state.current)` at line 549), which is the ordinary Politics-phase
+"prepare an event" resolution path (RULES_SPEC §5.2), reached by every
+game, every seat, self-play or human, whenever a player reveals a current
+event card. Grepped for the ONLY two base-game cards that ever set
+`food_and_or_resources != 0` in card_table.rs: Raiders (Age II,
+`Special::WeakestPlayers([1,2,2])` + `Lose{food_and_or_resources: 2}`) and
+Foray (Age II, `Special::StrongestPlayers([1,2,2])` +
+`Gain{food_and_or_resources: 3}`) -- confirmed by reading the two literal
+struct entries in card_table.rs. (Crime Wave and Refugees, also named in
+GAMEDROP's grep-based extrapolation, do NOT route through this function --
+their own `food_and_or_resources` field is 0; they use culture/blue-token/
+population-increase fields instead. Correcting GAMEDROP's loose
+"Foray/Raiders/Crime Wave/Refugees" grep pattern: only 2 of those 4 cards
+are actually affected.) The `[1,2,2]` count table means 1 target in 2p, 2
+targets in 3p/4p per card reveal -- confirmed to match the measured firing
+counts in section 3 below.
+
+`bots::weighted`/`bots::greedy` have NO special-case code for any
+`ChoiceKind` (grepped `bots/weighted/*.rs`, `bots/greedy*.rs` for
+`ChoiceKind::PlunderSplit`/`FoodOrRes`/`GainBlock` -- zero matches).
+`legal.rs:222-223` routes an open `state.pending` straight to
+`interact::pending_moves(state)`, which turns a `Pending::Choice`'s options
+into ordinary legal moves that the bot's normal weighted evaluation scores
+and picks among like any other move -- i.e. existing choice kinds
+(PlunderSplit etc.) are NOT hardcoded/auto-resolved, they are genuinely
+decided by the same evaluation function that plays the rest of the game.
+This matters for section 5 below.
+
+-----------------------------------------------------------------------
+3. EXPOSURE -- MEASURED, self-play, rate WITH denominator
+-----------------------------------------------------------------------
+
+Method: ran the existing `selfplay` binary (rust/src/bin/selfplay.rs,
+weighted bot, `--profile difftest`, no journal/replay involved at all) with
+`REPLAY_DEBUG_ALL=1` (a pre-existing engine env flag, see
+rust/src/debugflags.rs) and counted the pre-existing
+`"DEBUG food_or_resources AFTER"` print (events.rs:1099-1104), which fires
+exactly once per call to `food_or_resources`, i.e. once per targeted player
+per event reveal. No engine code changed; this print already exists and is
+already gated for exactly this kind of measurement.
+
+  cargo build --profile difftest --bin selfplay
+  REPLAY_DEBUG_ALL=1 ./target/difftest/selfplay --games N --players P \
+    --bots weighted --threads 2 --seed S 2> out.err
+  grep -c "food_or_resources AFTER" out.err
+
+Aggregate runs (100 games each, one player count per run):
+  2p: 100 games -> 215 firings  (2.15 firings/game)
+  3p: 100 games -> 636 firings  (6.36 firings/game)
+  4p: 100 games -> 968 firings  (9.68 firings/game)
+  TOTAL: 300 self-play games -> 1,819 firings (6.06 firings/game, mixed mix)
+
+Per-game fraction of games with >=1 occurrence (separate sample, 25
+single-game runs per player count, `--games 1` each, distinct seeds 1001-
+1025, so this is an independent measurement from the aggregate run above,
+not a re-derivation of it):
+  2p: 14/25 games had >=1 firing  = 56.0%   (60 firings / 25 games = 2.40/game)
+  3p: 16/25 games had >=1 firing  = 64.0%   (124 firings / 25 games = 4.96/game)
+  4p: 23/25 games had >=1 firing  = 92.0%   (218 firings / 25 games = 8.72/game)
+  COMBINED: 53/75 games (70.7%) had at least one occurrence of the
+  fixed-formula event firing.
+
+This is NOT a vanishingly rare edge case: at typical 2-4p self-play, roughly
+56-92% of games (rising with player count, since the WeakestPlayers/
+StrongestPlayers target-count table is [1,2,2] -- 2 targets instead of 1
+once a 3rd/4th seat exists, and games run more rounds with more players,
+giving the Age II event deck more chances to cycle back to these two
+cards). At 4p, it fires an average of nearly 10 times per game. Every
+firing is the engine silently overriding what should be a real per-player
+decision with "drain resources first" (loss) / "resources first, food for
+the remainder" (gain).
+
+-----------------------------------------------------------------------
+4. ADVANTAGED, DISADVANTAGED, OR NEUTRAL? (mostly HYPOTHESISED --
+   flagged honestly where this cannot be settled without more work)
+-----------------------------------------------------------------------
+
+HYPOTHESISED, reasoned from the code, not measured by playing it out:
+
+- Within a single self-play game, the SAME fixed formula applies
+  identically to whichever seat is currently strongest/weakest -- it does
+  not hardcode a specific SEAT's advantage. Since self-play typically pits
+  the same bot/weight-vector against itself (or symmetric opponents,
+  selfplay.rs's own doc comment: seats rotate specifically to cancel
+  seating bias), there is no reason to expect this bug to systematically
+  favor "seat 0" over "seat 1" etc. across a training run. In that narrow
+  sense it looks NEUTRAL between self-play participants.
+- But it is very unlikely to be neutral in a DEEPER sense: `pending_moves`
+  (section 2) shows the engine's other choice kinds (PlunderSplit etc.) are
+  genuinely decided by the bot's own weighted evaluation, not a hardcoded
+  default -- so wherever a REAL Pending::Choice exists, the trained weights
+  already encode a learned, situational policy for it. `food_or_resources`
+  gives the bot NO such opportunity: whatever `resources_first` computes is
+  forced, regardless of whether that split is good or bad for THAT player's
+  actual board state (e.g. a player who is food-starved and resource-rich
+  would rationally choose to protect food, but the "loss" formula always
+  drains resources first -- correct only for that direction; a player who
+  desperately needs resources for an imminent Build, as the concrete
+  example on game 7522886 shows a REAL human doing (Orange chose "spends 2
+  food", the opposite of the engine's guess, precisely to protect
+  resources for an upcoming build), is not reachable at all).
+- Net effect on the TRAINED BOT specifically: the bot has never had the
+  opportunity to learn this decision (it is not in its action space at
+  all, unlike PlunderSplit), so its weights encode zero preference or
+  skill here. Whether the engine's fixed default happens to be good or bad
+  strategy on average is a separate, unmeasured question. If it is
+  suboptimal on average, self-play games are systematically slightly worse
+  than "true" Through the Ages for BOTH sides equally (symmetric handicap,
+  doesn't change relative win rates between two self-play bots of equal
+  skill) -- but it DOES mean any single-player metric derived from
+  self-play (win probability against a hypothetical outside opponent who
+  DOES get to choose optimally) is contaminated, because a real opponent
+  would extract value here that the bot's training never modeled and the
+  bot itself never learned to extract when it's on the beneficial side of
+  a future real matchup.
+- HONEST LIMIT: whether the fixed "resources first" default is closer to
+  optimal play or clearly worse cannot be determined from this pass's
+  work -- it would need either (a) an actual `Pending::Choice`
+  implementation played out against the current weighted evaluation to see
+  whether the eval function would ever choose differently, or (b) a
+  hand-analysis of when "protect resources" vs "protect food" is
+  correct given the rest of the ruleset (yellow-bank tiers, upcoming
+  build/develop/pop costs) -- neither was attempted this pass, per the
+  task's read-only/no-new-engine-feature scope.
+
+MEASURED fact bearing on urgency: because the SAME function
+(`food_or_resources`) is shared between self-play (training) and replay
+(evaluation against real human logs), fixing it changes BOTH -- there is
+no way to "fix it for replay only" the way the prior pass did with the
+journal-side patch; a real engine fix (section 5) necessarily touches
+self-play behavior too.
+
+-----------------------------------------------------------------------
+5. SKETCH OF A CORRECT FIX (NOT IMPLEMENTED -- per this task's scope)
+-----------------------------------------------------------------------
+
+This mirrors, and largely just re-confirms, the sketch already written by
+the prior pass (docs/REPLAY.md, ~lines 5114-5151), which I read and checked
+against the current code rather than re-deriving from scratch:
+
+  1. New `ChoiceKind` (or a `PlunderSplit`-shaped variant with an optional/
+     self `victim`), opened by `resolve_count_targets`'s
+     `food_and_or_resources` arm (events.rs ~1004-1040) instead of calling
+     `food_or_resources` directly -- one `Pending::Choice` per targeted
+     player, opened in `targets` order (matching "<Color> choses first"),
+     offering every valid split of the block's total between food and
+     resources (gain side: capped by blue-token availability, mirroring
+     `economy::gain_resources`/`gain_food`'s existing caps; loss side:
+     capped at the player's current holdings, floored at zero -- both
+     already computed inside today's `food_or_resources`, just needs
+     enumerating into options instead of picked deterministically).
+  2. Reuse `interact::offer_plunder_split`'s existing split-enumeration
+     shape (`ChoiceOption::Gain`) rather than writing a second one --
+     structurally the same problem, self-directed instead of
+     attacker-directed.
+  3. A self-play default-answering policy for when the weighted eval
+     doesn't have anything specific tuned for this new choice kind --
+     `pending_moves` (legal.rs:222-223) already routes any `Pending::
+     Choice` into ordinary scored legal moves, so this does NOT need a
+     hardcoded default the way a naive implementation might assume: once
+     the choice exists, the SAME weighted evaluation that already picks
+     among PlunderSplit options would pick among these too. The "keep
+     'resources first' as a safe default" language in the prior pass's
+     sketch would only be needed if the choice were deliberately kept
+     OUTSIDE the normal move-scoring path -- worth flagging as a design
+     decision the next implementer must make explicitly, not inherit
+     silently.
+  4. `replay_common.rs`'s own `resolve_intervening`/`PrepareEvent` handling
+     (already reading the journal's real split via
+     `parse_produces_grant_line`/`prescan_produces_grants` per the prior
+     pass's fix) would need to be re-pointed at draining the NEW
+     `Pending::Choice` instead of post-hoc correcting `p.food`/
+     `p.resources` after the deterministic call -- the replayer's
+     bookkeeping and the engine's own choice-resolution would then agree
+     structurally, not just numerically.
+
+Files touched (sketch only, not attempted): `state.rs` (new `ChoiceKind`
+variant), `events.rs` (`resolve_count_targets`/`apply_gains_block`, remove
+the direct `food_or_resources` call for this one arm), `interact.rs` (new
+choice-opening function alongside `offer_plunder_split`), `apply.rs`
+(resolving the new choice kind once answered), `legal.rs`/`interact.rs`'s
+`pending_moves` (enumerate the new option kind -- likely falls out of the
+existing generic `Pending::Choice` handling for free, per point 3), and
+`replay_common.rs` (repoint the journal-side correction at draining the
+real choice instead of post-hoc patching).
+
+WHAT COULD BREAK / INVALIDATION RISK:
+- If the new choice is wired into the normal scored-legal-move path (as
+  point 3 argues it naturally would be), self-play GAMEPLAY changes going
+  forward: the weighted bot would start actually deciding this split based
+  on board state instead of always doing "resources first" -- this is a
+  strictly MORE faithful game, but it means newly generated self-play data
+  is not directly comparable/mixable with anything generated before the
+  fix (the two corpora reflect different rule sets at this one decision
+  point). Existing trained weight vectors (`champion_2p_now.json` and
+  siblings in this tree) were fit under a world where this decision does
+  not exist for the bot to make -- they are not automatically WRONG (the
+  decision point they were trained under is a strict subset of the real
+  game), but they have zero learned skill at the new decision and would
+  need further training exposure to it before being trusted at full
+  strength. This does NOT retroactively invalidate past hill-climb
+  generations' RELATIVE rankings (both/all competitors in any given climb
+  round were equally blind to this decision), but it does mean absolute
+  win-rate/skill estimates against anything OUTSIDE that closed self-play
+  population (e.g. against real humans, or future bots that do model this
+  choice) were measured under a simplified ruleset.
+- The replayer-side fix (deea9a0/5154e08) would become partially redundant
+  once the engine change lands -- risk of the two corrections fighting
+  each other (the journal-side FIFO correction and a real engine
+  `Pending::Choice` both trying to apply the same journal line) if not
+  carefully sequenced; the prior pass's own "food-text-vs-stock-delta trap"
+  section (docs/REPLAY.md ~5397+) is the relevant cautionary precedent for
+  this exact family of double-correction bug.
+- Any cached/serialized game-tree or training data that encodes
+  `food_or_resources`'s deterministic outcome as ground truth (not checked
+  this pass what, if anything, in this tree does that beyond the live
+  champion JSON weight files already named above) would need
+  re-validation; I did not find such a cache in this pass and did not go
+  looking beyond the champion weight files already named, per scope.
+
+-----------------------------------------------------------------------
+WHAT WAS NOT DONE
+-----------------------------------------------------------------------
+- Did not implement any `Pending::Choice` or change any engine behavior --
+  explicitly out of scope for this task. `git status --short` confirms
+  zero tracked-file changes in this checkout.
+- Did not determine whether "resources first" is empirically better or
+  worse than optimal play -- flagged as HYPOTHESISED/undetermined in
+  section 4, honestly, rather than guessed.
+- Did not measure Crime Wave/Refugees separately since code-reading showed
+  they do not route through `food_or_resources` at all (their own
+  `food_and_or_resources` field is 0) -- correcting GAMEDROP.txt's looser
+  4-card grep-based extrapolation to the 2 cards actually affected
+  (Raiders, Foray).
+- Did not touch /private/tmp/bgoholdout, /Users/pt/tta-ai, or run any git
+  command outside this working copy.
+- Did not exceed the difftest-profile / low-parallelism constraints:
+  every cargo/selfplay invocation used `--profile difftest` and
+  `--threads 1` or `--threads 2`, sequential, polled in-turn, nothing
+  backgrounded.

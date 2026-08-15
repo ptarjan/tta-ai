@@ -735,7 +735,7 @@ impl Composition {
             CardType::Cavalry => self.cavalry,
             CardType::Artillery => self.artillery,
             CardType::Air => self.air,
-            _ => 0,
+            CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Government | CardType::SpecialTech | CardType::Wonder | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => 0,
         }
     }
 }

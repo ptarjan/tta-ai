@@ -1,0 +1,215 @@
+RESDRIFT worker -- 2026-08-14 -- clone /private/tmp/resdrift, base commit
+67e14c5 ("base", on top of e642c90 TIE_CENSUS -- today's uncommitted fixes
+committed as-is, no code changed by this pass).
+
+TASK: take the RESOURCE_ORACLE checkpoint (already landed today by the
+SCIDRIFT pass, see scidrift__SCIDRIFT.txt in this directory) and SPLIT the
+312 diverging games into distinct mechanisms by signature, per the
+project's standing "divergence is a long tail, do not hunt one root cause"
+rule. No fix attempted -- resdrift.patch is intentionally empty.
+
+===========================================================================
+STEP 0: REPRODUCE THE SWEEP
+===========================================================================
+  cd rust && cargo build --profile difftest --bin replaystats --bin replay
+  RESOURCE_ORACLE=1 ./target/difftest/replaystats <index> <journals> > /tmp/res.txt
+
+On this tree (today's other fixes now committed as baseline) the corpus
+sweep found 315 diverging games, not the 312 the task brief quoted (the
+prior SCIDRIFT pass ran before some of today's other commits landed) --
+close enough to be the same population; using 315 throughout below.
+Checkpoint agreement: 40123/41518 = 96.6%.
+
+Format read straight from source, not guessed:
+  src/bin/replaystats.rs:344 -- one `RESOURCE_DETAIL <id> lineno=N round=R
+  actor=A last_action_class=C journal_now=J reconstructed=R delta=(R-J)`
+  line per game, FIRST divergence only.
+  src/replay_common.rs:3037 -- `record_resource_check` also has a
+  REPLAY_DEBUG-gated eprintln that fires on EVERY checkpoint (not just the
+  first), used below via the single-game `replay` binary to trace
+  persistence across a game, e.g.:
+    REPLAY_DEBUG=1 RESOURCE_ORACLE=1 ./target/difftest/replay <index> \
+      <journals> <game_id>
+
+===========================================================================
+STEP 1: OVERALL SHAPE -- SIZE OF THE FIRST DIVERGENCE
+===========================================================================
+Signed delta histogram (315 games, delta = reconstructed - journal_now):
+  -12:1  -8:2  -5:2  -4:5  -3:1  -2:42  -1:15  +1:50  +2:195  +3:2
+
+Absolute-value buckets:
+  |delta|=1:  65 (20.6%)
+  |delta|=2: 237 (75.2%)   <-- three out of four games, off by EXACTLY 2
+  |delta|=3-5: 10 (3.2%)
+  |delta|>5:   3 (1.0%)
+
+This alone is the single strongest signal in the corpus: divergence size is
+overwhelmingly a small integer constant (1 or 2), not "a small amount" in
+the vague sense WONDER's writeup used -- it clusters HARD on exactly 2.
+That pointed straight at CORRUPTION (BGO's "CORRUPTION! <player> loses N
+resources" clause, almost always N=2 or N=4, printed on the SAME "End
+turn ...scores:" line the oracle checkpoints).
+
+===========================================================================
+STEP 2: THE SPLIT -- CORRUPTION-DEDUCTION HANDLING AT THE CHECKPOINT LINE
+===========================================================================
+For every one of the 315 first-divergence lines, read the journal at
+`lineno` directly (not inferred) and regex for `CORRUPTION! (\S+) loses
+(\d+) resources?`.
+
+  GROUP A -- "corruption fully skipped"                       166 (52.7%)
+    CORRUPTION! clause present on the checkpoint line, and delta EXACTLY
+    equals the stated corruption amount, ALWAYS positive (engine over-
+    counts by precisely the corruption penalty BGO applied and we didn't).
+    Round histogram (broad, no sharp peak, present from round 4 to 19):
+      4:1 5:2 6:3 7:14 8:22 9:20 10:23 11:11 12:23 13:13 14:9 15:6 16:7 17:7 18:4 19:1
+    Examples: 7522658 (round 7, Orange, delta=+2, corruption=2),
+              7522639 (round ~4, Orange/Purple, delta=+2, corruption=2),
+              7522618, 7522633, 7522640.
+
+  GROUP B1 -- "corruption half-applied"                        17 (5.4%)
+    CORRUPTION! clause present, but delta = corruption_amount / 2 EXACTLY
+    (always an even corruption amount, always positive delta): e.g.
+    corruption=2 -> delta=+1 (8 of the 17 cases), corruption=4 -> delta=+2
+    (9 of the 17 cases). This is NOT the same failure as group A -- group A
+    drops the WHOLE deduction, group B1 drops HALF of it, suggesting a
+    different code path (a formula/rounding bug in how much corruption is
+    computed or applied, not a control-flow skip). Flagging as related-but-
+    distinct rather than folding into group A.
+    Examples: 7523341 (round 10, Purple, corruption=2, delta=+1),
+              7523035 (round 14, Purple, corruption=4, delta=+2),
+              7523025, 7522181, 7522107.
+
+  GROUP B2 -- "corruption present, doesn't fit either pattern"  8 (2.5%)
+    Deltas: 7523791(+3,corr=2) 7522652(-8,corr=2) 7523069(-1,corr=2)
+    7523640(-5,corr=2) 7522166(-8,corr=2) 7522347(-2,corr=2)
+    7521943(+1,corr=4) 7521689(-4,corr=2).
+    Traced 7523791 by hand: its round-19 turn has an EVENT CARD
+    ("Economic Progress") that triggers an immediate corruption+production
+    re-evaluation for ALL players mid-turn (a SECOND corruption clause,
+    "CORRUPTION! Green loses 4 resources", journal line 637), on top of the
+    normal end-of-turn corruption clause at line 646 ("CORRUPTION! Green
+    loses 2 resources") that the oracle actually checkpoints against. Delta
+    (+3) doesn't equal either individual corruption amount (4 or 2) or
+    their sum (6) -- multiple production/corruption re-evaluations stacking
+    in one turn is its own more complex variant, not chased further here.
+    NOT counted in the corruption-confirmed total below; flagged as its own
+    small bucket for a future worker (event-card-triggered mid-turn
+    production/corruption, distinct from the plain end-of-turn case).
+
+  GROUP C -- no CORRUPTION! clause on the first-divergence line 124 (39.4%)
+    The remaining population -- genuinely NOT explained by corruption.
+    Delta histogram within C: -12:1 -5:1 -4:4 -3:1 -2:41 -1:14 +1:32 +2:29 +3:1
+    Action-class-before-EndTurn histogram is dominated by TakeCard (42/124)
+    but TakeCard is also just the single most common last-action in the
+    corpus generally -- checked, this is NOT a TakeCard-specific bug
+    concentration, no (action, delta) combo accounts for more than 15/124.
+    Round histogram is NOT flat like group A -- it spikes late:
+      3:3 4:4 5:3 6:3 7:5 8:4 9:4 10:7 11:6 12:7 13:2 14:8 15:8 16:21 17:24 18:13 19:2
+    45/124 (36%) land in rounds 16-17 alone, and within that late cluster
+    delta=-2 dominates (25/45). Round 16-17 is where many games cross an
+    Age III->IV boundary. This LOOKS like a second production/recompute-
+    at-a-boundary mechanism (echoing hint (b) again, but at an ERA
+    boundary rather than corruption's ordinary end-of-turn one) -- but I
+    did NOT confirm this against actual era-transition markers in the
+    journal (only round number, which is a proxy), so report this as a
+    CANDIDATE lead, not a confirmed group, sized at ~45/124 if it holds.
+    Examples (late-round -2 subcluster): 7523350, 7523085, 7523044,
+              7521805, 7523612.
+    Examples (early/mid-round, unexplained, genuinely open): 7522668,
+              7522648, 7522616, 7522665, 7523072.
+
+===========================================================================
+STEP 3: PERSISTENCE -- ONE MISSED EVENT, OR A WRONG RATE?
+===========================================================================
+Traced 3 games end-to-end with `REPLAY_DEBUG=1 RESOURCE_ORACLE=1
+./target/difftest/replay <index> <journals> <id>` (every checkpoint, not
+just first):
+
+  7522658 (group A): Orange's delta is +2 at line 201, and STAYS +2 at
+    every subsequent Orange checkpoint (252, 286, 330) for the rest of the
+    game -- flat, never grows, never corrects. Purple in the SAME game
+    independently picks up its OWN +1 offset starting at line 262 (no
+    corruption nearby -- this is a group-C-shaped onset) and it too stays
+    flat (262, 296, 339, 382) for the rest of the game.
+  7522639 (group A): Orange's +2 offset is flat across 4 checkpoints;
+    Purple's separate +2 offset (starts later) is flat across 9 more.
+  7523341 (group B1): Purple's +1 offset is flat across 7 checkpoints;
+    Green picks up an independent -2 offset later (line 641) that is also
+    flat across its own following checkpoints.
+
+CONCLUSION on persistence: every traced instance, in BOTH the corruption
+groups (A and B1), is a ONE-TIME MISSED EVENT that then becomes a flat,
+CONSTANT additive offset for the rest of the game -- not a wrong ongoing
+production RATE (which would grow or shrink each round) and not a
+transient blip that self-corrects. This also means each actor in a game
+can carry their OWN independent offset with its own onset point -- the
+"first divergence per game" the oracle reports is only the EARLIEST of
+potentially several independent per-actor onsets in that game, so the true
+number of distinct missed-event instances in the corpus is >= 315, not
+exactly 315.
+
+===========================================================================
+STEP 4: THE TWO HINTS FROM THE TASK BRIEF, CHECKED AGAINST THIS SPLIT
+===========================================================================
+(a) "a shortfall of exactly 1 with a Trade Routes conversion nearby":
+    CHECKED against all 14 group-C delta=-1 games (the closest matching
+    bucket -- a shortfall of exactly 1, no corruption confound) by grepping
+    the 6 journal lines preceding each first-divergence checkpoint for
+    "Trade Routes". Only 1/14 hit. DENIED as a general pattern in this
+    corpus -- it may be a real one-off somewhere else in the game (WONDER's
+    writeup traced a different bucket, Build/Upgrade IllegalMoves, not this
+    oracle's checkpoint divergences) but it is not the resource-oracle's
+    dominant delta=-1 mechanism.
+
+(b) "production/corruption recompute timing at a round boundary":
+    CONFIRMED, strongly -- and turns out to be the single largest
+    identified mechanism in this whole split. Groups A+B1+B2 (corruption
+    clause present at the checkpoint) total 191/315 = 60.6% of ALL first
+    divergences. The dominant flavor (group A, 166 games) is a clean,
+    exact, always-positive match: the engine's own end-of-turn corruption
+    deduction is being skipped entirely for that turn while BGO's own
+    journal applies it. Group C's own late-round (16-17) delta=-2 spike is
+    a CANDIDATE second instance of the same "recompute at a boundary" kind
+    of hazard, at an era boundary rather than an ordinary turn -- unconfirmed,
+    flagged for a follow-up worker.
+
+===========================================================================
+SUMMARY TABLE
+===========================================================================
+  Group A  corruption fully skipped            166  52.7%  examples: 7522658, 7522639, 7522618
+  Group B1 corruption half-applied               17   5.4%  examples: 7523341, 7523035, 7523025
+  Group B2 corruption present, multi/complex      8   2.5%  examples: 7523791, 7522652, 7523640
+  Group C  no corruption at checkpoint          124  39.4%  examples: 7523350, 7522668, 7522648
+    - late-round (16-17) delta=-2 subcluster    ~45 (candidate era-boundary mechanism)
+    - remainder, genuinely unexplained          ~79
+  TOTAL                                          315
+
+Persistence (all traced instances, both corruption groups): flat constant
+offset once introduced, never compounds, never self-corrects -- a "one
+missed event" shape, not a "wrong rate" shape.
+
+===========================================================================
+NOT DONE / NEXT STEPS FOR A FUTURE WORKER
+===========================================================================
+- Did NOT attempt a fix. Group A (166 games, 53% of the whole population)
+  is the highest-value next target: find where `economy`'s end-of-turn
+  corruption step decides whether to apply the deduction for a given
+  actor/turn and why it sometimes doesn't run at all. Reproduce on
+  7522658 (Orange, round 7, line 201) or 7522639 -- both single, clean,
+  no compounding complications.
+- Group B1's "exactly half" shape (17 games) is a distinct enough pattern
+  (a computed/rounding error, not a skip) to be worth its own trace,
+  separately from group A -- do not assume it's the same bug.
+- Group C's late-round (16-17) delta=-2 spike (~45 games) needs an actual
+  era-boundary check against the journal (not just round number) before
+  it can be called a confirmed group -- currently just a candidate.
+- Group C's remaining ~79 games are still an unsplit long tail themselves;
+  this pass did not have budget to go further than "no corruption clause,
+  no dominant action-class, no dominant round" for them.
+- Group B2 (8 games) hints at a second, more complex "event-card-triggered
+  mid-turn production/corruption" mechanism (traced concretely on
+  7523791) stacking with the ordinary end-of-turn one -- not chased.
+
+FILES CHANGED: none. `resdrift.patch` in this directory is an empty file
+by design -- this pass's deliverable is the split above, not a fix.

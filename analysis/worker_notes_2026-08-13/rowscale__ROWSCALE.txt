@@ -1,0 +1,221 @@
+rowscale: instrumenting row_last_copy's magnitude
+==================================================
+
+Context: takeworth.rs (cardworth clone, FINDINGS.txt) established that a
+chosen Take's mean total score delta is +384.76, of which row_last_copy
+alone contributes +374.13 (~97%), while the weight on that key is small and
+NEGATIVE (frozen 2026-08-06 champion -4.17, live champion -3.16). This file
+(rust/src/bin/rowscale.rs, new binary, 3 unit tests, all passing) explains
+WHERE that magnitude comes from: is row_last_copy a sum over many row slots,
+a division blowing up near zero, an unbounded accumulation, or something
+else -- and whether the ~6x cost-1-vs-cost-3 scaling reported earlier is a
+scarcity effect or a row-position effect.
+
+Weights used: /private/tmp/rowdig/frozen_champion_2p.json, as instructed.
+NOTE: this file's row_last_copy weight is -3.164818673692828 -- it matches
+the value the task brief calls "the current live one (-3.16)", not the
+"frozen 2026-08-06 champion (-4.17)" that cardworth's own
+frozen_champion_2p.json holds (md5-different, verified: -4.166050796498309).
+Used the file exactly as instructed regardless; all numbers below are
+self-consistent under -3.1648 and are NOT directly comparable in absolute
+score-point terms to takeworth_200.txt's -4.17-weighted numbers, though the
+qualitative conclusions (below) hold under both.
+
+Sample: 200 self-play 2p games, seed 1..200, both seats playing this
+weights file. 400 player-games, 4952 Take decisions (fewer than cardworth's
+7031 because a different, less-negative row_last_copy weight changes which
+moves the bot actually chooses -- not a bug, a different policy).
+
+-------------------------------------------------------------------------
+1. What row_last_copy computes (rust/src/bots/weighted/row.rs:435-495)
+-------------------------------------------------------------------------
+Doc comment, quoted in full because it states the author's intent directly:
+
+  "Value sitting in the row that, if I pass it up, I will never see again.
+  THE FEATURE THE AUDIT WAS ACTUALLY ASKED FOR, in the project owner's own
+  words: 'know that a second selective breeding is near the end or not and
+  it has to build another farm since it won't see it'. row_pressure already
+  knows a card is about to slide off the LEFT; it has never known whether
+  another copy is coming off the deck, so a last copy and a card with three
+  more behind it price identically.
+
+  Each takeable slot contributes card_potential * P(no further copy), and
+  that probability is max(0, 1 - outlook) where outlook is
+  counting::civil_outlook's expected number of further copies. The clip is
+  the whole model and it has no fitted constant in it: at an outlook of 0
+  the deck provably holds no more ... so the probability is exactly 1; at
+  an outlook of 1 or more another copy is expected, so it is 0; in between
+  it interpolates."
+
+Plain terms: for every row slot the acting player could legally take right
+now, multiply "how much is this card worth to me" (card_potential) by "how
+sure am I this is my last chance at this specific card" (gone, in [0,1]),
+and sum across the row. It is meant to catch a case the older row_pressure
+feature (row_urgency/row_bargain_forgone) structurally cannot see: sliding
+off the left edge of the row is visible to row_pressure, but a card
+vanishing because the DECK ran out of copies (regardless of row position)
+is not, so row_last_copy exists specifically to add that signal.
+
+-------------------------------------------------------------------------
+2. Instrumentation: where the magnitude comes from
+-------------------------------------------------------------------------
+Binary: rust/src/bin/rowscale.rs. For every chosen Take it replicates
+row_last_copy's own per-slot loop (pinned equal to row::row_last_copy to
+float precision by test full_row_last_copy_matches_row_rs) and reports, in
+addition to the full before/after/delta already known from takeworth:
+  - val = card_potential(taken card), gone = P(no further copy), separately
+  - contributing_slots_before: how many OTHER row slots also have a
+    positive term in the same sum
+  - other_slots_sum_before: the sum of every slot EXCEPT the taken one
+
+Run: 200 games, frozen weights, n=4952 Take samples (rowscale_200.txt).
+
+  ALL takes (n=4952):
+    full_before        min=0.000  median=9.407   mean=31.125  max=705.226
+    full_after         min=0.000  median=0.217   mean=2.478   max=140.066
+    full_delta          mean=-28.647  (min=-679.763, max=0.000)
+    weighted contribution (rlc * delta), mean = +90.66
+
+    taken card's own factors:
+      val (card_potential)   median=4.703   mean=24.840   max=678.256
+      gone (P no further copy) median=1.000  mean=0.669   max=1.000
+      own_term = val*gone     median=4.703   mean=24.811   max=678.256
+
+    everything else in the row-sum:
+      other_slots_sum_before  median=0.382   mean=6.314   max=197.826
+      contributing_slots_before (count) median=3  mean=2.830  max=9
+
+    taken card's own_term / full_before, ratio of means = 0.797
+
+MECHANISM: NOT "a sum over many row slots." The row only ever has ~2.8
+qualifying slots on average (ROW_SIZE=6 total, most slots gated out by
+can_take_gated / val<=0 / gone<=0), and the taken card's OWN term is ~80%
+of the full row-sum on average (rising to 90% at cost 3, see below) -- the
+"everything else" slice (other_slots_sum_before, mean 6.3) is small next to
+the taken card's own term (mean 24.8). This matches takeworth's earlier,
+independent finding (94-98.5% of the raw DELTA attributable to the taken
+card's own before-state term at cost 1/2/3).
+
+NOT "a division by something near zero" either: gone is a clean [0,1]
+clip with "no fitted constant in it" per the doc comment above, and it sits
+at a median of 1.000 and a mean of 0.669 -- nowhere near an unstable
+denominator (there is no division in the formula at all; gone is a
+subtraction-then-clamp, val*gone is a product).
+
+The actual mechanism is (c): card_potential itself is a large, effectively
+UNBOUNDED number, not a bounded feature. card_potential (cards.rs:1639) is
+"priced through w": it recurses into tech_value/gov_value/action_value,
+each of which does its own w.get(SomeKey) * amount and sums a card's whole
+printed yield line (culture, science, production, workers, etc.) through
+the SAME weight vector evaluate() itself uses (CardYield's own doc comment:
+"the same weight-vector namespace evaluate itself indexes"). So a single
+call to card_potential is not a raw count like "civil_actions remaining" or
+"discontent" (the kind of quantity every OTHER WeightKey in weights.rs
+multiplies, all naturally bounded to small integers) -- it is already a
+composite, ALREADY-WEIGHTED sub-evaluation, capable of reaching the
+hundreds on its own (measured max here: 678.256, on ONE card). row_last_copy
+then multiplies that already-large number by a SECOND weight (rlc, -3.16),
+compounding an eval-scale quantity through another weight multiplication --
+the source of the size mismatch against every other WeightKey's
+contribution (which multiply a weight against a small bounded count).
+
+-------------------------------------------------------------------------
+3. Is it SUPPOSED to be this dominant?
+-------------------------------------------------------------------------
+The doc comment (quoted in full above) states an INTENT -- catch scarcity
+row_pressure cannot see -- and separately, carefully, defends the SHAPE of
+the gone/outlook clip ("the clip is the whole model and it has no fitted
+constant in it"). It says nothing at all about the intended MAGNITUDE or
+about calibrating card_potential's own scale before folding it into this
+sum. There is no comment anywhere in row.rs or weights.rs asserting
+row_last_copy should dominate ~80-97% of a Take's total score, or that it
+should be allowed to reach the hundreds on a single card while every other
+WeightKey contribution in the same evaluate() call stays in the
+single/low-double digits (see takeworth's own top-12 list: ca_left +12.32,
+hand_value_early -9.42, row_urgency +7.16, everything else < 3). The
+observed dominance is real and reproducible, but it is not something the
+author's own comments claim was the design goal -- the doc comment defends
+correctness of the probability clip, not the resulting scale.
+
+-------------------------------------------------------------------------
+4. Why does it scale with cost (cheap vs expensive slot)?
+-------------------------------------------------------------------------
+Same run, split by take cost:
+
+  cost=1 (n=1488): val mean=8.592   gone mean=0.521  own_term mean=8.547
+  cost=2 (n=1343): val mean=18.970  gone mean=0.623  own_term mean=18.938
+  cost=3 (n=2100): val mean=40.351  gone mean=0.809  own_term mean=40.335
+
+  cost3/cost1 ratio:  val = 4.70x   gone = 1.55x   own_term = 4.72x
+
+val (card_potential -- "how good is this card") grows ~4.7x from cost-1 to
+cost-3 takes. gone (P(no further copy) -- the scarcity signal) grows only
+~1.55x over the same span. own_term's growth (4.72x) tracks val's growth
+almost exactly, not gone's. (Earlier cardworth work, under the -4.17
+weight and a larger/different sample, reported a steeper ~6x scaling of
+the full row_last_copy contribution 87->533; the same decomposition logic
+applies there -- val dominates the ratio, gone is the minor factor -- this
+run's absolute numbers differ because the weight and bot policy differ,
+but the ATTRIBUTION direction is the same.)
+
+Also: cost=1's val MEDIAN is 0.001 (essentially zero) vs cost=3's median of
+15.226 -- more than half of cost-1 takes have a taken card whose own
+card_potential term is gated to ~nothing (redundant / already covered /
+val<=0), while cost-3 takes (freshly dealt cards, the expensive end of the
+row) are reliably worth something.
+
+CONCLUSION: the cost-1-to-cost-3 scaling is dominantly a ROW-POSITION /
+card-quality effect, not a scarcity effect. Cards enter the row at the
+expensive (cost-3) end and slide toward cost-1 as the sweep runs; a cost-1
+card has typically already been passed over by every player once (its own
+card_potential often already near zero -- not worth taking, which is
+consistent with it having survived to the cheap end unclaimed), while a
+cost-3 card is untested and, on average, simply a much bigger number. gone
+does rise somewhat with cost (0.52 -> 0.81) -- freshly dealt cards do skew
+toward being scarcer on average too -- but that factor is a much smaller
+contributor (1.55x) than val's (4.70x) to the overall ~4.7x scaling.
+
+-------------------------------------------------------------------------
+5. Verdict: is there a defect, and what shape is it?
+-------------------------------------------------------------------------
+Not a wrong-sign bug: the negative weight, applied to a feature that is
+evaluated on the POST-move state (same convention as every other feature),
+mechanically rewards Take over EndTurn because taking a card visibly
+removes that card's own term from the row-sum in the after-state (which
+EndTurn's after-state does not) -- multiplying a lower after-sum by a
+negative weight raises the score. That is a coherent, intentional way to
+encode "minimize scarce, unclaimed value left in the row," matching the
+doc comment's stated intent. Not a division-by-near-zero bug: there is no
+division in the formula, and the one clipped ratio (gone) sits centered
+near its bounds, not near an unstable edge.
+
+The defect, if there is one, is in NORMALIZATION / SCALE, not in the
+formula's logic: row_last_copy sums card_potential -- an already fully
+weight-priced, unbounded eval-scale quantity (same namespace and same
+weight vector evaluate() itself uses, capable of reaching several hundred
+points on a single card, measured max 678.256 here) -- and then multiplies
+that sum by a SECOND weight. Every other WeightKey in weights.rs prices a
+small, naturally bounded raw count (workers, civil actions, discontent,
+stock levels) exactly once. row_last_copy is structurally different: it is
+one weighted composite folded into another, which is why its swings run
+1-2 orders of magnitude larger than every other term in the same evaluate()
+call (takeworth's top-12: everything else in the list is single/low-double
+digits; row_last_copy alone is +374 of a +384 total). Whether that
+magnitude is a problem worth changing is exactly the question this task
+was told NOT to answer -- no weights, no formulas, no clamps were touched
+here. What is established, with numbers: the mechanism is "one already-
+large per-card value, multiplied by a second weight, dominated by the
+taken card's own term (~80-90% of the row-sum)" -- not a sum-over-many-
+slots effect, not a near-zero-division blowup, and its cost-1-to-cost-3
+growth is chiefly a row-position/card-quality effect (val, ~4.7x), with
+scarcity (gone, ~1.55x) playing a distinctly secondary role.
+
+-------------------------------------------------------------------------
+Artifacts
+-------------------------------------------------------------------------
+Binary: rust/src/bin/rowscale.rs (3 unit tests, all passing, including
+full_row_last_copy_matches_row_rs which pins this file's duplicated
+per-slot loop to row::row_last_copy's real output to float precision).
+Raw run output: /private/tmp/rowscale/rowscale_200.txt (200 games, seed
+1..200, frozen /private/tmp/rowdig/frozen_champion_2p.json weights).
+Never touched /Users/pt/tta-ai or experiments/rust_champion_2p.json.

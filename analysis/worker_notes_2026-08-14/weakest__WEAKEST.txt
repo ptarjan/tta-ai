@@ -1,0 +1,313 @@
+TARGET: settle the "how does an EVENT pick the weakest civilization" question
+left open by build2__BUILD2.txt (game 7523082, round-9 "Reign of Terror",
+`Special::WeakestPlayer`), then fix the engine if it's wrong. Worked in a
+warm clone at /private/tmp/weakest, base commit 791150f on branch base0814
+(includes econcap, buildbkt, and everything build2 already ruled out).
+
+RESULT: NO FIX LANDED. weakest.patch is empty (0 lines) by design -- git diff
+791150f -- rust is empty, no commits made. This is a MEASURED NEGATIVE: the
+engine's existing definition and arithmetic for "weakest civilization" are
+CORRECT, confirmed independently by (1) the two highest-authority rules
+sources available and (2) a full 1011-game corpus cross-check with 98.8%
+agreement. Guard confirms the tree is unchanged: 671 completed / 630 exact,
+identical ID set to /private/tmp/guard_ids_671.txt (comm -23 and comm -13
+both empty).
+
+============================================================
+STEP 1: what the sources say, verbatim
+============================================================
+
+/Users/pt/tta-ai/sources/ does NOT contain BGA's actual game-logic source
+(no throughtheages.game.php or equivalent) -- only
+`bga_throughtheages_material.inc.php`, which is card TEXT/metadata, not
+targeting logic. So "BGA's own implementation" is not directly inspectable
+this pass; the rules oracle (RULES_SPEC.md) and the two official errata PDFs
+are the highest-authority sources actually available, and they are decisive:
+
+- FAQ v1.5, p.11 (`sources/faq_v15.pdf`), verbatim: "Weakest/Strongest
+  Civilization(s): When this phrase occurs, it is referring only to
+  Military Strength, not to Culture or Population or anything else."
+
+- FAQ v1.5, p.11, same page, the paragraph just above it (defining Military
+  Strength itself): "Ties during Wars and Aggressions: If the Military
+  Strengths of two warring Civilizations are tied at the moment of
+  execution of a War, then there is no effect from that War. The same goes
+  for Aggressions. (Note that Military Strength includes your Strength
+  that arises from all sources, including from Wonders and Leaders and
+  Territories.)" -- i.e. Military Strength (== "weakest/strongest") is
+  explicitly an ALL-SOURCES quantity, the same one used for combat.
+
+- Code of Laws, p.12 (`sources/cge_code_of_laws.pdf`, "GENGHIS KHAN" leader
+  errata), verbatim: "When forming armies, each infantry unit can be either
+  cavalry or infantry (but not both) to maximize the civilization's total
+  strength rating. The infantry units are still considered infantry for
+  other cards, such as the Great Wall, regardless of their role in forming
+  armies." -- confirms tactic-formed armies count toward "strength rating"
+  and that the substitution is chosen to MAXIMIZE it, exactly matching
+  RULES_SPEC 10.3's "grouping chosen to maximize total tactical strength
+  (no choice, always maximal)" and this engine's `army_strength`.
+
+- RULES_SPEC.md 5.3 (already quoted by build2, re-confirmed): "Statistic
+  comparisons (\"strongest/weakest\" = strength rating [FAQ p.11])".
+- RULES_SPEC.md 10.3 (already quoted by build2, re-confirmed): "Each army
+  adds the card's tactical strength to your strength rating, on top of the
+  units' own strength."
+
+CONCLUSION FROM SOURCES: "weakest civilization" for scripted events IS the
+live, tactic-inclusive Military Strength -- the SAME quantity used for
+War/Aggression combat resolution, not a separate/simpler track. This is
+exactly what `events::apply_single_target(..., RankStat::Strength, ...)` ->
+`effects::state_stats(...).strength` (which adds `army_strength(p)`, the
+tactic-formed-army bonus) already computes. build2's open question
+("does BGA use the same live combat strength, or a separate simpler
+track?") is answered: SAME quantity, by direct rules citation. This alone
+would already close the avenue as a naming/definition question -- the corpus
+check below is the independent, quantitative confirmation the task asked
+for.
+
+============================================================
+STEP 2: hand-verifying game 7523082's actual computed values (not just
+trusting the debug trace)
+============================================================
+
+Added a temporary debug probe (`TMPDEBUG_WEAKEST`, `src/events.rs`, gated
+behind the existing `REPLAY_DEBUG_ALL` flag, REVERTED before this file was
+written -- confirmed by `git diff 791150f -- rust` being empty) that dumps
+each player's tactic, leader, unit list, `army_strength(p)`, and total
+`state_stats(...).strength` at the exact moment `apply_single_target`
+resolves a `RankStat::Strength` comparison.
+
+For the round-9 "Reign of Terror" resolution in 7523082, the probe showed:
+
+  idx=0 (Orange) tactic=Heavy Cavalry leader=Genghis Khan units=[Warriors:3]
+        army_strength=4 total=7
+  idx=2 (Green)  tactic=Fighting Band leader=Napoleon Bonaparte
+        units=[Warriors:4] army_strength=2 total=8
+  idx=1 (Purple) tactic=none leader=Joan of Arc
+        units=[Warriors:1, Knights:1] army_strength=0 total=6
+
+Hand-verified against the journal (`/private/tmp/bgo-journals/journals/
+7523082.tsv`) directly:
+- Orange really did build exactly 3 Warriors by round 9 (build2's own STEP 2
+  had only found 2 -- a build2 undercount, not an engine bug: line 148/149
+  round 7, plus one more Orange build2 missed). Heavy Cavalry needs 3
+  cavalry; Genghis Khan's `InfantryCountsAsCavalryForTactics` lets exactly
+  those 3 Warriors form ONE army worth Heavy Cavalry's printed 4 strength
+  (`card_table.rs`: `Heavy Cavalry { composition: {cavalry: 3}, effects.
+  strength: 4 }`) -- 3+4=7, matching the probe exactly. This is the CoL p.12
+  "maximize total strength rating" rule applied correctly.
+- Purple genuinely has NO tactic at round 9 -- confirmed directly in the
+  journal: Purple's first-ever tactic action is round 10, line 246,
+  "Purple adopts existing tactics I / Heavy Cavalry" (AFTER the event).
+  So Purple's `army_strength` being 0 at round 9 is correct, not a bug; the
+  +3-over-raw-units delta (1+2=3 raw, total 6) is Joan of Arc's
+  `StrengthPerTempleOrGovernmentHappy`, also confirmed correctly firing.
+
+So EVERY number in this specific game's computation is independently
+verified correct against the journal and the card table. Purple (6) is
+genuinely the lowest strength rating of the three by the rules' own
+definition; the journal nonetheless shows Orange losing the population.
+This game remains a genuine, unexplained anomaly -- but see STEP 3: it is
+one of only 4 such anomalies out of 324 cleanly-checkable events corpus-wide
+(1.2%), not a systemic mis-definition.
+
+============================================================
+STEP 3: corpus cross-check -- the decisive, quantitative evidence
+============================================================
+
+Method: for every game in the 1011-game corpus, ran `REPLAY_DEBUG_ALL=1
+./target/difftest/replay <id>` (using the temporary `TMPDEBUG_WEAKEST`
+probe from STEP 2), and for every "Current event:" block in the journal's
+own raw text whose FULL description is a SINGLE sentence containing
+"weakest civilization" (singular -- e.g. "Reign of Terror": "The weakest
+civilization loses 1 population."), extracted:
+  (a) the journal's own named victim (BGO's raw text always follows the
+      description with "<Color> <loses/gains/...>", copied verbatim into
+      this engine's own `raw_text` debug field -- ground truth, no separate
+      journal parse needed), and
+  (b) this engine's own live pick, read off the nearest following
+      `apply_single_target: ... stat=Strength best=false ...` trace line
+      that the SAME resolution emits.
+
+IMPORTANT METHODOLOGY NOTE, so the next worker doesn't repeat the mistake:
+an earlier version of this script also tried to handle COMBINED
+strongest+weakest cards (e.g. "Refugees": "The strongest scores 3 culture
+and gains 1 population. The weakest civilization loses 3 culture and 1
+population.") by pairing description-sentence order with named-outcome-
+clause order positionally. This is UNSOUND -- verified by hand against
+"Border Conflict" ("The weakest civilization must destroy...The strongest
+civilization gains 3 resources.; Purple produces 3 resources; Orange must
+destroy..."): the weakest-effect sentence comes FIRST in the description
+but its named outcome comes SECOND in the clause list, the opposite of
+Refugees' own ordering. There is no reliable positional rule connecting
+description-sentence order to named-outcome-clause order for combined
+cards from the text alone. The corpus check below therefore ONLY uses
+single-sentence, single-effect "weakest civilization" cards, where the sole
+outcome clause is unambiguous. This drops from 715 raw "weakest
+civilization" text occurrences (including combined and plural
+"civilizations" cards) to 324 cleanly-attributable single-target events --
+smaller N, but every one of the 324 is a sound, unambiguous ground-truth
+comparison, which is what the task asked for ("agreement counts... not just
+an anecdote").
+
+RESULTS (two candidate definitions):
+
+  CURRENT definition (`state_stats(...).strength`, includes army_strength /
+  tactic bonuses -- what the engine already does):
+    320 / 324 agree with the journal's named victim = 98.8%
+
+  ALTERNATIVE "no-tactic" definition (strip `army_strength(p)` out of the
+  total, i.e. raw unit strength + leader/wonder/special bonuses only):
+    244 / 324 agree with the journal's named victim = 75.3%
+
+The current (tactic-inclusive) definition wins by a wide, decisive margin --
+consistent with STEP 1's rules citations, not just marginally better. This
+settles the question the task posed: our engine's DEFINITION of "weakest
+civilization" for event targeting is correct as implemented; it should
+continue to use the same live, tactic-inclusive strength rating that combat
+resolution uses. There is no separate/simpler "strength" track to
+implement.
+
+Full mismatch list (all 4 of the 324):
+  ('7523082', 'The weakest civilization loses 1 population.',
+   journal_victim='Orange', engine_pick='Purple',
+   totals={Purple:6, Green:8, Orange:7}, army_strengths={Purple:0, Green:2,
+   Orange:4})
+  ('7522113', 'The weakest civilization loses 1 population.',
+   journal_victim='Green', engine_pick='Purple',
+   totals={idx1:4, idx2:5, idx3:9, idx0:9}, army={idx1:0, idx2:2, idx3:0,
+   idx0:3})
+  ('7523420', 'The weakest civilization loses 1 population.',
+   journal_victim='Purple', engine_pick='Orange',
+   totals={idx0:8, idx1:10}, army={idx0:2, idx1:2})
+  ('7522446', 'The weakest civilization loses 1 colony (the player choses
+   which one).', journal_victim='Orange', engine_pick='Grey',
+   totals={idx0:34, idx1:35, idx2:36, idx3:29}, army={idx0:6, idx1:15,
+   idx2:15, idx3:10})
+
+None of these 4 involve an exact strength tie (each has a strictly unique
+minimum), so the existing `protect_current_from_bad_tie` tie-break logic
+(already landed, already verified against 63 corpus ties in an earlier
+pass per `events.rs`'s own doc comment) is not implicated -- these are
+clean "the lowest value differs from the journal's named victim" cases,
+same shape as 7523082, and share no common card type, player count, or
+round-number pattern across the 4. Given 320/324 correct, these read as
+independent, low-frequency anomalies (rare unmodeled interaction, or BGO/
+journal data quirks in those specific games) rather than evidence of a
+systemic definitional or arithmetic bug. Not chased further this pass --
+1.2% of a already-narrow-N sub-check is not a productive lead to fix code
+against without risking exactly the "fit a tie-break to 4 corpus points"
+the task explicitly forbids.
+
+============================================================
+STEP 4: why this does NOT explain most of the Build-bucket's 16-game
+sub-bucket after all
+============================================================
+
+build2 found 14/16 "workers_free==0" Build-failure games have SOME
+population-loss-shaped event in their journal, and flagged the
+WeakestPlayer hypothesis as the leading explanation. Given STEP 3's 98.8%
+corpus agreement, that hypothesis is now LARGELY CLOSED: the targeting
+mechanism itself is correct in the overwhelming majority of cases, so it
+cannot be the systemic cause of most of that 14-game correlation. The
+correlation build2 found is likely coincidental/structural (population-loss
+events are simply common enough late-game that most games in a
+"workers_free==0" bucket will have encountered one somewhere in their
+journal, without that event being the actual point of divergence) rather
+than causal. Game 7523082 itself remains explained by this exact bug
+class (still the confirmed proximate cause of ITS OWN worker-ledger
+mismatch, per build2's STEP 2 hand-trace) but is one of only ~4 such cases
+corpus-wide, not a template for the other ~13.
+
+============================================================
+STEP 5: explicitly RULED OUT / RE-CONFIRMED this pass
+============================================================
+- The "weakest civilization" DEFINITION (full tactic-inclusive strength
+  rating): CONFIRMED CORRECT, both by direct FAQ/CoL citation (STEP 1) and
+  by 98.8% corpus agreement (STEP 3). Not a bug; do not change
+  `RankStat::Strength` / `apply_single_target` / `army_strength` /
+  `state_stats` to use a different quantity.
+- Game 7523082's own arithmetic (Orange's Genghis-Khan+Heavy-Cavalry
+  synergy, Purple's Joan-of-Arc bonus, Purple's lack of any tactic at round
+  9): hand-verified correct against the journal and card table (STEP 2).
+  Not a bug in this game either -- it is a genuine, unexplained 1-of-324
+  anomaly.
+- `protect_current_from_bad_tie`'s existing tie-break fix: not touched, not
+  implicated (none of the 4 mismatches are ties).
+- Everything build2 already ruled out (`game::START_TECHS`, the
+  `AllPlayers` population-grant mechanism, RULES_SPEC §7.5's urban-building
+  gate, econcap, buildbkt, `economy::uprising`): not re-touched, per the
+  task's own instruction.
+- `events::extra_production`: NOT touched (a separate worker owns it
+  concurrently, per the task's explicit instruction). No change was made
+  anywhere near that function.
+
+============================================================
+MEASUREMENT (verbatim)
+============================================================
+
+No functional source change was made this pass. One temporary debug probe
+(`TMPDEBUG_WEAKEST` in `src/events.rs`) was added, used for STEP 2/3, and
+reverted before this file was written -- confirmed by `git diff 791150f --
+rust` being empty (0 lines).
+
+cd /private/tmp/weakest/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/weakest_after.txt 2>&1
+grep '^SCOREDIV_COMPLETED_ID' /tmp/weakest_after.txt | awk '{print $2}' | sort \
+    > /tmp/weakest_ids.txt
+
+Header lines from /tmp/weakest_after.txt (read directly, not reconstructed):
+  "# replaystats: 1011 games sampled, 671 completed to state.game_over"
+  "671/671 completed games actually flipped state.game_over ... 630/671 of
+   those matched index.tsv exactly (sorted per-game score-list compare)."
+
+Before: 671 completed / 630 exact (guard_ids_671.txt, 671 lines).
+After:  671 completed / 630 exact (identical -- no source change, expected).
+
+comm -23 /private/tmp/guard_ids_671.txt /tmp/weakest_ids.txt   (REGRESSIONS):
+<empty>
+
+comm -13 /private/tmp/guard_ids_671.txt /tmp/weakest_ids.txt   (WINS):
+<empty>
+
+cargo clippy --all-targets --profile fasttest -- -D warnings: clean
+("Finished `fasttest` profile [unoptimized] target(s) in 33.03s", zero
+warnings/errors).
+
+`IllegalMove: Build` bucket: not re-censused this pass (STEP 4 explains why
+a re-census would not be expected to change -- no code changed).
+
+============================================================
+CONCRETE HANDOFF for whoever picks up the Build bucket (or a "weakest
+civilization" re-investigation) next
+============================================================
+
+1. Do NOT re-chase "weakest civilization" targeting as a systemic
+   explanation for the Build bucket. It is settled: correct by rules
+   citation and correct in 320/324 (98.8%) of cleanly-checkable corpus
+   events. The remaining 4 mismatches (7523082, 7522113, 7523420, 7522446)
+   are listed above in full (values, army-strength breakdown) if someone
+   wants to hand-trace them individually as isolated anomalies -- but
+   given no shared pattern across card type/player-count/round, this is a
+   low-expected-value lead, not a quick multi-game win.
+2. The Build bucket's 16-game "workers_free==0" sub-bucket (listed in
+   build2__BUILD2.txt) needs a NEW hypothesis; population-loss-shaped
+   events correlating with the bucket was a coincidence, not (mostly) a
+   cause. Re-trace one or two of the 14 correlated games from scratch with
+   a DIFFERENT worker-ledger hypothesis (a build/upgrade/pop-increase
+   action this engine mis-models some other way), the same way build2's
+   STEP 2 hand-traced 7523082 -- that method (hand ledger vs.
+   `REPLAY_DEBUG_ALL=1`'s `uprising check: ... workers_free=N` trace line)
+   is solid and reusable.
+3. The reusable corpus-cross-check script (`extract_events`/single-sentence
+   filter, described in STEP 3) is a good template for any future
+   "does the journal agree with our targeting logic" question -- the key
+   lesson is: don't try to positionally pair multi-sentence card
+   descriptions with their outcome clauses; only trust single-effect
+   cards for this kind of ground-truth check.
+
+FILES CHANGED: none. weakest.patch (git diff 791150f -- rust) is empty by
+design -- no functional change was made or landed this pass.

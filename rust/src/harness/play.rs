@@ -1,6 +1,6 @@
 //! The operator loop: play the CGE app, log the bot.
 //!
-//! Built on [`crate::advisor::advisor::Advisor`], which already does the
+//! Built on [`crate::advisor::session::Advisor`], which already does the
 //! hard part -- mirroring the board, ranking moves, fuzzy card names, never
 //! crashing on bad input. What is added here is only what a physical-table
 //! session needs on top of the advisor's own REPL:
@@ -43,7 +43,7 @@
 
 use std::time::Instant;
 
-use crate::advisor::advisor::{self as advisor, Advisor, Candidate};
+use crate::advisor::session::{self as advisor, Advisor, Candidate};
 use crate::advisor::state_io;
 use crate::cards::Age;
 use crate::fixtures::Json;
@@ -98,6 +98,10 @@ pub struct HarnessConsole<IO: Io> {
 /// mirroring the Rust advisor console's own `Quit` (see `bin/advisor.rs`'s
 /// top doc comment for the Python inconsistency that convention closes).
 struct Quit;
+
+/// Per-rival `(idx, forced field/value pairs)`, `ask_rivals`'s own result
+/// shape.
+type RivalAnswers = Vec<(u8, Vec<(String, Value)>)>;
 
 impl<IO: Io> HarnessConsole<IO> {
     pub fn new(adv: Advisor, log: GameLog, io: IO, strict: bool, verdicts: Vec<(ProbeId, Verdict)>) -> HarnessConsole<IO> {
@@ -462,7 +466,7 @@ impl<IO: Io> HarnessConsole<IO> {
         }
     }
 
-    fn ask_rivals(&mut self) -> Result<Vec<(u8, Vec<(String, Value)>)>, Quit> {
+    fn ask_rivals(&mut self) -> Result<RivalAnswers, Quit> {
         let me = self.adv.board.me;
         let n = self.adv.state().num_players as usize;
         let idxs: Vec<u8> = self.adv.state().players[..n].iter().filter(|q| q.idx != me && !q.resigned).map(|q| q.idx).collect();
@@ -639,7 +643,7 @@ impl<IO: Io> HarnessConsole<IO> {
         let n = self.adv.state().num_players;
         let prompt = format!("  final scores  {} > ", (0..n).map(|i| format!("p{i}")).collect::<Vec<_>>().join("/"));
         let line = self.ask(&prompt);
-        let toks: Vec<String> = line.replace(',', " ").replace('/', " ").split_whitespace().map(str::to_string).collect();
+        let toks: Vec<String> = line.replace([',', '/'], " ").split_whitespace().map(str::to_string).collect();
         toks.iter().enumerate().filter_map(|(i, t)| t.parse::<i64>().ok().map(|v| (format!("p{i}"), v))).collect()
     }
 
@@ -697,6 +701,12 @@ note you write at the end will ever say so.\n"
 /// The pre-flight, driven by a plain ask/say pair rather than [`Io`] (there
 /// is no board yet to hand a scripted test double). Refuses to start a game
 /// we cannot honestly log. Mirrors `ask_setup`.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 pub fn ask_setup(
     mut ask: impl FnMut(&str) -> String,
     mut say: impl FnMut(&str),
@@ -721,7 +731,7 @@ pub fn ask_setup(
             !ask("  expansion is OFF? [y/N] > ").trim().to_lowercase().starts_with('y')
         }
     };
-    let mut setup = record::Setup::new(game_id.unwrap_or_else(|| now_id()));
+    let mut setup = record::Setup::new(game_id.unwrap_or_else(now_id));
     setup.players = players;
     setup.seat = seat;
     setup.difficulty = difficulty;
@@ -743,7 +753,7 @@ fn now_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::advisor::advisor::load_bot;
+    use crate::advisor::session::load_bot;
     use crate::advisor::state_io as S;
     use crate::state::ROW_SIZE;
     use std::path::Path;

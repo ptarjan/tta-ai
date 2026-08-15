@@ -11,19 +11,6 @@ renumber them.**  New hazards go in the later sections, which are unnumbered.
 
 Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 
-> **Read every `engine/`, `tools/*.py`, `tests/`, `experiments/*.py` mention
-> below as historical (2026-08-06).** This document predates the Rust port
-> and describes those paths in the present tense throughout — "the watchdog
-> relaunches...", "`X.py` is the standing check for..." — but the whole
-> Python tree (`engine/`, `tools/`, `tests/`, every `experiments/*.py`) is
-> deleted; `cargo test --profile difftest` is the gate now, and the league
-> supervision described here (`watchdog.sh`, `run_league.sh`,
-> `hillclimb_league.py`) no longer runs anywhere. The TRAPS themselves — the
-> shape of each bug, and the discipline it argues for — are still real and
-> still worth reading; only the specific file paths and "currently does X"
-> claims are stale. Where a Rust equivalent is known to exist it is noted
-> inline; otherwise assume there isn't one yet.
-
 ---
 
 ## 1. Training-loop traps (the original `UNATTENDED.md` numbering)
@@ -41,13 +28,13 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
    champion's margin is threshold effects of that one hand-written family —
    `var:military` is held to 5.5% of turns at its required +3 lead and never gets
    to fight.  Beating the pool is not the same as playing well.  (Partly
-   addressed by the `hum:*` archetypes — [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) — whose logistic
+   addressed by the `hum:*` archetypes — [`docs/HUMAN_BOTS.md`](HUMAN_BOTS.md) — whose logistic
    gate degrades to x0.42 rather than `var:military`'s x0.18.)
 4. **Individual trained weights are not interpretable.**  Champion marginals are
    indistinguishable from a random walk (KS p=0.14-0.80) even though the same
    champion beats its own drift-siblings 0.94-0.99.  The improvement lives in
    joint structure, not in any single coordinate.  "`culture_rate_early` = 0.000"
-   is not a strategic statement.  Corollary, from [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md): **"the
+   is not a strategic statement.  Corollary, from [`docs/OPENING_AUDIT.md`](OPENING_AUDIT.md): **"the
    AI moved this weight, therefore it matters" is never a valid inference unless
    somebody ablated it.**  Mutations move ~19 weights at once and are accepted on
    one bundle-level test.
@@ -76,26 +63,18 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
    It resumes, silently.  To genuinely restart clean, move the state dir aside
    first.
 
-6. **A saturated pool is not a strong bot.**  This applied to the Python
-   league (2026-07-29 through the 2026-08-06 removal of `engine/`): the pool
-   downweighted opponents by their measured win rate and skipped them in the
-   acceptance rotation (the now-deleted `docs/LEAGUE_POOL.md`, git history).
-   Read the `[pool] informative ...` line: at 2p, 8 of 18 opponents were
-   inert.  "The champion beats the pool" said less than it used to, not more.
-   **The current Rust `climb` binary has no pool at all** — mutant vs.
-   champion mirror plus a fixed anchor veto — so this trap does not apply to
-   it, but the underlying lesson (a beatable-but-uninformative opponent
-   inflates apparent strength) is worth keeping in mind for any future
-   pool-style design.
+6. **A saturated pool is not a strong bot.**  Since 2026-07-29 the pool
+   downweights opponents by their measured win rate and skips them in the
+   acceptance rotation ([`docs/LEAGUE_POOL.md`](LEAGUE_POOL.md)).  Read the `[pool] informative
+   ...` line: at 2p, 8 of 18 opponents are inert.  "The champion beats the pool"
+   says less than it used to, not more.  If the `informative` line ever reads a
+   small number **and** the `tier share` line moves, something is wrong — those
+   two are independent by construction.
 7. **The training proxy is not known to track shipped strength.**
-   [`docs/NEURAL.md`](NEURAL.md) runs the check that says whether it does, from its
-   own cron entry.  Before quoting any arm's progress as strength, read
-   `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.  The
-   `experiments/proxy_check` module that produced those lines was Python and
-   is gone; the log it wrote is still the record, and the hazard it names --
-   a training proxy that is not known to track shipped strength -- is
-   unchanged and unresolved by the port.  Re-establishing the check against
-   `neuraleval`/`arena` is open work.
+   [`docs/PROXY_GUARDRAIL.md`](PROXY_GUARDRAIL.md) runs the check that says whether it does, from its
+   own cron entry.  Before quoting any arm's progress as strength, run
+   `python3 -m experiments.proxy_check --report` and
+   `grep "PROXY DIVERGENCE" experiments/logs/proxy_check.log`.
 8. **A generation can complete ZERO games and nothing used to notice.**
    `experiments/arena.py`'s `_play` catches every exception per game on purpose —
    one engine bug must not kill a 40-hour tournament — so a bug that kills
@@ -131,7 +110,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 
 ## Radioactive files and vectors
 
-* **Never warm-start 4p from `analysis/frozen/python_champion_4p_gen133_2026-07-26.json`** (the top-level
+* **Never warm-start 4p from `experiments/champion_4p.json`** (the top-level
   file, not the one under `league_state/`).  It holds 8-9 sign-inverted weights
   including `science = −6.089`, and collapses the win rate to 9.7% +/- 2.7%.
   `refuse_if_degenerate_champion` now tests **provenance over the informative
@@ -141,27 +120,20 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   `experiments/frozen/champion_4p_strengthcheck.json` reproduce all 62
   informative weights of that vector bit-for-bit.  **Every 4p number measured
   against them is quarantined** — they are left in place in
-  [`docs/EVALUATOR_HISTORY.md`](EVALUATOR_HISTORY.md) and [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md)
-  so they stay auditable, not because they are
+  [`docs/BOT_ROSTER.md`](BOT_ROSTER.md), [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md), [`docs/STRENGTH_CHECK.md`](STRENGTH_CHECK.md) and
+  [`docs/INFORMATION_AUDIT.md`](INFORMATION_AUDIT.md) so they stay auditable, not because they are
   facts.  See [`analysis/frozen/README.md`](../analysis/frozen/README.md).
-* **(Historical -- describes the retired Python trainer.)** `experiments/
-  league_state/` held the **live** champion and ladder; `experiments/
-  champion_{2,3,4}p.json` and `experiments/league_4p/` were stale snapshots
-  from an earlier run. Confusing them once produced a false "the 4p arm has
-  plateaued" conclusion when it was in fact the least-converged arm. That
-  trainer and `league_state/` are both gone now (`engine/` was deleted
-  2026-08-06); the equivalent live/stale trap for the current Rust league is
-  `experiments/rust_champion_{2,3,4}p.json` (live) vs. the frozen snapshots
-  under `analysis/frozen/` (stale) -- see
-  [`docs/RUST_LEAGUE.md`](RUST_LEAGUE.md#which-champion-file-is-live). The
-  underlying lesson holds either way: **any weight snapshot taken for
-  measurement must be copied to `/tmp` first and must come from the live
-  file, never a frozen one.**
+* `experiments/league_state/` holds the **live** champion and ladder.
+  `experiments/champion_{2,3,4}p.json` and `experiments/league_4p/` are stale
+  snapshots from an earlier run.  Confusing them once produced a false "the 4p
+  arm has plateaued" conclusion when it was in fact the least-converged arm.
+  **Any weight snapshot taken for measurement must be copied to `/tmp` first and
+  must come from `league_state/`.**
 * `experiments/baselines.jsonl` carries no timestamp, generation or seed on any
   row.  Do not quote it; re-run `experiments/evaluate.py`.
 * Three tools (`tools/quiesce_bench.py`, `tools/no_credit_check.py`,
   `tools/behaviour_counts.py`) have historically defaulted to the invalidated
-  `analysis/frozen/python_champion_4p_gen133_2026-07-26.json` and printed plausible numbers for a crippled
+  `experiments/champion_4p.json` and printed plausible numbers for a crippled
   vector without erroring.  `tools/culture_probe.py` defaults to the live
   `league_state/` path and is the pattern to copy.
 
@@ -173,7 +145,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   Removing it has been measured **five separate ways** and made the bot much
   weaker every time (down to 11.0% against a 50% null).  The phantom bonus acts
   as an accidental move-quality confidence filter.  There is a standing warning
-  in the code comment; [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §6 is the measurement.  Combining
+  in the code comment; [`docs/WASTED_ACTIONS.md`](WASTED_ACTIONS.md#6-the-obvious-fix-makes-the-bot-worse) §6 is the measurement.  Combining
   the card-valuation fix with same-horizon scoring is *worse* than the card fix
   alone (39.8% +/- 6.7% vs 69.6% +/- 4.5%).
 * **The ten phase multipliers are deliberately exempt from sign clamping**
@@ -231,8 +203,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   null**.  Before opening a new channel onto an existing weight, ask what has
   ever constrained that weight; if the answer is "nothing", expect the first
   measurement to be a regression *of the weight*, and check it against
-  `DEFAULT_WEIGHTS`.  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §3 (the general "0.0-default biases,
-  it does not stay neutral" lesson) and [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md) (CARD_BLINDNESS.md verdict).
+  `DEFAULT_WEIGHTS`.  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md#1452-3p-on-the-archived-champion-a-large-unambiguous-regression) §14.5.2.
 * **A card whose cost is priced while its gain sits at 0.0 is biased, not
   inert.**  More generally: *adding a 0.0-default feature for one side of a trade
   whose other side is already priced does not leave the card neutral; it biases
@@ -243,8 +214,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   `card_potential` at zero — the bias removed, nothing added — moved "is this
   the best card on the row" only from 1 in 437 to 20 in 437.  A card worth
   exactly nothing is still not a card worth taking, so a fix that only removes
-  the sign will read as a null.  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) §3 and
-  [`docs/ANALYSIS_HISTORY.md`](ANALYSIS_HISTORY.md) (CARD_BLINDNESS.md verdict).
+  the sign will read as a null.  [`docs/CARD_BLINDNESS.md`](CARD_BLINDNESS.md) §14.1c.
 * **A swap diff is exact over `Stats` and blind to everything else**, and it
   *replaces* the static table rather than supplementing it — so any key the static
   path priced that the diff cannot see is silently dropped.  Taj Mahal's blue
@@ -262,7 +232,7 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
   everything.  Anyone proposing a learned evaluator in this project should be made
   to run that exact duel before claiming anything.
 * **Uniformly-positive blocks are also the signature of a systematic asymmetry.**
-  [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md) ran a seat-bias audit for exactly this reason and found
+  [`docs/EVENT_SEEDING.md`](EVENT_SEEDING.md) ran a seat-bias audit for exactly this reason and found
   a real ~5pp seat effect.
 * **The 94.9%-of-`end_turn` figure is a draw count, not a leak measurement.**  It
   counts candidates whose trial `apply` draws a card, on `WeightedBot`, which
@@ -380,10 +350,8 @@ Open work lives in [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md), not here.
 ## Git and multi-agent working
 
 * **Never `git add -A` in this repo.**  A live hillclimb continuously rewrites
-  `experiments/rust_champion_*.json` (all three are gitignored, but logs and
-  other run state under `experiments/` are not) and `generations_*.jsonl`.
-  Stage explicit paths only.  Copy the live champion file to `/tmp` before
-  analysing it.
+  `experiments/champion_*.json`, `generations_*.jsonl` and `league_*/`.  Stage
+  explicit paths only.  Copy `champion_*.json` to `/tmp` before analysing it.
 * **Do not `git checkout -b` in a shared working tree.**  This has already
   happened: every agent that subsequently committed in that tree landed on the
   feature branch without noticing, while `git push origin master` kept pushing an
@@ -430,6 +398,6 @@ absolute epoch second) has passed.  To extend a run, rewrite the deadline file.
 Log: `experiments/logs/watchdog.log`.
 
 The BGO corpus scrape referenced by the old handoff note completed and now lives
-in `sources/bgo/` — see [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md).  The "no external anchor" item it
-carried is answered by [`docs/HUMAN_PLAY.md`](HUMAN_PLAY.md) and [`docs/AUDIT_HISTORY.md`](AUDIT_HISTORY.md);
+in `sources/bgo/` — see [`docs/BGO_CORPUS.md`](BGO_CORPUS.md).  The "no external anchor" item it
+carried is answered by [`docs/HUMAN_BASELINE.md`](HUMAN_BASELINE.md) and [`docs/SYSTEM_COVERAGE.md`](SYSTEM_COVERAGE.md);
 the remaining open pieces of it moved to [`docs/OPEN_ITEMS.md`](OPEN_ITEMS.md#8-measurement-and-infrastructure) §8.

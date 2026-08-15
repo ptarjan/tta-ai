@@ -1,0 +1,13 @@
+games        4800 (1600 deals x 3 seats)
+players      3
+kind         weighted
+A            rust_champion_3p
+B            champion_3p_pre_headroom
+mean moves   401.5
+elapsed      227.9s  (21.1 games/s)
+
+win rate     38.6%  +/- 1.4   (null 33.3%)   p = 0.0000
+             [naive +/- 1.4, rho -0.01, deff 0.99, 1600 deals]
+culture      A 126.4   best other 144.9   lead -18.4 +/- 1.6
+
+verdict      accept -- rust_champion_3p beats champion_3p_pre_headroom (interval clear of the null)

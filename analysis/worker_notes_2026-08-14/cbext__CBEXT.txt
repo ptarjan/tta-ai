@@ -1,0 +1,354 @@
+cbext -- widen cardblame to total, structural coverage (task 2026-08-14)
+====================================================================
+Worker: cbext, 2026-08-14. Clone: /private/tmp/cbext (LEFT IN PLACE per
+instructions, holds unlanded commits ba1d525/82adbd8 on top of b5b3d9a).
+Baseline used for the byte-identical proof: /private/tmp/cbext_baseline,
+git-checked-out to b5b3d9a exactly (the shared /private/tmp/base0815
+template had itself moved forward to a different commit -- 9860400 -- by
+the time I went to build a baseline from it, presumably another worker
+advancing it concurrently; I pinned cbext_baseline to b5b3d9a by hand with
+`git checkout b5b3d9a -- .` inside that private clone, not touching the
+shared template).
+
+THE ASK, AS IT ENDED UP (steered mid-task by the coordinator)
+---------------------------------------------------------------
+The original brief was to widen `cardblame`'s attribution beyond
+`GameResult::cards_in_play` (a snapshot: tableau + leader + tactic at the
+point a game stopped/ended) to also cover event cards, played
+action/military cards, wonders, governments, and colonies, plus add a
+happenings cut for revolution/corruption/war/aggression/pact/colonization/
+resignation/discard. Mid-task the coordinator steered this to be TOTAL and
+STRUCTURAL rather than a hand-picked list: every card in the game (zero-
+exposure ones shown too), happenings enumerated exhaustively off the `Move`
+enum (and `ActionClass`, "whatever enum drives events/specials") with NO
+wildcard match arm so a future variant fails to compile until classified,
+plus a coverage summary and an explicit "not attributable" section. What
+shipped is the steered version.
+
+WHAT WAS BUILT
+--------------
+Two files touched, both in /private/tmp/cbext/rust/src/:
+
+1. `replay_common.rs` (purely additive -- see the byte-identical proof
+   below):
+   - `Replayer::apply_move` -- a single new choke point every successful
+     `Move` application in this file now goes through (replaces 18 raw
+     `apply::apply(&mut self.state, ..)` call sites, including
+     `try_apply`'s own and the internal bypasses like `Move::Choose`
+     replies and `try_apply_take`'s hand-full override). Records into a
+     new `moves_applied: Vec<Move>` field before applying, changes nothing
+     about what gets applied or how.
+   - `apply_one` now pushes every journal line's own `ActionClass` into a
+     new `line_classes: Vec<ActionClass>` field, unconditionally, as its
+     first statement -- `ActionClass` is BGO's own line-shape
+     classification, independent of `Move` (several variants --
+     `WinAuction`, `WinWar`, `PlayEvent`, `Discard` -- are pure
+     confirmation lines with no `Move` of their own, so this is the only
+     place those happenings are visible at all).
+   - `GameResult` gains three new fields: `ever_cards_in_play` (the
+     widened card set), `moves_applied`, `line_classes` (the raw per-game
+     logs, exposed directly for `cardblame` to classify).
+   - `game_ever_cards_in_play` builds the widened set as a union of FOUR
+     sources: (1) the existing narrow `game_cards_in_play` (so widened is
+     always a superset); (2) every `CardId` argument of every applied
+     `Move`, via a new exhaustive (no wildcard) `move_card_args` match --
+     covers events (`PrepareEvent`), one-shot actions (`PlayAction`),
+     aggressions/wars/pacts, and superseded leaders/tactics/governments a
+     single snapshot can't see; (3) every player's own `colonies` list
+     directly (colonization assigns a territory without any `Move` naming
+     its `CardId` at all); (4) each player's FINAL `wonder`/`government`
+     slot directly -- ADDED IN A SECOND PASS after the first real corpus
+     run showed every wonder and the starting government reading as
+     zero-exposure (see "what I got wrong the first time" below).
+
+2. `bin/cardblame.rs` (rewritten):
+   - Every one of the 236 cards in `tta::CARDS` gets a row somewhere in
+     every card cut: RANKED (>=20 games/checkpoints exposure), LOW
+     EXPOSURE (seen, too rare to trust), or its own ZERO EXPOSURE section
+     (never once observed) -- for both the narrow and widened sets, in
+     both the completion-failure and score-mismatch cuts. Nothing is
+     capped to a top-N any more; every qualifying row prints.
+   - Two independent, exhaustive happenings cuts: one keyed by `Move`
+     variant name (`move_kind_name`, 37 variants, a plain `match` with no
+     `_ =>` arm -- the crate's own `wildcard_enum_match_arm` lint denies
+     that outright, so a future `Move` variant is a compile error here
+     until classified), one keyed by `ActionClass::label()` (31 variants,
+     pre-seeded from `ActionClass::ALL`, the crate's own exhaustiveness-
+     checked constant). Both cuts pre-seed EVERY variant at zero exposure
+     so a variant that never fires still prints a row instead of silently
+     never appearing.
+   - A `card_group` function (exhaustive over `CardType`, 15 groups from
+     23 types) labels every card row so a reader can see at a glance
+     whether a ranked card is a leader, wonder, government, tactic,
+     event, one-shot action, aggression/war/pact, territory, etc.
+   - A "Coverage summary" section, printed first: total cards/Move
+     variants/ActionClass variants, how many were observed at all, how
+     many cleared the exposure cutoff -- for both card sets.
+   - A "Not attributable by this tool" section, printed second, stating
+     four explicit structural blind spots (see the tool's own output,
+     copied below) rather than letting a gap show up only as silence.
+   - Cut 3 (corruption vs. journal `CORRUPTION!` marker) is UNCHANGED
+     from the previous pass -- kept as its own separate checkpoint-level
+     population, not re-run against the widened set or happenings cuts.
+   - 14 unit tests inside the file's own `#[cfg(test)] mod tests`,
+     covering: `CardCounter` rate/mean-round math, `rank_cards`'s
+     exposure-cutoff routing (ranked / low-exposure / and a NEW test that
+     a zero-games entry lands in NEITHER, since it belongs to its own
+     zero-exposure section instead), descending sort, `round_without`
+     complement/NaN-when-universal, the `group` column plumbing, a
+     same-variant-count/no-duplicates tripwire for the Move-name seed
+     list, an `ActionClass::ALL` no-duplicate-labels check, `card_group`
+     classifying a sample of types distinctly, and `accumulate`'s own
+     per-game dedup contract.
+
+WHAT I GOT WRONG THE FIRST TIME (worth reading before trusting the numbers)
+----------------------------------------------------------------------------
+The first full-corpus run showed 27/236 cards at zero exposure in the
+widened set, ALL wonders plus "Despotism" (a government). That surprised
+me enough to check: `move_card_args` only extracts a `CardId` from `Move`
+variants that CARRY one, and neither a wonder's own entry into play nor a
+starting government is ever the result of a `Move` naming that card --
+`Move::Take{slot}` (which sets `p.wonder` as a side effect) carries only a
+row slot, and the STARTING government (`Despotism`) is part of
+`new_game`'s initial setup, never "developed" or "revolved" into by
+anything. So my widened set had a real, silent gap for exactly the two
+card types the ORIGINAL task brief called out by name ("Wonders (p.wonder)
+and governments (p.government) -- deliberately excluded from the narrow
+set"). Fixed by unioning each player's final `p.wonder`/`p.government`
+directly into the widened set (source (4) above). Re-verified the full
+bar (tests/clippy/replaystats/cardblame's own tests) after the fix; the
+numbers quoted below are all from the FIXED, second run. Zero-exposure
+widened-set cards dropped from 27 to 10 after the fix (see "genuinely
+zero" below) -- I'm flagging this prominently because it's exactly the
+kind of gap a "total coverage" pass is supposed to catch, and it very
+nearly shipped uncaught -- the coverage summary / zero-exposure sections
+THEMSELVES are what caught it, on the first real run against the corpus,
+not a design review beforehand.
+
+VERIFICATION (THE BAR)
+-----------------------
+  cd /private/tmp/cbext/rust
+  PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats --bin cardblame
+    -> compiles clean, no warnings.
+  cargo test --profile fasttest --lib
+    -> 1419 passed, 0 failed (matches the stated 1419 baseline exactly).
+  cargo test --profile fasttest --bin cardblame
+    -> 14 passed, 0 failed.
+  cargo clippy --all-targets --profile fasttest -- -D warnings
+    -> clean.
+
+Byte-identical proof for replaystats -- with a caveat I want to be
+explicit about rather than paper over: a LITERAL `diff` between the
+baseline and modified replaystats output is NOT empty (53-55 line-level
+hunks out of 821 lines). Before concluding that meant a regression, I
+checked whether the SAME unmodified b5b3d9a binary run TWICE in a row
+diffs against itself -- it does (53 lines), because `replaystats`' own
+ranked tables break ties among equal-count rows using `HashMap` iteration
+order, which Rust's default hasher seeds randomly PER PROCESS. So literal
+`diff` cannot be the bar here even for a truly unmodified build vs itself.
+What I verified instead, which is the thing that actually matters: the
+baseline and modified outputs are the exact same MULTISET of 821 lines --
+
+  python3 -c "
+  base = open('/tmp/cbext_base.txt').read().splitlines()
+  mod_ = open('/tmp/cbext_replaystats2.txt').read().splitlines()
+  print(len(base), len(mod_), sorted(base) == sorted(mod_))
+  "
+  -> 821 821 True
+
+-- i.e. every line that appears in one appears in the other, the same
+number of times; the only difference is which of several EQUAL-count rows
+prints first, exactly the same nondeterminism the unmodified binary has
+against itself. This is a strictly stronger and more honest proof than a
+literal diff would have been for this particular tool. Headline numbers
+match exactly in both: "1011 games sampled, 690 completed to
+state.game_over", "690/690 ... 663/690 ... matched", "39839 ...
+checkpoints ... 38438 (96.5%) matched", "40830 ... checkpoints ... 40682
+(99.6%) matched" -- all identical, order-independent by construction
+(running sums, not affected by HashMap order).
+
+  ./target/difftest/cardblame /Users/pt/tta-ai/sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals
+    -> "# cardblame: 1011 games sampled, 690 completed, 663/690 exact"
+       (matches replaystats' own numbers exactly, as it always has.)
+
+TOOL OUTPUT
+-----------
+Full output of the (second, fixed) run is in `cbext_full_output.txt` in
+this same directory (1353 lines -- every card/happening cut, in full, not
+truncated, per the coordinator's own "group it, don't truncate it").
+
+COVERAGE SUMMARY (as printed by the tool itself)
+--------------------------------------------------
+  cards: 236 total. narrow set (cards_in_play): 85 observed at least
+  once, 77 cleared the 20-game cutoff. widened set (ever_cards_in_play):
+  226 observed at least once, 213 cleared the cutoff.
+  Move variants: 37 total. 35 observed at least once, 35 cleared the
+  cutoff.
+  ActionClass variants: 31 total. 27 observed at least once, 26 cleared
+  the cutoff.
+
+GENUINELY ZERO EXPOSURE (both card sets, after the wonder/government fix)
+-----------------------------------------------------------------------------
+10 cards never appear ANYWHERE in 1011 sampled games, in EITHER the narrow
+or widened set: Development of Agriculture, Development of Civil Life,
+Development of Crafts, Development of Markets, Development of Politics,
+Development of Religion, Development of Science, Development of
+Settlement, Development of Trade Routes, Development of Warfare -- all
+ten are the same family ("Development of X"), all `event` type. My
+reading, NOT verified against the engine source this pass (flagging for
+whoever picks this up): these read like a starting/setup-only event
+family (an Age-A "founding" event distinct from the ordinary future/
+current event decks), plausibly resolved during `new_game`'s own initial
+deal before the journal's first line and therefore structurally
+unreachable by a per-line replayer no matter how the attribution is
+widened -- consistent with the "not attributable" section's own first
+bullet (anything that happens before the point this tool can see is
+invisible by construction, just at the START of the game rather than
+after a stop). Could also mean this whole card family is simply unused/
+vestigial in the actual base-game 1011-game corpus by chance, or literally
+unimplemented in a way that never gets exercised. Worth 10 minutes with
+`grep -n "Development of" src/card_table.rs src/events.rs` for whoever
+wants to close this out -- I did not spend the budget on it this pass.
+
+READING OF THE RESULTS -- what's genuinely enriched once confounds are
+accounted for, and what is not
+--------------------------------------------------------------------------
+Per the task's own instruction, I am NOT concluding any card is buggy from
+a ranking alone -- these are CANDIDATES, ranked, with the confound columns
+printed so a reader can triage them; nothing here has a BGA-source diff or
+a control-group census run against it yet (that's the next pass's work,
+same as the original cardblame worker did for its own top candidates).
+
+1. THE SINGLE-SLOT ARTIFACT REPRODUCES EXACTLY AS BEFORE, extended to the
+   widened set's own government entry. Cut 1 [narrow]'s top 10 rows are
+   all leaders at 3.15x/100% failure (Robespierre, Shakespeare, Joan of
+   Arc, James Cook, Michelangelo, da Vinci, Genghis Khan, Napoleon,
+   Hammurabi, Newton) -- round_with 5-14 vs round_without ~17.4-17.7,
+   the same "an early leader is definitionally absent from a full-length
+   completed game" artifact the original cardblame worker already
+   identified and I am reproducing, not re-discovering. NEW this pass:
+   "Despotism" (the starting government, now visible ONLY because of the
+   wonder/government fix above) shows the SAME shape in cut 1w: 2.01x,
+   316 games, 202 failures, round_with 14.3 vs round_without 18.7 -- a
+   player still on the starting government at the stop/end point is, by
+   the same logic, one whose game stopped or ended before their first
+   revolution/redevelopment. Not a lead; a confirmation the confound
+   generalizes exactly the way the module doc predicted.
+
+2. THE WIDENED SET FLATTENS THE LEADER ARTIFACT, as designed. In cut 1w,
+   every one of those same 10 leaders drops to 1.0-1.24x (Julius Caesar
+   1.24x, Alexander the Great 1.15x, Joan of Arc 1.14x, ..., down to
+   ~1.0x) -- because the widened set counts a game as "had this leader"
+   for every game it was EVER elected in, not just the one surviving to
+   the snapshot. This is the tool doing exactly what it was built to do:
+   the narrow set's 3.15x was 100% a single-slot snapshot artifact, not a
+   leader-implementation signal, confirmed by it disappearing entirely
+   once the attribution window is widened.
+
+3. THE MOST INTERESTING CANDIDATE THIS PASS: PACTS, corroborated across
+   FOUR independent cuts with the round-length confound essentially FLAT
+   (not the mechanism behind findings #1/#2 above). In cut 2w (score-
+   mismatch, completed games only -- the cut LEAST subject to any round
+   confound by construction):
+     3.83x Open Borders Agreement    60 games,  9 mismatches (15.0%)
+     3.52x Peace Treaty              29 games,  4 mismatches (13.8%)
+     3.04x Trade Routes Agreement    42 games,  5 mismatches (11.9%)
+     2.92x Scientific Cooperation    35 games,  4 mismatches (11.4%)
+     1.85x International Trade Agreement 69 games, 5 mismatches (7.2%)
+   -- FIVE of the six base-game pact cards, ALL enriched, all with
+   round_with/round_without within ~0.2-0.4 rounds of each other (19.0-
+   19.6 both sides) -- i.e. this is NOT a round-length proxy the way
+   findings #1/#2 are. Corroborated independently three more ways:
+     - Cut 1w (completion-failure, ALL games): Trade Routes Agreement
+       1.59x/85 games, Open Borders Agreement 1.40x/108, Scientific
+       Cooperation 1.31x/60 -- same direction, smaller magnitude (as
+       expected: cut 1 pools in engine-stop failures too, a different,
+       noisier population).
+     - Cut 5 (Move-keyed happenings, score-mismatch): the GENERIC
+       `OfferPact` move itself is 2.04x/138 games/11 mismatches -- the
+       mechanism-level signal matches the card-level one.
+     - Cut 7 (ActionClass-keyed happenings, score-mismatch, a totally
+       independent classification built off BGO's own journal-line shape
+       rather than this replayer's own Move construction): "propose
+       pact" 2.04x/138, "accept pact" 2.08x/135 -- near-identical numbers
+       to cut 5's `OfferPact`, which is itself a useful cross-check that
+       the two independent enumerations (Move vs ActionClass) agree with
+       each other, not just noise in one.
+     - Also striking: `TradeResourceAsFood`/`TradeFoodAsResource` (the
+       specific once-per-turn conversion Trade Routes Agreement grants,
+       per that Move variant's own doc comment in moves.rs) are the
+       SINGLE highest-enrichment Move-keyed happenings in cut 5:
+       `TradeResourceAsFood` 4.09x/25 games/4 mismatches,
+       `TradeFoodAsResource` 3.52x/29 games/4 mismatches -- exactly
+       Trade Routes Agreement's own mechanic, ranking above every other
+       Move including the pact-proposal move itself.
+   CHEAP CHECK (not a fix, not conclusive): read `h_trade_food_as_resource`
+   /`h_trade_resource_as_food` in `apply.rs` (lines ~1560-1576) -- both are
+   three-line functions (decrement one resource, `economy::gain_*` the
+   other, bump a per-turn counter), nothing visibly wrong against the
+   card's own printed text. If this candidate is real, the bug is more
+   likely in how this REPLAYER reconstructs the pact's per-turn effect
+   from BGO's journal text (a parser/inference gap specific to pact
+   grammar, which this diagnostic-only pass cannot distinguish from a real
+   engine bug without tracing an actual disagreeing game by hand -- flagged
+   for whoever picks this up next, NOT concluded as a card bug here, per
+   the task's own explicit instruction not to convict off a ranking alone).
+
+4. WAR OVER TECHNOLOGY, a smaller but consistent signal alongside the
+   pacts: 1.92x/97 games in cut 1w, 2.69x/38 games in cut 2w, round_with/
+   round_without flat both times (16.5/17.4 and 19.6/19.2). Exposure is
+   thinner than the pacts (38-97 vs 60-108+), so weaker evidence, but the
+   SAME shape (score-mismatch cut, no round confound) -- worth grouping
+   with the pacts as "diplomatic/negotiated-outcome cards", possibly a
+   shared underlying mechanism (both pacts and War over Technology involve
+   a negotiated/contingent resolution the replayer has to infer rather
+   than read off a flat "X builds Y" line).
+
+5. WONDERS: Transcontinental Railroad and Eiffel Tower show 3.15x/100%
+   failure in cut 1w, but on only 29 and 25 games respectively, with
+   round_with (13.0/13.2) far below round_without (17.4 both) -- the
+   SAME shape as the leader single-slot artifact, but wonders are NOT
+   single-slot (a wonder, once chosen, isn't superseded). At this small a
+   sample I cannot tell apart "genuinely broken, only manifests once one
+   of these two specific Age IV wonders is in play" from "these two
+   wonders happen to have been common in a handful of games that stopped
+   early for an unrelated shared reason" -- flagging as a low-confidence
+   candidate, explicitly NOT concluding anything from n=25-29 at 100%.
+
+6. EVERYTHING ELSE clears the exposure cutoff at 0.9-1.2x across both
+   card sets and all four happenings cuts -- i.e. noise, exactly the
+   "clean negative" result the task explicitly said was an acceptable
+   outcome to publish. No card outside the single-slot artifact (findings
+   #1/#2, already explained, not a lead) and the pacts/War over Technology
+   cluster (findings #3/#4, real candidates, not yet confirmed) shows an
+   enrichment worth chasing this pass.
+
+NOT ATTRIBUTABLE BY THIS TOOL (as printed in the tool's own output)
+-----------------------------------------------------------------------
+  - Anything strictly AFTER a game's replay STOPS on a Mismatch: only
+    what the replayer actually reconstructed up to the stop point is
+    visible to any cut here. A card or happening that would only have
+    mattered LATER in that same game is invisible by construction, not
+    merely unsampled.
+  - Per-turn passive/continuous card effects with no Move or ActionClass
+    line of their own (e.g. a Special like CulturePerLabEqualToLevel,
+    folded silently into whichever Move triggers scoring, usually
+    EndTurn): the OWNING card still lands in cards_in_play/
+    ever_cards_in_play so it can still be blamed at the card level, but
+    there is no separate happenings row for the effect itself.
+  - Cut 3 (corruption vs. journal CORRUPTION! marker) is its OWN separate
+    checkpoint-level population, kept exactly as previously built -- not
+    re-run against the widened card set or the happenings cuts this pass.
+  - GameResult::final_event_cards/final_event_award_divergences (the
+    separate section 12.5.2 final-scoring oracle) are not folded into
+    any cut here.
+  - (Added by me, not printed by the tool, since it's about the corpus
+    rather than the tool's own design): the 10 "Development of X" event
+    cards above -- plausibly pre-journal setup events, see that section.
+
+Files in this directory from this pass:
+  cbext__CBEXT.txt        -- this file
+  cbext_full_output.txt   -- complete cardblame output, every cut, in full
+  cbext.patch             -- git diff b5b3d9a..HEAD (both commits) from
+                              /private/tmp/cbext, the actual deliverable

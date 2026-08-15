@@ -1,0 +1,224 @@
+ILLEGALMOVE: BUILD -- investigation notes, NO FIX LANDED
+Worker: buildbucket (clone /private/tmp/buildbucket, base commit f7f121f)
+Date: 2026-08-14
+
+OUTCOME
+-------
+(d) -- no change made at all. `git diff f7f121f HEAD` is EMPTY (all
+diagnostic instrumentation added during the session was reverted before
+finishing). Zero regressions, zero wins, because there is nothing to land.
+This is a deliberate "do not paper over a systemic gap with a narrow patch"
+call, not a stall -- see "why nothing landed" below. Both `comm` outputs
+(run for rigor even though the diff is empty) are pasted verbatim at the
+bottom.
+
+SCOPE
+-----
+Bucket "IllegalMove: Build" at f7f121f: 85 games
+(`REPLAY_DUMP_BUCKET='IllegalMove: Build'`). Baseline: 609/1011 complete
+(`/tmp/pa_ids.txt`, confirmed 609 lines).
+
+IMPORTANT: THIS BUCKET WAS ALREADY WORKED BY A PRIOR SESSION THIS SAME DAY
+---------------------------------------------------------------------------
+`analysis/worker_notes_2026-08-14/illegalbuild__ILLEGALBUILD.txt` (clone
+/private/tmp/illegalbuild, base commit 9f6104d -- an ANCESTOR of my f7f121f)
+worked this exact bucket (92 games at their base) and landed a real, tested
+fix: leader replacement mid-turn was clawing back CA/MA already spent from
+the OLD leader's flat bonus (Joan of Arc's +1 MA, etc.) instead of only the
+unclaimed remainder. Their commit message in their own clone was "Fix leader
+replacement to carry over already-spent action pool, not claw it back".
+
+I re-derived this independently before reading their notes (traced game
+7523818's Wave-of-Nationalism screen, found the `h_play_leader` shape looked
+suspicious) and went to apply their patch
+(`analysis/worker_notes_2026-08-14/illegalbuild.patch`) to my clone as a
+verification step. `git apply --check` FAILED -- not because of a conflict,
+but because the fix is ALREADY PRESENT in f7f121f, landed as commit 71e93f5
+"Replacing a leader mid-turn clawed back actions already spent (509 -> 553
+complete)", confirmed an ancestor of my HEAD via `git merge-base
+--is-ancestor 71e93f5 HEAD`. Diffed the live `h_play_leader` body against the
+patch by eye -- identical down to the comments. So: their "head start lead"
+(bucket now 85, was 92 at their base -- some of that shrinkage IS this same
+fix already merged upstream of both of us) is correctly flagged by their own
+notes as "confirmed a dead end for this session" and is a dead end for mine
+too, for the same reason, now doubly confirmed.
+
+TRIAGE (independent re-derivation, cross-validates their categorization)
+--------------------------------------------------------------------------
+For each of the 85 games, pulled the trailing `DEBUG try_apply fail:
+mv=Build{...}` + `DEBUG cost detail: build_cost_for(...)` pair
+(REPLAY_DEBUG=1 on `bin/replay` per-game) and classified against `legal.rs`'s
+own build-loop gates (`workers_free>0`, then unit-vs-non-unit
+`have_ma`/`have_ca`, then `resources (+ mil_discount, UNITS ONLY) >= net
+cost`):
+
+  RES   (resources short, mil_discount credited only for unit builds)   50
+  WF0   (workers_free == 0, blocks Build regardless of $/CA/MA)         30
+  URBAN_OR_OTHER (workers/actions/resources all look sufficient)         3
+  CA0_RES (both civil_actions==0 AND resources short)                    1  (7523818)
+  RES_WF0 (both resources short AND workers_free==0)                     1  (7522729)
+
+This lines up almost exactly with the prior session's post-their-fix
+categorization (workers_free==0: 31 vs my 30/31 combined; res_short: 48 vs
+my 50/51 combined; "3 unresolved" vs my 3 URBAN_OR_OTHER -- SAME THREE GAME
+IDS: 7521832, 7521971, 7523193). Two independent derivations agreeing this
+closely is strong evidence the categorization itself is solid; the
+UNDERLYING causes are what's still open.
+
+WHY NOTHING LANDED -- each cluster is a systemic, multi-turn drift, not a
+local legal.rs bug
+--------------------------------------------------------------------------
+
+1. WF0 cluster (30 games) -- `workers_free` undercounted by the time of the
+   failing Build, NOT a single missing rule.
+   Hand-traced game 7522242 (Purple builds Knights, line 277) end-to-end
+   with temporary unconditional `eprintln!` instrumentation on every
+   `workers_free` mutation site (`do_build`, `h_destroy`,
+   `economy::increase_population`; NOT committed, reverted after use).
+   Result: our own reconstruction's worker bookkeeping is INTERNALLY
+   CONSISTENT (every `+1`/`-1` traces to a real do_build/h_destroy/pop call
+   in the expected order) but disagrees with the human's legal move by
+   exactly 1 free worker. Cross-checked the full "Purple
+   destroys/disbands/builds" journal history for this game by hand (lines
+   23-277) against the traced sequence -- the SECOND "Purple destroys
+   Bronze" (journal line 237, round 16) never produces a matching
+   `h_destroy` call in the trace, while the FIRST one (line 201) and both
+   "Purple disbands Swordsmen" (lines 186, 200) do. That means either (a)
+   the replayer's dispatch silently drops SOME destroy/disband lines under
+   a condition not yet found, or (b) my line-by-line hand pairing is itself
+   wrong (the trace order didn't obviously line up 1:1 against raw journal
+   order on a first pass, possibly due to Bid/Auction resolution reordering
+   -- NOT fully resolved). Did not chase further given the sheer number of
+   turns/actions involved per game (this is turn 16 of 18, i.e. hundreds of
+   prior actions already applied correctly for both players).
+   START HERE if resuming: re-run with a line-number-tagged
+   version of the `do_build`/`h_destroy` instrumentation (thread the
+   current `Line::lineno` through, not just idx/card) on 7522242, and
+   diff mechanically against `grep -n "Purple destroys\|Purple disbands\|
+   Purple builds" journals/7522242.tsv` rather than by eye.
+
+2. RES cluster (50 games) -- resources short at the failing Build by a SMALL
+   amount (often exactly 1-2), usually with NO `"DEBUG end-turn resources
+   drift"` print at any PRIOR end-of-turn checkpoint in the same game (i.e.
+   our reconstructed resources exactly matched the journal's own "(now N)"
+   running total at every earlier checkpoint) -- so the miscount happens
+   WITHIN the single failing turn, between the last confirmed checkpoint and
+   the failing build.
+   Hand-traced game 7522648 (Purple builds Mechanized Agriculture a SECOND
+   time, line 388) with temporary resources-print instrumentation on
+   `do_build`/`do_upgrade`/`do_wonder_step` (not committed, reverted).
+   Confirmed: previous End Turn line explicitly reads "(now 34)"; our
+   reconstruction enters the SAME turn's first spend (a wonder stage) with
+   only 32 resources -- 2 short, with NOTHING in the journal between those
+   two points that should touch Purple's resources (the intervening lines
+   are entirely Orange's own turn, plus a culture-only "Impact of Industry"
+   scoring event and two science-only "discovers" lines for Purple). Did not
+   find where the 2 resources go missing. Candidate next step (matches the
+   prior session's own unresolved note #3): compare
+   `economy::corruption`/production math for one CORRUPTION-tagged turn
+   against a fully hand-reconstructed ledger, OR check whether some GLOBAL
+   event effect (e.g. an Age III "Impact of ..." scoring event, of which
+   there are 15, all `FinalScoring`-shaped per card_table.rs) has a
+   resources side-effect on a NON-acting player that isn't applied, since
+   the 2-resource gap opens during ORANGE's turn while it's PURPLE's
+   resources that come up short.
+
+3. URBAN_OR_OTHER cluster (3 games: 7521832 Organized Religion, 7521971
+   Scientific Method, 7523193 Theology) -- workers/CA-MA/resources all
+   sufficient; the actual gate must be `legal.rs`'s urban-building-limit
+   check (`kind.is_urban() && costs::urban_count(p, kind) >= s.urban_limit`,
+   §7.5). Confirmed for all three: the player already has EXACTLY
+   `s.urban_limit` workers on cards of that CardType (Temple or Lab) summed
+   ACROSS TIERS (e.g. 7521832: 1 worker on "Religion" + 1 on "Organized
+   Religion" = 2 Temple workers, Despotism's urban_limit is 2 per
+   RULES_SPEC item 7.5/8.1, and the failing move is a THIRD Temple).
+   RULES_SPEC #7.5 reads "government card's lower-right number = max
+   buildings of EACH urban type (e.g. Despotism 2, so max 2 labs AND 2
+   temples)" -- i.e. the cap is meant to be shared across every tier of a
+   building type, which is exactly what `costs::urban_count` implements.
+   BUT for 7523193 the player has THREE workers on "Theology" alone
+   (`Theologyx3` in the failure trace's own tableau dump) under Republic
+   (urban_limit 3 per card_table.rs) -- i.e. that player is ALREADY over a
+   strict same-tier reading in a way that only makes sense if BGO's own
+   client permits some builds beyond the type-wide cap under conditions
+   this session did not identify (a completed wonder, a leader, or
+   something else raising the effective cap that this session failed to
+   spot in the tableau dump). NOT investigated further -- do not touch the
+   urban_limit gate itself without first checking corpus-wide whether OTHER
+   completed games (the 609) also show players sitting at exactly
+   `s.urban_limit` workers on a type without exceeding it (if so, the gate
+   is right and these 3 games have a different, as-yet-unidentified
+   exemption in play; if the corpus shows plenty of players sailing past
+   the type-wide cap by building same-tier duplicates, the RULES_SPEC #7.5
+   reading itself may be wrong). §7.5 is NOT on the task's settled list
+   (§5.2, §5.7, §5.9, §8.2, §12.2, §12.2.4, §6.6, §6.7), so it is fair game
+   for a future worker, but needs the corpus-wide check first, not a
+   single-game guess.
+
+DEAD ENDS RULED OUT THIS SESSION
+---------------------------------
+- Wave of Nationalism / Military Build-Up's
+  `Special::ResourcesForMilitaryUnitsPerStrongerCivilization` "n=0 when it
+  should be positive" theory (my own first lead, chasing the task prompt's
+  own example game 7523818 "loses 7 military resource"): traced with
+  temporary instrumentation and found the computation IS firing correctly
+  in most cases (e.g. 7522242's Military Build-Up grant reaches
+  `mil_discount=5` exactly as the journal implies) -- the actual blocker in
+  those games turned out to be workers_free==0 (cluster 1 above), not a
+  broken discount. For 7523818 specifically, the computation legitimately
+  finds `mine == opponent.strength` (an exact tie, 16==16) at the moment
+  Orange plays both cards, so `n=0` (correct under a strict `>` reading of
+  "stronger than yours") -- yet the journal shows the discount granted
+  anyway. This IS possibly a real bug (our strength tracking for the
+  opponent may itself be wrong, i.e. Purple was actually stronger in the
+  real game and our reconstruction undercounts their army), but that traces
+  into the SAME class of "army/strength tracking drift across many turns"
+  as clusters 1/2 above, not a local fix. NOT pursued further. 7523818 is
+  now categorized CA0_RES in this session's triage (a DIFFERENT, LATER
+  failing line than the "loses 7 military resource" one the task prompt
+  quoted -- confirms the task prompt's own example has already moved
+  further since it was written, consistent with ongoing unrelated fixes
+  landing on this bucket).
+
+FULL TRIAGE TABLE (game IDs by cluster)
+------------------------------------------
+RES (50): 7522648, 7522635, 7523073, 7521377, 7521515, 7521850, 7521819,
+  7521791, 7522518, 7522520, 7522505, 7523608, 7520999, 7522845, 7522890,
+  7522946, 7522914, 7521738, 7521763, 7523373, 7523427, 7521912, 7521932,
+  7521213, 7523460, 7523438, 7523543, 7523510, 7523566, 7522315, 7522733,
+  7522673, 7522717, 7522962, 7522977, 7523176, 7523218, 7522024, 7523283,
+  7522347, 7522349, 7522348, 7522815, 7522773, 7522587, 7521657, 7523091,
+  7523132, 7523099, 7523124
+
+WF0 (30): 7523355, 7523338, 7520707, 7523082, 7523025, 7521378, 7521544,
+  7521833, 7521837, 7522513, 7522242, 7522113, 7521782, 7521739, 7521775,
+  7523383, 7523420, 7521917, 7521243, 7523456, 7523515, 7523568, 7523520,
+  7523198, 7523159, 7522074, 7522358, 7522818, 7521943, 7523127
+
+URBAN_OR_OTHER (3): 7521832, 7523193, 7521971
+
+CA0_RES (1): 7523818
+RES_WF0 (1): 7522729
+
+BEFORE/AFTER COMPLETED COUNTS
+--------------------------------
+Before: 609/1011 (`/tmp/pa_ids.txt`, confirmed 609 lines)
+After:  609/1011 (no change -- `git diff f7f121f HEAD` is empty)
+
+COMM OUTPUT (verbatim, both empty since nothing changed)
+-----------------------------------------------------------
+=== REGRESSIONS (must be EMPTY) ===
+(empty)
+=== WINS ===
+(empty)
+
+FILES
+-----
+Clone: /private/tmp/buildbucket -- LEFT IN PLACE (not deleted) even though
+       the patch is empty, per the task's "leave it and say so" instruction
+       -- there is nothing destructive about leaving a clean clone, and a
+       fresh worker resuming clusters 1/2/3 above may want the same base
+       already built (`cargo build --profile difftest --bin replaystats`
+       already run, ~9s full sweep confirmed working).
+Patch: analysis/worker_notes_2026-08-14/buildbucket.patch (EMPTY, 0 lines --
+       `git diff f7f121f HEAD` with no changes).

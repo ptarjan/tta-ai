@@ -266,7 +266,7 @@ const BID_SCALE: f64 = 30.0;
 
 /// Type one-hot + primary/secondary card identity + relative-target one-hot
 /// + pact-side one-hot + Churchill one-hot + row-slot one-hot + three raw
-/// scalars (`steps`, `bid`, `choose`, each normalised).
+///   scalars (`steps`, `bid`, `choose`, each normalised).
 pub const ACTION_DIM: usize =
     NUM_MOVE_KINDS + 2 * CARD_VEC_DIM + MAX_PLAYERS + 3 + 2 + ROW_SIZE + 3;
 

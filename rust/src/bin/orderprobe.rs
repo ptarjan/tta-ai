@@ -228,7 +228,7 @@ fn play_one(args: &Args, index: usize, policy_net: &Arc<ValueNet>) -> DecisionTa
             // Snapshot BEFORE the real, game-advancing call mutates them, so
             // the shadow "on" call below starts from the identical
             // conditions the "off" call saw.
-            let counters_snapshot = counters.clone();
+            let counters_snapshot = *counters;
             let rng_snapshot = rng.clone();
 
             let mut stats_off = plan::Stats::default();

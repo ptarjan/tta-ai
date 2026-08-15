@@ -111,7 +111,7 @@ fn rival_take_cost(name: CardId, i: usize, gate: &TakeGate) -> i32 {
     match name.kind() {
         CardType::Wonder => cost += gate.surcharge,
         CardType::Leader => cost -= gate.leader_discount,
-        _ => {}
+        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::Government | CardType::SpecialTech | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => {}
     }
     cost.max(0)
 }
@@ -153,13 +153,7 @@ pub fn rival_take_p(cost: i32, budget: i32, reach: f64, slack: i32, share: f64) 
         }
     };
     let p = takes / reach;
-    if p <= 0.0 {
-        0.0 // a clamped-negative `share`
-    } else if p > 1.0 {
-        1.0
-    } else {
-        p
-    }
+    p.clamp(0.0, 1.0) // a clamped-negative `share` at the low end
 }
 
 /// Row slots visible AT THE ROOT of this search, gated by `root_row` -- the
@@ -371,7 +365,7 @@ pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalC
                     let slot = match typ {
                         CardType::Leader => 0,
                         CardType::Government => 1,
-                        _ => unreachable!("swap_slot only ever returns a single-slot CardType"),
+                        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::SpecialTech | CardType::Wonder | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => unreachable!("swap_slot only ever returns a single-slot CardType"),
                     };
                     match &mut doomed_slots[slot] {
                         None => doomed_slots[slot] = Some((val, val)),
@@ -441,13 +435,34 @@ pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalC
 /// whether another copy is coming off the deck, so a last copy and a card
 /// with three more behind it price identically.
 ///
-/// Each takeable slot contributes `card_potential * P(no further copy)`, and
-/// that probability is `max(0, 1 - outlook)` where `outlook` is
-/// `counting::civil_outlook`'s expected number of further copies. The clip
-/// is the whole model and it has no fitted constant in it: at an outlook of
-/// 0 the deck provably holds no more (an age's deck is always dealt out in
-/// full), so the probability is exactly 1; at an outlook of 1 or more
-/// another copy is expected, so it is 0; in between it interpolates.
+/// Each takeable slot contributes `P(no further copy)`, and that probability
+/// is `max(0, 1 - outlook)` where `outlook` is `counting::civil_outlook`'s
+/// expected number of further copies. The clip is the whole model and it has
+/// no fitted constant in it: at an outlook of 0 the deck provably holds no
+/// more (an age's deck is always dealt out in full), so the probability is
+/// exactly 1; at an outlook of 1 or more another copy is expected, so it is
+/// 0; in between it interpolates.
+///
+/// UNITS FIX (was `card_potential * P(no further copy)`, summed, then that
+/// sum multiplied AGAIN by `WeightKey::RowLastCopy`'s own coefficient in
+/// `eval::evaluate`): `card_potential(..., w, ...)` is itself already a
+/// composite the LIVE weight vector `w` prices (`*BoardCredit`/
+/// `card_rate_credit`/every printed-yield key `sum_yields` dots against) --
+/// feeding that composite into a second, outer coefficient made the outer
+/// coefficient's fitted number mean something different every time ANY
+/// OTHER weight in `w` moved, even though `row_last_copy`'s own coefficient
+/// never did (`weights.rs`'s own `sign_intent` comment on this key: "its
+/// defect is units, not sign" -- widening the clamp or flipping the sign
+/// cannot fix a term that is not measuring a fixed quantity to begin with).
+/// `card_potential` is still called -- it is still the right question ("do I
+/// want this card at all?") -- but only as a `> 0.0` GATE, never as a
+/// magnitude: what is actually summed is `gone` itself, a deterministic,
+/// `w`-independent count of wanted slots about to vanish for good. That
+/// makes `eval::evaluate`'s own `rlc * row_last_copy(...)` the ONLY weight
+/// this reading depends on, so the same `rlc` means the same thing (price
+/// per about-to-vanish wanted card) at every position, not a price that
+/// rides whatever the board-credit weights happen to be this generation.
+/// Pinned by `row_last_copy_depends_on_no_weight_but_its_own` below.
 ///
 /// Deliberately NOT folded into `row_pressure`'s return -- see that
 /// function's own doc comment on why -- so the masking loop is duplicated
@@ -482,13 +497,18 @@ pub fn row_last_copy(state: &GameState, idx: u8, w: &Weights, ctx: Option<&Rival
         if !costs::can_take_gated(state, p, i as usize, &mine, Some(name)) {
             continue;
         }
+        // `card_potential` is a GATE here, not a magnitude -- see this
+        // function's own doc comment (UNITS FIX): summing its dollar value
+        // would feed a composite already priced by `w` into `rlc`'s own
+        // multiply below, a second weight on top of however many `w` already
+        // spent inside `card_potential`.
         let val = cards::card_potential(name, w, Some(&base), Some(late), &mut scratch);
         if val <= 0.0 {
             continue;
         }
         let gone = 1.0 - counting::lookup(outlook, name, 0.0);
         if gone > 0.0 {
-            total += val * gone;
+            total += gone;
         }
     }
     total
@@ -684,7 +704,7 @@ mod tests {
     /// doomed and one past it survives.
     ///
     /// Uses a Wonder ("Colossus") under `Weights::default()`: `card_board_credit`
-    /// and `card_board_wonder` both default to 0.0, so `cards::card_potential`
+    /// and `wonder_board_credit` both default to 0.0, so `cards::card_potential`
     /// takes the static-table early return for it regardless of board --
     /// deterministic and known-positive (pinned by `cards::tests::
     /// wonders_pay_a_stage_cost_and_grant_a_wonders_point`'s sibling
@@ -764,17 +784,18 @@ mod tests {
         assert_eq!(urgency, va.max(vb), "hand_swap_extra=0.0 must keep only the better doomed leader's value, not the sum of both");
     }
 
-    /// `row_last_copy` weights each takeable card by `max(0, 1 - outlook)`.
-    /// Rather than assume a fresh deal's real `civil_outlook` for "Colossus"
-    /// (a fitted/measured number, not a constant this test should hardcode),
+    /// `row_last_copy` weights each takeable card by `max(0, 1 - outlook)`
+    /// -- UNITS FIX: `card_potential` gates which cards count (must be
+    /// wanted, `> 0.0`) but no longer scales the sum, so the total is
+    /// exactly `gone` summed over wanted cards, not `val * gone`. Rather
+    /// than assume a fresh deal's real `civil_outlook` for "Colossus" (a
+    /// fitted/measured number, not a constant this test should hardcode),
     /// this computes that same outlook independently via
     /// `counting::civil_outlook` and checks `row_last_copy` against the
     /// formula directly -- correct whichever side of 1.0 the real outlook
-    /// happens to land on. Likewise `cards::card_potential` itself is called
-    /// once, directly, to get the exact value `row_last_copy` must scale --
-    /// its own arithmetic is `cards.rs`'s to pin, not this file's.
+    /// happens to land on.
     #[test]
-    fn row_last_copy_matches_the_one_minus_outlook_formula() {
+    fn row_last_copy_matches_the_gone_only_formula() {
         let mut state = G::new_game(2, 31);
         state.players[0].civil_actions = 6;
         state.card_row = [CardId::NONE; ROW_SIZE];
@@ -784,10 +805,67 @@ mod tests {
         let late = horizon::lateness(&state);
         let mut scratch = Vec::new();
         let val = cards::card_potential(name, &w, Some(&Baseline::at(&state, 0)), Some(late), &mut scratch);
-        assert!(val > 0.0, "val={val}");
+        assert!(val > 0.0, "val={val}, must be wanted for this test to exercise the gate");
         let outlook = counting::lookup(&counting::civil_outlook(&state, 0), name, 0.0);
         let gone = (1.0 - outlook).max(0.0);
         let total = row_last_copy(&state, 0, &w, None);
-        assert!((total - val * gone).abs() < 1e-9, "total={total} expected={}", val * gone);
+        assert!((total - gone).abs() < 1e-9, "total={total} expected={gone}");
+    }
+
+    /// THE UNITS BUG ITSELF, pinned directly: before this fix, `row_last_copy`
+    /// summed `card_potential(..., w, ...) * gone`, a composite the LIVE
+    /// weight vector already prices -- so moving ANY other weight (say
+    /// `card_rate_credit`, which scales every `Rate`-kind printed card
+    /// yield) moved this reading too, even though `row_last_copy`'s own
+    /// coefficient never did. `eval::evaluate` then multiplies this reading
+    /// by `RowLastCopy`'s own coefficient AGAIN, so that outer coefficient's
+    /// fitted number meant a different thing every time some unrelated
+    /// weight drifted -- "the coefficient has no consistent meaning" is
+    /// exactly this: not expressible as `price * f(state)` for any fixed
+    /// price. Confirmed RED by reverting the fix (`total += val * gone`
+    /// instead of `total += gone`): this loop found at least one weight
+    /// whose change moved `row_last_copy`'s reading (see this test's own
+    /// failure message for which one and by how much).
+    #[test]
+    fn row_last_copy_depends_on_no_weight_but_its_own() {
+        let mut state = G::new_game(2, 31);
+        state.players[0].civil_actions = 6;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        let name = card("Colossus");
+        state.card_row[0] = name;
+        let baseline = Weights::default();
+        let base_total = row_last_copy(&state, 0, &baseline, None);
+        assert!(base_total > 0.0, "must be pricing a wanted last copy to exercise anything, got {base_total}");
+
+        let late = horizon::lateness(&state);
+        let board = Baseline::at(&state, 0);
+        let mut scratch = Vec::new();
+        let mut checked = 0;
+        for &k in WeightKey::ALL {
+            if k == WeightKey::RowLastCopy {
+                continue; // its own coefficient is applied OUTSIDE this function, by `eval::evaluate`
+            }
+            let mut w = baseline;
+            w.set(k, w.get(k) + 7.0);
+            // Flipping whether the card is wanted at all is `card_potential`'s
+            // own legitimate `> 0.0` gate (every caller in this file relies on
+            // it) -- not the bug under test. The property this test pins is
+            // that, AS LONG AS the card stays wanted, the READING does not
+            // scale with `k`'s magnitude the way the old `val * gone` formula
+            // did; a gate flip is skipped, not asserted on.
+            if cards::card_potential(name, &w, Some(&board), Some(late), &mut scratch) <= 0.0 {
+                continue;
+            }
+            checked += 1;
+            let total = row_last_copy(&state, 0, &w, None);
+            assert_eq!(
+                total,
+                base_total,
+                "row_last_copy moved from {base_total} to {total} when only {} changed (card still \
+                 wanted under the new weight) -- it must depend on no weight but its own",
+                k.name()
+            );
+        }
+        assert!(checked > 0, "the sweep never left the card wanted after a perturbation, so it proved nothing");
     }
 }

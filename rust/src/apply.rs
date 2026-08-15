@@ -66,8 +66,10 @@
 //! ahead of `costs.rs` being updated to use them -- both are closed now:
 //! [`costs::wonder_stage_cost`] reads `Card::stages` (so [`do_wonder_step`]
 //! is fully ported; this module's own [`wonder_is_complete`] already read the
-//! field directly and was never a gap), and [`revolution_cost`] below reads
-//! `Card::revolution_cost` directly, so [`h_revolution`] is fully ported too.
+//! field directly and was never a gap), and [`costs::revolution_cost`] reads
+//! `Card::revolution_cost` (plus the same pact discount [`costs::tech_cost`]
+//! already applied to the peaceful path -- see that function's own doc), so
+//! [`h_revolution`] is fully ported too.
 //!
 //! - ~~**Per-player-count effect magnitudes.**~~ CLOSED 2026-08-05.
 //!   `Wave of Nationalism` / `Military Build-Up`
@@ -159,7 +161,7 @@ fn barbarossa_discounts(p: &PlayerState) -> (i32, i32) {
             match s {
                 Special::ComboFoodDiscount(v) => food = *v as i32,
                 Special::ComboResourceDiscount(v) => resources = *v as i32,
-                _ => {}
+                Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => {}
             }
         }
     }
@@ -279,7 +281,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::RemoveLeaderYellow => h_remove_leader_yellow(state, idx),
         Move::ColumbusColonize { card } => h_columbus_colonize(state, idx, card),
         Move::Barbarossa { card } => h_barbarossa(state, idx, card),
-        Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to),
+        Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to, 0, false),
         Move::TradeFoodAsResource => h_trade_food_as_resource(state, idx),
         Move::TradeResourceAsFood => h_trade_resource_as_food(state, idx),
 
@@ -377,16 +379,28 @@ fn on_enter_play(p: &mut PlayerState, id: CardId) {
     }
 }
 
-/// The leave-play twin of [`on_enter_play`]. `cultureOnLeaveEqualToLab
-/// ResourceProduction` (Bill Gates) is a genuine gap: it needs
-/// `_lab_level_workers` (sum of lab level * workers), which is
-/// self-contained and easy, but wiring it up needs `Special::
-/// CultureOnLeaveEqualToLabResourceProduction` to be checked here, and
-/// nothing in `p.effects` distinguishes "Bill Gates left play" from "a lab
-/// technology's own `on_enter_play`" without it. Left unported since Bill
-/// Gates is a rare leader swap and this module already has enough named
-/// gaps to track.
+/// The leave-play twin of [`on_enter_play`].
+///
+/// `CultureOnLeaveEqualToLabResourceProduction` (Bill Gates -- Code of Laws:
+/// "When Bill Gates leaves play, score culture equal to the amount of
+/// resources you produce from labs"): scores culture equal to
+/// `effects::lab_level_workers`, the SAME level*workers-summed-over-staffed-
+/// labs formula `ResourcesPerLabEqualToLevel` uses for his OTHER (in-play)
+/// ability -- both keys live on the one card (`card_table.rs`'s "Bill
+/// Gates"). Was a documented, unwired gap (this function's own prior doc
+/// comment named it "left unported"); traced live to game `7522665`'s own
+/// journal: Iconoclasm (line 332, round 18) discards Bill Gates for missing
+/// the current age, and the journal's own next `"End turn"` checkpoint (line
+/// 340, `"(now 81)"`) is short by exactly 9 without this -- the SAME 9 a
+/// staffed lab producing 9 resources/turn would owe, confirmed against
+/// Orange's own tableau at that point in a `REPLAY_DEBUG_ALL` trace.
+/// Computed BEFORE the token/civil-action bookkeeping below reads `id`'s
+/// OTHER effects, though order does not matter here (independent fields).
 pub(crate) fn on_leave_play(p: &mut PlayerState, id: CardId) {
+    if id.get().special.contains(&Special::CultureOnLeaveEqualToLabResourceProduction) {
+        let gained = effects::lab_level_workers(&p.techs);
+        p.culture = (p.culture as i32 + gained).max(0) as u16;
+    }
     let eff = &id.get().effects;
     let bt = eff.blue_tokens as i32;
     if bt != 0 {
@@ -568,6 +582,21 @@ fn h_take(state: &mut GameState, idx: u8, slot: u8) {
 /// Move row card `slot` into `idx`'s hand/play area (actions already paid).
 /// Mirrors `engine/actions.py::take_card`.
 pub(crate) fn take_card(state: &mut GameState, idx: u8, slot: usize) {
+    take_card_impl(state, idx, slot, true);
+}
+
+/// International Agreement's own `TakeRow` choice (CoL p.12, `docs/
+/// RULES_SPEC.md` line ~383, "RESOLVED"): "if the current player takes
+/// cards, action cards taken may be used the same turn" -- the ONE
+/// documented exception to the normal rule that an action card cannot be
+/// played "in the same Action Phase in which it was taken from the row"
+/// [RB p.14, CoL p.6]. Skips [`take_card`]'s `taken_this_turn` bookkeeping
+/// so `legal::action_moves`'s `held > taken` gate does not block it.
+pub(crate) fn take_card_from_international_agreement(state: &mut GameState, idx: u8, slot: usize) {
+    take_card_impl(state, idx, slot, false);
+}
+
+fn take_card_impl(state: &mut GameState, idx: u8, slot: usize, record_taken_this_turn: bool) {
     let id = state.card_row[slot];
     state.card_row[slot] = CardId::NONE;
     on_take_card(&mut state.players[idx as usize], id);
@@ -582,7 +611,7 @@ pub(crate) fn take_card(state: &mut GameState, idx: u8, slot: usize) {
             // § one leader per age (state.rs's doc comment on the field):
             // set once, never cleared, even once this leader is replaced.
             p.taken_leader_ages |= 1 << (card.age as u8);
-        } else if card.kind == CardType::Action {
+        } else if card.kind == CardType::Action && record_taken_this_turn {
             p.taken_this_turn.push(id);
         }
     }
@@ -670,9 +699,16 @@ fn h_barbarossa(state: &mut GameState, idx: u8, unit: CardId) {
 /// right thing for this cross-type move: the cost is the difference of the
 /// two build costs (floored at 0), the civil action is paid because a
 /// theater is not a unit, and the worker moves from one card to the other.
-fn h_bach_theater(state: &mut GameState, idx: u8, from: CardId, to: CardId) {
+///
+/// `discount`/`free` exist for [`apply_free_civil_move`]'s benefit (an
+/// action card's "using Efficient Upgrade"/"using Urban Growth" clause can
+/// fund this SAME cross-kind privilege at a discount and no CA -- see
+/// `legal::free_action_moves`'s urban-upgrade arm for the citation and the
+/// corroborating BGO games); the bare dispatch below still passes `(0,
+/// false)`, unchanged from before this was parameterized.
+fn h_bach_theater(state: &mut GameState, idx: u8, from: CardId, to: CardId, discount: i32, free: bool) {
     state.players[idx as usize].bach_upgrade_used = true;
-    do_upgrade(state, idx, from, to, 0, false);
+    do_upgrade(state, idx, from, to, discount, free);
 }
 
 /// Ports `engine/actions.py::do_build`. `discount`/`free` exist for
@@ -719,7 +755,7 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
     }
     {
         let p = &mut state.players[idx as usize];
-        p.resources = p.resources.saturating_sub(cost.max(0) as u16);
+        economy::pay_resources(p, cost.max(0) as u16);
         p.techs
             .get_mut(id)
             .expect("do_build: card must already be developed (in the tableau)")
@@ -753,7 +789,7 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
         }
     }
     let p = &mut state.players[idx as usize];
-    p.resources = p.resources.saturating_sub(cost.max(0) as u16);
+    economy::pay_resources(p, cost.max(0) as u16);
     p.techs.get_mut(lo).expect("do_upgrade: lo not in tableau").workers -= 1;
     p.techs.get_mut(hi).expect("do_upgrade: hi not in tableau").workers += 1;
 }
@@ -768,7 +804,7 @@ pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, discount: i32, free
     }
     let wonder = {
         let p = &mut state.players[idx as usize];
-        p.resources = p.resources.saturating_sub(cost.max(0) as u16);
+        economy::pay_resources(p, cost.max(0) as u16);
         p.wonder_steps += k;
         p.wonder
     };
@@ -813,6 +849,31 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
         // turn, taking this wonder costs you 2 civil actions less"), so it
         // gets its own, weaker flag rather than reusing Hammurabi's.
         state.players[idx as usize].replaced_leader_this_turn = true;
+        // Snapshot the CA/MA pool the SAME way `set_government` does
+        // (`old_total`/`spent`/`old_remaining`, fed to `carry_over_action_
+        // pool`) BEFORE `on_leave_play` strips the old leader's own flat
+        // `civil_actions`/`military_actions` bonus (if any) -- a leader
+        // carrying one (Joan of Arc: +1 MA; Julius Caesar/Napoleon, ...) who
+        // is replaced mid-turn must NOT retroactively lose actions already
+        // spent from that bonus, only the amount left unclaimed (RULES_SPEC
+        // §9.1 "Effects apply immediately" governs the NEW leader's bonus,
+        // not a clawback of the old one's already-banked turn -- the same
+        // shape as §8.4's revolution carry-over `set_government` already
+        // gets right). `on_leave_play`'s own plain decrement (clamped at 0,
+        // no memory of what was already spent) got this wrong: confirmed
+        // against game 7522520 round 11 -- Joan of Arc's +1 MA had already
+        // paid for a CopyTactic (2 MA) before Isaac Newton replaced her, so
+        // the swap must leave the remaining MA pool untouched, not subtract
+        // Joan's bonus a second time out of what was left. Overwritten below
+        // once the swap (and the new leader's own bonus) has fully applied,
+        // so `on_leave_play`/`on_enter_play`'s own CA/MA arithmetic in
+        // between is harmless dead work, not double-counted.
+        let old_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
+        let old_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
+        let spent_c = old_total_c - state.players[idx as usize].civil_actions as i32;
+        let spent_m = old_total_m - state.players[idx as usize].military_actions as i32;
+        let old_remaining_c = state.players[idx as usize].civil_actions as i32;
+        let old_remaining_m = state.players[idx as usize].military_actions as i32;
         on_leave_play(&mut state.players[idx as usize], old);
         let is_homer = old.get().name == "Homer";
         let has_completed = !state.players[idx as usize].completed_wonders.is_empty();
@@ -823,13 +884,41 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
         } else {
             economy::discard_civil(state, old);
         }
-        // Replacing a leader refunds one civil action (§9.1).
-        let total = costs::ca_total(state, &state.players[idx as usize]);
-        let p = &mut state.players[idx as usize];
-        p.civil_actions = total.min(p.civil_actions as i32 + 1) as i8;
+        state.players[idx as usize].leader = id;
+        on_enter_play(&mut state.players[idx as usize], id);
+        let new_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
+        let new_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
+        let carried_c = carry_over_action_pool(old_total_c, new_total_c, spent_c, old_remaining_c);
+        // Replacing a leader ALSO refunds one civil action on top of the
+        // carry-over (§9.1's own, separate clause) -- clamped to the new
+        // total, same as before this fix.
+        state.players[idx as usize].civil_actions = new_total_c.min(carried_c as i32 + 1) as i8;
+        state.players[idx as usize].military_actions = carry_over_action_pool(old_total_m, new_total_m, spent_m, old_remaining_m);
+        return;
     }
     state.players[idx as usize].leader = id;
     on_enter_play(&mut state.players[idx as usize], id);
+}
+
+/// Scientific Cooperation's own charge to the OTHER civilization (BGA's
+/// card text: "...the other civilization pays 1 science... If the other
+/// cannot pay 1 science, then the technology cannot be developed."): the
+/// legality half of that sentence is `effects::science_pact_partners_can_pay`,
+/// already checked by every caller of `h_develop`/`h_revolution` before
+/// either got this far (`legal.rs`'s `DevelopTechnology`/`Government`/
+/// `can_revolt` sites); this is just the charge itself, applied AFTER `p`'s
+/// own (already pact-discounted) payment. `p`'s pact-derived `Stats::
+/// science_partners` bitmask depends only on which pacts `p` holds, never on
+/// any player's science total, so reading it after `p`'s own charge already
+/// landed cannot change which partners owe.
+fn charge_science_pact_partners(state: &mut GameState, idx: u8) {
+    let mask = effects::state_stats(state, &state.players[idx as usize]).science_partners;
+    for i in 0..state.num_players {
+        if mask & (1 << i) != 0 {
+            let partner = &mut state.players[i as usize];
+            partner.science = partner.science.saturating_sub(1);
+        }
+    }
 }
 
 fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
@@ -870,6 +959,7 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
         p.science = p.science.saturating_sub(cost.max(0) as u16);
         p.hand_civil.remove_first(id);
     }
+    charge_science_pact_partners(state, idx);
     if card.kind == CardType::Government {
         set_government(state, idx, id);
     } else if card.kind == CardType::SpecialTech {
@@ -891,7 +981,16 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
 /// shrink. §8.3.4 explicitly reuses this same rule for a revolution's
 /// unaffected pool ("behaves exactly as in a peaceful change"), so both
 /// callers below share this helper -- keep them that way.
-fn carry_over_action_pool(old_total: i32, new_total: i32, spent: i32, old_remaining: i32) -> i8 {
+///
+/// `pub(crate)`: `game.rs::antiquate` is a THIRD caller (a leader aging out
+/// mid-round is a total DECREASE exactly like a leader replacement with a
+/// weaker one, so it owes the same "already-spent is forgiven first" rule --
+/// a flat, unconditional subtract clawed back actions the player had
+/// already spent from OTHER sources this turn whenever the antiquating
+/// leader's own bonus was less than what was left of it, the identical
+/// failure mode `h_play_leader`'s own doc comment already traces for
+/// leader replacement, game `7522520`).
+pub(crate) fn carry_over_action_pool(old_total: i32, new_total: i32, spent: i32, old_remaining: i32) -> i8 {
     if new_total >= old_total {
         (new_total - spent).max(0) as i8
     } else {
@@ -976,12 +1075,27 @@ pub fn put_special_in_play(state: &mut GameState, idx: u8, id: CardId) {
 /// PRE-Breakthrough pool. For a bare revolution `via_ordered_action` is
 /// always `false` and this changes nothing (see below).
 fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: bool) {
-    let cost = revolution_cost(id);
+    // `costs::revolution_cost` folds in the standing pact discount (`Stats::
+    // tech_discount`) that a bare `Card::revolution_cost` read misses -- see
+    // that function's own doc for the confirmed 2-science overcharge this
+    // closes. `unwrap_or(0)`: every caller of `h_revolution` has already
+    // gone through a `can_revolt`/`revolt_ok`-gated legality check, which
+    // itself now reads the same discounted cost, so a `None` here (no
+    // printed revolution cost at all) cannot actually happen -- the
+    // fallback only avoids a spurious panic if that invariant is ever
+    // violated.
+    let cost = costs::revolution_cost(state, &state.players[idx as usize], id).unwrap_or(0);
     {
         let p = &mut state.players[idx as usize];
         p.science = p.science.saturating_sub(cost.max(0) as u16);
         p.hand_civil.remove_first(id);
     }
+    // A violent revolution changes government via the SAME "develops a
+    // technology" trigger Scientific Cooperation's own text names -- BGO's
+    // own journal confirms it (game `7523162` line 292: Grey revolutions,
+    // "Orange loses 1 science" logged in the SAME line as Grey's own
+    // discounted charge).
+    charge_science_pact_partners(state, idx);
     let robespierre = leader_is(&state.players[idx as usize], "Maximilien Robespierre");
     // §8.3.4 (RB p.13): only the pool that PAYS for the revolution is
     // emptied; the other behaves exactly as in a peaceful change -- i.e. its
@@ -1009,7 +1123,17 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: 
     // zeroed there regardless of how the revolution was funded (RB p.13's
     // base "you end with 0 available CAs this turn" already covers a
     // Breakthrough-funded base revolution with no separate accounting).
-    if via_ordered_action && robespierre {
+    // `breakthrough_ma_funded` (set by `h_play_action`, `legal::
+    // breakthrough_robespierre_ma_fundable`'s own doc comment has the
+    // citation): when Breakthrough's own 1-CA play cost was paid with a
+    // military action instead (civil already exhausted), civil was never
+    // touched by playing it at all, so the `-1` correction below would
+    // wrongly credit a civil action that was never spent -- skip it, and
+    // consume the flag so a LATER, unrelated revolution this same turn
+    // cannot accidentally inherit it.
+    let breakthrough_civil_spent = via_ordered_action && !state.players[idx as usize].breakthrough_ma_funded;
+    state.players[idx as usize].breakthrough_ma_funded = false;
+    if breakthrough_civil_spent && robespierre {
         spent -= 1;
     }
     state.players[idx as usize].government = id;
@@ -1024,15 +1148,35 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: 
         p.civil_actions = 0;
         p.military_actions = carry_over_action_pool(old.military_actions, s.military_actions, spent, old_remaining_m);
     }
-    if leader_is(&state.players[idx as usize], "Isaac Newton") {
-        let p = &mut state.players[idx as usize];
-        p.civil_actions = s.civil_actions.min(p.civil_actions as i32 + 1) as i8;
-    }
-}
-
-/// §8.3.4: science cost to seize a government by violent revolution.
-fn revolution_cost(id: CardId) -> i32 {
-    id.get().revolution_cost as i32
+    // §8.3.4 / `docs/RULES_SPEC.md` line 232: "revolution counts as
+    // developing a technology" (that line's own text is about Newton, but
+    // the citation is general -- a revolution IS a `DevelopTechnology`, see
+    // this file's own doc comment on `Move::Develop`/`Move::Revolution`
+    // just above `h_develop`'s definition). `h_develop`'s peaceful path
+    // already reaches every develop-triggered leader ability uniformly via
+    // `on_develop` (Leonardo da Vinci's +1 resource, Albert Einstein's +3
+    // culture, Isaac Newton's +1 CA) -- this branch used to hand-roll ONLY
+    // Newton's arm inline, so a Leonardo da Vinci or Albert Einstein player
+    // who seized their government by violent revolution never got their
+    // trigger at all. REPLAYER-BUG-CONFIRMED-ENGINE-BUG (`IllegalMove:
+    // Upgrade` bucket, game `7522665` round 11): the journal's own
+    // resolution line names the leader explicitly --
+    // "Orange revolutions Change government to Constitutional Monarchy; 6
+    // science points spent; Orange loses 6 science; Leonardo Da Vinci gives
+    // 1 resource" -- and the missing +1 resource is a permanent, uncorrected
+    // 1-resource deficit for the rest of the game (confirmed against every
+    // later `"(now N)"` resource total in that journal, off by exactly -1
+    // from this round onward) until it starves an `Upgrade` 7 rounds later.
+    // `on_develop` recomputes its own `effects::state_stats` fresh, but that
+    // is provably identical to the `s` already in scope here: nothing this
+    // function touches between computing `s` (just above) and this call
+    // changes any input `state_stats` reads (`p.techs`/`p.government`/
+    // leader/production), so re-deriving it is not a race, just a second
+    // read of the same answer -- and calling the ONE shared helper instead
+    // of hand-rolling Newton's own arithmetic a second time here is exactly
+    // the "single source of truth" reasoning `costs::build_cost_net`'s own
+    // doc comment already established for this file.
+    on_develop(state, idx);
 }
 
 fn h_churchill(state: &mut GameState, idx: u8, choice: ChurchillChoice) {
@@ -1162,7 +1306,23 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     // later inside the queue item's own resolution (which would otherwise
     // always see the CA this card itself just cost).
     let revolt_ok = legal::revolt_pool_ok(state, &state.players[idx as usize]);
-    costs::pay_ca(&mut state.players[idx as usize], 1);
+    // RB p.15's "1 CA" for Breakthrough is explicitly the cost of FUNDING
+    // THE REVOLUTION, not an order-independent §3.11 fee -- so Maximilien
+    // Robespierre's own exception (CoL p.12: "pay with all military actions
+    // instead of civil") reaches it too, exactly like it already reaches the
+    // revolution's own science cost (this file's `h_revolution` `via_
+    // ordered_action && robespierre` branch). `legal::
+    // breakthrough_robespierre_ma_fundable`'s own doc comment has the 5
+    // corroborating BGO games (civil hits 0 taking + electing Robespierre,
+    // same turn, before the revolution line) and the full citation; gated
+    // there on a revolution actually being live so this never substitutes a
+    // military action for an ordinary Breakthrough-funded Develop.
+    if costs::spare_ca(&state.players[idx as usize]) < 1 && legal::breakthrough_robespierre_ma_fundable(state, &state.players[idx as usize], id) {
+        state.players[idx as usize].military_actions -= 1;
+        state.players[idx as usize].breakthrough_ma_funded = true;
+    } else {
+        costs::pay_ca(&mut state.players[idx as usize], 1);
+    }
     state.players[idx as usize].hand_civil.remove_first(id);
     economy::discard_civil(state, id); // one-shot: played face up, spent
 
@@ -1200,7 +1360,7 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     let count_idx = events::live_count_idx(state);
     if let Some(t) = card.special.iter().find_map(|&s| match s {
         Special::CulturePerCivilizationWithMoreCulture(t) => Some(t),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     }) {
         let per = t[count_idx] as i32;
         let mine = state.players[idx as usize].culture as i32;
@@ -1216,7 +1376,7 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     }
     if let Some(t) = card.special.iter().find_map(|&s| match s {
         Special::ResourcesForMilitaryUnitsPerStrongerCivilization(t) => Some(t),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     }) {
         let per = t[count_idx] as i32;
         let mine = effects::state_stats(state, &state.players[idx as usize]).strength;
@@ -1246,7 +1406,7 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     let gains = card_gains_of(card);
     if let Some(value) = card.special.iter().find_map(|s| match s {
         Special::FreeCivilAction(v) => Some(*v),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     }) {
         // FIFO, and the order is the rule (§3.11): the ordered action
         // resolves, and only THEN the card's own gains -- Breakthrough's
@@ -1292,7 +1452,7 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
             .iter()
             .find_map(|s| match s {
                 Special::GainFoodOrResources(n) => Some(*n),
-                _ => None,
+                Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
             })
             .unwrap_or(0),
     }
@@ -1301,10 +1461,12 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
 /// Apply the one move an ordered free civil action resolved to, at no action
 /// cost and `discount` off its resource cost (mirrors `engine/actions.py::
 /// apply_free_action`'s dispatch over its own `kind` tuples). `Move::Pop` /
-/// `Move::Build` / `Move::Upgrade` / `Move::WonderStep` are the only shapes
-/// `free_action_moves`'s build/upgrade/pop/wonder-step arms ever produce;
-/// `Move::Develop` / `Move::Revolution` are the two `DevelopTechnology` can
-/// produce. No other `Move` variant is reachable from there.
+/// `Move::Build` / `Move::Upgrade` / `Move::WonderStep` / `Move::BachTheater`
+/// are the shapes `free_action_moves`'s build/upgrade/pop/wonder-step arms
+/// ever produce (`BachTheater` only when the actor is J. S. Bach, mid-turn,
+/// same arm); `Move::Develop` / `Move::Revolution` are the two
+/// `DevelopTechnology` can produce. No other `Move` variant is reachable
+/// from there.
 ///
 /// `pub`, not `pub(crate)`, since 2026-08: `replay.rs` (`docs/REPLAY.md`
 /// Finding 2) also calls this directly, for a DIFFERENT free-civil source
@@ -1339,7 +1501,13 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
         // ran -- see `h_revolution`'s own doc comment for why that matters
         // for Robespierre.
         Move::Revolution { card } => h_revolution(state, idx, card, true),
-        other => unreachable!(
+        // J. S. Bach's cross-kind theater upgrade, funded by the action
+        // card's discount instead of his own bare 1 CA -- `legal::
+        // free_action_moves`'s urban-upgrade arm is the only place this
+        // shape can come from now; see its own doc comment for the
+        // citation.
+        Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to, discount, true),
+        other @ Move::Take { .. } | other @ Move::PopFree | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => unreachable!(
             "free_action_moves produced a move apply_free_civil_move does not \
              expect: {other:?}"
         ),
@@ -1426,7 +1594,7 @@ fn h_remove_leader_yellow(state: &mut GameState, idx: u8) {
 fn h_trade_food_as_resource(state: &mut GameState, idx: u8) {
     let p = &mut state.players[idx as usize];
     debug_assert!(p.food >= 1, "h_trade_food_as_resource: caller must ensure 1 food (legality check)");
-    p.food -= 1;
+    economy::pay_food(p, 1);
     economy::gain_resources(p, 1);
     p.trade_food_as_resource_used_this_turn += 1;
 }
@@ -1436,7 +1604,7 @@ fn h_trade_food_as_resource(state: &mut GameState, idx: u8) {
 fn h_trade_resource_as_food(state: &mut GameState, idx: u8) {
     let p = &mut state.players[idx as usize];
     debug_assert!(p.resources >= 1, "h_trade_resource_as_food: caller must ensure 1 resource (legality check)");
-    p.resources -= 1;
+    economy::pay_resources(p, 1);
     economy::gain_food(p, 1);
     p.trade_resource_as_food_used_this_turn += 1;
 }
@@ -1568,6 +1736,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -1585,6 +1754,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            breakthrough_ma_funded: false,
             replaced_leader_this_turn: false,
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
@@ -1601,6 +1771,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
             taken_leader_ages: 0,
             war_declared_by_me: CardId::NONE,
             war_target: 0,
@@ -1645,6 +1817,8 @@ mod tests {
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+            last_end_of_turn_science: [None; MAX_PLAYERS],
+            last_end_of_turn_resources: [None; MAX_PLAYERS],
         }
     }
 
@@ -1662,6 +1836,54 @@ mod tests {
         ];
         players[0] = p;
         blank_state(4, players)
+    }
+
+    // -------------------------------------------------------------- leave play
+
+    /// Regression for the `7522665` culture-checkpoint gap (`docs/REPLAY.md`'s
+    /// culture-oracle `BuildWonderStage`-bucket trace): Bill Gates leaving
+    /// play (there, via Iconoclasm discarding him for being off-age) must
+    /// score culture equal to `effects::lab_level_workers`, mirroring his
+    /// OTHER, already-wired ability (`ResourcesPerLabEqualToLevel`) which
+    /// uses the identical formula while he is still in play. Revert the
+    /// `CultureOnLeaveEqualToLabResourceProduction` branch in `on_leave_play`
+    /// to see this go RED: culture stays 0 instead of 9.
+    #[test]
+    fn on_leave_play_scores_culture_equal_to_lab_level_workers_when_bill_gates_leaves() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Bill Gates");
+        // A level-III lab staffed by 3 workers: lab_level_workers = 3*3 = 9,
+        // matching the 9-culture gap traced in game 7522665 line 340.
+        p.techs.insert(card("Computers"), TechSlot { workers: 3, stored: 0 });
+        on_leave_play(&mut p, card("Bill Gates"));
+        assert_eq!(p.culture, 9);
+    }
+
+    /// An UNSTAFFED lab contributes nothing (`lab_level_workers` sums
+    /// `level * workers`, and `workers == 0` zeroes that lab's own term) --
+    /// distinguishes "the formula is wired at all" from "the formula reads
+    /// the tableau correctly" rather than the first test alone, which could
+    /// pass by accident if `on_leave_play` granted a flat bonus instead.
+    #[test]
+    fn on_leave_play_grants_no_culture_from_bill_gates_for_an_unstaffed_lab() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Bill Gates");
+        p.techs.insert(card("Computers"), TechSlot { workers: 0, stored: 0 });
+        on_leave_play(&mut p, card("Bill Gates"));
+        assert_eq!(p.culture, 0);
+    }
+
+    /// A leader with no `CultureOnLeaveEqualToLabResourceProduction` special
+    /// (e.g. Napoleon) must not touch culture at all when leaving play, even
+    /// with a staffed lab present -- the branch is gated on THIS specific
+    /// leader's own special, not "any leader leaving play with a lab up".
+    #[test]
+    fn on_leave_play_does_not_score_culture_for_a_leader_without_the_bill_gates_special() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Napoleon Bonaparte");
+        p.techs.insert(card("Computers"), TechSlot { workers: 3, stored: 0 });
+        on_leave_play(&mut p, card("Napoleon Bonaparte"));
+        assert_eq!(p.culture, 0);
     }
 
     // -------------------------------------------------------------- take
@@ -1700,6 +1922,39 @@ mod tests {
         state.card_row[0] = card("Bronze"); // a technology (mine)
         h_take(&mut state, 0, 0);
         assert_eq!(state.players[0].science, 1);
+    }
+
+    /// CoL p.12 / `docs/RULES_SPEC.md` line ~383 (RESOLVED): "if the current
+    /// player takes cards [via International Agreement], action cards taken
+    /// may be used the same turn" -- the one documented exception to the
+    /// normal rule that a card cannot be played in the same Action Phase it
+    /// was taken in [RB p.14, CoL p.6]. Before this fix, `take_card`
+    /// unconditionally recorded every taken Action card into
+    /// `taken_this_turn`, so `legal::action_moves`'s `held > taken` gate
+    /// blocked it even when it was taken via International Agreement's
+    /// `TakeRow` choice -- found replaying real BGO games (`IllegalMove:
+    /// PlayAction` bucket, e.g. games 7522274, 7523579, 7522824). Uses
+    /// "Cultural Heritage" (an immediate-gain-only Action card, no ordered
+    /// action) so `legal::action_card_playable` reads true unconditionally
+    /// and the test isolates the `taken_this_turn` bookkeeping specifically.
+    #[test]
+    fn a_card_taken_via_international_agreement_can_still_be_played_the_same_turn() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        let mut state = one_player_state(p);
+        let heritage = card("Cultural Heritage (A)");
+        state.card_row[6] = heritage;
+
+        take_card_from_international_agreement(&mut state, 0, 6);
+
+        assert!(state.players[0].hand_civil.contains(heritage));
+        let legal = legal::legal_moves(&state);
+        assert!(
+            legal.as_slice().contains(&Move::PlayAction { card: heritage }),
+            "an action card taken via International Agreement must be immediately \
+             playable the same turn, not blocked as if it were an ordinary Take: {:?}",
+            legal.as_slice()
+        );
     }
 
     // --------------------------------------------------------------- pop
@@ -2063,7 +2318,7 @@ mod tests {
         p.techs.insert(card("Theology"), TechSlot { workers: 1, stored: 0 });
         p.techs.insert(card("Drama"), TechSlot { workers: 0, stored: 0 });
         let mut state = one_player_state(p);
-        h_bach_theater(&mut state, 0, card("Theology"), card("Drama"));
+        h_bach_theater(&mut state, 0, card("Theology"), card("Drama"), 0, false);
         let p = &state.players[0];
         assert!(p.bach_upgrade_used, "at most once per turn");
         assert_eq!(p.civil_actions, 3);
@@ -2089,6 +2344,32 @@ mod tests {
         assert!(state.players[0].techs.has(card("Irrigation")));
         assert_eq!(state.players[0].techs.workers(card("Irrigation")), 0);
         assert!(!state.players[0].hand_civil.contains(card("Irrigation")));
+    }
+
+    /// ENGINE GAP closed: Scientific Cooperation's own card text ("...the
+    /// other civilization pays 1 science...") had NO consumer anywhere in
+    /// the crate before this pass -- `effects::Stats::science_partners` was
+    /// computed but only ever read by its own unit tests. `h_develop` must
+    /// charge the partner too, not just discount the developer.
+    #[test]
+    fn h_develop_charges_the_pact_partner_1_science() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.science = 10;
+        p.hand_civil.push(card("Irrigation"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 5;
+        h_develop(&mut state, 0, card("Irrigation"), false);
+        // Irrigation's printed techCost 3, minus the pact's 2 = 1.
+        assert_eq!(state.players[0].science, 10 - 1, "the developer pays the discounted cost");
+        assert_eq!(state.players[1].science, 5 - 1, "the partner pays its own 1 science");
     }
 
     /// THE REGRESSION, fixed 2026-08-05: same bug as `h_pop`'s and
@@ -2305,6 +2586,36 @@ mod tests {
             !state.players[0].replaced_leader_this_turn,
             "the discount is scoped to the turn of the replacement, not the rest of the game"
         );
+    }
+
+    /// A leader carrying a flat `military_actions` bonus (Joan of Arc: +1
+    /// MA) who is replaced MID-TURN, after some of that bonus was already
+    /// spent, must not have the already-spent portion clawed back out of
+    /// the remaining pool -- RULES_SPEC #7's "Effects apply immediately"
+    /// governs the NEW leader's own bonus, not a retroactive subtraction of
+    /// the old one's. Found chasing the `IllegalMove: Build` bucket: BGO
+    /// human game 7522520 round 11 (Theocracy, 3 printed MA) has Joan of
+    /// Arc's +1 MA (4 total) pay for a 2-MA `CopyTactic`, THEN Isaac Newton
+    /// replaces her (no MA bonus of his own, new total back to 3) mid-turn,
+    /// and the human still builds two more military units (1 MA each) --
+    /// only possible if the 2 MA remaining after `CopyTactic` survives the
+    /// swap untouched. Before this fix `on_leave_play`'s plain decrement
+    /// (clamped at 0, no memory of what was already spent) dropped the
+    /// remaining pool from 2 to 1, one short of the second unit build.
+    #[test]
+    fn replacing_a_leader_with_a_flat_military_action_bonus_mid_turn_does_not_claw_back_actions_already_spent_from_it(
+    ) {
+        let mut p = blank_player(0, card("Theocracy")); // 4 CA / 3 MA printed
+        p.leader = card("Joan of Arc"); // +1 MA -> 4 MA total this turn
+        p.civil_actions = 3;
+        p.military_actions = 2; // 4 total minus 2 already spent on CopyTactic
+        p.hand_civil.push(card("Isaac Newton"));
+        let mut state = one_player_state(p);
+        h_play_leader(&mut state, 0, card("Isaac Newton"));
+        // Newton grants no flat MA, so the total drops back to 3 -- but the
+        // 2 already spent (from Joan's now-departed bonus) must not be
+        // spent again: what's left stays 2, not 1.
+        assert_eq!(state.players[0].military_actions, 2);
     }
 
     // -------------------------------------------------------------- churchill
@@ -2702,7 +3013,7 @@ mod tests {
         apply(&mut state, Move::Choose { n: 1 });
         let n = match card("Reserves (I)").get().special.iter().find_map(|s| match s {
             Special::GainFoodOrResources(n) => Some(*n),
-            _ => None,
+            Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
         }) {
             Some(n) => n as u16,
             None => panic!("Reserves prints gainFoodOrResources"),
@@ -2802,6 +3113,62 @@ mod tests {
         assert_eq!(state.players[0].military_actions, 3); // Monarchy MA total, none spent yet
     }
 
+    /// ENGINE BUG regression: `h_revolution` used to read `Card::
+    /// revolution_cost` completely undiscounted, ignoring a standing pact's
+    /// science discount (`Stats::tech_discount`) that `h_develop`'s own
+    /// `costs::tech_cost` already applied to the peaceful path. Confirmed
+    /// against BGO journal `7523162` (Grey revolutions to Constitutional
+    /// Monarchy at journal line 292 while Scientific Cooperation's pact is
+    /// active: printed `revolutionCost` 6, journal's own "4 science points
+    /// spent" -- a real, silent 2-science overcharge with no matching
+    /// journal event, exactly the phantom drop this fix closes).
+    #[test]
+    fn h_revolution_applies_a_standing_pact_science_discount_to_its_own_cost() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.science = 10;
+        p.civil_actions = 4;
+        p.military_actions = 2;
+        p.hand_civil.push(card("Constitutional Monarchy"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Constitutional Monarchy"), false);
+        // Constitutional Monarchy's printed revolutionCost is 6, minus the
+        // pact's 2 -- 4, matching the journal exactly.
+        assert_eq!(state.players[0].science, 10 - 4);
+    }
+
+    /// A violent revolution is the same "develops a technology" trigger the
+    /// pact's own text names -- confirmed against BGO journal `7523162`
+    /// line 292 ("Orange loses 1 science" logged in the SAME line as Grey's
+    /// own revolution). `h_revolution` must charge the partner too, exactly
+    /// like `h_develop` does.
+    #[test]
+    fn h_revolution_charges_the_pact_partner_1_science() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.science = 10;
+        p.civil_actions = 4;
+        p.military_actions = 2;
+        p.hand_civil.push(card("Constitutional Monarchy"));
+        p.pacts.push(crate::state::Pact {
+            card: card("Scientific Cooperation"),
+            owner: 0,
+            partner: 1,
+            a: 0,
+            b: 1,
+        });
+        let mut state = one_player_state(p);
+        state.players[1].science = 5;
+        h_revolution(&mut state, 0, card("Constitutional Monarchy"), false);
+        assert_eq!(state.players[0].science, 10 - 4, "the revolutioner pays the discounted cost");
+        assert_eq!(state.players[1].science, 5 - 1, "the partner pays its own 1 science");
+    }
+
     /// ENGINE BUG regression (docs/REPLAY.md, this pass): a Robespierre
     /// player revolting via Breakthrough must NOT be short-changed 1 civil
     /// action for the rest of the turn. Breakthrough's own `Move::PlayAction`
@@ -2835,6 +3202,37 @@ mod tests {
         assert_eq!(state.players[0].civil_actions, 7);
     }
 
+    /// This pass's fix 3 (`legal::breakthrough_robespierre_ma_fundable`'s own
+    /// doc comment has the full citation): when civil was already exhausted,
+    /// `h_play_action` lets Robespierre fund Breakthrough's own RB p.15 "1
+    /// CA" with a MILITARY action instead, and sets `p.breakthrough_ma_funded`.
+    /// The sibling test just above (`h_revolution_via_breakthrough_does_not_
+    /// charge_robespierres_civil_pool_for_breakthroughs_own_ca`) proves the
+    /// PRE-EXISTING `via_ordered_action && robespierre` correction is right
+    /// when Breakthrough's 1 CA DID come out of civil -- but here it never
+    /// did, so that correction must be SKIPPED here, or it wrongly credits a
+    /// civil action the player never spent, one-upping the new government's
+    /// real total (7, not 8).
+    #[test]
+    fn h_revolution_does_not_double_credit_a_civil_action_when_breakthrough_paid_its_own_cost_with_a_military_action() {
+        let mut p = blank_player(0, card("Constitutional Monarchy")); // civil_actions 6, military_actions 4
+        p.leader = card("Maximilien Robespierre");
+        p.science = 20;
+        p.civil_actions = 6; // untouched -- Breakthrough's own play cost came out of MILITARY this time
+        p.military_actions = 4 - 1; // the 1 MA h_play_action spent funding Breakthrough
+        p.breakthrough_ma_funded = true; // set by h_play_action's new branch
+        p.hand_civil.push(card("Democracy")); // civilActions 7
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Democracy"), true);
+        assert_eq!(state.players[0].government, card("Democracy"));
+        assert_eq!(state.players[0].military_actions, 0, "Robespierre: military pays for/empties on a revolution");
+        assert_eq!(
+            state.players[0].civil_actions, 7,
+            "nothing was ever spent from civil this turn -- the new government's full total (7), \
+             not 8 (which would mean crediting back a civil action that was never taken)"
+        );
+    }
+
     /// Same scenario, but the revolution is declared BARE (not via
     /// Breakthrough): `via_ordered_action=false` must leave `spent` alone --
     /// this is the precondition-enforced case (RB p.15: a bare revolution
@@ -2853,6 +3251,32 @@ mod tests {
         h_revolution(&mut state, 0, card("Democracy"), false);
         assert_eq!(state.players[0].military_actions, 0);
         assert_eq!(state.players[0].civil_actions, 7);
+    }
+
+    /// ENGINE BUG FIX (`IllegalMove: Upgrade` bucket, game `7522665` round
+    /// 11): `docs/RULES_SPEC.md` line 232 says a revolution "counts as
+    /// developing a technology" (that line is citing Newton's own trigger,
+    /// but the citation covers every develop-triggered leader ability the
+    /// same way `h_develop`'s peaceful path already does via `on_develop`).
+    /// `h_revolution` used to hand-roll ONLY Newton's arm inline, so a
+    /// Leonardo da Vinci player seizing their government by violent
+    /// revolution never got the leader's "every time you develop a
+    /// technology, gain 1 resource" trigger. The real game's own journal
+    /// names the leader explicitly on this exact move: "Orange revolutions
+    /// Change government to Constitutional Monarchy; 6 science points
+    /// spent; Orange loses 6 science; Leonardo Da Vinci gives 1 resource".
+    #[test]
+    fn h_revolution_triggers_leonardo_da_vincis_develop_bonus() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Leonardo da Vinci");
+        p.science = 10;
+        p.civil_actions = 4; // == ca_total(Despotism): every CA still unspent
+        p.military_actions = 2; // == Despotism's full MA pool: none spent yet
+        p.blue_total = 20; // bank room for gain_resources to actually pay out
+        p.hand_civil.push(card("Monarchy"));
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Monarchy"), false);
+        assert_eq!(state.players[0].resources, 1, "Leonardo da Vinci's +1 resource must fire on a revolution, not just a peaceful develop");
     }
 
     #[test]

@@ -82,7 +82,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use tta::arena::{loader_for, Match, Summary};
-use tta::bots::greedy::{BotKind, Seat};
+use tta::bots::greedy::{BotKind, Search as SeatSearch, Seat};
 use tta::bots::weighted::eval::{dominance_repair, load_weights, save_weights};
 use tta::bots::weighted::weights::{WeightGroup, WeightKey, Weights};
 use tta::rng::PyRandom;
@@ -387,8 +387,8 @@ fn challenge(mutant: &Weights, cfg: &Config, seed: u64) -> Challenge {
     while shares.len() < cfg.max_games {
         let want = batch.min(cfg.max_games - shares.len());
         let mut duel = Match {
-            a: Seat { kind: cfg.kind, weights: *mutant },
-            b: Seat { kind: cfg.kind, weights: cfg.champion },
+            a: Seat { kind: cfg.kind, weights: *mutant, search: SeatSearch::None },
+            b: Seat { kind: cfg.kind, weights: cfg.champion, search: SeatSearch::None },
             games: want,
             players: cfg.players,
             // Every batch must be a FRESH deal range: reusing the seed would
@@ -444,7 +444,7 @@ fn measure_against(a: Seat, b: Seat, cfg: &Config, games: usize, seed: u64) -> A
 /// the champion (and every mutant challenging it) is always seated as that
 /// one kind -- only the gauntlet's OPPONENTS may carry a different kind.
 fn champion_seat(w: &Weights, cfg: &Config) -> Seat {
-    Seat { kind: cfg.kind, weights: *w }
+    Seat { kind: cfg.kind, weights: *w, search: SeatSearch::None }
 }
 
 fn measure_anchor(w: &Weights, cfg: &Config, seed: u64) -> Anchor {
@@ -491,7 +491,7 @@ fn measure_gauntlet(w: &Weights, cfg: &Config, seed_base: u64) -> Vec<(String, A
 /// `every == 0` disables the gauntlet entirely (also true if `--gauntlet`
 /// was never passed, since `measure_gauntlet` returns nothing to log then).
 fn gauntlet_due(gen: u64, every: usize) -> bool {
-    every > 0 && gen % every as u64 == 0
+    every > 0 && gen.is_multiple_of(every as u64)
 }
 
 // ========================================================================= pool
@@ -784,6 +784,12 @@ usage: climb --out PATH [options]
   --gauntlet-kind KIND  kind of the NEXT --gauntlet member (default: --kind,
                      i.e. same kind as the champion -- set this first when a
                      member is a different kind, e.g. --gauntlet-kind human)
+  --gauntlet-search PATH  give the NEXT --gauntlet member real lookahead: a
+                     human-plausible root shortlist (its own --gauntlet file)
+                     narrows the legal moves, then plan::pick's beam --
+                     scored by THIS file's gameplay-evaluator vector -- picks
+                     among them (only legal when that member's kind is human,
+                     set via --gauntlet-kind human first)
   --gauntlet-games N games per gauntlet member each time it runs (default 60)
   --gauntlet-every N generations between gauntlet measurements; 0 disables
                      (default 50)
@@ -815,9 +821,12 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     // Raw `--gauntlet` entries, resolved into `a.cfg.gauntlet` only AFTER
     // the whole command line is parsed -- resolving a member's kind (and so
     // which loader reads its file) needs `a.cfg.kind`'s FINAL value, which
-    // may be typed after the `--gauntlet` flags that need it.
-    let mut gauntlet_raw: Vec<(Option<BotKind>, PathBuf)> = Vec::new();
+    // may be typed after the `--gauntlet` flags that need it. The third slot
+    // is `--gauntlet-search`'s pending eval-weights path, same "applies to
+    // the NEXT `--gauntlet` only" semantics as `pending_gauntlet_kind`.
+    let mut gauntlet_raw: Vec<(Option<BotKind>, Option<PathBuf>, PathBuf)> = Vec::new();
     let mut pending_gauntlet_kind: Option<BotKind> = None;
+    let mut pending_gauntlet_search: Option<PathBuf> = None;
     let mut it = argv.iter();
     while let Some(flag) = it.next() {
         let mut value = |flag: &str| -> Result<String, String> {
@@ -837,9 +846,16 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--max-games" => a.cfg.max_games = parse_num(&value(flag)?, flag)?,
             "--anchor-games" => a.cfg.anchor_games = parse_num(&value(flag)?, flag)?,
             "--gauntlet" => {
-                gauntlet_raw.push((pending_gauntlet_kind.take(), PathBuf::from(value(flag)?)));
+                gauntlet_raw.push((
+                    pending_gauntlet_kind.take(),
+                    pending_gauntlet_search.take(),
+                    PathBuf::from(value(flag)?),
+                ));
             }
             "--gauntlet-kind" => pending_gauntlet_kind = Some(value(flag)?.parse::<BotKind>()?),
+            "--gauntlet-search" => {
+                pending_gauntlet_search = Some(PathBuf::from(value(flag)?));
+            }
             "--gauntlet-games" => a.cfg.gauntlet_games = parse_num(&value(flag)?, flag)?,
             "--gauntlet-every" => a.gauntlet_every = parse_num(&value(flag)?, flag)?,
             "--pool-k" => a.cfg.pool_k = parse_num(&value(flag)?, flag)?,
@@ -868,7 +884,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     // (exactly the old, single-kind behaviour), and either way the file is
     // read with THAT kind's own loader (see `loader_for`) -- never blindly
     // with the champion loader the way this used to work unconditionally.
-    for (kind_override, p) in gauntlet_raw {
+    for (kind_override, search_path, p) in gauntlet_raw {
         let kind = kind_override.unwrap_or(a.cfg.kind);
         let weights = loader_for(kind)(&p)?;
         // The filename stem carries the provenance (generation, key count,
@@ -877,7 +893,29 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
         // rather than inventing a new label.
         let label =
             p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string());
-        a.cfg.gauntlet.push((label, Seat { kind, weights }));
+        // `--gauntlet-search`: the root-shortlist+beam hybrid
+        // (`bots::greedy::Search::HumanShortlistBeam`) instead of this
+        // member's plain, searchless `HumanBot` -- only legal when the
+        // member's resolved kind is `human` (same rule `bin/kindmatch.rs`'s
+        // `--a-search`/`--b-search` enforce at their own parse time, see
+        // that file's module doc comment). `eval_weights` is loaded with the
+        // CHAMPION loader (`dominance_repair` included): it is a real
+        // gameplay evaluator for `plan::pick`'s beam, not a human-imitation
+        // ranking vector, so it belongs to the same vocabulary `cfg.champion`/
+        // `cfg.anchor` already load with.
+        let search = match search_path {
+            None => SeatSearch::None,
+            Some(sp) => {
+                if kind != BotKind::Human {
+                    return Err(format!(
+                        "--gauntlet-search is only legal when the gauntlet member's kind is human, got {:?} for {p:?}",
+                        kind
+                    ));
+                }
+                SeatSearch::HumanShortlistBeam { eval_weights: load_weights(&sp)? }
+            }
+        };
+        a.cfg.gauntlet.push((label, Seat { kind, weights, search }));
     }
     if a.lambda == 0 {
         return Err("--lambda must be at least 1".to_string());
@@ -1020,7 +1058,7 @@ fn main() -> ExitCode {
         let mut forced = None;
         if args.stall_kick > 0
             && progress.since_accept > 0
-            && progress.since_accept % args.stall_kick == 0
+            && progress.since_accept.is_multiple_of(args.stall_kick)
         {
             forced = Some(Op::Kick);
             progress.sigma = (progress.sigma.max(0.25) * 2.0).min(0.8);
@@ -1308,8 +1346,8 @@ fn append(path: &Path, line: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Only the sign-gate test needs the module itself (`eval::LOSS_GATES`);
-    // importing it at file scope would warn as unused in a normal build.
+    // Only the sign-gate tests need this -- importing it at file scope
+    // would warn as unused in a normal build.
     use tta::bots::weighted::eval;
 
     fn cfg() -> Config {
@@ -1376,63 +1414,60 @@ mod tests {
     /// The climb may not walk a penalty weight positive. `dominance_repair`
     /// used to run only in `load_weights`, so a champion was legal at startup
     /// and unconstrained forever after -- and the live arms duly pushed all
-    /// five `LOSS_GATES` keys positive. Drive the mutator hard from a
+    /// five former `LOSS_GATES` keys positive. Drive the mutator hard from a
     /// deliberately illegal start and assert every mutant comes back legal.
+    /// Sourced from [`eval::non_positive_gates`] (derived from
+    /// [`WeightKey::sign_intent`], `weights.rs`), not a hand-copied list, so
+    /// a key reclassified `NonPositive` there arms this coverage
+    /// automatically with no edit needed here.
     #[test]
     fn no_mutant_ever_prices_a_rulebook_penalty_as_a_benefit() {
         let mut w = Weights::defaults();
-        for &(keys, _) in eval::NON_POSITIVE_GATES {
-            for &k in keys {
-                w.set(k, 9.0);
-            }
+        for (k, _) in eval::non_positive_gates() {
+            w.set(k, 9.0);
         }
         let mut s = Search::new(2027);
         for gen in 0..300 {
             w = mutate(&w, &mut s, 0.8, None).weights;
-            for &(keys, why) in eval::NON_POSITIVE_GATES {
-                for &k in keys {
-                    assert!(
-                        w.get(k) <= 1e-12,
-                        "generation {gen}: {} walked to {}, which {why}",
-                        k.name(),
-                        w.get(k)
-                    );
-                }
+            for (k, why) in eval::non_positive_gates() {
+                assert!(
+                    w.get(k) <= 1e-12,
+                    "generation {gen}: {} walked to {}, which {why}",
+                    k.name(),
+                    w.get(k)
+                );
             }
         }
     }
 
     /// Mirror image of the test above, in the other direction: the climb may
-    /// not walk a benefit-shaped weight ([`eval::NON_NEGATIVE_GATES`])
+    /// not walk a benefit-shaped weight ([`eval::non_negative_gates`])
     /// negative either. Same past bug, same fix -- `dominance_repair` running
     /// only in `load_weights` made a champion legal at startup and
     /// unconstrained forever after, and this is what let the live 2p
     /// champion price `wonder_potential` at -0.7206 despite its authored
     /// default being 0.0. Drive the mutator hard from a deliberately illegal
     /// start (every gated key pinned at -9.0, the mirror of the +9.0 start
-    /// above) and assert every mutant comes back legal, table-driven so a
-    /// future non-negative gate arms this coverage the moment it is added to
-    /// [`eval::NON_NEGATIVE_GATES`], with no separate test to remember.
+    /// above) and assert every mutant comes back legal, sourced from
+    /// [`eval::non_negative_gates`] so a future `NonNegative` classification
+    /// in [`WeightKey::sign_intent`] arms this coverage the moment it lands,
+    /// with no separate test to remember.
     #[test]
     fn no_mutant_ever_prices_a_benefit_shaped_weight_as_a_downside() {
         let mut w = Weights::defaults();
-        for &(keys, _) in eval::NON_NEGATIVE_GATES {
-            for &k in keys {
-                w.set(k, -9.0);
-            }
+        for (k, _) in eval::non_negative_gates() {
+            w.set(k, -9.0);
         }
         let mut s = Search::new(2028);
         for gen in 0..300 {
             w = mutate(&w, &mut s, 0.8, None).weights;
-            for &(keys, why) in eval::NON_NEGATIVE_GATES {
-                for &k in keys {
-                    assert!(
-                        w.get(k) >= -1e-12,
-                        "generation {gen}: {} walked to {}, which {why}",
-                        k.name(),
-                        w.get(k)
-                    );
-                }
+            for (k, why) in eval::non_negative_gates() {
+                assert!(
+                    w.get(k) >= -1e-12,
+                    "generation {gen}: {} walked to {}, which {why}",
+                    k.name(),
+                    w.get(k)
+                );
             }
         }
     }
@@ -1466,6 +1501,76 @@ mod tests {
                     lo.name(),
                     w.get(lo)
                 );
+            }
+        }
+    }
+
+    /// LEADERSIGN: the board-credit rule (`eval::dominance_repair`'s
+    /// `card_board_base + card_board_credit_keys() >= 0` loop) has to
+    /// survive mutation too, exactly like the three directions above it --
+    /// this is what actually proves "adding the rule inside
+    /// `dominance_repair` arms both load-time and mutation-time repair at
+    /// once" rather than merely asserting it by reading `mutate`'s source.
+    /// Driven from the live 2p champion's own illegal shape (`card_board_
+    /// credit` legal at `0.0`, every per-type key pinned deeply negative)
+    /// and table-driven over [`eval::card_board_credit_keys`], so a future
+    /// card type this function starts covering arms this coverage with no
+    /// new test, matching every other guard test in this file.
+    #[test]
+    fn no_mutant_ever_leaves_a_board_credit_pair_net_negative() {
+        let mut w = Weights::defaults();
+        w.set(WeightKey::CardBoardCredit, 0.0);
+        for &k in eval::card_board_credit_keys() {
+            w.set(k, -9.0);
+        }
+        let mut s = Search::new(2030);
+        for gen in 0..300 {
+            w = mutate(&w, &mut s, 0.8, None).weights;
+            let base = w.get(WeightKey::CardBoardCredit);
+            for &k in eval::card_board_credit_keys() {
+                assert!(
+                    base + w.get(k) >= -1e-12,
+                    "generation {gen}: card_board_credit ({base}) + {} ({}) went negative",
+                    k.name(),
+                    w.get(k)
+                );
+            }
+        }
+    }
+
+    /// SIGNAUDIT instance 3 (`hand_value_early`/`hand_value_late`): the
+    /// `NET_NONNEG_PHASE` rule (`eval::dominance_repair`'s `base + k.early()
+    /// >= 0` / `base + k.late() >= 0` loop) was EMPTY until this audit added
+    /// `WeightKey::HandValue` to it, so nothing ever proved that rule is
+    /// actually armed at mutation time rather than only at load -- this is
+    /// that proof, the same shape as `no_mutant_ever_leaves_a_board_credit_
+    /// > pair_net_negative` one test up. Driven from a shape close to the
+    /// live corpus (`hand_value` legal near its authored default,
+    /// `hand_value_early`/`hand_value_late` both pinned deeply negative) and
+    /// table-driven over `eval::NET_NONNEG_PHASE`, so the next key added to
+    /// > that list arms this coverage with no new test.
+    #[test]
+    fn no_mutant_ever_leaves_a_net_nonneg_phase_pair_net_negative() {
+        let mut w = Weights::defaults();
+        for &k in eval::NET_NONNEG_PHASE {
+            w.set(k, 0.2);
+            w.set(k.early(), -9.0);
+            w.set(k.late(), -9.0);
+        }
+        let mut s = Search::new(2031);
+        for gen in 0..300 {
+            w = mutate(&w, &mut s, 0.8, None).weights;
+            for &k in eval::NET_NONNEG_PHASE {
+                let base = w.get(k);
+                for mk in [k.early(), k.late()] {
+                    assert!(
+                        base + w.get(mk) >= -1e-12,
+                        "generation {gen}: {} ({base}) + {} ({}) went negative",
+                        k.name(),
+                        mk.name(),
+                        w.get(mk)
+                    );
+                }
             }
         }
     }
@@ -1618,7 +1723,7 @@ mod tests {
         let mut c = cfg();
         c.players = 2;
         c.gauntlet_games = 4; // cheap: this only checks shape, not the number
-        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        let seat = Seat { kind: c.kind, weights: Weights::defaults(), search: SeatSearch::None };
         c.gauntlet = vec![("frozen_a".to_string(), seat), ("frozen_b".to_string(), seat)];
         let got = measure_gauntlet(&c.champion, &c, 42);
         assert_eq!(got.len(), 2);
@@ -1641,7 +1746,7 @@ mod tests {
         let mut c = cfg();
         c.players = 2;
         c.gauntlet_games = 4;
-        c.gauntlet = vec![("frozen".to_string(), Seat { kind: c.kind, weights: Weights::defaults() })];
+        c.gauntlet = vec![("frozen".to_string(), Seat { kind: c.kind, weights: Weights::defaults(), search: SeatSearch::None })];
         // Run it twice, once with the gauntlet populated and once without --
         // the mutant accept decision (`challenge`) must be identical either
         // way, since it never consults `c.gauntlet`.
@@ -1749,6 +1854,120 @@ mod tests {
         assert_eq!(args.cfg.gauntlet[1].1.kind, args.cfg.kind, "override leaked onto the second member");
         std::fs::remove_file(&human_path).ok();
         std::fs::remove_file(&champ_path).ok();
+    }
+
+    // ------------------------------------------------------- --gauntlet-search
+
+    /// `--gauntlet-search` gives the NEXT `--gauntlet` member
+    /// `Search::HumanShortlistBeam` instead of the plain `Search::None` --
+    /// the root-shortlist+beam hybrid (`bots::greedy::Search`'s own doc
+    /// comment) instead of that member's searchless `HumanBot`, with
+    /// `eval_weights` read from the `--gauntlet-search` file through the
+    /// CHAMPION loader (`dominance_repair` included -- it is a gameplay
+    /// evaluator, not a human-imitation fit).
+    #[test]
+    fn a_gauntlet_search_flag_gives_that_member_the_shortlist_beam_hybrid() {
+        let dir = std::env::temp_dir().join("tta_climb_gauntlet_search_flag");
+        std::fs::create_dir_all(&dir).unwrap();
+        let human_path = dir.join("human_member.json");
+        let eval_path = dir.join("eval_vector.json");
+        tta::human_policy::save_weights(&human_path, &Weights::defaults()).unwrap();
+        save_weights(&eval_path, &Weights::defaults(), &[]).unwrap();
+
+        let args = parse_args(&[
+            "--gauntlet-kind".into(),
+            "human".into(),
+            "--gauntlet-search".into(),
+            eval_path.to_string_lossy().into_owned(),
+            "--gauntlet".into(),
+            human_path.to_string_lossy().into_owned(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(args.cfg.gauntlet.len(), 1);
+        assert_eq!(args.cfg.gauntlet[0].1.kind, BotKind::Human);
+        match args.cfg.gauntlet[0].1.search {
+            SeatSearch::HumanShortlistBeam { eval_weights } => {
+                assert_eq!(eval_weights, load_weights(&eval_path).unwrap());
+            }
+            SeatSearch::None => panic!("--gauntlet-search must not leave the member at Search::None"),
+        }
+        std::fs::remove_file(&human_path).ok();
+        std::fs::remove_file(&eval_path).ok();
+    }
+
+    /// `--gauntlet-search` on a member that is NOT human-kind is a command
+    /// line error, not a silently ignored flag -- mirrors
+    /// `bin/kindmatch.rs`'s identical `--a-search`/`--b-search` rule (only
+    /// legal when the matching side is `human`), and is exactly the
+    /// precondition `bots::greedy::build_bots` trusts the caller already
+    /// checked (see that function's own doc comment).
+    #[test]
+    fn a_gauntlet_search_flag_is_rejected_when_the_member_is_not_human_kind() {
+        let dir = std::env::temp_dir().join("tta_climb_gauntlet_search_non_human");
+        std::fs::create_dir_all(&dir).unwrap();
+        let champ_path = dir.join("champ_member.json");
+        let eval_path = dir.join("eval_vector.json");
+        save_weights(&champ_path, &Weights::defaults(), &[]).unwrap();
+        save_weights(&eval_path, &Weights::defaults(), &[]).unwrap();
+
+        // No `--gauntlet-kind`, so this member resolves to `cfg.kind`
+        // (`weighted` by default) -- `--gauntlet-search` must reject it.
+        let e = parse_args(&[
+            "--gauntlet-search".into(),
+            eval_path.to_string_lossy().into_owned(),
+            "--gauntlet".into(),
+            champ_path.to_string_lossy().into_owned(),
+        ]);
+        assert!(e.is_err(), "{e:?}");
+        std::fs::remove_file(&champ_path).ok();
+        std::fs::remove_file(&eval_path).ok();
+    }
+
+    /// The same "applies to only the NEXT member" semantics
+    /// `a_gauntlet_kind_override_applies_to_only_the_next_gauntlet_member`
+    /// pins for `--gauntlet-kind`, for `--gauntlet-search`: two consecutive
+    /// human-kind `--gauntlet` members with only the FIRST preceded by
+    /// `--gauntlet-search` must leave the second at `Search::None`, not
+    /// carrying the first member's eval vector forward.
+    #[test]
+    fn a_gauntlet_search_override_applies_to_only_the_next_gauntlet_member() {
+        let dir = std::env::temp_dir().join("tta_climb_gauntlet_search_leak");
+        std::fs::create_dir_all(&dir).unwrap();
+        let human_path_a = dir.join("human_member_a.json");
+        let human_path_b = dir.join("human_member_b.json");
+        let eval_path = dir.join("eval_vector.json");
+        tta::human_policy::save_weights(&human_path_a, &Weights::defaults()).unwrap();
+        tta::human_policy::save_weights(&human_path_b, &Weights::defaults()).unwrap();
+        save_weights(&eval_path, &Weights::defaults(), &[]).unwrap();
+
+        let args = parse_args(&[
+            "--gauntlet-kind".into(),
+            "human".into(),
+            "--gauntlet-search".into(),
+            eval_path.to_string_lossy().into_owned(),
+            "--gauntlet".into(),
+            human_path_a.to_string_lossy().into_owned(),
+            "--gauntlet-kind".into(),
+            "human".into(),
+            "--gauntlet".into(),
+            human_path_b.to_string_lossy().into_owned(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(args.cfg.gauntlet.len(), 2);
+        assert!(
+            matches!(args.cfg.gauntlet[0].1.search, SeatSearch::HumanShortlistBeam { .. }),
+            "the first member must have the hybrid search"
+        );
+        assert_eq!(
+            args.cfg.gauntlet[1].1.search,
+            SeatSearch::None,
+            "--gauntlet-search must not leak onto the second member"
+        );
+        std::fs::remove_file(&human_path_a).ok();
+        std::fs::remove_file(&human_path_b).ok();
+        std::fs::remove_file(&eval_path).ok();
     }
 
     #[test]
@@ -1861,7 +2080,7 @@ mod tests {
         c.players = 2;
         c.threads = 2;
         c.pool_confirm_games = 4; // cheap: this checks shape, not the number
-        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        let seat = Seat { kind: c.kind, weights: Weights::defaults(), search: SeatSearch::None };
         let pool = vec![("suspect".to_string(), seat), ("fine".to_string(), seat)];
         let stage1 = vec![
             result("suspect", anchor(0.30, 0.10), anchor(0.50, 0.10)), // -0.20: flagged
@@ -1882,7 +2101,7 @@ mod tests {
     fn confirm_suspects_is_empty_when_nothing_was_flagged() {
         let mut c = cfg();
         c.players = 2;
-        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        let seat = Seat { kind: c.kind, weights: Weights::defaults(), search: SeatSearch::None };
         let pool = vec![("fine".to_string(), seat)];
         let stage1 = vec![result("fine", anchor(0.52, 0.10), anchor(0.50, 0.10))];
         let confirmed = confirm_suspects(&c.champion, &c, &pool, &stage1, 1);
@@ -1892,7 +2111,7 @@ mod tests {
     #[test]
     fn pool_members_includes_the_anchor_gauntlet_league_and_incumbent_in_order() {
         let mut c = cfg();
-        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        let seat = Seat { kind: c.kind, weights: Weights::defaults(), search: SeatSearch::None };
         c.gauntlet = vec![("frozen_a".to_string(), seat)];
         let league = vec![("gen10".to_string(), Weights::defaults())];
         let pool = pool_members(&c, &league);
@@ -1971,7 +2190,7 @@ mod tests {
         let mut c = cfg();
         c.players = 2;
         c.threads = 2;
-        let seat = Seat { kind: c.kind, weights: Weights::defaults() };
+        let seat = Seat { kind: c.kind, weights: Weights::defaults(), search: SeatSearch::None };
         c.gauntlet = vec![("frozen_a".to_string(), seat), ("frozen_b".to_string(), seat)];
         let pool = pool_members(&c, &[]); // anchor, frozen_a, frozen_b, incumbent = 4 members
         let results = play_pool(&c.champion, &c, &pool, 2, 4, 555);
@@ -1994,4 +2213,5 @@ mod tests {
         let results = play_pool(&c.champion, &c, &pool, 10, 4, 1);
         assert_eq!(results.len(), 2);
     }
+
 }

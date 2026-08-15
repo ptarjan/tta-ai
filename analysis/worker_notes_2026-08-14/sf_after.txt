@@ -1,0 +1,1437 @@
+SCOREDIV_COMPLETED_ID 7523791
+SCOREDIV_COMPLETED_ID 7523357
+SCOREDIV_COMPLETED_ID 7523353
+SCOREDIV_COMPLETED_ID 7523350
+SCOREDIV_COMPLETED_ID 7523341
+SCOREDIV_COMPLETED_ID 7523338
+SCOREDIV_COMPLETED_ID 7523335
+SCOREDIV_COMPLETED_ID 7522612
+SCOREDIV_COMPLETED_ID 7522668
+SCOREDIV_COMPLETED_ID 7522625
+SCOREDIV_COMPLETED_ID 7522665
+SCOREDIV_COMPLETED_ID 7522650
+SCOREDIV_COMPLETED_ID 7522663
+SCOREDIV_COMPLETED_ID 7522654
+SCOREDIV_COMPLETED_ID 7522639
+SCOREDIV_COMPLETED_ID 7522618
+SCOREDIV_COMPLETED_ID 7522640
+SCOREDIV_COMPLETED_ID 7522630
+SCOREDIV_COMPLETED_ID 7522623
+SCOREDIV_COMPLETED_ID 7522621
+SCOREDIV_COMPLETED_ID 7522634
+SCOREDIV_COMPLETED_ID 7522629
+SCOREDIV_COMPLETED_ID 7522669
+SCOREDIV_COMPLETED_ID 7522661
+SCOREDIV_COMPLETED_ID 7522638
+SCOREDIV_COMPLETED_ID 7520707
+SCOREDIV_COMPLETED_ID 7520718
+SCOREDIV_COMPLETED_ID 7523047
+SCOREDIV_COMPLETED_ID 7523073
+SCOREDIV_COMPLETED_ID 7523045
+SCOREDIV_COMPLETED_ID 7523087
+SCOREDIV_COMPLETED_ID 7523090
+SCOREDIV_COMPLETED_ID 7523032
+SCOREDIV_COMPLETED_ID 7523028
+SCOREDIV_COMPLETED_ID 7523072
+SCOREDIV_COMPLETED_ID 7523053
+SCOREDIV_COMPLETED_ID 7523079
+SCOREDIV_COMPLETED_ID 7523063
+SCOREDIV_COMPLETED_ID 7523065
+SCOREDIV_COMPLETED_ID 7523044
+SCOREDIV_COMPLETED_ID 7523081
+SCOREDIV_COMPLETED_ID 7523086
+SCOREDIV_COMPLETED_ID 7523035
+SCOREDIV_COMPLETED_ID 7523036
+SCOREDIV_COMPLETED_ID 7523034
+SCOREDIV_COMPLETED_ID 7523058
+SCOREDIV_COMPLETED_ID 7521386
+SCOREDIV_COMPLETED_ID 7521344
+SCOREDIV_COMPLETED_ID 7521839
+SCOREDIV_COMPLETED_ID 7521835
+SCOREDIV_COMPLETED_ID 7521833
+SCOREDIV_COMPLETED_ID 7521805
+SCOREDIV_COMPLETED_ID 7521836
+SCOREDIV_COMPLETED_ID 7521815
+SCOREDIV_COMPLETED_ID 7521851
+SCOREDIV_COMPLETED_ID 7521842
+SCOREDIV_COMPLETED_ID 7521854
+SCOREDIV_COMPLETED_ID 7521853
+SCOREDIV_COMPLETED_ID 7521856
+SCOREDIV_COMPLETED_ID 7521825
+SCOREDIV_COMPLETED_ID 7522532
+SCOREDIV_COMPLETED_ID 7522492
+SCOREDIV_COMPLETED_ID 7522500
+SCOREDIV_COMPLETED_ID 7522497
+SCOREDIV_COMPLETED_ID 7522529
+SCOREDIV_COMPLETED_ID 7522536
+SCOREDIV_COMPLETED_ID 7522528
+SCOREDIV_COMPLETED_ID 7522488
+SCOREDIV_COMPLETED_ID 7522502
+SCOREDIV_COMPLETED_ID 7522516
+SCOREDIV_COMPLETED_ID 7522501
+SCOREDIV_COMPLETED_ID 7522477
+SCOREDIV_COMPLETED_ID 7522510
+SCOREDIV_COMPLETED_ID 7522486
+SCOREDIV_COMPLETED_ID 7522526
+SCOREDIV_COMPLETED_ID 7522476
+SCOREDIV_COMPLETED_ID 7522482
+SCOREDIV_COMPLETED_ID 7522521
+SCOREDIV_COMPLETED_ID 7522524
+SCOREDIV_COMPLETED_ID 7522489
+SCOREDIV_COMPLETED_ID 7523598
+SCOREDIV_COMPLETED_ID 7523614
+SCOREDIV_COMPLETED_ID 7523612
+SCOREDIV_COMPLETED_ID 7523631
+SCOREDIV_COMPLETED_ID 7523582
+SCOREDIV_COMPLETED_ID 7523600
+SCOREDIV_COMPLETED_ID 7523658
+SCOREDIV_COMPLETED_ID 7523661
+SCOREDIV_COMPLETED_ID 7523616
+SCOREDIV_COMPLETED_ID 7523655
+SCOREDIV_COMPLETED_ID 7523659
+SCOREDIV_COMPLETED_ID 7523644
+SCOREDIV_COMPLETED_ID 7523607
+SCOREDIV_COMPLETED_ID 7523625
+SCOREDIV_COMPLETED_ID 7523623
+SCOREDIV_COMPLETED_ID 7523624
+SCOREDIV_COMPLETED_ID 7523618
+SCOREDIV_COMPLETED_ID 7523592
+SCOREDIV_COMPLETED_ID 7523671
+SCOREDIV_COMPLETED_ID 7523647
+SCOREDIV_COMPLETED_ID 7523599
+SCOREDIV_COMPLETED_ID 7522166
+SCOREDIV_COMPLETED_ID 7522167
+SCOREDIV_COMPLETED_ID 7522148
+SCOREDIV_COMPLETED_ID 7522197
+SCOREDIV_COMPLETED_ID 7522152
+SCOREDIV_COMPLETED_ID 7522201
+SCOREDIV_COMPLETED_ID 7522193
+SCOREDIV_COMPLETED_ID 7522146
+SCOREDIV_COMPLETED_ID 7522188
+SCOREDIV_COMPLETED_ID 7522195
+SCOREDIV_COMPLETED_ID 7522158
+SCOREDIV_COMPLETED_ID 7522173
+SCOREDIV_COMPLETED_ID 7522143
+SCOREDIV_COMPLETED_ID 7522199
+SCOREDIV_COMPLETED_ID 7522159
+SCOREDIV_COMPLETED_ID 7522162
+SCOREDIV_COMPLETED_ID 7522181
+SCOREDIV_COMPLETED_ID 7522205
+SCOREDIV_COMPLETED_ID 7522251
+SCOREDIV_COMPLETED_ID 7522271
+SCOREDIV_COMPLETED_ID 7522252
+SCOREDIV_COMPLETED_ID 7522246
+SCOREDIV_COMPLETED_ID 7522221
+SCOREDIV_COMPLETED_ID 7522254
+SCOREDIV_COMPLETED_ID 7522267
+SCOREDIV_COMPLETED_ID 7522212
+SCOREDIV_COMPLETED_ID 7522215
+SCOREDIV_COMPLETED_ID 7522261
+SCOREDIV_COMPLETED_ID 7522277
+SCOREDIV_COMPLETED_ID 7522270
+SCOREDIV_COMPLETED_ID 7522275
+SCOREDIV_COMPLETED_ID 7522269
+SCOREDIV_COMPLETED_ID 7522239
+SCOREDIV_COMPLETED_ID 7522238
+SCOREDIV_COMPLETED_ID 7522278
+SCOREDIV_COMPLETED_ID 7522265
+SCOREDIV_COMPLETED_ID 7522272
+SCOREDIV_COMPLETED_ID 7522219
+SCOREDIV_COMPLETED_ID 7522225
+SCOREDIV_COMPLETED_ID 7522218
+SCOREDIV_COMPLETED_ID 7522859
+SCOREDIV_COMPLETED_ID 7522851
+SCOREDIV_COMPLETED_ID 7522881
+SCOREDIV_COMPLETED_ID 7522827
+SCOREDIV_COMPLETED_ID 7522836
+SCOREDIV_COMPLETED_ID 7522838
+SCOREDIV_COMPLETED_ID 7522880
+SCOREDIV_COMPLETED_ID 7522833
+SCOREDIV_COMPLETED_ID 7522866
+SCOREDIV_COMPLETED_ID 7522844
+SCOREDIV_COMPLETED_ID 7522822
+SCOREDIV_COMPLETED_ID 7522829
+SCOREDIV_COMPLETED_ID 7522879
+SCOREDIV_COMPLETED_ID 7522864
+SCOREDIV_COMPLETED_ID 7522825
+SCOREDIV_COMPLETED_ID 7522852
+SCOREDIV_COMPLETED_ID 7522834
+SCOREDIV_COMPLETED_ID 7522882
+SCOREDIV_COMPLETED_ID 7522869
+SCOREDIV_COMPLETED_ID 7522820
+SCOREDIV_COMPLETED_ID 7522858
+SCOREDIV_COMPLETED_ID 7522823
+SCOREDIV_COMPLETED_ID 7522873
+SCOREDIV_COMPLETED_ID 7522837
+SCOREDIV_COMPLETED_ID 7522899
+SCOREDIV_COMPLETED_ID 7522900
+SCOREDIV_COMPLETED_ID 7522906
+SCOREDIV_COMPLETED_ID 7522953
+SCOREDIV_COMPLETED_ID 7522895
+SCOREDIV_COMPLETED_ID 7522912
+SCOREDIV_COMPLETED_ID 7522952
+SCOREDIV_COMPLETED_ID 7522888
+SCOREDIV_COMPLETED_ID 7522957
+SCOREDIV_COMPLETED_ID 7522886
+SCOREDIV_COMPLETED_ID 7522948
+SCOREDIV_COMPLETED_ID 7522893
+SCOREDIV_COMPLETED_ID 7522950
+SCOREDIV_COMPLETED_ID 7522903
+SCOREDIV_COMPLETED_ID 7522892
+SCOREDIV_COMPLETED_ID 7522922
+SCOREDIV_COMPLETED_ID 7522887
+SCOREDIV_COMPLETED_ID 7522943
+SCOREDIV_COMPLETED_ID 7522951
+CA_TOTAL_UNDERCOUNT game=7522905 actor=3 lineno=20 age_civil=A round=1 take_spend_this_turn=5 ca_total=4 deficit=1
+SCOREDIV_COMPLETED_ID 7522891
+SCOREDIV_COMPLETED_ID 7522920
+SCOREDIV_COMPLETED_ID 7522894
+SCOREDIV_COMPLETED_ID 7522909
+SCOREDIV_COMPLETED_ID 7522958
+SCOREDIV_COMPLETED_ID 7522940
+SCOREDIV_COMPLETED_ID 7522106
+SCOREDIV_COMPLETED_ID 7522081
+SCOREDIV_COMPLETED_ID 7522125
+SCOREDIV_COMPLETED_ID 7522075
+SCOREDIV_COMPLETED_ID 7522101
+SCOREDIV_COMPLETED_ID 7522126
+SCOREDIV_COMPLETED_ID 7522077
+SCOREDIV_COMPLETED_ID 7522107
+SCOREDIV_COMPLETED_ID 7522078
+SCOREDIV_COMPLETED_ID 7522085
+SCOREDIV_COMPLETED_ID 7522138
+SCOREDIV_COMPLETED_ID 7522133
+SCOREDIV_COMPLETED_ID 7522088
+SCOREDIV_COMPLETED_ID 7522091
+SCOREDIV_COMPLETED_ID 7522122
+SCOREDIV_COMPLETED_ID 7522135
+SCOREDIV_COMPLETED_ID 7522095
+SCOREDIV_COMPLETED_ID 7522136
+SCOREDIV_COMPLETED_ID 7522134
+SCOREDIV_COMPLETED_ID 7522128
+SCOREDIV_COMPLETED_ID 7522087
+SCOREDIV_COMPLETED_ID 7522112
+SCOREDIV_COMPLETED_ID 7521776
+SCOREDIV_COMPLETED_ID 7521771
+SCOREDIV_COMPLETED_ID 7521790
+SCOREDIV_COMPLETED_ID 7521789
+SCOREDIV_COMPLETED_ID 7521785
+SCOREDIV_COMPLETED_ID 7521727
+SCOREDIV_COMPLETED_ID 7521767
+SCOREDIV_COMPLETED_ID 7521724
+SCOREDIV_COMPLETED_ID 7521742
+SCOREDIV_COMPLETED_ID 7521762
+SCOREDIV_COMPLETED_ID 7521740
+SCOREDIV_COMPLETED_ID 7521773
+SCOREDIV_COMPLETED_ID 7521777
+SCOREDIV_COMPLETED_ID 7521072
+SCOREDIV_COMPLETED_ID 7521090
+SCOREDIV_COMPLETED_ID 7521113
+SCOREDIV_COMPLETED_ID 7523367
+SCOREDIV_COMPLETED_ID 7523366
+SCOREDIV_COMPLETED_ID 7523370
+SCOREDIV_COMPLETED_ID 7523404
+SCOREDIV_COMPLETED_ID 7523395
+SCOREDIV_COMPLETED_ID 7523376
+SCOREDIV_COMPLETED_ID 7523411
+SCOREDIV_COMPLETED_ID 7523421
+SCOREDIV_COMPLETED_ID 7523375
+SCOREDIV_COMPLETED_ID 7523390
+SCOREDIV_COMPLETED_ID 7523360
+SCOREDIV_COMPLETED_ID 7523426
+SCOREDIV_COMPLETED_ID 7523416
+SCOREDIV_COMPLETED_ID 7523402
+SCOREDIV_COMPLETED_ID 7523365
+SCOREDIV_COMPLETED_ID 7523364
+SCOREDIV_COMPLETED_ID 7521906
+SCOREDIV_COMPLETED_ID 7521924
+SCOREDIV_COMPLETED_ID 7521921
+SCOREDIV_COMPLETED_ID 7521884
+SCOREDIV_COMPLETED_ID 7521915
+SCOREDIV_COMPLETED_ID 7521883
+SCOREDIV_COMPLETED_ID 7521922
+SCOREDIV_COMPLETED_ID 7521918
+SCOREDIV_COMPLETED_ID 7521914
+SCOREDIV_COMPLETED_ID 7521923
+SCOREDIV_COMPLETED_ID 7521890
+SCOREDIV_COMPLETED_ID 7521882
+SCOREDIV_COMPLETED_ID 7521934
+SCOREDIV_COMPLETED_ID 7521873
+SCOREDIV_COMPLETED_ID 7521899
+SCOREDIV_COMPLETED_ID 7521917
+SCOREDIV_COMPLETED_ID 7521888
+SCOREDIV_COMPLETED_ID 7521894
+SCOREDIV_COMPLETED_ID 7521606
+SCOREDIV_COMPLETED_ID 7521623
+SCOREDIV_COMPLETED_ID 7521619
+SCOREDIV_COMPLETED_ID 7521576
+SCOREDIV_COMPLETED_ID 7521561
+SCOREDIV_COMPLETED_ID 7521565
+SCOREDIV_COMPLETED_ID 7521603
+SCOREDIV_COMPLETED_ID 7521605
+SCOREDIV_COMPLETED_ID 7521577
+SCOREDIV_COMPLETED_ID 7521243
+SCOREDIV_COMPLETED_ID 7521253
+SCOREDIV_COMPLETED_ID 7521213
+SCOREDIV_COMPLETED_ID 7521066
+SCOREDIV_COMPLETED_ID 7523460
+SCOREDIV_COMPLETED_ID 7523462
+SCOREDIV_COMPLETED_ID 7523486
+SCOREDIV_COMPLETED_ID 7523442
+SCOREDIV_COMPLETED_ID 7523468
+SCOREDIV_COMPLETED_ID 7523491
+SCOREDIV_COMPLETED_ID 7523440
+SCOREDIV_COMPLETED_ID 7523477
+SCOREDIV_COMPLETED_ID 7523464
+SCOREDIV_COMPLETED_ID 7523487
+SCOREDIV_COMPLETED_ID 7523470
+SCOREDIV_COMPLETED_ID 7523454
+SCOREDIV_COMPLETED_ID 7523474
+SCOREDIV_COMPLETED_ID 7523436
+SCOREDIV_COMPLETED_ID 7523499
+SCOREDIV_COMPLETED_ID 7523482
+SCOREDIV_COMPLETED_ID 7523473
+SCOREDIV_COMPLETED_ID 7523479
+SCOREDIV_COMPLETED_ID 7523457
+SCOREDIV_COMPLETED_ID 7523429
+SCOREDIV_COMPLETED_ID 7523437
+SCOREDIV_COMPLETED_ID 7523449
+SCOREDIV_COMPLETED_ID 7523500
+SCOREDIV_COMPLETED_ID 7523476
+SCOREDIV_COMPLETED_ID 7523441
+SCOREDIV_COMPLETED_ID 7522472
+SCOREDIV_COMPLETED_ID 7522420
+SCOREDIV_COMPLETED_ID 7522454
+SCOREDIV_COMPLETED_ID 7522421
+SCOREDIV_COMPLETED_ID 7522426
+SCOREDIV_COMPLETED_ID 7522441
+SCOREDIV_COMPLETED_ID 7522463
+SCOREDIV_COMPLETED_ID 7522467
+SCOREDIV_COMPLETED_ID 7522473
+SCOREDIV_COMPLETED_ID 7522417
+SCOREDIV_COMPLETED_ID 7522436
+SCOREDIV_COMPLETED_ID 7522422
+SCOREDIV_COMPLETED_ID 7522440
+SCOREDIV_COMPLETED_ID 7522433
+SCOREDIV_COMPLETED_ID 7522452
+SCOREDIV_COMPLETED_ID 7522471
+SCOREDIV_COMPLETED_ID 7522443
+SCOREDIV_COMPLETED_ID 7522423
+SCOREDIV_COMPLETED_ID 7522446
+SCOREDIV_COMPLETED_ID 7522450
+SCOREDIV_COMPLETED_ID 7522470
+SCOREDIV_COMPLETED_ID 7522448
+SCOREDIV_COMPLETED_ID 7522412
+SCOREDIV_COMPLETED_ID 7522459
+SCOREDIV_COMPLETED_ID 7522434
+SCOREDIV_COMPLETED_ID 7523553
+SCOREDIV_COMPLETED_ID 7523528
+SCOREDIV_COMPLETED_ID 7523512
+SCOREDIV_COMPLETED_ID 7523569
+SCOREDIV_COMPLETED_ID 7523573
+SCOREDIV_COMPLETED_ID 7523564
+SCOREDIV_COMPLETED_ID 7523577
+SCOREDIV_COMPLETED_ID 7523509
+SCOREDIV_COMPLETED_ID 7523524
+SCOREDIV_COMPLETED_ID 7523527
+SCOREDIV_COMPLETED_ID 7523534
+SCOREDIV_COMPLETED_ID 7523578
+SCOREDIV_COMPLETED_ID 7523559
+SCOREDIV_COMPLETED_ID 7523541
+SCOREDIV_COMPLETED_ID 7523510
+SCOREDIV_COMPLETED_ID 7523554
+SCOREDIV_COMPLETED_ID 7523531
+SCOREDIV_COMPLETED_ID 7523562
+SCOREDIV_COMPLETED_ID 7522307
+SCOREDIV_COMPLETED_ID 7522284
+SCOREDIV_COMPLETED_ID 7522318
+SCOREDIV_COMPLETED_ID 7522329
+SCOREDIV_COMPLETED_ID 7522308
+SCOREDIV_COMPLETED_ID 7522300
+SCOREDIV_COMPLETED_ID 7522345
+SCOREDIV_COMPLETED_ID 7522319
+SCOREDIV_COMPLETED_ID 7522320
+SCOREDIV_COMPLETED_ID 7522292
+SCOREDIV_COMPLETED_ID 7522291
+SCOREDIV_COMPLETED_ID 7522287
+SCOREDIV_COMPLETED_ID 7522334
+SCOREDIV_COMPLETED_ID 7522331
+SCOREDIV_COMPLETED_ID 7522285
+SCOREDIV_COMPLETED_ID 7522339
+SCOREDIV_COMPLETED_ID 7522335
+SCOREDIV_COMPLETED_ID 7522280
+SCOREDIV_COMPLETED_ID 7522317
+SCOREDIV_COMPLETED_ID 7522302
+SCOREDIV_COMPLETED_ID 7522279
+SCOREDIV_COMPLETED_ID 7522709
+SCOREDIV_COMPLETED_ID 7522725
+SCOREDIV_COMPLETED_ID 7522684
+SCOREDIV_COMPLETED_ID 7522741
+SCOREDIV_COMPLETED_ID 7522740
+SCOREDIV_COMPLETED_ID 7522728
+SCOREDIV_COMPLETED_ID 7522685
+SCOREDIV_COMPLETED_ID 7522739
+SCOREDIV_COMPLETED_ID 7522694
+SCOREDIV_COMPLETED_ID 7522689
+SCOREDIV_COMPLETED_ID 7522721
+SCOREDIV_COMPLETED_ID 7522744
+SCOREDIV_COMPLETED_ID 7522726
+SCOREDIV_COMPLETED_ID 7522715
+SCOREDIV_COMPLETED_ID 7522697
+SCOREDIV_COMPLETED_ID 7522722
+SCOREDIV_COMPLETED_ID 7522717
+SCOREDIV_COMPLETED_ID 7522731
+SCOREDIV_COMPLETED_ID 7522679
+SCOREDIV_COMPLETED_ID 7522687
+SCOREDIV_COMPLETED_ID 7522705
+SCOREDIV_COMPLETED_ID 7522714
+SCOREDIV_COMPLETED_ID 7522996
+SCOREDIV_COMPLETED_ID 7523014
+SCOREDIV_COMPLETED_ID 7523011
+SCOREDIV_COMPLETED_ID 7523005
+SCOREDIV_COMPLETED_ID 7523021
+SCOREDIV_COMPLETED_ID 7522970
+SCOREDIV_COMPLETED_ID 7522968
+SCOREDIV_COMPLETED_ID 7522979
+SCOREDIV_COMPLETED_ID 7522991
+SCOREDIV_COMPLETED_ID 7522978
+SCOREDIV_COMPLETED_ID 7522966
+SCOREDIV_COMPLETED_ID 7523002
+SCOREDIV_COMPLETED_ID 7523015
+SCOREDIV_COMPLETED_ID 7522976
+SCOREDIV_COMPLETED_ID 7522995
+SCOREDIV_COMPLETED_ID 7522974
+SCOREDIV_COMPLETED_ID 7522977
+SCOREDIV_COMPLETED_ID 7523010
+SCOREDIV_COMPLETED_ID 7522990
+SCOREDIV_COMPLETED_ID 7522992
+SCOREDIV_COMPLETED_ID 7522959
+SCOREDIV_COMPLETED_ID 7522981
+SCOREDIV_COMPLETED_ID 7523016
+SCOREDIV_COMPLETED_ID 7521328
+SCOREDIV_COMPLETED_ID 7521302
+SCOREDIV_COMPLETED_ID 7523198
+SCOREDIV_COMPLETED_ID 7523193
+SCOREDIV_COMPLETED_ID 7523172
+SCOREDIV_COMPLETED_ID 7523220
+SCOREDIV_COMPLETED_ID 7523185
+SCOREDIV_COMPLETED_ID 7523197
+SCOREDIV_COMPLETED_ID 7523162
+SCOREDIV_COMPLETED_ID 7523190
+SCOREDIV_COMPLETED_ID 7523160
+SCOREDIV_COMPLETED_ID 7523214
+SCOREDIV_COMPLETED_ID 7523167
+SCOREDIV_COMPLETED_ID 7523216
+SCOREDIV_COMPLETED_ID 7523207
+SCOREDIV_COMPLETED_ID 7523169
+SCOREDIV_COMPLETED_ID 7523176
+SCOREDIV_COMPLETED_ID 7523192
+SCOREDIV_COMPLETED_ID 7523159
+SCOREDIV_COMPLETED_ID 7523210
+SCOREDIV_COMPLETED_ID 7523165
+SCOREDIV_COMPLETED_ID 7523205
+SCOREDIV_COMPLETED_ID 7523195
+SCOREDIV_COMPLETED_ID 7523196
+SCOREDIV_COMPLETED_ID 7523208
+SCOREDIV_COMPLETED_ID 7522074
+SCOREDIV_COMPLETED_ID 7522008
+SCOREDIV_COMPLETED_ID 7522072
+SCOREDIV_COMPLETED_ID 7522011
+SCOREDIV_COMPLETED_ID 7522067
+SCOREDIV_COMPLETED_ID 7522034
+SCOREDIV_COMPLETED_ID 7522051
+SCOREDIV_COMPLETED_ID 7522046
+SCOREDIV_COMPLETED_ID 7522023
+SCOREDIV_COMPLETED_ID 7522043
+SCOREDIV_COMPLETED_ID 7522055
+SCOREDIV_COMPLETED_ID 7522048
+SCOREDIV_COMPLETED_ID 7522061
+SCOREDIV_COMPLETED_ID 7522036
+SCOREDIV_COMPLETED_ID 7522022
+SCOREDIV_COMPLETED_ID 7522037
+SCOREDIV_COMPLETED_ID 7522019
+SCOREDIV_COMPLETED_ID 7522009
+SCOREDIV_COMPLETED_ID 7522007
+SCOREDIV_COMPLETED_ID 7522068
+SCOREDIV_COMPLETED_ID 7522041
+SCOREDIV_COMPLETED_ID 7522054
+SCOREDIV_COMPLETED_ID 7522058
+SCOREDIV_COMPLETED_ID 7522033
+SCOREDIV_COMPLETED_ID 7522064
+SCOREDIV_COMPLETED_ID 7521436
+SCOREDIV_COMPLETED_ID 7521428
+SCOREDIV_COMPLETED_ID 7523270
+SCOREDIV_COMPLETED_ID 7523225
+SCOREDIV_COMPLETED_ID 7523271
+SCOREDIV_COMPLETED_ID 7523246
+SCOREDIV_COMPLETED_ID 7523234
+SCOREDIV_COMPLETED_ID 7523275
+SCOREDIV_COMPLETED_ID 7523272
+SCOREDIV_COMPLETED_ID 7523233
+SCOREDIV_COMPLETED_ID 7523268
+SCOREDIV_COMPLETED_ID 7523256
+SCOREDIV_COMPLETED_ID 7523277
+SCOREDIV_COMPLETED_ID 7523227
+SCOREDIV_COMPLETED_ID 7523281
+SCOREDIV_COMPLETED_ID 7523243
+SCOREDIV_COMPLETED_ID 7523262
+SCOREDIV_COMPLETED_ID 7523276
+SCOREDIV_COMPLETED_ID 7523257
+SCOREDIV_COMPLETED_ID 7523258
+SCOREDIV_COMPLETED_ID 7523260
+SCOREDIV_COMPLETED_ID 7523264
+SCOREDIV_COMPLETED_ID 7523223
+SCOREDIV_COMPLETED_ID 7523253
+SCOREDIV_COMPLETED_ID 7523285
+SCOREDIV_COMPLETED_ID 7523255
+SCOREDIV_COMPLETED_ID 7522371
+SCOREDIV_COMPLETED_ID 7522385
+SCOREDIV_COMPLETED_ID 7522404
+SCOREDIV_COMPLETED_ID 7522384
+SCOREDIV_COMPLETED_ID 7522375
+SCOREDIV_COMPLETED_ID 7522351
+SCOREDIV_COMPLETED_ID 7522354
+SCOREDIV_COMPLETED_ID 7522382
+SCOREDIV_COMPLETED_ID 7522392
+SCOREDIV_COMPLETED_ID 7522363
+SCOREDIV_COMPLETED_ID 7522405
+SCOREDIV_COMPLETED_ID 7522397
+SCOREDIV_COMPLETED_ID 7522378
+SCOREDIV_COMPLETED_ID 7522360
+SCOREDIV_COMPLETED_ID 7522402
+SCOREDIV_COMPLETED_ID 7522399
+SCOREDIV_COMPLETED_ID 7522381
+SCOREDIV_COMPLETED_ID 7522369
+SCOREDIV_COMPLETED_ID 7522386
+SCOREDIV_COMPLETED_ID 7522800
+SCOREDIV_COMPLETED_ID 7522807
+SCOREDIV_COMPLETED_ID 7522799
+SCOREDIV_COMPLETED_ID 7522767
+SCOREDIV_COMPLETED_ID 7522783
+SCOREDIV_COMPLETED_ID 7522753
+SCOREDIV_COMPLETED_ID 7522768
+SCOREDIV_COMPLETED_ID 7522796
+SCOREDIV_COMPLETED_ID 7522754
+SCOREDIV_COMPLETED_ID 7522776
+SCOREDIV_COMPLETED_ID 7522789
+SCOREDIV_COMPLETED_ID 7522748
+SCOREDIV_COMPLETED_ID 7522798
+SCOREDIV_COMPLETED_ID 7522808
+SCOREDIV_COMPLETED_ID 7522770
+SCOREDIV_COMPLETED_ID 7522785
+SCOREDIV_COMPLETED_ID 7522786
+SCOREDIV_COMPLETED_ID 7522814
+SCOREDIV_COMPLETED_ID 7522763
+SCOREDIV_COMPLETED_ID 7522804
+SCOREDIV_COMPLETED_ID 7522765
+SCOREDIV_COMPLETED_ID 7522813
+SCOREDIV_COMPLETED_ID 7522773
+SCOREDIV_COMPLETED_ID 7522572
+SCOREDIV_COMPLETED_ID 7522580
+SCOREDIV_COMPLETED_ID 7522578
+SCOREDIV_COMPLETED_ID 7522562
+SCOREDIV_COMPLETED_ID 7522597
+SCOREDIV_COMPLETED_ID 7522561
+SCOREDIV_COMPLETED_ID 7522546
+SCOREDIV_COMPLETED_ID 7522555
+SCOREDIV_COMPLETED_ID 7522607
+SCOREDIV_COMPLETED_ID 7522609
+SCOREDIV_COMPLETED_ID 7522543
+SCOREDIV_COMPLETED_ID 7522586
+SCOREDIV_COMPLETED_ID 7522560
+SCOREDIV_COMPLETED_ID 7522590
+SCOREDIV_COMPLETED_ID 7522606
+SCOREDIV_COMPLETED_ID 7522557
+SCOREDIV_COMPLETED_ID 7522550
+SCOREDIV_COMPLETED_ID 7522544
+SCOREDIV_COMPLETED_ID 7522552
+SCOREDIV_COMPLETED_ID 7522573
+SCOREDIV_COMPLETED_ID 7522554
+SCOREDIV_COMPLETED_ID 7521940
+SCOREDIV_COMPLETED_ID 7521996
+SCOREDIV_COMPLETED_ID 7521966
+SCOREDIV_COMPLETED_ID 7522000
+SCOREDIV_COMPLETED_ID 7521972
+SCOREDIV_COMPLETED_ID 7521971
+SCOREDIV_COMPLETED_ID 7521981
+SCOREDIV_COMPLETED_ID 7521968
+SCOREDIV_COMPLETED_ID 7521959
+SCOREDIV_COMPLETED_ID 7521992
+SCOREDIV_COMPLETED_ID 7521990
+SCOREDIV_COMPLETED_ID 7521985
+SCOREDIV_COMPLETED_ID 7521998
+SCOREDIV_COMPLETED_ID 7521974
+SCOREDIV_COMPLETED_ID 7522001
+SCOREDIV_COMPLETED_ID 7521982
+SCOREDIV_COMPLETED_ID 7521946
+SCOREDIV_COMPLETED_ID 7521986
+SCOREDIV_COMPLETED_ID 7521939
+SCOREDIV_COMPLETED_ID 7521943
+SCOREDIV_COMPLETED_ID 7521987
+SCOREDIV_COMPLETED_ID 7521960
+SCOREDIV_COMPLETED_ID 7521969
+SCOREDIV_COMPLETED_ID 7521993
+SCOREDIV_COMPLETED_ID 7521997
+SCOREDIV_COMPLETED_ID 7521995
+SCOREDIV_COMPLETED_ID 7521956
+SCOREDIV_COMPLETED_ID 7521951
+SCOREDIV_COMPLETED_ID 7521665
+SCOREDIV_COMPLETED_ID 7521711
+SCOREDIV_COMPLETED_ID 7521666
+SCOREDIV_COMPLETED_ID 7521683
+SCOREDIV_COMPLETED_ID 7521681
+SCOREDIV_COMPLETED_ID 7521710
+SCOREDIV_COMPLETED_ID 7521662
+SCOREDIV_COMPLETED_ID 7521694
+SCOREDIV_COMPLETED_ID 7521673
+SCOREDIV_COMPLETED_ID 7521712
+SCOREDIV_COMPLETED_ID 7521704
+SCOREDIV_COMPLETED_ID 7521721
+SCOREDIV_COMPLETED_ID 7521695
+SCOREDIV_COMPLETED_ID 7521690
+SCOREDIV_COMPLETED_ID 7523143
+SCOREDIV_COMPLETED_ID 7523131
+SCOREDIV_COMPLETED_ID 7523142
+SCOREDIV_COMPLETED_ID 7523145
+SCOREDIV_COMPLETED_ID 7523149
+SCOREDIV_COMPLETED_ID 7523091
+SCOREDIV_COMPLETED_ID 7523106
+SCOREDIV_COMPLETED_ID 7523102
+SCOREDIV_COMPLETED_ID 7523114
+SCOREDIV_COMPLETED_ID 7523157
+SCOREDIV_COMPLETED_ID 7523095
+SCOREDIV_COMPLETED_ID 7523137
+SCOREDIV_COMPLETED_ID 7523115
+SCOREDIV_COMPLETED_ID 7523151
+SCOREDIV_COMPLETED_ID 7523128
+SCOREDIV_COMPLETED_ID 7523100
+SCOREDIV_COMPLETED_ID 7523125
+SCOREDIV_COMPLETED_ID 7523127
+SCOREDIV_COMPLETED_ID 7523154
+SCOREDIV_COMPLETED_ID 7523146
+SCOREDIV_COMPLETED_ID 7523111
+SCOREDIV_COMPLETED_ID 7523144
+# replaystats: 1011 games sampled, 612 completed to state.game_over
+
+## Final-score cross-check
+
+612/612 completed games actually flipped state.game_over (the other 0 reached the journal's own "End of game" marker but hit a mismatch afterward, so `game::scores` was never computed for them); 561/612 of those matched index.tsv exactly (sorted per-game score-list compare).
+delta distribution for the 132 non-matching player-scores (engine minus index.tsv, sorted ascending, mean -0.53): [-16, -14, -10, -10, -9, -9, -9, -8, -8, -8, -7, -6, -6, -6, -6, -6, -5, -5, -5, -5, -5, -5, -5, -4, -4, -4, -4, -4, -4, -3, -3, -2, -2, -2, -2, -2, -2, -2, -2, -2, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 5, 6, 6, 6, 6, 6, 8, 8, 8, 8, 9, 9]
+
+mean rounds reached: 16.92 (mean 19.27 total rounds per sampled game)
+decisions recorded: 284965 (65.2% in Age II or later)
+hand cards grounded from a bid's own force ceiling: 251 (in 151 games)
+journal-observed takes accepted despite failing ONLY the hand_full gate: 410 (in 142 games; the known corpus shape is ~109 games' worth -- a much larger number here means the override is too loose)
+
+## Final-scoring award oracle (which "Impact of ..." card's formula is wrong)
+
+13 games had at least one (card, seat) whose journal-stated §12.5.2 award this binary's own `scoring_culture` disagreed with:
+
+| (game,seat) pairs | card | example |
+|---|---|---|
+| 7 | Impact of Population | 7523357 seat 1: journal says 2, this binary computes 0 (delta -2) |
+| 4 | Impact of Happiness | 7522277 seat 1: journal says 12, this binary computes 14 (delta 2) |
+| 3 | Impact of Competition | 7522866 seat 0: journal says 7, this binary computes 6 (delta -1) |
+| 2 | Impact of Variety | 7522866 seat 0: journal says 16, this binary computes 14 (delta -2) |
+| 1 | Impact of Strength | 7522143 seat 1: journal says 10, this binary computes 0 (delta -10) |
+
+## Discard-phase hand-size oracle
+
+38908 `(actor, round)` checkpoints had a cross-validated journal count to check this binary's own reconstructed military-hand excess against (see `replay_common`'s "Discard-phase hand-size oracle" module doc and `docs/REPLAY.md`); 37463 (96.3%) matched exactly.
+702/1011 games sampled had at least one checkpoint disagree (FIRST divergence only, one line per game -- walk each back from here to find where the drift actually starts):
+
+- 7523809 line 272 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 9 limit 5)
+- 7523791 line 447 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523357 line 173 (round 6 age I, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 7 limit 3)
+- 7523354 line 250 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7523347 line 238 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7523341 line 435 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523338 line 444 (round 12 age III, Grey): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523335 line 214 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522612 line 206 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522668 line 154 (round 5 age I, Grey): journal's cross-validated excess 4, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522645 line 151 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522625 line 256 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522647 line 203 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522665 line 244 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522650 line 247 (round 14 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522663 line 236 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 10 limit 7)
+- 7522652 line 301 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 6 limit 3)
+- 7522654 line 504 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522639 line 326 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522633 line 245 (round 14 age III, Orange): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522640 line 158 (round 6 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522630 line 232 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522619 line 337 (round 12 age III, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7522623 line 248 (round 13 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 9 limit 5)
+- 7522635 line 469 (round 13 age III, Grey): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7522621 line 289 (round 16 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522634 line 121 (round 8 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522629 line 237 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 11 limit 9)
+- 7522669 line 398 (round 20 age IV, Orange): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 11 limit 7)
+- 7522661 line 242 (round 14 age III, Orange): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 8 limit 4)
+- 7522638 line 148 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522666 line 295 (round 12 age III, Green): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7520707 line 216 (round 8 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7520718 line 311 (round 17 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523047 line 532 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523075 line 138 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7523073 line 219 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523087 line 303 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523029 line 235 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 5)
+- 7523090 line 318 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523052 line 277 (round 14 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 7 limit 3)
+- 7523032 line 439 (round 16 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523069 line 114 (round 7 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523028 line 217 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523072 line 286 (round 16 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7523079 line 243 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 9 limit 9)
+- 7523082 line 190 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523031 line 262 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 0 (hand_military_len 6 limit 6)
+- 7523063 line 302 (round 9 age II, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523065 line 200 (round 7 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523044 line 261 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523026 line 203 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 0 limit 2)
+- 7523081 line 245 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523086 line 232 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 10 limit 8)
+- 7523035 line 360 (round 17 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523061 line 379 (round 11 age II, Green): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523036 line 224 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 7 limit 6)
+- 7523034 line 239 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523058 line 323 (round 17 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523025 line 263 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7521344 line 448 (round 12 age III, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521365 line 694 (round 18 age IV, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7521377 line 442 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7521491 line 423 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 9 limit 5)
+- 7521515 line 421 (round 11 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7521530 line 454 (round 14 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7521864 line 319 (round 16 age III, Purple): journal's cross-validated excess 2, this binary computes 0 (hand_military_len 7 limit 7)
+- 7521847 line 339 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7521798 line 205 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521839 line 265 (round 8 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521835 line 348 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 9 limit 7)
+- 7521805 line 106 (round 6 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521850 line 216 (round 7 age I, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7521836 line 433 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7521802 line 85 (round 6 age I, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7521837 line 245 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7521851 line 267 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521842 line 515 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521832 line 249 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521803 line 255 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 4)
+- 7521806 line 238 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7521853 line 529 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521855 line 136 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521825 line 325 (round 19 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522532 line 438 (round 13 age III, Grey): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522492 line 254 (round 14 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522478 line 454 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522500 line 218 (round 14 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522529 line 219 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522536 line 324 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 9 limit 7)
+- 7522488 line 218 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522502 line 337 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522516 line 355 (round 11 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522530 line 335 (round 13 age III, Orange): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522510 line 159 (round 7 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522506 line 367 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522486 line 250 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522526 line 321 (round 18 age IV, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522513 line 241 (round 10 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522509 line 246 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522514 line 202 (round 12 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522482 line 335 (round 13 age III, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522521 line 304 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 9 limit 5)
+- 7522520 line 419 (round 12 age III, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522512 line 692 (round 18 age IV, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522524 line 241 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522519 line 430 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7523634 line 136 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523598 line 330 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 3 (hand_military_len 8 limit 5)
+- 7523614 line 340 (round 18 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523640 line 238 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523631 line 336 (round 19 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523600 line 204 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523658 line 326 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7523633 line 97 (round 7 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523655 line 218 (round 12 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7523659 line 356 (round 19 age IV, Orange): journal's cross-validated excess 3, this binary computes 5 (hand_military_len 13 limit 8)
+- 7523644 line 148 (round 9 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7523597 line 232 (round 15 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523607 line 324 (round 17 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523613 line 234 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 7 limit 6)
+- 7523625 line 130 (round 8 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523589 line 258 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 5)
+- 7523623 line 196 (round 8 age II, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523624 line 248 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523618 line 332 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523592 line 115 (round 7 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523671 line 259 (round 13 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523652 line 215 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7523647 line 146 (round 9 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523599 line 215 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522166 line 217 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522167 line 238 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522148 line 270 (round 16 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522197 line 131 (round 8 age II, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522152 line 135 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522201 line 220 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522188 line 231 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522195 line 139 (round 9 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522158 line 324 (round 19 age IV, Purple): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 8 limit 4)
+- 7522157 line 344 (round 19 age IV, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522203 line 200 (round 12 age II, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 3)
+- 7522202 line 134 (round 8 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522173 line 594 (round 17 age III, Purple): journal's cross-validated excess 3, this binary computes 6 (hand_military_len 11 limit 5)
+- 7522156 line 465 (round 14 age III, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7522143 line 316 (round 17 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522170 line 334 (round 17 age IV, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7522199 line 461 (round 13 age III, Green): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522175 line 224 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 10 limit 7)
+- 7522181 line 273 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522153 line 217 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522205 line 335 (round 18 age IV, Orange): journal's cross-validated excess 4, this binary computes 5 (hand_military_len 8 limit 3)
+- 7522251 line 294 (round 17 age IV, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522271 line 232 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522252 line 240 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522249 line 435 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522221 line 628 (round 17 age IV, Green): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522230 line 232 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7522254 line 269 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 9 limit 8)
+- 7522214 line 106 (round 7 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522267 line 257 (round 15 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522212 line 379 (round 18 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522215 line 574 (round 16 age III, Green): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522261 line 220 (round 12 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522277 line 351 (round 19 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522243 line 246 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 5)
+- 7522270 line 263 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522275 line 112 (round 6 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522268 line 238 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522235 line 213 (round 13 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7522233 line 92 (round 5 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522269 line 193 (round 8 age II, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7522244 line 231 (round 10 age II, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 3)
+- 7522238 line 346 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7522278 line 247 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522236 line 234 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522272 line 370 (round 18 age IV, Purple): journal's cross-validated excess 4, this binary computes 5 (hand_military_len 10 limit 5)
+- 7522219 line 234 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522225 line 148 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522218 line 358 (round 18 age IV, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7520999 line 201 (round 8 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522851 line 215 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522881 line 278 (round 16 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522827 line 299 (round 18 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522865 line 285 (round 16 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 7)
+- 7522860 line 229 (round 13 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522838 line 312 (round 16 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522845 line 460 (round 13 age III, Green): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522880 line 217 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522833 line 371 (round 14 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522866 line 262 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522844 line 240 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522822 line 351 (round 14 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522829 line 443 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522879 line 226 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522864 line 351 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522825 line 339 (round 17 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522852 line 239 (round 15 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522882 line 286 (round 15 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522824 line 330 (round 12 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522869 line 219 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522820 line 274 (round 15 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522858 line 444 (round 13 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522823 line 222 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522873 line 329 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522875 line 88 (round 6 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522899 line 264 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522900 line 371 (round 15 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522906 line 322 (round 18 age IV, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522936 line 210 (round 7 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522953 line 221 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522895 line 327 (round 18 age IV, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522924 line 33 (round 3 age I, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522912 line 232 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522952 line 309 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522888 line 503 (round 17 age IV, Green): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 10 limit 7)
+- 7522944 line 259 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522957 line 235 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522886 line 272 (round 8 age II, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522948 line 225 (round 13 age III, Purple): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 10 limit 6)
+- 7522893 line 331 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522950 line 336 (round 16 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522903 line 200 (round 12 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522892 line 309 (round 12 age III, Purple): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522926 line 136 (round 8 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522922 line 230 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522943 line 294 (round 17 age III, Orange): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522951 line 239 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522913 line 434 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522920 line 191 (round 7 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522894 line 340 (round 17 age IV, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522909 line 277 (round 15 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522958 line 326 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522940 line 293 (round 11 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522106 line 269 (round 15 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522141 line 253 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7522081 line 379 (round 18 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522075 line 359 (round 18 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522101 line 444 (round 16 age IV, Green): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522099 line 217 (round 9 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522107 line 135 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522085 line 302 (round 12 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522091 line 338 (round 17 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7522135 line 347 (round 17 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522095 line 302 (round 16 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522136 line 151 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522134 line 341 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522128 line 248 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522124 line 232 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7522115 line 103 (round 7 age I, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7522087 line 332 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 9 limit 7)
+- 7522112 line 302 (round 16 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7521782 line 274 (round 11 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7521771 line 476 (round 13 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7521780 line 483 (round 13 age III, Green): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521741 line 198 (round 8 age II, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521790 line 490 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521787 line 346 (round 14 age III, Green): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7521789 line 142 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521785 line 220 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521767 line 325 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7521757 line 276 (round 9 age II, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521724 line 280 (round 9 age II, Grey): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521738 line 489 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521762 line 344 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7521740 line 333 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521773 line 150 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521751 line 347 (round 10 age II, Grey): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7521777 line 520 (round 14 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521775 line 342 (round 20 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521072 line 165 (round 8 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523367 line 330 (round 18 age IV, Orange): journal's cross-validated excess 4, this binary computes 5 (hand_military_len 9 limit 4)
+- 7523366 line 279 (round 16 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523373 line 492 (round 14 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 6 limit 2)
+- 7523370 line 238 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523415 line 266 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523404 line 424 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523363 line 462 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523359 line 64 (round 5 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523395 line 282 (round 16 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523376 line 203 (round 11 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523421 line 260 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523393 line 237 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523375 line 316 (round 12 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523390 line 454 (round 16 age IV, Green): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 10 limit 6)
+- 7523414 line 226 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7523374 line 323 (round 12 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523360 line 442 (round 13 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523426 line 303 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7523402 line 113 (round 4 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523364 line 466 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523408 line 133 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7521141 line 292 (round 9 age II, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521868 line 136 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7521924 line 335 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 10 limit 8)
+- 7521885 line 243 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7521921 line 326 (round 17 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 12 limit 8)
+- 7521884 line 217 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7521915 line 225 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521883 line 464 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521922 line 489 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521872 line 263 (round 8 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521874 line 264 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521920 line 216 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7521914 line 134 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521923 line 237 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521911 line 333 (round 11 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521897 line 141 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521890 line 141 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521882 line 98 (round 5 age I, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7521912 line 361 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521931 line 139 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521873 line 212 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7521933 line 245 (round 13 age II, Orange): journal's cross-validated excess 4, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521917 line 284 (round 9 age II, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521888 line 327 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7521894 line 502 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7521606 line 546 (round 15 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 8 limit 4)
+- 7521623 line 251 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7521619 line 510 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521576 line 171 (round 10 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521561 line 243 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521603 line 276 (round 16 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521605 line 186 (round 6 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521243 line 445 (round 13 age III, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7521213 line 128 (round 5 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521039 line 275 (round 8 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521066 line 334 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523490 line 183 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523492 line 91 (round 6 age I, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 3)
+- 7523462 line 120 (round 8 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523486 line 319 (round 18 age IV, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523468 line 201 (round 12 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7523491 line 234 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523440 line 229 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523477 line 202 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7523464 line 287 (round 9 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523470 line 353 (round 17 age IV, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7523454 line 323 (round 17 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523446 line 251 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7523436 line 505 (round 15 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7523499 line 243 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523482 line 238 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523473 line 224 (round 14 age III, Orange): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523429 line 416 (round 12 age III, Purple): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 6 limit 2)
+- 7523437 line 240 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523459 line 237 (round 13 age III, Orange): journal's cross-validated excess 3, this binary computes 0 (hand_military_len 6 limit 7)
+- 7523449 line 230 (round 14 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 10 limit 7)
+- 7523500 line 373 (round 15 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523476 line 211 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523475 line 318 (round 12 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523456 line 525 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522472 line 219 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522420 line 138 (round 9 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522454 line 371 (round 18 age IV, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522421 line 245 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522426 line 84 (round 6 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522441 line 262 (round 14 age III, Orange): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 10 limit 9)
+- 7522463 line 241 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522467 line 317 (round 12 age III, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522473 line 265 (round 8 age II, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522417 line 296 (round 12 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522453 line 234 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522422 line 456 (round 14 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522440 line 232 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522433 line 343 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522452 line 216 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522457 line 84 (round 6 age I, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 3)
+- 7522443 line 296 (round 16 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522423 line 244 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522446 line 266 (round 8 age II, Grey): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522450 line 438 (round 17 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522470 line 251 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522448 line 438 (round 12 age III, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522459 line 224 (round 12 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522434 line 237 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7522411 line 292 (round 9 age II, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523553 line 67 (round 5 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523581 line 97 (round 6 age I, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523512 line 446 (round 13 age III, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523569 line 252 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523573 line 207 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523564 line 230 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7523579 line 260 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523557 line 142 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523568 line 271 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523509 line 287 (round 16 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523524 line 284 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523527 line 247 (round 10 age II, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523534 line 371 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523547 line 134 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523545 line 285 (round 12 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523559 line 266 (round 15 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 11 limit 9)
+- 7523541 line 213 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523510 line 240 (round 8 age II, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7523520 line 166 (round 9 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523531 line 318 (round 16 age III, Purple): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 10 limit 6)
+- 7523562 line 229 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522307 line 202 (round 12 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522321 line 238 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522344 line 183 (round 11 age II, Orange): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522318 line 237 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522329 line 219 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522308 line 244 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 11 limit 8)
+- 7522315 line 130 (round 8 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522319 line 92 (round 5 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522320 line 308 (round 16 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 10 limit 8)
+- 7522292 line 237 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522290 line 223 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 0 (hand_military_len 6 limit 6)
+- 7522287 line 231 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522334 line 143 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522331 line 451 (round 12 age III, Grey): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522285 line 329 (round 18 age IV, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522339 line 195 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522335 line 364 (round 19 age IV, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522280 line 309 (round 12 age III, Purple): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522317 line 239 (round 13 age III, Purple): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 6 limit 2)
+- 7522309 line 181 (round 12 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522279 line 211 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522690 line 434 (round 12 age III, Grey): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7522671 line 133 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522725 line 267 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522684 line 247 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522741 line 318 (round 12 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522703 line 338 (round 18 age IV, Orange): journal's cross-validated excess 2, this binary computes 0 (hand_military_len 4 limit 5)
+- 7522729 line 153 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522733 line 244 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7522719 line 230 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7522673 line 341 (round 13 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522728 line 244 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522685 line 214 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522739 line 212 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 7 limit 6)
+- 7522694 line 358 (round 19 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7522689 line 585 (round 15 age III, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522744 line 300 (round 9 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522715 line 419 (round 13 age III, Grey): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522697 line 29 (round 3 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522674 line 207 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7522717 line 235 (round 14 age III, Orange): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522679 line 356 (round 19 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7522687 line 237 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522714 line 356 (round 18 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523022 line 268 (round 15 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523013 line 280 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 7 limit 7)
+- 7522985 line 284 (round 16 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 10 limit 8)
+- 7522996 line 234 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523014 line 106 (round 5 age I, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522962 line 422 (round 12 age III, Grey): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7523011 line 246 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523005 line 368 (round 19 age IV, Orange): journal's cross-validated excess 2, this binary computes 5 (hand_military_len 9 limit 4)
+- 7523021 line 312 (round 18 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522964 line 142 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522970 line 304 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522978 line 244 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523003 line 454 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522966 line 323 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523015 line 167 (round 10 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522976 line 177 (round 10 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522995 line 223 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7522974 line 72 (round 5 age I, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522987 line 392 (round 11 age II, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522977 line 150 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523010 line 263 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522990 line 349 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522992 line 319 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522959 line 237 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522981 line 224 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523016 line 343 (round 18 age IV, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 10 limit 7)
+- 7522984 line 75 (round 5 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523018 line 236 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523009 line 308 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 4)
+- 7523007 line 129 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521328 line 339 (round 18 age IV, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7521302 line 606 (round 16 age IV, Green): journal's cross-validated excess 0, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523198 line 241 (round 15 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7523193 line 302 (round 10 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523164 line 229 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523172 line 230 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523220 line 304 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7523197 line 182 (round 11 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523162 line 411 (round 12 age III, Grey): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7523190 line 309 (round 12 age III, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523175 line 188 (round 11 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523214 line 203 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523167 line 357 (round 17 age IV, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 1 limit 3)
+- 7523202 line 230 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 6)
+- 7523216 line 228 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523207 line 217 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523169 line 238 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523176 line 193 (round 11 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523192 line 365 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523159 line 253 (round 15 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523210 line 383 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523218 line 320 (round 12 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523165 line 214 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523205 line 349 (round 18 age IV, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523195 line 222 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523196 line 252 (round 14 age III, Purple): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523208 line 251 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522074 line 138 (round 9 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522008 line 227 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522072 line 318 (round 17 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7522011 line 129 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522067 line 132 (round 5 age I, Orange): journal's cross-validated excess 4, this binary computes 5 (hand_military_len 9 limit 4)
+- 7522034 line 500 (round 17 age IV, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522051 line 272 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522046 line 244 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522023 line 245 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522055 line 214 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522053 line 293 (round 12 age II, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522006 line 147 (round 8 age I, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7522005 line 84 (round 5 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522061 line 306 (round 12 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 7 limit 3)
+- 7522066 line 338 (round 10 age II, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522036 line 244 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 11 limit 9)
+- 7522022 line 258 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 3)
+- 7522037 line 428 (round 12 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522019 line 294 (round 12 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522009 line 219 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7522007 line 230 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522068 line 79 (round 6 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522041 line 451 (round 18 age IV, Orange): journal's cross-validated excess 3, this binary computes 5 (hand_military_len 7 limit 2)
+- 7522069 line 246 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 3)
+- 7522054 line 269 (round 15 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522058 line 127 (round 8 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522047 line 309 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521436 line 437 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521459 line 149 (round 5 age I, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521449 line 302 (round 8 age II, Grey): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521425 line 318 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523274 line 352 (round 11 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523270 line 250 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523229 line 231 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523225 line 344 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523224 line 219 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 5 limit 5)
+- 7523278 line 340 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523250 line 102 (round 5 age I, Green): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523246 line 217 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523234 line 341 (round 17 age IV, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523275 line 100 (round 7 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7523272 line 249 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523233 line 97 (round 7 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523268 line 249 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7523281 line 308 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523283 line 467 (round 13 age III, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523243 line 260 (round 14 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 8 limit 4)
+- 7523262 line 286 (round 17 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 10 limit 7)
+- 7523257 line 307 (round 19 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523258 line 253 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523265 line 128 (round 8 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7523260 line 258 (round 15 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523264 line 136 (round 9 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523223 line 305 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523253 line 309 (round 9 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523285 line 329 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7523236 line 473 (round 13 age III, Green): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523255 line 246 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 10 limit 9)
+- 7522371 line 198 (round 8 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522390 line 205 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522385 line 464 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522404 line 328 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522347 line 125 (round 8 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522384 line 331 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522375 line 317 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522351 line 225 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522354 line 322 (round 17 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522350 line 242 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522382 line 191 (round 11 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522363 line 77 (round 6 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522405 line 203 (round 12 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522372 line 142 (round 8 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522397 line 213 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522348 line 338 (round 9 age II, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522358 line 502 (round 14 age III, Grey): journal's cross-validated excess 6, this binary computes 4 (hand_military_len 9 limit 5)
+- 7522378 line 328 (round 16 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522374 line 150 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522365 line 393 (round 12 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522402 line 82 (round 6 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522381 line 92 (round 6 age I, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522369 line 136 (round 9 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522386 line 247 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 11 limit 9)
+- 7522815 line 391 (round 10 age II, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522800 line 169 (round 10 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522807 line 154 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522818 line 288 (round 9 age II, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522799 line 242 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522783 line 365 (round 19 age IV, Orange): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 11 limit 7)
+- 7522753 line 216 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522768 line 336 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 10 limit 8)
+- 7522754 line 229 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522789 line 505 (round 14 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522748 line 227 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522795 line 225 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 8 limit 6)
+- 7522764 line 234 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522792 line 441 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522798 line 176 (round 6 age I, Grey): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522808 line 243 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522770 line 355 (round 17 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522785 line 161 (round 9 age II, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 5 limit 2)
+- 7522786 line 409 (round 19 age IV, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 9 limit 6)
+- 7522814 line 419 (round 12 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522762 line 272 (round 15 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522804 line 222 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 10 limit 7)
+- 7522782 line 328 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522765 line 352 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 8 limit 5)
+- 7522813 line 222 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 7 limit 4)
+- 7522773 line 253 (round 8 age II, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522572 line 218 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522539 line 214 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7522580 line 429 (round 12 age III, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522595 line 207 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 8 limit 4)
+- 7522571 line 233 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7522578 line 343 (round 18 age IV, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522561 line 333 (round 18 age IV, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 9 limit 7)
+- 7522555 line 149 (round 9 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522607 line 138 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522609 line 142 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7522543 line 450 (round 13 age III, Grey): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 7 limit 3)
+- 7522581 line 169 (round 9 age II, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522586 line 230 (round 7 age II, Grey): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522560 line 292 (round 12 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522606 line 327 (round 13 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7522557 line 243 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 9 limit 8)
+- 7522550 line 250 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7522589 line 233 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7522544 line 240 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 8 limit 7)
+- 7522552 line 143 (round 9 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7522573 line 223 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7522554 line 265 (round 15 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7521983 line 259 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 5)
+- 7521940 line 283 (round 11 age III, Purple): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 6 limit 2)
+- 7521996 line 251 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521966 line 232 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 6 limit 5)
+- 7522000 line 285 (round 15 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521972 line 329 (round 18 age IV, Orange): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521971 line 350 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7521981 line 164 (round 10 age II, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521968 line 285 (round 16 age III, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 9 limit 5)
+- 7521963 line 256 (round 14 age III, Purple): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 12 limit 10)
+- 7521959 line 64 (round 5 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521992 line 215 (round 12 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521985 line 152 (round 9 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7521998 line 187 (round 12 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521974 line 141 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521982 line 61 (round 5 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521946 line 321 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521986 line 257 (round 15 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 6 limit 3)
+- 7521939 line 698 (round 19 age IV, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7521943 line 227 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 3 (hand_military_len 7 limit 4)
+- 7521953 line 237 (round 13 age III, Purple): journal's cross-validated excess 6, this binary computes 5 (hand_military_len 13 limit 8)
+- 7521984 line 247 (round 14 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7521969 line 117 (round 8 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521993 line 200 (round 11 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521997 line 409 (round 15 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7521995 line 239 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 6 limit 5)
+- 7521967 line 304 (round 17 age IV, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 3 limit 5)
+- 7521956 line 210 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7521958 line 310 (round 16 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 1 limit 2)
+- 7521951 line 285 (round 15 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7521657 line 319 (round 12 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7521711 line 357 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 1 (hand_military_len 9 limit 8)
+- 7521703 line 430 (round 15 age III, Green): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 6 limit 6)
+- 7521666 line 505 (round 13 age III, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7521683 line 81 (round 6 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7521681 line 226 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521710 line 390 (round 10 age II, Grey): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521662 line 349 (round 18 age IV, Orange): journal's cross-validated excess 3, this binary computes 4 (hand_military_len 7 limit 3)
+- 7521694 line 249 (round 14 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521712 line 405 (round 15 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521704 line 217 (round 13 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521721 line 295 (round 11 age III, Green): journal's cross-validated excess 0, this binary computes 3 (hand_military_len 6 limit 3)
+- 7521695 line 495 (round 14 age III, Green): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7521671 line 159 (round 5 age I, Green): journal's cross-validated excess 3, this binary computes 2 (hand_military_len 6 limit 4)
+- 7521690 line 267 (round 14 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 10 limit 7)
+- 7523116 line 75 (round 5 age I, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523142 line 305 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523140 line 68 (round 5 age I, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523149 line 247 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523123 line 500 (round 14 age III, Green): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 4 limit 5)
+- 7523132 line 159 (round 10 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 4 limit 2)
+- 7523106 line 248 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523102 line 229 (round 14 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523114 line 291 (round 11 age III, Green): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523157 line 261 (round 15 age III, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 8 limit 6)
+- 7523104 line 216 (round 13 age III, Purple): journal's cross-validated excess 1, this binary computes 0 (hand_military_len 2 limit 2)
+- 7523101 line 241 (round 13 age III, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 9 limit 6)
+- 7523095 line 288 (round 15 age III, Orange): journal's cross-validated excess 2, this binary computes 4 (hand_military_len 7 limit 3)
+- 7523092 line 223 (round 13 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+- 7523137 line 327 (round 13 age III, Orange): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523115 line 450 (round 17 age IV, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523098 line 373 (round 11 age II, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 4 limit 3)
+- 7523151 line 151 (round 7 age I, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523135 line 249 (round 13 age III, Purple): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 5 limit 4)
+- 7523128 line 341 (round 17 age IV, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523100 line 306 (round 18 age IV, Purple): journal's cross-validated excess 2, this binary computes 3 (hand_military_len 7 limit 4)
+- 7523124 line 241 (round 13 age III, Purple): journal's cross-validated excess 6, this binary computes 7 (hand_military_len 13 limit 6)
+- 7523125 line 145 (round 6 age I, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523127 line 133 (round 9 age II, Orange): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 5 limit 3)
+- 7523154 line 218 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 2 (hand_military_len 9 limit 7)
+- 7523146 line 234 (round 13 age III, Orange): journal's cross-validated excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+- 7523111 line 257 (round 14 age III, Orange): journal's cross-validated excess 4, this binary computes 3 (hand_military_len 11 limit 8)
+- 7523094 line 172 (round 10 age II, Purple): journal's cross-validated excess 1, this binary computes 2 (hand_military_len 7 limit 5)
+
+## Military hand ledger: classifying WHY the discard-phase oracle diverges
+
+| games | reason | example |
+|---|---|---|
+| 153 | UnmodelledEvent: last ledger event was PrepareEvent | 7523791 line 447 (round 14 age III, Purple): journal excess 2, simulator excess 3, ledger excess 3 (ledger's own last event: Some((PrepareEvent, 441))) |
+| 110 | UnmodelledEvent: last ledger event was Draw | 7523341 line 435 (round 13 age III, Purple): journal excess 0, simulator excess 1, ledger excess 1 (ledger's own last event: Some((Draw, 388))) |
+| 104 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was PrepareEvent | 7523809 line 272 (round 14 age III, Purple): journal excess 2, simulator excess 4, ledger excess 2 (ledger's own last event: Some((PrepareEvent, 264))) |
+| 81 | UnmodelledEvent: last ledger event was Discard | 7523338 line 444 (round 12 age III, Grey): journal excess 1, simulator excess 3, ledger excess 3 (ledger's own last event: Some((Discard, 391))) |
+| 60 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was Draw | 7522645 line 151 (round 9 age II, Purple): journal excess 0, simulator excess 1, ledger excess 0 (ledger's own last event: Some((Draw, 134))) |
+| 59 | UnmodelledEvent: last ledger event was ConsumingPlay | 7522639 line 326 (round 17 age IV, Purple): journal excess 0, simulator excess 1, ledger excess 1 (ledger's own last event: Some((ConsumingPlay, 322))) |
+| 55 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was ConsumingPlay | 7523357 line 173 (round 6 age I, Orange): journal excess 3, simulator excess 4, ledger excess 3 (ledger's own last event: Some((ConsumingPlay, 169))) |
+| 55 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was Discard | 7523063 line 302 (round 9 age II, Green): journal excess 2, simulator excess 3, ledger excess 2 (ledger's own last event: Some((Discard, 260))) |
+| 12 | UnmodelledEvent: last ledger event was ColonizeConsume | 7521837 line 245 (round 14 age III, Orange): journal excess 0, simulator excess 1, ledger excess 1 (ledger's own last event: Some((ColonizeConsume, 236))) |
+| 6 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was ColonizeConsume | 7521802 line 85 (round 6 age I, Orange): journal excess 2, simulator excess 3, ledger excess 2 (ledger's own last event: Some((ColonizeConsume, 69))) |
+| 4 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was DefenseConsume | 7521855 line 136 (round 9 age II, Orange): journal excess 0, simulator excess 1, ledger excess 0 (ledger's own last event: Some((DefenseConsume, 124))) |
+| 3 | SimulatorBug (ledger agrees with journal; forward simulator's own hand_military is wrong) -- last ledger event was ColumbusConsume | 7521917 line 284 (round 9 age II, Green): journal excess 0, simulator excess 1, ledger excess 0 (ledger's own last event: Some((ColumbusConsume, 279))) |
+
+## Culture oracle
+
+39808 "End turn" checkpoints had a `"(now M)"` running total to check this binary's own reconstructed `state.players[_].culture` against; 39605 (99.5%) matched exactly.
+86/1011 games sampled had at least one checkpoint disagree (FIRST divergence only, ranked by the ActionClass immediately preceding it -- a bucket name is the SYMPTOM location, not necessarily the cause; trace before theorizing):
+
+| games | preceding ActionClass | example |
+|---|---|---|
+| 32 | TakeCard | 7523809 line 353 (Orange): journal says (now 89), this binary computes 95 (delta 6) |
+| 10 | Discard | 7521847 line 361 (Green): journal says (now 66), this binary computes 67 (delta 1) |
+| 8 | BuildWonderStage | 7522665 line 340 (Orange): journal says (now 81), this binary computes 72 (delta -9) |
+| 7 | BuildBuilding | 7522143 line 336 (Purple): journal says (now 105), this binary computes 79 (delta -26) |
+| 5 | IncreasePopulation | 7523061 line 631 (Orange): journal says (now 126), this binary computes 124 (delta -2) |
+| 4 | BuildUnit | 7523347 line 317 (Purple): journal says (now 29), this binary computes 32 (delta 3) |
+| 4 | UpgradeProduction | 7522703 line 327 (Purple): journal says (now 111), this binary computes 106 (delta -5) |
+| 3 | UpgradeUnit | 7523159 line 367 (Purple): journal says (now 128), this binary computes 129 (delta 1) |
+| 3 | EndTurn | 7522446 line 718 (Grey): journal says (now 104), this binary computes 97 (delta -7) |
+| 3 | WinWar | 7522506 line 442 (Green): journal says (now 97), this binary computes 89 (delta -8) |
+| 2 | PlayTactic | 7523367 line 181 (Orange): journal says (now 26), this binary computes 29 (delta 3) |
+| 2 | ElectLeader | 7523473 line 307 (Orange): journal says (now 133), this binary computes 139 (delta 6) |
+| 2 | DevelopTechnology | 7521917 line 743 (Green): journal says (now 79), this binary computes 83 (delta 4) |
+| 1 | Destroy | 7523640 line 355 (Purple): journal says (now 66), this binary computes 68 (delta 2) |
+
+civil-age premature advances (this reconstruction's own age_civil read ahead of the journal's Line::age column, with more of the OLD age still to come): 0 games
+
+politics false-skips (a real event/territory preparation the journal shows; RECOVERED in place, this is an occurrence count for the still-open hand_military gap, not damage -- see GameResult::politics_false_skips's own doc): 14 across 14 games
+politics false-skips left UNRECOVERED (the true damage signal -- should be 0): 0 across 0 games
+
+## Stop-reason histogram, ranked by count
+
+| count | mean round reached | reason | example |
+|---|---|---|---|
+| 95 | 12.9 | StuckPending: decider # != expected actor #, phase Actions, no pending | 7523354 line 251: Purple discards 1 card |
+| 41 | 14.7 | IllegalMove: Build | 7523818 line 308: Orange builds Air Forces Orange loses 7 military resource |
+| 33 | 12.8 | IllegalMove: PlayAction | 7522645 line 324: Orange upgrades Alchemy to Computers using Efficient Upgrade Orange spends 1 resource |
+| 25 | 14.0 | IllegalMove: Aggression | 7523809 line 379: Purple plays Raid against Orange Destroy up to 2 of your rival's urban buildings: one of age III or older and one of age II or older. You gain resources equal to half their total cost, rounded up.; ; Purple uses 3 military action |
+| 24 | 13.6 | IllegalMove: WonderStep | 7522652 line 440: Orange builds 4 stages of First Space Flight Orange spends 16 resources; ; Wonder completed; Orange scores 27 culture |
+| 21 | 14.3 | IllegalMove: Upgrade | 7523347 line 468: Grey upgrades Bronze to Coal Grey spends 6 resources |
+| 20 | 11.1 | IllegalMove: Revolution | 7521491 line 447: Green revolutions Change government to Republic; 1 science points spent; Grey loses 1 science; Green loses 1 science; Green scores 3 culture |
+| 17 | 10.8 | UnrecoverableHiddenInfo: unpaired BGO client-side undo ("puts X back in the row" with no matching preceding take) | 7522613 line 219: Green puts Reserves back in the row Green gets 1 civil action |
+| 15 | 12.8 | IllegalMove: Take | 7523330 line 91: Purple takes Taj Mahal in hand |
+| 15 | 15.1 | IllegalMove: Develop | 7522617 line 107: Green discovers Monarchy Green loses 8 science |
+| 12 | 11.2 | IllegalMove: Pop | 7522658 line 417: Purple increases population Purple spends 4 food |
+| 9 | 15.0 | StuckPending: Raid choice open for player # but no journal-observed Raid/Terrorism destroy line left to resolve it with | 7522249 line 674: Grey builds Computers Grey spends 11 resources |
+| 9 | 14.2 | IllegalMove: War | 7522633 line 283: Orange declares War over Culture on Purple The victor takes 5 culture + 1 culture for each point of strength advantage from the defeated civilization. ; Orange uses 3 military action |
+| 6 | 11.0 | StuckPending: FoodOrResSplit choice open for player # but no journal-observed produces line left to resolve it with | 7522651 line 258: Grey builds 1 stage of Universitas Carolina Grey spends 3 resources |
+| 5 | 14.0 | UnrecoverableHiddenInfo: colonization bid of # exceeds this binary's computed force ceiling (#) for the correctly-resolved bidder, and their whole military hand converted to the best bonus card the deck's current age prints still does not reach it -- so this is a genuine contradiction, not the ordinary hidden-hand gap | 7523597 line 356: Purple bids 19 |
+| 4 | 15.2 | IllegalMove: PlayTactic | 7522875 line 274: Orange sets up new tactics III / Mechanized Army |
+| 4 | 11.0 | StuckPending: no auto-resolution for pending choice DestroyOwn (decider #, options #) | 7521741 line 242: Purple destroys Bronze |
+| 3 | 16.0 | ParserGap: International Agreement pick with no open TakeRow choice | 7522268 line 333: International Agreement Purple takes Multimedia in hand; Purple takes Efficient Upgrade in hand; Purple takes Military Build-Up in hand; Purple takes Movies in hand |
+| 3 | 17.0 | IllegalMove: Destroy | 7521933 line 362: Orange disbands Swordsmen |
+| 3 | 14.0 | IllegalMove: PolPass | 7523633 line 235: Orange passes Political Phase |
+| 3 | 9.3 | IllegalMove: PlayLeader | 7523043 line 159: Purple elects Napoleon Bonaparte Leonardo Da Vinci dies; Purple gets 1 civil action |
+| 3 | 14.3 | IllegalMove: Bid | 7521535 line 2: Orange bids 17 |
+| 3 | 12.0 | IllegalMove: CopyTactic | 7522230 line 302: Purple adopts existing tactics II / Classic Army |
+| 3 | 13.0 | StuckPending: PlunderSplit choice open for player # but no journal-observed Plunder resolution left to resolve it with | 7523648 line 268: Orange takes Air Forces in hand Orange uses 2 civil action |
+| 2 | 15.5 | ParserGap: open TakeRow choice does not offer slot # (Multimedia) | 7522649 line 268: Orange takes Multimedia in hand Orange uses 1 civil action |
+| 2 | 9.5 | IllegalMove: Barbarossa | 7522870 line 401: Barbarossa enlists a Warrior; Green spends 3 food; Green spends 1 resource |
+| 2 | 13.5 | StuckPending: no auto-resolution for pending choice WarTech { victim: #, budget: # } (decider #, options #) | 7521829 line 259: Purple passes Political Phase |
+| 1 | 15.0 | ParserGap: Efficient Upgrade (III)'s free-civil-action options [Move(Upgrade { from: Agriculture, to: Irrigation }), Move(Upgrade { from: Opera, to: Movies })] do not include BachTheater { from: Religion, to: Opera } | 7521929 line 275: Johannes Sebastian Bachupgrades Religion to Opera using Efficient Upgrade |
+| 1 | 16.0 | ParserGap: Urban Growth (III)'s free-civil-action options [Move(Build { card: Alchemy }), Move(Build { card: Philosophy }), Move(Build { card: Religion }), Move(Build { card: Theology })] do not include BachTheater { from: Theology, to: Movies } | 7523545 line 424: Johannes Sebastian Bachupgrades Theology to Movies using Urban Growth Green spends 1 resource |
+| 1 | 16.0 | StuckPending: LosePop choice open for player # but no journal-observed destroy line left to resolve it with | 7523069 line 307: Purple takes Multimedia in hand Purple uses 1 civil action |
+| 1 | 18.0 | UnrecoverableHiddenInfo: build cost mismatch for Drama: journal says # resources, this binary's reconstructed state computes # -- an unmodeled discount source (not a parser gap: the card and actor are both correctly resolved) | 7522309 line 316: Orange builds Drama Orange spends 3 resources |
+| 1 | 10.0 | ParserGap: observed destroy card not among LosePop options | 7522211 line 157: Purple disbands Warrior |
+| 1 | 16.0 | ParserGap: open TakeRow choice does not offer slot # (Reserves (III)) | 7521931 line 265: Purple takes Reserves in hand Purple uses 3 civil action |
+| 1 | 14.0 | ParserGap: Urban Growth (III)'s free-civil-action options [Move(Build { card: Opera }), Move(Build { card: Philosophy }), Move(Build { card: Printing Press }), Move(Build { card: Religion })] do not include BachTheater { from: Philosophy, to: Opera } | 7522973 line 243: Johannes Sebastian Bachupgrades Philosophy to Opera using Urban Growth Purple spends 2 resources |
+| 1 | 4.0 | StuckPending: GainBlock choice open for player # but no journal-observed "produces" line left to resolve it with | 7521799 line 107: Purple plays Reserves Purple spends 2 resource |
+| 1 | 15.0 | IllegalMove: OfferPact | 7522792 line 515: Orange proposes International Trade Agreement to Grey Orange is B; Grey is A; Each round, A produces an extra resource and B produces an extra food. |
+| 1 | 14.0 | ParserGap: Rich Land (II)'s free-civil-action options [Move(Build { card: Agriculture }), Move(Build { card: Bronze })] do not include Build { card: Irrigation } | 7521847 line 380: Purple builds Irrigation using Rich Land Purple spends 1 resource |
+| 1 | 16.0 | StuckPending: played Breakthrough (II) for its free-civil-action discount, but no Choice pending opened and Develop { card: Tanks } was not auto-resolved either | 7522985 line 294: Purple discovers Tanks using Breakthrough Purple loses 3 military science; Purple loses 6 science; Purple gets 3 science |
+| 1 | 14.0 | ParserGap: Urban Growth (III)'s free-civil-action options [Move(Build { card: Bread and Circuses }), Move(Build { card: Opera }), Move(Build { card: Philosophy }), Move(Build { card: Printing Press }), Move(Build { card: Religion })] do not include BachTheater { from: Religion, to: Opera } | 7522066 line 481: Johannes Sebastian Bachupgrades Religion to Opera using Urban Growth Purple spends 2 resources |
+| 1 | 11.0 | StuckPending: FoodOrResSplit choice open for player # but no journal-observed spends line left to resolve it with | 7522963 line 330: Purple takes Riflemen in hand Purple uses 2 civil action |
+| 1 | 16.0 | ParserGap: Efficient Upgrade (III)'s free-civil-action options [Move(Upgrade { from: Alchemy, to: Scientific Method }), Move(Upgrade { from: Drama, to: Movies })] do not include BachTheater { from: Religion, to: Movies } | 7522674 line 254: Johannes Sebastian Bachupgrades Religion to Movies using Efficient Upgrade Orange spends 2 resources |
+| 1 | 15.0 | ParserGap: Urban Growth (II)'s free-civil-action options [Move(Build { card: Alchemy }), Move(Build { card: Opera }), Move(Build { card: Philosophy }), Move(Build { card: Religion })] do not include BachTheater { from: Religion, to: Opera } | 7523025 line 282: Johannes Sebastian Bachupgrades Religion to Opera using Urban Growth Orange spends 2 resources |
+| 1 | 16.0 | ParserGap: open TakeRow choice does not offer slot # (Bill Gates) | 7523092 line 290: Purple takes Bill Gates in hand Purple uses 2 civil action |
+| 1 | 18.0 | ParserGap: Urban Growth (III)'s free-civil-action options [Move(Build { card: Alchemy }), Move(Build { card: Philosophy })] do not include Build { card: Organized Religion } | 7523640 line 367: Purple builds Organized Religion using Urban Growth Purple spends 1 resource |

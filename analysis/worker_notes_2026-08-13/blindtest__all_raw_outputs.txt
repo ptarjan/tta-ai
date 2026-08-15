@@ -1,0 +1,106 @@
+=== card_board_leader_plus15 ===
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            card_board_leader__plus15
+B            base
+mean moves   238.3
+elapsed      8.6s  (23.1 games/s)
+
+win rate     35.0%  +/- 6.7   (null 50.0%)   p = 0.0000
+             [naive +/- 6.6, rho +0.02, deff 1.04, 100 deals]
+culture      A 65.9   best other 83.9   lead -18.0 +/- 6.5
+
+verdict      reject -- card_board_leader__plus15 is WORSE than base
+=== card_board_leader_zero ===
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            card_board_leader__zero
+B            base
+mean moves   239.3
+elapsed      9.2s  (21.8 games/s)
+
+win rate     40.2%  +/- 6.1   (null 50.0%)   p = 0.0015
+             [naive +/- 6.8, rho -0.21, deff 0.81, 100 deals]
+culture      A 69.8   best other 80.0   lead -10.2 +/- 7.2
+
+verdict      reject -- card_board_leader__zero is WORSE than base
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            row_last_copy__neg1
+B            base
+mean moves   242.0
+elapsed      9.9s  (20.2 games/s)
+
+win rate     48.2%  +/- 7.2   (null 50.0%)   p = 0.6312
+             [naive +/- 6.9, rho +0.08, deff 1.10, 100 deals]
+culture      A 80.3   best other 84.3   lead -4.0 +/- 5.9
+
+verdict      inconclusive -- the interval still straddles the null
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            row_last_copy__neg10
+B            base
+mean moves   237.6
+elapsed      9.1s  (21.9 games/s)
+
+win rate     49.5%  +/- 6.7   (null 50.0%)   p = 0.8821
+             [naive +/- 6.9, rho -0.10, deff 0.93, 100 deals]
+culture      A 75.8   best other 77.2   lead -1.3 +/- 6.0
+
+verdict      inconclusive -- the interval still straddles the null
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            ca_left__neg8
+B            base
+mean moves   245.9
+elapsed      8.7s  (22.9 games/s)
+
+win rate     25.0%  +/- 5.7   (null 50.0%)   p = 0.0000
+             [naive +/- 6.0, rho -0.12, deff 0.91, 100 deals]
+culture      A 61.7   best other 96.2   lead -34.5 +/- 6.2
+
+verdict      reject -- ca_left__neg8 is WORSE than base
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            special_techs__zero
+B            base
+mean moves   240.4
+elapsed      9.8s  (20.5 games/s)
+
+win rate     51.0%  +/- 2.0   (null 50.0%)   p = 0.3173
+             [naive +/- 6.9, rho -0.92, deff 0.08, 100 deals]
+culture      A 80.4   best other 77.8   lead +2.6 +/- 1.9
+
+verdict      inconclusive -- the interval still straddles the null
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            uprising__zero
+B            base
+mean moves   233.7
+elapsed      8.5s  (23.5 games/s)
+
+win rate     25.8%  +/- 5.7   (null 50.0%)   p = 0.0000
+             [naive +/- 6.0, rho -0.14, deff 0.89, 100 deals]
+culture      A 51.8   best other 80.6   lead -28.8 +/- 5.6
+
+verdict      reject -- uprising__zero is WORSE than base
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            card_board_wonder__flip
+B            base
+mean moves   240.4
+elapsed      9.6s  (20.8 games/s)
+
+win rate     50.0%  +/- 0.0   (null 50.0%)   p = 1.0000
+             [naive +/- 6.9, rho -1.00, deff 0.00, 100 deals]
+culture      A 78.8   best other 78.8   lead +0.0 +/- 0.0
+
+verdict      inconclusive -- the interval still straddles the null

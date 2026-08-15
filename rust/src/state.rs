@@ -496,6 +496,15 @@ pub struct PlayerState {
     /// creates a token (§12.2.4).
     pub yellow_granted: u8,
     pub workers_free: u8,
+    /// Printed cost (unrounded) of the urban buildings THIS Raid aggression
+    /// has destroyed so far this use, accumulated across its per-age-tier
+    /// brackets (`QueueItem::Raid`/`ChoiceKind::Raid`'s `is_last`) so the
+    /// card's "half the resources needed to build THEM, rounded up" can
+    /// round the TOTAL once, not each casualty separately -- see
+    /// `interact.rs`'s `ChoiceKind::Raid` handler, which drains this back to
+    /// 0 the moment the last bracket resolves (destroyed, declined, or
+    /// invalid alike), so it never survives past the raid that filled it.
+    pub raid_loot_pending: u16,
     /// Total blue tokens owned, bank plus cards.
     pub blue_total: u8,
     pub food: u16,
@@ -553,6 +562,20 @@ pub struct PlayerState {
     /// rules let them keep. Cleared with `hammurabi_used` in
     /// `economy::end_of_turn`.
     pub hammurabi_replaced_this_turn: bool,
+    /// This turn's `Move::PlayAction { card: Breakthrough }` paid its own
+    /// RB p.15 "1 CA" with a military action instead (Maximilien
+    /// Robespierre's CoL p.12 exception, `legal::
+    /// breakthrough_robespierre_ma_fundable`'s own doc comment has the full
+    /// citation and the corroborating BGO games) because civil was already
+    /// exhausted. Consumed by `apply::h_revolution`'s own `robespierre`
+    /// branch the instant the revolution it funded actually resolves --
+    /// that branch otherwise assumes Breakthrough's 1 CA came out of civil
+    /// and backs 1 out of this turn's civil spend to avoid double-counting
+    /// it; skipping that correction here (nothing was ever spent from civil
+    /// to correct for) is the other half of the same fix. Reset at end of
+    /// turn like every other once-per-turn flag on this struct, in case the
+    /// order resolved to an ordinary Develop instead and left it unconsumed.
+    pub breakthrough_ma_funded: bool,
     /// SOME leader was in play this turn and has since been replaced by a new
     /// one (`apply::h_play_leader`) -- the condition Taj Mahal's printed 2015
     /// text reads: "If you replaced your leader this turn, taking this wonder
@@ -641,6 +664,57 @@ pub struct PlayerState {
     pub trade_resource_as_food_used_this_turn: u8,
 
     pub resigned: bool,
+
+    /// Blue tokens actually placed on this player's Farm cards, grouped by
+    /// denomination (printed food value) -- see [`TokenBank`]'s own doc.
+    /// `economy::blue_used`/`gain_food`/`pay_food`/`credit_production`'s
+    /// shared body maintains this; nothing else should write it directly.
+    pub food_tokens: TokenBank,
+    /// The Mine-card twin of [`Self::food_tokens`] (printed resource value).
+    pub resource_tokens: TokenBank,
+}
+
+/// A player's blue tokens, bucketed by the denomination (printed farm food /
+/// mine resource value) of whatever card they are placed on -- see
+/// `economy.rs`'s module doc for the corpus bug this closes (RESOURCE_ORACLE
+/// Group A, `analysis/worker_notes_2026-08-14/corrskip__CORRSKIP.txt`/
+/// `corrskip2__CORRSKIP2.txt`).
+///
+/// RULES_SPEC §6.4 / Code of Laws p.11: a token is worth whatever card it is
+/// ACTUALLY sitting on; tokens may move to a LOWER-value card ("making
+/// change") but NEVER to a higher one. The engine used to derive `blue_used`
+/// fresh every call from the scalar `p.food`/`p.resources` total, greedily
+/// re-packed into whatever denominations exist RIGHT NOW -- which silently
+/// assumes every player has always achieved perfect consolidation onto their
+/// best available card, something the "never move up" rule makes impossible
+/// once a higher card enters play after older stock was already placed.
+/// `TokenBank` instead tracks the tokens actually placed, by value, so old
+/// stock stays exactly where a real player's tokens would sit.
+///
+/// Per-DENOMINATION counts, not per-card identity: two cards printing the
+/// same food/resource value are interchangeable for corruption purposes (only
+/// the total occupied-token COUNT feeds the bank, `economy::corruption`),
+/// and nothing in RULES_SPEC/Code of Laws/the FAQ caps how many tokens one
+/// card may hold -- see `corrskip2__CORRSKIP2.txt` for the citation search.
+/// Same fixed 8-slot capacity as `economy::Denoms` (DESIGN.md rule 3: no
+/// `Vec`) for the same reason -- at most four farm/mine levels exist today.
+///
+/// `_len == 0` (the `Default`) also doubles as "never tracked" -- a
+/// hand-built `PlayerState` in a unit test that sets `p.food`/`p.resources`
+/// directly and never calls a real gain/pay path. `economy::blue_used`
+/// reconciles that gap by treating any UNTRACKED amount (`p.food` above
+/// `bank_total_value`) as if it needed fresh greedy placement right now --
+/// i.e. exactly today's pre-fix formula -- so every test that never touches
+/// this field keeps its old, already-asserted behavior unchanged. Real
+/// gameplay (`replay`/self-play) always drives the full `gain_food`/
+/// `pay_food`/`credit_production` chokepoints, so for those the tracked
+/// total and `p.food` never drift apart and the reconciliation fallback is a
+/// no-op.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct TokenBank {
+    pub denoms: [u8; 8],
+    pub counts: [u8; 8],
+    pub len: u8,
 }
 
 /// The one-time cost discount `events::apply_extras` writes onto EVERY
@@ -934,8 +1008,12 @@ pub enum ChoiceKind {
     FlipWonder,
     /// `_c_discard_military`: §6.6 step 1 / an event's discard.
     DiscardMilitary,
-    /// `_c_raid`: attacker picks the urban building to destroy.
-    Raid { victim: u8, loot: bool },
+    /// `_c_raid`: attacker picks the urban building to destroy. `is_last`
+    /// marks the final age-tier bracket of this raid use (Raid I has one,
+    /// Raid II/III two) -- the card grants "half the resources needed to
+    /// build THEM, rounded up" ONCE for the whole raid, so only the last
+    /// bracket flushes `PlayerState::raid_loot_pending` into real resources.
+    Raid { victim: u8, loot: bool, is_last: bool },
     /// `_c_annex`: attacker picks which colony changes hands.
     Annex { victim: u8 },
     /// `_c_infiltrate`: remove the rival's leader or unfinished wonder,
@@ -956,6 +1034,21 @@ pub enum ChoiceKind {
     /// plunder_split_options`) is every way to reach the maximum takeable
     /// total, one `ChoiceOption::Gain` per split. `victim` is who pays it.
     PlunderSplit { victim: u8 },
+    /// Raiders'/Foray's `foodAndOrResources` gain/lose block (§5.3): a
+    /// SELF-directed split, not an attacker's -- the targeted player picks
+    /// their own food/resources split, clockwise from the revealer when
+    /// more than one player is targeted (`QueueItem::FoodOrResSplit`'s own
+    /// doc). `lose` is Raiders' direction (drain, floored at zero, capped
+    /// by `interact::plunder_split_options` reused against the player's
+    /// OWN banks); `!lose` is Foray's (gain, one `ChoiceOption::Gain` per
+    /// split of the total with no cap at option-build time -- exactly
+    /// `PlunderSplit`'s own attacker-gain precedent above: blue-token
+    /// availability caps what actually lands, per bank, at resolution via
+    /// `economy::gain_food`/`gain_resources`, not by filtering options).
+    /// Distinct from `FoodOrRes` above: that one is Reserves' bare "N food
+    /// OR N resources" (all-or-nothing, `gainFoodOrResources`), this one is
+    /// a SPLIT of a fixed total between the two (`foodAndOrResources`).
+    FoodOrResSplit { lose: bool },
 }
 
 /// An open `choice`: somebody must pick one of `options`.
@@ -1237,17 +1330,26 @@ pub enum QueueItem {
     DiscardMilitary { player: u8, n: u8 },
     /// `_q_end_of_turn`: resume §6.6 after the discard decision.
     EndOfTurn { player: u8 },
-    /// `_q_auto_skip_politics`: resume the start-of-turn "is passing the only
-    /// political option?" test after a War over Technology's spoils.
-    AutoSkipPolitics { player: u8 },
     /// `_q_raid`: destroy one of `victim`'s urban buildings, up to `max_age`.
-    Raid { player: u8, victim: u8, max_age: Age, no_loot: bool },
+    /// `is_last` mirrors `ChoiceKind::Raid`'s own field -- see its doc.
+    Raid { player: u8, victim: u8, max_age: Age, no_loot: bool, is_last: bool },
     /// `_q_annex`.
     Annex { player: u8, victim: u8 },
     /// `_q_infiltrate`.
     Infiltrate { player: u8, victim: u8, per: u8 },
     /// `_q_take_row`.
     TakeRow { player: u8, budget: i16 },
+    /// §5.3's `foodAndOrResources` gain/lose block (Raiders, Foray): the
+    /// TARGETED player's own choice of how to split `amount` between food
+    /// and resources, not `events::food_or_resources`'s old fixed
+    /// "resources first" formula -- see `ChoiceKind::FoodOrResSplit`'s own
+    /// doc for the full rationale. One of these is enqueued per targeted
+    /// player, in the same clockwise-from-the-revealer order
+    /// `resolve_count_targets` already calls `apply_gains_block` in, so
+    /// RULES_SPEC.md §5.3's "multiple-player decisions resolve clockwise
+    /// from the revealing player" falls out of that existing order rather
+    /// than needing new ordering logic here.
+    FoodOrResSplit { player: u8, amount: i16, lose: bool },
 }
 
 impl QueueItem {
@@ -1260,12 +1362,12 @@ impl QueueItem {
             | CardGains { player, .. }
             | FreeBuild { player, .. }
             | DestroyOwn { player }
+            | FoodOrResSplit { player, .. }
             | LosePop { player, .. }
             | LoseColony { player }
             | FlipWonder { player, .. }
             | DiscardMilitary { player, .. }
             | EndOfTurn { player }
-            | AutoSkipPolitics { player }
             | Raid { player, .. }
             | Annex { player, .. }
             | Infiltrate { player, .. }
@@ -1451,6 +1553,18 @@ pub struct GameState {
     /// after `resume_end_turn` returns can read a value that has already
     /// been through a DIFFERENT player's entire start-of-turn sequence.
     pub last_end_of_turn_culture: [Option<u16>; MAX_PLAYERS],
+
+    /// [`GameState::last_end_of_turn_culture`]'s twin for science -- same
+    /// snapshot-before-`advance_turn` timing, same consumer
+    /// (`replay_common.rs`'s science oracle, `SCIENCE_ORACLE`-gated, mirrors
+    /// the culture oracle exactly). Instrumentation only.
+    pub last_end_of_turn_science: [Option<u16>; MAX_PLAYERS],
+
+    /// [`GameState::last_end_of_turn_culture`]'s twin for resources -- same
+    /// snapshot-before-`advance_turn` timing, same consumer
+    /// (`replay_common.rs`'s resource oracle, `RESOURCE_ORACLE`-gated).
+    /// Instrumentation only.
+    pub last_end_of_turn_resources: [Option<u16>; MAX_PLAYERS],
 }
 
 impl GameState {

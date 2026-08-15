@@ -1,0 +1,48 @@
+games        200
+players      2
+weights      ../champion_2p_zeroed.json
+elapsed      8.6s
+
+## Wasted civil actions (n=200 games, 400 player-games, 8070 player-turns total)
+
+Player-turns ending with unspent CA: 5125/8070 (63.5%)
+Total civil actions left unspent across the sample: 15147
+
+BUCKET SPLIT (by wasted turn):
+  nothing legal to spend on : 2/5125 (0.0%) turns, 6 CA (0.0%)
+  chose to stop w/ legal alt: 5123/5125 (100.0%) turns, 15141 CA (100.0%)
+
+### THE KEY DIAGNOSTIC -- best-available-alternative raw evaluator score, on 'chose to stop' turns:
+min=-483560.541 p10=276.343 p25=458.966 median=772.582 p75=1291.847 p90=2018.682 max=5361.818 mean=853.984 n=5123
+Best alternative scored <= 0 on 212/5123 (4.1%) of 'chose to stop' turns -- the evaluator judged EVERY legal, affordable, CA-costing move as non-positive.
+EndTurn's own score on those same turns: min=-5356.588 p10=296.008 p25=480.409 median=787.991 p75=1311.379 p90=2039.673 max=5378.756 mean=979.859 n=5123
+Gap (best_alt_score - end_turn_score, always <= 0 by construction -- how CLOSE the call was): min=-483631.659 p10=-50.273 p25=-19.950 median=-11.861 p75=-5.387 p90=-1.564 max=-0.001 mean=-125.876 n=5123
+
+### Move family of the best-scoring forgone alternative, 'chose to stop' turns:
+  Take         n= 2414 ( 47.1% of chose-to-stop) mean_score=920.609
+  Population   n=  901 ( 17.6% of chose-to-stop) mean_score=879.077
+  Destroy      n=  675 ( 13.2% of chose-to-stop) mean_score=955.461
+  WonderStep   n=  640 ( 12.5% of chose-to-stop) mean_score=1137.734
+  PlayAction   n=  247 (  4.8% of chose-to-stop) mean_score=-888.279
+  Leader       n=  120 (  2.3% of chose-to-stop) mean_score=632.709
+  Develop      n=   79 (  1.5% of chose-to-stop) mean_score=1346.642
+  Revolution   n=   29 (  0.6% of chose-to-stop) mean_score=917.763
+  Build        n=   14 (  0.3% of chose-to-stop) mean_score=-307.419
+  Upgrade      n=    4 (  0.1% of chose-to-stop) mean_score=564.663
+
+### Where the waste concentrates (age of the wasted turn, both buckets):
+  Age A(setup)  turns=   80 (  1.6%)  CA=   113 (  0.7%)
+  Age I         turns= 1270 ( 24.8%)  CA=  3163 ( 20.9%)
+  Age II        turns= 1532 ( 29.9%)  CA=  4170 ( 27.5%)
+  Age III       turns= 1881 ( 36.7%)  CA=  6468 ( 42.7%)
+  Age IV        turns=  362 (  7.1%)  CA=  1233 (  8.1%)
+
+### Unspent-CA-per-wasted-turn distribution:
+min=1.000 p10=1.000 p25=2.000 median=3.000 p75=4.000 p90=5.000 max=7.000 mean=2.956 n=5125
+
+### Where the waste concentrates (round number of the wasted turn):
+  round 1-5    turns= 1020 ( 19.9%)  CA=  2439 ( 16.1%)
+  round 6-10   turns= 1172 ( 22.9%)  CA=  2998 ( 19.8%)
+  round 11-15  turns= 1289 ( 25.2%)  CA=  3827 ( 25.3%)
+  round 16-20  turns= 1560 ( 30.4%)  CA=  5602 ( 37.0%)
+  round 21+    turns=   84 (  1.6%)  CA=   281 (  1.9%)

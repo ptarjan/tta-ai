@@ -1,0 +1,101 @@
+ISOQUIRK -- "replaystats cannot isolate a single game" is NOT a tooling bug
+==========================================================================
+2026-08-14, checked centrally by the coordinator at base 791150f after the
+assigned worker stalled without writing anything.
+
+VERDICT: CLOSED, NO DEFECT. A one-row index reproduces the full sweep exactly.
+Nothing was changed. isoquirk.patch is empty by design.
+
+WHAT WAS CLAIMED
+----------------
+A previous worker reported that game 7522315 "cannot be isolated for
+single-game measurement -- a replaystats tooling quirk worth fixing", and
+that this blocked their investigation.
+
+WHAT ACTUALLY HAPPENS
+---------------------
+Build a one-row index (header + the game's row) and run it:
+
+    head -1 sources/bgo/index.tsv > /tmp/iso_one.tsv
+    awk -F'\t' '$1=="7522315"' sources/bgo/index.tsv >> /tmp/iso_one.tsv
+    SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+        /tmp/iso_one.tsv /private/tmp/bgo-journals/journals > /tmp/iso_one.txt 2>&1
+
+That works. It emits a complete report for the one game: 262 decisions
+recorded, 36 discard checkpoints, 36 culture checkpoints, and every oracle
+section populated.
+
+The one line that appears in BOTH runs is byte-identical:
+
+    - 7522315 line 130 (round 8 age II, Purple): journal's cross-validated
+      excess 0, this binary computes 1 (hand_military_len 3 limit 2)
+
+Full sweep: 1011 sampled, 671 completed, 630 exact -- the current baseline,
+unchanged. One-row run: 1 sampled, 0 completed, stop reason
+`IllegalMove: Build` at line 346.
+
+THE REAL EXPLANATION -- one example per bucket, not one row per game
+--------------------------------------------------------------------
+`grep 7522315 /tmp/iso_full.txt` over the FULL sweep returns exactly ONE
+line, from the discard-phase oracle. The game's culture divergence and its
+stop reason do not appear anywhere in the full-sweep output.
+
+That is not data loss. Every other section of the report is a HISTOGRAM: it
+prints a count per bucket and ONE example game for the bucket. 7522315 is
+counted in its culture bucket (`BuildWonderStage`) and in its stop-reason
+bucket (`IllegalMove: Build`), but some other game is the one named as the
+example. Isolating the game to one row makes it the only candidate, so it
+becomes the example everywhere and all its detail appears.
+
+So the tool behaves correctly and identically in both modes. What misled the
+earlier worker is that grepping the full sweep for a game ID is NOT a way to
+see that game's findings -- the histograms deliberately name one example
+each. Isolating to a one-row index is exactly the right move, and it works.
+
+HOW TO ISOLATE A GAME (this is the supported workflow, use it freely)
+---------------------------------------------------------------------
+    cd <clone>/rust
+    PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+    head -1 /Users/pt/tta-ai/sources/bgo/index.tsv > /tmp/one.tsv
+    awk -F'\t' '$1=="<GAME_ID>"' /Users/pt/tta-ai/sources/bgo/index.tsv >> /tmp/one.tsv
+    ./target/difftest/replaystats /tmp/one.tsv /private/tmp/bgo-journals/journals \
+        > /tmp/one.txt 2>&1
+
+The header row is required -- the parser skips line 1. Never pipe
+replaystats through `head`; SIGPIPE truncates or kills the run.
+
+GUARD
+-----
+No source was changed, so the guard is trivially clean; run to confirm the
+binary in the clone matched the baseline:
+
+    671 completed / 630 exact, identical to /private/tmp/guard_ids.txt.
+    comm -23 (regressions): <empty>
+    comm -13 (wins):        <empty>
+
+HANDOFF
+-------
+1. Delete the backlog item "7522315 cannot be isolated -- replaystats
+   tooling quirk". It does not exist.
+2. 7522315's real content is still open and is now cheap to look at:
+   - discard oracle, line 130 round 8, Purple: classified SimulatorBug --
+     the military-hand LEDGER agrees with the journal (excess 0) while the
+     forward simulator computes excess 1. Last ledger event before the
+     divergence was `ConsumingPlay`. That is the ~100-game SimulatorBug
+     family, and this is a small, fully-traced instance of it.
+     NOTE FIRST: forcing the journal's discard count in `apply_one`'s
+     `ActionClass::Discard` arm is MEASURED WRONG (456 regressions, 1 win) --
+     see simbug2__SIMBUG2.txt. The ambiguity is that "journal count > engine
+     excess" means either a phantom card OR an already-missing card, ~456:1
+     in favour of already-missing. Any fix here must disambiguate those two,
+     not pick one.
+   - culture oracle, line 220, Purple: journal "(now 27)", binary computes
+     31, delta 4, preceded by BuildWonderStage.
+   - stop reason: `IllegalMove: Build` at line 346, "Orange builds Swordsmen
+     Orange spends 3 resources" -- this is the resource-shortfall bucket, so
+     it belongs to whoever owns that bucket, not to a separate effort.
+3. Worth considering for the tool itself (NOT done, and not obviously worth
+   it): the histogram sections could name the example game AND the bucket
+   size in a way that makes it obvious the example is one of N. The present
+   output already says "| games |" next to it, so this is cosmetic. Do not
+   add a flag to print every game -- that is what the one-row index is for.

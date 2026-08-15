@@ -102,6 +102,7 @@
 use crate::cards::{Age, CardId, CardType, Special, CARDS};
 use crate::combat;
 use crate::economy;
+use crate::effects;
 use crate::events;
 use crate::legal;
 use crate::moves::{Move, MoveList};
@@ -269,6 +270,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         yellow_bank: 18,
         yellow_granted: 0,
         workers_free: 1,
+        raid_loot_pending: 0,
         blue_total: 16,
         food: 0,
         resources: 0,
@@ -286,6 +288,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         ca_spent_taking: 0,
         hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            breakthrough_ma_funded: false,
         replaced_leader_this_turn: false,
         trade_food_as_resource_used_this_turn: 0,
         trade_resource_as_food_used_this_turn: 0,
@@ -302,6 +305,8 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         mil_sci_discount: 0,
         one_time_discount: crate::state::OneTimeDiscount::default(),
         resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
     }
 }
 
@@ -411,6 +416,8 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
         pending: PendingStack::new(),
         queue: Queue::new(),
         last_end_of_turn_culture: [None; MAX_PLAYERS],
+        last_end_of_turn_science: [None; MAX_PLAYERS],
+        last_end_of_turn_resources: [None; MAX_PLAYERS],
     };
 
     // The thirteen row slots, dealt from the shuffled Age A civil deck. That
@@ -452,16 +459,12 @@ pub fn live_count(state: &GameState) -> usize {
 /// §2.1: discard the leftmost N cards, slide the rest left, deal from the
 /// current deck.
 fn replenish(state: &mut GameState, rng: &mut LazyRandom) {
-    // §1.10: the FIRST replenish ends Age A outright -- whatever is left of
-    // the 20-card Age A deck is simply removed from the game, with no
-    // antiquation and no yellow-token loss (that is what `advance_age`'s
-    // `ended != A` guard buys). Note that those leftover cards are NOT
-    // recorded in `civil_discard`/`civil_removed`: Python drops them the same
-    // way, and the card census treats "never dealt" as unseen either way.
-    if state.age_civil == Age::A {
-        state.civil_deck = CardList::new();
-        advance_age(state, rng);
-    }
+    // §1.10: whether THIS replenish is the one that ends Age A. Captured
+    // before sweeping/dealing, and checked again below rather than assumed,
+    // because `deal` can itself already advance the age (see the fallback
+    // note below) -- in which case the check after `deal` must be a no-op,
+    // not a second advance.
+    let first_replenish = state.age_civil == Age::A;
 
     let n = sweep_count(live_count(state)).min(ROW_SIZE);
     for i in 0..n {
@@ -484,7 +487,33 @@ fn replenish(state: &mut GameState, rng: &mut LazyRandom) {
         }
     }
     state.card_row = kept;
+    // §1.10: fill from whatever deck is current -- for the first replenish
+    // that is the remaining (7-card) Age A civil deck, NOT Age I. `deal`
+    // already falls through to the next age if the deck it is drawing from
+    // runs dry mid-fill (its own doc comment, §2.2), which is exactly the
+    // "if Age A civil cards run out while filling, continue filling from the
+    // Age I deck" fallback -- nothing extra is needed here for that case. At
+    // the current card counts this deck never actually runs dry here (7
+    // available, `player_count + sweep_count` = 5 needed at every player
+    // count), but the fallback is implemented anyway since a resignation or
+    // future data change could reach it.
     deal(state, rng);
+
+    // §1.10: the first replenish ends Age A outright, whether or not the
+    // deck emptied while filling above -- unlike Ages I/II/III, Age A's
+    // end is triggered by the replenish itself, not by deck exhaustion. If
+    // `deal` already advanced the age above (the deck-ran-dry fallback),
+    // `state.age_civil` is no longer `A` and this is a no-op guard. If it
+    // didn't (the normal case), this call boxes whatever Age A cards are
+    // still in `civil_deck` (overwritten by `advance_age`'s
+    // `build_deck(nxt, ..)`, so not separately recorded -- same "never
+    // dealt is unseen" reasoning as before) and installs the Age I civil
+    // and military decks. `advance_age`'s `ended != Age::A` guard still
+    // skips antiquation and the -2 yellow-token loss here, since `ended`
+    // reads `state.age_civil`, which is still `A` at this point.
+    if first_replenish && state.age_civil == Age::A {
+        advance_age(state, rng);
+    }
 }
 
 /// Fill empty row slots from the current civil deck (§2.1 step 3).
@@ -571,6 +600,13 @@ fn advance_age(state: &mut GameState, rng: &mut LazyRandom) {
 /// change play -- but leaving them out cannot be detected, which is why it is
 /// written down here rather than assumed.
 fn antiquate(state: &mut GameState, ended: Age) {
+    antiquate_hands(state, ended);
+    antiquate_leader_wonder_and_pacts(state, ended);
+}
+
+/// The hand half of [`antiquate`], split out so [`antiquate_leader_wonder_and_pacts`]
+/// can run on its own -- see that function's own doc for why.
+fn antiquate_hands(state: &mut GameState, ended: Age) {
     let cutoff = ended as u8;
     for idx in 0..state.num_players as usize {
         // Hands: cull first (so the record is written), then keep the rest.
@@ -597,12 +633,53 @@ fn antiquate(state: &mut GameState, ended: Age) {
             }
         }
         state.players[idx].hand_military = keep;
+    }
+}
 
+/// The leader/wonder/pact half of [`antiquate`], split out so the BGO
+/// journal replayer can run JUST this half early, ahead of [`antiquate_hands`]
+/// and ahead of `advance_age`'s own §12.2.4 yellow-bank deduction and deck
+/// rebuild -- see [`antiquate_leader_wonder_pacts_up_to`]'s own doc for why.
+/// Hands stay OUT of this split deliberately: they are what the discard-phase
+/// hand-size machinery (`interact::discard_options` and friends) reasons
+/// about, and running their antiquation ahead of the deferred, fully-timed
+/// `advance_age` call risks shifting a discard-phase decision this function
+/// has no business touching. A leader/wonder/pact leaving play has no such
+/// entanglement: `on_leave_play`'s own token bookkeeping is the only side
+/// effect, and it is idempotent here the same way the rest of [`antiquate`]
+/// is -- the card is simply gone by the time the deferred, full [`antiquate`]
+/// call reaches the same `(state, ended)` pair, so that later call finds
+/// nothing left to discard for it.
+fn antiquate_leader_wonder_and_pacts(state: &mut GameState, ended: Age) {
+    let cutoff = ended as u8;
+    for idx in 0..state.num_players as usize {
         let leader = state.players[idx].leader;
         if !leader.is_none() && (leader.get().age as u8) < cutoff {
+            // Snapshot/carry-over exactly like `apply::h_play_leader`'s own
+            // replacement -- antiquation is a total DECREASE (the leader's
+            // own flat CA/MA bonus drops out) exactly like §8.2's "if
+            // decreased, return tokens (spent first)", so a flat subtract
+            // (this file's `on_leave_play` alone) would wrongly claw back
+            // actions the player had already spent from OTHER sources this
+            // same turn once the antiquating leader's bonus is smaller than
+            // what is left of it -- see `apply::carry_over_action_pool`'s
+            // own doc comment for the citation and the leader-replacement
+            // precedent (game `7522520`) this mirrors.
+            let old_total_c = effects::state_stats(state, &state.players[idx]).civil_actions;
+            let old_total_m = effects::state_stats(state, &state.players[idx]).military_actions;
+            let old_remaining_c = state.players[idx].civil_actions as i32;
+            let old_remaining_m = state.players[idx].military_actions as i32;
+            let spent_c = old_total_c - old_remaining_c;
+            let spent_m = old_total_m - old_remaining_m;
             on_leave_play(&mut state.players[idx], leader);
             economy::discard_civil(state, leader);
             state.players[idx].leader = CardId::NONE;
+            let new_total_c = effects::state_stats(state, &state.players[idx]).civil_actions;
+            let new_total_m = effects::state_stats(state, &state.players[idx]).military_actions;
+            state.players[idx].civil_actions =
+                crate::apply::carry_over_action_pool(old_total_c, new_total_c, spent_c, old_remaining_c);
+            state.players[idx].military_actions =
+                crate::apply::carry_over_action_pool(old_total_m, new_total_m, spent_m, old_remaining_m);
         }
 
         let wonder = state.players[idx].wonder;
@@ -627,16 +704,92 @@ fn antiquate(state: &mut GameState, ended: Age) {
     }
 }
 
+/// Run [`antiquate_leader_wonder_and_pacts`] for every age between
+/// `state.age_civil` (exclusive lower bound handled by the loop starting
+/// there) and `target` (exclusive), WITHOUT bumping `state.age_civil`,
+/// touching `civil_deck`, or running `advance_age`'s §12.2.4 yellow-bank
+/// deduction -- the narrow fix for the (-6,+6) War-over-Culture cluster
+/// (`docs/REPLAY.md`, Napoleon Bonaparte bucket).
+///
+/// WHY THIS EXISTS: `combat::resolve_war_outcome` fires synchronously inside
+/// `game::start_turn`, itself triggered as a side effect of applying the
+/// BGO journal's own DEFENDER-side `EndTurn`/`Discard` line for the OLD
+/// age -- there is no journal line boundary between that trailer and the
+/// attacker's own synchronous start-of-turn cascade for the replayer to
+/// hook into. `replay_common.rs`'s `catch_up_civil_age` cannot fire in time:
+/// it is deliberately deferred past `EndTurn`/`Discard`/`WinWar` lines
+/// (`is_trustworthy_age_line`'s own doc has the full history, including WHY
+/// trusting a `WinWar` line's own age at ITS call site is unsafe -- game
+/// `7523079`'s same-timestamp export collision). The result: an Age II
+/// leader (Napoleon Bonaparte) that the real BGA game had already
+/// antiquated out by the time a War over Culture resolved one age later is
+/// still present in this reconstruction, still contributing his strength
+/// bonus.
+///
+/// The fix runs ONLY the antiquation half early, at the point
+/// `replay_common.rs`'s main loop detects (via `upcoming_confirmed_winwar_age`)
+/// that the very next non-bridge line is a `WinWar` confirmation tagged an
+/// age this reconstruction has not caught up to yet, with no older-tagged
+/// line immediately following it (the discriminator that rules out the
+/// `7523079` collision shape). Everything else -- `state.age_civil` itself,
+/// `civil_deck`, `yellow_bank`'s §12.2.4 deduction, hand antiquation -- stays
+/// on the EXACT same deferred schedule as before, so none of the existing
+/// timing-sensitive tests around `catch_up_civil_age`/`is_trustworthy_age_line`
+/// change behaviour. The later, deferred, full `antiquate` call (via the
+/// normal `force_civil_age_at_least` path) still runs for the same
+/// `(state, ended)` pairs; it is a no-op for whatever this function already
+/// removed, since there is nothing left below `cutoff` to find.
+pub(crate) fn antiquate_leader_wonder_pacts_up_to(state: &mut GameState, target: Age) {
+    let mut ended = state.age_civil;
+    while ended < target {
+        antiquate_leader_wonder_and_pacts(state, ended);
+        let Some(next) = next_age(ended) else { break };
+        ended = next;
+    }
+}
+
 /// The leave-play token bookkeeping, for the one caller [`antiquate`] has.
 ///
 /// Duplicated from `apply.rs`'s private `on_leave_play` rather than shared,
 /// exactly as `legal.rs`/`costs.rs`/`apply.rs` each keep their own four-line
 /// `leader_is`: making it `pub(crate)` is an edit to a module this port does
-/// not own. It is six lines and it is the whole of Python's
-/// `effects.on_leave_play` for the non-`Special` half. (Bill Gates'
-/// `cultureOnLeaveEqualToLabResourceProduction` is a gap `apply.rs` already
-/// names and carries; it is not re-opened here.)
+/// not own. PLUS the one `Special` this port models here too:
+/// `CultureOnLeaveEqualToLabResourceProduction` (Bill Gates) now fires on
+/// THIS path as well (antiquation -- a leader too old for the current age is
+/// discarded exactly like any other leave-play, so a Bill Gates who ages out
+/// rather than being Iconoclasm'd owes the same culture; `apply.rs`'s own
+/// twin carries the full citation/trace for the mechanism itself).
+///
+/// ENGINE BUG FIX (`IllegalMove: Revolution` bucket, game `7522515` round
+/// 12): this duplicate used to stop at blue/yellow tokens, silently dropping
+/// the `civil_actions`/`military_actions` giveback `apply.rs`'s own
+/// `on_leave_play` already has (its own doc comment: "a leader carrying a
+/// ... bonus leaving play mid-turn ... must give back the headroom it
+/// added"). A leader antiquated out of play (RULES_SPEC line 244, CoL p.3/RB
+/// p.21: "an Age I leader dies when Age II ends") is a leave-play exactly
+/// like a replacement or Iconoclasm -- there is no rules basis for exempting
+/// it from the same symmetric give-back `on_enter_play` grants on the way
+/// in. Without this, a flat MA/CA bonus a since-antiquated leader printed
+/// (Joan of Arc: +1 MA) survived as a ghost in the player's LIVE per-turn
+/// pool forever; the next leader elected into the now-empty slot then had
+/// `apply.rs::on_enter_play`'s own `p.military_actions += ma` ADD its bonus
+/// ON TOP of that ghost (that branch assumes an empty slot means nothing to
+/// net against), overcounting the total by exactly the antiquated leader's
+/// bonus. `legal::revolt_pool_ok` requires the live pool to equal a FRESH
+/// `effects::state_stats` recompute (which correctly excludes the
+/// long-gone leader) before a revolution is legal, so the ghosted extra
+/// action permanently failed that check for the rest of the game -- 7522515
+/// round 12: Joan of Arc (Age I, +1 MA) antiquates when Age II ends,
+/// leaving `military_actions` at a stale 3 instead of 2; Robespierre (+1
+/// MA) is elected into the empty slot afterward and `on_enter_play` adds
+/// its own +1 on top, landing on 4 where a fresh recompute says 3 -- the
+/// exact mismatch this binary's own `try_apply` debug trace showed at the
+/// human's real, BGA-accepted "Purple revolutions ... Republic" line.
 fn on_leave_play(p: &mut PlayerState, id: CardId) {
+    if id.get().special.contains(&Special::CultureOnLeaveEqualToLabResourceProduction) {
+        let gained = effects::lab_level_workers(&p.techs);
+        p.culture = (p.culture as i32 + gained).max(0) as u16;
+    }
     let eff = &id.get().effects;
     let bt = eff.blue_tokens as i32;
     if bt != 0 {
@@ -644,6 +797,14 @@ fn on_leave_play(p: &mut PlayerState, id: CardId) {
     }
     if eff.yellow_tokens != 0 {
         p.yellow_bank = (p.yellow_bank as i32 - eff.yellow_tokens as i32).max(0) as u8;
+    }
+    let ca = eff.civil_actions as i32;
+    if ca != 0 {
+        p.civil_actions = (p.civil_actions as i32 - ca).max(0) as i8;
+    }
+    let ma = eff.military_actions as i32;
+    if ma != 0 {
+        p.military_actions = (p.military_actions as i32 - ma).max(0) as i8;
     }
 }
 
@@ -787,38 +948,26 @@ fn start_turn(state: &mut GameState, rng: &mut LazyRandom) {
         // completeness flag that is always true for the compiled-in base game
         // -- the same non-field `legal.rs::politics_moves` and
         // `economy::end_of_turn` both document.
+        //
+        // There USED to be an `auto_skip_politics` call here that silently
+        // jumped straight to `Phase::Actions`, without ever consuming a
+        // `Move::PolPass`, whenever `legal::legal_moves` had exactly one
+        // option (only ever true in Age IV, where `Resign` is not offered --
+        // `legal::politics_moves`'s own §5.11 comment). RULES_SPEC.md §5.0:
+        // "In the Politics Phase you may perform AT MOST ONE political
+        // action (OR SKIP)" -- skipping is the player's own move, not a
+        // phase that can fail to exist. BGO's own journals confirm this: the
+        // `IllegalMove: PolPass` bucket (`docs/REPLAY.md`'s 2026-08-14 note)
+        // was 54 real human games logging an explicit "<Color> passes
+        // Political Phase" at EXACTLY the turn this shortcut had already
+        // silently closed -- proof the phase is never actually skipped
+        // client-side, only ever explicitly passed. Removed; the phase now
+        // always opens and waits for whatever `Move::PolPass` the caller
+        // (bot or replay) submits, which is legal.rs's own only option
+        // anyway, so self-play's behaviour is unchanged bit-for-bit.
         state.phase = Phase::Politics;
         peek_top_event(state, idx);
-        if state.pending.is_empty() {
-            auto_skip_politics(state);
-        } else {
-            // `resolve_war` above can leave a War over Technology's spoils
-            // decision outstanding (§5.7), and stealing a blue technology can
-            // hand the CURRENT player military actions -- Warfare +1,
-            // Strategy +2, Military Theory +3 -- which is exactly what
-            // `auto_skip_politics` reads to decide whether passing is the
-            // only political option. Answering that before the spoils are
-            // taken would deny the victor a politics phase it is owed, so the
-            // test is deferred behind the decision. Nothing else can be
-            // pending here: measured across the Python fingerprint's 33
-            // games, `state.pending` was empty on all 3737 arrivals.
-            state.queue.push_back(QueueItem::AutoSkipPolitics { player: idx });
-        }
     } else {
-        state.phase = Phase::Actions;
-    }
-}
-
-/// Pass immediately when passing is the only political option.
-///
-/// Note that this practically never fires in the base game: `PolPass` and
-/// `Resign` are both unconditional outside Age IV, so the list is two long.
-/// It is ported anyway because it is the only thing that skips the phase
-/// without spending the player's political action, and because in Age IV
-/// (where `Resign` is not offered) it does fire.
-pub fn auto_skip_politics(state: &mut GameState) {
-    if legal::legal_moves(state).len() == 1 {
-        state.me_mut().politics_done = true;
         state.phase = Phase::Actions;
     }
 }
@@ -861,6 +1010,13 @@ pub fn resume_end_turn(state: &mut GameState, idx: u8) {
     // before anything gets a chance to read it as "idx's total right after
     // idx's own turn ended".
     state.last_end_of_turn_culture[idx as usize] = Some(state.players[idx as usize].culture);
+    // Same snapshot-before-`advance_turn` timing, science and resources twins
+    // -- see `GameState::last_end_of_turn_science`/`last_end_of_turn_
+    // resources`'s own docs. Consumed by `replay_common.rs`'s
+    // `SCIENCE_ORACLE`/`RESOURCE_ORACLE`-gated oracles, mirroring the
+    // always-on culture oracle exactly.
+    state.last_end_of_turn_science[idx as usize] = Some(state.players[idx as usize].science);
+    state.last_end_of_turn_resources[idx as usize] = Some(state.players[idx as usize].resources);
     advance_turn(state, &mut rng);
 }
 
@@ -933,6 +1089,14 @@ fn next_player(state: &GameState) -> Option<u8> {
 
 /// §12.5 final scoring. Mirrors `engine/game.py::_finish_game`.
 fn finish_game(state: &mut GameState) {
+    if std::env::var("SCOREDIV_EVENT_DEBUG").is_ok() {
+        eprintln!(
+            "SCOREDIV_FINISH_GAME round={} current_events_len={} future_events_len={}",
+            state.round,
+            state.current_events.len(),
+            state.future_events.len()
+        );
+    }
     // §12.5.2: Age III events left in the current/future decks score at game
     // end -- `events::evaluate_final_events`. Python guards this call with
     // `if state.has_military:`; that flag is card-database-completeness, not
@@ -1099,6 +1263,26 @@ pub fn step(state: &mut GameState, mv: Move) {
 mod tests {
     use super::*;
 
+    /// ENGINE BUG FIX regression (see `on_leave_play`'s own doc comment for
+    /// the full BGO trace, game `7522515` round 12): a leader antiquated out
+    /// of play must give back any flat `military_actions`/`civil_actions`
+    /// bonus it printed, the same way a mid-turn leader REPLACEMENT already
+    /// does (`apply.rs::on_leave_play`) -- there is no rules basis for
+    /// exempting antiquation from that symmetric give-back. RULES_SPEC line
+    /// 244 (CoL p.3/RB p.21): "an Age I leader dies when Age II ends."
+    /// Before this fix, `on_leave_play`'s antiquation-only duplicate in this
+    /// file stopped at blue/yellow tokens, so Joan of Arc's printed +1 MA
+    /// survived in the live per-turn pool as a permanent ghost.
+    #[test]
+    fn on_leave_play_gives_back_a_military_action_when_a_leader_antiquates() {
+        let mut state = new_game(2, 1);
+        state.players[0].leader = named("Joan of Arc"); // Age I, +1 MA
+        state.players[0].military_actions = 3; // Despotism's 2 + Joan's +1, unspent
+        antiquate(&mut state, Age::II); // Age II just ended -> Age I leaders die
+        assert!(state.players[0].leader.is_none(), "Joan of Arc is Age I and must antiquate when Age II ends");
+        assert_eq!(state.players[0].military_actions, 2, "her +1 MA must be given back, not left as a ghost");
+    }
+
     /// The overflow that killed a live `climb` run for real: `climb.rs`
     /// folds its generation counter into `state.seed` (a `u64`) via
     /// `u64`-wrapping arithmetic, and once that folded value's magnitude
@@ -1213,6 +1397,139 @@ mod tests {
                 "{card:?} was swept and must be recorded (§2.1)"
             );
         }
+    }
+
+    /// Simulates §1.10's real precondition for the first replenish: by the
+    /// time it fires, each of the `p` players has already taken one card out
+    /// of the row (their first turn), so `p` slots are already empty before
+    /// the sweep. The rightmost `p` slots are picked (not the leftmost) so
+    /// they fall outside the sweep's `0..n` range and don't collide with it
+    /// -- see this test's callers for why that makes the arithmetic land on
+    /// exactly `p + sweep_count(p)` cards dealt.
+    fn simulate_first_turns_taken(s: &mut GameState, p: usize) {
+        for i in ROW_SIZE - p..ROW_SIZE {
+            s.card_row[i] = CardId::NONE;
+        }
+    }
+
+    /// §1.10: the first replenish fills from the remaining Age A civil deck
+    /// (7 cards after the 13 dealt at setup), NOT the Age I deck the old
+    /// code jumped to. Before the fix, `replenish` cleared `civil_deck` and
+    /// called `advance_age` FIRST, so every card dealt here was already Age
+    /// I; a real 2p game against the CGE digital edition (2026-08-12)
+    /// dealt Frugality, Patriotism, Pyramids, Caesar, Stock Pile on this
+    /// exact replenish, and Stock Pile/Pyramids/Caesar exist only in Age A.
+    ///
+    /// Checked by POSITION, not by scanning for card identity: `CardId` is
+    /// an index into the shared card table, so two physical copies of the
+    /// same printed card (e.g. a yellow action card with `count > 1`) share
+    /// one `CardId` -- a plain `.contains()` on a card-value miscounts the
+    /// moment the surviving row and the dealt cards happen to share a
+    /// duplicated type. Position is unambiguous: `slide` packs survivors to
+    /// `card_row[..kept]` in order (`replenish_sweeps_slides_and_refills`
+    /// already pins that down), so `deal`'s empties are exactly the trailing
+    /// `card_row[kept..]`, and `CardList::pop` (`state.rs`) takes from the
+    /// END of the deck -- so the deck's LAST card deals first, into the
+    /// leftmost of those trailing slots.
+    #[test]
+    fn the_first_replenish_deals_the_remaining_age_a_cards_not_age_i_cards() {
+        for p in [2usize, 3, 4] {
+            let mut s = new_game(p as u8, 5);
+            let mut rng = LazyRandom::new(1);
+            // The 7 cards left in the Age A deck after setup's 13-card deal.
+            let deck_before: Vec<CardId> = s.civil_deck.as_slice().to_vec();
+            assert_eq!(deck_before.len(), 7, "{p}p: Age A deck is 20 cards, 13 dealt at setup");
+
+            simulate_first_turns_taken(&mut s, p);
+            replenish(&mut s, &mut rng);
+
+            assert!(s.card_row.iter().all(|c| !c.is_none()), "{p}p: row refilled to 13");
+            assert!(
+                s.card_row.iter().all(|c| c.get().age == Age::A),
+                "{p}p: every row card is still Age A right after the first replenish"
+            );
+            // §1.10's own arithmetic: p players already took one card each,
+            // the sweep removes sweep_count(p) more, and the deal must
+            // refill both -- 5 at every player count, verified rather than
+            // assumed.
+            let dealt_count = p + sweep_count(p);
+            assert_eq!(dealt_count, 5, "{p}p: player_count + sweep_count is 5 at every count");
+
+            let dealt: Vec<CardId> = s.card_row[ROW_SIZE - dealt_count..].to_vec();
+            let expected: Vec<CardId> =
+                deck_before[deck_before.len() - dealt_count..].iter().rev().copied().collect();
+            assert_eq!(
+                dealt, expected,
+                "{p}p: the last {dealt_count} row slots are the deck's top cards, in pop order"
+            );
+        }
+    }
+
+    /// §9: the Age A civil deck is 20 cards; 13 go to the row at setup and
+    /// the first replenish deals `p + sweep_count(p)` (always 5) more --
+    /// leaving exactly 2 that are boxed, unseen, when Age A ends. Derived
+    /// positionally (see the previous test's doc comment for why): the two
+    /// cards that were at the FRONT of the deck (indices `0..2`, since `pop`
+    /// drains from the end) are the ones never reached by the fill.
+    #[test]
+    fn exactly_two_age_a_civil_cards_never_appear() {
+        for p in [2usize, 3, 4] {
+            let mut s = new_game(p as u8, 7);
+            let mut rng = LazyRandom::new(1);
+            let deck_before: Vec<CardId> = s.civil_deck.as_slice().to_vec();
+
+            simulate_first_turns_taken(&mut s, p);
+            replenish(&mut s, &mut rng);
+
+            let dealt_count = p + sweep_count(p);
+            // Same positional argument as the previous test: `pop` drains
+            // the deck from the end, so the cards actually dealt are the
+            // deck's LAST `dealt_count`, in reverse. Asserting this (not
+            // just the arithmetic `7 - 5 == 2`) is what makes this test
+            // depend on the fix rather than on a coincidence -- the old
+            // buggy code also dealt 5 cards, just from the wrong (Age I)
+            // deck, which would make a bare length check pass for the wrong
+            // reason.
+            let dealt: Vec<CardId> = s.card_row[ROW_SIZE - dealt_count..].to_vec();
+            let expected: Vec<CardId> =
+                deck_before[deck_before.len() - dealt_count..].iter().rev().copied().collect();
+            assert_eq!(dealt, expected, "{p}p: the dealt cards are the Age A deck's own top cards");
+
+            let boxed = &deck_before[..deck_before.len() - dealt_count];
+            assert_eq!(
+                boxed.len(),
+                2,
+                "{p}p: exactly 2 of the 7 remaining Age A cards are boxed, unseen"
+            );
+        }
+    }
+
+    /// §1.10's last sentence: no antiquation, no yellow-token loss at the
+    /// A -> I transition, unlike every later age change. Regression guard
+    /// for the fix to `replenish`: the new code explicitly calls
+    /// `advance_age` with `state.age_civil` still `A`, so `ended != Age::A`
+    /// must still be false here and the two side effects must still be
+    /// skipped.
+    #[test]
+    fn the_age_a_to_age_i_transition_skips_antiquation_and_yellow_token_loss() {
+        let mut s = new_game(2, 5);
+        let mut rng = LazyRandom::new(1);
+        let age_a_card = named("Bronze");
+        s.players[0].hand_civil.push(age_a_card);
+
+        replenish(&mut s, &mut rng);
+
+        assert_eq!(s.age_civil, Age::I, "§1.10: the first replenish ends Age A");
+        assert!(
+            s.players[0].hand_civil.as_slice().contains(&age_a_card),
+            "no antiquation at the A -> I transition"
+        );
+        assert!(
+            !s.civil_removed[Age::A as usize].contains(age_a_card),
+            "nothing culled, so nothing recorded as culled"
+        );
+        assert_eq!(s.players[0].yellow_bank, 18, "§12.2.4: no yellow-token loss at A -> I");
+        assert_eq!(s.players[1].yellow_bank, 18);
     }
 
     /// §2.2: the age ends the moment its last card is DEALT, and the rest of
@@ -1347,6 +1664,68 @@ mod tests {
         assert!(s.civil_removed[Age::A as usize].contains(age_a_card), "the cull is recorded, same as an ordinary advance_age");
     }
 
+    /// The (-6,+6) War-over-Culture cluster's own fix: an Age II leader
+    /// (Napoleon Bonaparte) must leave play as soon as this function is
+    /// asked to catch antiquation up to Age IV, WITHOUT touching
+    /// `age_civil`, `civil_deck`, or the §12.2.4 yellow-bank deduction --
+    /// those stay on the replayer's normal, deferred schedule. Reverting
+    /// the fix (having `replay_common.rs` call nothing here) leaves
+    /// Napoleon in play, which is the exact bug: his `StrengthPerUnitType`
+    /// bonus still contributes to a war strength BGA's own game had already
+    /// stopped crediting.
+    #[test]
+    fn antiquate_leader_wonder_pacts_up_to_discards_a_too_old_leader_without_moving_the_age() {
+        let mut s = new_game(2, 11);
+        s.age_civil = Age::III;
+        s.players[0].leader = named("Napoleon Bonaparte");
+        let yellow_before = s.players[0].yellow_bank;
+        let deck_len_before = s.civil_deck.len();
+
+        antiquate_leader_wonder_pacts_up_to(&mut s, Age::IV);
+
+        assert!(s.players[0].leader.is_none(), "an Age II leader is more than one age behind once Age III ends");
+        assert_eq!(s.age_civil, Age::III, "the age itself must not move -- that stays on the deferred schedule");
+        assert_eq!(s.players[0].yellow_bank, yellow_before, "§12.2.4's deduction must not fire early");
+        assert_eq!(s.civil_deck.len(), deck_len_before, "the deck rebuild must not fire early");
+    }
+
+    /// A leader still within one age of the age that just ended survives --
+    /// this function must not over-cull just because it is being asked to
+    /// run ahead of the normal schedule. Napoleon (Age II) is exactly one
+    /// age behind Age II ending (cutoff 2, leader age 2 is not < 2), so
+    /// catching antiquation up from II to III must leave him in play.
+    #[test]
+    fn antiquate_leader_wonder_pacts_up_to_keeps_a_leader_still_within_one_age() {
+        let mut s = new_game(2, 11);
+        s.age_civil = Age::II;
+        let leader = named("Napoleon Bonaparte");
+        s.players[0].leader = leader;
+
+        antiquate_leader_wonder_pacts_up_to(&mut s, Age::III);
+
+        assert_eq!(s.players[0].leader, leader, "one age behind is not YET antiquated -- CoL only discards MORE than one age behind");
+        assert_eq!(s.age_civil, Age::II, "the age itself still must not move");
+    }
+
+    /// Running the early half must not double-discard once the deferred,
+    /// full `antiquate` (via `force_civil_age_at_least`) later reaches the
+    /// SAME `(state, ended)` pair -- the leader is simply already gone, so
+    /// the later call is a no-op for it, exactly like re-running `antiquate`
+    /// on an already-caught-up age is a no-op elsewhere in this module.
+    #[test]
+    fn antiquate_leader_wonder_pacts_up_to_is_idempotent_with_the_later_deferred_antiquate() {
+        let mut s = new_game(2, 11);
+        s.age_civil = Age::III;
+        s.players[0].leader = named("Napoleon Bonaparte");
+
+        antiquate_leader_wonder_pacts_up_to(&mut s, Age::IV);
+        assert!(s.players[0].leader.is_none());
+
+        force_civil_age_at_least(&mut s, Age::IV);
+        assert_eq!(s.age_civil, Age::IV, "the deferred call still moves the age itself");
+        assert!(s.players[0].leader.is_none(), "still gone -- the deferred antiquate found nothing left to discard");
+    }
+
     /// A no-op when this reconstruction's own age already matches or leads
     /// the journal's -- the overwhelmingly common case (every line but the
     /// first one of a new age). Must not re-run antiquation (which would
@@ -1467,6 +1846,39 @@ mod tests {
         advance_turn(&mut s, &mut rng);
         assert_eq!((s.round, s.current), (2, 0));
         assert_eq!(s.turn, 4);
+    }
+
+    /// Age IV, empty military hand: `legal::legal_moves` returns exactly one
+    /// move (`Move::PolPass` -- `Resign` is not offered in Age IV,
+    /// `legal::politics_moves`'s own §5.11 comment). This USED to be exactly
+    /// when the deleted `auto_skip_politics` fired, jumping straight to
+    /// `Phase::Actions` without ever letting a real `Move::PolPass` land --
+    /// which is what made 54 real BGO games' own logged "<Color> passes
+    /// Political Phase" illegal against this engine (`docs/REPLAY.md`,
+    /// 2026-08-14, the `IllegalMove: PolPass` bucket). RULES_SPEC.md §5.0:
+    /// the Politics Phase always lets the player "perform AT MOST ONE
+    /// political action (OR SKIP)" -- skipping is the player's own move, so
+    /// the phase must stay open and wait for it, never vanish underneath
+    /// them.
+    #[test]
+    fn start_turn_leaves_the_politics_phase_open_in_age_iv_even_when_passing_is_the_only_option() {
+        let mut s = new_game(2, 7);
+        s.age_civil = Age::IV;
+        s.age_military = Age::IV;
+        s.round = 2;
+        s.civil_deck = CardList::new();
+        s.military_deck = CardList::new();
+        s.players[0].hand_military = CardList::new();
+        let mut rng = LazyRandom::new(1);
+        start_turn(&mut s, &mut rng);
+        assert_eq!(s.phase, Phase::Politics, "the Politics Phase must stay open, not be silently skipped");
+        let moves = legal::legal_moves(&s);
+        assert_eq!(moves.as_slice().len(), 1, "passing must be the only legal move here");
+        assert_eq!(moves.as_slice()[0], Move::PolPass);
+        assert!(
+            !s.players[0].politics_done,
+            "politics_done must not be set until an actual PolPass move lands"
+        );
     }
 
     /// The game must end when the round counter passes the deadline §12.3

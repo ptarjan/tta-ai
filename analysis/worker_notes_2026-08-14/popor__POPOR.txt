@@ -1,0 +1,265 @@
+POPULATION ORACLE (`p.yellow_bank`) -- per-player, built from the food cost
+every "increases population" line already states -- investigation
+Worker: popor, clone /private/tmp/popor, base commit 58e4cd9 (same base
+drift.patch/drift__DRIFT.txt and resdrift.patch/resdrift__RESDRIFT.txt used)
+Date: 2026-08-14
+
+OUTCOME: (c) -- no fix. The dominant, cleanly-traced mechanism is a
+hidden-information approximation gap (`Replayer::approximate_colonize`,
+already named and flagged by the engine's own `colonize_approximated`
+field), not a rules bug -- the code that actually moves yellow tokens
+(`interact.rs`'s `Move::SendUnit` handler, `p.yellow_bank += 1` per
+sacrificed unit, §11.4) is independently verified rules-correct at every
+OTHER checkpoint in every game hand-traced this pass. See section 4.
+
+===========================================================================
+0. WHAT WAS BUILT
+===========================================================================
+A new, PER-PLAYER (deliberately, per the task's own methodological warning
+about `DRIFT_AUDIT`'s per-game "first actor wins" convention burying the
+actually-relevant actor -- see `resdrift__RESDRIFT.txt` section 3) oracle,
+modelled on `Replayer::check_discard_phase_oracle`:
+
+- `economy::pop_cost_base_band_low(base_cost: u8) -> Option<u8>`
+  (`rust/src/economy.rs`) -- the literal inverse of the existing, already
+  spec-verified `pop_cost_base` band table (§6.1): given an UNCLAMPED base
+  food cost, returns the LOW edge of the `yellow_bank` band that must have
+  produced it (2->17, 3->13, 4->9, 5->5, 7->1). Unit-tested
+  (`pop_cost_base_band_low_inverts_the_cost_table`).
+- `Replayer::pop_drift_first: [Option<PopDivergence>; MAX_PLAYERS]`
+  (`rust/src/replay_common.rs`) -- one slot PER SEAT, first-wins, never
+  overwritten, independent of every other seat's own divergence. Recorded
+  by `maybe_record_pop_drift`, called from the `ActionClass::
+  IncreasePopulation` arm BEFORE any move mutates state, so the compared
+  `p.yellow_bank`/`p.food` are exactly what they were when the real human
+  made the choice.
+- THE GUARD (mirroring the `discard_blocked` guard the task's brief called
+  out by name): only recorded when the journal's own stated cost is
+  UNCLAMPED (`journal_cost > 0`). `pop_food_cost`'s formula floors negative
+  results at zero, so a clamped 0 could come from ANY yellow_bank band once
+  a big enough discount is subtracted -- inverting it would be exactly the
+  kind of manufactured, ambiguous "signal" `drift__DRIFT.txt`'s own
+  `discard_blocked` false-start warned about. Skipped, not force-recorded.
+  A second guard: the recovered pre-discount base cost must be one
+  `pop_cost_base` can actually return, or the record is skipped (protects
+  against a bad discount read producing a nonsense "band").
+- `POP_AUDIT=1` env flag (`debugflags.rs`), inert otherwise -- costs one
+  static bool read on the hot Pop path when off, same shape as
+  `DRIFT_AUDIT`.
+- `replaystats.rs` "## Population audit" report section: delta histogram,
+  age/round distribution, and the completion cross-tab against
+  `/private/tmp/guard_ids.txt` (the task's own frozen 644-id reference set
+  -- NOT `/tmp/rd_ids.txt`, a different, drift-pass-specific file this
+  clone does not even populate).
+
+SANITY CHECK BEFORE TRUSTING THE HEADLINE NUMBER (per the task's own
+warning about the missing `discard_blocked` guard producing a bogus 98%
+headline): hand-traced game 7521791 with the new oracle and got EXACTLY
+the same (game, seat, lineno, delta) triple `resdrift__RESDRIFT.txt`
+section 3 hand-derived independently by a completely different method
+(manual band-table arithmetic, no code): actor Green (seat 2), line 166,
+our own `yellow_bank=13` (band 13-16, cost 3 on our side after Moses's
+`PopIncreaseFoodDiscount(1)`), journal states cost 4 (implies band 5-8,
+base cost 5) -- delta = 13 - 5 = +8, and this run's own table lists
+"7521791 seat2 (line 166)" in the single-occurrence +8 bucket. Independent
+reproduction of a previously hand-verified number -- the oracle is sound.
+
+===========================================================================
+1. CORPUS-WIDE: HOW MANY GAMES/PLAYERS DIVERGE
+===========================================================================
+29/1011 games (2.9%) have at least one (player, seat) whose `yellow_bank`
+diverges from the journal's own implied population band -- RARE, unlike
+`hand_military_excess`'s 624/1011 (61.7%) or even `resources`'s 131/1011
+(13.0%) from `drift__DRIFT.txt`. In this sample every diverging game had
+exactly ONE diverging seat (29 games, 29 (game,seat) pairs) -- the
+per-player oracle did not surface any game with two independently-diverging
+players.
+
+===========================================================================
+2. DELTA DISTRIBUTION (reconstructed `yellow_bank` - journal-implied band low)
+===========================================================================
+| (game,seat) pairs | delta | example ids |
+|---|---|---|
+| 16 | +4 | 7522614 seat1 (line 200), 7520718 seat1 (line 345), 7521378 seat2 (line 650) |
+|  7 | +5 | 7523616 seat0 (line 355), 7522271 seat0 (line 119), 7522136 seat0 (line 345) |
+|  4 | -1 | 7521757 seat0 (line 497), 7523177 seat1 (line 413), 7523229 seat0 (line 303) |
+|  1 | +7 | 7522502 seat1 (line 135) |
+|  1 | +8 | 7521791 seat2 (line 166) |
+
+Skewed heavily positive (27 of 29 non-`-1` deltas, i.e. our reconstruction
+thinks yellow_bank is HIGHER than truth -- fewer population increases have
+"really" happened than we believe) -- consistent with section 4's traced
+mechanism (an extra PHANTOM population-consuming action, over-crediting
+`yellow_bank`), not consistent with a systematically UNDER-counted
+population.
+
+first-divergence age: age IV 11, age III 11, age II 6, age I 1 --
+overwhelmingly a mid-to-late-game phenomenon (38% age IV, 76% age III/IV
+combined), the SAME shape `drift__DRIFT.txt` found for
+`hand_military_excess` ("drift builds up over many turns before the
+[coarse, band-resolution] check first gets caught out").
+first-divergence round: 9/29 (31%) at round 18 alone, otherwise a broad
+6-19 spread -- a real cluster, but see section 4: this round-18 spike
+tracks the age III->IV boundary in many of these games' own round counts,
+not a single fixed trigger mechanism.
+
+===========================================================================
+3. CORRELATION WITH LATER COMPLETION
+===========================================================================
+rate of completing AMONG games with a diverging seat: 17/29 = 58.6%
+rate of completing OVERALL (all 1011 sampled):        644/1011 = 63.7%
+
+Population divergence correlates with a SLIGHTLY LOWER completion rate
+(58.6% vs 63.7%, a 5.1-point gap) -- the OPPOSITE direction from
+`hand_military_excess` (`drift__DRIFT.txt` section 4: 69.5% vs 63.7%,
+slightly HIGHER). Per the task's own explicit warning not to assume this
+transfers: it does not, and it doesn't transfer the OTHER way either --
+this is a real but modest effect, not a strong predictor. With only 29
+diverging games the confidence interval on 58.6% is wide (roughly +-18
+points at 95% CI on n=29); read this as "population divergence is not
+obviously benign the way hand-size divergence turned out to be," not as
+"population divergence causes stops."
+
+===========================================================================
+4. HAND TRACE -- three games, TWO distinct mechanisms
+===========================================================================
+
+--- 7522614 (delta +4, round 12, line 200, actor Purple/seat1) -- TRACED ---
+Full per-checkpoint trace (temporary `POP_TRACE_DUMP` instrumentation, not
+kept in the final patch -- see FILES section) showed every single Pop
+checkpoint for Purple agreeing with the journal EXACTLY up through line 130
+(round 8): yellow_bank 18 -> 17 -> 16(after age advance) -> 15 -> ... -- six
+Pop actions and one `advance_age` §12.2.4 "-2" all matching. Immediately
+before line 130, between rounds 7 and 8, Purple ran TWO colonizations back
+to back:
+  - "Purple colonizes a Strategic Territory Sacrificed Units:; 1 Knights;
+    1 Colonization card +1; 1 Colonization card +1; ..." (line ~112)
+  - "Purple colonizes a Historic Territory Sacrificed Units:; 1 Warrior;
+    1 Colonization card +2; ..." (line ~124)
+Ground truth: exactly TWO military UNITS sacrificed total (1 Knights, 1
+Warrior) -- the two "Colonization card" clauses are BONUS cards from the
+military hand, not deployed units, and `interact.rs`'s own `SendBonus`
+handler correctly does NOT touch `yellow_bank` for those (verified: no
+`p.yellow_bank` change on that path). But the trace showed THREE
+`Move::SendUnit` calls fired for these two colonizations -- "Warriors",
+"Warriors", "Knights" -- one MORE than the two the journal's own text
+names, and in the WRONG order (Warriors first, twice, then Knights; the
+journal's own order is Knights first, once, then Warrior).
+`this binary's own reconstructed hand/tableau state did not offer
+`Move::SendUnit { card: Knights }` as a legal continuation of
+`Replayer::drain_colonize` at the moment it was needed (a hidden-information
+gap -- WHICH exact unit card the human held vs. what this binary's
+imperfect hand reconstruction believes at that point), so `drain_colonize`
+fell through to `Replayer::approximate_colonize` (`rust/src/
+replay_common.rs:2312`) -- confirmed directly: `./target/difftest/replay
+... 7522614` prints "STOPPED after 225 actions (colonize approximated)".
+`approximate_colonize`'s own doc is explicit about what it does: "Repeatedly
+pick the engine's own first-offered continuation... until it clears" --
+i.e. it abandons trying to match the journal's own named units at all once
+the exact match fails, and just grabs whatever `legal_moves` offers first,
+however many units that takes to satisfy the SAME total FORCE requirement.
+Substituting weaker units (Warriors) for a stronger one (Knights) needs
+MORE of them to reach the same force total -- mechanically explaining BOTH
+the extra `SendUnit` call and its direction (systematically MORE units
+sacrificed than truth, hence systematically HIGHER reconstructed
+`yellow_bank` than truth, matching section 2's positive skew exactly).
+Every individual `Move::SendUnit` call is itself rules-correct
+(`p.yellow_bank += 1` per unit, §11.4's "the token goes to the yellow bank,
+not to free workers" -- `interact.rs:1578`, and this formula's correctness
+is independently reconfirmed by EVERY OTHER Pop-cost checkpoint in this
+exact game matching the journal exactly, both before and after this
+episode, until the drift crosses a cost-band boundary at line 200 and
+becomes visible). The bug, if it is one, is entirely in the FIDELITY of
+`approximate_colonize`'s fallback under hidden information, not in any
+rule this binary enforces.
+
+--- 7521757 and 7523177 (delta -1 bucket) -- SAME MECHANISM CONFIRMED ---
+Both re-run through `./target/difftest/replay ... <id>`: both print
+"(colonize approximated)" in their own STOPPED summary line -- same
+hidden-information fallback as 7522614, not independently re-traced line
+by line this pass (budget), but the mechanism match (colonize_approximated
+= true, non-completing) is exact.
+
+--- 7520718 (delta +4, round 19, line 345, actor Purple/seat1) -- TRACED,
+    DIFFERENT MECHANISM, NOT PINNED TO A SINGLE FILE:LINE ---
+This game COMPLETED CLEANLY (`0 used the colonize approximation` in its own
+`replay` summary) -- so the colonize-fallback theory above does NOT explain
+this example. The line immediately before the divergent Pop checkpoint is
+a "Refugees" current event: "Purple plays event Purple scores 3 culture;
+Current event:; II / Refugees; The strongest scores 3 culture and gains 1
+population. ...; Purple gains 3 culture and 1 population; Orange loses 3
+culture and 1 population". Traced with `POP_TRACE_DUMP`: this binary's own
+reconstruction DOES apply the "-1 to yellow_bank" for Purple's "+1
+population" gain here (bank read 7 before the immediately-preceding Pop,
+6 after that Pop, 5 after the event -- exactly the arithmetic a correctly-
+applied population gain predicts), yet the journal's own independently
+-implied truth at the NEXT Pop checkpoint (line 345) requires a band whose
+low edge is 5 points lower than our reconstructed 5 (delta +4, band 1-4
+implied vs our band 5-8) -- i.e. the true bank was ALREADY several tokens
+lower than ours by the time this event fired, not because of the event
+itself. NOT PINNED further within this pass's budget. NAMED AS THE NEXT
+SUSPECT for whoever resumes: this looks like the SAME accumulate-silently-
+under-coarse-band-resolution pattern `resdrift__RESDRIFT.txt` found (five
+Pop actions can agree by coincidence while the true and reconstructed
+values sit in the same 4-5-wide band, then a sixth crosses the boundary
+and becomes visible many lines later) -- worth a FULL per-action ledger for
+`yellow_bank` (every `grant_yellow`/`SendUnit`/`apply_immediate_effects`
+population call, not just "increases population" checkpoints), the same
+style `military_hand_ledger` already gives `check_discard_phase_oracle`
+for hand size, to find exactly which EARLIER action this game's Purple
+first goes wrong on.
+
+===========================================================================
+CONCLUSION / NEXT SUSPECT
+===========================================================================
+The DOMINANT, cleanly-verified mechanism (at least 3 of 6 non-completing
+games directly checked, likely more across the 29) is `Replayer::
+approximate_colonize`'s hidden-information fallback substituting a
+DIFFERENT, usually WEAKER set of sacrificed military units than the human
+actually sacrificed, while still hitting the same total colonization FORCE
+-- each substitute unit is individually priced correctly (`interact.rs`'s
+`SendUnit` handler, §11.4, verified rules-correct at every other
+checkpoint), so the resulting `yellow_bank` inflation is a RECONSTRUCTION
+FIDELITY gap under hidden information, not a rules violation. This is
+squarely the class of gap the engine's own `colonize_approximated` field
+already exists to flag -- not a new bug, and not something a "fix the
+engine" patch can close without first improving the colonization hidden-
+hand solver's own fidelity (a materially bigger undertaking than this
+pass's population-oracle mandate, and out of scope here per "don't force a
+patch").
+A SECOND, distinct, not-yet-pinned mechanism (7520718) exists for games
+that never hit the colonize approximation at all -- named above as the
+concrete next step (full `yellow_bank` action ledger, not just Pop
+checkpoints).
+
+===========================================================================
+GUARD
+===========================================================================
+Before: 644/1011 (`/private/tmp/guard_ids.txt`)
+After:  644/1011 (this session's own `/tmp/po_ids.txt` re-run)
+REGRESSIONS: (empty)
+WINS: (empty)
+Expected and correct: no fix landed, so no completion-set change is
+possible; the oracle itself only READS state (all writes are inside
+`if crate::debugflags::pop_audit() { ... }` / `if journal_cost <= 0 ...`
+early-return guards), so it cannot have altered replay behaviour with
+`POP_AUDIT` unset, which is how the corpus tools always run outside this
+one measurement pass.
+
+===========================================================================
+FILES
+===========================================================================
+Clone: /private/tmp/popor -- deleted after this file and the patch were
+       written and verified non-empty (per the task's own "or if you hold
+       unlanded work, leave the clone" clause -- this pass has NO unlanded
+       fix, only the oracle instrumentation, which IS the patch).
+Patch: analysis/worker_notes_2026-08-14/popor.patch --
+       `git diff 58e4cd9 HEAD`. Includes BOTH this pass's new population
+       oracle AND the pre-supplied `DRIFT_AUDIT` instrumentation
+       (`drift.patch`) inherited unmodified from the base clone setup step
+       -- flagged explicitly, same as `resdrift.patch` before it, so the
+       reviewer knows which lines are new. The temporary `POP_TRACE_DUMP`
+       per-line/per-`SendUnit`/per-`advance_age` eprintln scaffolding used
+       for section 4's hand traces was added AND REVERTED before writing
+       this patch (same convention `resdrift__RESDRIFT.txt` used for its
+       own throwaway `DRIFT_DUMP_RESOURCE_IDS`) -- it is not in the diff.

@@ -1,0 +1,265 @@
+diff --git c/rust/src/replay_common.rs w/rust/src/replay_common.rs
+index 30e8f8d..2079ee6 100644
+--- c/rust/src/replay_common.rs
++++ w/rust/src/replay_common.rs
+@@ -2187,6 +2187,34 @@ impl<'a> Replayer<'a> {
+         } else {
+             Vec::new()
+         };
++        // TOKENCOUNT fix (2026-08-14): the correction below used to overwrite
++        // `p.food`/`p.resources` directly, leaving `p.food_tokens`/
++        // `p.resource_tokens` (the per-denomination placement history --
++        // `crate::state::TokenBank`'s own doc) holding whatever
++        // `events::food_or_resources`'s own default guessed split had
++        // already credited/debited through the real `gain_food`/
++        // `gain_resources`/`pay_food`/`pay_resources` chokepoints. Once the
++        // scalar is corrected but the bank is not, `economy::occupied_tokens`
++        // either silently drops the excess (corrected total BELOW the
++        // guessed-and-tracked value: it only tops up on an INCREASE, see its
++        // own doc) or re-packs a phantom top-up on top of an already-wrong
++        // bank (corrected total ABOVE it) -- either way the tracked token
++        // COUNT permanently diverges from a real single consistent
++        // placement history, even though the corrected VALUE is right. Snapshot
++        // the bank here too, so the correction below can roll the GUESSED
++        // gain/loss back out through the same blessed chokepoints before
++        // applying the JOURNAL's own true split -- keeping bank and scalar
++        // in lockstep the same way every other gain/loss site already must.
++        let pre_food_tokens: Vec<crate::state::TokenBank> = if triggers_food_or_resources {
++            (0..n).map(|i| self.state.players[i as usize].food_tokens).collect()
++        } else {
++            Vec::new()
++        };
++        let pre_resource_tokens: Vec<crate::state::TokenBank> = if triggers_food_or_resources {
++            (0..n).map(|i| self.state.players[i as usize].resource_tokens).collect()
++        } else {
++            Vec::new()
++        };
+         // BUG (found chasing the 103-game `SimulatorBug`/`PrepareEvent`
+         // ledger bucket, simulator excess = journal excess + 1 in 81 of
+         // those 103 -- the classic unpaid-deficit shape): every OTHER
+@@ -2296,8 +2324,16 @@ impl<'a> Replayer<'a> {
+                         if let Some(pos) = q.iter().position(|&(jf, jr)| jf as i32 + jr as i32 == total) {
+                             let (jf, jr) = q.remove(pos).expect("position just found by iter()");
+                             let p = &mut self.state.players[i as usize];
+-                            p.food = (pre_food as i32 + jf as i32).max(0) as u16;
+-                            p.resources = (pre_res as i32 + jr as i32).max(0) as u16;
++                            apply_journal_food_or_res_correction(
++                                p,
++                                pre_food,
++                                pre_res,
++                                pre_food_tokens[i as usize],
++                                pre_resource_tokens[i as usize],
++                                jf,
++                                jr,
++                                false,
++                            );
+                         }
+                     }
+                 } else if delta_food < 0 || delta_res < 0 {
+@@ -2306,8 +2342,16 @@ impl<'a> Replayer<'a> {
+                         if let Some(pos) = q.iter().position(|&(jf, jr)| jf as i32 + jr as i32 == total) {
+                             let (jf, jr) = q.remove(pos).expect("position just found by iter()");
+                             let p = &mut self.state.players[i as usize];
+-                            p.food = (pre_food as i32 - jf as i32).max(0) as u16;
+-                            p.resources = (pre_res as i32 - jr as i32).max(0) as u16;
++                            apply_journal_food_or_res_correction(
++                                p,
++                                pre_food,
++                                pre_res,
++                                pre_food_tokens[i as usize],
++                                pre_resource_tokens[i as usize],
++                                jf,
++                                jr,
++                                true,
++                            );
+                         }
+                     }
+                 }
+@@ -3100,6 +3144,18 @@ impl<'a> Replayer<'a> {
+     /// -- same self-deferring retry, `p.resources` in place of `p.culture`.
+     /// See [`Replayer::pending_resource_corrections`]'s own doc for why this
+     /// exists at all.
++    ///
++    /// Unlike culture (a plain scalar with no blue-token backing), a
++    /// `resources` correction MUST go through [`economy::gain_resources`]/
++    /// [`economy::pay_resources`], not a bare `p.resources = new`: those are
++    /// the only chokepoints that also update `p.resource_tokens` (the
++    /// per-denomination placement history -- `crate::state::TokenBank`'s own
++    /// doc). A bare scalar overwrite here is exactly the same class of bug
++    /// TOKENCOUNT's own pass fixed in the `food_and_or_resources` correction
++    /// a few hundred lines up: `economy::blue_used`'s reconciliation either
++    /// silently drops a downward correction's excess (leaving the bank
++    /// permanently holding more tokens than the corrected total justifies)
++    /// or freshly re-packs an upward one on top of an already-stale bank.
+     fn flush_pending_resource_corrections(&mut self) {
+         if self.pending_resource_corrections.is_empty() {
+             return;
+@@ -3110,7 +3166,13 @@ impl<'a> Replayer<'a> {
+             .filter(|&(color, old, new)| {
+                 let p = &mut self.state.players[color.seat() as usize];
+                 if p.resources as i32 == old {
+-                    p.resources = new.max(0) as u16;
++                    let new = new.max(0);
++                    let delta = new - old;
++                    if delta > 0 {
++                        economy::gain_resources(p, delta as u16);
++                    } else if delta < 0 {
++                        economy::pay_resources(p, (-delta) as u16);
++                    }
+                     false // applied -- drop from the pending list
+                 } else {
+                     true // still doesn't match -- keep trying
+@@ -5172,6 +5234,64 @@ fn bump_ledger(
+     last_event.insert(actor, (kind, lineno));
+ }
+ 
++/// Roll a guessed food/resources gain-or-loss back out of `p` (restoring the
++/// pre-`apply_move` snapshot `pre_food`/`pre_res`/`pre_food_tokens`/
++/// `pre_resource_tokens`) and apply the JOURNAL's own true `(jf, jr)` split
++/// instead, through the real [`economy::gain_food`]/[`economy::gain_resources`]/
++/// [`economy::pay_food`]/[`economy::pay_resources`] chokepoints -- never a
++/// bare `p.food =`/`p.resources =`.
++///
++/// TOKENCOUNT fix (2026-08-14): the correction this backs (`resolve_political_
++/// decision`'s `triggers_food_or_resources` block, a few hundred lines up)
++/// used to overwrite `p.food`/`p.resources` directly, leaving `p.food_tokens`/
++/// `p.resource_tokens` (the per-denomination placement history --
++/// `crate::state::TokenBank`'s own doc) holding whatever `events::
++/// food_or_resources`'s own default guessed split had already credited/
++/// debited through the real chokepoints. Once the scalar is corrected but the
++/// bank is not, `economy::occupied_tokens` either silently drops the excess
++/// (corrected total BELOW the guessed-and-tracked value: it only tops up on
++/// an INCREASE, see its own doc) or re-packs a phantom top-up on top of an
++/// already-wrong bank (corrected total ABOVE it) -- either way the tracked
++/// token COUNT permanently diverges from a real single consistent placement
++/// history, even though the corrected VALUE is right. Restoring the FULL
++/// pre-guess snapshot before applying the journal's own split keeps bank and
++/// scalar in lockstep the same way every other gain/loss site already must.
++/// `pay_food`/`pay_resources` (not another restore-then-subtract) are not an
++/// option to roll the guess back with: those spend LOWEST denomination
++/// first, which would strip pre-existing OLDER tokens instead of undoing the
++/// exact ones the guess just placed.
++#[allow(clippy::too_many_arguments)]
++fn apply_journal_food_or_res_correction(
++    p: &mut PlayerState,
++    pre_food: u16,
++    pre_res: u16,
++    pre_food_tokens: crate::state::TokenBank,
++    pre_resource_tokens: crate::state::TokenBank,
++    jf: i16,
++    jr: i16,
++    lose: bool,
++) {
++    p.food = pre_food;
++    p.resources = pre_res;
++    p.food_tokens = pre_food_tokens;
++    p.resource_tokens = pre_resource_tokens;
++    if lose {
++        if jf > 0 {
++            economy::pay_food(p, jf as u16);
++        }
++        if jr > 0 {
++            economy::pay_resources(p, jr as u16);
++        }
++    } else {
++        if jf > 0 {
++            economy::gain_food(p, jf as u16);
++        }
++        if jr > 0 {
++            economy::gain_resources(p, jr as u16);
++        }
++    }
++}
++
+ /// Foray/Raiders' own `Special::StrongestPlayers`/`WeakestPlayers` "gains/
+ /// loses a total of N resources and/or food (their choice)" resolution line:
+ /// `"<Color> produces <N> food; <Color> produces <M> resources"` (either
+@@ -10130,6 +10250,42 @@ mod tests {
+         assert!(r.pending_resource_corrections.is_empty(), "consumed, not left pending forever");
+     }
+ 
++    /// TOKENCOUNT regression (2026-08-14): before this fix,
++    /// `flush_pending_resource_corrections` set `p.resources = new` directly
++    /// -- correcting the SCALAR but never touching `p.resource_tokens` (the
++    /// per-denomination placement history, `crate::state::TokenBank`'s own
++    /// doc). `economy::blue_used`'s reconciliation only tops the tracked bank
++    /// up on an INCREASE; it silently accepts a stale, too-small tracked
++    /// bank as-is when the corrected total is smaller than what the bank
++    /// still (wrongly) held, permanently inflating the reconstructed token
++    /// COUNT relative to the corrected VALUE. This asserts the fixed
++    /// `+4` correction (2 -> 6) is reflected in `resource_tokens` too, i.e.
++    /// the bank's own tracked value matches `p.resources` afterward, not
++    /// just the scalar the previous test already covers. Confirmed RED by
++    /// reverting `flush_pending_resource_corrections` to the bare
++    /// `p.resources = new.max(0) as u16` it used before this pass: this
++    /// assertion fails (tracked value stays 0, `p.resources` becomes 6).
++    #[test]
++    fn flush_pending_resource_corrections_keeps_the_token_bank_in_sync_with_the_corrected_scalar() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        // Reach resources=2 through the real chokepoint (not a bare `=2`,
++        // which per `crate::state::TokenBank`'s own doc is the "never
++        // tracked" hand-built-test convention every OTHER test here relies
++        // on and would make this specific assertion meaningless -- a fresh
++        // player's tracked bank must start genuinely in sync, the way a real
++        // replay's always does, for a stale-bank regression to be visible).
++        economy::gain_resources(&mut r.state.players[0], 2);
++        r.pending_resource_corrections.push((Color::Orange, 2, 6));
++
++        r.flush_pending_resource_corrections();
++
++        let p = &r.state.players[0];
++        let tracked: u32 =
++            (0..p.resource_tokens.len as usize).map(|i| p.resource_tokens.denoms[i] as u32 * p.resource_tokens.counts[i] as u32).sum();
++        assert_eq!(tracked, p.resources as u32, "the tracked bank must account for every corrected resource, not just the scalar");
++    }
++
+     /// Same self-deferring shape as `flush_pending_culture_corrections_
+     /// defers_until_the_live_value_matches_bgos_own_old_baseline` -- a
+     /// `Bronze` correction whose stated `old` does not (yet) match this
+@@ -10444,6 +10600,45 @@ mod tests {
+         assert_eq!(parse_produces_grant_line("Purple builds Bronze Purple spends 2 resources"), None);
+     }
+ 
++    /// TOKENCOUNT regression (2026-08-14): [`apply_journal_food_or_res_correction`]
++    /// must roll a wrong DEFAULT guess (all 3 into resources, mismatching
++    /// the journal's real "1 food; 2 resources" Foray split) back out of
++    /// BOTH the scalar and the tracked bank, then place the journal's true
++    /// split through the real chokepoints -- not just fix the scalar and
++    /// leave the bank holding the wrong guess's tokens. Player has a single
++    /// denom-1 Farm/Mine (`Denoms::of` always includes `1`), so the guessed
++    /// `gain_resources(3)` would have placed 3 denom-1 tokens; after the
++    /// correction the bank must hold exactly 1 food token (value 1) and 2
++    /// resource tokens (value 2), matching the corrected scalars, not the
++    /// 3-resource-token guess. Confirmed RED by reverting the fix (restoring
++    /// the bare `p.food = pre_food + jf as i32` / `p.resources = pre_res +
++    /// jr as i32` this replaced): `resource_tokens` still shows 3 tracked
++    /// tokens (the unrolled guess) while `p.resources` reads 2, and
++    /// `food_tokens` shows 0 tracked tokens while `p.food` reads 1.
++    #[test]
++    fn apply_journal_food_or_res_correction_rolls_back_the_wrong_guess_and_resyncs_the_bank() {
++        let mut state = crate::game::new_game(2, 0xC0FFEE);
++        let p = &mut state.players[0];
++        let pre_food = p.food;
++        let pre_res = p.resources;
++        let pre_food_tokens = p.food_tokens;
++        let pre_resource_tokens = p.resource_tokens;
++        // The DEFAULT ("resources first") guess: all 3 into resources.
++        economy::gain_resources(p, 3);
++        assert_eq!(p.resources, pre_res + 3, "fixture assumption: the guess applied cleanly");
++
++        // The journal's own true split: 1 food, 2 resources.
++        apply_journal_food_or_res_correction(p, pre_food, pre_res, pre_food_tokens, pre_resource_tokens, 1, 2, false);
++
++        assert_eq!(p.food, pre_food + 1, "the journal's true food share must land");
++        assert_eq!(p.resources, pre_res + 2, "the journal's true resources share must land, not the guessed 3");
++        let food_tracked: u32 = (0..p.food_tokens.len as usize).map(|i| p.food_tokens.denoms[i] as u32 * p.food_tokens.counts[i] as u32).sum();
++        let res_tracked: u32 =
++            (0..p.resource_tokens.len as usize).map(|i| p.resource_tokens.denoms[i] as u32 * p.resource_tokens.counts[i] as u32).sum();
++        assert_eq!(food_tracked, p.food as u32, "food_tokens must account for the corrected food, not the guess's zero");
++        assert_eq!(res_tracked, p.resources as u32, "resource_tokens must account for the corrected 2, not the guessed 3");
++    }
++
+     /// Real corpus shapes for BGO's own §6.6-step-1 announcement, singular
+     /// and plural, `"No Discard Phase"`, and the largest real value observed
+     /// corpus-wide (`14`, game-independent -- just the parser's own upper

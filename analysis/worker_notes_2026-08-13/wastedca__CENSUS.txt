@@ -1,0 +1,102 @@
+Through the Ages -- take-cost census (2026-08-13)
+==================================================
+
+QUESTION: does the champion buy disproportionately from the expensive
+(3-civil-action) end of the 13-slot card row, as Paul observed watching it
+repeatedly take 3-civil-action cards? Measured as a histogram of the
+civil-action cost of every card actually taken, across three populations.
+
+Band boundaries (found in code, not assumed)
+---------------------------------------------
+rust/src/costs.rs:71-79, fn row_cost(idx):
+    slots 0-4 (5 slots)  -> 1 civil action
+    slots 5-8 (4 slots)  -> 2 civil actions
+    slots 9-12 (4 slots) -> 3 civil actions
+Matches the doc comment on line 70: "The printed table is 1,1,1,1,1 /
+2,2,2,2 / 3,3,3,3 across the 13 slots."
+
+Populations
+-----------
+(1) Champion as it plays today (pre-sign-gate weights), frozen copy
+    /private/tmp/ipadgame/champion_2p_game.json (NOT the live file at
+    /Users/pt/tta-ai/experiments/rust_champion_2p.json).
+    civil_actions = -0.520, civil_action_surplus = -1.324, wonders = -0.055
+    (all three negative -- unspent actions and unfinished wonders score as
+    a PENALTY today).
+    200 self-play games, 2p mirror match, seed 1..200, via
+    rust/src/bin/behavcensus.rs (new --take-cost census added this pass).
+
+(2) Same champion, sign gates applied by hand: civil_actions,
+    civil_action_surplus, wonders all set to 0.0 (all three were negative,
+    all three zeroed -- champion_2p_signfixed.json). Same 200 games, same
+    seed 1..200 (paired).
+
+(3) Humans: full 1,011-game BGO corpus (sources/bgo/index.tsv +
+    journals.tar.gz), 2-PLAYER GAMES ONLY (1,384 player-games) to match
+    populations (1)/(2)'s 2p self-play. Cost read directly off the
+    journal's own "<Colour> takes <Card> in hand <Colour> uses N civil
+    action" clause (ground truth for what the human actually paid -- no
+    row-position reconstruction needed), via a new histogram added to
+    rust/src/bin/corpuscensus.rs. /private/tmp/bgoholdout/ was never read.
+    Parser coverage 451,403/451,453 lines (99.99%); 1,011/1,011 games
+    included (0 excluded).
+
+Results
+-------
+                          (1) champion today   (2) sign-gate-repaired   (3) humans (2p, BGO)
+1 civil action (cheap)         25.9%                  27.3%                 67.7%
+2 civil actions (mid)          25.6%                  25.5%                 22.9%
+3 civil actions (expensive)    48.5%                  47.2%                  6.0%
+other (0 / >3)                  n/a                    n/a                   3.4%
+                          -------------------   ----------------------   --------------------
+takes / player-game            17.58                  16.97                37.26
+takes total                    7,031                  6,789               51,561
+player-games                    400                    400                 1,384
+
+(Populations 1/2 have no "other" bucket because behavcensus buckets by
+row_cost(slot) directly, which is always exactly 1/2/3 in the base game;
+population 3's 3.4% "other" is wonder-surcharge takes above 3 and rare
+Hammurabi/Taj-Mahal discounts down to 0 -- see corpuscensus.rs's
+take_civil_cost doc comment.)
+
+Verdict
+-------
+Paul's read is confirmed and, if anything, understated. The champion takes
+from the 3-action band on 48.5% of ALL its takes -- eight times humans'
+6.0% rate on the exact same 2-player corpus. Humans overwhelmingly take
+from the cheap end (67.7% at 1 action) where the champion only manages
+25.9%.
+
+Today's sign-gate repair (zeroing civil_actions, civil_action_surplus,
+wonders) moved the expensive-band share from 48.5% to 47.2% -- a 1.3
+percentage-point shift, essentially noise-level and nowhere near closing
+the ~42-point gap to human play (48.5% vs 6.0%). The three weights the
+repair targeted are not the (or not the only) mechanism driving this
+specific pathology; whatever is pricing the 3-action slots as attractive
+survives the repair. This needs further investigation beyond today's sign
+gates -- the swap test that proved "it picks a PRICE, not a card" is
+consistent with this: something in the evaluator besides these three
+weights still rewards spending 3 actions per take, or rewards row slots
+9-12's card population specifically, independent of the just-repaired
+civil-action-penalty terms.
+
+Method notes / new tooling
+---------------------------
+- rust/src/bin/behavcensus.rs: added a TakeCostCounts struct, recorded per
+  Move::Take via tta::costs::row_cost(slot), printed as a new "### Take
+  cost" section. Zero new hot-path code (this is entirely inside the
+  census binary's own move loop, not the evaluator).
+- rust/src/bin/corpuscensus.rs: added take_civil_cost(text), a local parse
+  of the "uses N civil action" clause (mirrors replay_common.rs's private
+  civil_and_military_uses, duplicated rather than imported since that
+  function belongs to the full game-state reconstruction module and this
+  binary intentionally does no reconstruction), gated to 2p games, printed
+  as a new "### Take cost, 2-player games only" section.
+- Both committed in the sandbox repo (/private/tmp/takecensus) by
+  pathspec, commit 3c54d5b, after `cargo test --profile difftest` (all
+  suites green, 0 failures; lib count 1264 vs the stated 1265 baseline --
+  not attributable to this change, no test was touched).
+- Nothing under /Users/pt/tta-ai was read or modified. The live champion
+  file at /Users/pt/tta-ai/experiments/rust_champion_2p.json was never
+  read; /private/tmp/ipadgame/champion_2p_game.json (frozen) was used
+  instead, per instructions.

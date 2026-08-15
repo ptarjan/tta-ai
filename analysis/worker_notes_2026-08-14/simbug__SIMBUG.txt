@@ -1,0 +1,192 @@
+SIMBUG -- SimulatorBug/PrepareEvent ledger bucket (103 games)
+Session 2026-08-14, clone /private/tmp/simbug, base commit 8113a15 (branch
+base0814, "Prefer non-Event/Territory victims when repaying a military hand
+deficit" -- the decider3 session's own landed fix, applied on top of the
+handfix (ground_for_consumption) and gawh (ground_auction_winner_hand)
+phantom-card fixes from earlier today).
+============================================================================
+
+BOTTOM LINE
+-----------
+FIX LANDED, zero regressions, 2 wins, unit-tested RED then GREEN. Root
+cause: `Replayer::resolve_political_decision` (rust/src/replay_common.rs)
+is the ONE remaining call site in the whole file that applies a `Move` by
+calling `apply::apply` DIRECTLY instead of through `Self::try_apply` --
+every other caller gets a free, automatic `military_hand_deficit` repay
+whenever `apply::apply` grows a seat's `hand_military` (`try_apply`'s own
+post-apply loop, see that function's doc). `resolve_political_decision`
+never got that hook, so any deficit owed by ANY seat -- including a fresh
+one THIS SAME call just incurred for the decider one line above, in its own
+"no disposable filler" branch -- can never be repaid by a card drawn as
+part of the revealed political card's own IMMEDIATE effect (an `AllPlayers`/
+`StrongestPlayer`/etc. `drawMilitaryCards` block: Development of Politics'
+"Each player draws 3 military cards.", Politics of Strength, ...), because
+that draw happens synchronously inside the SAME `apply::apply` call this
+function issues directly. The debt then sits on the books forever while the
+drawn card(s) stay uncompensated in hand: a permanent phantom card. This is
+the exact shape 81 of the 103 `SimulatorBug`/`PrepareEvent` rows show
+(simulator excess = journal excess + 1, the classic unpaid-deficit
+signature) -- not a per-game hand-tracing question, a structural gap in
+which call sites get the repay hook and which don't.
+
+THE FIX
+-------
+`resolve_political_decision`, right around its own `apply::apply(&mut
+self.state, mv)` call (rust/src/replay_common.rs, ~line 1918): snapshot
+every seat's `hand_military.len()` immediately before the call, then after
+it, call `self.repay_military_hand_deficit(seat, growth)` for every seat
+whose hand grew -- byte-for-byte the same loop `try_apply` already runs
+right after its own `apply::apply` call. No new mechanism, no new field: it
+just gives this one remaining caller the SAME hook every other caller
+already has. 22 lines of doc comment (the "why" -- this class of bug is
+easy to reintroduce at a NEW `apply::apply` call site if a future edit adds
+one without realizing `try_apply` is what makes the repay automatic) + 8
+lines of code.
+
+WHY THIS IS DIFFERENT FROM THE THREE EARLIER PHANTOM-CARD FIXES
+------------------------------------------------------------------
+The three sites fixed earlier today (`resolve_political_decision`'s own
+"no filler to sacrifice a PREPARED card" branch, `ground_for_consumption`,
+`ground_auction_winner_hand`) all fixed the INCUR side: recording a debt
+instead of silently washing a push-then-remove to net zero. This fix is on
+the REPAY side: even with the debt correctly recorded, one call site (this
+same `resolve_political_decision`, ironically) could never pay it back
+when the repaying growth happened to be a side effect of its OWN apply
+call rather than a later, separately-dispatched `Move`. The two problems
+share a symptom (a permanent phantom card) but are opposite halves of the
+same ledger.
+
+EVIDENCE
+--------
+1. Traced game `7522697` (round 3, line 23, the SMALLEST/earliest
+   PrepareEvent SimulatorBug repro in the corpus): Orange's `resolve_
+   political_decision(0)` at line 23 prepares a card with an EMPTY hand (no
+   filler -- deficit[0] += 1), then reveals "Development of Politics"
+   (`Special::AllPlayers(EventBlock{draw_military_cards: 3, ...})`), whose
+   immediate effect draws 3 cards for BOTH Orange and Purple synchronously
+   inside the SAME `apply::apply` call. Before the fix, Orange's hand ends
+   at 3 cards with `military_hand_deficit[0]` still 1 (owed forever) --
+   after the fix, `repay_military_hand_deficit(0, growth)` fires inside
+   this same call and pays it down to 2, deficit 0. This game and
+   `7523116` (round 5, same shape) are 2 of the 3 corpus-wide `comm -13`
+   wins below.
+2. `repay_military_hand_deficit`'s own doc comment already states (written
+   by an earlier session, before this bug was found) that it is "called
+   from `Self::try_apply` right after `apply::apply` for every seat whose
+   `hand_military` just grew for real" -- an accurate description of every
+   OTHER call site, and an implicit confession that `resolve_political_
+   decision` (which never calls `try_apply`) was never covered.
+3. Corpus-wide directional check: of the 103 `SimulatorBug`/`PrepareEvent`
+   rows, 81 show simulator excess = journal excess + 1 (phantom-card
+   direction, this fix's own signature), 17 show journal excess + 1
+   (simulator SHORT by one -- `decider3__DECIDER3.txt`'s own eviction-
+   collision mechanism, a different, already-investigated shape this
+   session did not re-attempt), 2 show -2, 3 show +2.
+4. Bucket count directly confirms the mechanism, not just a lucky
+   completion-count shuffle: `SimulatorBug`/`PrepareEvent` 103 -> 100 rows
+   after the fix (measured with `REPLAY_DUMP_BUCKET='SimulatorBug'`,
+   filtering `last event: Some((PrepareEvent`).
+
+RULED OUT / NOT RE-ATTEMPTED
+-----------------------------
+- Checkpoint-TIMING artifact (the task's own named risk: "a deferred
+  cascade meant our live value was simply behind, not wrong"): ruled out
+  for this specific mechanism because the fix changes real, permanent
+  `hand_military` CONTENTS and `military_hand_deficit` STATE inside one
+  `apply::apply` call, not merely which checkpoint a value gets attributed
+  to -- confirmed by the corpus's own completion-count and exact-score
+  movement (648->650 completed, 604->605 exact), which a pure timing/
+  attribution artifact could not produce.
+- `resolve_political_decision`'s PrepareEvent-cost eviction restricted to
+  CardType::Event/Territory victims: `decider3__DECIDER3.txt` already
+  measured this at 139 regressions on the full corpus and closed it. Not
+  re-attempted here.
+- `handfix__HANDFIX.txt`'s own warning that the `SimulatorBug`/
+  `PrepareEvent` bucket may be a PROXIMITY artifact ("whichever ledger-
+  tracked action most recently preceded the checkpoint", not necessarily
+  causal): true in general, but this session's mechanism does not depend
+  on that framing at all -- it is a structural code-path gap (one call
+  site missing a hook every sibling call site has), independently
+  verified by direct code reading (`resolve_political_decision` vs.
+  `try_apply`) and confirmed by a deterministic, hand-traced repro
+  (`7522697`), not inferred from the bucket's own label.
+- Did NOT attempt the 17-row "simulator short by one" sub-shape
+  (`decider3__DECIDER3.txt`'s eviction-collision mechanism) or the other
+  six `SimulatorBug` categories (Discard 56, Draw 54, ConsumingPlay 50,
+  ColonizeConsume 9, DefenseConsume 4, ColumbusConsume 3) -- out of this
+  session's budget. See HANDOFF below for whether this same missing-hook
+  shape could explain any of them.
+
+MEASUREMENT
+-----------
+Guard corpus command (`SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/
+replaystats /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-
+journals/journals`, 1011 games sampled):
+
+  BEFORE (base 8113a15): 648/1011 completed, 604/648 exact score match,
+    37830/39297 (96.267%) hand-excess checkpoints matched.
+  AFTER (this fix):      650/1011 completed, 605/650 exact score match,
+    37876/39337 (96.286%) hand-excess checkpoints matched.
+
+  comm -23 /private/tmp/guard_ids.txt /tmp/simbug_ids.txt   (REGRESSIONS):
+    (empty)
+
+  comm -13 /private/tmp/guard_ids.txt /tmp/simbug_ids.txt   (WINS):
+    7522924
+    7523116
+
+SimulatorBug/PrepareEvent bucket (REPLAY_DUMP_BUCKET='SimulatorBug',
+filtered to `last event: Some((PrepareEvent`): 103 -> 100 rows.
+
+`cargo test --profile fasttest --lib`: 1396 passed (1395 baseline + 1 new),
+0 failed.
+`cargo clippy --all-targets --profile fasttest -- -D warnings`: clean.
+
+New unit test `preparing_an_event_that_immediately_reveals_a_card_drawing_
+military_cards_repays_its_own_fresh_deficit` (replay_common.rs, next to
+the sibling `preparing_an_event_with_no_disposable_filler_records_a_
+deficit_that_a_later_draw_repays` test): confirmed RED by reverting the
+behavioural hunk (the snapshot-then-repay loop right after `resolve_
+political_decision`'s own `apply::apply` call) back to a bare `apply::
+apply(&mut self.state, mv);` with nothing after it -- test failed exactly
+as expected (`military_hand_deficit[0]` stayed 1 instead of repaying to 0).
+Fix restored, GREEN. NOTE: the test seeds `state.age_military = Age::I`
+and a real `military_deck` (`game::build_deck`) before calling `resolve_
+political_decision` -- §1.6 leaves `military_deck` genuinely EMPTY at the
+game's real starting Age A (all ten Age A military cards are dealt
+straight into `current_events` at setup, none are ever drawable), so
+`economy::draw_military` silently returns `None` for every draw at Age A
+and would mask this test's own mechanism entirely if left at the default.
+
+HANDOFF
+-------
+1. The other six `SimulatorBug` categories (Discard 56, Draw 54,
+   ConsumingPlay 50, ColonizeConsume 9, DefenseConsume 4, ColumbusConsume
+   3) were not audited for the same "missing `try_apply` hook" shape this
+   session. Worth a targeted `grep -n 'apply::apply(&mut self.state'
+   rust/src/replay_common.rs` sweep (this fix removes the one hit inside
+   `resolve_political_decision`; check whether any OTHER function still
+   calls `apply::apply` directly instead of through `try_apply` -- if so,
+   it is a candidate for the identical bug).
+2. The 17-row "simulator short by one" PrepareEvent sub-shape is
+   `decider3__DECIDER3.txt`'s already-traced eviction-collision mechanism
+   (two independent filler-eviction call sites colliding on the same
+   turn's hand); that file's own "NEXT STEPS" section (peeking the
+   preparation queue from `repay_military_hand_deficit` before it spends a
+   card a nearby preparation will need) is the concrete next step for that
+   sub-shape, not anything this session touched.
+3. `SimulatorBug`/`PrepareEvent` is still 100 games -- most of the
+   remaining rows are presumably the 17-row short-by-one sub-shape plus
+   whatever residual proximity-artifact noise `handfix__HANDFIX.txt`
+   already flagged (the bucket names the SYMPTOM location, not necessarily
+   the cause). A fresh `REPLAY_DUMP_BUCKET='SimulatorBug'`-filtered sweep
+   against the post-this-fix binary would re-derive the current delta
+   breakdown before picking the next thread.
+
+CLONE STATUS
+------------
+`/private/tmp/simbug` holds one committed, landed-quality commit
+(`f98f279`, "Repay a military-hand deficit from a PrepareEvent's own
+immediate draw") on top of base `8113a15`. Patch exported to
+`analysis/worker_notes_2026-08-14/simbug.patch`. Clone deleted after this
+write-up and the patch were both verified non-empty.

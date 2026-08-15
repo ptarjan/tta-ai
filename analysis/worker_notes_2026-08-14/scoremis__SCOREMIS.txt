@@ -1,0 +1,281 @@
+SCOREMIS worker notes -- 42 games that COMPLETE but final score disagrees with index.tsv
+============================================================================
+Base commit: d68eeb3 (clone /private/tmp/base0815 -> /private/tmp/scoremis)
+Baseline guard: /private/tmp/guard_ids.txt, 674 completed IDs, 632/674 exact.
+NO FIX LANDED. rust/ tree is byte-identical to d68eeb3 (patch file is empty,
+confirmed with `git diff d68eeb3 -- rust/` -> 0 lines). This file documents
+two deep, independently-verified hand-traces and explains why I stopped short
+of a code change on each, plus a strong lead for the next worker.
+
+Mid-task update from the coordinator: a separate worker fixed Fortifications
+tactic strength (4/2 -> 5/3) in card_table.rs, moving the corpus 674->687
+completed, 632->651 exact. My guard_ids.txt (674) is a strict subset of the
+new 687, so it stayed valid throughout and I did not re-baseline. None of the
+games I traced in depth involve Fortifications (checked explicitly, see
+below) so that fix does not retire any of my findings.
+
+THE 42 IDs
+----------
+7520722 7521695 7521790 7521849 7521985 7522009 7522212 7522239 7522277
+7522397 7522417 7522426 7522446 7522473 7522509 7522513 7522590 7522672
+7522776 7522786 7522813 7522838 7522866 7522899 7522924 7522979 7523045
+7523081 7523087 7523127 7523154 7523159 7523162 7523167 7523253 7523341
+7523364 7523367 7523473 7523474 7523597 7523647
+
+Reproduce with:
+  SCOREDIV_DUMP_IDS=1 SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+      | grep '^SCOREDIV_DIVERGING_ID' | awk '{print $2}' | sort
+
+DELTA GROUPING (required even without a fix)
+---------------------------------------------
+CAUTION on method: replaystats' own exact-match check sorts BOTH the engine
+score list and the index.tsv score list independently before comparing
+("let mut a = engine...; a.sort_unstable(); ... let mut b = index...;
+b.sort_unstable();" -- replaystats.rs ~line 366-369), and SCOREDIV_DETAIL
+prints those SORTED arrays. So a naive "zip sorted engine vs sorted index"
+delta table (which I built first) does NOT reliably line up per-SEAT unless
+scores happen to already be in matching rank order. I initially grouped on
+that naive per-position delta (see table A) but the bucket that mattered
+(Population) needed the seat-correct oracle instead (table B), which
+replaystats already computes and reports separately, keyed by seat.
+
+Table A -- naive sorted-position delta groups (engine-index, ascending),
+from all 42 SCOREDIV_DETAIL lines, POSITIONAL not seat-verified:
+  (-6, 6)          5 games  7523045 7522509 7523473 7522590 7523127
+  (0, 3)           4 games  7522239 7523367 7522776 7523154
+  (-4, 0, 4)       3 games  7522513 7522417 7522672
+  (-5, 3)          3 games  7523474 7523167 7521985
+  (-4, 4)          2 games  7523081 7523647
+  (-8, 8)          2 games  7523597 7522979
+  (0, 2)           2 games  7522212 7522277
+  (0, 1)           2 games  7522838 7523159
+  (0, 0, 0, 2)     2 games  7523162 7523253
+  (-4,0,0,4) (0,0,4,8) (-2,0,0) (-6,8) (-5,0,4,4) (-6,4) (-1,1) (-5,0,0,5)
+  (-8,0,0,8) (-9,3) (0,0,0,1) (-7,-2,0,0) (-9,9) (0,6) (-3,9) (-2,2)
+  (0,0,2,3)        1 game each (17 games total, singletons)
+
+Table B -- SEAT-VERIFIED oracle: replaystats' own "Final-scoring award
+oracle" section groups by which "Impact of ..." final-scoring CARD's
+computed award disagrees with the journal's own stated per-seat amount
+(`result.final_event_award_divergences`, seat-keyed, NOT the sorted-array
+diff). This is the trustworthy grouping for anything that traces to a
+final-scoring card:
+  Impact of Happiness    4 (game,seat) pairs: 7522277 seat1(+2) 7522446
+                          seat3(-2) 7523253 seat2(+2) 7522397 seat0(+4)
+  Impact of Population    4 (game,seat) pairs: 7523087 seat0(-2) 7522866
+                          seat0(-2) 7522899 seat0(-2) 7523162 seat2(+2)
+  Impact of Progress      1 pair: 7521849 seat1(+2)
+  Impact of Competition    1 pair: 7522866 seat0(-1)
+  Impact of Variety       1 pair: 7522866 seat0(-2)
+  (33 games have NO final-scoring-card divergence at all -- their score
+  bug, if any, is upstream of final events, e.g. in war spoils, event
+  effects, or base culture accumulation during play.)
+
+Table A's largest naive group, (-6,+6) across 5 two/three-player games, is
+NOT a final-scoring-card bug (none of those 5 appear in Table B) -- it
+traces to War over Culture spoils instead (see FINDING 2 below), discovered
+by reading the actual journal text for those 5 games, not from the delta
+table alone.
+
+FINDING 1 -- Impact of Population, hand-traced, root cause NOT PINNED
+-----------------------------------------------------------------------
+Rule (bga_throughtheages_material.inc.php, card 3845): "Each civilization
+scores 2 culture per content worker above 10." Implementation:
+events.rs ~359-375, `content = (on_card_workers + workers_free -
+economy::discontent(...)).max(0)`, `total += culture_per_content_worker_above_10
+* (content - 10).max(0)`.
+
+Hand-trace, game 7523087 ("Hollywood Returns", 3p), seat Orange (index 0):
+  Journal (line 484): "Orange scores 22 culture" (Impact of Population)
+  Engine:  SCOREDIV_POPULATION player=0 on_card=18 workers_free=2 workers=20
+           discontent=0 content=20 -> 2*(20-10) = 20 culture (journal 22, delta -2)
+  Purple (seat1) and Green (seat2) both match the journal EXACTLY
+  (content=11->2, content=17->14), so this is isolated to Orange, isolated
+  to one worker (22 vs 20 requires content=21, i.e. one more worker than we
+  compute).
+
+I fully instrumented every yellow_bank mutation site (economy::
+increase_population, economy::lose_population, game::advance_age's
+"-2 §12.2.4" deduction, game::on_leave_play / apply::on_leave_play
+yellow_tokens, apply::grant_yellow, interact::apply_card_gains,
+interact::apply_immediate_effects, interact::colonize_step's SendUnit,
+interact::{ChoiceKind::LosePop, QueueItem::LosePop}, interact::lose_colony,
+events.rs's take_yellow_tokens_from_weakest) with temporary eprintln!
+tracing (TRACE_POP=<idx>, all removed before finishing -- rust/ is clean).
+
+Result for Orange: starting workers = 7 (1 workers_free + START_TECHS sum
+of 6, game.rs's blank_player/START_TECHS -- confirmed against
+ubg_player-areas.txt: "18 in your yellow bank ... the seven yellow tokens
+[not in the bank] ... represent the initial population"). Budget arithmetic,
+fully self-consistent with our own code:
+  18 (start) - 2 (Age I end) - 2 (Age II end) - 2 (Age III end) + 1
+  (Uncertain Borders event, journal line 188, confirmed: "Orange gets 1
+  yellow token; Purple loses 1 yellow token") = 13 successful grants
+  available, all 13 consumed (12 direct "increases population" actions +
+  1 event grant, "Development of Settlement", line 105). The 14th attempted
+  grant -- Refugees (line 457, "Orange gains 3 culture and 1 population")
+  -- silently FAILS inside `free_increase_population` (events.rs:1225-1234,
+  `if !economy::increase_population(...) { break; }`, no mismatch raised)
+  because yellow_bank is already 0.
+
+I verified EVERY input to that budget arithmetic against external sources
+and could NOT find a wrong one:
+  - Starting bank = 18: ubg_player-areas.txt:41 confirms.
+  - "-2 yellow tokens" at the end of EACH of Age I, II, AND III (all three,
+    not two): ubg_rules.txt:117 ("You also return two yellow tokens to the
+    box at the ends of Ages I and II (and Age III in the full game)") and
+    ubg_full-game.txt:28 both confirm explicitly, INCLUDING the III->IV
+    transition -- so my first hypothesis (skip the deduction at the last
+    transition) is independently DISPROVEN by two separate fan-rules
+    sources, not just guessed away.
+  - Uncertain Borders' +1 token: journal states exactly 1, card text
+    ("takes 1 yellow token") agrees.
+So by every source I could check, our formula computes the CORRECT budget
+(13), yet the real BGO game evidently allowed a 14th grant. I traced the
+exact trigger line for our engine's 3rd (Age III->IV) deduction using a
+second temporary trace (TRACE_AGE, also removed): it fires on line 447
+("Orange elects Charles Chaplin", ActionClass::ElectLeader), which is TWO
+lines after the journal itself first tags "IV" (line 446, Orange's own
+"Ocean Liner Service used", ActionClass::IncreasePopulation -- also
+trustworthy per is_trustworthy_age_line, but deferred, presumably by
+pending/queue state left over from line 445's Crime Wave event; I did not
+chase why). Refugees (line 457) is AFTER this trigger, so it sees the
+already-decremented bank. Given how heavily replay_common.rs's
+is_trustworthy_age_line / catch_up_civil_age machinery is already
+hardened against exactly this class of "which line's age tag do we trust"
+bug (its own doc comment cites four prior fixes: game 7522648, 7522064,
+7523079, 7523449), I did NOT feel confident guessing a fifth exclusion
+without being able to independently verify the TRUE BGO transition instant
+-- there is no BGA game-logic source on this machine, only card text.
+
+SECOND DATA POINT, same bucket, DIFFERENT mechanism (important): I
+re-traced game 7522899 (seat Orange again, content 14 vs journal's implied
+15) expecting the same "grant silently fails right at a deferred age
+transition" signature. It does NOT reproduce: every single
+increase_population call for that seat SUCCEEDS (no FAILED trace line at
+all), yet the final total is still 1 worker short of what the journal's
+Impact-of-Population score implies. I did not have budget left to chase
+this second mechanism to ground. CONCLUSION: the "Impact of Population"
+bucket is NOT one root cause -- do not assume a single fix clears all 4
+(game,seat) pairs in Table B. Two of the four are confirmed
+architecturally different from each other.
+
+FINDING 2 -- War over Culture spoils, Napoleon Bonaparte, 5/5 games, STRONG LEAD
+-----------------------------------------------------------------------------------
+This is Table A's largest naive group, (-6,+6), across 7523045 7522509
+7523473 7522590 7523127. None of these appear in the seat-verified
+Table B (Impact-of-*) oracle, so the bug is NOT in final-scoring -- it is
+in `combat::resolve_war_outcome`'s live strength computation during play
+(§5.7, "War over Culture: victor takes 5 + strength-advantage culture,
+capped at the loser's culture" -- combat.rs:355-360, hardcoded to match
+Python's own hardcoded literal per this module's own top doc comment).
+
+Hand-trace, game 7523045 (2p), journal line 335: "Purple wins War over
+Culture Attacker's strength: 41; Defender's strength: 27" (advantage 14,
+take = 5+14 = 19 culture). I added a temporary trace in
+combat::resolve_war_outcome (TRACE_WAR, removed, rust/ clean) printing both
+sides' `effects::state_stats(...).strength` at the exact resolution instant:
+  TRACE_WAR attacker_idx=1 base_strength=47 army_strength=14 tactic="Napoleonic Army"
+  TRACE_WAR defender_idx=0 defender_strength=27 army_strength=8  tactic="Heavy Cavalry"
+Defender (Orange) MATCHES the journal exactly: 27 = 27. Attacker (Purple)
+does not: we compute 47, journal says 41 -- exactly +6, which is exactly
+this game's -6/+6 mismatch (advantage 20 vs true 14, take 25 vs true 19,
+delta 6 on the culture transfer, sign flipped between the two seats because
+one gains what the other loses).
+
+All 5 games in this bucket have the SAME leader in play for the WINNING
+attacker: Napoleon Bonaparte ("You have +2 strength for each different
+type of military unit you have [infantry/cavalry/artillery/airforce]",
+bga_throughtheages_material.inc.php card ~2642, ported as
+Special::StrengthPerUnitType(2), effects.rs:1160-1177).
+  7523045 Purple elects Napoleon Bonaparte (round 12) -- Purple later wins
+  7522509 Orange elects Napoleon Bonaparte (round 13) -- Orange wins
+  7523473 Orange elects Napoleon Bonaparte (round 12) -- Orange wins
+  7522590 Purple elects Napoleon Bonaparte (round 11) -- Purple wins
+  7523127 Purple elects Napoleon Bonaparte (round 11) -- Purple wins
+This is a 5/5 correlation, found by grepping each game's own journal, not
+inferred from the delta table. None of the 5 mention "Fortifications" (I
+checked explicitly, given the coordinator's mid-task note about a landed
+Fortifications strength fix elsewhere) -- this is a DIFFERENT bug from
+that one.
+
+For 7523045 specifically, Purple's built units at war time are Swordsmen
+(infantry), Knights (cavalry), Cannon (artillery) -- 3 distinct types, no
+Air units anywhere in the journal, so Napoleon's own bonus should be
++2*3 = +6 by the card's own text (matching the discrepancy's exact
+magnitude) -- but I could NOT determine in the time remaining whether our
++6 is a case of Napoleon being counted TWICE (once directly in
+state_stats' StrengthPerUnitType arm, once double-folded into
+army_strength's tactic-army count via some other path), or whether the
+truth is that Napoleon's bonus is legitimately +6 in BOTH our number and
+the journal's, and the extra +6 comes from something else in the "base"
+component (I also checked Strategic Territory (II)'s printed colonize
+strength, +4, which Purple owns -- close but not an exact 6, so probably
+not the source; not conclusively ruled out either).
+
+I did NOT attempt a fix here: `effects::state_stats` and
+`effects::army_strength` are both heavily tested (see effects.rs's own
+"KNOWN GAPS" and army_strength doc comments, and combat.rs's ~15 existing
+unit tests around resolve_war_outcome), and I was not confident enough in
+a specific line to change without risking a regression on a well-covered,
+frequently-exercised path. This is nonetheless the single strongest,
+cleanest lead in the whole 42-game bucket: uniform mechanism, uniform
+delta, 5/5 correlation with one named card.
+
+WHAT I CHANGED IN THE CLONE
+----------------------------
+Nothing landed. I added and then fully reverted temporary eprintln! tracing
+(gated behind TRACE_POP / TRACE_AGE / TRACE_WAR env vars) across economy.rs,
+game.rs, apply.rs, interact.rs, events.rs, replay_common.rs, combat.rs to
+do the hand-traces above. `git diff d68eeb3 -- rust/` is 0 lines (verified
+after each revert). `analysis/worker_notes_2026-08-14/scoremis.patch` is
+therefore an empty file, as instructed for a no-fix outcome.
+
+GUARD (unchanged, since no fix landed -- run for the record)
+---------------------------------------------------------------
+Before: 674 completed, 632/674 exact (base d68eeb3, /private/tmp/guard_ids.txt)
+After:  674 completed, 632/674 exact (rust/ tree identical to base)
+
+  comm -23 /private/tmp/guard_ids.txt /tmp/scoremis_ids.txt   (REGRESSIONS)
+  <empty output>
+
+  comm -13 /private/tmp/guard_ids.txt /tmp/scoremis_ids.txt   (NEW completions)
+  <empty output>
+
+  wc -l: 674 /tmp/scoremis_ids.txt, 674 /private/tmp/guard_ids.txt
+
+HANDOFF -- what to look at next, in priority order
+-----------------------------------------------------
+1. FINDING 2 (War over Culture / Napoleon Bonaparte) is the strongest lead.
+   Add a trace of `effects::state_stats`'s strength ACCUMULATION
+   (per-Special-variant subtotal, not just the final sum) for Purple in
+   7523045 at the war-resolution instant, to see exactly which term(s) sum
+   to 47 instead of 41. Compare against `army_strength`'s own internal
+   fresh/outdated split (14 = 2 fresh Napoleonic-Army armies at 7 each --
+   verify that's really 2 full armies of matching units, not double-counted
+   with StrengthPerUnitType looking at the SAME workers). All 5 games in
+   this group are available for cross-checking once a hypothesis exists;
+   they should ALL move from -6/+6 to exact on a correct fix (a good,
+   cheap confirmation signal before running the full guard).
+2. FINDING 1's SECOND mechanism (game 7522899, Orange short 1 worker with
+   NO failed grant anywhere in the trace) is still completely unexplained.
+   Worth an independent hand-trace from scratch -- do not assume it's the
+   same age-transition-timing issue as 7523087, it demonstrably is not.
+3. The 33 games in neither Table B nor the War-over-Culture group (i.e.
+   most of Table A's singleton/small groups) have not been triaged AT ALL
+   beyond the naive sorted-position delta table, which -- as noted above --
+   is not seat-verified and may be actively misleading for any game with
+   more than 2 players. Before trusting Table A for anything beyond "roughly
+   how many games, roughly what magnitude", rebuild it from
+   `final_event_award_divergences` (seat-safe) plus a similarly seat-safe
+   mid-game oracle (the existing culture_oracle_divergence /
+   SCOREDIV_DETAIL machinery, but read per-seat via `result.engine_scores`
+   BEFORE the sort, not after) if replaystats can be asked to print that
+   un-sorted (it currently only sorts for the exact-match test, but
+   SCOREDIV_DETAIL already prints the pre-sort `a`/`b` too -- rename fields
+   in this file's DETAIL if unclear).
+4. All the temporary trace patterns I used (TRACE_POP, TRACE_AGE, TRACE_WAR)
+   are documented above precisely enough to re-add in under 10 lines each
+   if useful; I removed them rather than leave dead debug code in a clone
+   someone else will diff.

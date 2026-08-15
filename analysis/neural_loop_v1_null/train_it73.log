@@ -1,0 +1,14 @@
+device=cuda cuda=True
+gpu: NVIDIA GeForce RTX 3090
+50 shards -> 42 train / 8 val
+train pairs 912867  val pairs 85980  train vals 188848  dim 1897
+warm-started from checkpoints/best.pt
+epoch   1  rank 0.3414  vloss 0.1516  val_pair_acc 0.9330  val_mae 55.2  *best
+epoch   2  rank 0.3242  vloss 0.1217  val_pair_acc 0.9272  val_mae 56.7
+epoch   3  rank 0.3112  vloss 0.1081  val_pair_acc 0.9186  val_mae 62.3
+epoch   4  rank 0.2973  vloss 0.0952  val_pair_acc 0.9170  val_mae 71.7
+epoch   5  rank 0.2861  vloss 0.0871  val_pair_acc 0.9139  val_mae 68.8
+epoch   6  rank 0.2775  vloss 0.0809  val_pair_acc 0.9137  val_mae 72.2
+epoch   7  rank 0.2716  vloss 0.0772  val_pair_acc 0.9123  val_mae 75.1
+epoch   8  rank 0.2686  vloss 0.0752  val_pair_acc 0.9126  val_mae 75.9
+best epoch 1: pair_acc 0.9330 mae 55.2; saved checkpoints/cand.pt

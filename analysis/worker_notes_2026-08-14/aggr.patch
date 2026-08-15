@@ -1,0 +1,75 @@
+diff --git a/rust/src/legal.rs b/rust/src/legal.rs
+index e3db03a..1216e0e 100644
+--- a/rust/src/legal.rs
++++ b/rust/src/legal.rs
+@@ -312,9 +312,32 @@ fn politics_moves(state: &GameState, p: &PlayerState) -> MoveList {
+                     if combat::pact_forbids_attack(state, p, q) {
+                         continue;
+                     }
+-                    if combat::defense_strength(state, p, q) >= combat::attack_strength(state, p, q) {
+-                        continue;
+-                    }
++                    // CoL p.4 prints a declare-time gate here ("You cannot
++                    // attack a player whose strength equals or exceeds
++                    // yours"), and this function used to enforce it with
++                    // `combat::defense_strength(..) >= combat::attack_
++                    // strength(..) => continue`. BGO's own journals refute
++                    // it outright: 9 real games in the corpus's `IllegalMove:
++                    // Aggression` bucket (its largest group, by card) show a
++                    // human declaring a Plunder against a rival whose
++                    // strength was TIED (e.g. `7521259` line 136, 9 vs 9) or
++                    // even STRICTLY HIGHER (e.g. `7523613` line 385, attacker
++                    // 7 vs defender 22; `7521515` line 590, attacker 7 vs
++                    // defender 27) than the attacker's own -- with the
++                    // defender's `"defends"` line showing zero bonus cards
++                    // played, so these are not post-defense swings, they are
++                    // the PRE-declaration numbers. BGO evidently never
++                    // enforces this half of the printed rule; it only
++                    // enforces the OTHER half, the FAQ's "ties during Wars
++                    // and Aggressions" / CoL's "if your rival matches or
++                    // exceeds your strength, the aggression is unsuccessful"
++                    // -- which is exactly `combat::finish_aggression`'s own
++                    // `if ctx.dfn >= ctx.atk { return false; }`, downstream
++                    // of this move actually being offered. Removing the
++                    // gate here does not weaken that: a hopeless aggression
++                    // is still legal to declare (spending the card and the
++                    // MA, exactly as BGO logs it) and still fails with no
++                    // effect on resolution.
+                     // Annex/Infiltrate against a target they cannot affect
+                     // are legal moves that resolve to nothing: `combat::
+                     // finish_aggression` enqueues `QueueItem::Annex`/
+@@ -1427,17 +1450,29 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn politics_aggression_not_generated_when_attacker_cannot_win() {
+-        // No strength at all on either side: defense_strength (0) >=
+-        // attack_strength (0) blocks the move -- an attack that cannot
+-        // possibly succeed is not offered as a choice.
++    fn politics_aggression_generated_even_when_attacker_cannot_win() {
++        // Both sides have 0 strength here (tied), which per CoL p.4's
++        // printed rule ("You cannot attack a player whose strength equals
++        // or exceeds yours") would make this illegal to even declare -- but
++        // BGO's own journals refute that half of the rule outright: 9 real
++        // games in the corpus's `IllegalMove: Aggression` bucket show a
++        // human declaring a Plunder against a rival whose PRE-declaration
++        // strength was tied or strictly higher (`7521259` line 136, 9 vs 9;
++        // `7523613` line 385, attacker 7 vs defender 22), with the
++        // defender's `"defends"` line showing zero bonus cards played. BGO
++        // only enforces the OTHER half of the rule -- "if your rival
++        // matches or exceeds your strength, the aggression is unsuccessful"
++        // -- which is `combat::finish_aggression`'s own `dfn >= atk => no
++        // effect`, downstream of the move being offered at all. So a
++        // hopeless aggression is still a legal move: it spends the card and
++        // the MA and simply resolves to nothing, exactly as BGO logs it.
+         let (agg, cost) = aggression_card_and_cost();
+         let mut p = blank_player(0, card("Despotism"));
+         p.military_actions = cost as i8 + 2;
+         p.hand_military.push(agg);
+         let state = one_player_state(p);
+         let moves = politics_moves(&state, &state.players[0]);
+-        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })));
++        assert!(moves.as_slice().contains(&Move::Aggression { card: agg, target: 1 }));
+     }
+ 
+     #[test]

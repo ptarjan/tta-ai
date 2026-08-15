@@ -511,7 +511,7 @@ fn card_value(_state: &GameState, p: &PlayerState, ctx: &Ctx, id: CardId) -> f64
             }
             v
         }
-        _ => 1.0,
+        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => 1.0,
     }
     // `_state` is never read here, matching Python's `_card_value`, whose
     // own `state` argument is likewise unused -- kept as a parameter only to
@@ -542,7 +542,7 @@ pub(crate) fn gov_value(p: &PlayerState, ctx: &Ctx, id: CardId) -> f64 {
 fn free_civil_action_of(id: CardId) -> Option<FreeCivilActionValue> {
     id.get().special.iter().find_map(|s| match s {
         Special::FreeCivilAction(v) => Some(*v),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     })
 }
 
@@ -1284,7 +1284,7 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                 let v = match o {
                     ChoiceOption::Word(Keyword::Food) => ctx.food_need as f64 * 2.0,
                     ChoiceOption::Word(Keyword::Resources) => ctx.res_need as f64 * 2.0 + 1.0,
-                    _ => 0.0,
+                    ChoiceOption::Card(_) | ChoiceOption::Slot(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => 0.0,
                 };
                 best.consider(i, v);
             }
@@ -1294,7 +1294,7 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                 let v = match o {
                     ChoiceOption::Word(Keyword::Skip) => 0.1,
                     ChoiceOption::Card(id) => prod_value(id.get().production, ctx),
-                    _ => 0.0,
+                    ChoiceOption::Slot(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => 0.0,
                 };
                 best.consider(i, v);
             }
@@ -1312,7 +1312,7 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                             card_value(state, p, ctx, id)
                         }
                     }
-                    _ => 0.0,
+                    ChoiceOption::Card(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => 0.0,
                 };
                 best.consider(i, v);
             }
@@ -1326,7 +1326,7 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                             Production { food: g.food, resources: g.resources, science: 0, culture: 0, happy: 0, strength: 0 };
                         prod_value(prod, ctx)
                     }
-                    _ => 0.0,
+                    ChoiceOption::Card(_) | ChoiceOption::Slot(_) | ChoiceOption::Move(_) | ChoiceOption::Word(_) => 0.0,
                 };
                 best.consider(i, v);
             }
@@ -1369,7 +1369,7 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                         CardType::War => 0.2,
                         CardType::Tactic => 0.0,
                         CardType::Bonus => 0.4,
-                        _ => 1.0,
+                        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::Government | CardType::SpecialTech | CardType::Wonder | CardType::Leader | CardType::Action => 1.0,
                     };
                     best.consider(i, v);
                 }
@@ -1388,7 +1388,7 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                 let v = match o {
                     ChoiceOption::Word(Keyword::Leader) => 1.0,
                     ChoiceOption::Word(Keyword::Wonder) => 0.5,
-                    _ => 0.0,
+                    ChoiceOption::Card(_) | ChoiceOption::Slot(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => 0.0,
                 };
                 best.consider(i, v);
             }
@@ -1431,7 +1431,7 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                             card_value(state, p, ctx, *id) / cost as f64
                         }
                     }
-                    _ => 0.0,
+                    ChoiceOption::Slot(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => 0.0,
                 };
                 best.consider(i, v);
             }
@@ -1457,6 +1457,27 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
                         strength: 0,
                     };
                     best.consider(i, prod_value(prod, ctx));
+                }
+            }
+        }
+        ChoiceKind::FoodOrResSplit { lose } => {
+            // Same `ChoiceOption::Gain` shape as `PlunderSplit` just above,
+            // self-directed rather than attacker-directed (Raiders/Foray's
+            // §5.3 `foodAndOrResources` split): price each split by this
+            // book's own marginal food/resources value, negated for a loss
+            // (prefer losing whichever combination this book values LEAST).
+            for (i, o) in opts.iter().enumerate() {
+                if let ChoiceOption::Gain(g) = o {
+                    let prod = Production {
+                        food: g.food,
+                        resources: g.resources,
+                        science: 0,
+                        culture: 0,
+                        happy: 0,
+                        strength: 0,
+                    };
+                    let v = prod_value(prod, ctx);
+                    best.consider(i, if lose { -v } else { v });
                 }
             }
         }
@@ -1536,7 +1557,7 @@ fn cook_bonus_per_discard(p: &PlayerState) -> i32 {
         .iter()
         .find_map(|s| match s {
             Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(v) => Some(*v as i32),
-            _ => None,
+            Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
         })
         .unwrap_or(0)
 }

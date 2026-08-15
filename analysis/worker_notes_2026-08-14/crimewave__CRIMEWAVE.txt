@@ -1,0 +1,243 @@
+TARGET: Crime Wave event's "return 1 blue token to the box", as flagged by
+noworker2__NOWORKER2.txt's STEP 3 (found in passing while tracing game
+7523640, deliberately NOT fixed there). Worked in a fresh clone at
+/private/tmp/crimewave, base commit d6a9fa3 (Fortifications tactic
+5/3-strength fix).
+
+RESULT: NO BUG in the reported mechanism. crimewave.patch contains one
+commit, a documentation-only comment (29 lines, zero functional change) in
+rust/src/events.rs recording the finding so a future worker doesn't re-chase
+the same false lead. The task was then WIDENED by the coordinator mid-pass
+into a related but distinct corruption/blue-token-capacity question, which
+is a genuine, confirmed, but NOT locally fixable systemic issue -- see PART 2.
+
+============================================================
+PART 1: Crime Wave / blueTokens -- the original assignment
+============================================================
+
+STEP 1: confirmed the report's CODE claims, corrected its RULES claim
+------------------------------------------------------------------------
+`apply_gains_block`'s `blueTokens` key (events.rs, both the `apply_gains`
+copy at line ~127 and `apply_gains_block`'s own copy) does exactly what
+noworker2 said: `p.blue_total = (p.blue_total as i32 + sign * n).max(0)`,
+touching ONLY the abstract `blue_total` counter -- never `workers_free`,
+never `yellow_bank`. This part of the report is accurate.
+
+Where the report goes wrong: it assumes "blue token" and "population
+worker" are the same pool, citing FAQ p.15's "Lose 1 population: unused
+worker -> yellow bank; if none, a worker off a card" as the applicable rule,
+and treating Barbarians' `QueueItem::LosePop` as the model Crime Wave should
+follow. They are NOT the same pool. In this engine (state.rs:492-500) and in
+the real game:
+  - Population/workers are YELLOW tokens: `p.yellow_bank` (unborn
+    population) / `p.workers_free` (placed, unused workers). Losing
+    population (Barbarians, `Special::DecreasePopulation`) correctly costs a
+    YELLOW token via `QueueItem::LosePop` -- confirmed correct, not touched
+    this pass.
+  - Food/resource STORAGE CAPACITY is tracked by BLUE tokens: `p.blue_total`
+    (bank + cards combined, `economy::blue_used`/`blue_available` derive
+    occupancy from held food/resources via denomination math, §6.4). CoL
+    p.10, quoted directly from `sources/cge_code_of_laws.pdf` (via
+    pdftotext -layout): "Your food and resources are represented by blue
+    tokens on the mine and farm technologies you have in play. Each blue
+    token represents the quantity printed at the bottom of the card."
+  - Card text for Crime Wave (`sources/bga_throughtheages_material.inc.php`
+    line 2175): "The 2 weakest civilizations lose 3 culture and return 1
+    blue token to the box." This is unambiguously the BLUE pool, not
+    population.
+
+STEP 2: what the rulebook actually requires for losing a blue token
+------------------------------------------------------------------------
+CoL p.10 (same page, quoted verbatim, pdftotext -layout of
+sources/cge_code_of_laws.pdf around "If you lose blue tokens"):
+  "If you lose blue tokens, you return blue tokens from your blue bank to
+  the box. If there are not enough in your blue bank, you also return
+  tokens from mines and farms of your choice."
+This matches RULES_SPEC.md line 185 (§6.5) exactly. So losing a blue token
+is: (a) take from the BANK first (`blue_available`), (b) if the bank is
+short, ALSO strip a token off a farm/mine card of the OWNER'S CHOICE --
+which, since a token on a farm/mine card literally represents held
+food/resources (CoL p.10 again), would reduce actual held food or resources,
+not just the abstract total. This is a genuinely different mechanism from
+"lose 1 population" (FAQ p.15) -- confirmed by CoL p.17's OWN text drawing
+the yellow/blue distinction in adjacent paragraphs ("If you lose yellow
+tokens, return tokens from your yellow bank to the box... If you lose blue
+tokens, you return blue tokens from your blue bank...").
+
+STEP 3: is the (b) branch ("strip from a card") ever reachable?
+------------------------------------------------------------------------
+Census of `card_table.rs`: exactly TWO base-game cards ever print a nonzero
+`blue_tokens` key inside an `EventBlock` reached through `apply_gains_block`
+(i.e. a card-TEXT one-shot loss, not the reversible enter/leave-play
+"+yellow/+blue symbol" mechanic already verified correct by noworker2's
+STEP 2 for Columbus Colonize): Crime Wave (`blue_tokens: 1`, `Special::Lose`
+via `WeakestPlayers`) and Civil Unrest (`blue_tokens: -1`, via
+`Special::PlayersWithMostDiscontentWorkers`). (All OTHER nonzero
+`blue_tokens` fields in card_table.rs -- Justice System, Civil Service, Taj
+Mahal, Vast/Wealthy/Developed Territory -- are top-level `CardEffects`
+fields read by the reversible `on_enter_play`/`on_leave_play`/
+`gain_colony`/`lose_colony` mechanic, a different, already-verified-correct
+code path; confirmed none of them are Aggression cards, so `apply_gains`'s
+own copy of this branch stays genuinely unreachable exactly as its own doc
+comment already claims.)
+
+Instrumented `apply_gains_block`'s blue_tokens branch with a temporary
+eprintln (`blue_total_before`, `blue_available_before`), ran the full corpus
+sweep (`SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats
+sources/bgo/index.tsv bgo-journals/journals`), and grepped all 241 firings
+of these two cards across the whole corpus:
+  minimum blue_available_before observed: 1
+  (every card here only ever loses 1 blue token, so "available >= n" always
+  holds -- the bank NEVER runs short at any of these 241 firings)
+Reverted the temporary debug print before committing anything.
+
+CONCLUSION: the current code -- decrementing `blue_total` directly,
+implicitly always "from the bank" -- is EXACTLY CORRECT for every reachable
+case in this project's entire corpus. The "strip from a farm/mine of your
+choice" branch the rulebook also describes is real but genuinely
+unreachable by any data on this machine, matching the exact pattern this
+module's own top-of-file doc comment already uses to justify NOT building
+unreachable branches ("a branch against a value that cannot exist would be
+dead code nothing exercises"). Building a full player-choice
+strip-a-card-token mechanic with no case to test it against would be
+speculative, untestable engineering, not a fix -- consistent with this
+project's standing convention.
+
+ACTION TAKEN: landed a documentation-only comment (29 lines) above the
+`blue_tokens` branch in `apply_gains_block`, citing CoL p.10/p.17 and the
+241-firing corpus census, so this false lead is not re-opened by a future
+worker reading noworker2's notes. Zero functional change. Full guard sweep:
+687/687 completed, 651/687 exact -- byte-identical to baseline
+(/private/tmp/guard_ids_687.txt), as expected for a comment-only diff.
+  comm -23 guard_ids_687.txt cw_ids.txt   (regressions): EMPTY
+  comm -13 guard_ids_687.txt cw_ids.txt   (wins):        EMPTY
+cargo test --profile fasttest --lib: 1410 passed; 0 failed.
+cargo clippy --all-targets --profile fasttest -- -D warnings: clean.
+
+============================================================
+PART 2: WIDENED SCOPE -- corruption/blue-token-capacity off-by-one
+============================================================
+Mid-pass, the coordinator reported convergent evidence from a sibling
+worker: games 7522024, 7521657, 7521791 each show `economy::end_of_turn`'s
+corruption calc computing `blue_available == 10` (bands to a 2-resource
+charge) where the real BGO journal shows ZERO corruption at that exact
+checkpoint (needs `blue_available >= 11`) -- an off-by-one in the direction
+of "we think 1 more token is occupied/1 fewer available than reality".
+Asked to widen from Crime Wave to every blue-token mutation site and check
+the `blue_total == occupied + available` invariant.
+
+METHOD: enumerated every non-test mutation site of `p.blue_total` in the
+engine:
+  - apply.rs `on_enter_play`/`on_leave_play` (lines 347/405): the reversible
+    card-symbol +yellow/+blue mechanic, tech/leader/wonder enter-leave-play.
+  - game.rs `on_leave_play` (line 674): the antiquation-specific duplicate
+    of the same mechanic, for antiquated leaders.
+  - interact.rs `gain_colony`/`lose_colony`/`Annex` handling (lines
+    483/1614/1658): the SAME mechanic for territory-card colonization
+    (§11.5, RULES_SPEC line 287: "Apply its PERMANENT effects... FIRST").
+  - events.rs `apply_gains`/`apply_gains_block`'s two `blueTokens` branches
+    (Part 1, above): the card-TEXT one-shot loss mechanic.
+None of these are missing an inverse, none double-apply (`Annex` correctly
+calls `lose_colony` on the victim BEFORE crediting the new owner), and the
+wonder-antiquation branch (game.rs ~638) correctly does NOT touch
+`blue_total` at all, relying on `blue_used`'s own re-derivation from
+`p.wonder_steps` once the wonder card is discarded -- confirmed by its own
+doc comment and cross-checked against `economy::blue_used`'s actual formula.
+
+LIVE TRACE (game 7522024, `REPLAY_DEBUG=1 REPLAY_DEBUG_ALL=1 ./target/
+difftest/replay /tmp/one.tsv journals 7522024`): confirmed the discrepancy
+is REAL. At round 10's end-of-turn for Orange (idx=0):
+  `blue_total=15 blue_used=5 corr=2` (our engine)
+vs. the journal's own round-10 "End turn" line (line 237 of
+7522024.tsv): "...3 food - consumption: 1 (now 7); 3 resources (now 5)" --
+NO "CORRUPTION!" marker, i.e. the real game charged 0.
+
+Traced `blue_total`'s own history backward: it was 16 (full bank) through
+round 9's own end-of-turn (`blue_total=16 blue_used=3 corr=0`, matching the
+journal's own no-corruption line for round 9), then dropped to 15 exactly
+when Orange colonized "Vast Territory (I)" in round 8 (`gain_colony`
+crediting `perm.blue_tokens = -1`, its printed permanent effect being "+3
+yellow tokens & -1 blue token" -- confirmed in both card_table.rs and
+`sources/bga_throughtheages_material.inc.php` line 958). This -1 is applied
+by exactly the same, already-verified-correct `gain_colony` mechanic Part 1
+above traces for Columbus Colonize. Walked every other Orange action
+between the two checkpoints (Printing Press build, Constitutional Monarchy
+develop, two Irrigation upgrades, Religion build, Good Harvest's "produce 4
+food immediately, ignore corruption/consumption" event, Warriors build) --
+each is individually correct against `economy::gain_food`/
+`worker_capped_production`/`tokens_for`'s own formulas and CoL p.11's "gain
+nearest lower achievable value" rule. `blue_used` never exceeds `blue_total`
+anywhere in this trace -- there is NO internal invariant violation, the
+model is fully self-consistent by its OWN rules. It simply disagrees with
+BGA's ground truth by exactly one blue token's worth of capacity at this
+one checkpoint.
+
+THIS IS THE SAME SHAPE A PRIOR WORKER ALREADY FOUND AND COULD NOT RESOLVE:
+`resshort__RESSHORT.txt`'s HAND-TRACE 1 (game 7523124, a different,
+Bill-Gates-adjacent scenario) independently found the identical pattern --
+every individual mechanism (blue_total's card-driven adjustments, Denoms,
+tokens_for, the corruption band table) checks out component-by-component,
+yet the corruption charge still disagrees with BGA by exactly one band's
+worth. Their own conclusion, which this pass's independent trace does
+nothing to contradict: "recomputing 'what if corr=0' is NOT simply '+2 to
+the final total' -- blue token CAPACITY is shared between [the corruption
+charge and food/resource production that compete for the same tokens]",
+and it remains an OPEN QUESTION whether BGA evaluates the corruption
+snapshot using a different resource/food state than "whatever this turn's
+own actions left behind, right before this turn's own production step" (see
+resshort's HANDOFF item 2 for the concrete next-step: chase
+`Special::ResourcesPerLabEqualToLevel`/production-timing theories with a
+dedicated budget).
+
+NOT FIXED THIS PASS, DELIBERATELY: given (a) two independent traces on two
+different games/scenarios both land on "every component is individually
+rules-correct, yet the aggregate disagrees with ground truth", (b) the
+prior worker's own explicit warning that a naive fix is not a simple
+additive correction because corruption and production capacity are
+entangled, and (c) no new lead surfaced this pass beyond what resshort
+already documented, attempting a guess-fix here risks a REGRESSION across
+every game (corruption fires almost every turn) for a mechanism I cannot
+fully explain. Per the task's own standing rule, this is exactly the kind
+of situation where landing nothing and reporting clearly is the right call.
+
+HANDOFF for whoever picks this up next: this is now a 2nd independent
+confirmation (crimewave pass) of resshort's original finding, across two
+different games and two different triggering scenarios (Vast Territory
+colonization here vs. a Bill-Gates-adjacent case in 7523124). A future pass
+should treat this as ONE shared open question, not per-game noise, and
+needs either (a) a real BGA game-logic reference source (not available on
+this machine, per this task's own standing note), or (b) a dedicated
+budget large enough to test resshort's own open theory: does BGA's
+corruption computation read a resource/food snapshot from a DIFFERENT point
+in the end-of-turn sequence than this engine's `economy::end_of_turn` does.
+
+============================================================
+MEASUREMENT (Part 1's landed change)
+============================================================
+Build: `cargo build --profile difftest --bin replaystats` -- clean.
+Full sweep (`SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats
+sources/bgo/index.tsv bgo-journals/journals`):
+  "# replaystats: 1011 games sampled, 687 completed to state.game_over"
+  "687/687 completed games actually flipped state.game_over ... 651/687 of
+  those matched index.tsv exactly (sorted per-game score-list compare)."
+Regressions (`comm -23 /private/tmp/guard_ids_687.txt /tmp/cw_ids.txt`):
+  EMPTY.
+Wins (`comm -13 /private/tmp/guard_ids_687.txt /tmp/cw_ids.txt`): EMPTY.
+(Both empty is correct/expected -- the landed change is a doc comment,
+byte-identical binary behavior to the guard baseline.)
+`cargo test --profile fasttest --lib`: "test result: ok. 1410 passed; 0
+failed; 0 ignored; 0 measured; 0 filtered out".
+`cargo clippy --all-targets --profile fasttest -- -D warnings`: clean,
+"Finished `fasttest` profile [unoptimized] target(s)".
+
+============================================================
+FILES CHANGED
+============================================================
+rust/src/events.rs: +29 lines, a documentation comment only, above the
+`blueTokens` branch in `apply_gains_block`. No other file touched.
+Commit in clone (/private/tmp/crimewave, base d6a9fa3): 12a2bfc "Document
+why Crime Wave's blue-token loss is already rules-correct".
+Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/crimewave.patch
+(`git diff d6a9fa3 -- rust/`, non-empty: the one doc-comment commit above).
+Clone deleted after this write-up (patch confirmed non-empty first, per
+cleanup instructions).

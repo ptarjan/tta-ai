@@ -1,0 +1,263 @@
+CORRSKIP2 worker -- 2026-08-14 -- clone /private/tmp/corrskip2 (deleted at end of
+this pass per cleanup rule; corrskip2.patch in this directory is the full diff,
+`git diff` run inside the clone).
+
+TASK: finish CORRSKIP's fix for RESOURCE_ORACLE Group A (166 games, engine
+skips the end-of-turn corruption deduction entirely, always undercounting by
+exactly the journal's stated amount). CORRSKIP's own turn-start-snapshot patch
+fixed Group A but regressed 6 completions (7522077, 7522552, 7522685, 7523072,
+7523437, 7523491) on games containing a same-turn Upgrade.
+
+RESULT: the project owner corrected the model twice more while this pass was
+in flight (see below) -- the real defect is not a missing snapshot but the
+REPRESENTATION itself: `blue_used` re-derived a "minimal token packing" from
+the scalar `p.food`/`p.resources` total on every call, which silently assumes
+perfect free consolidation onto whatever farm/mine card is best RIGHT NOW.
+That assumption is what RULES_SPEC/CoL forbid. This pass replaced the scalar
+derivation with a real per-denomination TOKEN BANK tracked in `PlayerState`
+and wired every gain/pay/production call site through it. Tests: 1437/1437
+passing (1433 baseline + 4 new), clippy clean, RESOURCE_ORACLE checkpoint
+agreement improved to 99.0% (41105/41513, vs the task's stated 96.6% baseline
+and CORRSKIP's own 97.4%), and only 134/1011 sampled games have even ONE
+divergent checkpoint left (down from the stated 315-game baseline) -- but the
+guard sweep found 5 REAL regressions (apples-to-apples against the pre-move
+731-game baseline, i.e. excluding the unrelated parallel h_revolution fix's
+own new completion). Per the task's own explicit bar ("a fix that lowers
+divergence but regresses even ONE completion does NOT land"), THIS DOES NOT
+LAND. Reported here as a measured negative with a concrete, partially-traced
+lead for whoever picks it up next.
+
+===========================================================================
+THE MODEL BUILT (all three of the owner's live corrections, in order)
+===========================================================================
+1. Tokens are bound to the specific denomination they were placed at and
+   NEVER move to a higher one (RULES_SPEC S6.4 / CoL p.11, restated by the
+   owner in person: "if you develop a new farm all the tokens stay on the
+   old farm... blue tokens are bound to their card, when you put a new card
+   down you don't move the tokens, they just stay put and you can spend
+   them"). This kills the Develop-vs-Upgrade distinction CORRSKIP chased --
+   there isn't one; both just never retroactively move existing stock up.
+2. PRODUCTION (S6.6 step 3c/3e) places exactly one NEW token per producing
+   WORKER, at that worker's own card's denomination -- not a scalar amount
+   re-packed for minimal token count afterward. Owner's words: "during
+   production you produce wherever your yellow tokens are."
+3. Non-production gains (event/card/tactic effects with no worker attached,
+   e.g. "gain N resources") are NOT pinned down by RULES_SPEC/CoL/the FAQ as
+   to which card the new tokens land on. ASSUMPTION (ordered by the owner
+   explicitly: "if you genuinely cannot determine it, pick the
+   count-minimizing option, state the assumption prominently... and move
+   on"): this engine places non-production gains on the highest available
+   denomination, greedily -- the same representation `tokens_for`'s own
+   affordability search already assumed. THIS ASSUMPTION IS THE PRIME
+   SUSPECT for the 5 regressions below -- see "WHY IT DOES NOT LAND".
+4. SPEND (paying corruption, builds, upgrades, wonder stages, trade,
+   consumption) removes tokens LOWEST denomination first, "making change"
+   (breaking exactly the one token that must be broken, re-representing the
+   unspent remainder at smaller denominations) only when the low tokens
+   alone fall short. Owner's words: "when you spend resources you can
+   choose to spend from whatever farm you want (you usually want to spend
+   from the lower ones). You can also make change when you spend."
+
+Per-DENOMINATION counts, not per-card identity -- the owner confirmed cards
+sharing a printed value are interchangeable for corruption purposes and nothing
+in the rules caps tokens per card, so a `[u8; 8]`-shaped bank (mirroring
+`economy::Denoms`'s own fixed-capacity shape) is sufficient state, no `Vec`,
+no per-card tracking (`state.rs::TechSlot::stored` stays the pre-existing dead
+field it already was -- checked, never written anywhere in the codebase except
+one unrelated `Tableau` unit test -- and is NOT what this fix uses).
+
+===========================================================================
+WHAT CHANGED, FILE BY FILE
+===========================================================================
+rust/src/state.rs: new `TokenBank { denoms: [u8;8], counts: [u8;8], len: u8 }`
+(derives Default), two new `PlayerState` fields `food_tokens`/
+`resource_tokens`. All 12 `PlayerState { .. }` struct literals across the
+crate (apply/costs/events/combat/economy/effects/interact/replay_common/
+advisor::state_io/legal/game/bots::weighted::events) mechanically updated,
+same shape as CORRSKIP's `turn_start_denoms` addition.
+
+rust/src/economy.rs (the real work): `production_pairs` extracted out of
+`worker_capped_production` so `credit_production` (the new, token-committing
+twin used by `end_of_turn` steps 3c/3e) reuses the exact same per-card
+traversal rather than a second copy. New bank primitives: `bank_add`,
+`bank_total_tokens`, `bank_total_value`, `bank_credit_greedy` (non-production
+gain placement + "making change" reuse this), `bank_debit_lowest_first`
+(spend). `occupied_tokens` is the reconciliation shim: any part of
+`p.food`/`p.resources` the tracked bank does NOT already account for (true
+for every hand-built `PlayerState` test fixture that sets `p.food` directly
+and never drives a real gain/pay call) still falls back to the OLD
+`tokens_for(total, live_denoms)` formula -- this is why all ~1433 pre-existing
+tests kept passing unchanged except the two documented below. `blue_used`/
+`blue_available` keep their old signatures, so `replay_common.rs`'s
+`record_corruption_check` oracle needed ZERO changes (it just calls the same
+public functions). `gain()` dropped its `cur` parameter -- under the new
+model the cost of gaining `want` no longer depends on existing stock (which
+never moves), so it is simply `tokens_for(want, denoms)`, not a delta between
+two totals. New `pay_food`/`clear_food` (mirroring `pay_resources`, already
+public) -- `clear_resources` was written too but had no real caller (no
+"lose all stored resources" effect exists in this codebase) so it was
+deleted rather than left as dead code clippy would flag.
+
+`end_of_turn` step 3b now calls `pay_food` instead of a bare
+`p.food.saturating_sub`; step 3c/3e call `credit_production` (committing
+tokens per-worker) instead of adding `worker_capped_production`'s scalar
+result directly; step 3d (consumption) uses `pay_food`/`clear_food`.
+`increase_population` (pop-cost payment) uses `pay_food`.
+
+rust/src/apply.rs: build/upgrade/wonder-step cost payments (3 call sites,
+do_build/do_upgrade/do_wonder_step) now call `economy::pay_resources`
+instead of a bare `saturating_sub`. `h_trade_food_as_resource`/
+`h_trade_resource_as_food` (Trade Routes) use `economy::pay_food`/
+`economy::pay_resources` for their 1-unit debit side (the credit side
+already called `gain_resources`/`gain_food`). NONE of these touch
+`h_revolution`/costs.rs/effects.rs/legal.rs -- the four files the parallel
+h_revolution/Scientific-Cooperation fix (commit f2dff03) touched. Only
+apply.rs overlaps, and only in unrelated functions (do_build/do_upgrade/
+do_wonder_step/h_trade_*), so a merge conflict is unlikely but WORTH A
+by-hand check before landing, per the coordinator's own instruction.
+
+rust/src/events.rs: `apply_food_delta`/`apply_resources_delta`'s LOSS branch,
+the "lose all stored food" block clause, and `extra_production`'s own
+duplicate corruption/consumption logic (S6.6 step 3b/3d re-run for a
+mid-game event) all route through `pay_food`/`pay_resources`/`clear_food`
+now instead of a bare scalar subtract.
+
+rust/src/interact.rs: Plunder's victim-loss arm and `FoodOrResSplit`'s
+`lose` arm route through `pay_food`/`pay_resources`.
+
+Tests added (economy.rs, full-sentence names, comments explain why):
+- `a_farm_card_developed_after_food_was_already_gained_does_not_retroactively_consolidate_it`
+  -- THE Group A regression test, mirrors BGO 7522658 by hand. Confirmed RED
+  by reverting `occupied_tokens` to the old unconditional `tokens_for`
+  formula and re-running (fails `left: 5, right: 6`), then restored GREEN.
+- `a_farm_card_developed_before_gaining_lets_the_new_food_use_it` -- the
+  round-trip: old stock frozen, genuinely NEW stock free to use a newer card.
+- `pay_resources_spends_the_lowest_denomination_first_and_makes_change_on_overshoot`
+- `production_places_one_token_per_worker_at_that_workers_own_card`
+Two PRE-EXISTING tests were rewritten, not just left broken, because they
+asserted the OLD (now explicitly forbidden) "gaining consolidates existing
+stock onto a higher card for free" behavior as their whole point:
+`blue_used_and_available_with_farm_denominations` (numbers corrected 13->12,
+20->19, with the reasoning in the test's own comment) and
+`gain_food_consolidates_into_a_higher_denomination` -> renamed
+`gain_food_places_newly_gained_food_on_the_highest_available_denomination`
+(same mechanism, tested through a single non-retroactive gain instead).
+
+===========================================================================
+MEASUREMENTS
+===========================================================================
+Tests: `cargo test --profile fasttest --lib` -- 1437 passed, 0 failed (1433
+baseline + 4 new). Confirmed RED/GREEN for the core fix as above.
+Clippy: `cargo clippy --all-targets -- -D warnings` -- clean (one
+`derivable_impls` lint fixed by deriving `Default` on `TokenBank` instead of
+a manual impl; one `clear_resources` dead-code warning fixed by deleting the
+function since it never had a caller).
+
+RESOURCE_ORACLE checkpoint agreement: 41105/41513 = 99.0% (up from the
+task-stated 96.6% baseline and CORRSKIP's own 97.4%). 134/1011 sampled games
+have at least one divergent checkpoint left (down from the RESDRIFT-stated
+315-game baseline this whole line of work started from).
+
+Guard sweep (the bar that actually matters): the live guard baseline moved
+under this pass mid-flight (coordinator message: commit f2dff03, an unrelated
+h_revolution/Scientific-Cooperation discount fix, landed on the tree this
+clone was NOT built from, moving guard_ids.txt from 731 to 732 entries with
+one new win, 7521462, that is not in this clone's own reach at all). Compared
+apples-to-apples against the PRE-MOVE 731-game baseline (`/private/tmp/
+guard_ids_731.txt`), since that is what this clone's unpatched tree actually
+matches:
+  completed: 731 -> 731 (no net change in count, but NOT the same set)
+  wins (comm -13): 7520999, 7522236, 7522673, 7523203, 7523634
+  REGRESSIONS (comm -23), NOT EMPTY:
+    7521459, 7522402, 7522796, 7523072, 7523510
+(7521462 also shows up against the CURRENT 732-entry guard_ids.txt, but that
+is the unrelated parallel fix's own new completion, not something this
+clone's tree can reach at all -- excluded above as noise, not a real
+regression of this patch.)
+
+Per the task's explicit bar ("A fix that lowers divergence but regresses even
+ONE completion does NOT land -- report it instead, with the regressing ids
+traced"), this DOES NOT LAND.
+
+===========================================================================
+WHY IT DOES NOT LAND -- what was traced, and the strongest remaining lead
+===========================================================================
+All 5 regressions share the IDENTICAL shape: the game plays cleanly for many
+rounds, then LATE in a long game (round 18-20, every one of them Age IV)
+stops on an `IllegalMove` for a `Build`/`WonderStep` whose printed resource
+cost the engine now believes the player cannot afford, when the human
+journal shows them affording it fine. This is a resources SHORTFALL, not a
+corruption-band edge case narrowly -- and it only ever shows up after a long
+accumulation, which points at a small systematic per-turn effect compounding
+over ~20 rounds rather than a single sharp logic bug.
+
+Hand-traced 7523072 in full (round 10, the FIRST point its own resource
+total diverges from the journal's implied true value -- 5 vs a manually
+reconstructed true 4, tracked action-by-action against the journal text from
+round 9's confirmed-correct end value). The proximate cause at round 10
+itself is CONFOUNDED by a pre-existing, unrelated bug this pass did not
+introduce and did not touch: `interact.rs`'s `ChoiceKind::Raid` handler
+(line ~447-474, untouched by this patch) calls `economy::gain_resources`
+ONCE PER DESTROYED CARD using that card's OWN halved-and-rounded cost
+(`printed.div_ceil(2)`), not once for the printed card text's actual rule
+("gain resources equal to half their TOTAL cost, rounded up") -- and in this
+game's case, the SECOND of two same-turn Raid casualties silently no-ops
+(`techs.get_mut(id)` fails because the same card was already destroyed once,
+see the `if !ok { return; }` guard three lines into that match arm), so only
+ONE of the two casualties' loot is ever credited. This pre-dates this patch
+entirely (confirmed: the exact same code path is untouched, and this game
+IS in the pristine 731-game baseline, i.e. it completes fine WITHOUT any of
+this pass's changes) -- but the resulting scalar resource total, once wrong,
+then interacts with the NEW, stricter corruption accounting (which correctly
+refuses to let 5 old denom-1 resource tokens retroactively "become" denom-2
+Iron tokens just because Iron was discovered later that same turn) to charge
+2 corruption the journal's own text does not show at all. Whether the TRUE
+corruption really was 0 there (meaning assumption #3 above -- "non-production
+gains use the highest available denomination, greedily" -- or some other
+part of the SPEND/change-making model is still wrong) or whether the TRUE
+resource total the human had was different from both this engine's number
+AND my manual reconstruction (because the Raid-loot bug's true effect is
+itself unknown without fixing it first) could not be disentangled with the
+budget remaining on this pass.
+
+The other 4 regressions (7521459, 7522402, 7522796, 7523510) were NOT
+traced to this same depth, but their identical late-game "Build/WonderStep
+now unaffordable" shape strongly suggests the SAME systematic small
+resource-accounting drift, not four unrelated causes -- worth checking
+first, before assuming each needs its own investigation.
+
+===========================================================================
+NEXT STEPS FOR WHOEVER PICKS THIS UP
+===========================================================================
+1. Fix `interact.rs`'s `ChoiceKind::Raid` loot handler to gain resources
+   ONCE per raid (summed, rounded once) instead of once per casualty
+   (rounded per-casualty) -- this is a real, separately-diagnosable bug
+   regardless of the token model, and re-run 7523072 with it fixed before
+   drawing any more conclusions about assumption #3 from that specific game.
+2. If the shortfall persists after that, the prime suspect is still
+   assumption #3 (non-production gain placement) -- try the OTHER
+   documented option explicitly (place non-production gains using the SAME
+   per-worker-adjacent logic production uses, or LOWEST-denomination-first
+   like spends do, i.e. treat "gain" and "spend" symmetrically) and
+   re-measure. The task instructions anticipated this might need a real
+   citation search in `sources/cge_code_of_laws.pdf`/`sources/faq_v15.pdf`
+   this pass did not have budget to complete.
+3. Re-run the SAME guard sweep methodology after each change: `cargo build
+   --profile difftest --bin replaystats`, `SCOREDIV_DUMP_COMPLETED=1
+   ./target/difftest/replaystats <index> <journals>`, compare completed-ID
+   sets by `comm` against `/private/tmp/guard_ids.txt` (NOT a stale copy --
+   it may move again if other parallel work lands).
+4. The representation itself (per-denomination `TokenBank`, `credit_production`
+   reusing `production_pairs`, `bank_debit_lowest_first`'s lowest-first-with-
+   change-making) is NOT in question -- it matches the owner's three
+   corrections exactly and is a strict generalization of the old formula
+   (identical behavior whenever the bank is untracked, i.e. every existing
+   test). Only the ONE open assumption (#3, non-production gain placement)
+   and the confounding pre-existing Raid bug need resolving.
+
+FILES: rust/src/state.rs (TokenBank + PlayerState fields, 12 literals),
+rust/src/economy.rs (bank primitives, gain/pay/production/blue_used rewrite,
+4 new tests + 2 rewritten), rust/src/apply.rs (5 call sites -- OVERLAPS the
+parallel h_revolution fix's own touched file, but not its touched functions),
+rust/src/events.rs (6 call sites), rust/src/interact.rs (4 call sites).
+corrskip2.patch in this directory is the full diff.

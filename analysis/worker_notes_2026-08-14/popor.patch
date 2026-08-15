@@ -1,0 +1,651 @@
+diff --git c/rust/src/bin/replaystats.rs w/rust/src/bin/replaystats.rs
+index 0f518b1..9c9e797 100644
+--- c/rust/src/bin/replaystats.rs
++++ w/rust/src/bin/replaystats.rs
+@@ -44,6 +44,48 @@ use tta::corpus;
+ use tta::corpus::ActionClass;
+ use tta::replay_common::{build_card_index, replay_game, HandLedgerVerdict, LedgerEventKind, MismatchKind};
+ 
++/// TEMPORARY (2026-08-14 drift-audit measurement pass, `DRIFT_AUDIT=1`
++/// only): one game's FIRST divergence on any journal-asserted quantity this
++/// binary can also compute -- see `replay_common::DriftDivergence`'s own
++/// doc, which this mirrors plus the `round`/`age`/`completed` context that
++/// struct does not itself carry (derived here from `journal_text` and
++/// `GameResult::completed` instead, to avoid growing the engine-side struct
++/// for a report-only need).
++struct DriftRecord {
++    id: String,
++    quantity: &'static str,
++    lineno: usize,
++    round: String,
++    age: String,
++    delta: i32,
++    completed: bool,
++}
++
++/// TEMPORARY (2026-08-14 population-oracle measurement pass, `POP_AUDIT=1`
++/// only): ONE SEAT's own first population (`p.yellow_bank`) divergence --
++/// see `replay_common::PopDivergence`'s own doc for the comparison itself.
++/// Deliberately per-(game, seat), not per-game like `DriftRecord` -- see
++/// `replay_common::Replayer::pop_drift_first`'s own doc for why.
++struct PopRecord {
++    id: String,
++    seat: u8,
++    lineno: usize,
++    round: String,
++    age: String,
++    /// `reconstructed_yellow - journal_yellow_low` (see
++    /// `replay_common::PopDivergence`'s own field docs) -- a TOKEN-COUNT
++    /// delta, not a food-cost delta.
++    delta: i32,
++}
++
++/// The journal's own per-line `round` column (see `line_age`'s own doc,
++/// which this duplicates the column split of -- column index 3, not 2).
++fn line_round(journal_text: &str, lineno: usize) -> Option<&str> {
++    let line = journal_text.lines().nth(lineno.checked_sub(1)?)?;
++    let fields: Vec<&str> = line.splitn(5, '\t').collect();
++    (fields.len() == 5).then_some(fields[3])
++}
++
+ /// A stable, printable bucket key for [`HandLedgerVerdict`] -- collapses the
+ /// carried/looked-up [`LedgerEventKind`] to its `Debug` name so the
+ /// classification histogram groups by MECHANISM, not by the `Option` wrapper
+@@ -229,6 +271,38 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+     // deliverable `docs/REPLAY.md`'s "Final scores" section still needed.
+     let mut final_event_award_buckets: HashMap<&'static str, (u32, String)> = HashMap::new();
+     let mut n_games_with_final_event_award_divergence: u32 = 0;
++    // TEMPORARY (2026-08-14 drift-audit pass, `DRIFT_AUDIT=1` only) -- see
++    // `DriftRecord`'s own doc and `replay_common::DriftDivergence`'s.
++    let drift_audit = std::env::var("DRIFT_AUDIT").is_ok();
++    let mut drift_records: Vec<DriftRecord> = Vec::new();
++    // The 644-completing-id regression-guard list (`replaystats.rs`'s own
++    // module doc, `SCOREDIV_DUMP_COMPLETED`) -- read here (not recomputed
++    // from this run's own `result.completed`) so the correlation this pass
++    // reports is against the SAME fixed reference list `docs/REPLAY.md`'s
++    // other passes already anchor to, not a number that moves if some
++    // future change shifts which games complete.
++    let rd_ids: std::collections::HashSet<String> = if drift_audit {
++        std::fs::read_to_string("/tmp/rd_ids.txt")
++            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
++            .unwrap_or_default()
++    } else {
++        std::collections::HashSet::new()
++    };
++    // TEMPORARY (2026-08-14 population-oracle measurement pass,
++    // `POP_AUDIT=1` only) -- see `PopRecord`'s own doc and
++    // `replay_common::PopDivergence`'s. Cross-referenced against the frozen
++    // 644-completing-id guard list (the task's own reference set, not
++    // `/tmp/rd_ids.txt` -- a different, drift-pass-specific file that may not
++    // even exist in this clone).
++    let pop_audit = std::env::var("POP_AUDIT").is_ok();
++    let mut pop_records: Vec<PopRecord> = Vec::new();
++    let guard_ids: std::collections::HashSet<String> = if pop_audit {
++        std::fs::read_to_string("/private/tmp/guard_ids.txt")
++            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
++            .unwrap_or_default()
++    } else {
++        std::collections::HashSet::new()
++    };
+ 
+     for meta in &games {
+         let path = format!("{journals_dir}/{}.tsv", meta.id);
+@@ -280,6 +354,33 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+                 entry.0 += 1;
+             }
+         }
++        if drift_audit {
++            if let Some(d) = &result.drift_first {
++                drift_records.push(DriftRecord {
++                    id: meta.id.clone(),
++                    quantity: d.quantity,
++                    lineno: d.lineno,
++                    round: line_round(&text, d.lineno).unwrap_or("?").to_string(),
++                    age: line_age(&text, d.lineno).unwrap_or("?").to_string(),
++                    delta: d.reconstructed - d.journal_value,
++                    completed: result.completed,
++                });
++            }
++        }
++        if pop_audit {
++            for (seat, slot) in result.pop_drift_first.iter().enumerate() {
++                if let Some(d) = slot {
++                    pop_records.push(PopRecord {
++                        id: meta.id.clone(),
++                        seat: seat as u8,
++                        lineno: d.lineno,
++                        round: line_round(&text, d.lineno).unwrap_or("?").to_string(),
++                        age: line_age(&text, d.lineno).unwrap_or("?").to_string(),
++                        delta: d.reconstructed_yellow as i32 - d.journal_yellow_low as i32,
++                    });
++                }
++            }
++        }
+         culture_oracle_checked_total += result.culture_oracle_checked as u64;
+         culture_oracle_agreed_total += result.culture_oracle_agreed as u64;
+         if let Some(d) = &result.culture_oracle_divergence {
+@@ -599,6 +700,143 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+         "politics false-skips left UNRECOVERED (the true damage signal -- should be 0): \
+          {n_false_skips_unrecovered_total} across {n_games_with_unrecovered_false_skip} games\n"
+     );
++    if drift_audit {
++        println!("## Drift audit (TEMPORARY, 2026-08-14 measurement pass, DRIFT_AUDIT=1)\n");
++        println!(
++            "{}/{n_games} games diverge on at least one asserted quantity (culture, science, resources, or \
++             discard-phase military-hand excess) at some point; {} of those still reach `completed` anyway.\n",
++            drift_records.len(),
++            drift_records.iter().filter(|d| d.completed).count()
++        );
++        let mut qcounts: HashMap<&'static str, u32> = HashMap::new();
++        for d in &drift_records {
++            *qcounts.entry(d.quantity).or_insert(0) += 1;
++        }
++        let mut qranked: Vec<(&&str, &u32)> = qcounts.iter().collect();
++        qranked.sort_unstable_by_key(|x| std::cmp::Reverse(*x.1));
++        println!("| games (first-divergence quantity) | quantity |");
++        println!("|---|---|");
++        for (q, c) in &qranked {
++            println!("| {c} | {q} |");
++        }
++        println!();
++        for (q, _) in qranked.iter().take(2) {
++            let subset: Vec<&DriftRecord> = drift_records.iter().filter(|d| &d.quantity == *q).collect();
++            let mut delta_counts: HashMap<i32, u32> = HashMap::new();
++            let mut round_counts: HashMap<String, u32> = HashMap::new();
++            let mut age_counts: HashMap<String, u32> = HashMap::new();
++            for d in &subset {
++                *delta_counts.entry(d.delta).or_insert(0) += 1;
++                *round_counts.entry(d.round.clone()).or_insert(0) += 1;
++                *age_counts.entry(d.age.clone()).or_insert(0) += 1;
++            }
++            let mut deltas_ranked: Vec<(&i32, &u32)> = delta_counts.iter().collect();
++            deltas_ranked.sort_unstable_by_key(|x| std::cmp::Reverse(*x.1));
++            println!("### `{q}` ({} games) -- delta distribution (reconstructed - journal)\n", subset.len());
++            println!("| games | delta | example ids |");
++            println!("|---|---|---|");
++            for (delta, c) in &deltas_ranked {
++                let examples: Vec<String> = subset
++                    .iter()
++                    .filter(|d| &d.delta == *delta)
++                    .take(3)
++                    .map(|d| format!("{} (line {})", d.id, d.lineno))
++                    .collect();
++                println!("| {c} | {delta:+} | {} |", examples.join(", "));
++            }
++            println!();
++            let mut age_ranked: Vec<(&String, &u32)> = age_counts.iter().collect();
++            age_ranked.sort_unstable_by_key(|x| std::cmp::Reverse(*x.1));
++            println!("`{q}` first-divergence age distribution:");
++            for (age, c) in &age_ranked {
++                println!("- age {age}: {c} games");
++            }
++            let mut round_ranked: Vec<(&String, &u32)> = round_counts.iter().collect();
++            round_ranked.sort_unstable_by_key(|x| x.0.parse::<u32>().unwrap_or(0));
++            println!("\n`{q}` first-divergence round distribution (sorted by round number):");
++            for (round, c) in &round_ranked {
++                println!("- round {round}: {c} games");
++            }
++            println!();
++        }
++        let drifting_ids: std::collections::HashSet<&String> = drift_records.iter().map(|d| &d.id).collect();
++        let drifting_and_completing = drifting_ids.iter().filter(|id| rd_ids.contains(**id)).count();
++        println!("### Correlation with the 644-completing reference list (/tmp/rd_ids.txt)\n");
++        println!(
++            "rate of completing AMONG games that diverge: {drifting_and_completing}/{} ({:.1}%)",
++            drifting_ids.len(),
++            100.0 * drifting_and_completing as f64 / drifting_ids.len().max(1) as f64
++        );
++        println!(
++            "rate of completing OVERALL (all {n_games} sampled games): {}/{n_games} ({:.1}%)\n",
++            rd_ids.len(),
++            100.0 * rd_ids.len() as f64 / n_games.max(1) as f64
++        );
++    }
++    if pop_audit {
++        println!("## Population audit (TEMPORARY, 2026-08-14 measurement pass, POP_AUDIT=1)\n");
++        let diverging_games: std::collections::HashSet<&String> = pop_records.iter().map(|d| &d.id).collect();
++        let diverging_player_seats = pop_records.len();
++        println!(
++            "{}/{n_games} games have at least one (player, seat) whose `yellow_bank` first diverges from the \
++             journal's own implied population band; {diverging_player_seats} total diverging (game, seat) pairs \
++             (a game can contribute more than one seat -- this oracle is PER PLAYER, not first-in-game-wins, per \
++             `resdrift__RESDRIFT.txt`'s own methodological caveat about `DRIFT_AUDIT`'s per-game convention).\n",
++            diverging_games.len()
++        );
++        let mut delta_counts: HashMap<i32, u32> = HashMap::new();
++        let mut round_counts: HashMap<String, u32> = HashMap::new();
++        let mut age_counts: HashMap<String, u32> = HashMap::new();
++        for d in &pop_records {
++            *delta_counts.entry(d.delta).or_insert(0) += 1;
++            *round_counts.entry(d.round.clone()).or_insert(0) += 1;
++            *age_counts.entry(d.age.clone()).or_insert(0) += 1;
++        }
++        let mut deltas_ranked: Vec<(&i32, &u32)> = delta_counts.iter().collect();
++        deltas_ranked.sort_unstable_by_key(|x| std::cmp::Reverse(*x.1));
++        println!(
++            "### delta distribution (reconstructed `yellow_bank` minus the journal-implied band's own low edge)\n"
++        );
++        println!("| (game,seat) pairs | delta | example ids |");
++        println!("|---|---|---|");
++        for (delta, c) in &deltas_ranked {
++            let examples: Vec<String> = pop_records
++                .iter()
++                .filter(|d| &d.delta == *delta)
++                .take(3)
++                .map(|d| format!("{} seat{} (line {})", d.id, d.seat, d.lineno))
++                .collect();
++            println!("| {c} | {delta:+} | {} |", examples.join(", "));
++        }
++        println!();
++        let mut age_ranked: Vec<(&String, &u32)> = age_counts.iter().collect();
++        age_ranked.sort_unstable_by_key(|x| std::cmp::Reverse(*x.1));
++        println!("first-divergence age distribution:");
++        for (age, c) in &age_ranked {
++            println!("- age {age}: {c} (game,seat) pairs");
++        }
++        let mut round_ranked: Vec<(&String, &u32)> = round_counts.iter().collect();
++        round_ranked.sort_unstable_by_key(|x| x.0.parse::<u32>().unwrap_or(0));
++        println!("\nfirst-divergence round distribution (sorted by round number):");
++        for (round, c) in &round_ranked {
++            println!("- round {round}: {c} (game,seat) pairs");
++        }
++        println!();
++        let diverging_and_completing = diverging_games.iter().filter(|id| guard_ids.contains(**id)).count();
++        println!("### Correlation with the 644-completing reference list (/private/tmp/guard_ids.txt)\n");
++        println!(
++            "rate of completing AMONG games with at least one diverging seat: {diverging_and_completing}/{} \
++             ({:.1}%)",
++            diverging_games.len(),
++            100.0 * diverging_and_completing as f64 / diverging_games.len().max(1) as f64
++        );
++        println!(
++            "rate of completing OVERALL (all {n_games} sampled games): {}/{n_games} ({:.1}%)\n",
++            guard_ids.len(),
++            100.0 * guard_ids.len() as f64 / n_games.max(1) as f64
++        );
++    }
++
+     println!("## Stop-reason histogram, ranked by count\n");
+     println!("| count | mean round reached | reason | example |");
+     println!("|---|---|---|---|");
+diff --git c/rust/src/debugflags.rs w/rust/src/debugflags.rs
+index 0d1543f..35a763a 100644
+--- c/rust/src/debugflags.rs
++++ w/rust/src/debugflags.rs
+@@ -36,6 +36,24 @@ fn flag(name: &str) -> bool {
+ static REPLAY_DEBUG: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG"));
+ static REPLAY_DEBUG_ALL: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_ALL"));
+ static REPLAY_DEBUG_TECHS: LazyLock<bool> = LazyLock::new(|| flag("REPLAY_DEBUG_TECHS"));
++/// `DRIFT_AUDIT`: TEMPORARY multi-quantity first-divergence instrument (2026-08-14
++/// measurement pass, see `analysis/worker_notes_2026-08-14/drift__DRIFT.txt`).
++/// Gates the cross-quantity (culture/science/resources/hand-excess) "first
++/// mismatch of ANY asserted quantity" recording on top of the pre-existing,
++/// always-on culture/discard oracles -- kept env-gated (unlike those two)
++/// because it is scaffolding for one measurement, not a permanent instrument.
++static DRIFT_AUDIT: LazyLock<bool> = LazyLock::new(|| flag("DRIFT_AUDIT"));
++/// `POP_AUDIT`: TEMPORARY per-player population (`p.yellow_bank`) oracle
++/// (2026-08-14 measurement pass, see `analysis/worker_notes_2026-08-14/
++/// popor__POPOR.txt`). Every `"<Color> increases population <Color> spends
++/// N food[; <Color> spends M resource]"` line states its own food cost,
++/// which is a pure function of the actor's yellow-bank band (`economy::
++/// pop_cost_base`) -- this inverts that to check `p.yellow_bank` against an
++/// independent ground truth on every such line, PER PLAYER (see
++/// `Replayer::pop_drift_first`'s own doc for why per-player, not per-game
++/// like `DRIFT_AUDIT`). Env-gated for the same reason `DRIFT_AUDIT` is:
++/// scaffolding for one measurement, not a permanent instrument.
++static POP_AUDIT: LazyLock<bool> = LazyLock::new(|| flag("POP_AUDIT"));
+ 
+ /// `REPLAY_DEBUG`: per-game replay tracing.
+ pub fn replay_debug() -> bool {
+@@ -54,6 +72,16 @@ pub fn replay_debug_techs() -> bool {
+     *REPLAY_DEBUG_TECHS
+ }
+ 
++/// `DRIFT_AUDIT`: the temporary cross-quantity first-divergence instrument.
++pub fn drift_audit() -> bool {
++    *DRIFT_AUDIT
++}
++
++/// `POP_AUDIT`: the temporary per-player population oracle.
++pub fn pop_audit() -> bool {
++    *POP_AUDIT
++}
++
+ // ============================================================== tests ====
+ 
+ #[cfg(test)]
+diff --git c/rust/src/economy.rs w/rust/src/economy.rs
+index 518a3b8..df2a103 100644
+--- c/rust/src/economy.rs
++++ w/rust/src/economy.rs
+@@ -61,6 +61,30 @@ pub fn pop_cost_base(yellow_bank: u8) -> Option<u8> {
+     })
+ }
+ 
++/// Inverse of [`pop_cost_base`]: given an UNCLAMPED base food cost (i.e.
++/// before any `pop_food_discount`/one-time discount is subtracted -- see
++/// [`pop_food_cost`]'s own doc for why a CLAMPED (post-floor) cost of 0
++/// cannot be inverted this way, since several different bands can all
++/// floor to 0 once a big enough discount is subtracted), the LOW edge of
++/// the `yellow_bank` band that must have produced it -- e.g. `3` can only
++/// come from a bank in `13..=16`, so this returns `13`. `None` for any cost
++/// [`pop_cost_base`] itself never returns (`0`, `1`, `6`, or anything above
++/// `7`) -- an impossible value, not a real band. TEMPORARY (2026-08-14
++/// population-oracle measurement pass, see `analysis/worker_notes_2026-08-14/
++/// popor__POPOR.txt`) -- used by `replay_common`'s `POP_AUDIT` instrument to
++/// recover the journal's own implied `yellow_bank` band from the food cost
++/// every "increases population" line already states.
++pub fn pop_cost_base_band_low(base_cost: u8) -> Option<u8> {
++    match base_cost {
++        2 => Some(17),
++        3 => Some(13),
++        4 => Some(9),
++        5 => Some(5),
++        7 => Some(1),
++        _ => None,
++    }
++}
++
+ /// Food eaten in the production phase (§6.1).
+ pub fn consumption(yellow_bank: u8) -> u8 {
+     if yellow_bank >= 17 {
+@@ -1060,6 +1084,21 @@ mod tests {
+         assert_eq!(pop_cost_base(0), None);
+     }
+ 
++    /// [`pop_cost_base_band_low`] is the inverse of [`pop_cost_base`]'s own
++    /// band table (previous test) -- every cost that table can return must
++    /// map back to that band's own low edge, and every cost it can never
++    /// return (`0`, `1`, `6`, `8`, anything above `7`) must come back `None`.
++    #[test]
++    fn pop_cost_base_band_low_inverts_the_cost_table() {
++        let expect: &[(u8, u8)] = &[(2, 17), (3, 13), (4, 9), (5, 5), (7, 1)];
++        for &(cost, low) in expect {
++            assert_eq!(pop_cost_base_band_low(cost), Some(low), "cost={cost}");
++        }
++        for impossible in [0, 1, 6, 8, 9, 255] {
++            assert_eq!(pop_cost_base_band_low(impossible), None, "cost={impossible}");
++        }
++    }
++
+     #[test]
+     fn consumption_bands() {
+         let expect: &[(u8, u8)] =
+diff --git c/rust/src/replay_common.rs w/rust/src/replay_common.rs
+index 6725226..402bcf3 100644
+--- c/rust/src/replay_common.rs
++++ w/rust/src/replay_common.rs
+@@ -695,6 +695,73 @@ struct Replayer<'a> {
+     /// immediate recovery (`resolve_intervening`'s own doc); this only
+     /// increments on the rare case that recovery itself fails.
+     politics_false_skips_unrecovered: u32,
++    /// TEMPORARY (`DRIFT_AUDIT=1` only, see `debugflags::drift_audit`):
++    /// this game's FIRST divergence on ANY journal-asserted quantity this
++    /// binary can also compute (culture, science, resources, or the
++    /// discard-phase military-hand excess), whichever checkpoint is reached
++    /// first in line order. Set once, never overwritten -- same "first
++    /// wins" convention as `culture_oracle_divergence` etc. `None` when
++    /// `DRIFT_AUDIT` is unset (the check is skipped entirely, not just the
++    /// recording) or when every checkpoint this game reached agreed.
++    drift_first: Option<DriftDivergence>,
++    /// TEMPORARY (`POP_AUDIT=1` only, see `debugflags::pop_audit`): each
++    /// SEAT's own FIRST population (`p.yellow_bank`) divergence, indexed by
++    /// seat number -- deliberately PER-PLAYER, unlike `drift_first`'s
++    /// per-GAME "first actor to diverge wins" convention. That convention
++    /// was flagged by `analysis/worker_notes_2026-08-14/resdrift__RESDRIFT.txt`
++    /// section 3's own methodological caveat as burying the actually-relevant
++    /// actor's divergence behind an earlier, unrelated bystander's -- see
++    /// `PopDivergence`'s own doc. `None` per seat until that seat's own
++    /// first "increases population" checkpoint disagrees, or `POP_AUDIT` is
++    /// unset.
++    pop_drift_first: [Option<PopDivergence>; MAX_PLAYERS],
++}
++
++/// See [`Replayer::drift_first`]'s own doc -- one entry, the first
++/// checkpoint (in journal line order) where ANY of the quantities this
++/// TEMPORARY audit tracks disagreed with the journal's own asserted value.
++/// `quantity` is a fixed small set of `&'static str` tags (`"culture"`,
++/// `"science"`, `"resources"`, `"hand_military_excess"`) -- see
++/// `Replayer::maybe_record_drift`'s call sites for the exhaustive list; it
++/// is not an open-ended free-text field.
++#[derive(Debug, Clone)]
++pub struct DriftDivergence {
++    pub lineno: usize,
++    pub quantity: &'static str,
++    pub actor: &'static str,
++    /// BGO's own asserted value -- ground truth.
++    pub journal_value: i32,
++    /// This binary's own reconstructed value at the same checkpoint.
++    pub reconstructed: i32,
++}
++
++/// See [`Replayer::pop_drift_first`]'s own doc. ONE seat's first checkpoint
++/// (in journal line order) where the food cost a `"<Color> increases
++/// population ..."` line states disagrees with what this binary's own
++/// `p.yellow_bank`, fed through the SAME `economy::pop_cost` formula that
++/// line's real cost was verified against (`RULES_SPEC.md` §6.1, Moses's
++/// `PopIncreaseFoodDiscount(1)` -- see `resdrift__RESDRIFT.txt`), would
++/// have cost. Only recorded when the journal's stated cost is UNCLAMPED
++/// (`> 0`, so `economy::pop_cost_base_band_low`'s inversion is exact, not
++/// ambiguous behind a floor -- see that function's own doc) -- the same
++/// spirit as `DRIFT_AUDIT`'s `discard_blocked` guard: a checkpoint that
++/// cannot be inverted uniquely is skipped, not force-recorded as a
++/// mismatch that might just be floor-clamping noise.
++#[derive(Debug, Clone, Copy)]
++pub struct PopDivergence {
++    pub lineno: usize,
++    /// The LOW edge of the `yellow_bank` band the journal's own stated food
++    /// cost implies (`economy::pop_cost_base_band_low`).
++    pub journal_yellow_low: u8,
++    /// This binary's own reconstructed `p.yellow_bank` at the same
++    /// checkpoint, BEFORE this action pays its cost.
++    pub reconstructed_yellow: u8,
++    /// The food cost the journal states this action paid (food clause plus
++    /// any Trade-Routes-converted resource clause, `spent_food` +
++    /// `spent_resource_after_food`).
++    pub journal_cost: i32,
++    /// This binary's own `economy::pop_cost` at the same checkpoint.
++    pub our_cost: i32,
+ }
+ 
+ /// Overwrite the current-events pile with `reveal_order` -- the journal's
+@@ -902,6 +969,8 @@ impl<'a> Replayer<'a> {
+             politics_false_skips: 0,
+             false_skip_flagged_prep: None,
+             politics_false_skips_unrecovered: 0,
++            drift_first: None,
++            pop_drift_first: [None; MAX_PLAYERS],
+         }
+     }
+ 
+@@ -2376,6 +2445,13 @@ impl<'a> Replayer<'a> {
+         let hand_len = p.hand_military.len();
+         let reconstructed_excess = (hand_len as i32 - limit).max(0) as u32;
+         self.discard_oracle_checked += 1;
++        self.maybe_record_drift(
++            "hand_military_excess",
++            line.lineno,
++            Color::parse(line.color).map(Color::as_str).unwrap_or("?"),
++            journal_excess as i32,
++            reconstructed_excess as i32,
++        );
+         if reconstructed_excess == journal_excess {
+             self.discard_oracle_agreed += 1;
+             return;
+@@ -2404,6 +2480,71 @@ impl<'a> Replayer<'a> {
+         }
+     }
+ 
++    /// TEMPORARY (`DRIFT_AUDIT=1` only): records `self.drift_first` the
++    /// first time ANY tracked quantity's journal-asserted value disagrees
++    /// with this binary's own reconstruction, across the whole game. A
++    /// no-op when `DRIFT_AUDIT` is unset (checked first, so this costs one
++    /// static bool read on the hot path when off), when the two values
++    /// already agree, or when an earlier checkpoint this same game already
++    /// recorded a divergence. See [`DriftDivergence`]'s own doc.
++    fn maybe_record_drift(&mut self, quantity: &'static str, lineno: usize, actor: &'static str, journal_value: i32, reconstructed: i32) {
++        if !crate::debugflags::drift_audit() {
++            return;
++        }
++        if journal_value == reconstructed {
++            return;
++        }
++        if self.drift_first.is_none() {
++            self.drift_first = Some(DriftDivergence { lineno, quantity, actor, journal_value, reconstructed });
++        }
++    }
++
++    /// TEMPORARY (`POP_AUDIT=1` only): records `self.pop_drift_first[seat]`
++    /// the first time THAT SEAT's own "increases population" checkpoint
++    /// disagrees with the journal's stated food cost -- see
++    /// [`PopDivergence`]'s own doc for the exact comparison and the
++    /// unclamped-cost guard. `discount_total` is this binary's OWN
++    /// `pop_food_discount + one_time_discount.pop_food` at this checkpoint
++    /// (trusted, not re-verified here -- `resdrift__RESDRIFT.txt` section 3
++    /// independently confirmed both the band table and a live leader
++    /// discount match `RULES_SPEC.md`/source data verbatim in the one game
++    /// it hand-traced) -- added back to the journal's own UNCLAMPED paid
++    /// cost to recover the true pre-discount base cost, which
++    /// `economy::pop_cost_base_band_low` then inverts to a `yellow_bank`
++    /// band. A no-op when `POP_AUDIT` is unset (checked first, same cost
++    /// shape as `maybe_record_drift`), when the journal's stated cost is
++    /// clamped (`journal_cost <= 0`, ambiguous to invert -- the guard this
++    /// oracle needs in place of `discard_blocked`, see `debugflags::
++    /// pop_audit`'s own doc), when the two costs already agree, when the
++    /// recovered base cost is not one `pop_cost_base` can ever return, or
++    /// when this seat already has an earlier recorded divergence.
++    fn maybe_record_pop_drift(
++        &mut self,
++        seat: u8,
++        lineno: usize,
++        journal_cost: i32,
++        our_cost: i32,
++        discount_total: i32,
++        reconstructed_yellow: u8,
++    ) {
++        if !crate::debugflags::pop_audit() {
++            return;
++        }
++        if journal_cost <= 0 || journal_cost == our_cost {
++            return;
++        }
++        let base = journal_cost + discount_total;
++        let Ok(base_u8) = u8::try_from(base) else { return };
++        let Some(journal_yellow_low) = economy::pop_cost_base_band_low(base_u8) else {
++            return;
++        };
++        let seat = seat as usize;
++        if seat < self.pop_drift_first.len() && self.pop_drift_first[seat].is_none() {
++            self.pop_drift_first[seat] =
++                Some(PopDivergence { lineno, journal_yellow_low, reconstructed_yellow, journal_cost, our_cost });
++        }
++    }
++
+     /// The actual culture-oracle compare-and-record step, shared by the
+     /// immediate path (an ordinary `EndTurn` whose production already ran)
+     /// and [`Self::flush_pending_culture_check`] (a deferred one). See
+@@ -2431,6 +2572,8 @@ impl<'a> Replayer<'a> {
+                 )
+             }) as i32;
+         self.culture_oracle_checked += 1;
++        let actor_str = Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?");
++        self.maybe_record_drift("culture", lineno, actor_str, journal_now, got);
+         if journal_now == got {
+             self.culture_oracle_agreed += 1;
+             return;
+@@ -5194,6 +5337,12 @@ pub struct GameResult {
+     /// without re-deriving which is which from the raw mismatch bucket
+     /// table. Zero across the full corpus as of the fix landing.
+     pub politics_false_skips_unrecovered: u32,
++    /// TEMPORARY (`DRIFT_AUDIT=1` only) -- see [`Replayer::drift_first`] and
++    /// [`DriftDivergence`]'s own doc.
++    pub drift_first: Option<DriftDivergence>,
++    /// TEMPORARY (`POP_AUDIT=1` only) -- see [`Replayer::pop_drift_first`]
++    /// and [`PopDivergence`]'s own doc. Indexed by seat.
++    pub pop_drift_first: [Option<PopDivergence>; MAX_PLAYERS],
+ }
+ 
+ /// Ground-truth evidence (never a rules reimplementation) that the PRIMARY,
+@@ -5898,6 +6047,45 @@ pub fn replay_game(
+                         }
+                     }
+                 }
++                // TEMPORARY (`DRIFT_AUDIT=1` only, see `debugflags::
++                // drift_audit`'s own doc): the same two checks as the
++                // `REPLAY_DEBUG` block just above, but recorded structurally
++                // via `maybe_record_drift` instead of merely eprintln'd, so
++                // science/resources can compete on equal footing with
++                // culture/hand-excess for "which quantity diverges FIRST in
++                // this game" -- deliberately a SEPARATE `if`, not folded into
++                // the `replay_debug()` block above, so this audit runs
++                // whether or not `REPLAY_DEBUG` firehose tracing is also on.
++                if crate::debugflags::drift_audit() {
++                    let actor_str = Color::from_seat(actor).map(Color::as_str).unwrap_or("?");
++                    // Same guard as the pre-existing `resources` debug check
++                    // just above (and the always-on culture oracle's own
++                    // `PendingCultureCheck` deferral): when this actor's
++                    // `EndTurn` opened a still-unresolved `DiscardMilitary`
++                    // choice, `economy::end_of_turn` stopped BEFORE running
++                    // production (steps 2-5) -- checking `science` (or
++                    // `resources`) against the journal's already-POST-
++                    // production `"(now M)"` right here is a false positive
++                    // by construction, not a real divergence. Discovered by
++                    // hand-tracing this audit's own first example (see
++                    // `drift__DRIFT.txt`'s deep dive): the pre-existing
++                    // `REPLAY_DEBUG` science check a few lines up never had
++                    // this guard (only `resources` did), so a naive
++                    // structural recording of it was ~98% checkpoint-timing
++                    // noise, not engine drift.
++                    let discard_blocked =
++                        matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary);
++                    if !discard_blocked {
++                        if let Some(want) = trailing_now_science(line.text) {
++                            let got = r.state.players[actor as usize].science as i32;
++                            r.maybe_record_drift("science", line.lineno, actor_str, want, got);
++                        }
++                        if let Some(want) = trailing_now_resources(line.text) {
++                            let got = r.state.players[actor as usize].resources as i32;
++                            r.maybe_record_drift("resources", line.lineno, actor_str, want, got);
++                        }
++                    }
++                }
+                 // Structural, always-on culture-oracle checkpoint -- see
+                 // `CultureOracleDivergence`'s own doc. Unlike the science
+                 // drift check above (still `REPLAY_DEBUG`-gated eyeball
+@@ -6537,6 +6725,8 @@ pub fn replay_game(
+         civil_deck_premature_advance,
+         politics_false_skips: r.politics_false_skips,
+         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
++        drift_first: r.drift_first,
++        pop_drift_first: r.pop_drift_first,
+     }
+ }
+ 
+@@ -6903,6 +7093,27 @@ fn apply_one(
+             r.try_apply(Move::WonderStep { steps }, true)
+         }
+         ActionClass::IncreasePopulation => {
++            // TEMPORARY (`POP_AUDIT=1` only, see `debugflags::pop_audit`'s
++            // own doc): the population oracle. Runs BEFORE any move below
++            // mutates state, so `p.yellow_bank`/`p.food` here are exactly
++            // what they were when the real human made this choice. Only
++            // fires on a real (non-`PopFree`) Pop line -- `spent_food`
++            // returns `None` for "Ocean Liner Service used" (no "spends"
++            // clause), the free-population source this line's own text can
++            // also carry, so this naturally skips those without a separate
++            // check.
++            if crate::debugflags::pop_audit() {
++                if let Some(food) = spent_food(raw_text) {
++                    let journal_cost = food + spent_resource_after_food(raw_text);
++                    let (our_cost, discount_total, reconstructed_yellow) = {
++                        let p = &r.state.players[actor as usize];
++                        let our_cost = economy::pop_cost(&r.state, p).unwrap_or(0);
++                        let stats = effects::state_stats(&r.state, p);
++                        (our_cost, stats.pop_food_discount + p.one_time_discount.pop_food as i32, p.yellow_bank)
++                    };
++                    r.maybe_record_pop_drift(actor, r.current_lineno, journal_cost, our_cost, discount_total, reconstructed_yellow);
++                }
++            }
+             let legal = legal::legal_moves(&r.state);
+             // BGO's own line names the free-population source explicitly
+             // when one was used ("Ocean Liner Service used" -- the wonder's

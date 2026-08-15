@@ -1,0 +1,302 @@
+ACTION-ECONOMY VALUATION FIX -- Hammurabi and siblings
+workspace: /private/tmp/actionprice   (warm clone of gatefix2; NEVER touch /Users/pt/tta-ai or /Users/pt)
+binary: rust/target/difftest/advisor, run from repo root, --search human
+
+================================================================================
+STEP 1 -- AUDIT: every DELIBERATELY_UNPRICED key that grants/refunds/discounts
+a civil, military or political action (cards.rs ~645-759)
+================================================================================
+
+1. militaryActionAsCivilPerTurn -- Hammurabi (leader, data/cards_wonders_leaders.json:26)
+   Text: "On your turn, you may use one military action as a civil action."
+   Value: 1 (capped at ONE conversion per turn -- costs.rs::hammurabi_conversion_available
+   / pay_ca spends it LAZILY, only once the printed CA pool is empty).
+   Rule impl: costs.rs:117-121 (hammurabi_conversion_available), costs.rs:179-189 (pay_ca),
+   apply.rs:802-816 (hammurabi_replaced_this_turn survives a same-turn leader swap).
+   Passing test: apply.rs:2250 (replacing_hammurabi_mid_turn_keeps_his_military_action_
+   as_civil_action_conversion_for_the_rest_of_the_turn).
+   VERDICT: PRICE IT. Worth up to 1 civil action/turn, gated on the government
+   actually granting >=1 military action/turn (a real board fact).
+
+2. leaderTakeCivilActionDiscount -- Hammurabi, same card
+   Text: "When you take a new leader from the card row, it costs 1 less civil action."
+   Value: 1. Rule impl: costs.rs:206-208 (take_cost, `cost -= 1` when leader_is(p,"Hammurabi")
+   and the ROW card being taken is a Leader).
+   VERDICT: LEAVE UNPRICED, justification upgraded. This discounts the COST of a
+   FUTURE take of a DIFFERENT card. No board-state fact tells us how many more
+   leaders this player will take before Hammurabi leaves play -- that is a
+   genuine future-behaviour rate (bucket 4's "measured firing rate", not invented
+   here) that would need self-play instrumentation, not a snapshot query.
+
+3. wonderTakeNoExtraCivilActions -- Michelangelo (leader, cards_wonders_leaders.json:34)
+   Text: "When you take a wonder card from the card row, you spend no additional
+   civil actions even if you have completed wonders."
+   Rule impl: costs.rs:203-204 (take_cost's wonder surcharge, guarded by
+   !leader_is(p,"Michelangelo")).
+   VERDICT: LEAVE UNPRICED, same shape as #2 -- discounts a FUTURE wonder take,
+   not a per-turn recurring grant. No board fact says how many more wonders this
+   player will take.
+
+4. civilActionBackOnTechDevelop -- Isaac Newton (leader, cards_wonders_leaders.json:36)
+   Text: "Every time you play a technology card, get 1 spent civil action back."
+   Rule impl: apply.rs:465 (on_develop), apply.rs:1027 (revolution-as-develop branch).
+   VERDICT: LEAVE UNPRICED, justification upgraded. Recurring per-turn trigger, but
+   unlike Hammurabi's MA-conversion there is no stable government-level production
+   stat for "how many Develop actions per turn" -- it depends on hand contents,
+   which techs remain available, and turns left. Genuinely a firing-rate question,
+   not a board-state fact we can compute without inventing a number.
+
+5. civilActionUpgradeUrbanBuildingToTheater -- J. S. Bach (leader, cards_wonders_leaders.json:37)
+   Text: "Once per turn, as a civil action, you may upgrade one of your urban
+   buildings to a theater of the same or higher level, paying the resource cost
+   difference as normal."
+   Rule impl: legal.rs:512, apply.rs:666-675 (h_bach_theater).
+   VERDICT: current bucket-3 reason is ACCURATE, no change needed. This does not
+   grant/refund/discount an action -- it adds a new legal use for a civil action
+   you already have. (The theater-upgrade's building value is a separate,
+   already-existing pricing question, out of this task's action-economy scope.)
+
+6. revolutionUsesMilitaryActionsInstead -- Maximilien Robespierre (leader, cards_wonders_leaders.json:38)
+   Text: "When you declare a revolution, you spend all your military actions
+   instead of all your civil actions."
+   Rule impl: legal.rs:786 (revolt_pool_ok), apply.rs:985-1010/2668-2681/2799-2847.
+   VERDICT: ALREADY PRICED -- board_yields.rs::government_routes (lines ~518-551)
+   already special-cases `leader_is(p, "Maximilien Robespierre")` and prices the
+   revolution route off MaLeft instead of CaLeft. The DELIBERATELY_UNPRICED
+   listing was misleading (implied a gap); this is a documentation-only fix,
+   updating the reason to say it is priced by name-dispatch in government_routes,
+   not by this key directly (mirrors why Genghis Khan/Winston Churchill/Isaac
+   Newton also dispatch by leader NAME rather than by reading the key's value).
+
+7. oncePerGameTwoPoliticalActions -- Julius Caesar (leader, cards_wonders_leaders.json:25)
+   Text: "Once per game, you may take two political actions in your politics phase."
+   Rule impl: apply.rs:184-230 (end_politics, caesar_second_politics/
+   caesar_double_politics_used).
+   VERDICT: LEAVE UNPRICED, justification upgraded. There is no Feature::
+   PoliticalActions anywhere in board_yields.rs -- political actions are not a
+   tracked evaluator dimension at all today. Pricing this cleanly would mean
+   adding that dimension (a real architecture extension), which is bigger than
+   this task; flagging per "if the architecture fights you, stop and report".
+   One-time (once per game) and highly conditional on already wanting two
+   political moves the same turn, so the value is small relative to Hammurabi's
+   per-turn conversion regardless.
+
+8. militaryActionCombinedPopIncreaseAndUnitBuild -- Frederick Barbarossa (leader, cards_wonders_leaders.json:31)
+   Text: "By spending 1 military action, you may increase population and build a
+   military unit all at once; the population increase costs 1 less food and the
+   unit costs 1 less resource."
+   Rule impl: legal.rs:508/620-693, apply.rs:635-663 (h_barbarossa).
+   VERDICT: LEAVE UNPRICED, justification upgraded. Saves a CIVIL action (the
+   population-increase half) only when the player would otherwise have spent one
+   on Increase Population the same turn they also build a unit -- a recurring
+   per-turn trigger with no stable board-level rate, same shape as #4.
+
+Also swept the table for keys containing "politic"/"military" that turned out
+NOT to be action-economy grants (checked text, not just names, per the audit
+agent's report):
+- removeAsPoliticalActionForYellowToken (Alexander the Great) -- CONSUMES a
+  political action for a one-shot yellow token, does not grant/discount one.
+- removeAsPoliticalActionFreeColonize (Christopher Columbus) -- same shape,
+  consumes a political action for a free colonize.
+- opponentsPayDoubleMilitaryActionsToAttackYou (Mahatma Gandhi) -- doubles a
+  RIVAL's military-action cost to attack you; defensive, not this player's own
+  action economy. Real gap, but out of this task's scope (civil-action focus).
+- peekTopEventCardInPolitics (Joan of Arc) -- information peek, not an action
+  count/cost change at all.
+- colonizeDiscardUpTo2MilitaryCardsForBonus (James Cook) -- discards military
+  CARDS (hand cards) for a colony bonus, not an action.
+None of these are touched by this change.
+
+================================================================================
+STEP 2 -- WHAT WAS PRICED, AND HOW
+================================================================================
+
+Added a Hammurabi rider to board_yields.rs::rider_of (the SAME dispatch table
+Genghis Khan's strength-conditional culture and Winston Churchill's floor
+culture already use), so it flows through card_potential's existing swap-diff
+scaling (card_board_leader * sum_board_triples) exactly like every other
+leader value -- no new WeightKey, no flat per-card weight.
+
+fn hammurabi(state, p, out):
+  if effects::state_stats(state, p).military_actions >= 1 {
+      out.push((Feature::CivilActions, 1.0, Kind::Gain));
+  }
+
+Board fact used: `effects::state_stats(state, p).military_actions` -- the
+GOVERNMENT'S per-turn grant (Stats field, default 2 under Despotism), the same
+kind of production-level quantity Genghis Khan's strength check reads. NOT
+`p.military_actions` (the actual remaining-this-turn pool), which a fresh
+game's first-turn start-player handicap sets to 0 and would misprice Hammurabi
+as worthless on exactly the turn a player is deciding whether to take him.
+
+Documented assumption: whenever the government grants >=1 MA/turn, we price
+the FULL printed cap (1 CA) as realized every turn -- not a fitted usage
+fraction. This leans generous (an army rarely spends 100% of its granted MA
+every single turn, especially pre-Age-I), but no measured firing rate exists
+to discount it by, and inventing one would violate "compute over inference".
+
+================================================================================
+STEP 3 -- PROOF ON THE REAL TURN-1 POSITION
+================================================================================
+
+Frozen champion used: /private/tmp/ipadgame/champion_2p_game.json, copied
+aside to scratch/champion_2p_frozen.json and used from the copy throughout
+(never pointed a run at the live file).
+
+Command (from repo ROOT, not rust/ -- confirmed "search: human" on every run):
+  INPUT="row Engineering Genius (A), Rich Land (A), Hammurabi, Cultural Heritage (A), \
+  Urban Growth (A), Library of Alexandria, Hanging Gardens, Moses, Rich Land (A), \
+  Alexander the Great, Urban Growth (A), Frugality (A), Colossus"
+  echo "$INPUT" | ./rust/target/difftest/advisor --players 2 --seat 0 --seed 0 \
+      --weights scratch/champion_2p_frozen.json --search human --save OUT.json
+
+BEFORE the fix (6 decimal places, widened for this analysis only, reverted
+before commit):
+  1. END TURN                                        (top pick)
+  2. Cultural Heritage (A)  slot 3   -0.770275
+  3. Engineering Genius (A) slot 0   -6.549463
+  4. Rich Land (A)          slot 1   -9.076420
+  5. Urban Growth (A)       slot 4   -9.076420
+  6. Hammurabi              slot 2   -9.382359   <- LAST
+
+AFTER the fix (identical run, code changed):
+  1. END TURN                                        (top pick)
+  2. Cultural Heritage (A)  slot 3   -0.770275
+  3. Engineering Genius (A) slot 0   -6.549463
+  4. Rich Land (A)          slot 1   -9.076420
+  5. Urban Growth (A)       slot 4   -9.076420
+  6. Hammurabi              slot 2   -9.382359   <- STILL LAST, IDENTICAL
+
+RESULT: Hammurabi does NOT beat Cultural Heritage. The two runs are
+byte-identical to 6 decimal places. Saying so plainly, as asked, with the
+mechanism nailed down (not a guess):
+
+ROOT CAUSE, CONFIRMED BY INSTRUMENTATION (added and removed a temporary
+eprintln inside board_yields::board_yields and cards::card_potential_core
+to trace the live run; both showed the fix firing correctly, so the search
+below is not "does the code run", it is "why doesn't it move the score"):
+
+  1. The rider DOES fire and DOES compute the right board fact: the traced
+     swap for Hammurabi was `[(Leader, 1.0, Gain), (CivilActions, 1.0, Gain)]`
+     -- exactly the intended +1 civil action, correctly gated on
+     Despotism's Stats.military_actions == 2.
+
+  2. But `eval::parse_weights` (`rust/src/bots/weighted/eval.rs:990-1016`,
+     used by every `--weights` load, including this one) unconditionally
+     calls `dominance_repair` on the way out. `civil_actions` is a member of
+     `STOCK_NONNEG_GATES` (eval.rs ~707-741: "nothing in the rules costs you
+     for holding a civil action you have not spent yet"), and the frozen
+     champion's RAW trained value is -0.5196954234135993 (negative --
+     already flagged by eval.rs's own doc comment as a known, pre-existing
+     bug: "the live 2p champion priced both negative ... which is exactly
+     what makes overpaying for cards look like an improvement"). The repair
+     clamps it UP to exactly 0.0 on every load.
+
+  3. `WeightKey::CivilActions` (0.0, post-repair) is the SAME key
+     `sum_board_triples` uses to price my new `(Feature::CivilActions, 1.0,
+     Gain)` triple. `0.0 * 1.0 = 0.0`. The channel my fix feeds is real and
+     correctly wired, but the weight sitting at the end of it has been
+     silently zeroed by a repair that predates this task and is doing
+     exactly its documented job (suppressing a bug that would otherwise
+     reward the bot for OVERPAYING civil actions) -- it just also happens to
+     zero out the one coordinate a correct Hammurabi valuation needs.
+
+  DEMONSTRATION that the wiring itself is sound (diagnostic only, NOT a
+  change to the real champion -- explicitly not "tuning numbers until it
+  wins"): scratch/champion_2p_civilnonzero.json is the same frozen champion
+  with ONLY "civil_actions" hand-edited to +0.5 outside dominance_repair's
+  reach (i.e. edited AFTER loading, not by feeding a different raw value
+  through the same repair). Under that vector every action-card take price
+  shifts by a large, uniform amount (civil_actions is also read directly as
+  a linear stock feature in `features::features`, not only through my
+  rider), and Hammurabi's OWN score moves too (-9.38 -> -11.61) --
+  confirming the CivilActions channel is live end to end. The DIRECTION
+  moved the wrong way in this particular demo because `card_board_leader`
+  (-1.0158, see below) is ALSO still negative and flips the sign of
+  whatever comes through it; fixing one miscalibrated coordinate while a
+  second one it multiplies against is still broken does not produce a clean
+  result, which is itself the finding, not a bug in the rider.
+
+  So: two independent, pre-existing calibration problems in THIS SPECIFIC
+  frozen champion -- `civil_actions` repaired to 0.0, and `card_board_leader`
+  still negative -- together prevent a correct per-turn action-economy
+  valuation from being visible in this champion's decisions, no matter how
+  correctly the valuation itself is computed. Retraining after this fix
+  (letting the hill-climb re-learn `civil_actions` now that its floor is 0,
+  and separately revisiting why `card_board_leader` trained negative) is
+  the next step, and is outside this task's scope (a code/valuation fix,
+  not a training run).
+
+(d) ARISTOTLE and CARD_BOARD_LEADER, as asked:
+  Aristotle (`scienceOnTechCardTake`, still and correctly on
+  DELIBERATELY_UNPRICED -- out of this task's action-economy scope) scored
+  -9.4 in the identical slot-2 substitution test, matching Hammurabi's own
+  before-fix and after-fix score almost exactly (both leaders reduce, on
+  this champion, to the SAME generic "it is a leader" (Feature::Leader,
+  1.0, Gain) term with nothing else surviving the repaired weight) --
+  confirming Aristotle is worth ~nothing to the evaluator too, as predicted.
+
+  card_board_leader = -1.0158366438730428 in the frozen champion: LARGE and
+  NEGATIVE, confirmed. Leaders ARE being suppressed/miscalibrated by this
+  second, independent mechanism, exactly as flagged as a risk. Its practical
+  effect is not simply "leaders always score worse than they should" --
+  because it multiplies the WHOLE swap-diff sum, and several per-feature
+  weights it multiplies against (`leader`: -0.445, `civil_actions`: 0.0
+  post-repair) are also negative or zero, the double negative on the
+  generic Leader term (`leader` * `card_board_leader` = -0.445 * -1.0158 =
+  +0.452, positive) currently makes EVERY leader look mildly positive by
+  accident, not suppressed -- but it will flip any POSITIVE-per-feature
+  leader rider (Genghis Khan's/Winston Churchill's culture_rate, weight
+  +0.00305) NEGATIVE, and will flip my new CivilActions rider negative too
+  the moment civil_actions is retrained back to a real positive value
+  (since -1.0158 * (positive) < 0). This is a live landmine for the NEXT
+  training run and should be looked at alongside re-learning civil_actions,
+  not left as-is.
+
+================================================================================
+STEP 4 -- TESTS
+================================================================================
+
+Both added to rust/src/bots/board_yields.rs's existing `#[cfg(test)] mod
+tests` (full-sentence names, WHY in the doc comment, per repo style):
+
+  hammurabis_military_action_conversion_is_worth_a_civil_action_to_the_evaluator
+  replacing_hammurabi_with_a_leader_with_no_rider_prices_the_conversion_as_lost
+
+RED (confirmed by literally commenting out the `"Hammurabi" => Some(hammurabi)`
+line in `rider_of`, rebuilding, and re-running -- then restoring it), verbatim:
+
+  thread 'bots::board_yields::tests::hammurabis_military_action_conversion_is_worth_a_civil_action_to_the_evaluator' panicked at src/bots/board_yields.rs:1122:9:
+  expected a +1 CivilActions gain triple for Hammurabi's MA-as-CA conversion, got [(Leader, 1.0, Gain)]
+
+  thread 'bots::board_yields::tests::replacing_hammurabi_with_a_leader_with_no_rider_prices_the_conversion_as_lost' panicked at src/bots/board_yields.rs:1140:9:
+  expected the -1 CivilActions loss of Hammurabi's conversion when replacing him, got []
+
+  test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 1261 filtered out
+
+GREEN after restoring the fix: both pass, 6/6 in that module.
+
+EXISTING "DELIBERATELY_UNPRICED completeness" TEST: does not exist. Searched
+the whole tree (grep -rl "DELIBERATELY_UNPRICED" rust/src, independently
+confirmed by a research subagent). The only tests touching this table are
+three internal-consistency checks, all still inside cards.rs and all still
+passing unchanged: `deliberately_unpriced_has_no_duplicate_keys`,
+`unpriced_values_has_no_duplicate_pairs`, `every_reason_is_a_real_sentence_
+not_a_stub` (checks reason length > 20 chars only). The module's own doc
+comment (cards.rs:622-630) says the real coverage tool "was not written
+yet" -- still true. Not fabricating one to satisfy the brief; reporting the
+gap honestly instead, as instructed.
+
+================================================================================
+STEP 5 -- FULL SUITE
+================================================================================
+
+`cargo test --profile difftest` from rust/: every suite green, 0 failures,
+across the whole run (lib: 1267 passed, up from 1265 -- the 2 new tests;
+every other bin/integration suite unchanged and passing). No existing test
+asserted the old zero valuation for militaryActionAsCivilPerTurn (there
+wasn't one), so nothing needed updating for that reason -- the DELIBERATELY_
+UNPRICED table's own 3 tests only check internal shape, not per-key values,
+so removing/editing reason strings could not break them as long as they stay
+non-duplicate and >20 chars, which they are.
+

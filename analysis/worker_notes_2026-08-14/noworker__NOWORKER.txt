@@ -1,0 +1,298 @@
+TARGET: the "IllegalMove: Build" bucket's workers_free==0 sub-shape -- games
+where NO Build option at all is legal because our engine believes the player
+has no uncommitted worker. Worked in a warm clone at /private/tmp/noworker,
+base commit 791150f on branch base0814 (includes econcap, buildbkt/the two
+build-payment fixes, and everything build2/weakest already ruled out).
+
+RESULT: ONE FIX LANDED. noworker.patch (git diff 791150f -- rust) is 126
+lines, one commit (ba40188) touching only rust/src/events.rs. Guard: 671->674
+completed / 630->632 exact, ZERO regressions (comm -23 empty), 3 wins
+(7521849, 7522756, 7523355).
+
+============================================================
+STEP 1: re-enumerated the bucket fresh at 791150f -- do NOT trust build2's 16
+============================================================
+
+cd /private/tmp/noworker/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/noworker_before.txt 2>&1
+-> 671 completed / 630 exact, ID set IDENTICAL to /private/tmp/guard_ids.txt
+   (diff empty) -- confirms the stated baseline.
+
+Re-ran the "IllegalMove: Build" bucket dump with a temporary
+`TMPDEBUG_LEGAL` probe (gated behind the existing `REPLAY_DUMP_BUCKET` env
+var, added to `src/bin/replaystats.rs`, REVERTED via `git checkout --`
+before this file was written -- confirmed by `git diff --stat` against
+791150f for that file being empty) that reads `MismatchKind::IllegalMove`'s
+own `legal_moves` string and flags whether it contains ANY `"Build"` token at
+all -- the same "no Build{} in legal_moves" signature build2 used.
+
+RESULT: 15 games this time, not 16. build2's 16 minus 7523383, which has
+SHIFTED to the "cost-short for one specific card" sub-bucket since build2's
+pass (its own `legal_moves` now contains `Upgrade { from: Religion, to:
+Organized Religion }` and other options -- something upstream changed its
+trajectory, most likely the buildbkt/build-payment fixes already in this base
+commit). This is exactly the kind of drift the task brief warned about
+("re-enumerate yourself, do not trust build2's count").
+
+The 15: 7520999 7521544 7521657 7521791 7522024 7522113 7522608 7522673
+7523082 7523132 7523283 7523355 7523420 7523438 7523640
+
+============================================================
+STEP 2: MAJOR FINDING -- half of the 15 are NOT workers_free==0 at all
+============================================================
+
+For each of the 15, ran `REPLAY_DEBUG=1 ./target/difftest/replay ... <id>`
+and read the EXISTING `try_apply fail` diagnostic (already in
+`replay_common.rs`, no changes needed) at the exact failing line -- it prints
+`workers_free` AND `resources` together. Confirmed for every game that the
+single-game run's own failing line/text matched replaystats's dump exactly
+(the nondeterminism trap build2's STEP 1a warned about did NOT recur here --
+verified per game, not assumed).
+
+  7520999  workers_free=1 resources=0   <- has a worker, just no money
+  7521544  workers_free=0 resources=10  <- TRUE workers_free==0
+  7521657  workers_free=1 resources=1   <- has a worker, just no money
+  7521791  workers_free=2 resources=1   <- has a worker, just no money
+  7522024  workers_free=2 resources=1   <- has a worker, just no money
+  7522113  workers_free=0 resources=6   <- TRUE workers_free==0
+  7522608  workers_free=0 resources=4   <- TRUE workers_free==0
+  7522673  workers_free=1 resources=1   <- has a worker, just no money
+  7523082  workers_free=0 resources=6   <- TRUE workers_free==0
+  7523132  workers_free=1 resources=1   <- has a worker, just no money
+  7523283  workers_free=1 resources=1   <- has a worker, just no money
+  7523355  workers_free=0 resources=13  <- TRUE workers_free==0 (FIXED, see below)
+  7523420  workers_free=0 resources=6   <- TRUE workers_free==0
+  7523438  workers_free=1 resources=0   <- has a worker, just no money
+  7523640  workers_free=0 resources=8   <- TRUE workers_free==0
+
+8 of 15 have workers_free > 0 but resources so low (0 or 1) that literally
+EVERY buildable option is unaffordable at once -- producing the exact same
+"no Build{} at all in legal_moves" signature build2's/this task's own
+methodology used to define the bucket, without actually being a missing-
+worker bug. This is a methodological trap: "no Build in legal_moves" is NOT
+a reliable proxy for "workers_free==0" once a game's economy is thin enough.
+Only 7 of the 15 are genuinely workers_free==0:
+  7521544 7522113 7522608 7523082 7523355 7523420 7523640
+
+============================================================
+STEP 3: hand-traced 7523420 -- lands on the ALREADY-DOCUMENTED, unresolved
+WeakestPlayer anomaly (weakest__WEAKEST.txt), not a new bug
+============================================================
+
+Full ledger walk (every actor=0 APPLY_ONE ENTRY from round 1, using
+REPLAY_DEBUG_ALL=1's own `workers_free=N` field already printed on every
+entry -- no new instrumentation needed for this part) is internally
+consistent end to end EXCEPT one jump: round 10's "Reign of Terror" event
+("The weakest civilization loses 1 population.; Purple loses 1 population")
+resolves against ORANGE in the engine (`apply_single_target: ... ranked=[0,
+1] values=[8, 10]`, i.e. engine computes Orange=8 < Purple=10, so Orange is
+"weakest" and loses the population/worker), while the journal names PURPLE.
+
+Added a temporary `TMPDEBUG_STRENGTH`/`TMPDEBUG_TIED` probe (gated behind
+`REPLAY_DEBUG_ALL`, in `src/events.rs`, REVERTED before the final commit --
+confirmed by the landed diff containing neither) to break down BOTH players'
+strength: Orange 3xWarriors(1each)=3 + army_strength(Legion,2)=2 +
+strength_extra(0) + Joan-of-Arc's StrengthPerTempleOrGovernmentHappy=3 -> 8.
+Purple 3xSwordsmen(2each)=6 + army_strength(Legion,2)=2 + a colonized
+"Strategic Territory (I)" territory's own printed +2 strength -> 10. FAQ
+p.11 (`sources/faq_v15.pdf`), quoted directly: "Military Strength includes
+your Strength that arises from all sources, including from Wonders and
+Leaders and Territories" -- so the Territory bonus is CORRECTLY included;
+Orange really is weaker (8 < 10) by the rules' own definition, yet BGO's
+real game assigned the loss to Purple anyway.
+
+This is EXACTLY one of the 4 already-documented, already-investigated
+WeakestPlayer anomalies from weakest__WEAKEST.txt's STEP 3 corpus check
+(320/324 = 98.8% agreement; 7523420 is explicitly named there with the same
+totals={idx0:8, idx1:10}). weakest.txt's own conclusion -- correct
+definition and arithmetic, a genuine unexplained 1-of-324 anomaly, not a
+productive lead to fix code against -- still holds; re-confirming it here
+independently (from the Build-bucket side, not the WeakestPlayer-corpus
+side) does not change that verdict. NOT RE-FIXED, per that pass's explicit
+recommendation and this task's own warning not to re-chase this hypothesis.
+
+This also explains 7522113 (also in weakest.txt's 4-mismatch list) and very
+likely 7523082 (build2's own hand-traced game, ALSO in that list) -- 3 of
+the 7 true workers_free==0 games trace to this one already-closed anomaly.
+
+============================================================
+STEP 4: hand-traced 7523355 -- found and fixed a REAL, NEW bug
+============================================================
+
+Full ledger walk for Orange (2p game) from round 1 through the failure
+(round 13, "Orange builds Religion", workers_free=0) is internally
+consistent for every Build/BuildUnit/BuildWonderStage/Upgrade/Colonize
+action EXCEPT one: round 11's "Immigration" event --
+
+  "Orange plays event ... Current event:; I / Immigration; All
+   civilizations with the most happy faces gain 1 population.; Orange
+   receives a new immigrant; Purple receives a new immigrant"
+
+Both players are NAMED in the journal as receiving a population token. The
+engine's own `workers_free` trace shows NO change across this event for
+Orange (stayed at 1 both immediately before and immediately after). Added a
+temporary `TMPDEBUG_TIED` probe (gated behind `REPLAY_DEBUG_ALL`, REVERTED
+before the final commit) to `events::apply_tied_targets` and confirmed:
+`stat=Happy top=0 values=[0, 0]` -- BOTH players are tied at 0 happy faces,
+and `apply_tied_targets`'s own gate (`if top <= 0 { return; }`) skipped the
+grant for EVERYONE.
+
+Root cause: `apply_tied_targets` is the SHARED implementation for BOTH
+`Special::PlayersWithMostHappyFaces` (Immigration) and
+`Special::PlayersWithMostDiscontentWorkers` (a different card, e.g. the
+`blue_tokens: -1` one at card_table.rs line 3541), and its "skip when the
+tied stat is 0" gate applied to BOTH uniformly. The gate's own doc comment
+already explained its ACTUAL justification is Discontent-specific ("'the
+players with the most discontent workers' targets nobody when nobody has
+one" -- 0 discontent workers means nobody genuinely "has" one), but nothing
+in that reasoning applies to Happy faces: everyone tied at 0 happy faces is
+still tied for the most happy faces.
+
+RULE CITATION: `docs/RULES_SPEC.md` line 119 (§5.3, "Evaluating events"):
+'"All civilizations" with most/least: all tied civs affected, no
+tie-break.' -- no positivity clause anywhere in that sentence. Corpus
+evidence in the SAME direction: game 7523355's own journal explicitly grants
+both tied-at-zero players their immigrant.
+
+FIX: `src/events.rs`, `apply_tied_targets` gained a `require_positive: bool`
+parameter. The `RankStat::Happy` call site (Immigration) now passes `false`
+(never gates on positivity); the `RankStat::Discontent` call site keeps
+`true` (unchanged behavior, preserving the existing, differently-justified
+mechanism -- NOT re-verified against the corpus this pass, since Discontent
+was explicitly out of scope and untouched).
+
+TEST: `src/events.rs`, `events::tests::
+immigration_grants_population_to_both_players_tied_at_zero_happy_faces` --
+two blank 2p players (both 0 happy by construction), `resolve_event(&mut
+state, card("Immigration"), 0)`, asserts BOTH players' `workers_free` become
+1. Confirmed RED by temporarily flipping the Happy call site's new
+parameter back to `true` (`cargo test --profile fasttest --lib
+events::tests::immigration_grants_population_to_both_players_tied_at_zero_happy_faces`
+FAILED, "left: 0, right: 1"), then reverted to GREEN (same test PASSED).
+
+Full suite after the fix: `cargo test --profile fasttest --lib` -> 1409
+passed, 0 failed. `cargo clippy --all-targets -- -D warnings` -> clean, no
+warnings.
+
+Confirmed 7523355 itself now replays to completion with a matching score:
+`REPLAY_DEBUG=1 ./target/difftest/replay ... 7523355` ->
+"7523355 [2p] COMPLETE after 294 actions scores engine=[181, 236]
+index=[236, 181] match=true".
+
+============================================================
+STEP 5: explicitly NOT chased / ruled out this pass
+============================================================
+- The remaining true workers_free==0 games not yet individually hand-traced:
+  7521544, 7522608, 7523640 (3 of the 7). Budget ran out before reaching
+  these -- see HANDOFF below.
+- Colonization's `Move::SendUnit` sacrifice: CHECKED DIRECTLY (while
+  hand-tracing 7523355) and CONFIRMED CORRECT, not a bug -- the code's own
+  comment ("the token goes to the YELLOW BANK, not to free workers") matches
+  RULES_SPEC.md line 285 (§11.4) exactly: "Sacrifice: sent units' yellow
+  tokens go to the YELLOW BANK (not worker pool)". Do not re-chase this.
+- `RankStat::Discontent`'s own `require_positive=true` gate: NOT
+  re-verified against the corpus this pass (out of scope -- the task's
+  bucket is about workers_free, and no game in this bucket's failure traced
+  to Discontent). If a future pass finds a Discontent-targeted-event
+  undercount, check whether ITS gate is also wrong before assuming this
+  fix's parameterization got the split right.
+- The "weakest civilization" targeting anomaly (7523420, and by strong
+  inference 7522113/7523082): explicitly NOT re-fixed, per weakest.txt's own
+  measured conclusion and this task's explicit instruction not to re-chase
+  it. Confirmed independently from a different angle (Build-bucket) that it
+  is real, still unexplained, and not worth chasing further without new
+  data (e.g. an actual BGA game-logic source, which is not present in
+  `sources/`).
+- The 8 "resource-shortfall masquerading as workers_free==0" games: not
+  touched at all -- this is the SIBLING bucket's territory per the task
+  brief ("Do NOT work on affordability"), even though it turned out several
+  of THIS bucket's 15 candidates actually belong there. Flagged for
+  whoever owns that bucket to pick up: 7520999 7521657 7521791 7522024
+  7522673 7523132 7523283 7523438.
+
+============================================================
+MEASUREMENT (verbatim)
+============================================================
+
+cd /private/tmp/noworker/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/noworker_after2.txt 2>&1
+
+Header lines (read directly):
+  "# replaystats: 1011 games sampled, 674 completed to state.game_over"
+  "674/674 completed games actually flipped state.game_over ... 632/674 of
+   those matched index.tsv exactly (sorted per-game score-list compare)."
+
+Before: 671 completed / 630 exact (guard_ids.txt, 671 lines).
+After:  674 completed / 632 exact.
+
+comm -23 /private/tmp/guard_ids.txt /tmp/noworker_ids2.txt   (REGRESSIONS):
+<empty>
+
+comm -13 /private/tmp/guard_ids.txt /tmp/noworker_ids2.txt   (WINS):
+7521849
+7522756
+7523355
+
+(7521849 and 7522756 were not part of this bucket's own 15-game census --
+they are OTHER games whose own divergence happened to route through the
+same Immigration-tied-at-zero-happy code path; a genuine, if incidental,
+extra win from a generically-correct fix, not cherry-picked.)
+
+cargo test --profile fasttest --lib: 1409 passed, 0 failed.
+cargo clippy --all-targets -- -D warnings: clean.
+
+`IllegalMove: Build` bucket: not re-censused after landing (would need
+another replaystats run + TMPDEBUG_LEGAL probe re-added; left for the next
+pass per the task's own "re-run the census fresh before trusting either
+sub-bucket's membership" advice from build2/weakest).
+
+============================================================
+CONCRETE HANDOFF for whoever picks this bucket up next
+============================================================
+1. Re-run STEP 1's census fresh -- this fix will have shifted the bucket's
+   membership again (7523355 is gone; some of the other 6 true-
+   workers_free==0 games may also have shifted, the same way 7523383 shifted
+   out between build2's pass and this one).
+2. Hand-trace the 3 true workers_free==0 games not yet individually
+   examined this pass: 7521544, 7522608, 7523640. Use the SAME method as
+   STEP 4 above (REPLAY_DEBUG_ALL=1, walk every APPLY_ONE ENTRY's own
+   printed `workers_free=N` for the failing actor from round 1, look for the
+   first action whose before/after values don't match its expected ±1).
+   That method needs NO new instrumentation -- `workers_free` is already
+   printed on every ENTRY line by the base engine.
+3. If another game's divergence traces to a DIFFERENT `AllPlayers`/tied-
+   targeting event silently skipping a grant (the same bug SHAPE as this
+   pass's fix, just a different card), check `apply_gains`/`apply_extras`/
+   `queue_decisions` (all called from `apply_player_block`, the same
+   function `apply_tied_targets`'s selected players eventually reach) for
+   an equivalent unjustified gate.
+4. The 8-game "resource-shortfall masquerading as workers_free==0"
+   sub-bucket (STEP 2/STEP 5) is NOT this bucket's problem -- it belongs
+   to whoever owns the "cost-short for a specific card" affordability
+   bucket. Worth flagging to that pass, since the SAME structural symptom
+   ("no Build{} at all in legal_moves") was previously assumed to mean
+   workers_free==0 uniformly; it doesn't.
+
+============================================================
+FILES CHANGED
+============================================================
+rust/src/events.rs only (one commit, ba40188, on branch base0814):
+- `apply_tied_targets` gained a `require_positive: bool` parameter.
+- The `RankStat::Happy` (Immigration) call site passes `false`.
+- The `RankStat::Discontent` call site passes `true` (unchanged behavior).
+- New regression test:
+  `events::tests::immigration_grants_population_to_both_players_tied_at_zero_happy_faces`.
+No other files touched. Two temporary debug probes used during
+investigation (`TMPDEBUG_LEGAL` in `src/bin/replaystats.rs`, a
+`workers_free` field added to `replay_common.rs`'s existing APPLY_ONE ENTRY
+eprintln, and `TMPDEBUG_STRENGTH`/`TMPDEBUG_TIED` in `src/events.rs`) were
+all added, used, and reverted before the commit -- confirmed by
+`git diff --stat 791150f -- rust/` showing only `events.rs`, and that diff
+containing neither `TMPDEBUG_LEGAL` nor `TMPDEBUG_STRENGTH` nor
+`TMPDEBUG_TIED`.

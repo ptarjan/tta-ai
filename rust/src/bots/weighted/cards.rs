@@ -402,7 +402,39 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
             // measured disagreement). `WeightKey::FreeCivilAction` stays
             // in the registry as a known-dead coordinate; nothing pushes it
             // anymore.
-            _ => {}
+            //
+            // BUG, found by turning `clippy::wildcard_enum_match_arm` on
+            // (this arm used to be a bare `_ => {}`, which is exactly what
+            // let this go unnoticed): every EventBlock-carrying variant --
+            // `Gain`, `Lose`, `AllPlayers`, `PlayerWithLeastCulture`,
+            // `PlayerWithMostCulture`, `PlayersWithMostDiscontentWorkers`,
+            // `PlayersWithMostHappyFaces`, `StrongestPlayer(s)`,
+            // `WeakestPlayer(s)`, `Condition`, `FinalScoring`,
+            // `LastRoundSubstitute`, `TakeFromOpponent` -- falls through to
+            // this same no-op arm, and Event cards print NOTHING else
+            // (`science_cost`/`resource_cost`/`effects` are all zero for
+            // every one of them; their whole behaviour lives in `special`).
+            // Verified directly: calling `card_yields` on all 55
+            // `CardType::Event` cards in `card_table.rs` returns an EMPTY
+            // vector for every single one -- not "two cards", ALL of them.
+            // Net effect on the live bot is smaller than that count implies:
+            // `card_potential_core`'s `CardType::Event` branch prefers
+            // `event_prepare_value` (`level * culture_rate`, no `special`
+            // lookup either) whenever `w[EventBoardCredit] != 0.0`, which
+            // this file's own comments say is true on every trained
+            // champion sampled -- so the empty-`card_yields` path is only
+            // actually reached off-board (state=None) or when
+            // `EventBoardCredit` happens to hill-climb to exactly 0.0,
+            // which does happen (e.g. `wonder_value_scaled`'s `card_yields`
+            // fallback, and any off-board analysis/test caller). Left
+            // UNHANDLED rather than invented here on purpose -- pricing an
+            // event's `EventBlock` correctly needs to know WHO it targets
+            // (self/all/weakest/strongest), which `card_yields` has no
+            // access to (no `GameState`); that is `docs/RULES_SPEC.md`'s
+            // event-targeting territory, not a one-line fix. Tracked here so
+            // the next person who touches this arm sees it instead of
+            // re-swallowing it behind a wildcard.
+            Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => {}
         }
     }
 
@@ -450,7 +482,7 @@ pub fn card_choice(id: CardId) -> Option<(CardYield, CardYield)> {
             (WeightKey::FoodStock, amt as f64, YieldKind::Gain),
             (WeightKey::ResourceStock, amt as f64, YieldKind::Gain),
         )),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     })
 }
 
@@ -498,10 +530,12 @@ pub fn sum_yields(triples: &[CardYield], w: &Weights, credit: f64) -> f64 {
 // -------------------------------------------------- how much board to believe
 
 /// `_BOARD_CREDIT_KEYS`/`_board_credit_key`: the per-type offset on top of
-/// `card_board_credit` for a card whose pricing is board-aware
-/// ([`board_yields::is_swap_type`] for leader/government/wonder, plus
-/// action, plus the military-deck's Bonus class). `None` for every other
-/// type -- there is nothing to offset.
+/// `card_board_credit` for a card whose pricing is board-aware and has NO
+/// dedicated board-aware pricing function of its own (leader, plus the
+/// military-deck's Bonus class). `None` for every other type -- either there
+/// is nothing to offset, or (Government/Action/Wonder, see below) a
+/// dedicated function already owns the pricing and a second, generic offset
+/// would be dead weight.
 ///
 /// Deliberately exhaustive over every [`CardType`] variant, NOT a `match`
 /// with a trailing `_ => None` -- docs/OPEN_ITEMS.md's own account of why
@@ -518,9 +552,6 @@ pub fn board_credit_key(id: CardId) -> Option<WeightKey> {
     use CardType::*;
     match id.get().kind {
         Leader => Some(WeightKey::CardBoardLeader),
-        Government => Some(WeightKey::CardBoardGovernment),
-        Action => Some(WeightKey::CardBoardAction),
-        Wonder => Some(WeightKey::CardBoardWonder),
         Bonus => Some(WeightKey::CardBoardBonus),
 
         // No board-aware pricing concept exists in THIS table for these --
@@ -540,8 +571,30 @@ pub fn board_credit_key(id: CardId) -> Option<WeightKey> {
         // Territory was never truly part of item 2's "prices at 0.0" claim
         // despite being named alongside these five in earlier drafts of
         // this comment.
+        //
+        // Government/Action/Wonder joined this `None` bucket 2026-08-13
+        // (SIGNAUDIT.txt), moving OUT of a `Some(WeightKey::CardBoard*)`
+        // arm each used to have: `card_potential_core`'s dedicated
+        // `gov_value`/`action_value` branches and Wonder's own
+        // `board_yields::board_yields` swap-diff branch, gated on
+        // `gov_board_credit`/`action_board_credit`/`wonder_board_credit`
+        // respectively, ALREADY dispatch and unconditionally `return`
+        // before this function is ever reached for one of the three,
+        // exactly like the levelled-type and military-deck cases above --
+        // this file's own doc comment simply had not noticed the shape
+        // applied to these three as well when it was first written.
+        // `gov_board_credit`/`action_board_credit` default nonzero (1.0,
+        // "measured effective from the start"), so the two per-type keys
+        // that used to sit here (`card_board_government`/
+        // `card_board_action`) were dead on EVERY trained champion by
+        // construction; `wonder_board_credit` defaults 0.0 but is climbed
+        // away from it in practice, making `card_board_wonder` dead the
+        // same way once trained. All three retired (`WeightKey::
+        // RETIRED_KEYS`) rather than left as live-looking knobs wired to
+        // nothing.
         Farm | Mine | Lab | Temple | Library | Arena | Theater | Infantry | Cavalry | Artillery
-        | Air | SpecialTech | Tactic | Aggression | War | Pact | Territory | Event => None,
+        | Air | SpecialTech | Tactic | Aggression | War | Pact | Territory | Event | Government
+        | Action | Wonder => None,
     }
 }
 
@@ -568,6 +621,18 @@ pub fn swap_type(id: CardId) -> Option<CardType> {
 /// no units this turn realises none of) for the second. See the Python
 /// source's own extensive derivation on `_RESTRICTED_TO_FEATURE`, not
 /// reproduced here.
+///
+/// `#[allow(clippy::wildcard_enum_match_arm)]`: only two `WeightKey`
+/// variants reroute anywhere here; spelling out the rest as an explicit
+/// or-pattern would literally name the seven phase-suffixed keys
+/// `registry.rs`'s `every_weight_key_is_named_by_production_source_outside_
+/// its_own_declaration` ratchets as reachable only via `.early()`/`.late()`
+/// indirection (see that test's `PHASE_SUFFIXED_NO_LITERAL_READER` doc
+/// comment) -- a false "this is read directly now" signal for a fallback
+/// that reads nothing. Reviewed exception, not a swallowed variant: a new
+/// `WeightKey` still can't silently gain a reroute here, it just also
+/// doesn't get one, same as every other key not named above.
+#[allow(clippy::wildcard_enum_match_arm)]
 fn restricted_to_feature(key: WeightKey) -> Option<(WeightKey, RestrictedCredit)> {
     match key {
         WeightKey::ResourceDiscount => Some((WeightKey::ResourceStock, RestrictedCredit::Fixed(1.0))),
@@ -668,16 +733,53 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
     ("noAttacksBetweenParties", "rule change: alters what is legal, not what is produced"),
     ("cancelledIfPartiesAttackEachOther", "rule change: alters what is legal, not what is produced"),
     ("opponentsPayDoubleMilitaryActionsToAttackYou", "rule change: alters what is legal, not what is produced"),
-    ("wonderTakeNoExtraCivilActions", "rule change: alters what is legal, not what is produced"),
-    ("revolutionUsesMilitaryActionsInstead", "rule change: alters what is legal, not what is produced"),
-    ("oncePerGameTwoPoliticalActions", "rule change: alters what is legal, not what is produced"),
+    (
+        "wonderTakeNoExtraCivilActions",
+        "discounts the take-cost of a FUTURE wonder card, not a per-turn grant this board produces -- \
+         no board-state fact tells us how many more wonders this player will take before Michelangelo \
+         leaves play, same shape as leaderTakeCivilActionDiscount below",
+    ),
+    (
+        "revolutionUsesMilitaryActionsInstead",
+        "ALREADY PRICED, not by this key: board_yields::government_routes special-cases \
+         leader_is(p, \"Maximilien Robespierre\") directly (the same name-dispatch \
+         Genghis Khan/Winston Churchill/Hammurabi's riders use) and prices the revolution \
+         route off MaLeft instead of CaLeft. Stays listed because card_yields itself still \
+         cannot express it -- this note exists so the listing does not read as a live gap",
+    ),
+    (
+        "oncePerGameTwoPoliticalActions",
+        "no Feature::PoliticalActions exists in board_yields.rs -- political actions are not a \
+         tracked evaluator dimension at all today, so this needs a real architecture extension, \
+         not a per-card number; also one-time (once per game) and conditional on already wanting \
+         two political moves the same turn, so the value is small regardless",
+    ),
     ("removeAsPoliticalActionForYellowToken", "rule change: alters what is legal, not what is produced"),
     ("removeAsPoliticalActionFreeColonize", "rule change: alters what is legal, not what is produced"),
     ("peekTopEventCardInPolitics", "rule change: alters what is legal, not what is produced"),
-    ("militaryActionCombinedPopIncreaseAndUnitBuild", "rule change: alters what is legal, not what is produced"),
+    (
+        "militaryActionCombinedPopIncreaseAndUnitBuild",
+        "saves a civil action only when the player would otherwise have spent one on Increase \
+         Population the same turn they also build a unit -- a recurring per-turn trigger with no \
+         stable board-level rate, same shape as civilActionBackOnTechDevelop below",
+    ),
+    (
+        "militaryActionAsCivilPerTurn",
+        "PRICED for Hammurabi: board_yields.rs::hammurabi (dispatched by rider_of, the same \
+         leader-name table Genghis Khan/Winston Churchill use) adds 1 Feature::CivilActions \
+         whenever the government grants >= 1 military action/turn -- see that function's doc \
+         comment for the board fact used and the documented assumption. Stays listed because \
+         card_yields (the static table this list is actually scoped to) still cannot express a \
+         per-turn conversion; the gap this list exists to track is closed elsewhere, not here",
+    ),
     ("civilActionUpgradeUrbanBuildingToTheater", "rule change: alters what is legal, not what is produced"),
-    ("militaryActionAsCivilPerTurn", "rule change: alters what is legal, not what is produced"),
-    ("civilActionBackOnTechDevelop", "rule change: alters what is legal, not what is produced"),
+    (
+        "civilActionBackOnTechDevelop",
+        "recurring per-turn trigger (Isaac Newton), but unlike Hammurabi's conversion there is no \
+         stable government-level production stat for \"how many Develop actions per turn\" -- it \
+         depends on hand contents, which techs remain available, and turns left. A genuine \
+         firing-rate question, not a board-state fact",
+    ),
     ("colonizeDiscardUpTo2MilitaryCardsForBonus", "rule change: alters what is legal, not what is produced"),
     ("colonyPermanentBonusTransfers", "rule change: alters what is legal, not what is produced"),
     ("colonyImmediateBonusApplies", "rule change: alters what is legal, not what is produced"),
@@ -698,7 +800,14 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
         "trigger: pays per future event, not on play; needs a measured firing rate",
     ),
     ("cultureOnRevolution", "trigger: pays per future event, not on play; needs a measured firing rate"),
-    ("leaderTakeCivilActionDiscount", "trigger: pays per future event, not on play; needs a measured firing rate"),
+    (
+        "leaderTakeCivilActionDiscount",
+        "discounts the take-cost of a FUTURE leader card (Hammurabi), not a per-turn grant this \
+         board produces -- no board-state fact tells us how many more leaders this player will \
+         take before Hammurabi leaves play; a genuine future-behaviour rate, would need self-play \
+         instrumentation, not a snapshot query (contrast militaryActionAsCivilPerTurn above, \
+         Hammurabi's OTHER effect, which IS a stable per-turn board fact and is now priced)",
+    ),
     ("comboFoodDiscount", "trigger: pays per future event, not on play; needs a measured firing rate"),
     ("comboResourceDiscount", "trigger: pays per future event, not on play; needs a measured firing rate"),
     ("theaterTechScienceDiscount", "trigger: pays per future event, not on play; needs a measured firing rate"),
@@ -756,6 +865,40 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
     ("B", "addressing: names who an event or pact side applies to, not a yield"),
     // 7. prose.
     ("note", "prose: a rules clarification for human readers"),
+    // 8. NEWLY AUDITED (found by `cards::tests::coverage_of_printed_effect_keys`,
+    // added 2026-08-13): implemented correctly by the rules engine
+    // (`effects.rs::apply_special`/`compute`) -- the game plays these right.
+    // The 17 board-scaled entries this bucket used to list (a coefficient
+    // times a board count -- a building level, a unit-type count, a colony
+    // count) turned out, on inspection, to ALREADY be priced: every one of
+    // their carrier cards is a Leader or a Wonder (`board_yields::
+    // is_swap_type`), `apply_special` folds the variant straight into
+    // `Stats.culture`/`.science`/`.strength`/`.resources`/`.happy` inside
+    // `effects::compute`, and `board_yields::board_yields`'s generic swap
+    // diff (`delta_triples` over `STATS_FEATURES`) reads exactly those
+    // `Stats` fields before/after the swap -- so the board-scaled coefficient
+    // was already reaching `Feature::CultureRate`/`ScienceRate`/`Strength`/
+    // `ResourceRate`/`HappyMargin` with no bespoke rider, the same way a
+    // leader's flat printed `effects.culture` does. Confirmed empirically
+    // (2026-08-13): a fresh 2p game, player 0 given 3 theater workers,
+    // `board_yields(J. S. Bach)` returns `[(CultureRate, 3.0, Gain), ...]`
+    // before any code in this bucket was touched. Moved to
+    // `PRICED_ELSEWHERE` below, one entry per key, each citing the exact
+    // `apply_special` arm and the scaling test that locks the board-scaling
+    // in (`board_yields.rs`'s own test module -- NOT spelled with the
+    // literal cfg-test attribute text here: `registry.rs`'s
+    // `production_source_excluding` does a naive substring cut on that
+    // exact token, and a comment merely MENTIONING it earlier in this file
+    // than the real attribute would hide every real reader after it).
+    ("cannotPlayAggressionOrWar", "rule change: alters what is legal, not what is produced (Mahatma Gandhi)"),
+    (
+        "popIncreaseFoodDiscount",
+        "trigger: pays per future Increase Population action, not on play; needs a measured firing rate, same shape as the other trigger-bucket entries above (Moses)",
+    ),
+    (
+        "takeCivilActionDiscountIfLeaderReplacedThisTurn",
+        "discounts the take-cost of a FUTURE leader card conditionally (must replace a leader the same turn), not a per-turn grant this board produces -- same shape as leaderTakeCivilActionDiscount above (Taj Mahal)",
+    ),
 ];
 
 /// `UNPRICED_VALUES`: the gap one level down from [`DELIBERATELY_UNPRICED`] --
@@ -859,7 +1002,12 @@ fn feature_key(f: board_yields::Feature) -> WeightKey {
 /// emits the RATE/UNIT/TERRITORY/BONUS distinctions [`sum_yields`]'s `credit`
 /// argument exists to price -- that vocabulary belongs to the static table
 /// only), so this needs no `credit` parameter of its own.
-fn sum_board_triples(triples: &[board_yields::Triple], w: &Weights) -> f64 {
+// `pub`, not private: `bin/leadersign.rs` (the LEADERSIGN investigation) is a
+// separate binary crate and calls this directly so its printed "raw diff" is
+// provably the exact same number `card_potential` scales, not a
+// hand-reimplemented copy that could silently drift from this function and
+// hide the very bug it exists to show.
+pub fn sum_board_triples(triples: &[board_yields::Triple], w: &Weights) -> f64 {
     let mut total = 0.0;
     for &(feat, amt, kind) in triples {
         let mut wk = w.get(feature_key(feat));
@@ -1463,7 +1611,7 @@ pub fn pact_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Opt
     for &sp in id.get().special {
         let block = match sp {
             Special::BothPlayers(b) | Special::A(b) | Special::B(b) => b,
-            _ => continue,
+            Special::AllPlayers(_) | Special::BestTheaterDoubleCulture | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => continue,
         };
         let mut v = 0.0;
         v += f64::from(block.culture) * yield_marginal(WeightKey::CultureRate, state, idx, w, late);
@@ -1682,17 +1830,23 @@ fn card_potential_core(
             // positioned to take through a dedicated board-aware function
             // (`tech_value`/`gov_value`/`action_value`) before ever falling
             // to the generic `card_board_credit` + `board_credit_key` path
-            // below. A wonder on the row had no such dedicated gate at all --
-            // `card_board_wonder` only ever fires through the generic
-            // fallback, and both it and `card_board_credit` default 0.0, so
-            // a row wonder was priced at exactly nothing by default while
-            // tech/gov/action (seeded at 1.0) were not. There is no bespoke
+            // below. A wonder on the row had no such dedicated gate at all
+            // when this branch was added -- there is no bespoke
             // `wonder_value` to write: a wonder's board price already IS the
             // swap diff [`board_yields::board_yields`] computes (the same
             // function `wonder_potential`'s in-progress case and the generic
             // fallback below both use) -- what changes here is only that a
             // dedicated weight gates it, so the league can price a row
-            // wonder independently of `card_board_credit`/`card_board_wonder`.
+            // wonder independently of `card_board_credit`.
+            //
+            // `card_board_wonder`, the per-type offset this branch used to
+            // compete with through the generic fallback below, was retired
+            // 2026-08-13 (SIGNAUDIT.txt): this branch `return`s
+            // unconditionally whenever `wb != 0.0` and `board_yields`
+            // succeeds, which is every trained champion sampled (`wb`
+            // climbs away from its 0.0 default), so the per-type offset was
+            // a live-looking knob wired to nothing rather than a genuine
+            // second pricing path.
             let wb = w.get(WeightKey::WonderBoardCredit);
             if wb != 0.0 {
                 if let Some(swap) = board_yields::board_yields(id, b) {
@@ -1770,14 +1924,41 @@ fn card_potential_core(
 
 // --------------------------------------------------------------- hand terms
 
-/// `_swap_slot`: the single-slot class `id` is being priced as a diff for, or
-/// `None`. `None` for an ordinary card, and also for a leader/government
-/// when its board credit is 0.0 -- then [`card_potential`] returned the
-/// static-table value, which is not a replacement and must not be collapsed.
+/// `_swap_slot`: the single-slot class `id` is being priced BOARD-AWARE for
+/// (Leader or Government -- [`board_yields::is_single_slot`]), or `None`.
+/// `None` for an ordinary card, and also for a leader/government when
+/// [`card_potential`] would return the static-table value instead (which is
+/// not a replacement and must not be collapsed to "best of slot").
+///
+/// The two single-slot classes reach board-aware pricing through DIFFERENT
+/// routes in `card_potential_core`'s dispatch, so each needs its own
+/// condition here rather than one shared formula:
+///
+/// * Leader has no dedicated top-level branch -- the generic swap-diff path
+///   (`card_board_credit + board_credit_key(id)`, [`card_board_credit_keys`]
+///   in `eval.rs` is what gates its SIGN) is the only board-aware channel it
+///   has.
+/// * Government has ONE ([`gov_value`], gated on [`WeightKey::
+///   GovBoardCredit`]) that intercepts first whenever `gov_board_credit !=
+///   0.0` -- true on every trained champion sampled, since that credit
+///   defaults nonzero -- and falls back to the SAME generic swap-diff path
+///   Leader uses only when `gov_board_credit == 0.0`. `card_board_government`
+///   used to be this fallback's per-type offset; it was retired 2026-08-13
+///   (SIGNAUDIT.txt) for being permanently shadowed by `gov_value`, so the
+///   fallback's condition is `card_board_credit != 0.0` alone now.
 pub fn swap_slot(id: CardId, w: &Weights) -> Option<CardType> {
     let typ = swap_type(id)?;
-    let key = board_credit_key(id).expect("a single-slot type always has a board credit key");
-    if w.get(WeightKey::CardBoardCredit) + w.get(key) != 0.0 { Some(typ) } else { None }
+    let priced_board_aware = match typ {
+        CardType::Leader => {
+            let key = board_credit_key(id).expect("Leader always has a board credit key");
+            w.get(WeightKey::CardBoardCredit) + w.get(key) != 0.0
+        }
+        CardType::Government => {
+            w.get(WeightKey::GovBoardCredit) != 0.0 || w.get(WeightKey::CardBoardCredit) != 0.0
+        }
+        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::SpecialTech | CardType::Wonder | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => unreachable!("swap_type only ever returns a board_yields::is_single_slot CardType"),
+    };
+    priced_board_aware.then_some(typ)
 }
 
 /// `_hand_total`: [`card_potential`] over `hand`, with the single-slot
@@ -1825,7 +2006,7 @@ pub fn hand_total(hand: &[CardId], state: &GameState, idx: u8, w: &Weights) -> f
         let i = match typ {
             CardType::Leader => 0,
             CardType::Government => 1,
-            _ => unreachable!("swap_slot only ever returns a single-slot CardType"),
+            CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::SpecialTech | CardType::Wonder | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => unreachable!("swap_slot only ever returns a single-slot CardType"),
         };
         match &mut slots[i] {
             None => slots[i] = Some((v, v)),
@@ -2284,15 +2465,21 @@ mod tests {
     // ------------------------------------------------------- board plumbing
 
     #[test]
-    fn board_credit_key_covers_exactly_the_five_board_priced_types() {
+    fn board_credit_key_covers_exactly_the_two_types_with_no_dedicated_pricer() {
         assert_eq!(board_credit_key(CardId::by_name("Julius Caesar").unwrap()), Some(WeightKey::CardBoardLeader));
-        assert_eq!(board_credit_key(CardId::by_name("Despotism").unwrap()), Some(WeightKey::CardBoardGovernment));
-        assert_eq!(board_credit_key(CardId::by_name("Reserves (I)").unwrap()), Some(WeightKey::CardBoardAction));
-        assert_eq!(board_credit_key(CardId::by_name("Colossus").unwrap()), Some(WeightKey::CardBoardWonder));
         assert_eq!(
             board_credit_key(CardId::by_name("Military Bonus (defense 2 / colonization 1)").unwrap()),
             Some(WeightKey::CardBoardBonus)
         );
+        // Government/Action/Wonder each have their OWN dedicated board-aware
+        // pricing function now (`gov_value`/`action_value`/the wonder
+        // swap-diff branch, `card_potential_core`) -- their per-type offset
+        // was retired 2026-08-13 for being permanently shadowed by it
+        // (SIGNAUDIT.txt), so `board_credit_key` answers `None` for all
+        // three, same as any other type with no per-type offset concept.
+        assert_eq!(board_credit_key(CardId::by_name("Despotism").unwrap()), None);
+        assert_eq!(board_credit_key(CardId::by_name("Reserves (I)").unwrap()), None);
+        assert_eq!(board_credit_key(CardId::by_name("Colossus").unwrap()), None);
         assert_eq!(board_credit_key(CardId::by_name("Warriors").unwrap()), None);
     }
 
@@ -2312,7 +2499,10 @@ mod tests {
     #[test]
     fn every_card_types_board_credit_key_membership_is_pinned() {
         fn expects_some(kind: CardType) -> bool {
-            matches!(kind, CardType::Leader | CardType::Government | CardType::Action | CardType::Wonder | CardType::Bonus)
+            // Government/Action/Wonder no longer expect `Some` -- see
+            // `board_credit_key_covers_exactly_the_two_types_with_no_
+            // dedicated_pricer`'s own comment.
+            matches!(kind, CardType::Leader | CardType::Bonus)
         }
         for card in crate::card_table::CARDS {
             let id = CardId::by_name(card.name).unwrap();
@@ -2427,6 +2617,671 @@ mod tests {
         for &(n, k, why) in UNPRICED_VALUES {
             assert!(why.len() > 20, "{n}/{k}: reason too short to be real: {why:?}");
         }
+    }
+
+    // ---------------------------------------- coverage: every printed key
+    //
+    // This module's top doc comment (on [`DELIBERATELY_UNPRICED`]) admits the
+    // gap: "a future coverage tool ... not written yet". The three tests
+    // above only check the TABLE's own internal shape (no duplicate keys,
+    // reasons long enough to be real sentences) -- none of them ever load a
+    // card, so a printed effect key that is neither priced nor declared has
+    // never once failed a test. This module closes that.
+    mod coverage_of_printed_effect_keys {
+        use super::*;
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+
+        // -------------------------------------------------------- I/O --
+        // Mirrors `card_table.rs::baked_table_matches_source_data`'s own
+        // `data_dir`/`load_part` (down to the `base-2015` scope assertion),
+        // not reused from there because that pair is private to that file's
+        // own test module -- duplicating six lines of I/O is cheaper than
+        // making a test-only helper `pub(crate)` just to save them.
+        fn data_dir() -> PathBuf {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../data")
+        }
+
+        fn load_part(filename: &str) -> Vec<crate::fixtures::Json> {
+            let path = data_dir().join(filename);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+            let doc = crate::fixtures::parse_json(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let scope = doc.get("scope").and_then(crate::fixtures::Json::as_str);
+            assert_eq!(
+                scope,
+                Some("base-2015"),
+                "{filename}: wrong scope -- this test, like every other reader of data/*.json, is \
+                 base-2015 only; the expansion is out of scope by standing decision"
+            );
+            doc.get("cards")
+                .and_then(crate::fixtures::Json::as_arr)
+                .unwrap_or_else(|| panic!("{filename}: no top-level \"cards\" array"))
+                .to_vec()
+        }
+
+        /// Every base-game card's name paired with the raw keys printed at
+        /// the TOP LEVEL of its `effects` object -- `gen_cards.py`'s own
+        /// vocabulary (`militaryActionAsCivilPerTurn`, not a Rust
+        /// identifier), exactly what [`DELIBERATELY_UNPRICED`] is keyed by.
+        ///
+        /// Deliberately does NOT recurse into a nested block's own keys
+        /// (`allPlayers.gain.culture`, a pact's `A.foodProduction`, an
+        /// event's `condition`, ...): those are a smaller, different
+        /// vocabulary reused inside an addressing wrapper that is itself
+        /// already one of these top-level keys (`allPlayers`/`A`/`gain`/...,
+        /// all DELIBERATELY_UNPRICED bucket 6), and auditing coverage a
+        /// level down inside those blocks is future work this test does not
+        /// attempt -- see COVERAGE.txt.
+        fn printed_effect_keys() -> Vec<(String, String)> {
+            let mut out = Vec::new();
+            for filename in ["cards_civil.json", "cards_military_actions.json", "cards_wonders_leaders.json"] {
+                for card in load_part(filename) {
+                    let name = card
+                        .get("name")
+                        .and_then(crate::fixtures::Json::as_str)
+                        .unwrap_or_else(|| panic!("{filename}: a card with no name"))
+                        .to_string();
+                    let Some(eff) = card.get("effects") else { continue };
+                    let entries = match eff {
+                        crate::fixtures::Json::Obj(entries) => entries,
+                        other @ crate::fixtures::Json::Null | other @ crate::fixtures::Json::Bool(_) | other @ crate::fixtures::Json::Num(_) | other @ crate::fixtures::Json::Str(_) | other @ crate::fixtures::Json::Arr(_) => panic!("{name}: effects is not an object: {other:?}"),
+                    };
+                    for (k, _) in entries {
+                        out.push((k.clone(), name.clone()));
+                    }
+                }
+            }
+            out
+        }
+
+        /// The residual gap one level down from [`DELIBERATELY_UNPRICED`]:
+        /// every printed key this crate genuinely prices WITHOUT a matching
+        /// entry in that table, because the pricing does not live in
+        /// `card_yields`'s own flat dispatch -- either it is a
+        /// `CardEffects` scalar field `card_yields` reads directly, a
+        /// `Special` variant a different function (`card_choice`,
+        /// `board_yields::government_plans`/`board_extra`, or a leader-NAME
+        /// rider off `board_yields::rider_of`) consumes, or a ring-fenced
+        /// reroute `action_value`/`yield_marginal` prices instead of the
+        /// static table. Exists for the same reason `DELIBERATELY_UNPRICED`
+        /// does: a hand-audited registry with the SIZE and the reason
+        /// visible, not a silent allowlist -- see
+        /// `every_priced_elsewhere_key_is_still_printed_on_a_real_card`
+        /// below for why this cannot rot the way a bare `&[&str]` could.
+        const PRICED_ELSEWHERE: &[(&str, &str)] = &[
+            ("culture", "card_yields: eff.culture -> WeightKey::CultureRate (YieldKind::Rate)"),
+            ("science", "card_yields: eff.science -> WeightKey::ScienceRate (YieldKind::Rate)"),
+            (
+                "strength",
+                "card_yields: eff.strength -> WeightKey::Strength (Gain/Unit/Territory by type; \
+                 skipped only for Tactic, whose duplicate spelling tacticBonus is declared instead)",
+            ),
+            ("happy", "card_yields: eff.happy -> WeightKey::HappyMargin"),
+            ("civilActions", "card_yields: eff.civil_actions -> WeightKey::CivilActions (every non-Government type; a government's own count is gov_value's board-aware job)"),
+            ("militaryActions", "card_yields: eff.military_actions -> WeightKey::MilitaryActions, same shape as civilActions above"),
+            ("gainCulture", "card_yields: eff.gain_culture -> WeightKey::Culture"),
+            ("gainScience", "card_yields: eff.gain_science -> WeightKey::Science"),
+            ("gainFood", "card_yields: eff.gain_food -> WeightKey::FoodStock"),
+            ("gainResources", "card_yields: eff.gain_resources -> WeightKey::ResourceStock"),
+            ("defenseBonus", "card_yields: the CardType::Bonus branch -> WeightKey::DefenseBonus (increment over the flat +1)"),
+            ("colonizationBonus", "card_yields: the CardType::Bonus branch -> WeightKey::ColonizeBonus"),
+            ("colonizeBonus", "card_yields: eff.colonize_bonus -> WeightKey::ColonizeBonus"),
+            ("blueTokens", "card_yields: eff.blue_tokens -> WeightKey::BlueFree (both the territory and general branches)"),
+            ("wonderStagesPerAction", "card_yields: eff.wonder_stages_per_action -> WeightKey::WonderStagesPerAction (increment over the base rate of 1)"),
+            ("civilHandLimit", "card_yields: eff.civil_hand_limit -> WeightKey::HandLimit"),
+            ("militaryHandLimit", "card_yields: eff.military_hand_limit -> WeightKey::HandLimit"),
+            (
+                "resourceDiscount",
+                "NOT pushed by card_yields itself (deliberately -- see this file's own comment on the \
+                 two ring-fenced coordinates), but priced by action_value through yield_marginal's \
+                 resource_discount reroute at credit 1.0",
+            ),
+            (
+                "resourcesForMilitaryUnits",
+                "same ring-fenced shape as resourceDiscount above, rerouted through restricted_resource_credit instead",
+            ),
+            (
+                "freeCivilAction",
+                "Special::FreeCivilAction: WeightKey::FreeCivilAction is a documented-dead coordinate \
+                 in card_yields, but action_value prices the same 18 action cards board-aware through \
+                 free_action_credit instead",
+            ),
+            (
+                "onBuildCulture",
+                "Special::OnBuildCulture: priced by board_yields::government_plans's has_on_build_culture check",
+            ),
+            (
+                "onBuildCulturePerTechLevelSum",
+                "Special::OnBuildCulturePerTechLevelSum: the other half of government_plans's has_on_build_culture check",
+            ),
+            ("gainFoodOrResources", "Special::GainFoodOrResources: priced by card_choice (Reserves' food-OR-resources pair)"),
+            (
+                "culturePerCivilizationWithMoreCulture",
+                "Special::CulturePerCivilizationWithMoreCulture: priced by board_yields::board_extra (Endowment for the Arts)",
+            ),
+            (
+                "resourcesForMilitaryUnitsPerStrongerCivilization",
+                "Special::ResourcesForMilitaryUnitsPerStrongerCivilization: priced by board_yields::board_extra (Wave of Nationalism / Military Build-Up)",
+            ),
+            (
+                "freePopIncreasePerTurn",
+                "Special::FreePopIncreasePerTurn: priced by board_yields::government_plans (Ocean Liners)",
+            ),
+            (
+                "cultureIfTopTwoStrength",
+                "Special::CultureIfTopTwoStrength: priced by board_yields::genghis, dispatched by board_yields::rider_of(\"Genghis Khan\")",
+            ),
+            (
+                "perTurnChoice",
+                "priced as its unconditional floor by board_yields::churchill, dispatched by \
+                 board_yields::rider_of(\"Winston Churchill\") -- the ring-fenced military option is not",
+            ),
+            ("buildDiscount", "Special::BuildDiscount: priced directly in card_yields as WeightKey::BuildDiscount (max over ages)"),
+            // 2026-08-13: the 17 "board-scaled" keys, reclassified out of
+            // DELIBERATELY_UNPRICED -- see that table's bucket 8 doc comment
+            // for how these were found to already be priced. Every carrier
+            // is a Leader or Wonder, so `board_yields::board_yields`'s
+            // GENERIC swap diff (not a bespoke rider) is what reads the
+            // `apply_special` arm's contribution to `Stats`; the citation
+            // below is the `effects.rs::apply_special` match arm that does
+            // the actual board-fact math, plus the `board_yields.rs` test
+            // that pins the scaling.
+            (
+                "culturePerTheater",
+                "Special::CulturePerTheater: apply_special adds it to Stats.culture (J. S. Bach); \
+                 board_yields's generic swap diff -> Feature::CultureRate; test \
+                 bachs_culture_per_theater_scales_with_theater_workers",
+            ),
+            (
+                "culturePerLabEqualToLevel",
+                "Special::CulturePerLabEqualToLevel: apply_special adds lab level x workers to Stats.culture \
+                 (Sid Meier); board_yields's generic swap diff -> Feature::CultureRate; test \
+                 sid_meiers_culture_and_science_per_lab_scale_with_lab_level_and_count",
+            ),
+            (
+                "sciencePerLab",
+                "Special::SciencePerLab: apply_special adds v (NEGATIVE on Sid Meier's card) x lab workers to \
+                 Stats.science; board_yields's generic swap diff -> Feature::ScienceRate (negative delta); test \
+                 sid_meiers_culture_and_science_per_lab_scale_with_lab_level_and_count",
+            ),
+            (
+                "culturePerLibraryTheaterPair",
+                "Special::CulturePerLibraryTheaterPair: apply_special adds v x min(library, theater) workers to \
+                 Stats.culture (William Shakespeare); board_yields's generic swap diff -> Feature::CultureRate; \
+                 test shakespeares_culture_scales_with_matched_library_theater_pairs",
+            ),
+            (
+                "culturePerHappyFromTemplesTheatersWonders",
+                "Special::CulturePerHappyFromTemplesTheatersWonders: apply_special adds v x (temple/theater/wonder \
+                 happy) to Stats.culture (Michelangelo); board_yields's generic swap diff -> Feature::CultureRate; \
+                 test michelangelos_culture_scales_with_temple_theater_wonder_happy",
+            ),
+            (
+                "bestTheaterDoubleCulture",
+                "Special::BestTheaterDoubleCulture: apply_special adds the best staffed theater's own printed \
+                 culture again to Stats.culture (Charlie Chaplin); board_yields's generic swap diff -> \
+                 Feature::CultureRate; test chaplins_culture_scales_with_the_best_theaters_level",
+            ),
+            (
+                "sciencePerBestLabOrLibraryLevel",
+                "Special::SciencePerBestLabOrLibraryLevel: apply_special adds the best staffed lab-or-library's \
+                 level to Stats.science (Leonardo da Vinci / Isaac Newton / Albert Einstein); board_yields's \
+                 generic swap diff -> Feature::ScienceRate; test \
+                 leonardos_science_scales_with_the_best_lab_or_library_level",
+            ),
+            (
+                "resourcesPerLabEqualToLevel",
+                "Special::ResourcesPerLabEqualToLevel: apply_special adds lab level x workers to Stats.resources \
+                 (Bill Gates); board_yields's generic swap diff -> Feature::ResourceRate; test \
+                 bill_gatess_resources_scale_with_lab_level_and_count",
+            ),
+            (
+                "doubleBestMine",
+                "Special::DoubleBestMine: apply_special adds the best staffed mine's own printed resources again \
+                 to Stats.resources (Transcontinental Railroad, a Wonder); board_yields's generic swap diff -> \
+                 Feature::ResourceRate; test transcontinental_railroads_resources_scale_with_the_best_mines_level",
+            ),
+            (
+                "extraHappyPerHappySource",
+                "Special::ExtraHappyPerHappySource: apply_special adds v x happy_source_count(p) to Stats.happy \
+                 (St. Peter's Basilica, a Wonder); board_yields's generic swap diff -> Feature::HappyMargin; test \
+                 st_peters_happy_scales_with_distinct_happy_producing_sources",
+            ),
+            (
+                "strengthPerInfantry",
+                "Special::StrengthPerInfantry: apply_special adds v x infantry workers to Stats.strength \
+                 (Great Wall, a Wonder); board_yields's generic swap diff -> Feature::Strength; test \
+                 great_walls_strength_scales_with_infantry_and_artillery_counts",
+            ),
+            (
+                "strengthPerArtillery",
+                "Special::StrengthPerArtillery: apply_special adds v x artillery workers to Stats.strength \
+                 (Great Wall, a Wonder); board_yields's generic swap diff -> Feature::Strength; test \
+                 great_walls_strength_scales_with_infantry_and_artillery_counts",
+            ),
+            (
+                "strengthPerMilitaryUnit",
+                "Special::StrengthPerMilitaryUnit: apply_special adds v x every military-unit worker to \
+                 Stats.strength (Alexander the Great); board_yields's generic swap diff -> Feature::Strength; \
+                 test alexanders_strength_scales_with_total_military_units",
+            ),
+            (
+                "strengthPerUnitType",
+                "Special::StrengthPerUnitType: apply_special adds v x distinct unit TYPES present (not per \
+                 worker) to Stats.strength (Napoleon Bonaparte); board_yields's generic swap diff -> \
+                 Feature::Strength; test napoleons_strength_scales_with_distinct_unit_types",
+            ),
+            (
+                "strengthPerTempleOrGovernmentHappy",
+                "Special::StrengthPerTempleOrGovernmentHappy: apply_special adds v x (temple happy + government \
+                 happy) to Stats.strength (Joan of Arc); board_yields's generic swap diff -> Feature::Strength; \
+                 test joan_of_arcs_strength_scales_with_temple_and_government_happy",
+            ),
+            (
+                "cultureFirstColony",
+                "Special::CultureFirstColony: apply_special adds v to Stats.culture whenever p.colonies is \
+                 non-empty (James Cook); board_yields's generic swap diff -> Feature::CultureRate; test \
+                 james_cooks_culture_fires_once_a_colony_is_held",
+            ),
+            (
+                "culturePerAdditionalColony",
+                "Special::CulturePerAdditionalColony: apply_special adds v x colonies-held-beyond-the-first to \
+                 Stats.culture (James Cook); board_yields's generic swap diff -> Feature::CultureRate; test \
+                 james_cooks_culture_scales_with_colonies_beyond_the_first",
+            ),
+        ];
+
+        /// Whether `key` is accounted for by SOME registry this test knows
+        /// about -- [`DELIBERATELY_UNPRICED`] or [`PRICED_ELSEWHERE`] above.
+        /// Not a claim that every OTHER key not in either is a real gap by
+        /// construction -- that is exactly what
+        /// `every_printed_card_effect_is_either_priced_or_explicitly_declared_unpriced`
+        /// below checks, over the real data.
+        pub(super) fn is_accounted_for(key: &str) -> bool {
+            DELIBERATELY_UNPRICED.iter().any(|&(k, _)| k == key) || PRICED_ELSEWHERE.iter().any(|&(k, _)| k == key)
+        }
+
+        /// The forward direction: every printed `effects.<key>` on a real
+        /// base-game card must be priced or declared. This is the assertion
+        /// this whole module exists to make -- everything else here is
+        /// plumbing or the reverse-direction anti-rot check below.
+        #[test]
+        fn every_printed_card_effect_is_either_priced_or_explicitly_declared_unpriced() {
+            // Group by key so one failure message names every card a
+            // missing key appears on, not just the first -- a key present on
+            // three cards and missing from both registries is one gap, not
+            // three separate failures to read past.
+            let mut by_key: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+            let keys = printed_effect_keys();
+            for (k, name) in &keys {
+                by_key.entry(k.as_str()).or_default().push(name.as_str());
+            }
+            let mut missing: Vec<String> = Vec::new();
+            for (key, cards) in &by_key {
+                if !is_accounted_for(key) {
+                    missing.push(format!("{key:?} (on: {})", cards.join(", ")));
+                }
+            }
+            assert!(
+                missing.is_empty(),
+                "printed effect key(s) neither priced (see PRICED_ELSEWHERE above) nor declared \
+                 (see DELIBERATELY_UNPRICED) -- add a real, specific reason to one of the two, or \
+                 price it:\n  {}",
+                missing.join("\n  ")
+            );
+        }
+
+        /// The reverse direction the task calls for: a key can rot OFF
+        /// [`DELIBERATELY_UNPRICED`] just as easily as a real gap can rot
+        /// into existence -- a typo, a renamed key after `data/*.json` is
+        /// edited, an entry for an effect that no longer exists on any card.
+        /// Nothing previously caught that either.
+        #[test]
+        fn every_deliberately_unpriced_key_still_prints_on_a_real_card() {
+            let keys = printed_effect_keys();
+            let printed: std::collections::BTreeSet<&str> = keys.iter().map(|(k, _)| k.as_str()).collect();
+            let mut stale: Vec<&str> = Vec::new();
+            for &(key, _) in DELIBERATELY_UNPRICED {
+                if !printed.contains(key) {
+                    stale.push(key);
+                }
+            }
+            assert!(
+                stale.is_empty(),
+                "DELIBERATELY_UNPRICED entry(ies) that print on no real base-game card -- typo, \
+                 renamed key, or a genuinely dead entry that should be deleted: {stale:?}"
+            );
+        }
+
+        /// The same anti-rot check for [`PRICED_ELSEWHERE`] above: a stale
+        /// entry there would be worse than a stale `DELIBERATELY_UNPRICED`
+        /// entry, since it would silently CLEAR a real gap that
+        /// `is_accounted_for` would otherwise have caught.
+        #[test]
+        fn every_priced_elsewhere_key_still_prints_on_a_real_card() {
+            let keys = printed_effect_keys();
+            let printed: std::collections::BTreeSet<&str> = keys.iter().map(|(k, _)| k.as_str()).collect();
+            let mut stale: Vec<&str> = Vec::new();
+            for &(key, _) in PRICED_ELSEWHERE {
+                if !printed.contains(key) {
+                    stale.push(key);
+                }
+            }
+            assert!(stale.is_empty(), "PRICED_ELSEWHERE entry(ies) that print on no real base-game card: {stale:?}");
+        }
+
+        /// [`PRICED_ELSEWHERE`] and [`DELIBERATELY_UNPRICED`] are meant to
+        /// partition the printed vocabulary between them -- a key in BOTH
+        /// would mean one of the two reasons is a lie (either it is priced,
+        /// or the table above says it deliberately is not; not both).
+        #[test]
+        fn priced_elsewhere_and_deliberately_unpriced_share_no_key() {
+            let mut overlap: Vec<&str> = Vec::new();
+            for &(key, _) in PRICED_ELSEWHERE {
+                if DELIBERATELY_UNPRICED.iter().any(|&(k, _)| k == key) {
+                    overlap.push(key);
+                }
+            }
+            assert!(overlap.is_empty(), "key(s) claimed as both priced and deliberately unpriced: {overlap:?}");
+        }
+
+        // ------------------------ coverage: territory nested blocks (§11.5)
+        //
+        // The forward check above is scoped to the TOP LEVEL of a card's
+        // `effects` object only -- `printed_effect_keys` reads
+        // `card.get("effects")` and `continue`s past every card that has
+        // none, and a territory card's `effects` object IS `{}` in the
+        // source data (everything it prints lives in two SIBLING top-level
+        // keys instead, `immediateEffects`/`permanentEffects`, per
+        // `cards::ImmediateEffects`'s own doc comment). So all 12 base-game
+        // territory cards were silently skipped by every test above -- a
+        // second, genuine gap in the CHECK itself, found while extending
+        // this module, not a gap in the pricing (`card_yields`'s
+        // `CardType::Territory` branch, above in this file, already reads
+        // every one of these ten keys correctly). Closed the same way as
+        // the top-level check: gather every printed key from the two
+        // blocks, assert each is in a dedicated registry.
+        fn printed_territory_effect_keys() -> Vec<(String, String)> {
+            let mut out = Vec::new();
+            for card in load_part("cards_military_actions.json") {
+                if card.get("type").and_then(crate::fixtures::Json::as_str) != Some("territory") {
+                    continue;
+                }
+                let name = card
+                    .get("name")
+                    .and_then(crate::fixtures::Json::as_str)
+                    .unwrap_or_else(|| panic!("a territory card with no name"))
+                    .to_string();
+                for block in ["immediateEffects", "permanentEffects"] {
+                    let Some(obj) = card.get(block) else { continue };
+                    let entries = match obj {
+                        crate::fixtures::Json::Obj(entries) => entries,
+                        other @ crate::fixtures::Json::Null | other @ crate::fixtures::Json::Bool(_) | other @ crate::fixtures::Json::Num(_) | other @ crate::fixtures::Json::Str(_) | other @ crate::fixtures::Json::Arr(_) => panic!("{name}.{block} is not an object: {other:?}"),
+                    };
+                    for (k, _) in entries {
+                        out.push((format!("{block}.{k}"), name.clone()));
+                    }
+                }
+            }
+            out
+        }
+
+        /// Every `immediateEffects`/`permanentEffects` key the 12 base-game
+        /// territory cards print, paired with the exact `card_yields` line
+        /// (this file, the `CardType::Territory` branch above) that reads
+        /// it. Both blocks fuse into `CardEffects`/`ImmediateEffects` at
+        /// parse time (`card_table.rs::baked_table_matches_source_data` is
+        /// the exhaustive PARSER-side guarantee -- an unrecognized key
+        /// there is a hard `panic!`, not a silent drop); this table is the
+        /// PRICING-side counterpart `PRICED_ELSEWHERE` is above, kept
+        /// separate rather than merged into it because `food`/`resources`/
+        /// `culture`/`science` already name DIFFERENT `CardEffects` fields
+        /// at the bare top level (`gainFood`, `culture`, ...) -- reusing
+        /// the same short keys here would silently satisfy the top-level
+        /// check for a key that was never actually printed at the top
+        /// level, the exact collision this module exists to prevent.
+        const TERRITORY_PRICED_ELSEWHERE: &[(&str, &str)] = &[
+            ("permanentEffects.strength", "card_yields: CardType::Territory branch -> WeightKey::Strength"),
+            ("permanentEffects.happiness", "card_yields: CardType::Territory branch -> WeightKey::HappyMargin"),
+            ("permanentEffects.yellowTokens", "card_yields: CardType::Territory branch -> WeightKey::YellowBank"),
+            ("permanentEffects.blueTokens", "card_yields: CardType::Territory branch -> WeightKey::BlueFree"),
+            (
+                "immediateEffects.food",
+                "card_yields: CardType::Territory branch -> WeightKey::FoodStock, off card.immediate_effects",
+            ),
+            (
+                "immediateEffects.resources",
+                "card_yields: CardType::Territory branch -> WeightKey::ResourceStock, off card.immediate_effects",
+            ),
+            (
+                "immediateEffects.culture",
+                "card_yields: CardType::Territory branch -> WeightKey::Culture, off card.immediate_effects",
+            ),
+            (
+                "immediateEffects.science",
+                "card_yields: CardType::Territory branch -> WeightKey::Science, off card.immediate_effects",
+            ),
+            (
+                "immediateEffects.population",
+                "card_yields: CardType::Territory branch -> WeightKey::FreeWorkers, off card.immediate_effects",
+            ),
+            (
+                "immediateEffects.drawMilitaryCards",
+                "card_yields: CardType::Territory branch -> WeightKey::HandMilitary, off card.immediate_effects",
+            ),
+        ];
+
+        /// The forward direction, territory flavor: every printed
+        /// `immediateEffects`/`permanentEffects` key on a real base-game
+        /// territory card must be in [`TERRITORY_PRICED_ELSEWHERE`]. Unlike
+        /// the top-level check, there is no "deliberately unpriced" bucket
+        /// here yet -- all ten keys the 12 live territory cards print are
+        /// genuinely priced today, so a missing key means either
+        /// `card_yields` needs a new line or this table needs a new entry,
+        /// never "add a reason and move on".
+        #[test]
+        fn every_printed_territory_block_key_is_priced() {
+            let mut by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (k, name) in printed_territory_effect_keys() {
+                by_key.entry(k).or_default().push(name);
+            }
+            let mut missing: Vec<String> = Vec::new();
+            for (key, cards) in &by_key {
+                if !TERRITORY_PRICED_ELSEWHERE.iter().any(|&(k, _)| k == key) {
+                    missing.push(format!("{key:?} (on: {})", cards.join(", ")));
+                }
+            }
+            assert!(
+                missing.is_empty(),
+                "territory immediateEffects/permanentEffects key(s) not in TERRITORY_PRICED_ELSEWHERE -- \
+                 either card_yields does not price it (a real gap -- price it) or the table just needs a \
+                 new entry citing where it is priced:\n  {}",
+                missing.join("\n  ")
+            );
+        }
+
+        /// The anti-rot reverse direction, same reasoning as
+        /// `every_priced_elsewhere_key_still_prints_on_a_real_card` above.
+        #[test]
+        fn every_territory_priced_elsewhere_key_still_prints_on_a_real_card() {
+            let printed: std::collections::BTreeSet<String> =
+                printed_territory_effect_keys().into_iter().map(|(k, _)| k).collect();
+            let mut stale: Vec<&str> = Vec::new();
+            for &(key, _) in TERRITORY_PRICED_ELSEWHERE {
+                if !printed.contains(key) {
+                    stale.push(key);
+                }
+            }
+            assert!(
+                stale.is_empty(),
+                "TERRITORY_PRICED_ELSEWHERE entry(ies) that print on no real territory card: {stale:?}"
+            );
+        }
+    }
+
+    // ------------------- coverage: exhaustive over the Special enum itself
+    //
+    // Everything above is keyed by the printed JSON string, so it only ever
+    // audits a key once some real base-game card prints it -- exactly the
+    // scope `DELIBERATELY_UNPRICED`/`PRICED_ELSEWHERE` have always had. This
+    // is the STRUCTURALLY stronger form the task that added this module
+    // asked for: an exhaustive `match` over `Special` ITSELF, with NO
+    // wildcard arm, so a variant added to the enum in `card_table.rs` is a
+    // COMPILE ERROR here -- before any card ever prints it, not after.
+    // `Special`'s own doc comment guarantees the pairing this relies on:
+    // "one [variant] per distinct one-off effect key" (`gen_cards.py`, now
+    // deleted, generated exactly one variant per printed JSON key, and
+    // `card_table.rs::baked_table_matches_source_data`'s own parser dispatch
+    // is still the living proof -- every arm below is transcribed from that
+    // match, not guessed).
+    //
+    // Deliberately returns the JSON key rather than a `Priced`/`Unpriced`
+    // reason: duplicating ~90 reasons a second time would itself rot (two
+    // registries holding "the same fact," the bug class this whole file
+    // exists to close). Instead this feeds the SAME `is_accounted_for` the
+    // string-keyed checks above use, so there is exactly one place that
+    // knows why each key is or isn't priced.
+    fn special_effect_key(sp: &Special) -> &'static str {
+        match sp {
+            Special::A(_) => "A",
+            Special::AllPlayers(_) => "allPlayers",
+            Special::B(_) => "B",
+            Special::BestTheaterDoubleCulture => "bestTheaterDoubleCulture",
+            Special::BothPlayers(_) => "bothPlayers",
+            Special::BuildDiscount(_) => "buildDiscount",
+            Special::CancelledIfPartiesAttackEachOther => "cancelledIfPartiesAttackEachOther",
+            Special::CannotPlayAggressionOrWar => "cannotPlayAggressionOrWar",
+            Special::CivilActionBackOnTechDevelop(_) => "civilActionBackOnTechDevelop",
+            Special::CivilActionUpgradeUrbanBuildingToTheater => "civilActionUpgradeUrbanBuildingToTheater",
+            Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) => "colonizeDiscardUpTo2MilitaryCardsForBonus",
+            Special::ColonyImmediateBonusApplies => "colonyImmediateBonusApplies",
+            Special::ColonyPermanentBonusTransfers => "colonyPermanentBonusTransfers",
+            Special::ComboFoodDiscount(_) => "comboFoodDiscount",
+            Special::ComboResourceDiscount(_) => "comboResourceDiscount",
+            Special::Condition(_) => "condition",
+            Special::CultureFirstColony(_) => "cultureFirstColony",
+            Special::CultureIfTopTwoStrength(_) => "cultureIfTopTwoStrength",
+            Special::CultureOnLeaveEqualToLabResourceProduction => "cultureOnLeaveEqualToLabResourceProduction",
+            Special::CultureOnRevolution(_) => "cultureOnRevolution",
+            Special::CultureOnTechDevelop(_) => "cultureOnTechDevelop",
+            Special::CulturePerAdditionalColony(_) => "culturePerAdditionalColony",
+            Special::CulturePerCivilizationWithMoreCulture(_) => "culturePerCivilizationWithMoreCulture",
+            Special::CulturePerHappyFromTemplesTheatersWonders(_) => "culturePerHappyFromTemplesTheatersWonders",
+            Special::CulturePerLabEqualToLevel => "culturePerLabEqualToLevel",
+            Special::CulturePerLibraryTheaterPair(_) => "culturePerLibraryTheaterPair",
+            Special::CulturePerTheater(_) => "culturePerTheater",
+            Special::DecreasePopulation(_) => "decreasePopulation",
+            Special::DestroyUrbanBuildings(_) => "destroyUrbanBuildings",
+            Special::DoubleBestMine => "doubleBestMine",
+            Special::DoublesTacticBonusOfOneArmy => "doublesTacticBonusOfOneArmy",
+            Special::ExtraHappyPerHappySource(_) => "extraHappyPerHappySource",
+            // Shares its JSON key with `AllPlayers`: the SAME printed
+            // `effects.allPlayers` dict becomes `FinalScoring` instead of
+            // `AllPlayers` when the card also prints `scoringEvent: true`
+            // (`card_table.rs`'s parser, right before this match's own
+            // source -- see `FinalScoringBlock`'s doc comment). Mutually
+            // exclusive per card, so `is_accounted_for("allPlayers")`
+            // covering both is correct, not a collision.
+            Special::FinalScoring(_) => "allPlayers",
+            Special::FreeCivilAction(_) => "freeCivilAction",
+            Special::FreePopIncreasePerTurn => "freePopIncreasePerTurn",
+            Special::Gain(_) => "gain",
+            Special::GainCulturePerLevelOfRemovedCard(_) => "gainCulturePerLevelOfRemovedCard",
+            Special::GainFoodOrResources(_) => "gainFoodOrResources",
+            Special::GainResources(_) => "gainResources",
+            Special::InfantryCountsAsCavalryForTactics => "infantryCountsAsCavalryForTactics",
+            Special::LastRoundSubstitute(_) => "lastRoundSubstitute",
+            Special::LeaderTakeCivilActionDiscount(_) => "leaderTakeCivilActionDiscount",
+            Special::LibraryDiscountsIfTheater => "libraryDiscountsIfTheater",
+            Special::Lose(_) => "lose",
+            Special::MilitaryActionAsCivilPerTurn(_) => "militaryActionAsCivilPerTurn",
+            Special::MilitaryActionCombinedPopIncreaseAndUnitBuild => "militaryActionCombinedPopIncreaseAndUnitBuild",
+            Special::NoAttacksBetweenParties => "noAttacksBetweenParties",
+            Special::OnAttackBetweenParties(_) => "onAttackBetweenParties",
+            Special::OnBuildCulture(_) => "onBuildCulture",
+            Special::OnBuildCulturePerTechLevelSum => "onBuildCulturePerTechLevelSum",
+            Special::OnReplacePutUnderCompletedWonderHappy(_) => "onReplacePutUnderCompletedWonderHappy",
+            Special::OncePerGameTwoPoliticalActions => "oncePerGameTwoPoliticalActions",
+            Special::OpponentDecreasesPopulation(_) => "opponentDecreasesPopulation",
+            Special::OpponentsPayDoubleMilitaryActionsToAttackYou => "opponentsPayDoubleMilitaryActionsToAttackYou",
+            Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost => {
+                "orTakesSpecialTechnologiesOfSameTotalScienceCost"
+            }
+            Special::PeekTopEventCardInPolitics => "peekTopEventCardInPolitics",
+            Special::PerTurnChoice => "perTurnChoice",
+            Special::PlayerWithLeastCulture(_) => "playerWithLeastCulture",
+            Special::PlayerWithMostCulture(_) => "playerWithMostCulture",
+            Special::PlayersWithMostDiscontentWorkers(_) => "playersWithMostDiscontentWorkers",
+            Special::PlayersWithMostHappyFaces(_) => "playersWithMostHappyFaces",
+            Special::PopIncreaseFoodDiscount(_) => "popIncreaseFoodDiscount",
+            Special::RemoveAsPoliticalActionForYellowToken(_) => "removeAsPoliticalActionForYellowToken",
+            Special::RemoveAsPoliticalActionFreeColonize => "removeAsPoliticalActionFreeColonize",
+            Special::RemoveFromGame => "removeFromGame",
+            Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) => "resourceOnMilitaryUnitBuildOrUpgrade",
+            Special::ResourceOnTechDevelop(_) => "resourceOnTechDevelop",
+            Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) => {
+                "resourcesForMilitaryUnitsPerStrongerCivilization"
+            }
+            Special::ResourcesPerLabEqualToLevel => "resourcesPerLabEqualToLevel",
+            Special::RevolutionUsesMilitaryActionsInstead => "revolutionUsesMilitaryActionsInstead",
+            Special::ScienceOnTechCardTake(_) => "scienceOnTechCardTake",
+            Special::SciencePerBestLabOrLibraryLevel => "sciencePerBestLabOrLibraryLevel",
+            Special::SciencePerLab(_) => "sciencePerLab",
+            Special::StealColony(_) => "stealColony",
+            Special::StrengthPerArtillery(_) => "strengthPerArtillery",
+            Special::StrengthPerInfantry(_) => "strengthPerInfantry",
+            Special::StrengthPerMilitaryUnit(_) => "strengthPerMilitaryUnit",
+            Special::StrengthPerTempleOrGovernmentHappy(_) => "strengthPerTempleOrGovernmentHappy",
+            Special::StrengthPerUnitType(_) => "strengthPerUnitType",
+            Special::StrongestPlayer(_) => "strongestPlayer",
+            Special::StrongestPlayers(_) => "strongestPlayers",
+            Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) => {
+                "takeCivilActionDiscountIfLeaderReplacedThisTurn"
+            }
+            Special::TakeFromOpponent(_) => "takeFromOpponent",
+            Special::TheaterResourceDiscountIfLibrary(_) => "theaterResourceDiscountIfLibrary",
+            Special::TheaterScienceDiscountIfLibrary(_) => "theaterScienceDiscountIfLibrary",
+            Special::TheaterTechScienceDiscount(_) => "theaterTechScienceDiscount",
+            Special::VictorTakesCulture => "victorTakesCulture",
+            Special::VictorTakesScienceUpTo(_) => "victorTakesScienceUpTo",
+            Special::VictorTakesYellowTokens => "victorTakesYellowTokens",
+            Special::WeakestPlayer(_) => "weakestPlayer",
+            Special::WeakestPlayers(_) => "weakestPlayers",
+            Special::WonderTakeNoExtraCivilActions => "wonderTakeNoExtraCivilActions",
+            // NO wildcard arm. A `Special` variant added to `card_table.rs`
+            // without a line added here is a compile error, full stop.
+        }
+    }
+
+    /// Every key [`special_effect_key`]'s exhaustive match can produce, for
+    /// every `Special` value actually printed on a real base-game card,
+    /// must be accounted for by [`DELIBERATELY_UNPRICED`] or
+    /// [`PRICED_ELSEWHERE`] (the same `is_accounted_for` the string-keyed
+    /// forward check uses). The exhaustiveness GUARANTEE is
+    /// `special_effect_key` itself compiling -- this test additionally
+    /// confirms the keys it can actually produce today are all registered,
+    /// closing the "the match compiles but nobody registered the key it
+    /// returns" half of the gap the string-keyed check alone would miss for
+    /// any card whose `Special` payload this session did not otherwise
+    /// exercise.
+    #[test]
+    fn every_special_value_on_a_real_card_maps_to_an_accounted_for_key() {
+        let mut missing: Vec<String> = Vec::new();
+        for card in crate::card_table::CARDS.iter() {
+            for sp in card.special {
+                let key = special_effect_key(sp);
+                if !coverage_of_printed_effect_keys::is_accounted_for(key) {
+                    missing.push(format!("{key:?} (Special variant on {})", card.name));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "Special variant(s) whose printed key is not accounted for -- add a reason to \
+             DELIBERATELY_UNPRICED or PRICED_ELSEWHERE:\n  {}",
+            missing.join("\n  ")
+        );
     }
 
     // ============================================== the valuation layer
@@ -2601,17 +3456,17 @@ mod tests {
         assert_eq!(gov_value(gov, &state, 0, &w, None), 0.0);
     }
 
-    /// `card_potential`'s early-return fallback (`card_board_credit` and its
-    /// per-type offset both 0.0) is exactly `sum_yields(card_yields(id), w,
-    /// credit)` -- the pre-valuation-layer answer, pinned directly for a
-    /// Wonder (a type none of `card_potential`'s board-dispatch branches
-    /// intercept).
+    /// `card_potential`'s early-return fallback (`card_board_credit` at its
+    /// 0.0 default, so `credit_board` nets to 0.0) is exactly
+    /// `sum_yields(card_yields(id), w, credit)` -- the pre-valuation-layer
+    /// answer, pinned directly for a Wonder. `wonder_board_credit` also sits
+    /// at its 0.0 default here, so its dedicated dispatch branch does not
+    /// intercept either -- both have to stay at 0.0 for this fallback to be
+    /// reached at all, which `Weights::default()` already gives for free.
     #[test]
     fn card_potential_falls_back_to_the_static_table_when_board_credit_is_zero() {
         let state = crate::game::new_game(2, 45);
-        let mut w = Weights::default();
-        w.set(WeightKey::CardBoardCredit, 0.0);
-        w.set(WeightKey::CardBoardWonder, 0.0);
+        let w = Weights::default();
         let id = CardId::by_name("Colossus").unwrap();
         let mut scratch = Vec::new();
         let got = card_potential(id, &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
@@ -2963,9 +3818,29 @@ mod tests {
     /// (2 resources, one military action, Warriors' own printed cost), no
     /// research and no row at all. `tactic_value` must now price that as a
     /// real, positive, discounted gain instead of the old flat 0.0.
+    ///
+    /// `age_civil` is pinned to `Age::I` (Legion's own printed age, per
+    /// `card_table.rs` -- a genuinely later, more realistic moment for this
+    /// fixture than the literal Age A deal `new_game` starts at) rather than
+    /// left at the fresh-deal default. This margin used to be comfortable at
+    /// Age A too (`potential * strength_m` = 1.90 against a build cost of
+    /// 1.30), but the earlymil structural fix (`eval::evaluate`'s
+    /// `StrengthRel` special case, `rivals::strength_marginal`'s matching
+    /// one) deliberately shrinks the EARLY-game marginal value of strength
+    /// -- correctly, that is the whole point of the fix -- which shrinks
+    /// this fixture's literal-Age-A margin to 1.26 against the same 1.30
+    /// cost, just barely negative once floating-point rounds it. That is not
+    /// a regression: at the true opening, before Legion (an Age I card) is
+    /// even in play, its reachability SHOULD price close to nothing, for
+    /// the identical reason a military unit build should not either. Pinning
+    /// the fixture to Age I keeps testing this function's actual subject
+    /// (the reach-cost discount logic) instead of accidentally re-testing
+    /// earlymil's now-corrected early-game strength discount on a fixture
+    /// that was never trying to probe it.
     #[test]
     fn tactic_value_credits_a_not_yet_formable_tactic_when_its_missing_units_tech_is_already_owned() {
         let mut state = crate::game::new_game(2, 60);
+        state.age_civil = crate::cards::Age::I;
         state.players[0].techs.get_mut(card("Warriors")).expect("starting tech").workers = 2;
         let w = Weights::default();
         let got = tactic_value(card("Legion"), &state, 0, &w);

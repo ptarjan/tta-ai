@@ -1,0 +1,13 @@
+games        200 (100 deals x 2 seats)
+players      2
+kind         weighted
+A            uprising__zero
+B            base
+mean moves   233.7
+elapsed      8.5s  (23.5 games/s)
+
+win rate     25.8%  +/- 5.7   (null 50.0%)   p = 0.0000
+             [naive +/- 6.0, rho -0.14, deff 0.89, 100 deals]
+culture      A 51.8   best other 80.6   lead -28.8 +/- 5.6
+
+verdict      reject -- uprising__zero is WORSE than base

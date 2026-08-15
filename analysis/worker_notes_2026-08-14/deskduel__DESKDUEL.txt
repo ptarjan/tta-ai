@@ -1,0 +1,173 @@
+DESKTOP CLIMB CHAMPIONS vs MINI CHAMPIONS -- direct head-to-head duel
+2026-08-14, second pass. This supersedes the earlier version of this file
+(same filename, written against older files named desk_Np.json/mini_Np.json
+at earlier climb generations -- desk gen 57406/26270/12129 vs mini gen
+44852/15861/9650). This run uses the CURRENT frozen files the coordinator
+set up for me and is the one to trust.
+
+WHY THIS RUN EXISTS
+The desktop climb is stopped; its artifacts are already copied. The climb's
+own accept signal (vs_anchor) is known-unreliable -- blind anchor veto, and
+the desktop 2p run logged 1400 accepts against only 32 vetoes. vs_anchor is
+also not comparable cross-machine because each climb carries its own
+anchor. Only a direct duel under ONE binary settles whether the desktop's
+three vectors are actually better than what the mini is running.
+
+INTERFACE (learned by reading source, not guessed)
+Read /private/tmp/base0815/rust/src/bin/arena.rs and
+/private/tmp/base0815/rust/src/arena.rs on the mini (plain local reads).
+Confirmed identical on the desktop via `arena.exe --help` (byte-for-byte
+same usage text) -- the desktop binary, despite being hand-synced/possibly
+older, implements the same CLI:
+
+  arena --a PATH --b PATH --players N --games N --seed N --threads N
+        [--kind KIND, default "weighted"]
+
+  --a is the CHALLENGER: seated in ONE seat per game, ROTATED through every
+      seat across the run (game g: A in seat g % players, deal seed
+      seed0 + g/players).
+  --b is the DEFENDER: seated in every OTHER chair, every game.
+
+This means seat-fairness is BUILT IN, not something I had to arrange:
+`--games` is a multiple of `players`, so over the whole run each vector
+sits in each seat exactly games/players times, by construction (Match::
+seats_for + play_one in rust/src/arena.rs, unit-tested by
+`the_challenger_visits_every_seat_equally`). I did not need to run mirrored
+pairs myself -- the harness already does it, and reports one paired,
+deal-clustered win-rate estimate with a proper confidence interval and a
+`verdict` gate that requires the WHOLE interval to clear the null
+(1/players), not just the point estimate.
+
+Binary used for BOTH sides of every duel (same engine, only weights
+differ): C:\Users\micro\tta-desk\rust\target\release\arena.exe
+Note this desktop binary may be older than the mini's current engine (see
+CAVEAT below) -- that's fine for A-vs-B since both sides use it, but the
+result does not automatically transfer to the mini's newer engine.
+
+FILES DUELED
+  --a (challenger) = C:\Users\micro\tta-desk\experiments\rust_champion_Np.json  (desktop's own climb output)
+  --b (defender)   = C:\Users\micro\tta-desk\bench\rust_champion_Np.json        (mini's champion, frozen copy)
+Confirmed these are genuinely different vectors, not the same file twice
+(byte sizes differ per player count, e.g. 3p: 6,620 vs 6,679 bytes).
+
+MACHINE: ssh micro@100.68.145.15 (Windows cmd.exe), 28 logical processors,
+idle. Ran arena.exe directly in the foreground over ssh (no scheduled task
+needed -- each run finished in well under the 600s tool timeout: 8-146s).
+No games run on the mini; the mini stayed free for its other workers.
+
+EXACT COMMANDS RUN (from C:\Users\micro\tta-desk\rust\target\release)
+
+  arena.exe --a C:\Users\micro\tta-desk\experiments\rust_champion_2p.json --b C:\Users\micro\tta-desk\bench\rust_champion_2p.json --players 2 --games 240 --seed 42 --threads 24
+  arena.exe --a C:\Users\micro\tta-desk\experiments\rust_champion_2p.json --b C:\Users\micro\tta-desk\bench\rust_champion_2p.json --players 2 --games 720 --seed 42 --threads 24
+  arena.exe --a C:\Users\micro\tta-desk\experiments\rust_champion_3p.json --b C:\Users\micro\tta-desk\bench\rust_champion_3p.json --players 3 --games 720 --seed 42  --threads 24
+  arena.exe --a C:\Users\micro\tta-desk\experiments\rust_champion_3p.json --b C:\Users\micro\tta-desk\bench\rust_champion_3p.json --players 3 --games 720 --seed 999 --threads 24   (reproducibility check, different seed)
+  arena.exe --a C:\Users\micro\tta-desk\experiments\rust_champion_4p.json --b C:\Users\micro\tta-desk\bench\rust_champion_4p.json --players 4 --games 720 --seed 42 --threads 24
+
+Seed = 42 primary for all three configurations (720 games each, 3x the
+240-game standard, chosen because the harness is cheap here -- 8 to 146s
+per run -- so extra precision was free). 3p was additionally re-run at
+seed 999 to check the result wasn't a fluke of one seed.
+
+RESULTS (verbatim from arena.exe; "A" = desktop vector, "B" = mini vector
+-- both report the same file stem "rust_champion_Np" as their label since
+that's the file's basename in both directories; A is always the desktop
+--a file, B always the mini --b file, per the command lines above)
+
+--- 2p, seed 42, 720 games (360 deals x 2 seats) ---
+win rate     56.6%  +/- 3.6   (null 50.0%)   p = 0.0003
+             [naive +/- 3.6, rho -0.02, deff 0.98, 360 deals]
+culture      A 90.7   best other 81.8   lead +8.9 +/- 4.2
+verdict      accept -- desktop beats mini (interval clear of the null)
+(Confirmatory smaller run at 240 games/seed 42 agreed: 59.8% +/-6.2, p=0.0016.)
+
+--- 3p, seed 42, 720 games (240 deals x 3 seats) ---
+win rate     57.3%  +/- 3.6   (null 33.3%)   p = 0.0000
+             [naive +/- 3.6, rho -0.01, deff 0.99, 240 deals]
+culture      A 160.7   best other 147.3   lead +13.5 +/- 4.7
+verdict      accept -- desktop beats mini (interval clear of the null)
+
+--- 3p, seed 999, 720 games (240 deals x 3 seats) -- reproducibility check ---
+win rate     59.3%  +/- 3.6   (null 33.3%)   p = 0.0000
+             [naive +/- 3.6, rho -0.00, deff 1.00, 240 deals]
+culture      A 163.6   best other 148.1   lead +15.6 +/- 5.1
+verdict      accept -- desktop beats mini (interval clear of the null)
+
+--- 4p, seed 42, 720 games (180 deals x 4 seats) ---
+win rate     30.5%  +/- 3.2   (null 25.0%)   p = 0.0007
+             [naive +/- 3.4, rho -0.03, deff 0.92, 180 deals]
+culture      A 231.9   best other 273.8   lead -41.9 +/- 6.3
+verdict      accept -- desktop beats mini (interval clear of the null)
+
+NOISE ASSESSMENT
+All three configurations pass arena's own gate: the WHOLE confidence
+interval clears the null, at n=720 games (>=3x the 240 standard, >>60
+minimum), with p-values from 0.0007 down to ~0. These are not point-
+estimate-only "ahead"; the margins are large relative to their intervals
+(2p: 6.6 pts of margin vs +/-3.6; 3p: 24-26 pts of margin vs +/-3.6; 4p:
+5.5 pts of margin vs +/-3.2). None of this is 6-game noise. 3p was
+independently reproduced at a second seed with an even larger margin, so
+it is not a single-seed fluke either.
+
+CAVEATS
+1. ENGINE AGE: the desktop binary (target/release/arena.exe) may be older
+   than the mini's current Rust engine -- both sides of every duel used the
+   SAME binary, so weight-vs-weight comparison within each duel is valid,
+   but none of these results say anything directly about how these vectors
+   would fare under the mini's current (possibly patched) rules. Do not
+   install off this alone; re-test on the mini's current engine first.
+2. 4P CULTURE IS NEGATIVE while win rate is positive (A 231.9 vs best-other
+   273.8, lead -41.9). The desktop 4p vector wins more OUTRIGHT GAMES than
+   null despite scoring less culture on average than the best opponent --
+   i.e. it appears to be optimizing for winning narrowly rather than
+   margin. Win rate (not culture mean) is arena's actual gate and the
+   actual game-winning metric, so the accept verdict stands, but this is a
+   real behavioral difference worth knowing about before installing.
+3. 3P CONTRADICTS A PRIOR "SCRAP" CALL. I was told a previous review ruled
+   the desktop's 3p champion is scrap and must not be installed, and that
+   for 3p the bar here is "is there surprising evidence to overturn that,"
+   not "is it slightly ahead." This measurement clears that higher bar: a
+   57-59% win rate against a 33.3% null, reproduced at two seeds, p
+   effectively 0 both times, WITH a positive culture lead both times
+   (+13.5 and +15.6) -- i.e. the 3p vector isn't just winning close games,
+   it's outscoring the field too. This is surprising, large, and
+   reproducible evidence in the desktop vector's favor, measured under the
+   exact protocol (direct duel, same binary, seat-paired, real sample
+   size) this task exists to trust over the climb's own blind anchor
+   signal. I am NOT overriding the scrap ruling myself -- that's explicitly
+   not my call -- but this result is strong enough that the scrap verdict
+   should be revisited: either the prior review used a different (possibly
+   stale or differently-configured) baseline, or something about this
+   vector's real-world/anchor performance diverges from its head-to-head
+   strength against the mini's CURRENT champion. Worth a second look before
+   treating "scrap" as final.
+4. Table composition: per-config, the challenger (desktop) sits in exactly
+   1 seat per game and the defender (mini) fills the remaining seats
+   (players-1 of them), and the harness rotates the challenger through
+   every seat an equal number of times over the run (games is a multiple
+   of players, enforced by validate()). This is symmetric by construction,
+   not by an average I asked for after the fact.
+
+RECOMMENDATION (numbers only; install/no-install decision is Paul's + the
+coordinator's, not mine)
+  2p: Desktop vector clearly beats mini's, 56.6% vs 50% null over 720
+      games (p=0.0003), positive culture lead. Re-test on mini's current
+      engine before installing; margin is wide enough a reversal seems
+      unlikely but engine drift is unverified here.
+  3p: Desktop vector clearly beats mini's, 57-59% vs 33.3% null over 720
+      games x2 seeds (p~0 both), positive culture lead both times. This
+      directly contradicts the "3p is scrap" prior verdict -- flagging as
+      surprising evidence that verdict should be revisited, not
+      unilaterally recommending install given the explicit prior ruling.
+  4p: Desktop vector beats mini's on win rate, 30.5% vs 25% null over 720
+      games (p=0.0007), but with a NEGATIVE culture lead (-41.9) -- wins
+      more often, scores less. Win rate is the real gate and it passes,
+      but this behavioral quirk is worth a second opinion before
+      installing, separate from the engine-age caveat.
+
+Bottom line: at all three player counts, the desktop's weight vector beat
+the mini's champion in a controlled, same-binary, adequately-powered,
+seat-paired duel -- this is real signal, not the climb's unreliable
+vs_anchor noise. 2p and 4p results are large and clean modulo the 4p
+culture quirk. The 3p result is the most important one to report loudly:
+it is strong enough to warrant re-opening the "scrap" call, not act as a
+quiet footnote.

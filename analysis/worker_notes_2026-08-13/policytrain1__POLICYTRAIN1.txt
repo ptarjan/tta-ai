@@ -1,0 +1,372 @@
+POLICYTRAIN1.txt -- one iteration of the policy-improvement loop
+Status: COMPLETE. Both required proofs ran; they disagree (top-1 gain,
+match-play loss) -- reported honestly, not resolved, see sections 4/5/8/9.
+Scratch clone: /private/tmp/policytrain1 (cp -Rc of /private/tmp/policyloop).
+Base commit this clone started from: fdf98c9 "Add hybrid self-play data
+generator for the policy-improvement loop".
+
+===========================================================================
+0. WHAT "THE POLICY" IS, CONCRETELY (read this first)
+===========================================================================
+The hybrid bot (`bots::greedy::Search::HumanShortlistBeam` /
+`bots::human::choose_with_search`) has TWO weight vectors, both shaped as
+`bots::weighted::weights::Weights` but fit for completely different jobs:
+
+  - `human_weights` (`human_policy` module) -- a linear scorer over
+    `human_policy::candidate_features`, fit by `human_policy::train`
+    (multinomial-logit / softmax gradient descent). THIS is "the policy":
+    it ranks the root's legal moves and produces the shortlist
+    (`bots::human::root_shortlist`) the search picks among. This is what
+    this iteration retrains.
+  - `eval_weights` (the "champion") -- the 162 hand-climbed weights
+    `plan::pick`'s beam scores every node with. NEVER touched by this task
+    (explicit house rule) -- every run below loads ONE frozen champion file
+    and uses it, byte-identical, on every side of every measurement.
+
+So "retrain the policy" = fine-tune `human_weights`, holding `eval_weights`
+completely fixed. This matters for proof (b): the ONLY thing that may
+differ between the two match-play sides is which `human_weights` file
+builds the shortlist.
+
+===========================================================================
+1. CODE CHANGES MADE THIS ITERATION (see the commit for the full diff)
+===========================================================================
+The previous worker's generator (`bots::policyloop`, `bin/
+policyloop_gen.rs`) writes `.tpd` (state encoding + legal + search's chosen
+move) and `.meta.tsv` (shortlist/policy-rank bookkeeping) -- enough to
+measure disagreement, but NOT enough to fit `human_policy::train`, which
+needs the RAW `human_policy::candidate_features` per candidate (a `.tpd`
+record only stores the neural state encoding, a different, much wider
+vector). Rather than inventing a new format, this iteration:
+
+  1. `src/human_policy.rs`: added `train_with_init` (a `train` with a
+     caller-supplied starting vector instead of hard-coded zero; `train`
+     itself is now `train_with_init(.., vec![0.0; dim])`, unchanged
+     behaviour, so every existing recorded number stays reproducible). Lets
+     fine-tuning start from the CURRENT human_weights.json instead of
+     scratch.
+  2. `src/bots/policyloop.rs`: `generate_game` now also returns a
+     `Vec<human_policy::ExtractedDecision>` per game -- one row per
+     decision, built by calling the SAME `human_policy::candidate_features`
+     already used (a second time; the first call is inside
+     `build_shortlist` and was not threaded out, to avoid changing that
+     function's signature and the tests pinned to its tuple shape) with
+     `chosen_idx` = the SEARCH's pick, not the policy's own top-1.
+  3. `src/bin/policyloop_gen.rs`: new optional `--human-tsv-out PATH` flag,
+     writes those rows via the EXISTING `human_policy::write_decision`
+     serializer, unmodified.
+  4. New `src/bin/policyloop_train.rs`: reads a `--train`/`--holdout`
+     TSV pair (disjoint by game_id, checked), fits `human_policy::
+     train_with_init` warm-started from `--init-weights`, reports held-out
+     top-1 AND top-K for BOTH the untouched init vector and the fitted one,
+     saves the fitted vector via the existing `human_policy::save_weights`.
+  5. New `src/bin/policyloop_matchplay.rs`: paired hybrid-vs-hybrid match
+     play (`bots::greedy::Bot::human_plan`, unchanged) with the SAME
+     `--champion` eval file on both sides and two different `human_weights`
+     files -- `bin/kindmatch.rs` was NOT reusable as-is here: when both its
+     sides are `human --search`, it deliberately scores each side's beam
+     with the OTHER side's own weight file (`kindmatch.rs`'s own doc
+     comment), which would give the two match-play sides DIFFERENT eval
+     weights -- exactly what the calling task forbids.
+
+State encoder (`neural::encode::encode`) and `human_policy::
+candidate_features`/`features()` themselves: UNCHANGED, reused as-is.
+
+===========================================================================
+2. STEP 1 -- DATA (seed ranges, decision counts)
+===========================================================================
+Both runs: 2p, --shortlist-width 8 --explore-random 4 (exploration ON,
+matching the previous worker's measured config), --champion
+/private/tmp/rowdig/frozen_champion_2p.json, --human-weights
+../analysis/frozen/human_weights.json, --threads 2.
+
+TRAIN:   --seed 1      --games 500  -> seeds 1..500      (game_seed = seed+i)
+  cargo run --profile difftest --bin policyloop_gen -- --games 500 \
+    --players 2 --seed 1 --champion /private/tmp/rowdig/frozen_champion_2p.json \
+    --human-weights ../analysis/frozen/human_weights.json \
+    --shortlist-width 8 --explore-random 4 --threads 2 \
+    --out policyloop_data/train_2p_seed1_g500.tpd \
+    --meta-out policyloop_data/train_2p_seed1_g500.meta.tsv \
+    --human-tsv-out policyloop_data/train_2p_seed1_g500.human.tsv \
+    --provenance-out policyloop_data/train_2p_seed1_g500.provenance.json --verbose
+  113,609 decision records (112,020 non-trivial, >1 legal move).
+  573.5s, 0.87 games/s. Disagreement rate 61.32% (43,325/112,020 agreed with
+  the policy's own top-1) -- consistent with the previous worker's 50-game
+  measurement (60.84%), confirming the phenomenon holds at 10x scale.
+
+HOLDOUT: --seed 100001 --games 100 -> seeds 100001..100100 -- DISJOINT from
+  the train range by a wide margin (no seed arithmetic on either side can
+  collide).
+  cargo run --profile difftest --bin policyloop_gen -- --games 100 \
+    --players 2 --seed 100001 --champion /private/tmp/rowdig/frozen_champion_2p.json \
+    --human-weights ../analysis/frozen/human_weights.json \
+    --shortlist-width 8 --explore-random 4 --threads 2 \
+    --out policyloop_data/holdout_2p_seed100001_g100.tpd \
+    --meta-out policyloop_data/holdout_2p_seed100001_g100.meta.tsv \
+    --human-tsv-out policyloop_data/holdout_2p_seed100001_g100.human.tsv \
+    --provenance-out policyloop_data/holdout_2p_seed100001_g100.provenance.json --verbose
+  22,605 decision records (22,287 non-trivial). 104.5s, 0.96 games/s.
+  Disagreement rate 60.73% (8,751/22,287 agreed with top-1).
+
+Disjointness also checked programmatically: `bin/policyloop_train.rs`
+refuses to run if any game_id appears in both --train and --holdout (see
+section 3).
+
+===========================================================================
+3. STEP 2 -- TRAINING (hyperparameters, checkpoint)
+===========================================================================
+Trainer: new `bin/policyloop_train.rs`, built on `human_policy::
+train_with_init`/`Normalizer`/`denormalize_for_ranking` -- the SAME
+modelling code `bin/humantrain.rs` uses (multinomial-logit / softmax
+gradient descent over one decision's legal-move candidates), reused
+unchanged; only the driver (I/O, warm start, dual-weights held-out report)
+is new. See section 1 for why `humantrain.rs` itself was not reusable
+as-is (its `is_held_out` hash split doesn't give a seed-range-disjoint
+holdout).
+
+Hyperparameters: epochs=300, lr=0.3, l2=1e-4 -- IDENTICAL to `bin/
+humantrain.rs`'s own defaults (`TrainConfig { epochs: 300, learning_rate:
+0.3, l2: 1e-4 }`), chosen deliberately rather than tuned, so this run is not
+quietly re-litigating hyperparameters that were already chosen for the
+same model class on a similarly-sized corpus.
+
+Warm start: YES, fine-tuned from `../analysis/frozen/human_weights.json`
+(the current human-imitation checkpoint), per the calling task's
+instruction -- not from scratch. `train_with_init` seeds normalized-space
+gradient descent from that file's raw-space vector converted via
+`w_norm = w_raw * std` (`Normalizer` fit on the TRAIN split only, matching
+`humantrain.rs`'s own train-only-normalization discipline), the exact
+inverse of `denormalize_for_ranking`'s `w_raw = w_norm / std` used again at
+the end to save the fitted vector back to raw (play-time) space.
+
+Command:
+  cargo run --profile difftest --bin policyloop_train -- \
+    --train policyloop_data/train_2p_seed1_g500.human.tsv \
+    --holdout policyloop_data/holdout_2p_seed100001_g100.human.tsv \
+    --init-weights ../analysis/frozen/human_weights.json \
+    --out policyloop_data/retrained_human_weights.json \
+    --epochs 300 --lr 0.3 --l2 1e-4 --topk 8
+
+Wall clock: 2m49s (real). Loaded 113,609 train decisions (500 games),
+22,605 holdout decisions (100 games), 0 game_id overlap confirmed
+programmatically before any fitting.
+
+CHECKPOINT: /private/tmp/policytrain1/rust/policyloop_data/
+retrained_human_weights.json (5,653 bytes -- same on-disk shape as the
+4,899-byte original, `human_policy::save_weights`'s plain-text `{"key":
+value}` format, one line per `WeightKey`; NOT committed to git, see section
+7 for regeneration instructions).
+
+===========================================================================
+4. STEP 3a -- TARGET MATCHING (held-out top-1 / top-8)
+===========================================================================
+On the 22,287 non-trivial (>1 legal move) HELD-OUT decisions (seeds
+100001-100100, never trained on), scored by `policyloop_train`'s `score()`
+(`human_policy::rank` over each decision's real candidate feature vectors,
+same encoder as play time -- no normalization at eval time, matching how
+`HumanBot`/`root_shortlist` actually score at play):
+
+                        top-1                    top-8 (shortlist-hit)
+  ORIGINAL   human_weights   8,751/22,287 = 39.27%    21,200/22,287 = 95.12%
+  RETRAINED  human_weights  12,230/22,287 = 54.88%    21,052/22,287 = 94.46%
+
+TOP-1: a real, large gain -- +15.61 percentage points (39.27% -> 54.88%),
+a 40% relative increase in how often the policy's single favourite move IS
+the move the search actually picked.
+
+TOP-8 (the shortlist-hit rate -- the number that matters more, since this
+is what actually reaches the beam): essentially FLAT, and if anything
+slightly WORSE -- 95.12% -> 94.46%, a 0.66-point DROP. Reading: the
+original policy's top-8 was already covering the search's pick 95% of the
+time (headroom was already thin -- shortlist_width=8 plus 4 exploration
+slots covers most legal-move-count positions almost entirely), so there was
+very little room for a top-8 gain to begin with; fine-tuning visibly
+sharpened top-1 preference ordering AMONG the already-good top-8 set
+without expanding that set's coverage, and modestly overfit at the margin
+(a handful of holdout decisions whose true pick was previously inside the
+top-8 slipped just outside it). This is the training objective (softmax
+cross-entropy on the FULL ranking) doing exactly what it was asked --
+sharpen the top of the distribution -- not a bug.
+
+===========================================================================
+5. STEP 3b -- MATCH PLAY (retrained vs original shortlist, identical eval)
+===========================================================================
+`bin/policyloop_matchplay.rs` (new -- see section 1 for why `kindmatch.rs`
+was not reusable unmodified): 420 paired 2p games (210 deals, seat-rotated,
+identical shuffles per deal -- same pairing scheme as `bin/kindmatch.rs`'s
+own `play_one`/`arena::Match::play_one`), R = hybrid using the RETRAINED
+policy's shortlist, O = hybrid using the ORIGINAL policy's shortlist.
+EVAL WEIGHTS: /private/tmp/rowdig/frozen_champion_2p.json, loaded ONCE,
+passed byte-identically to `Bot::human_plan` on BOTH sides every game --
+confirmed by construction (`champion: Weights` is a single local built
+once in `run()`, `play_one` never overrides it per side; see the source).
+The ONLY thing that differs between R and O is which `human_weights` file
+(`policyloop_data/retrained_human_weights.json` vs `../analysis/frozen/
+human_weights.json`) built the root shortlist.
+
+Command:
+  cargo run --profile difftest --bin policyloop_matchplay -- \
+    --champion /private/tmp/rowdig/frozen_champion_2p.json \
+    --r-weights policyloop_data/retrained_human_weights.json \
+    --o-weights ../analysis/frozen/human_weights.json \
+    --games 420 --players 2 --seed 0 --threads 2
+
+Result (420 games, 435.3s, 0.96 games/s):
+  R (retrained-policy shortlist) win rate:  29.88%  +/- 4.25  (95% CI:
+  [25.63%, 34.13%]), null 50.00%, p = 0.0000 (paired/clustered estimator,
+  `tta::stats::paired` -- the SAME clustered-on-the-deal CI machinery
+  `kindmatch`/`arena` already use, reused unchanged).
+
+VERDICT: REJECT. The retrained-policy hybrid is SIGNIFICANTLY WORSE than
+the original-policy hybrid in actual play -- not a coin flip, not
+inconclusive: the 95% CI sits entirely and comfortably below 50%.
+
+THIS DIRECTLY CONTRADICTS THE NAIVE READING OF PROOF (a)'s TOP-1 NUMBER.
+A large top-1 target-matching gain (+15.6 points) produced a LARGE,
+STATISTICALLY CLEAR LOSS in real play, not a gain. See section 8 for the
+honest reconciliation of (a) and (b).
+
+===========================================================================
+6. TEST RED CONFIRMATION
+===========================================================================
+`human_policy::tests::train_with_init_at_zero_epochs_returns_the_init_vector_unchanged`
+and `train_with_init_from_a_nonzero_start_reaches_a_different_fit_than_from_zero`
+confirmed RED: temporarily changed `train_with_init`'s first line from
+`let mut w = init;` to `let mut w = vec![0.0f64; dim];` (silently ignoring
+the warm-start vector). Both failed immediately:
+
+  train_with_init_at_zero_epochs_returns_the_init_vector_unchanged:
+    assertion `left == right` failed
+      left: [0.0, 0.0, 0.0]
+     right: [1.5, -2.0, 0.25]
+
+  train_with_init_from_a_nonzero_start_reaches_a_different_fit_than_from_zero:
+    assertion `left != right` failed: warm start must actually change where training ends up
+      left: [0.14264091706223803, -0.14264091706223803, 0.0]
+     right: [0.14264091706223803, -0.14264091706223803, 0.0]
+
+Reverted; `cargo test --profile difftest --lib human_policy::` green again
+(15/15).
+
+The rival-hand-privacy test from the previous worker
+(`human_policy::tests::candidate_features_does_not_depend_on_a_rivals_hidden_hand_card_identity`)
+was RE-RUN (not re-broken -- the task says keep it passing) and is green.
+
+Full suite: `cargo test --profile difftest` -- 1329 lib tests + every
+binary's own test suite, 0 failures (ran before any data generation).
+
+===========================================================================
+7. DISK / CLEANUP
+===========================================================================
+Peak disk use: 1.4 GB (`.tpd` 849 MB + 176 MB, `.human.tsv` 321 MB + 61 MB,
+`.meta.tsv` 6 MB + 2 MB, across train+holdout). ALL of that was deleted
+after training and match play both completed and every headline number
+above was captured in this file and the run logs -- none of it was needed
+again (policyloop_train only reads the `.human.tsv`; match play reads no
+dataset at all, only the two weight files). What remains on disk under
+/private/tmp/policytrain1/rust/policyloop_data/ (56 KB total):
+  retrained_human_weights.json  -- the checkpoint (kept, per the task)
+  train_gen.log / holdout_gen.log / matchplay.log / train_run.log
+                                 -- full stdout of every run above
+  *.provenance.json             -- champion/human-weights file fingerprints
+                                    for the two generation runs
+
+To regenerate the (large) datasets exactly, re-run the two `policyloop_gen`
+commands in section 2 verbatim (seeds pinned, so byte-identical output),
+then the `policyloop_train` command in section 3. Nothing here was
+committed to git (existing project convention -- see section 10).
+
+===========================================================================
+8. WHAT DID NOT IMPROVE / HONEST CAVEATS
+===========================================================================
+STATE PLAINLY: this iteration's fine-tuned policy is WORSE for actual play,
+despite imitating the search's literal picks much better. Both proofs ran
+and disagree; here is both numbers, not a cherry-pick:
+
+  proof (a) top-1:  +15.61 points  (39.27% -> 54.88%)  -- GAIN
+  proof (a) top-8:   -0.66 points  (95.12% -> 94.46%)  -- flat/slightly down
+  proof (b) win rate: -20.12 points from the 50% null (29.88%, CI [25.63,
+                       34.13]) -- a CLEAR, SIGNIFICANT LOSS
+
+Plausible reconciliation (not verified further this iteration -- see
+section 9): the calling task's own background section already names WHY
+the search disagrees with the policy 60%+ of the time -- the search sees a
+WIDER shortlist (top-8 plus 4 random) than the policy's plain top-8, so a
+sizeable share of "disagreements" are the search picking one of the 4
+EXPLORATION candidates, not a real top-8 alternative the policy under-
+ranked. Training the policy to match the search's root pick literally,
+over the FULL legal-move softmax, pulls weight toward whatever made those
+exploration-injected picks look good in THAT specific position -- there is
+no guarantee that generalizes into a BETTER general-purpose ranking, and
+top-8 coverage (this run's own measurement) did not improve at all. Once
+plugged back into `choose_with_search`'s plain (non-exploring, ROOT_
+SHORTLIST=8) shortlist at match-play time, the fine-tuned ranking's top-1
+sharpening evidently does not carry over into better move SELECTION when
+that top-1-favoured move is not, in fact, better. The category breakdown
+in section 3 is suggestive but not conclusive: `take_card` (2,796 holdout
+decisions, the single largest category) fell to 2.1% top-1 for the
+retrained model -- a strikingly low number worth checking against the
+ORIGINAL model's own per-category breakdown (this run's `policyloop_train`
+only prints the retrained side's breakdown; extending it to print both
+side-by-side is the cheapest next step, see section 9).
+
+What did NOT change, confirmed unmodified this iteration (house rules):
+  - `eval_weights`/the champion's 162 hand-climbed weights -- loaded from
+    a single frozen file, never mutated, never used to fit anything.
+  - `bots::neural::encode::encode` (the `.tpd` state encoder) -- untouched;
+    this iteration never trains on it at all (a different corpus,
+    `human_policy`'s feature space, was used instead -- see section 1).
+  - `human_policy::candidate_features`/`features()` -- called MORE (a
+    second time per decision, for the new training-row sidecar), never
+    edited.
+  - `kindmatch.rs`, `climb`, or any other existing binary -- left exactly
+    as found; the mismatch it has for a same-champion-both-sides human-vs-
+    human match was worked around with a new, separate binary rather than
+    edited.
+
+===========================================================================
+9. NEXT EXPERIMENT
+===========================================================================
+The single most valuable next experiment: figure out WHY the match-play
+loss happened before running another fine-tune blind. Concretely, in order
+of cheapest-to-run first:
+
+  1. Extend `policyloop_train`'s report to print the ORIGINAL policy's
+     per-category top-1/top-8 breakdown ALONGSIDE the retrained one (right
+     now only the retrained side's category table prints) -- would show
+     directly whether `take_card`'s 2.1% is a regression from a much
+     higher original number, or whether that category was always this
+     hard to call and is a red herring.
+  2. Re-run `policyloop_train` with the FULL non-trivial holdout split by
+     `chosen_policy_rank` (already in `.meta.tsv`, not yet read by anything
+     -- `POLICYLOOP.txt` section 7 flagged this as unwritten): does top-8
+     coverage specifically regress on decisions where the search's pick
+     came from the exploration top-up (rank 8+, ~4.9% of decisions) versus
+     decisions where it was already within the plain top-8? If the
+     regression concentrates in the exploration-sourced labels, that is
+     direct evidence for the "training on exploration noise" hypothesis in
+     section 8, and the fix is training-signal filtering (e.g. drop or
+     down-weight rank>=8 labels), not a hyperparameter change.
+  3. If (1)/(2) do not explain it, try early stopping / a lower learning
+     rate (this run used `humantrain.rs`'s off-the-shelf 300-epoch/lr=0.3
+     defaults, tuned for a ~9K-decision human corpus, unvalidated on a
+     113K-decision self-play corpus of a different distribution) and
+     re-run BOTH proofs again -- the two-proof harness built this iteration
+     (`policyloop_train`/`policyloop_matchplay`) is fully reusable for that
+     with no further code changes.
+
+===========================================================================
+10. COMMIT
+===========================================================================
+2037a0f "Fine-tune the human-imitation policy on the search's picks
+(policy-improvement loop iteration 1)" on branch master, this scratch clone
+(/private/tmp/policytrain1), 6 files changed (1351 insertions, 39
+deletions): rust/src/human_policy.rs, rust/src/bots/policyloop.rs,
+rust/src/bin/policyloop_gen.rs, rust/src/bin/policyloop_train.rs (new),
+rust/src/bin/policyloop_matchplay.rs (new), POLICYTRAIN1.txt (new).
+Committed by explicit pathspec (`git add` the two new binaries and this
+file, then `git commit -- <the six paths>`) -- confirmed the many other
+untracked files already sitting in this scratch clone (FINDINGS.txt,
+champ_backup/, scratch/, etc. -- leftovers from unrelated prior work copied
+in by `cp -Rc`) were NOT touched or included; `git status --short` after
+the commit still shows them all as untracked, unchanged.

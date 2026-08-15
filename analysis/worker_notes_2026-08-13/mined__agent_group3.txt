@@ -1,0 +1,12 @@
+## Group 3 mining result: NO CONFIRMED FINDINGS
+
+Checked all 6 assigned files for tta-ai / Through the Ages AI content and measurement data.
+
+- 047f677f-589e-4377-9093-014dbd3f4191.jsonl (mtime Jul 31 09:13) — 0 mentions of "tta-ai" or "Through the Ages"; content is Hikvision NVR firmware discussion, skill listings, unrelated topics. Not the tta-ai project.
+- 4558656b-b2db-4257-be44-3a00d654c247.jsonl (mtime Aug 5 12:57) — 0 mentions of tta-ai; "replay" hits were about the discord-claude bridge project, not game replays. Unrelated.
+- 781d0732-9332-4d28-97bc-642370983981.jsonl (mtime Aug 7 19:27) — 0 mentions of tta-ai; "census"/"replay" hits were bridge log noise / discord-claude CLAUDE.md nested memory, false positives. Unrelated.
+- d8db4c8b-23fe-49fa-846d-f26d1e7329e7.jsonl (mtime Jul 31 07:25) — 0 mentions of tta-ai and 0 hits on any target keyword. Unrelated.
+- abcf84a9-bd4d-4707-8805-93c970e409d1.jsonl (mtime Jul 26 00:12) — 0 mentions of tta-ai and 0 hits on any target keyword. Unrelated.
+- d7f870f1-e41b-4279-aff9-90a08c55e3c8.jsonl (mtime Aug 7 03:09) — the ONLY file that touches the tta-ai project (cwd /Users/pt/tta-ai, cargo build/test of a "replay" binary, git status showing modified files including docs/WAR_RATE_CENSUS.md). However this entire 26-line session is just an automated-bridge-restart resume/environment-check: it lists modified filenames and running process info but contains NO actual measurement data — no score tables, no game ID lists, no failure-bucket counts, no win-rate/gauntlet numbers. Session was interrupted by user before any real work happened. Nothing meets the "actual data" bar for inclusion.
+
+Conclusion: none of these 6 session transcripts contain lost tta-ai measurement data. The tta-ai work must live in other session files not in this group's assignment.

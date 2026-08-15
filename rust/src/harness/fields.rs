@@ -27,7 +27,7 @@
 //! every call; dropping the cache trades an unmeasurable slowdown for one
 //! less piece of process-global mutable state.
 
-use crate::advisor::advisor as adv;
+use crate::advisor::session as adv;
 use crate::apply;
 use crate::bots::weighted::eval;
 use crate::bots::weighted::rivals;

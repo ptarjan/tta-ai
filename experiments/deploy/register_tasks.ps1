@@ -53,28 +53,7 @@ function Register-Xml($name, $xmlPath) {
   "registered $name"
 }
 
-# THE GPU GUARD IS GONE, AND THIS DEREGISTERS IT.
-#
-# tta_gpu_guard ran experiments/gpu_guard.py, whose actual job was freeing
-# VRAM: it watched nvidia-smi for a foreign GPU process and hard-killed our
-# torch python.exe so a game got the card back.  There is no torch and no GPU
-# anywhere in the pipeline any more -- training and self-play are CPU Rust --
-# so it has nothing left to detect and nothing left to kill.
-#
-# Deregistering rather than merely not registering: a task pointing at a
-# script that no longer exists would fire every five minutes forever, fail
-# every time, and leave a trail of Last Result errors that looks exactly like
-# a guard that is broken rather than one that was retired on purpose.  The
-# /f makes it idempotent on a box that has already been cleaned.
-#
-# What replaces it.  The PAUSE flag it used to write is still read by
-# experiments/neural_search_loop.sh, so `touch PAUSE` still parks training and
-# deleting the file resumes it -- the operator control survives its writer.
-# Automatic CPU politeness is the loop task's own Priority 7 (below normal,
-# inherited by every child) plus the loop's --threads budget.
-cmd.exe /c "schtasks.exe /delete /tn ""tta_gpu_guard"" /f >nul 2>&1"
-"deregistered tta_gpu_guard (retired: no GPU in the pipeline)"
-
+Register-Xml "tta_gpu_guard"   "$repo\experiments\deploy\guard_task.xml"
 Register-Xml "tta_neural_loop" "$repo\experiments\deploy\loop_task.xml"
 
 # --- the three CPU league arms ---------------------------------------------

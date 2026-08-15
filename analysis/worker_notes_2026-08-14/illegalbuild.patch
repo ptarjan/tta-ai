@@ -1,0 +1,146 @@
+diff --git a/rust/src/apply.rs b/rust/src/apply.rs
+index 6f8283c..4d50266 100644
+--- a/rust/src/apply.rs
++++ b/rust/src/apply.rs
+@@ -813,6 +813,31 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
+         // turn, taking this wonder costs you 2 civil actions less"), so it
+         // gets its own, weaker flag rather than reusing Hammurabi's.
+         state.players[idx as usize].replaced_leader_this_turn = true;
++        // Snapshot the CA/MA pool the SAME way `set_government` does
++        // (`old_total`/`spent`/`old_remaining`, fed to `carry_over_action_
++        // pool`) BEFORE `on_leave_play` strips the old leader's own flat
++        // `civil_actions`/`military_actions` bonus (if any) -- a leader
++        // carrying one (Joan of Arc: +1 MA; Julius Caesar/Napoleon, ...) who
++        // is replaced mid-turn must NOT retroactively lose actions already
++        // spent from that bonus, only the amount left unclaimed (RULES_SPEC
++        // §9.1 "Effects apply immediately" governs the NEW leader's bonus,
++        // not a clawback of the old one's already-banked turn -- the same
++        // shape as §8.4's revolution carry-over `set_government` already
++        // gets right). `on_leave_play`'s own plain decrement (clamped at 0,
++        // no memory of what was already spent) got this wrong: confirmed
++        // against game 7522520 round 11 -- Joan of Arc's +1 MA had already
++        // paid for a CopyTactic (2 MA) before Isaac Newton replaced her, so
++        // the swap must leave the remaining MA pool untouched, not subtract
++        // Joan's bonus a second time out of what was left. Overwritten below
++        // once the swap (and the new leader's own bonus) has fully applied,
++        // so `on_leave_play`/`on_enter_play`'s own CA/MA arithmetic in
++        // between is harmless dead work, not double-counted.
++        let old_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
++        let old_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
++        let spent_c = old_total_c - state.players[idx as usize].civil_actions as i32;
++        let spent_m = old_total_m - state.players[idx as usize].military_actions as i32;
++        let old_remaining_c = state.players[idx as usize].civil_actions as i32;
++        let old_remaining_m = state.players[idx as usize].military_actions as i32;
+         on_leave_play(&mut state.players[idx as usize], old);
+         let is_homer = old.get().name == "Homer";
+         let has_completed = !state.players[idx as usize].completed_wonders.is_empty();
+@@ -823,10 +848,17 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
+         } else {
+             economy::discard_civil(state, old);
+         }
+-        // Replacing a leader refunds one civil action (§9.1).
+-        let total = costs::ca_total(state, &state.players[idx as usize]);
+-        let p = &mut state.players[idx as usize];
+-        p.civil_actions = total.min(p.civil_actions as i32 + 1) as i8;
++        state.players[idx as usize].leader = id;
++        on_enter_play(&mut state.players[idx as usize], id);
++        let new_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
++        let new_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
++        let carried_c = carry_over_action_pool(old_total_c, new_total_c, spent_c, old_remaining_c);
++        // Replacing a leader ALSO refunds one civil action on top of the
++        // carry-over (§9.1's own, separate clause) -- clamped to the new
++        // total, same as before this fix.
++        state.players[idx as usize].civil_actions = new_total_c.min(carried_c as i32 + 1) as i8;
++        state.players[idx as usize].military_actions = carry_over_action_pool(old_total_m, new_total_m, spent_m, old_remaining_m);
++        return;
+     }
+     state.players[idx as usize].leader = id;
+     on_enter_play(&mut state.players[idx as usize], id);
+@@ -2307,6 +2339,36 @@ mod tests {
+         );
+     }
+ 
++    /// A leader carrying a flat `military_actions` bonus (Joan of Arc: +1
++    /// MA) who is replaced MID-TURN, after some of that bonus was already
++    /// spent, must not have the already-spent portion clawed back out of
++    /// the remaining pool -- RULES_SPEC #7's "Effects apply immediately"
++    /// governs the NEW leader's own bonus, not a retroactive subtraction of
++    /// the old one's. Found chasing the `IllegalMove: Build` bucket: BGO
++    /// human game 7522520 round 11 (Theocracy, 3 printed MA) has Joan of
++    /// Arc's +1 MA (4 total) pay for a 2-MA `CopyTactic`, THEN Isaac Newton
++    /// replaces her (no MA bonus of his own, new total back to 3) mid-turn,
++    /// and the human still builds two more military units (1 MA each) --
++    /// only possible if the 2 MA remaining after `CopyTactic` survives the
++    /// swap untouched. Before this fix `on_leave_play`'s plain decrement
++    /// (clamped at 0, no memory of what was already spent) dropped the
++    /// remaining pool from 2 to 1, one short of the second unit build.
++    #[test]
++    fn replacing_a_leader_with_a_flat_military_action_bonus_mid_turn_does_not_claw_back_actions_already_spent_from_it(
++    ) {
++        let mut p = blank_player(0, card("Theocracy")); // 4 CA / 3 MA printed
++        p.leader = card("Joan of Arc"); // +1 MA -> 4 MA total this turn
++        p.civil_actions = 3;
++        p.military_actions = 2; // 4 total minus 2 already spent on CopyTactic
++        p.hand_civil.push(card("Isaac Newton"));
++        let mut state = one_player_state(p);
++        h_play_leader(&mut state, 0, card("Isaac Newton"));
++        // Newton grants no flat MA, so the total drops back to 3 -- but the
++        // 2 already spent (from Joan's now-departed bonus) must not be
++        // spent again: what's left stays 2, not 1.
++        assert_eq!(state.players[0].military_actions, 2);
++    }
++
+     // -------------------------------------------------------------- churchill
+ 
+     #[test]
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index ce21541..49abd34 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -2915,6 +2915,26 @@ fn trailing_now_science(text: &str) -> Option<i32> {
+     rest[..digits_end].parse().ok()
+ }
+ 
++/// The banked-resources RUNNING TOTAL BGO prints in an `"End turn <Color>
++/// scores: ...; N resources (now M); ..."` line -- `M`, the authoritative
++/// post-turn total, mirrors [`trailing_now_science`] exactly but for the
++/// `IllegalMove: Build` bucket's own "resources < build_cost_for(...)"
++/// investigation (2026-08-14 session): a resource shortfall discovered only
++/// at the eventual `Build` spend, many lines downstream of whatever actually
++/// under-counted it, is the same "check the oracle every turn, not just at
++/// the spend" shape `trailing_now_science` already solved for science.
++/// Investigation-only, `REPLAY_DEBUG`-gated, same discard-blocked-turn
++/// caveat as `trailing_now_science`'s own doc comment.
++fn trailing_now_resources(text: &str) -> Option<i32> {
++    let p = text.find(" resources (now ")?;
++    let rest = &text[p + " resources (now ".len()..];
++    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
++    if digits_end == 0 {
++        return None;
++    }
++    rest[..digits_end].parse().ok()
++}
++
+ /// Applies Winston Churchill's once-per-turn choice
+ /// (`sources/bga_throughtheages_material.inc.php` #186: "On your turn,
+ /// choose one: score 3 culture; or you have 3 science and 3 resources for
+@@ -5775,6 +5795,19 @@ pub fn replay_game(
+                             );
+                         }
+                     }
++                    if let Some(want) = trailing_now_resources(line.text) {
++                        let got = r.state.players[actor as usize].resources as i32;
++                        let discard_blocked =
++                            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary);
++                        if want != got && !discard_blocked {
++                            eprintln!(
++                                "DEBUG end-turn resources drift: actor={actor} journal says (now {want}), \
++                                 this binary computes {got} (delta {}) at {:?}",
++                                got - want,
++                                line.text,
++                            );
++                        }
++                    }
+                 }
+                 // Structural, always-on culture-oracle checkpoint -- see
+                 // `CultureOracleDivergence`'s own doc. Unlike the science

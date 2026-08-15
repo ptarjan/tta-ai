@@ -287,6 +287,17 @@ pub fn describe_move(state: &GameState, mv: Move, board: Option<&Board>) -> Stri
 /// DESIGN.md's rule against them: exhaustiveness is not the safety property
 /// here, a readable label for literally every key is, and the fallback
 /// already provides one for free.
+///
+/// `#[allow(clippy::wildcard_enum_match_arm)]`: spelling that fallback out
+/// literally (`WeightKey::RateHorizon | ... | WeightKey::TechRedundancyDiscount`)
+/// would also name the seven phase-suffixed keys (`CultureRateTrailing` etc.)
+/// that `registry.rs`'s `every_weight_key_is_named_by_production_source_
+/// outside_its_own_declaration` ratchets as reachable ONLY via `.early()`/
+/// `.late()` indirection -- a literal mention here would trip that check for
+/// a label fallback, not a real new reader. Two independently-justified
+/// mechanical rules collide on this one arm; this allow is the reviewed
+/// resolution, not a bypass of either.
+#[allow(clippy::wildcard_enum_match_arm)]
 fn feature_word(key: WeightKey) -> String {
     let label = match key {
         WeightKey::Culture => "culture",

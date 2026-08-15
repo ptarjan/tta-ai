@@ -107,11 +107,47 @@ impl DiscardSolver {
         DiscardSolver { future_needs, solved: 0, chosen: 0, forced_collisions: 0 }
     }
 
-    /// Every card `actor` is observed playing out of their own military
-    /// hand at some journal line AFTER `at_lineno` -- so, every identity
-    /// that provably still sits in their hand right now and must not be
-    /// spent, overwritten or otherwise assumed away by anything resolving a
-    /// hidden hand card at this point.
+    /// Every card FAMILY (`Card::base_name`) `actor` is observed playing out
+    /// of their own military hand at some journal line AFTER `at_lineno` --
+    /// so, every family that provably still has a live copy sitting in
+    /// their hand right now and must not be spent, overwritten or otherwise
+    /// assumed away by anything resolving a hidden hand card at this point.
+    ///
+    /// Returns a set of FAMILIES (`base_name`), not exact [`CardId`]s. This
+    /// used to return exact `CardId`s, matched one-for-one against
+    /// `FutureNeed::card` -- which is only ever an EDUCATED GUESS at which
+    /// age-sibling BGO meant (`corpus::build_card_index`'s bare-name lookup
+    /// picks one arbitrarily; `replay_common.rs`'s own `best_age_sibling`/
+    /// `resolve_named_card_by_effect` corrections narrow that guess, but
+    /// still only ever narrow it). Protecting by the exact guessed `CardId`
+    /// meant that CORRECTING a future need's age-sibling guess (e.g. fixing
+    /// `ActionClass::PlayAggression` to resolve "Plunder" to the Age III
+    /// copy the journal's own text proves, instead of the Age I copy
+    /// `build_card_index` picked arbitrarily) changed WHICH exact identity
+    /// this method protected, which could silently un-protect (or newly
+    /// protect) a candidate at an EARLIER, unrelated discard decision --
+    /// `interact::discard_options`' candidates are themselves simulated
+    /// filler with no journal-verified identity of their own (this module's
+    /// own doc, above), so whether one of them happened to collide with the
+    /// old vs. the new guessed `CardId` was pure accident. That accident is
+    /// exactly what turned a same-day age-sibling fix into 8 unrelated
+    /// corpus regressions (`analysis/worker_notes_2026-08-14/
+    /// plunder__PLUNDER.txt`) -- flip the exact identity a future need
+    /// points at, and the set of candidates it happens to protect flips
+    /// with it, even though the JOURNAL FACT underneath ("a card of this
+    /// family is played later, so it wasn't discarded here") never changed
+    /// at all. Matching by family instead makes protection invariant to
+    /// which age-sibling a future need's `CardId` guess ends up being: any
+    /// candidate sharing that family is protected regardless, so refining
+    /// the guess elsewhere in the replayer can no longer move this set.
+    ///
+    /// This is strictly MORE conservative than exact-identity matching (a
+    /// superset of what it used to protect), never less: it can turn a
+    /// `Solved` discard into a `Chosen` or `ForcedCollision` one in the rare
+    /// case a player's simulated hand holds two different-age siblings of
+    /// the same family at once, but it can never let a genuinely-needed
+    /// family through unprotected, and `choose` (below) still always picks
+    /// a legal candidate either way.
     ///
     /// Exposed (rather than left inline in [`DiscardSolver::choose`])
     /// because a forced discard is not the only place this file's replayer
@@ -120,13 +156,13 @@ impl DiscardSolver {
     /// question. Same predicate, one copy -- and unlike `choose`, this is a
     /// pure query and moves none of the solved/chosen/forced-collision
     /// counters, which mean "a forced DISCARD was resolved" specifically.
-    pub fn needed_after(&self, actor: u8, at_lineno: usize) -> HashSet<CardId> {
+    pub fn needed_after(&self, actor: u8, at_lineno: usize) -> HashSet<&'static str> {
         self.future_needs
             .get(&actor)
             .into_iter()
             .flatten()
             .filter(|need| need.lineno > at_lineno)
-            .map(|need| need.card)
+            .map(|need| need.card.get().base_name)
             .collect()
     }
 
@@ -143,7 +179,8 @@ impl DiscardSolver {
     pub fn choose(&mut self, actor: u8, at_lineno: usize, options: &[CardId]) -> (usize, DiscardCertainty) {
         assert!(!options.is_empty(), "DiscardSolver::choose called with no candidates to pick from");
         let needed_later = self.needed_after(actor, at_lineno);
-        let safe: Vec<usize> = (0..options.len()).filter(|&i| !needed_later.contains(&options[i])).collect();
+        let safe: Vec<usize> =
+            (0..options.len()).filter(|&i| !needed_later.contains(options[i].get().base_name)).collect();
         match safe.len() {
             0 => {
                 self.forced_collisions += 1;
@@ -316,6 +353,40 @@ mod tests {
         let warriors = card("Warriors");
         let (_, cert) = s.choose(0, 50, &[warriors, rebellion]);
         assert_eq!(cert, DiscardCertainty::Chosen);
+    }
+
+    /// `FutureNeed::card` is only ever an educated GUESS at which
+    /// age-sibling BGO's bare-name journal text meant
+    /// (`corpus::build_card_index`'s doc comment) -- `replay_common.rs`'s
+    /// own age-sibling corrections (`best_age_sibling`, or Plunder's exact
+    /// "up to N" text match) can and do refine that guess to a DIFFERENT
+    /// exact `CardId` than whatever the prescan originally recorded.
+    /// Protection must survive that: a candidate sharing the SAME FAMILY
+    /// (`base_name`) as a future need must be ruled out, even when its
+    /// exact `CardId` differs from `FutureNeed::card`'s own guess.
+    ///
+    /// This is the RED/GREEN target for the DiscardSolver robustness fix:
+    /// reverting `needed_after`/`choose` to compare exact `CardId`s again
+    /// (as they did before this session) makes this fail, because
+    /// `plunder_iii != plunder_i` and the old code protected only the exact
+    /// guessed identity -- `plunder_iii` would incorrectly survive as
+    /// `Solved` instead of being ruled out as a `ForcedCollision`.
+    #[test]
+    fn a_future_need_protects_every_age_sibling_of_its_family_not_just_the_exact_guessed_card_id() {
+        let plunder_i = card("Aggression: Plunder (I)");
+        let plunder_iii = card("Aggression: Plunder (III)");
+        assert_ne!(plunder_i, plunder_iii, "sanity check: these really are two distinct CardIds");
+        // The prescan recorded the Age I guess (whatever `build_card_index`
+        // happened to pick); the discard decision offers only the Age III
+        // sibling -- a different exact identity, same family.
+        let mut s = solver(&[(0, 100, plunder_i)]);
+        let (idx, cert) = s.choose(0, 50, &[plunder_iii]);
+        // Family-based protection rules the only offered candidate out --
+        // a forced collision, not a false "Solved".
+        assert_eq!(cert, DiscardCertainty::ForcedCollision);
+        assert_eq!(idx, 0);
+        assert_eq!(s.forced_collisions, 1);
+        assert_eq!(s.solved, 0);
     }
 
     #[test]

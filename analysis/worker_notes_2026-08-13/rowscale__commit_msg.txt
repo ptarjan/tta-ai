@@ -1,0 +1,13 @@
+Add rowscale: instrument row_last_copy's per-slot magnitude on real Takes
+
+Companion to takeworth.rs. Decomposes row_last_copy's raw feature into
+its two factors (card_potential and P-no-further-copy) plus the row-sum
+context, on 4952 real chosen Take decisions from 200 self-play 2p games.
+Confirms the feature's large magnitude comes from card_potential itself
+being an already fully-weighted, unbounded eval-scale quantity (max
+678.256 on a single card here) rather than from summing many row slots
+(avg 2.8 qualifying slots; taken card is ~80-90% of the row-sum) or from
+a near-zero division (there is none). Cost-1-to-cost-3 scaling is
+dominantly a row-position/card-quality effect (card_potential grows
+~4.7x) rather than a scarcity effect (P-no-further-copy grows ~1.55x).
+Measurement only; no pricing or evaluation logic changed.

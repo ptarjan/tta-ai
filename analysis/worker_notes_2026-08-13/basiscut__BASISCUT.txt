@@ -1,0 +1,689 @@
+BASISCUT -- weight-vector LEARNABILITY audit (identifiability, not hardcoding)
+==============================================================================
+
+*** DIRECTION CHANGE, MID-TASK ***
+This file was started under a "compute what's computable, fit only real
+trade-offs" brief. The owner corrected that mid-way: "I don't want to encode
+hard coded things I want it to learn the right actions but it should learn
+well not this junk we learned so far." Nothing below proposes replacing a
+learned number with a formula. The question is now: of the 162 WeightKey
+coefficients, which ones CAN a hill-climb against a noisy win/loss signal
+possibly learn correctly, given how they are wired together -- and where the
+wiring itself makes two or three numbers fight over one piece of evidence, so
+that no amount of training data or search will ever pull them apart. Where a
+FEATURE was found to be shaped so crudely that no coefficient on it could be
+right (the "too coarse" question), that is called out separately and the fix
+proposed is still a learned number, just applied to a better-computed fact or
+in a better-chosen context -- never a constant.
+
+Evidence source note: `/private/tmp/signaudit/SIGNAUDIT.txt` (today's earlier
+pass) classified all 162 keys by SIGN INTENT (must-be-positive /
+must-be-negative / free) and mapped every key to its consuming code. That
+axis is reused here as a map of "what feeds what"; this file does not
+re-derive it. Where SIGNAUDIT already named a composite mechanism (the
+card_board_credit sum, the NET_NONNEG_PHASE array), that is exactly the
+kind of structural coupling this file is hunting for on a different axis
+(identifiability, not sign), and the two turn out to overlap a lot.
+
+Champion vector used for "current value": /private/tmp/rowdig/frozen_champion_2p.json
+(NOT experiments/rust_champion_*.json, which the live climb rewrites).
+
+
+(1) THE HEADLINE
+-----------------------------------------------------------------------------
+Four provable, exact, data-independent redundancies exist right now in the
+vector's algebra -- not a judgment call, a rank computation. They cost 4 free
+parameters for zero expressive power, with a mechanical, lossless remap for
+every champion file on disk (Section 6 has the arithmetic). That is the
+single cheapest, safest cut available and should go first.
+
+Beyond those four, this pass found four more clusters where the coupling is
+real and provable from the code, but how BADLY it hurts learning depends on
+how much of the state space the actual games visit -- the same shape as the
+"early military value is spread across strength/strength_rel/two phase
+variants" example the owner gave, which this audit independently re-derives
+below with the algebra and confirms in the live champion file (strength =
+-7.15, strength_rel = +17.23 -- two huge, opposite-signed numbers where the
+rules only ever act on their sum in the state that dominates the opening).
+
+Two features (uprising, has_unit) are flagged as TOO COARSE: a single
+always-on number cannot represent what the rulebook actually does, no matter
+how much training happens.
+
+Roughly 130 of the 162 keys were NOT individually re-derived this pass
+(budget). They are listed plainly in Section 5 as unreviewed, not claimed
+either way -- see Section 7 for exactly which.
+
+
+(2) TIER-1 CLUSTERS -- exact, unconditional rank deficiency (proof, not judgment)
+-----------------------------------------------------------------------------
+
+--- Cluster T1-A..D: the four *_early/*_late phase triples ---
+File: rust/src/bots/weighted/weights.rs (PHASE_KEYS, line 1293); blended in
+eval.rs as `w[k] + (1-L)*w[k.early()] + L*w[k.late()]` where L = lateness()
+in [0,1].
+
+  T1-A: workers, workers_early, workers_late
+  T1-B: strength_rel, strength_rel_early, strength_rel_late
+  T1-C: tech_levels, tech_levels_early, tech_levels_late
+  T1-D: hand_value, hand_value_early, hand_value_late
+
+For any base key k, the total coefficient actually applied to feature k at
+lateness L is a straight line in L:
+
+    A(L) = w[k] + (1-L)*w[k_early] + L*w[k_late]
+
+A line has exactly 2 degrees of freedom (its value at L=0 and at L=1). Three
+raw numbers (w[k], w[k_early], w[k_late]) are used to represent a 2-parameter
+object. The map (w[k], w[k_early], w[k_late]) -> (A(0), A(1)) is 3-to-2; its
+kernel is the line (w[k], w[k_early], w[k_late]) += t*(1, -1, -1) for any t.
+Moving all three weights along that direction changes NOTHING evaluate()
+ever computes, at any lateness, on any board, ever. This is not "hard to
+learn" -- it is a literal flat direction in the loss surface, provable from
+the blend formula alone, true for every possible training corpus.
+
+CONFIRMED IN THE LIVE CHAMPION: this predicts exactly the failure mode
+already measured -- one of the three numbers absorbing an arbitrary amount of
+drift while its partners sit near the authored default, because the climb
+has no gradient telling it not to:
+
+    workers            29.00   workers_early     -0.092   workers_late    0.128
+    hand_value         -0.40   hand_value_early -12.41   hand_value_late  -0.078
+    tech_levels          0.32   tech_levels_early  0.101   tech_levels_late -0.42
+    strength_rel        17.23   strength_rel_early -0.195  strength_rel_late 5.61
+
+`workers = 29.0` is larger than nearly every other coefficient in the entire
+162-key file (most sit in 0.01-5). `hand_value_early = -12.4` is the exact
+number SIGNAUDIT's hand_value net-nonneg gate had to repair. Neither number
+means what it looks like it means; both are noise that piled up in a
+direction training could never see.
+
+FIX (still fully learned, zero information loss): reparameterize each triple
+as (start, end) = (w[k]+w[k_early], w[k]+w[k_late]) and evaluate as
+`start*(1-L) + end*L` with no separate flat term. This is the SAME 2-df
+object, just spanned by a basis with no redundant direction. Every existing
+champion file remaps losslessly (Section 6): compute start/end from its own
+w[k]/w[k_early]/w[k_late] and the position it already scores is IDENTICAL at
+every lateness. -4 parameters, zero regression risk, mechanical.
+
+--- Cluster T1-E, T1-F: BlueFree/CorruptionHeadroom, YellowBank/ConsumptionHeadroom ---
+File: rust/src/economy.rs:141 (`corruption_headroom`), :157
+(`consumption_headroom`).
+
+    corruption_headroom(blue) = (blue - band_floor(blue)).min(4)
+    consumption_headroom(yellow) = (yellow - band_floor(yellow)).min(3)
+
+Both are literally `stock - (a step function of stock)`, capped. WITHIN one
+band (the common case -- a single move rarely crosses a corruption/
+consumption band edge) and below the cap, d(headroom)/d(stock) = 1 exactly,
+identical to BlueFree's/YellowBank's own slope of 1. A climb comparing two
+candidate moves that both stay inside the same band literally cannot tell
+w[blue_free] apart from w[corruption_headroom] -- their combined gradient is
+the same up to relabeling. The two ARE separable in principle (band-crossing
+moves and the cap break the tie), but only from the subset of training
+signal that actually crosses a band edge, which is a minority of moves.
+Weaker than T1-A..D (not unconditionally flat, just flat on the common
+subset of states) -- listed Tier 1 because the mechanism is exact algebra,
+not a guess, but its practical severity is smaller.
+  Champion: blue_free 1.508, corruption_headroom 0.242 (same sign, modest
+  magnitudes -- consistent with partial, not total, confounding).
+  yellow_bank 0.0034, consumption_headroom -0.144 (also modest).
+
+--- Cluster T1-G: happy_margin / discontent / happy_surplus ---
+File: features.rs:509-511, :706. All three are transforms of ONE underlying
+scalar `margin = happy_have - happy_required(yellow_bank)`:
+    happy_margin = min(margin, 3)
+    discontent   = max(0, -margin)
+    happy_surplus = max(0, margin)
+
+For margin in [0,3] -- plausibly the most commonly visited range, a
+"comfortable but not maxed" happiness position -- happy_margin and
+happy_surplus are LITERALLY THE SAME NUMBER (both equal margin). Their
+weights are only ever tested as a sum in that entire region:
+    value contribution = (w_margin + w_surplus) * margin      for 0<=margin<=3
+For margin<0: happy_margin=margin, discontent=-margin, happy_surplus=0, so
+    value contribution = (w_margin - w_discontent) * margin   for margin<0
+Only for margin>3 do w_margin and w_surplus separate (happy_margin goes flat
+at 3, happy_surplus keeps climbing), which is the ONLY region that pins down
+each coefficient individually rather than a sum/difference of two. Full
+identifiability of all three requires the corpus to visit margin>3 states
+often enough to see both the plateau and the slope there -- not verified
+this pass (would need a state-distribution histogram over `margin`, not
+done). Champion: happy_margin 0.736, discontent 0 (repaired to the
+NonPositive gate's floor), happy_surplus 0.346 -- discontent sitting at
+exactly 0 is at least consistent with (not proof of) the difference
+`w_margin - w_discontent` being weakly pinned.
+
+
+(3) TIER-2 CLUSTER -- the owner's own example, re-derived and confirmed
+-----------------------------------------------------------------------------
+Files: features.rs:444-550 (strength/strength_rel/strength_deficit/
+strength_lead), weights.rs (declarations).
+
+    strength        = s.strength                          (absolute, own)
+    rel             = s.strength - rival_str
+    strength_rel    = rel                                  (+ T1-B phase blend)
+    strength_deficit = max(0, -rel)
+    strength_lead    = min(6, max(0, rel))
+
+Any move that changes ONLY my own strength (by far the common case -- a
+rival's strength does not move on my turn) moves `strength` and `rel` by the
+IDENTICAL delta, because rival_str is exogenous to my move. In the interior
+region (0 <= rel <= 6, deficit and lead-cap both inactive -- true whenever
+neither side is badly outmatched, which is most of the game and effectively
+ALL of the opening, when nobody has built an army yet and rival_str = 0
+exactly for every player):
+
+    total = w_s*strength + relCoef(L)*(strength - rival_str) + w_lead*(strength - rival_str)
+          = [w_s + relCoef(L) + w_lead] * strength  -  [relCoef(L) + w_lead] * rival_str
+
+At the opening specifically, rival_str = 0, so the SECOND bracket's whole
+contribution is zero regardless of its value -- the climb gets no signal at
+all about how relCoef(L)+w_lead is split from w_s during exactly the phase
+that sets a bot's first-build priorities. This is precisely the owner's
+example ("no single mutation changes the bot's first build"), and the
+5-coordinate cluster it implicates is: strength, strength_rel (+ its own
+T1-B redundancy), strength_lead, and -- once rel goes negative, i.e. once
+someone is actually threatened -- strength_deficit.
+
+CONFIRMED IN THE LIVE CHAMPION: strength = -7.15, strength_rel = +17.23.
+Two enormous, opposite-signed numbers (nearly everything else in the file is
+under 5) for what the algebra says is largely one shared direction in the
+common region. Neither number in isolation says anything trustworthy about
+how much the bot values its own strength; only the combination does, and
+even the combination is contaminated by whatever else co-adapted around it
+during the climb.
+
+Unlike the Tier-1 clusters, this is NOT a pure reparameterization fix:
+`strength` (absolute) has a genuine independent rules meaning nothing else
+in the vector carries -- RULES_SPEC 11.3's colonization force is an absolute
+sum of sacrificed units' printed strength, not a relative comparison, so a
+player with zero relative disadvantage but very low absolute strength really
+can be short of what an auction requires. Dropping `strength` outright would
+lose real information. Two options, not mutually exclusive:
+  (a) Fix T1-B first (removes the phase-triple's own redundant direction),
+      which shrinks this cluster from 5 raw numbers to 4 without touching
+      strength/strength_rel's own entanglement.
+  (b) Deliberately mutate/measure this cluster on states where rival_str is
+      NOT near zero (a targeted, unbalanced-strength opening scenario suite)
+      so the climb gets gradient in the direction it currently cannot see --
+      an experiment-design fix, not a code fix.
+
+
+(4) TIER-3 -- flagged candidates, mechanism plausible, not proven this pass
+-----------------------------------------------------------------------------
+These are NOT claimed as proven collinear -- they are exactly the kind of
+pair the brief's own probe (vary 3x, run 200 paired games, see if win rate
+moves) is built to test, and are named here as the next batch to run through
+it, in priority order.
+
+--- T3-A: each *_gap feature vs. the WeightKey its own "have" side already is ---
+File: features.rs:677-725. Every marginal-need gap is `max(0, need - have)`
+where `have` is read via `f.get(WeightKey::X)` -- i.e. `have` IS ANOTHER
+LIVE, SEPARATELY-WEIGHTED coordinate, not a private local:
+
+    food_gap:          have = food_stock       (WeightKey::FoodStock)
+    resource_gap:       have = resource_stock   (WeightKey::ResourceStock)
+    science_gap:         have = science          (WeightKey::Science)
+    culture_gap:          have = culture          (WeightKey::Culture)
+    civil_action_gap:     have = ca_left          (WeightKey::CaLeft)
+    worker_gap:            have = free_workers     (WeightKey::FreeWorkers)
+
+In the region where the gap is active (have < need), d(gap)/d(have) = -1,
+the mirror of the "have" feature's own +1 slope. If `need` also varies
+independently in the training data (pop_cost's band, the row's cheapest
+developable tech, unbuilt_slots, rival_culture -- none of which move on a
+typical single move that only spends/gains a stock), that independent
+variation is enough in principle to separate the two weights. But from the
+1-ply SEARCH's own local perspective -- comparing candidate moves at a fixed
+board -- `need` is usually frozen while `have` moves on nearly every
+candidate, so LOCALLY (move-to-move, which is what feeds a search's ranking
+even if the CLIMB itself sees more global variation) the two features are
+close to a shared direction. This is weaker and less certain than Tier 1/2:
+it depends on how much of the climb's real signal comes from move-to-move
+local comparisons vs. across-game outcome variance. Flagged, not proven --
+recommend the 3x-vary probe on (food_gap, food_stock), (worker_gap,
+free_workers) first, since those two pairs are the ones most often BOTH
+live in an ordinary turn.
+
+--- T3-B: card_board_credit vs. card_board_leader / card_board_bonus ---
+File: cards.rs:1842-1846 (`card_potential_core`), eval.rs
+`card_board_credit_keys()`. The SUM `card_board_credit + card_board_leader`
+(resp. `+ card_board_bonus`) is what actually scales a leader's (resp.
+bonus card's) board-aware swap diff; `card_board_credit` ALSO independently
+scales every other card's `board_extra` term and the `card_choice`
+alternative-route valuation, so it is not purely redundant with
+card_board_leader -- but card_board_leader's OWN identified value is only
+ever the difference (sum) minus (an estimate of card_board_credit pinned by
+unrelated cards), a "subtract two independently-noisy numbers" shape that is
+never as well-conditioned as a coordinate that gets its own clean gradient.
+  Champion: card_board_credit = 0 (exactly), card_board_leader = -15.0. One
+  of the pair sitting at an exact boundary while the other is the largest
+  magnitude negative number outside `uprising`/`special_techs` is consistent
+  with (not proof of) poor conditioning between the two -- worth the same
+  probe.
+
+--- T3-C: unit_tech_credit x tech_board_credit (bilinear, unit cards only) ---
+File: cards.rs:1148-1186 (`tech_value`), :1764-1771 (`card_potential_core`).
+For a UNIT card, the priced value is `unit_tech_credit * tech_value(...,
+dev_credit=tech_board_credit, ...)`, and tech_value's `dev` term is itself
+`+= dev_credit * gain`. That term is a genuine PRODUCT unit_tech_credit *
+tech_board_credit, not a sum -- classic bilinear scale ambiguity (like a
+weight*bias pair in a two-layer model: only the product is pinned by that
+term alone). tech_board_credit is NOT purely riding on this product, though:
+for every NON-unit levelled card (farms/mines/labs/temples/...), it is
+passed as a flat outer multiplier with dev_credit hardcoded to 1.0, giving
+it independent, non-bilinear signal from the majority of card types. So this
+is a partial, narrow coupling (unit cards only), not a full collinearity.
+  Champion: unit_tech_credit 0.304, tech_board_credit -0.128 (opposite
+  signs, moderate magnitude -- inconclusive on its own).
+
+--- T3-D: special_techs vs. tech_levels ---
+File: features.rs (`sweep_tableau`, TableauSweep::special_techs and
+tech_levels both increment on the same `CardType::SpecialTech` arm: `special_
+techs += 1; tech_levels += lv`). A move that develops a special tech moves
+both features together (though not by identical amounts, since tech_levels
+adds the CARD'S LEVEL while special_techs adds a flat 1 -- so they are
+correlated, not exactly collinear, distinguishable via the level distribution
+of special techs actually developed). Flagged from the champion's own
+outlier value: special_techs = 40.05, the single largest-magnitude
+coefficient in the entire 162-key file (bigger than uprising's -60 only in
+that -60 is negative but 40 is close in scale) -- far outside every other
+Tech-group coefficient (best_farm 1.5, best_lab -1.5, num_techs 0.068).
+Not individually re-derived further this pass; flagged for the same probe.
+
+--- T3-E: the raw rival-facts family (17 keys) ---
+File: features.rs:644-670 (RivalCulture, RivalMeanCulture, RivalCultureRate,
+RivalScienceRate, RivalStrength, RivalFreeCa, RivalHandCivil, RivalWonders,
+RivalScienceStock, RivalFoodStock, RivalResourceStock, RivalFreeWorkers,
+RivalYellowBank, RivalColonies, RivalMilActions, RivalBuildingWonder,
+RivalHandPotential). Each is the MAX over rivals of a different raw board
+quantity. A rival who is ahead on one axis is plausibly ahead on several
+correlated axes (a strong player tends to lead broadly), which would make
+several of these move together across the corpus even though nothing in the
+rules FORCES the correlation the way T1's algebra does. This is a genuine
+empirical-multicollinearity question, not a structural one, and this pass
+did not compute a correlation matrix over the corpus to check it -- flagged
+as the top candidate for that kind of measurement (not the vary-3x probe,
+which tests ONE coordinate; this needs a correlation check ACROSS several).
+
+--- T3-F: the five wonder finish-discipline keys ---
+wonder_remaining, wonder_stages_left, wonder_turns_to_finish, wonder_overrun,
+wonder_age_overrun all derive from the same `horizon::wonder_outlook` call
+(features.rs:352-358). wonder_overrun and wonder_age_overrun are DELIBERATELY
+not redundant (measured against two different deadlines -- game end vs. age
+end -- and the whole point of adding wonder_age_overrun was that 66.5% of
+wonders in the 2p census died to the age deadline while wonder_overrun,
+measured against the game deadline, saw nothing; see weights.rs's own doc
+comment on WonderAgeOverrun). wonder_remaining (resource sum), wonder_stages_
+left (stage count) and wonder_turns_to_finish (stages_left / production
+rate, floored) were NOT individually checked for correlation this pass --
+plausible but unverified; flagged only.
+
+
+(5) TOO-COARSE FEATURES -- no coefficient can be right, regardless of training
+-----------------------------------------------------------------------------
+This is a different failure from Sections 2-4: not two numbers fighting over
+one signal, but ONE number being asked to represent something the rules say
+varies by context. Both fixes below are still fully learned coefficients --
+what changes is what the ENGINE computes as the input fact, or when the
+existing coefficient is applied, never the coefficient itself becoming fixed.
+
+--- Uprising ---
+Feature (features.rs:511): a flat 0/1 indicator (`discontent > workers_free`).
+Coefficient: a single flat number, currently -60.0 in the live champion --
+by a wide margin the largest-magnitude coefficient in the file.
+RULES_SPEC 6.3/6.6: an uprising skips the ENTIRE Production Phase -- no
+science/culture scoring, no food/resource production, no corruption or
+consumption charged either. The rules-forced CONSEQUENCE is "this turn you
+produce none of your science/culture/food/resource instead of your normal
+amount" -- a quantity that scales with the player's OWN current production
+rates, which vary enormously between a strong and a weak civilization. A
+single flat coefficient cannot express "an uprising costs a rich player far
+more than a poor one"; it can only average over the training corpus's mix of
+rich and poor uprisings, which is exactly the kind of averaging that
+produces an unstable, oversized number like -60.
+FIX (still fully learned, no new free parameter): have the ENGINE compute
+the forgone-production FACT for the turn (the science/culture/food/resource
+that would have been produced -- all already-known quantities, since the
+production formulas are the same ones ScienceRate/CultureRate/FoodRate/
+ResourceRate already read), and price that fact through the SAME rate
+coefficients already being fitted elsewhere in the vector, rather than
+through a new, separate `uprising` weight. Net effect: `uprising` drops out
+as an independent parameter entirely -- its price is inherited from
+coordinates already being learned, not hardcoded, and not re-added as a new
+number.
+MIGRATION NOTE: this is NOT a lossless reparameterization like Section 2 --
+every existing champion's `uprising` price is discarded outright, and the
+new formula's answer will differ from -60 on nearly every position. Needs a
+fresh A/B measurement before landing, not a free cut.
+
+--- HasUnit ---
+Feature (features.rs:556): a flat, globally-applied 0/1 indicator ("do I
+have any staffed military unit"). RULES_SPEC 11.3: the value this is meant
+to capture is that colonization REQUIRES sacrificing at least one unit
+"even if other bonuses would cover the bid" -- a cliff whose relevance is
+conditional on a colonization opportunity actually being live (a territory
+event pending/resolving). Firing this indicator unconditionally, in every
+board state whether or not a colony auction is anywhere near happening,
+forces one learned number to average "worth having a unit RIGHT NOW because
+an auction is live" together with "worth having a unit in the far majority
+of turns where it changes nothing," diluting the coefficient toward
+whatever the average state looks like rather than what the rules-relevant
+state looks like.
+FIX (still one learned coefficient): condition the feature on live/pending
+colonization pressure (the same public information the auction-bid features
+already read) rather than firing it unconditionally -- the number stays
+fully learned, it is simply applied where the rules say it matters.
+Not implemented or A/B'd this pass -- flagged only; the direction (condition
+the trigger, do not touch the coefficient) is the useful finding.
+
+
+(6) THE REDUCED, BETTER-CONDITIONED PARAMETERIZATION -- proposal
+-----------------------------------------------------------------------------
+Everything below stays LEARNED. Nothing here is a formula replacing a
+fitted number; every change either (a) re-bases an existing 2-df object onto
+a non-redundant 2-parameter representation (zero information loss, exact
+remap), or (b) moves an existing coefficient to fire on a better-chosen fact
+or in a better-chosen context (still fitted, just no longer diluted).
+
+  Tier-1 fix (do this first -- Section 2, T1-A..D): replace each
+  {base, early, late} triple with {start, end}, evaluated as
+  `start*(1-L) + end*L`. Applies to workers, strength_rel, tech_levels,
+  hand_value. -4 parameters. Lossless remap for every champion on disk
+  (Section 7 has the exact formula). HandValue's NET_NONNEG_PHASE gate
+  becomes two much simpler constraints (start >= 0, end >= 0) instead of
+  the current base+early>=0 / base+late>=0 pair -- strictly simpler, not
+  weaker (identical constraint set once the redundant DOF is gone).
+
+  Tier-1 headroom pair (Section 2, T1-E/F): no code change proposed yet --
+  flagged for the same measurement discipline that found the original 3
+  dead-on-arrival coordinates (vary blue_free 3x holding corruption_headroom
+  fixed and vice versa, 200 paired games, see if either one's win rate
+  moves independently of the other).
+
+  Happiness triple (Section 2, T1-G): measure how often the corpus visits
+  margin>3 before deciding whether to act; if rare, the same kind of
+  reparameterization as the phase triples likely applies (drop happy_margin's
+  redundant-with-happy_surplus portion below the margin=3 kink), but this
+  needs the state-distribution check first, not assumed here.
+
+  Strength cluster (Section 3): NOT a reparameterization -- recommend (a)
+  fixing T1-B first, then (b) adding a small targeted eval batch with
+  deliberately unbalanced early-game strength (so rival_str != 0 during the
+  opening) to give the climb gradient in the direction it currently cannot
+  see, before trusting any further drift in strength/strength_rel/
+  strength_lead.
+
+  Tier-3 candidates (Section 4): not touched -- each is a "run the probe"
+  item, not a "make this change" item. Priority order for probing:
+  food_gap/food_stock and worker_gap/free_workers first (most often BOTH
+  live in an ordinary turn), then card_board_credit/card_board_leader,
+  then the rival-facts correlation matrix (T3-E, needs a different kind of
+  check -- correlation across many keys, not a paired A/B on one).
+
+  Too-coarse features (Section 5): uprising's fix reuses already-fitted
+  rate coefficients (net: -1 parameter, needs a fresh A/B, not a free cut);
+  has_unit's fix conditions the trigger, coefficient count unchanged.
+
+  NET, IF EVERYTHING ABOVE LANDS AND MEASURES CLEAN: -4 (phase triples,
+  certain) + possibly -1 (uprising, conditional on the A/B) = -5 to -4
+  parameters confirmed removable with essentially zero risk; the strength
+  cluster, headroom pairs, and Tier-3 candidates are NOT counted in this
+  number because none of them are proven to the same standard -- they are
+  the next things to measure, not numbers already in hand.
+
+
+(7) MIGRATION RISK
+-----------------------------------------------------------------------------
+Tier-1 phase-triple fix (Section 2, T1-A..D): NO migration risk. The remap
+is exact and mechanical for every file on disk that carries these 8 keys
+(the 4 base + 4 late... actually 12 keys: 4 base + 4 early + 4 late):
+    new_start = old_base + old_early
+    new_end   = old_base + old_late
+applied once per family to every champion/gauntlet/scratch JSON under
+analysis/, champ_backup/, scratch/, experiments/ -- every one of them keeps
+scoring EVERY position identically at every lateness, because the new basis
+spans the exact same 2-parameter curve the old one did. This is the one cut
+in this whole file that is safe to do mechanically across the whole corpus
+in one pass with no re-measurement.
+
+Uprising fix (Section 5): REAL migration risk. Every champion's `uprising`
+number is discarded, not remapped -- there is no formula that recovers the
+old flat -60 (or whatever a given file drifted to) from the new
+forgone-production pricing, because the new pricing has no free parameter of
+its own to absorb the old one into. Every champion on disk will score
+uprising-adjacent positions differently the moment this lands. This is why
+it is listed as "needs a fresh A/B," not "safe to land."
+
+Strength cluster / headroom pairs / Tier-3 candidates: no code change is
+proposed in this pass, so no migration risk exists yet -- these are
+measurement items, not landed cuts.
+
+Corpus note: the same 27 champion/gauntlet/scratch JSON files SIGNAUDIT.txt
+already inventoried (/private/tmp/signaudit/*, /private/tmp/rowdig/
+frozen_champion_2p.json) are the ones any of the above would need to touch.
+No new corpus scan was run this pass beyond the single champion vector dump
+already used for evidence above.
+
+
+(8) ORDERED IMPLEMENTATION PLAN
+-----------------------------------------------------------------------------
+1. Phase-triple reparameterization (T1-A..D). Best ratio of parameters-
+   removed to risk in the whole file: -4 parameters, exact lossless remap,
+   zero behavior change on any existing position, no A/B needed to justify
+   landing it (though one should still be run afterward simply to confirm
+   the remap script itself is bug-free, not because the math is in doubt).
+2. Run the vary-3x/200-game probe on the Tier-3 candidates in the priority
+   order given in Section 6, starting with food_gap/food_stock and
+   worker_gap/free_workers. This is measurement, not a code change, and
+   directly extends the exact method that found the original 3 dead
+   coordinates.
+3. Headroom-pair probe (blue_free/corruption_headroom, yellow_bank/
+   consumption_headroom) -- same method, different pair.
+4. Happiness-triple state-distribution check (how often does margin exceed
+   3 in real games) -- decides whether the T1-G reparameterization is safe
+   to do the same lossless way as step 1, or needs the fuller treatment.
+5. Strength-cluster targeted eval batch (deliberately unbalanced early-game
+   strength) -- generates the gradient signal current training cannot see,
+   ahead of trusting any further measurement of strength/strength_rel/
+   strength_lead.
+6. Uprising re-pricing -- last, because unlike everything above it is NOT a
+   free/lossless cut: it needs its own A/B against the current champion
+   before landing, and should not be bundled with the earlier,
+   risk-free items.
+7. has_unit re-conditioning, rival-facts correlation matrix (T3-E), and the
+   wonder-finish-discipline correlation check (T3-F) -- lowest priority,
+   least evidence gathered this pass, do after 1-6 land and re-measure.
+
+
+(9) FULL 162-KEY TABLE
+-----------------------------------------------------------------------------
+Columns: key | champion value (frozen_champion_2p.json) | finding.
+"UNREVIEWED" = not individually re-derived this pass; presumed a legitimate
+learnable trade-off, no claim either way. Cluster tags refer to Sections 2-4.
+Retired keys (card_board_government/action/wonder) are listed for
+completeness -- they are dead code as of today's earlier audit, not live
+WeightKey variants, and are excluded from every parameter count above.
+
+rate_horizon                -0.106   UNREVIEWED
+culture                      1.000   T3-A (have-side of culture_gap)
+culture_rate                -0.747   UNREVIEWED (standing-hinge base, see culture_rate_trailing)
+science                     -5.499   T3-A (have-side of science_gap)
+science_rate                -4.183   UNREVIEWED (standing-hinge base, see science_rate_trailing)
+food_rate                    0.009   UNREVIEWED
+resource_rate                -0.526   UNREVIEWED
+food_stock                  -0.010   T3-A (have-side of food_gap)
+resource_stock                1.530   T3-A (have-side of resource_gap)
+blue_free                    1.508   T1-E (paired with corruption_headroom)
+corruption_headroom          0.242   T1-E (paired with blue_free)
+consumption_headroom        -0.144   T1-F (paired with yellow_bank)
+pop_cost                    -0.050   UNREVIEWED
+yellow_bank                  0.003   T1-F (paired with consumption_headroom)
+free_workers                 0.315   T3-A (have-side of worker_gap)
+workers                     29.002   T1-A (phase triple, base)
+prod_workers                 0.302   UNREVIEWED
+urban_workers                -0.198   UNREVIEWED
+unit_workers                 -5.689   UNREVIEWED
+happy_margin                  0.736   T1-G (happiness triple)
+discontent                    0.000   T1-G (happiness triple)
+uprising                    -60.000   TOO-COARSE (Section 5)
+civil_actions                 0.146   UNREVIEWED
+military_actions              3.505   UNREVIEWED
+ca_left                      -2.106   T3-A (have-side of civil_action_gap)
+ma_left                       2.442   UNREVIEWED
+take_cost_paid               -0.438   UNREVIEWED
+row_urgency                   0.002   UNREVIEWED
+row_bargain_forgone           3.428   UNREVIEWED
+row_last_copy                -3.165   UNREVIEWED (out of scope per task brief -- "units, not sign/identifiability")
+rival_desire                 -0.030   UNREVIEWED
+rival_take_share              -0.144   UNREVIEWED
+rival_free_ca                  0.062   T3-E (raw rival-facts family)
+rival_hand_civil               -0.038   T3-E
+rival_wonders                  -0.055   T3-E
+rival_hand_potential            0.163   T3-E
+rival_science_stock             -0.009   T3-E
+rival_food_stock                1.189   T3-E
+rival_resource_stock            -0.206   T3-E
+rival_free_workers               0.027   T3-E
+rival_yellow_bank                 0.069   T3-E
+rival_colonies                    0.534   T3-E
+rival_mil_actions                  0.227   T3-E
+rival_building_wonder              -0.086   T3-E
+my_seeded_pending                   0.967   UNREVIEWED
+my_event_threat                      5.865   UNREVIEWED
+attack_target_lead                   -0.346   UNREVIEWED
+attack_target_weakness                5.388   UNREVIEWED
+pact_partner_lead                    24.312   UNREVIEWED (large outlier -- flag for future pass, not individually derived here)
+strength                             -7.152   TIER-2 (Section 3, strength cluster)
+strength_rel                         17.231   TIER-2 + T1-B (both clusters)
+strength_deficit                     -0.131   TIER-2 (strength cluster)
+strength_lead                          0.038   TIER-2 (strength cluster)
+tactic_level                          -0.045   UNREVIEWED
+tactic_gain                           -0.897   UNREVIEWED (sign already gated by SIGNAUDIT; identifiability not re-checked)
+tactic_short                           1.809   UNREVIEWED (sign already gated by SIGNAUDIT; identifiability not re-checked)
+has_unit                              -0.122   TOO-COARSE (Section 5)
+colonies                               1.372   UNREVIEWED
+pacts                                  0.258   UNREVIEWED
+pact_blocks_attack                     0.226   UNREVIEWED
+auction_committed                     -0.823   UNREVIEWED
+auction_bid                            0.018   UNREVIEWED
+tech_levels                            0.320   T1-C (phase triple, base)
+gov_level                              0.074   UNREVIEWED
+best_farm                              1.520   UNREVIEWED
+best_mine                              0.336   UNREVIEWED
+best_lab                              -1.465   UNREVIEWED
+best_temple                            0.598   UNREVIEWED
+best_theater                           0.488   UNREVIEWED
+best_library                          -0.342   UNREVIEWED
+best_arena                             4.801   UNREVIEWED
+best_unit                             -1.949   UNREVIEWED
+num_techs                              0.068   UNREVIEWED
+special_techs                         40.052   T3-D (correlated with tech_levels; large outlier)
+wonders                                0.150   UNREVIEWED
+wonder_progress                       -1.320   UNREVIEWED
+wonder_remaining                      -0.048   T3-F (wonder finish-discipline family)
+wonder_stages_left                    -1.772   T3-F
+wonder_turns_to_finish                -0.852   T3-F
+wonder_overrun                        -0.019   T3-F (deliberately distinct deadline from wonder_age_overrun, see Section 4)
+wonder_stages_per_action               0.095   UNREVIEWED
+wonder_potential                       0.355   UNREVIEWED
+wonder_promise                         0.000   UNREVIEWED
+wonder_age_overrun                     0.000   T3-F (deliberately distinct deadline from wonder_overrun, see Section 4)
+leader                                 0.739   UNREVIEWED
+hand_limit                             0.089   UNREVIEWED
+colonize_bonus                         1.239   UNREVIEWED
+build_discount                         0.000   UNREVIEWED
+free_civil_action                      0.028   UNREVIEWED
+resource_discount                      0.332   UNREVIEWED
+defense_bonus                          1.180   UNREVIEWED
+urban_limit                           -0.012   UNREVIEWED
+gov_action_cost                       -0.520   UNREVIEWED
+no_aggression                         -0.195   UNREVIEWED
+restricted_resources                   0.000   UNREVIEWED
+card_board_credit                      0.000   T3-B (composite differencing with card_board_leader/bonus)
+event_scoring_margin                   0.577   UNREVIEWED
+card_board_leader                    -15.003   T3-B
+[card_board_government -1.009 -- RETIRED, dead code, not a live parameter]
+[card_board_action     -2.442 -- RETIRED, dead code, not a live parameter]
+[card_board_wonder       1.507 -- RETIRED, dead code, not a live parameter]
+card_board_bonus                      -0.163   T3-B
+hand_swap_extra                        0.113   UNREVIEWED
+card_rate_credit                       5.794   UNREVIEWED
+unit_strength_credit                   0.000   UNREVIEWED
+unit_tech_credit                       0.304   T3-C (bilinear w/ tech_board_credit, unit cards only)
+tech_board_credit                     -0.128   T3-C
+action_board_credit                   -0.143   UNREVIEWED
+gov_board_credit                       2.569   UNREVIEWED
+wonder_board_credit                    0.112   UNREVIEWED
+build_fresh_credit                    -0.692   UNREVIEWED
+restricted_resource_credit             0.615   UNREVIEWED
+free_action_credit                    -0.001   UNREVIEWED
+territory_credit                       0.283   UNREVIEWED
+bonus_card_credit                      0.475   UNREVIEWED
+tactic_board_credit                    0.649   UNREVIEWED
+aggression_board_credit               -1.004   UNREVIEWED
+war_board_credit                       1.185   UNREVIEWED
+pact_board_credit                     -0.014   UNREVIEWED
+event_board_credit                     0.677   UNREVIEWED
+tactic_shortfall_cost                 11.181   UNREVIEWED (large outlier -- flag for future pass, not individually derived here)
+tactic_reach_credit                    0.143   UNREVIEWED
+hand_civil                            -0.129   UNREVIEWED
+hand_value                            -0.403   T1-D (phase triple, base)
+hand_potential                         0.079   UNREVIEWED
+hand_military                          1.213   UNREVIEWED
+hand_mil_value                        -0.330   UNREVIEWED
+hand_mil_potential                    -0.147   UNREVIEWED
+hand_perishable                       -0.045   UNREVIEWED
+rival_culture                         -0.092   T3-E
+rival_mean_culture                    -0.152   T3-E
+rival_culture_rate                    -0.670   T3-E
+rival_science_rate                    -1.375   T3-E
+rival_strength                        -0.028   T3-E
+end_turn_bias                         -0.150   UNREVIEWED (own doc comment: "DO NOT fix this asymmetry", not a board coefficient in the usual sense)
+culture_rate_trailing                 -4.604   UNREVIEWED (standing hinge; provisionally plausible-identifiable, not verified -- see Section 4 note)
+science_rate_trailing                -12.328   UNREVIEWED (same; large outlier, flag for future pass)
+workers_early                         -0.092   T1-A (phase triple)
+workers_late                           0.128   T1-A
+strength_rel_early                    -0.195   T1-B
+strength_rel_late                      5.606   T1-B
+tech_levels_early                      0.101   T1-C
+tech_levels_late                      -0.419   T1-C
+hand_value_early                     -12.405   T1-D
+hand_value_late                       -0.078   T1-D
+food_gap                              -0.145   T3-A
+food_surplus                           0.764   UNREVIEWED (kink partner of food_gap; not itself flagged, see Section 4 T3-A note)
+resource_gap                          -0.055   T3-A
+resource_surplus                      -1.669   UNREVIEWED
+science_gap                           -0.101   T3-A
+science_surplus                       -0.186   UNREVIEWED
+culture_gap                           -0.030   T3-A
+culture_surplus                        0.144   UNREVIEWED
+happy_surplus                          0.346   T1-G
+civil_action_gap                      -0.311   T3-A
+civil_action_surplus                   0.028   UNREVIEWED
+take_cost_share                       -0.059   UNREVIEWED
+military_action_gap                    0.000   UNREVIEWED (have-side is raw p.military_actions, not itself a WeightKey -- weaker version of T3-A, not counted in that cluster)
+military_action_surplus               -0.153   UNREVIEWED
+worker_gap                            -0.015   T3-A
+worker_surplus                         0.133   UNREVIEWED
+tech_redundancy_discount               0.241   UNREVIEWED
+
+
+(10) WHAT WAS NOT DONE / COVERAGE HONESTY
+-----------------------------------------------------------------------------
+- ~100 of 159 live keys are UNREVIEWED for identifiability in this pass --
+  listed plainly above, not claimed clean and not claimed broken.
+- No correlation matrix was actually computed over any corpus (T3-E, T3-F
+  are named as candidates for one, not resolved).
+- No state-distribution histogram was run to settle how much of T1-G's
+  (happiness triple) redundancy is practically severe.
+- No vary-3x/200-game probes were run this pass (Section 8 lists them as
+  next steps, in order); the ones in SIGNAUDIT.txt's own opening ("three of
+  five completely undetectable") predate this file and are the reason the
+  Tier-1/Tier-3 method exists at all -- this pass reused that method's logic
+  algebraically, it did not re-run the games.
+- No code was changed. Per the task's own instruction this pass is the plan,
+  not the implementation; the phase-triple fix (Section 2/6) is flagged as
+  the safest candidate for a follow-up implementation pass specifically
+  because its remap is exact and lossless, not because it was done here.

@@ -407,7 +407,7 @@ pub(crate) fn card_value(state: &GameState, p: &PlayerState, ctx: &Ctx, profile:
             }
             v + bonus
         }
-        _ => 1.0,
+        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => 1.0,
     }
 }
 

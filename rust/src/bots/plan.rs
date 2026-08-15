@@ -362,6 +362,12 @@ pub fn pick(
 /// search takes EXACTLY today's code path unless a caller opts in by
 /// building a [`PolicyOrder`] and passing it explicitly. See [`beam`]'s own
 /// doc comment for what changes, and does not change, when it is `Some`.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 pub fn pick_collecting(
     cfg: &PlanConfig,
     stats: &mut Stats,
@@ -426,6 +432,12 @@ pub fn pick_collecting(
 /// itself computes to choose a winner, rather than re-running the beam once
 /// per candidate to recover them -- re-running would multiply search cost by
 /// the branching factor for information this one search call already has.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 fn search_totals(
     cfg: &PlanConfig,
     stats: &mut Stats,
@@ -491,7 +503,7 @@ fn best_from_totals(totals: &[(Move, f64, u32)]) -> Option<Move> {
 /// truncated-out line contributes nothing at all, no matter how generous
 /// `max_nodes` is. A caller that must never drop a legal move from view has
 /// to notice the gap and fall back to its own 1-ply score for it
-/// (`advisor::advisor::rank_moves_beam` does exactly this).
+/// (`advisor::session::rank_moves_beam` does exactly this).
 ///
 /// Outside the decider's own ordinary turn (`pending::not_my_turn`, mirroring
 /// [`pick_collecting`]'s identical branch) there is no multi-move "turn" to
@@ -500,6 +512,12 @@ fn best_from_totals(totals: &[(Move, f64, u32)]) -> Option<Move> {
 /// same [`pending::fallback_pick`] policy `pick_collecting` itself routes
 /// through -- so `counters` moves exactly as it would for [`pick`] at an
 /// identical decision.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 pub fn rank(
     cfg: &PlanConfig,
     stats: &mut Stats,
@@ -569,6 +587,12 @@ struct Frontier {
 /// `mvs = generated.as_slice()`, completely unordered -- so the flag-off
 /// path is not just "close to" today's search, it is the same code running
 /// the same comparisons in the same order.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 fn beam(
     cfg: &PlanConfig,
     stats: &mut Stats,
@@ -750,6 +774,12 @@ fn one_ply_ranked(state: &GameState, moves: &[Move], me: u8, w: &Weights, ctx: &
 /// spends cards on arithmetically hopeless defences and holds off none of
 /// the winnable ones, because an undrained position cannot express whether a
 /// defence succeeds.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 fn one_ply_quiet(
     state: &GameState,
     moves: &[Move],
@@ -771,6 +801,12 @@ fn one_ply_quiet(
 /// decision that wants the pending stack drained before scoring. See
 /// [`one_ply_ranked`]'s own doc comment for why `.first()` after a stable
 /// sort reproduces the original running-best tie-break exactly.
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 fn one_ply_quiet_ranked(
     state: &GameState,
     moves: &[Move],
@@ -822,11 +858,16 @@ fn one_ply_quiet_ranked(
 /// documented as "exactly as PlanBot._quiesce does"). Calling this function
 /// instead of forking a second copy is what makes that "exactly" durable
 /// rather than a comment two files can silently drift apart under.
+/// Borrowed form of `rivals::RootCounts` (see that alias): `(civil outlook,
+/// (event pool, its own total))`, by reference since `quiesce` never needs
+/// to own or mutate either.
+type RootCountsRef<'a> = (&'a Vec<(CardId, f64)>, &'a (Vec<(CardId, u16)>, f64));
+
 pub(crate) fn quiesce(
     st: &mut GameState,
     w: &Weights,
     root_row: Option<&CardList<ROW_SIZE>>,
-    root_counts: Option<(&Vec<(CardId, f64)>, &(Vec<(CardId, u16)>, f64))>,
+    root_counts: Option<RootCountsRef>,
 ) {
     let mut n = 0u32;
     while !st.pending.is_empty() && n < QUIESCE_CAP && !st.game_over {

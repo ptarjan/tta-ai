@@ -1,0 +1,175 @@
+CULTURE DRIFT BUCKET — culture_drifted_in_play=true
+Worker: culture drift
+Base commit: 13019ca (Churchill military option + fasttest profile; 350 complete, 316 exact)
+Clone: /private/tmp/culturedrift (deleted at end of session; fix preserved as
+       culturedrift.patch in this directory, scoped to rust/src/effects.rs only)
+
+=== BASELINE (before any fix, at 13019ca) ===
+350/350 completed games actually flipped state.game_over; 316/350 of those matched
+index.tsv exactly (sorted per-game score-list compare).
+
+=== ENUMERATION (re-derived fresh at 13019ca, NOT reusing the stale "24" number) ===
+Commands:
+  cd rust && PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+  SCOREDIV_DUMP_IDS=1 ./target/difftest/replaystats ../sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals > /tmp/cd_before.txt 2>&1
+  grep 'SCOREDIV_DETAIL' /tmp/cd_before.txt | grep 'culture_drifted_in_play=true'
+
+28 games in the bucket at 13019ca (the "24" in the task brief was stale; it moved
+along with the overall 350/316 baseline — this is the authoritative re-enumeration):
+
+7521066 7521666 7521789 7521790 7521815 7521882 7521894 7521899 7521985 7522009
+7522417 7522536 7522590 7522768 7522813 7522822 7522838 7522974 7522979 7523081
+7523102 7523149 7523172 7523233 7523256 7523360 7523367 7523528
+
+=== ROOT CAUSE FOUND AND FIXED ===
+
+File: rust/src/effects.rs, `apply_special`'s `CulturePerHappyFromTemplesTheatersWonders`
+arm (Michelangelo's leader ability).
+
+Traced via game 7521066 (Purple, round 12): the debug trace
+(`REPLAY_DEBUG=1 ./target/difftest/replay ... 7521066`) showed:
+  "DEBUG end-turn culture drift: actor=1 journal says (now 39), this binary
+   computes 38 (delta -1) at line 304"
+and this delta -1 persisted UNCHANGED at every subsequent Purple end-turn
+checkpoint for the rest of the game (lines 334, 366, 408, 441: always exactly
+-1) — a signature of a one-time miscount at the turn Purple completed Kremlin,
+not a compounding per-turn bug.
+
+Purple held Michelangelo (elected round 7, confirmed still in play — round
+10's "Orange plays Infiltrate against Purple" destroyed Purple's unfinished
+Transcontinental Railroad WONDER, not the leader). Purple completed Kremlin
+on round 12. Kremlin's printed effects (`rust/src/card_table.rs`) include
+`happy: -1` — a genuine printed UNHAPPY face, not merely the absence of a
+happy face; Kremlin is the only base-game wonder with negative printed happy.
+
+The buggy code:
+    let mut happy = happy_from(&p.techs, |k| matches!(k, CardType::Temple | CardType::Theater));
+    for &w in p.completed_wonders.as_slice() {
+        if p.flipped_wonders.contains(w) { continue; }
+        happy += w.get().effects.happy as i32;   // <-- BUG: raw signed value
+        if p.homer_wonder == w { happy += 1; }
+    }
+    ...
+    stats.culture += v as i32 * happy.max(0);
+
+Michelangelo's printed text is "1 culture per HAPPY FACE from temples,
+theaters and wonders" — an unhappy face is not a happy face, so it should
+contribute ZERO to this count, never a negative number that cancels a happy
+face contributed by some OTHER source in the same sum. FAQ v1.5 p.9 (already
+in sources/faq_v15.pdf) independently confirms this per-source count is its
+own thing, exempt from the whole-civilization 0..8 happiness clamp ("the
+maximum per-turn Culture benefit of Michelangelo can be greater than eight")
+— i.e. it is a face COUNT, not a net-happiness SUM. The two sibling helpers
+`happy_source_count` and `temple_theater_wonder_happy_source_count`
+(same file) already gate on `card.effects.happy > 0` for exactly this
+reason; this arm was the one place that summed the raw signed value instead.
+
+THE FIX: clamp each wonder's contribution to non-negative before adding it:
+    happy += w.get().effects.happy.max(0) as i32;
+
+This is NOT the wonder-loop `continue`-before-own-effects family of bugs the
+task brief flagged (Homer / happy_source_count / temple_theater_wonder_
+happy_source_count / Michelangelo's arm) — I checked all four call sites and
+the Homer-unconditional-check-before-`continue`, and the `effects.happy > 0`
+gating in both `happy_source_count` and `temple_theater_wonder_happy_source_
+count`, are ALL ALREADY CORRECT at 13019ca (fixed in prior commits ed3ccc9,
+8513ae0, a149802 — visible in `git log --oneline -- rust/src/effects.rs`).
+The bug that remained was specifically the un-clamped sum inside
+Michelangelo's own `CulturePerHappyFromTemplesTheatersWonders` arm.
+
+=== TEST (RED then GREEN) ===
+
+Added to rust/src/effects.rs `#[cfg(test)] mod tests`:
+
+  michelangelo_does_not_let_a_wonders_unhappy_face_cancel_a_temples_happy_face
+
+Setup: Michelangelo leader, a staffed Religion (Temple, 1 happy face), and a
+completed Kremlin (effects.happy == -1). Expected culture = Religion's own
++1, Kremlin's own +2, plus 1 * Michelangelo's culture-per-happy where the
+happy count is 1 (Religion's face only; Kremlin's unhappy face must NOT
+subtract) = 4.
+
+Confirmed RED by reverting ONLY the fixed line (`happy += w.get().effects.happy.max(0) as i32;`
+back to `happy += w.get().effects.happy as i32;`) and rerunning:
+
+  $ PATH=$HOME/.cargo/bin:$PATH cargo test --profile fasttest michelangelo_does_not_let_a_wonders_unhappy_face
+  test effects::tests::michelangelo_does_not_let_a_wonders_unhappy_face_cancel_a_temples_happy_face ... FAILED
+  thread '...' panicked at src/effects.rs:2108:9:
+  assertion `left == right` failed: Religion's own +1, Kremlin's own +2, and 1 * Michelangelo's culture-per-happy
+  (Religion's 1 happy face; Kremlin's unhappy face must not subtract)
+    left: 3
+   right: 4
+
+Restored the fix, reran: all 6 Michelangelo-related tests pass (including
+the two pre-existing regression tests for the Homer-tucked-wonder and St.
+Peter's-Basilica-boost cases, confirming no regression of those fixes).
+Full `cargo test --profile fasttest`: 1365 + 6+6+4+4+12+26+5+48+... all
+"test result: ok", 0 failed, across every module.
+`cargo clippy --all-targets --profile difftest -- -D warnings`: clean, no
+warnings.
+
+=== REGRESSION GUARD (after fix, rebuilt replaystats --profile difftest) ===
+
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats ../sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals > /tmp/cd_after.txt 2>&1
+  grep '^SCOREDIV_COMPLETED_ID' /tmp/cd_after.txt | awk '{print $2}' | sort > /tmp/cd_ids.txt
+
+  comm -23 /private/tmp/guard_ids.txt /tmp/cd_ids.txt     # REGRESSIONS
+  (empty — no output)
+
+  comm -13 /private/tmp/guard_ids.txt /tmp/cd_ids.txt     # WINS (new completions)
+  (empty — no output; expected, since this fix only changes a SCORED VALUE,
+  not move legality, so the completion set (350) is exactly unchanged)
+
+Both comm outputs verbatim: EMPTY. Zero regressions, as required.
+
+Summary line before -> after:
+  BEFORE: 350/350 completed games actually flipped state.game_over;
+          316/350 of those matched index.tsv exactly.
+  AFTER:  350/350 completed games actually flipped state.game_over;
+          323/350 of those matched index.tsv exactly.
+
+Exact-match count K: 316 -> 323 (+7). Judged by ID sets, not means.
+
+=== EFFECT ON THE 28-GAME BUCKET ===
+
+10 of the 28 bucket games held both Michelangelo and a completed Kremlin
+(checked by grepping each game's journal for both card names):
+  7521066 7521790 7521815 7521894 7521899 7522768 7522822 7523102 7523149 7523172
+
+Of those 10, this fix fully resolved 7 (score lists now match index.tsv
+exactly, dropped out of the bucket entirely):
+  7521066 7521815 7521894 7521899 7522822 7523149 7523172
+
+3 of the 10 (7521790, 7522768, 7523102) still diverge after the fix — they
+have at least one ADDITIONAL, different bug beyond the Michelangelo/Kremlin
+interaction (not investigated further this session; still culture_drifted_
+in_play=true, still present in the post-fix bucket).
+
+21 games remain in the culture_drifted_in_play=true bucket after this fix
+(re-enumerated the same way against the post-fix build):
+  7521666 7521789 7521790 7521882 7521985 7522009 7522417 7522536 7522590
+  7522768 7522813 7522838 7522974 7522979 7523081 7523102 7523233 7523256
+  7523360 7523367 7523528
+
+Their `first_culture_divergence` last_action_class values are heterogeneous
+(TakeCard, BuildBuilding, BuildUnit, BuildWonderStage, PlayTactic, Discard,
+ElectLeader, IncreasePopulation, UpgradeProduction, EndTurn) with no single
+obvious shared root cause spotted in the time available — each likely needs
+its own trace via `REPLAY_DEBUG=1 ./target/difftest/replay ... <id>` the same
+way 7521066 was diagnosed here. Handed over, not guessed at.
+
+=== DELIVERY ===
+
+  cd /private/tmp/culturedrift && git diff 13019ca HEAD -- rust/src/effects.rs \
+      > /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/culturedrift.patch
+
+Patch is scoped to ONLY rust/src/effects.rs (verified via `git status --short`
+that no other file was modified in the clone — a handful of pre-existing
+UNTRACKED scratch/*.json, champ_backup/*, human_openings.tsv etc. files were
+present in the /private/tmp/base0815 snapshot from other workers' sessions;
+these were explicitly excluded from the commit and from the patch by
+pathspec, not swept in with `git add -A`/`git commit -am`).
+
+Clone deleted after the patch was written out: `rm -rf /private/tmp/culturedrift`.

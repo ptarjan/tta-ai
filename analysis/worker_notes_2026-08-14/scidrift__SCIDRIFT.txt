@@ -1,0 +1,315 @@
+SCIDRIFT worker -- 2026-08-14 -- clone /private/tmp/scidrift, base commit e642c90
+(branch base0815), final commit f4b1a19.
+
+TASK: build an in-play SCIENCE cross-validation oracle over the human corpus
+(none existed before this pass -- only CULTURE is cross-validated in-play),
+then use it to find the science-tracking bug PACTS's writeup (this same
+directory, pacts__PACTS.txt) tripped over in game 7523162. Mid-session the
+coordinator added: also build the same oracle for RESOURCES (WONDER's
+writeup, wonder__WONDER.txt, found a matching "reconstructed short by a
+small amount" shape in the WonderStep/Build/Upgrade IllegalMove buckets),
+and report whether science and resource divergence are the same bug wearing
+two names or two different bugs.
+
+===========================================================================
+STEP 0: DOES THE ORACLE EVEN EXIST -- YES
+===========================================================================
+Found the existing culture-oracle machinery first (`replay_common.rs`'s
+`CultureOracleDivergence`, `record_culture_check`, `flush_pending_
+culture_check`, keyed off `trailing_now_culture` parsing an `"End turn ...
+N culture (now M) ..."` clause). Grepped the raw corpus and confirmed BGO
+prints SCIENCE and RESOURCES on the exact same "End turn ... scores:" line,
+same running-total grammar, right next to culture:
+
+  End turn Grey scores:; ; 2 culture (now 26); 3 science (now 6); 0 food -
+  consumption: 2 (now 0); 6 resources (now 16)
+
+A `trailing_now_science` helper (and its `trailing_now_resources` twin)
+ALREADY existed in `replay_common.rs` -- but only as `REPLAY_DEBUG`-gated
+eyeball tooling for a different investigation (chasing `IllegalMove:
+Develop`/`Build` science/resource-shortfall buckets one spend at a time),
+explicitly NOT the structural, snapshot-based, discard-aware checkpoint
+culture has. That distinction matters: the naive `REPLAY_DEBUG` science
+check reads the LIVE `state.players[actor].science` the instant an "End
+turn" line is dispatched, with no defer-on-open-discard logic, and it fires
+"drift" on nearly every single End Turn in some games (confirmed on
+7523162 itself) -- almost all of it false positives from exactly the
+discard-blocked-turn timing hazard `CultureOracleDivergence`'s own doc
+already named and solved for culture. Building a naive reuse of that
+existing helper would have produced a flood of noise, not a real oracle.
+So: buildable, and worth building properly (mirroring culture's full
+snapshot+defer shape), not as a shortcut.
+
+===========================================================================
+STEP 1: THE ORACLE (science AND, per the coordinator's mid-session ask,
+resources), env-var gated, zero replay-outcome change
+===========================================================================
+Mirrored the culture-oracle shape exactly, twice (once for science, once
+for resources), behind their OWN env vars `SCIENCE_ORACLE` / `RESOURCE_
+ORACLE` (added to `debugflags.rs` alongside the existing `REPLAY_DEBUG*`
+flags -- unlike culture's always-on checkpoint, these default OFF, per the
+task's own "DIAGNOSTIC-ONLY... must not change any replay outcome" rule):
+
+  state.rs:      GameState::last_end_of_turn_science / _resources (two new
+                 `[Option<u16>; MAX_PLAYERS]` snapshot fields, twins of the
+                 existing `last_end_of_turn_culture`)
+  game.rs:       resume_end_turn snapshots both, in the SAME spot, BEFORE
+                 advance_turn, for the same reason culture's own comment
+                 gives (a same-call war cascade for the NEXT player must
+                 not corrupt this actor's own checkpoint)
+  replay_common.rs:
+    - ScienceOracleDivergence / PendingScienceCheck (+ resources twins),
+      structurally identical to CultureOracleDivergence / PendingCulture
+      Check, with one addition: a `round: String` field (culture's struct
+      doesn't carry one -- added here because the corpus report explicitly
+      needs "at what round do games first diverge")
+    - record_science_check / flush_pending_science_check (+ resources
+      twins) -- same snapshot-read, same discard-blocked-turn deferral
+    - wired into the SAME "End turn" dispatch branch as the culture check,
+      immediately after it, gated on `debugflags::science_oracle()` /
+      `resource_oracle()`
+    - GameResult gained science_oracle_divergence/_checked/_agreed and the
+      resources equivalents, populated at the end of replay_game exactly
+      like culture's
+  bin/replaystats.rs:
+    - checked/agreed totals, a "## Science oracle" / "## Resource oracle"
+      summary section (mirrors culture's own summary line), and per-game
+      SCIENCE_DIVERGING_ID / SCIENCE_DETAIL / RESOURCE_DIVERGING_ID /
+      RESOURCE_DETAIL stdout lines (FIRST divergence only, one line per
+      game) -- printed whenever `Some`, which only happens when the run
+      opted in via the env var, so this needed no extra dump-gate the way
+      SCOREDIV_DUMP_IDS needs one for culture's always-on check.
+
+10 other GameState struct-literal construction sites across the crate
+(combat.rs, apply.rs, economy.rs, costs.rs, effects.rs, legal.rs, events.rs,
+interact.rs, advisor/state_io.rs, bots/weighted/events.rs, plus
+replay_common.rs's own test fixture) all needed the two new fields added --
+this codebase deliberately has no `Default`/spread pattern for `GameState`
+so every construction site is a real field literal (documented at `last_
+end_of_turn_culture`'s own doc, confirmed the hard way via the compiler).
+
+5 new unit tests added inside `replay_common.rs`'s own `#[cfg(test)] mod
+tests` (full-sentence names, mirroring the existing culture-oracle test
+pair): defer-while-blocked and compare-once-resolved for science, a
+sign-correctness test for a real divergence (reproducing the exact 7523162
+shape -- reconstructed 4, journal 6, delta -2, matching the known repro),
+and the resources equivalents.
+
+PROOF OF ZERO OUTCOME CHANGE (oracles OFF, the default):
+  cargo test --profile fasttest --lib: 1427 passed, 0 failed (1422 baseline
+    + 5 new tests).
+  cargo clippy --all-targets -- -D warnings: 0 warnings.
+  Guard sweep (SCOREDIV_DUMP_COMPLETED=1, no SCIENCE_ORACLE/RESOURCE_ORACLE
+    set):
+      # replaystats: 1011 games sampled, 698 completed to state.game_over
+      698/698 completed games actually flipped state.game_over; 671/698 of
+      those matched index.tsv exactly.
+    REGRESSIONS (comm -23 guard_ids_698.txt scidrift_ids.txt): EMPTY
+    WINS (comm -13 guard_ids_698.txt scidrift_ids.txt): EMPTY
+  698/698 completed, 671/698 exact -- byte-identical to the known baseline,
+  both comm diffs empty, exactly as required for diagnostic-only code.
+
+===========================================================================
+STEP 2: CORPUS-WIDE DIVERGENCE (the deliverable) -- SCIENCE_ORACLE=1
+RESOURCE_ORACLE=1, full 1011-game sweep
+===========================================================================
+SCIENCE:
+  40958 "End turn" checkpoints checked corpus-wide; 40301 (98.4%) matched
+  exactly. 70/1011 games sampled had at least one checkpoint disagree
+  (first divergence only, per game).
+  Sign of the FIRST divergence (delta = reconstructed - journal_now):
+    53/70 positive (this binary OVER-counts science)
+    17/70 negative (this binary UNDER-counts science)
+  -- lopsided toward over-counting (76%) but NOT one-sided. A one-sided
+  sign would point at a single missing-subtraction bug; this 76/24 split
+  says "a dominant cause plus at least one other," not one clean story.
+  First-divergence round histogram (peaks mid-game, not early or late):
+    round 5:1  6:1  7:3  8:2  9:9  10:10  11:12  12:11  13:11  14:1  15:4
+    16:2  17:2  18:1
+  76% of first divergences (53/70) land in rounds 9-13.
+
+RESOURCES:
+  Same 40958 checkpoints checked (same "End turn" lines carry both
+  clauses); 39604 (96.7%) matched exactly -- a visibly worse hit rate than
+  science's 98.4%. 312/1011 games sampled had at least one checkpoint
+  disagree -- 4.5x more games than science.
+  Sign of the FIRST divergence:
+    245/312 positive (over-counts resources)
+    67/312 negative (under-counts resources)
+  -- also lopsided toward over-counting (78%), same direction as science,
+  but again not one-sided.
+  First-divergence round histogram is much broader and starts much
+  earlier than science's: round 3:3 4:5 5:5 6:6 7:19 8:27 9:24 10:34 11:16
+  12:33 13:16 14:19 15:14 16:34 17:36 18:17 19:4 -- no sharp peak, real
+  mass from round 7 all the way to round 18. This matches WONDER's own
+  finding (13/14 WonderStep failures short by "a small amount," the same
+  shape recurring in Build/Upgrade) of a widespread, not localized,
+  resource-tracking gap.
+
+OVERLAP (the coordinator's specific ask -- same games/same sign, or
+disjoint?):
+  science-diverging games: 70. resource-diverging games: 312.
+  Games in BOTH sets: 35 (50% of science's 70; only 11% of resources' 312).
+  Science-only: 35. Resource-only: 277.
+  Of the 35 overlapping games:
+    - same sign (both over- or both under-counting): 27/35 (77%)
+    - same ACTOR at the first divergence checkpoint: 11/35 (31%)
+    - which fires first in journal order: science first in 19, resources
+      first in 15, tied (same line) in 1
+  READING: this is neither "one bug" nor "two fully disjoint bugs." Most
+  resource divergences (277/312, 89%) have NO accompanying science
+  divergence at all, so resources have their own large, mostly-independent
+  problem (consistent with WONDER's Build/Upgrade/WonderStep trace, which
+  never mentioned science). But the 35-game overlap is far from
+  coincidental noise: same-sign agreement (77%) is well above what a
+  50/50 coin flip would give, suggesting SOME shared root cause (a
+  production-step accounting error that touches both totals) contributes
+  to a minority of games, layered on top of resources' own separate,
+  larger-population bug. Different actors at the first checkpoint in 69%
+  of the overlap games argues against "the exact same event breaks both
+  counters simultaneously" as the shared mechanism -- more likely a shared
+  KIND of bug (e.g. a production-recompute or corruption interaction) that
+  independently mis-fires on each resource type on its own schedule.
+
+===========================================================================
+STEP 3: TRACED 7523162 (Grey, the PACTS repro) -- LOCALIZED, more
+precisely than PACTS's own finding, not yet root-caused
+===========================================================================
+PACTS's writeup (this directory) found Grey's tracked science drop 2
+points between journal line 296 (round 9 End Turn, which PACTS hand-
+verified as CORRECT at 6) and line 301 (round 10), with no visible cause in
+between -- and dated the bug to "somewhere in the round 9->10 boundary
+transition."
+
+Running this pass's new oracle on the UNMODIFIED baseline (no PACTS fix
+applied -- that fix is still reverted, science_pact_partners_can_pay does
+not exist in this tree) finds the FIRST science divergence for 7523162 is
+at line 296 ITSELF: lineno=296 round=9 actor=Grey journal_now=6
+reconstructed=5 delta=-1. That is, the discrepancy is already present at
+the very checkpoint PACTS trusted as ground truth -- one full round
+earlier than PACTS's own trace located it. (PACTS's "6" was hand-derived
+using their OWN not-yet-implemented Scientific-Cooperation partner-charge
+fix; re-deriving by hand against the true baseline engine, which has NEVER
+implemented that charge, gives an expected reconstructed value of 7 at
+line 296 -- not 5 -- explained below.)
+
+Manual reconstruction of Grey's science through round 9, using ONLY
+journal-stated amounts and the baseline engine's own (unimplemented-
+partner-charge) behaviour:
+  round 8 End Turn (line 264): baseline agreed exactly at 8 (no earlier
+    divergence flagged for this game).
+  line 268 (round 9): Orange develops Riflemen under the just-accepted
+    Scientific Cooperation pact -- journal charges Grey 1 science as the
+    partner. The baseline engine does NOT implement this charge at all
+    (PACTS's own confirmed gap), so the ENGINE's own science stays at 8
+    here (journal's true value would be 7, but that is not what the
+    engine computes).
+  line 292 (round 9): Grey develops (peacefully) Constitutional Monarchy
+    -- journal states "4 science points spent; Grey loses 4 science."
+    The engine's own DevelopTechnology cost path applies this deduction
+    (validated: the replay proceeds past this line without a Mismatch, so
+    the engine's own computed cost agrees with the journal's stated 4).
+    Engine's own running total: 8 - 4 = 4.
+  round 9 production (folded into the line-296 "End turn" clause): journal
+    labels this turn's science production rate "3" (`trailing_now_
+    science`'s own doc: the leading number in "N science (now M)" is a
+    RATE label, not necessarily the exact delta applied). Expected engine
+    total after production, given the engine's own pre-production baseline
+    of 4: 4 + (whatever the engine's own production step actually adds).
+
+The oracle's own snapshot says the ENGINE's post-production total is 5,
+not the naively-expected 7 (4 + 3). That means the engine's OWN production
+step for Grey, round 9, added only 1 science, not 3 -- a 2-point
+PRODUCTION shortfall, not a mystery post-hoc subtraction happening after
+the checkpoint. This is a materially different (and more specific) claim
+than PACTS's "silent drop between line 296 and 301": the anomaly is
+INSIDE round 9's own end-of-turn production step, coincident with (but not
+yet proven caused by) Grey's own government change taking effect that
+same turn (Constitutional Monarchy, elected via `ElectLeader`-adjacent
+`ChangeGovernment` at line 292, in the same turn whose production this
+oracle flags).
+
+Checked `card_table.rs`'s own Constitutional Monarchy entry against
+`sources/bga_throughtheages_material.inc.php`-style data: `production:
+Production { food: 0, resources: 0, culture: 0, science: 0, ... }` -- the
+card itself carries NO science-production modifier, so a bare data-table
+diff does not explain a 2-point production shortfall. The likely next
+places to look (NOT chased further -- out of this pass's remaining
+budget): whether `economy`'s production step reads Grey's `science_
+rate_extra`/lab-count BEFORE or AFTER the same-turn government swap lands
+in `state.players[_].government`, and whether Robespierre (Grey's leader,
+elected the same round at line 290) has a civil-action-pool interaction
+that is bleeding into the science rate calculation the way the existing
+`h_revolution_via_breakthrough_does_not_charge_robespierres_civil_pool_
+for_breakthroughs_own_ca` test already had to guard against for a
+DIFFERENT field.
+
+NEW LEAD FOR A FUTURE WORKER (more specific than PACTS's): trace `economy`
+crate's production step (not the round-boundary/advance_turn code PACTS
+pointed at) for game 7523162, Grey, round 9, specifically what science
+amount gets added between the post-Constitutional-Monarchy-cost snapshot
+(4) and the end-of-turn snapshot this oracle now proves is 5, against the
+journal's implied +3. Reproduction: `SCIENCE_ORACLE=1 REPLAY_DEBUG_ALL=1
+./target/difftest/replay <index> <journals> 7523162` and grep for `end_of_
+turn` / production-step debug lines around Grey's round-9 turn.
+
+===========================================================================
+FILES CHANGED (all in /private/tmp/scidrift, committed at f4b1a19)
+===========================================================================
+  src/state.rs               -- 2 new GameState fields + doc
+  src/game.rs                -- 2 new snapshot writes in resume_end_turn
+  src/debugflags.rs          -- SCIENCE_ORACLE / RESOURCE_ORACLE flags
+  src/replay_common.rs       -- the oracle itself (structs, Replayer
+                                 fields, record/flush fns, dispatch wiring,
+                                 GameResult fields, 5 new tests)
+  src/bin/replaystats.rs     -- corpus-wide reporting (counters, per-game
+                                 SCIENCE_DETAIL/RESOURCE_DETAIL dump lines,
+                                 summary sections)
+  src/combat.rs, src/apply.rs, src/economy.rs, src/costs.rs,
+  src/effects.rs, src/legal.rs, src/events.rs, src/interact.rs,
+  src/advisor/state_io.rs, src/bots/weighted/events.rs
+                              -- mechanical: 2 new field inits at each
+                                 GameState struct-literal construction site
+
+===========================================================================
+NOT DONE / OUT OF SCOPE
+===========================================================================
+- Did not root-cause the round-9 production shortfall in 7523162 -- only
+  localized it more precisely than PACTS's own trace (inside round 9's
+  own production step, not the round 9->10 boundary).
+- Did not chase the Scientific Cooperation partner-charge fix PACTS
+  describes -- explicitly out of scope for this pass, and per PACTS's own
+  note it should not be re-attempted until whatever underlying science-
+  drift bug is fixed.
+- Did not chase WONDER's Build/Upgrade/WonderStep resource-shortfall
+  bucket directly -- the resource oracle built here gives corpus-wide
+  numbers (312/1011 games, 96.7% checkpoint agreement) but no per-game
+  trace beyond the overlap analysis with science above.
+- The OLD `REPLAY_DEBUG`-gated `trailing_now_science`/`trailing_now_
+  resources` eyeball checks (pre-existing, not written by this pass) are
+  known-noisy (fire on nearly every End Turn in some games due to no
+  discard-defer logic) -- left untouched; the new SCIENCE_ORACLE/
+  RESOURCE_ORACLE checkpoints are the trustworthy structural oracle now.
+
+===========================================================================
+CONCLUSION
+===========================================================================
+Buildable, and built: a science oracle and (per the coordinator's
+mid-session ask) a resources oracle, both mirroring the culture oracle's
+proven-correct snapshot+defer shape, both env-var gated with zero replay-
+outcome change (tests 1427/1427, clippy 0 warnings, guard sweep 698/671
+unchanged, both comm diffs empty). Corpus-wide: science diverges in 70/1011
+games (98.4% checkpoint agreement, 76% of first-divergences over-counting,
+concentrated rounds 9-13); resources diverge in 312/1011 games (96.7%
+agreement, 78% over-counting, spread rounds 3-19) -- resources are a
+substantially bigger and more pervasive problem than science. The two are
+neither the same bug nor fully unrelated: 35 games show both, with 77%
+same-sign agreement but only 31% same-actor-at-first-divergence, consistent
+with a shared KIND of accounting hazard (most likely something in the
+production/corruption recompute step) manifesting independently per
+resource type, layered on top of resources' own much larger, separate
+problem population. Traced 7523162 (the PACTS repro) and found the
+divergence starts one round earlier and in a different code region (Grey's
+own round-9 production step, not the round-9/10 boundary) than PACTS's own
+writeup concluded -- a corrected, narrower lead for whoever picks this up
+next.

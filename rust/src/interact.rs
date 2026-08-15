@@ -40,9 +40,13 @@
 //!
 //! The auction, the colonization force, the defense decision, all fifteen
 //! choice resolvers and all fifteen deferred sub-effects are ported; the
-//! three that hand back to the turn loop ([`QueueItem::EndOfTurn`],
-//! [`QueueItem::AutoSkipPolitics`] and `finish_take_row`'s `deal_row`) call
-//! `game.rs` for real.
+//! two that hand back to the turn loop ([`QueueItem::EndOfTurn`] and
+//! `finish_take_row`'s `deal_row`) call `game.rs` for real. (A third,
+//! `_q_auto_skip_politics`, USED to have a [`QueueItem`] variant here too --
+//! removed 2026-08-14, `game::start_turn`'s own doc comment has the reason:
+//! it was closing real humans' Politics Phase before their own logged
+//! `Move::PolPass` could land, an `IllegalMove: PolPass` bug on 54 BGO
+//! games, not a faithful port of anything BGO's client actually does.)
 //!
 //! One thing used to be blocked one step PAST this module: `combat::
 //! finish_aggression`'s success branch needed `events::apply_gains` and the
@@ -141,7 +145,7 @@ pub fn apply_pending(state: &mut GameState, mv: Move) {
         Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone => {
             colonize_move(state, mv)
         }
-        other => panic!("{other:?} is not a response to an open decision"),
+        other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} is not a response to an open decision"),
     }
     run_queue(state);
 }
@@ -384,7 +388,7 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 Keyword::Resources => {
                     economy::gain_resources(pl, n.max(0) as u16);
                 }
-                other => panic!("food_or_res offered {other:?}"),
+                other @ Keyword::Stop | other @ Keyword::Skip | other @ Keyword::Science | other @ Keyword::Accept | other @ Keyword::Refuse | other @ Keyword::Leader | other @ Keyword::Wonder => panic!("food_or_res offered {other:?}"),
             }
         }
         ChoiceKind::FreeBuild => {
@@ -440,7 +444,21 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 economy::discard_military(state, id);
             }
         }
-        ChoiceKind::Raid { victim, loot } => {
+        ChoiceKind::Raid { victim, loot, is_last } => {
+            // Attacker picks the urban building to destroy, or declines this
+            // bracket outright (`Keyword::Stop` -- see `QueueItem::Raid`'s own
+            // doc on why "up to N" needs a real decline option; Terrorism's
+            // mandatory destroy never offers `Stop`, so this arm never sees it
+            // for that case). Declining still has to flush whatever an
+            // EARLIER bracket already piled into `raid_loot_pending` if this
+            // is the last bracket -- a "destroy one, decline the other" raid
+            // must not lose the first casualty's loot.
+            if matches!(opt, ChoiceOption::Word(Keyword::Stop)) {
+                if loot && is_last {
+                    flush_raid_loot(state, p);
+                }
+                return;
+            }
             // Attacker picks the urban building to destroy.
             let ChoiceOption::Card(id) = opt else { wrong_option(&choice.kind, opt) };
             let ok = match state.players[victim as usize].techs.get_mut(id) {
@@ -451,13 +469,26 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 _ => false,
             };
             if !ok {
+                if loot && is_last {
+                    flush_raid_loot(state, p);
+                }
                 return;
             }
             state.players[victim as usize].workers_free += 1;
             if loot {
-                // PRINTED build cost, halved and rounded up.
+                // The card grants "half the resources needed to build THEM
+                // (rounded up)" -- ONE rounding over the printed cost of
+                // every building this raid destroys, not one rounding per
+                // casualty (confirmed against real games: two Philosophy
+                // casualties, cost 3 each, pay out 3 total, not
+                // ceil(3/2)+ceil(3/2)=4 -- see RAIDLOOT notes). So accumulate
+                // the printed cost here and only convert it to resources
+                // once the LAST bracket of this raid resolves.
                 let printed = id.get().resource_cost as u16;
-                economy::gain_resources(&mut state.players[p as usize], printed.div_ceil(2));
+                state.players[p as usize].raid_loot_pending += printed;
+                if is_last {
+                    flush_raid_loot(state, p);
+                }
             }
         }
         ChoiceKind::Annex { victim } => {
@@ -497,7 +528,7 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     // `WonderInProgress`, steps included.
                     state.players[victim as usize].wonder_steps = 0;
                 }
-                other => panic!("infiltrate offered {other:?}"),
+                other @ Keyword::Stop | other @ Keyword::Skip | other @ Keyword::Science | other @ Keyword::Food | other @ Keyword::Resources | other @ Keyword::Accept | other @ Keyword::Refuse => panic!("infiltrate offered {other:?}"),
             }
         }
         ChoiceKind::PactOffer { owner, card, a, b } => {
@@ -528,7 +559,7 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     // Refusal returns the card to the offerer's hand.
                     state.players[owner as usize].hand_military.push(card);
                 }
-                other => panic!("pact_offer offered {other:?}"),
+                other @ Keyword::Stop | other @ Keyword::Skip | other @ Keyword::Science | other @ Keyword::Food | other @ Keyword::Resources | other @ Keyword::Leader | other @ Keyword::Wonder => panic!("pact_offer offered {other:?}"),
             }
         }
         ChoiceKind::TakeRow { budget } => {
@@ -539,10 +570,25 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 ChoiceOption::Word(Keyword::Stop) => finish_take_row(state),
                 ChoiceOption::Slot(slot) => {
                     let cost = costs::take_cost(state, &state.players[p as usize], slot as usize);
-                    crate::apply::take_card(state, p, slot as usize);
+                    // CoL p.12: action cards taken via International
+                    // Agreement may be played the SAME turn -- see
+                    // `apply::take_card_from_international_agreement`'s own
+                    // doc for the citation and why this is the one caller
+                    // that must not feed `taken_this_turn`.
+                    crate::apply::take_card_from_international_agreement(state, p, slot as usize);
+                    // CoL p.12: the forfeit of the player's next political
+                    // action is the cost of actually USING this privilege --
+                    // taking a card here is the only place that happens, so
+                    // this is the only place that pays for it (`events.rs`'s
+                    // own doc comment on `optional_take_cards_with_civil_
+                    // actions` has the full citation and the real-game
+                    // evidence for why this moved off the reveal-time
+                    // handler). Idempotent: setting it again on a second or
+                    // third card taken this same session is a no-op.
+                    state.players[p as usize].skip_next_politics = true;
                     offer_take_row(state, p, budget - cost as i16);
                 }
-                other => wrong_option(&choice.kind, other),
+                other @ ChoiceOption::Card(_) | other @ ChoiceOption::Move(_) | other @ ChoiceOption::Gain(_) | other @ ChoiceOption::Word(_) => wrong_option(&choice.kind, other),
             }
         }
         ChoiceKind::WarTech { victim, budget } => match opt {
@@ -554,25 +600,46 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                 steal_special_tech(state, p, victim, id);
                 offer_war_tech(state, p, victim, budget as i32 - cost);
             }
-            other => wrong_option(&choice.kind, other),
+            other @ ChoiceOption::Slot(_) | other @ ChoiceOption::Move(_) | other @ ChoiceOption::Gain(_) | other @ ChoiceOption::Word(_) => wrong_option(&choice.kind, other),
         },
         ChoiceKind::PlunderSplit { victim } => {
             let ChoiceOption::Gain(g) = opt else { wrong_option(&choice.kind, opt) };
             // The defender's loss is unconditional (§5.4.6 losses are never
-            // blue-token limited -- see `events::food_or_resources`'s
-            // `sign < 0` arm, which this mirrors). The attacker's gain IS
-            // blue-token limited, so a full bank can still cap what actually
-            // crosses over even though the defender's share is already gone;
-            // that half-degenerate outcome is inherited from the pre-choice
-            // code (`events::food_or_resources`'s `sign > 0` arm) rather than
+            // blue-token limited -- see `FoodOrResSplit`'s `lose` arm below,
+            // which this mirrors). The attacker's gain IS blue-token
+            // limited, so a full bank can still cap what actually crosses
+            // over even though the defender's share is already gone; that
+            // half-degenerate outcome is inherited from the pre-choice
+            // fixed-formula code this choice replaced rather than
             // introduced by this fix.
             let (food, res) = (g.food.max(0) as u16, g.resources.max(0) as u16);
             let v = &mut state.players[victim as usize];
-            v.food = v.food.saturating_sub(food);
-            v.resources = v.resources.saturating_sub(res);
+            economy::pay_food(v, food);
+            economy::pay_resources(v, res);
             let pl = &mut state.players[p as usize];
             economy::gain_food(pl, food);
             economy::gain_resources(pl, res);
+        }
+        ChoiceKind::FoodOrResSplit { lose } => {
+            let ChoiceOption::Gain(g) = opt else { wrong_option(&choice.kind, opt) };
+            let (food, res) = (g.food.max(0) as u16, g.resources.max(0) as u16);
+            let pl = &mut state.players[p as usize];
+            if lose {
+                // §5.4.6: losses are never blue-token limited -- the option
+                // itself already respects what the player's own banks can
+                // supply (`plunder_split_options`, reused), so a plain
+                // saturating subtraction is safe and matches Plunder's own
+                // victim-side arm above.
+                economy::pay_food(pl, food);
+                economy::pay_resources(pl, res);
+            } else {
+                // A gain: blue-token limited per bank, exactly like
+                // Plunder's own attacker-side arm above -- see
+                // `food_or_res_gain_options`'s doc for why the option list
+                // itself is not pre-capped.
+                economy::gain_food(pl, food);
+                economy::gain_resources(pl, res);
+            }
         }
     }
 }
@@ -582,6 +649,20 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
 /// which is exactly the thing worth failing loudly on.
 fn wrong_option(kind: &ChoiceKind, opt: ChoiceOption) -> ! {
     panic!("{kind:?} cannot resolve option {opt:?} -- producer/resolver mismatch")
+}
+
+/// Converts a raid's accumulated `raid_loot_pending` (the summed PRINTED
+/// cost of every building this raid use has destroyed so far, across
+/// however many age-tier brackets it carries) into real resources with ONE
+/// rounding, per the card's own "gain half the resources needed to build
+/// THEM (rounded up)" -- see `ChoiceKind::Raid`'s doc. Called exactly once
+/// per raid use, when its last bracket resolves (destroy, decline, or an
+/// invalid pick alike), so it always drains whatever is there back to 0.
+fn flush_raid_loot(state: &mut GameState, attacker: u8) {
+    let total = std::mem::take(&mut state.players[attacker as usize].raid_loot_pending);
+    if total > 0 {
+        economy::gain_resources(&mut state.players[attacker as usize], total.div_ceil(2));
+    }
 }
 
 // ------------------------------------------- War over Technology spoils
@@ -719,6 +800,14 @@ fn steal_special_tech(state: &mut GameState, victor: u8, loser: u8, id: CardId) 
 /// the direction the FAQ actually allows ("some or all", p.8) rather than
 /// hardcoding the option the card lists first.
 pub fn settle_war_spoils(state: &mut GameState) {
+    // Not a `while let Some(...) = state.pending.top() { ... }`: `top()`
+    // borrows `state.pending`, and the loop body's `apply_pending(state,
+    // ...)` needs `state` mutably. Extracting only the `usize` we need
+    // (`n_options`) out of the match, then breaking the immutable borrow
+    // before the mutable call, is what makes this compile at all -- clippy's
+    // `while let` rewrite is not just style here, it would move the borrow
+    // in a way this function can't satisfy.
+    #[allow(clippy::while_let_loop)]
     loop {
         let n_options = match state.pending.top() {
             Some(Pending::Choice(Choice { kind: ChoiceKind::WarTech { .. }, options, .. })) => {
@@ -779,6 +868,35 @@ fn plunder_split_options(defender: &PlayerState, printed: i32) -> OptionList {
 pub fn offer_plunder_split(state: &mut GameState, attacker: u8, defender: u8, printed: i32) {
     let opts = plunder_split_options(&state.players[defender as usize], printed);
     push_choice(state, attacker, ChoiceKind::PlunderSplit { victim: defender }, opts, true);
+}
+
+// -------------------------------------------------------- Raiders / Foray
+
+/// Foray's gain-direction enumeration for §5.3's `foodAndOrResources` split
+/// (`ChoiceKind::FoodOrResSplit { lose: false }`, opened from
+/// `QueueItem::FoodOrResSplit` below): every way to split `total` between
+/// food and resources, with NO cap at option-build time -- deliberately
+/// mirroring [`plunder_split_options`]'s own attacker-gain precedent just
+/// above (see that field's doc on `ChoiceKind::PlunderSplit` in `state.rs`):
+/// blue-token availability caps what actually lands, per bank, at
+/// RESOLUTION (`economy::gain_food`/`gain_resources`, in `resolve_choice`'s
+/// own `FoodOrResSplit` arm), not by filtering the option list here.
+/// Raiders' LOSS direction needs no sibling function: it reuses
+/// `plunder_split_options` directly against the player's OWN banks, since
+/// "how much of `total` can this player's two banks actually supply" is
+/// exactly the same question Plunder already answers for a victim's.
+fn food_or_res_gain_options(total: i16) -> OptionList {
+    let mut opts = OptionList::new();
+    let total = total.max(0);
+    if total == 0 {
+        return opts;
+    }
+    let mut r = total;
+    while r >= 0 {
+        opts.push(ChoiceOption::Gain(GainOption { food: total - r, resources: r }));
+        r -= 1;
+    }
+    opts
 }
 
 // -------------------------------------------------- International Agreement
@@ -933,6 +1051,21 @@ fn run_item(state: &mut GameState, item: QueueItem) {
                 }
             }
         }
+        QueueItem::FoodOrResSplit { player, amount, lose } => {
+            // §5.3's `foodAndOrResources` gain/lose block (Raiders, Foray):
+            // the TARGETED player's own split choice -- see
+            // `ChoiceKind::FoodOrResSplit`'s doc in `state.rs`. Loss reuses
+            // `plunder_split_options` against the player's OWN banks (the
+            // same "what can actually be paid" windowing Plunder already
+            // does for a victim's); gain has no such cap at option-build
+            // time (`food_or_res_gain_options`'s own doc).
+            let opts = if lose {
+                plunder_split_options(&state.players[player as usize], amount as i32)
+            } else {
+                food_or_res_gain_options(amount)
+            };
+            push_choice(state, player, ChoiceKind::FoodOrResSplit { lose }, opts, true);
+        }
         QueueItem::LoseColony { player } => {
             let mut buf = [CardId::NONE; 8];
             let n = sorted_unique_by_name(state.players[player as usize].colonies.as_slice(), &mut buf);
@@ -986,19 +1119,7 @@ fn run_item(state: &mut GameState, item: QueueItem) {
         // rather than an action, so the continuation rides the deferred queue
         // like any other sub-effect and the turn advances from there.
         QueueItem::EndOfTurn { player } => crate::game::resume_end_turn(state, player),
-        // Resume the start-of-turn "is passing the only political option?"
-        // test once a War over Technology's spoils have been answered: the
-        // spoils can hand the current player military actions (Warfare +1,
-        // Strategy +2, Military Theory +3), which is exactly what that test
-        // reads. See `game::start_turn` for why it has to wait.
-        QueueItem::AutoSkipPolitics { player } => {
-            if state.phase == crate::state::Phase::Politics
-                && !state.players[player as usize].politics_done
-            {
-                crate::game::auto_skip_politics(state);
-            }
-        }
-        QueueItem::Raid { player, victim, max_age, no_loot } => {
+        QueueItem::Raid { player, victim, max_age, no_loot, is_last } => {
             let max_lv = max_age as u8;
             let mut buf = [CardId::NONE; MAX_TABLEAU];
             let mut n = 0;
@@ -1009,8 +1130,28 @@ fn run_item(state: &mut GameState, item: QueueItem) {
                 }
             }
             buf[..n].sort_unstable_by_key(|id| id.name());
-            let opts = card_options(&buf[..n]);
-            push_choice(state, player, ChoiceKind::Raid { victim, loot: !no_loot }, opts, true);
+            let mut opts = card_options(&buf[..n]);
+            // A real Raid card's printed text is "destroy UP TO N urban
+            // buildings" (RULES_SPEC.md line 82/98) -- `combat::
+            // finish_aggression` enqueues one of these per printed age
+            // bracket (Raid II/III carry two), and each bracket is
+            // independently optional, not just the card as a whole: a human
+            // attacker can destroy fewer than the max even with an eligible
+            // target still standing. Terrorism's identical-shaped forced
+            // destruction (`events.rs`'s `destroy_one_urban_building_of_
+            // each_opponent`) is NOT optional and carries no loot -- `no_loot`
+            // is already the one field that tells the two apart at this call
+            // site, so it doubles as "is this bracket declinable" here. Without
+            // this, `push_choice`'s own `auto`+`len()==1` path (below) would
+            // force-destroy a lone remaining candidate the moment only one is
+            // left, which is exactly wrong for an "up to" choice -- confirmed
+            // on human game `7522647` (Orange's starting `Philosophy`, force-
+            // destroyed by Raid II's second bracket with no journal record of
+            // it; `analysis/worker_notes_2026-08-14/stuckfix__STUCKFIX.txt`).
+            if !no_loot {
+                opts.push(ChoiceOption::Word(Keyword::Stop));
+            }
+            push_choice(state, player, ChoiceKind::Raid { victim, loot: !no_loot, is_last }, opts, true);
         }
         QueueItem::Annex { player, victim } => {
             let mut buf = [CardId::NONE; 8];
@@ -1153,7 +1294,7 @@ fn cook_bonus_per_discard(p: &PlayerState) -> i32 {
         .iter()
         .find_map(|s| match s {
             crate::cards::Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(v) => Some(*v as i32),
-            _ => None,
+            crate::cards::Special::A(_) | crate::cards::Special::AllPlayers(_) | crate::cards::Special::B(_) | crate::cards::Special::BestTheaterDoubleCulture | crate::cards::Special::BothPlayers(_) | crate::cards::Special::BuildDiscount(_) | crate::cards::Special::CancelledIfPartiesAttackEachOther | crate::cards::Special::CannotPlayAggressionOrWar | crate::cards::Special::CivilActionBackOnTechDevelop(_) | crate::cards::Special::CivilActionUpgradeUrbanBuildingToTheater | crate::cards::Special::ColonyImmediateBonusApplies | crate::cards::Special::ColonyPermanentBonusTransfers | crate::cards::Special::ComboFoodDiscount(_) | crate::cards::Special::ComboResourceDiscount(_) | crate::cards::Special::Condition(_) | crate::cards::Special::CultureFirstColony(_) | crate::cards::Special::CultureIfTopTwoStrength(_) | crate::cards::Special::CultureOnLeaveEqualToLabResourceProduction | crate::cards::Special::CultureOnRevolution(_) | crate::cards::Special::CultureOnTechDevelop(_) | crate::cards::Special::CulturePerAdditionalColony(_) | crate::cards::Special::CulturePerCivilizationWithMoreCulture(_) | crate::cards::Special::CulturePerHappyFromTemplesTheatersWonders(_) | crate::cards::Special::CulturePerLabEqualToLevel | crate::cards::Special::CulturePerLibraryTheaterPair(_) | crate::cards::Special::CulturePerTheater(_) | crate::cards::Special::DecreasePopulation(_) | crate::cards::Special::DestroyUrbanBuildings(_) | crate::cards::Special::DoubleBestMine | crate::cards::Special::DoublesTacticBonusOfOneArmy | crate::cards::Special::ExtraHappyPerHappySource(_) | crate::cards::Special::FinalScoring(_) | crate::cards::Special::FreeCivilAction(_) | crate::cards::Special::FreePopIncreasePerTurn | crate::cards::Special::Gain(_) | crate::cards::Special::GainCulturePerLevelOfRemovedCard(_) | crate::cards::Special::GainFoodOrResources(_) | crate::cards::Special::GainResources(_) | crate::cards::Special::InfantryCountsAsCavalryForTactics | crate::cards::Special::LastRoundSubstitute(_) | crate::cards::Special::LeaderTakeCivilActionDiscount(_) | crate::cards::Special::LibraryDiscountsIfTheater | crate::cards::Special::Lose(_) | crate::cards::Special::MilitaryActionAsCivilPerTurn(_) | crate::cards::Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | crate::cards::Special::NoAttacksBetweenParties | crate::cards::Special::OnAttackBetweenParties(_) | crate::cards::Special::OnBuildCulture(_) | crate::cards::Special::OnBuildCulturePerTechLevelSum | crate::cards::Special::OnReplacePutUnderCompletedWonderHappy(_) | crate::cards::Special::OncePerGameTwoPoliticalActions | crate::cards::Special::OpponentDecreasesPopulation(_) | crate::cards::Special::OpponentsPayDoubleMilitaryActionsToAttackYou | crate::cards::Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | crate::cards::Special::PeekTopEventCardInPolitics | crate::cards::Special::PerTurnChoice | crate::cards::Special::PlayerWithLeastCulture(_) | crate::cards::Special::PlayerWithMostCulture(_) | crate::cards::Special::PlayersWithMostDiscontentWorkers(_) | crate::cards::Special::PlayersWithMostHappyFaces(_) | crate::cards::Special::PopIncreaseFoodDiscount(_) | crate::cards::Special::RemoveAsPoliticalActionForYellowToken(_) | crate::cards::Special::RemoveAsPoliticalActionFreeColonize | crate::cards::Special::RemoveFromGame | crate::cards::Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | crate::cards::Special::ResourceOnTechDevelop(_) | crate::cards::Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | crate::cards::Special::ResourcesPerLabEqualToLevel | crate::cards::Special::RevolutionUsesMilitaryActionsInstead | crate::cards::Special::ScienceOnTechCardTake(_) | crate::cards::Special::SciencePerBestLabOrLibraryLevel | crate::cards::Special::SciencePerLab(_) | crate::cards::Special::StealColony(_) | crate::cards::Special::StrengthPerArtillery(_) | crate::cards::Special::StrengthPerInfantry(_) | crate::cards::Special::StrengthPerMilitaryUnit(_) | crate::cards::Special::StrengthPerTempleOrGovernmentHappy(_) | crate::cards::Special::StrengthPerUnitType(_) | crate::cards::Special::StrongestPlayer(_) | crate::cards::Special::StrongestPlayers(_) | crate::cards::Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | crate::cards::Special::TakeFromOpponent(_) | crate::cards::Special::TheaterResourceDiscountIfLibrary(_) | crate::cards::Special::TheaterScienceDiscountIfLibrary(_) | crate::cards::Special::TheaterTechScienceDiscount(_) | crate::cards::Special::VictorTakesCulture | crate::cards::Special::VictorTakesScienceUpTo(_) | crate::cards::Special::VictorTakesYellowTokens | crate::cards::Special::WeakestPlayer(_) | crate::cards::Special::WeakestPlayers(_) | crate::cards::Special::WonderTakeNoExtraCivilActions => None,
         })
         .unwrap_or(0)
 }
@@ -1239,21 +1380,58 @@ pub fn max_force(state: &GameState, p: &PlayerState) -> i32 {
 
 /// A territory card revealed as the current event is auctioned (§11.1).
 ///
-/// Returns `false` and files the card as a past event when nobody can bid,
-/// matching Python's early return.
+/// RULES_SPEC 11.1: the auction is "open to all players" -- every
+/// non-resigned player gets a real bid/pass turn in clockwise order from the
+/// revealer, INCLUDING one whose own `max_force` is currently 0. Such a
+/// player has no legal `Bid` (`pending_moves`'s `Move::Bid` range is already
+/// empty when `ceiling <= bid`), but they are not silently dropped from the
+/// turn order the way an excluded-from-`active` player would be -- BGO logs
+/// their own explicit `Pass` before moving on, confirmed against real game
+/// `7523791` (Green's own colonization the round before drops their unit
+/// count to a computed `max_force` of exactly 0 for the very next
+/// territory reveal, yet the journal's line 200 still shows a real `"Green
+/// passes"` as the auction's FIRST move, before Grey/Orange/Purple ever
+/// bid). The previous version of this function filtered `active` down to
+/// `max_force(...) > 0` players before the auction ever started, which
+/// skipped Green's turn entirely and made Grey (not Green) the computed
+/// first decider -- a `decider != expected_actor` mismatch the replayer
+/// cannot resolve as a forced pass, because Grey legitimately has several
+/// real bids available.
+///
+/// Returns `false` and files the card as a past event WITHOUT opening a
+/// decision only when NO player anywhere can ever bid -- that early return
+/// is a distinct case from "this one player can't bid", pinned by
+/// `an_auction_nobody_can_enter_is_not_started`.
 pub fn start_auction(state: &mut GameState, card: CardId, revealer: u8) -> bool {
     let (order, n) = order_from(state, revealer);
+    // If NOBODY anywhere can ever bid, no auction opens at all -- pinned by
+    // `an_auction_nobody_can_enter_is_not_started`, unchanged from before.
+    let any_bidder = order[..n].iter().any(|&i| max_force(state, &state.players[i as usize]) > 0);
+    if !any_bidder {
+        state.past_events.push(card);
+        return false;
+    }
     let mut active = [0u8; MAX_PLAYERS];
     let mut k = 0;
     for &i in &order[..n] {
-        if max_force(state, &state.players[i as usize]) > 0 {
+        // The revealer is unconditionally entered even at `max_force == 0`
+        // as long as SOMEBODY can bid -- they are already mid-interaction
+        // from revealing the event, and BGO asks them for a real bid/pass
+        // regardless (real game `7523791`, journal line 200: Green's own
+        // colonization the round before drops Green's `max_force` to 0,
+        // yet Green still logs a real `"Green passes"` as the auction's
+        // first move, ahead of the other three players' bids). A
+        // NON-revealer with `max_force == 0` is instead skipped over
+        // entirely, never asked at all -- BGO's own auction loop only
+        // force-checks entrants OTHER than the one who triggered it (real
+        // games `7521683` and `7523256`: in both, a zero-force
+        // non-revealer never appears in the journal around that auction at
+        // all, and the revealer's own bid wins immediately with nobody
+        // else's move logged in between).
+        if i == revealer || max_force(state, &state.players[i as usize]) > 0 {
             active[k] = i;
             k += 1;
         }
-    }
-    if k == 0 {
-        state.past_events.push(card);
-        return false;
     }
     state.pending.push(Pending::Auction(crate::state::Auction::new(card, &active[..k])));
     true
@@ -1276,7 +1454,7 @@ fn auction_move(state: &mut GameState, mv: Move) {
                 a.pos = 0;
             }
         }
-        other => panic!("{other:?} against an auction decision"),
+        other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} against an auction decision"),
     }
     // Read the settled auction back out before mutating the rest of `state`.
     let (empty, sole_winner, card, bid) = {
@@ -1452,7 +1630,7 @@ fn colonize_step(state: &mut GameState, mv: Move) {
                 return;
             }
             Move::SendDone => (c.player, c.card),
-            other => panic!("{other:?} against a colonize decision"),
+            other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} against a colonize decision"),
         }
     };
     state.pending.pop();
@@ -1606,6 +1784,7 @@ mod tests {
             yellow_bank: 0,
             yellow_granted: 0,
             workers_free: 0,
+            raid_loot_pending: 0,
             blue_total: 0,
             food: 0,
             resources: 0,
@@ -1623,6 +1802,7 @@ mod tests {
             ca_spent_taking: 0,
             hammurabi_used: false,
             hammurabi_replaced_this_turn: false,
+            breakthrough_ma_funded: false,
             replaced_leader_this_turn: false,
             trade_food_as_resource_used_this_turn: 0,
             trade_resource_as_food_used_this_turn: 0,
@@ -1639,6 +1819,8 @@ mod tests {
             mil_sci_discount: 0,
             one_time_discount: crate::state::OneTimeDiscount::default(),
             resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
         }
     }
 
@@ -1673,6 +1855,8 @@ mod tests {
             pending: crate::state::PendingStack::new(),
             queue: crate::state::Queue::new(),
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+            last_end_of_turn_science: [None; MAX_PLAYERS],
+            last_end_of_turn_resources: [None; MAX_PLAYERS],
         }
     }
 
@@ -2084,8 +2268,46 @@ mod tests {
         assert!(state.pending.is_empty(), "nothing to destroy -- no decision opened");
         assert_eq!(
             state.queue.iter().collect::<Vec<_>>(),
-            vec![QueueItem::Raid { player: 0, victim: 1, max_age: Age::I, no_loot: false }]
+            vec![QueueItem::Raid { player: 0, victim: 1, max_age: Age::I, no_loot: false, is_last: true }]
         );
+    }
+
+    /// Aggression: Raid's printed text is "gain half the resources needed
+    /// to build THEM (rounded up)" -- ONE rounding over the combined
+    /// printed cost of every building the raid destroys, confirmed against
+    /// real BGO games (e.g. journal `"Raid casualties 1 Philosophy; 1
+    /// Philosophy; Orange produces 3 resources"`, game 7523072 round 10;
+    /// also seen with Organized Religion and Theology pairs -- see
+    /// RAIDLOOT worker notes). Raid II carries two brackets (Age II-or-
+    /// older, then Age I-or-older); a victim with two Philosophy copies
+    /// (printed cost 3, Age A so eligible for both) satisfies both. The
+    /// combined cost is 3+3=6, so the loot must be `ceil(6/2)=3` -- NOT
+    /// `ceil(3/2)+ceil(3/2)=4`, which is what rounding each casualty
+    /// separately before summing would wrongly produce.
+    #[test]
+    fn raid_ii_rounds_the_combined_printed_cost_of_both_casualties_once_not_each_casualty_separately() {
+        let mut state = blank_state(2);
+        let philosophy = card("Philosophy");
+        state.players[1].techs.insert(philosophy, TechSlot { workers: 2, stored: 0 });
+        // The blank test player starts with `blue_total: 0`, which caps
+        // `gain_resources` at 0 regardless of the raid math -- give the
+        // attacker real storage so the assertion below actually exercises
+        // the rounding, not the unrelated storage cap.
+        state.players[0].blue_total = 16;
+        start_defense(&mut state, 0, 1, card("Aggression: Raid (II)"), 5);
+        run_queue(&mut state);
+        assert_eq!(
+            pending_moves(&state).as_slice(),
+            &[Move::Choose { n: 0 }, Move::Choose { n: 1 }],
+            "the wide bracket's only options are the lone eligible card and Stop"
+        );
+        // Wide bracket (Age II-or-older): destroy the first Philosophy.
+        apply_pending(&mut state, Move::Choose { n: 0 });
+        assert_eq!(state.players[0].resources, 0, "loot is not granted until the LAST bracket settles");
+        // Narrow bracket (Age I-or-older) opened automatically: destroy the second.
+        apply_pending(&mut state, Move::Choose { n: 0 });
+        assert_eq!(state.players[1].techs.workers(philosophy), 0, "both copies destroyed");
+        assert_eq!(state.players[0].resources, 3, "ceil((3+3)/2)=3, not ceil(3/2)+ceil(3/2)=4");
     }
 
     /// A failed aggression is fully resolvable, and it is the branch the
@@ -2289,6 +2511,67 @@ mod tests {
         assert_eq!(state.players[0].techs.workers(warriors), 0);
     }
 
+    /// RULES_SPEC 11.1: the auction is "open to all players", so a player
+    /// with zero `max_force` (no units to sacrifice at all) is still owed a
+    /// real turn in the clockwise order -- their only legal move is
+    /// `BidPass`, but they are not skipped over the way `start_auction`
+    /// used to skip any player failing its own `max_force(...) > 0` filter.
+    /// Pinned against real game `7523791`: Green's own colonization the
+    /// round before leaves Green's computed `max_force` at exactly 0 for
+    /// the very next territory reveal, yet journal line 200 still shows a
+    /// real `"Green passes"` as that auction's FIRST move, ahead of
+    /// Grey/Orange/Purple's bids -- proving BGO asked Green, it did not
+    /// silently route around them.
+    #[test]
+    fn a_zero_force_player_still_gets_a_real_turn_in_the_auction() {
+        let mut state = blank_state(3);
+        let warriors = card("Warriors");
+        // Players 1 and 2 have force; player 0 (the revealer) has none.
+        state.players[1].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
+        state.players[2].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
+        let terr = card("Developed Territory (I)");
+        assert!(start_auction(&mut state, terr, 0), "players 1 and 2 can still bid");
+        assert_eq!(
+            state.decider(),
+            0,
+            "the zero-force revealer is still first in turn order, not skipped"
+        );
+        assert_eq!(
+            pending_moves(&state).as_slice(),
+            &[Move::BidPass],
+            "a zero-force player's only legal move is to pass, but the auction still owes them one"
+        );
+        apply_pending(&mut state, Move::BidPass);
+        assert_eq!(state.decider(), 1, "after passing, the turn moves to the next real bidder");
+    }
+
+    /// The zero-force exemption above is REVEALER-only: a non-revealer with
+    /// no units to sacrifice is skipped over entirely, never asked at all.
+    /// Pinned against real games `7521683` and `7523256`: in both, a
+    /// zero-force non-revealer never appears in the journal around the
+    /// auction, and the revealer's own bid wins immediately with nobody
+    /// else's move logged in between -- so unlike the revealer, a
+    /// non-revealer at 0 force must stay OUT of the active list, or the
+    /// replayer would wait forever for a `Pass` BGO never logs.
+    #[test]
+    fn a_zero_force_non_revealer_is_skipped_entirely() {
+        let mut state = blank_state(3);
+        let warriors = card("Warriors");
+        // Player 0 (the revealer) has force; player 1 has none and must be
+        // skipped; player 2 has force and stays in the turn order.
+        state.players[0].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
+        state.players[2].techs.insert(warriors, TechSlot { workers: 1, stored: 0 });
+        let terr = card("Developed Territory (I)");
+        assert!(start_auction(&mut state, terr, 0));
+        assert_eq!(state.decider(), 0, "the revealer (who has force) goes first, as usual");
+        apply_pending(&mut state, Move::Bid { n: 1 });
+        assert_eq!(
+            state.decider(),
+            2,
+            "player 1 (zero force) is skipped over entirely, straight to player 2"
+        );
+    }
+
     /// Nobody with a unit means no auction at all -- the territory is filed
     /// as a past event instead of hanging on a decision with no bidders.
     #[test]
@@ -2405,5 +2688,155 @@ mod tests {
             gain_colony(&mut state, 0, card(name));
         }
         assert_eq!(state.players[0].colonies.len(), 12);
+    }
+
+    // ------------------------------------------------- Raiders / Foray split
+    //
+    // FOODFIX: §5.3's `foodAndOrResources` gain/lose block used to be a
+    // fixed "resources first" formula (`events::food_or_resources`,
+    // deleted); it is now the targeted player's own choice, resolved
+    // through `QueueItem::FoodOrResSplit` / `ChoiceKind::FoodOrResSplit`
+    // exactly like Plunder's already-real `PlunderSplit`. `events.rs` covers
+    // the enqueue shape and clockwise multi-player ordering; these cover
+    // option enumeration (including a player who cannot pay one pool alone)
+    // and resolution, both directions.
+
+    /// Foray's gain side: every split of the total, with NO cap at
+    /// option-build time (blue tokens cap what actually lands at
+    /// resolution instead -- see `food_or_res_gain_options`'s own doc).
+    /// Ordered highest-resources-first, matching `plunder_split_options`'s
+    /// own convention (index 0 is the old fixed-formula default).
+    #[test]
+    fn food_or_res_gain_options_offers_every_split_with_no_pool_cap() {
+        let opts = food_or_res_gain_options(3);
+        assert_eq!(
+            opts.as_slice(),
+            &[
+                ChoiceOption::Gain(GainOption { food: 0, resources: 3 }),
+                ChoiceOption::Gain(GainOption { food: 1, resources: 2 }),
+                ChoiceOption::Gain(GainOption { food: 2, resources: 1 }),
+                ChoiceOption::Gain(GainOption { food: 3, resources: 0 }),
+            ]
+        );
+    }
+
+    /// Raiders' loss side, reusing `plunder_split_options` against the
+    /// player's OWN banks: a player who cannot cover the whole amount from
+    /// ONE pool alone (only 1 food, needs to cover up to 2 of the loss) must
+    /// not be offered an option that would drive that pool negative --
+    /// `(food: 2, resources: 0)` is illegal here and must be absent.
+    #[test]
+    fn plunder_split_options_omits_a_split_the_players_own_short_pool_cannot_cover() {
+        let mut p = blank_player(0);
+        p.food = 1;
+        p.resources = 5;
+        let opts = plunder_split_options(&p, 2);
+        assert_eq!(
+            opts.as_slice(),
+            &[
+                ChoiceOption::Gain(GainOption { food: 0, resources: 2 }),
+                ChoiceOption::Gain(GainOption { food: 1, resources: 1 }),
+            ],
+            "food:2 would need a food pool this player does not have -- must not be offered"
+        );
+    }
+
+    /// `QueueItem::FoodOrResSplit` -> `run_item` opens a REAL
+    /// `Pending::Choice`, and `pending_moves` (legal.rs's only caller, the
+    /// weighted bot's move source) turns it into ordinary `Move::Choose`
+    /// candidates with zero `ChoiceKind`-specific code -- i.e. the bot's
+    /// normal board-state evaluation decides this split like any other
+    /// move, not a hardcoded heuristic (`legal.rs`'s `pending_moves`).
+    #[test]
+    fn queued_food_or_res_split_opens_a_pending_choice_pending_moves_can_answer() {
+        let mut state = blank_state(2);
+        state.players[0].food = 5;
+        state.players[0].resources = 5;
+        enqueue(&mut state, QueueItem::FoodOrResSplit { player: 0, amount: 2, lose: true });
+        run_queue(&mut state);
+        let Some(Pending::Choice(c)) = state.pending.top() else { panic!("expected an open FoodOrResSplit choice") };
+        assert_eq!(c.player, 0);
+        assert_eq!(c.kind, ChoiceKind::FoodOrResSplit { lose: true });
+        // Full pools on both sides: r ranges 2..=0, three splits.
+        assert_eq!(c.options.len(), 3);
+        assert_eq!(
+            legal::legal_moves(&state).as_slice(),
+            &[Move::Choose { n: 0 }, Move::Choose { n: 1 }, Move::Choose { n: 2 }]
+        );
+    }
+
+    /// Resolving a LOSS split drains exactly the chosen amounts -- not
+    /// `events::food_or_resources`'s old "resources first" formula (which
+    /// would have drained all 2 from resources here, leaving food at 5).
+    #[test]
+    fn resolve_choice_food_or_res_split_loss_drains_the_chosen_split_only() {
+        let mut state = blank_state(2);
+        state.players[0].food = 5;
+        state.players[0].resources = 5;
+        let opts = plunder_split_options(&state.players[0], 2);
+        let choice = Choice { player: 0, kind: ChoiceKind::FoodOrResSplit { lose: true }, options: opts };
+        // Index 1 of `plunder_split_options(printed=2)` on a 5/5 player is
+        // the (food: 1, resources: 1) split (r_max=2 at index 0, r=1 next).
+        resolve_choice(&mut state, &choice, 1);
+        assert_eq!(state.players[0].food, 4, "5 - the chosen 1 food");
+        assert_eq!(state.players[0].resources, 4, "5 - the chosen 1 resource");
+    }
+
+    /// Resolving a GAIN split is blue-token limited per bank, exactly like
+    /// `PlunderSplit`'s own attacker-side arm (`resolve_choice`'s doc on
+    /// that variant) -- a chosen split can land short of what was picked.
+    #[test]
+    fn resolve_choice_food_or_res_split_gain_is_blue_token_limited_like_plunder_split() {
+        let mut state = blank_state(2);
+        state.players[0].blue_total = 2; // only 2 tokens free in the bank
+        let choice = Choice {
+            player: 0,
+            kind: ChoiceKind::FoodOrResSplit { lose: false },
+            options: {
+                let mut o = OptionList::new();
+                o.push(ChoiceOption::Gain(GainOption { food: 0, resources: 5 }));
+                o
+            },
+        };
+        resolve_choice(&mut state, &choice, 0);
+        assert_eq!(state.players[0].resources, 2, "capped by the 2 free blue tokens, not the chosen 5");
+        assert_eq!(state.players[0].food, 0);
+    }
+
+    /// International Agreement (CoL p.12): declining the whole privilege
+    /// (never choosing a `Slot`, going straight to `Word(Stop)`) must NOT
+    /// cost the player their next Politics Phase -- the forfeit is the
+    /// price of USING the privilege, not of merely being offered it. This
+    /// is the direct fix for the `IllegalMove: PolPass` bucket's 9-game
+    /// "declines international agreement" subgroup (`docs/REPLAY.md`,
+    /// 2026-08-14): those humans' own logged, perfectly legal "<Color>
+    /// passes Political Phase" the following turn was illegal against this
+    /// engine because `events.rs` used to set `skip_next_politics`
+    /// unconditionally the moment the event revealed, even for a player who
+    /// went on to take zero cards.
+    #[test]
+    fn resolve_choice_take_row_stop_without_ever_taking_a_card_does_not_forfeit_the_next_politics_phase() {
+        let mut state = blank_state(2);
+        let mut options = OptionList::new();
+        options.push(ChoiceOption::Word(Keyword::Stop));
+        let choice = Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options };
+        resolve_choice(&mut state, &choice, 0);
+        assert!(!state.players[0].skip_next_politics, "a full decline must not forfeit the next Politics Phase");
+    }
+
+    /// Companion: taking even one card off the row DOES forfeit the
+    /// player's next political action -- the card's own text ("...by
+    /// giving up its next chance to take a political action"), unaffected
+    /// by the fix above.
+    #[test]
+    fn resolve_choice_take_row_slot_taking_a_card_does_forfeit_the_next_politics_phase() {
+        let mut state = blank_state(2);
+        state.card_row[2] = card("Iron");
+        let mut options = OptionList::new();
+        options.push(ChoiceOption::Slot(2));
+        options.push(ChoiceOption::Word(Keyword::Stop));
+        let choice = Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options };
+        resolve_choice(&mut state, &choice, 0);
+        assert!(state.players[0].skip_next_politics, "taking a card must forfeit the next Politics Phase");
     }
 }

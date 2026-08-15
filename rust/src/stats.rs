@@ -95,6 +95,12 @@ impl Estimate {
     /// Computed from the clustered standard error, so it agrees with
     /// [`Estimate::half`] rather than with the naive interval.
     pub fn p_against(&self, null: f64) -> f64 {
+        // Not `self.se <= 0.0`: that would silently change behaviour for
+        // `se.is_nan()` (all `<=`/`>` comparisons against NaN are false, so
+        // `<= 0.0` would fall through and divide by a NaN `se` below instead
+        // of returning the safe "no evidence" p-value here). Keeping the
+        // negated `>` is deliberate NaN-guarding, not an oversight.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(self.se > 0.0) {
             return 1.0;
         }
@@ -221,7 +227,7 @@ fn erfc(x: f64) -> f64 {
         -1.3026537197817094,
         6.419_697_923_564_902e-1,
         1.9476473204185836e-2,
-        -9.561_514_786_808_631e-3,
+        -9.561_514_786_808_63e-3,
         -9.46595344482036e-4,
         3.66839497852761e-4,
         4.2523324806907e-5,

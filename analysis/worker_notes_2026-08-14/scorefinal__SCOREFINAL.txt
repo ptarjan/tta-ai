@@ -1,0 +1,326 @@
+FINAL-SCORING BUG HUNT -- session 2026-08-14, worker "scorefinal"
+Base: /private/tmp/base0815, commit ed3ccc9 ("Land Homer/Ravages happiness fix and colony-auction
+zero-force turn order (290 -> 310 completed)"). Clone: /private/tmp/scorefinal (deleted at the end
+of this session per the task's own instruction).
+
+SCOPE: five named games (7522075, 7522277, 7522786, 7522864, 7523162), all believed to have their
+score-divergence bug in `events::evaluate_final_events` / `game::end_of_game_bonus` specifically --
+code that runs strictly AFTER the last in-play checkpoint. culture_drifted_in_play=false was
+independently re-confirmed for all five via `SCOREDIV_DUMP_IDS=1 replaystats` before doing anything
+else.
+
+============================================================================
+HEADLINE RESULT: none of the five could be safely fixed within the stated scope.
+============================================================================
+For every one of the five, tracing the actual numeric divergence card-by-card and player-by-player
+against the journal (using `SCOREDIV_EVENT_DEBUG=1`/`SCOREDIV_HAPPY_DUMP=1`, and two small new debug
+hooks added this session -- see "WHAT CHANGED" below) led to a root cause that lives BEFORE
+`finish_game` even starts: either a genuine mid-game replay bug (state mutation that never happened,
+or happened wrong) or a fundamentally unrecoverable hidden-information gap (which of several
+indistinguishable choices the human actually made). In every case the FORMULAS inside
+`scoring_culture`/`end_of_game_bonus` were cross-checked against at least one OTHER player or OTHER
+card in the SAME game that used the exact same formula and matched the journal exactly -- so the
+formulas are not the suspect; the STATE they read is.
+
+Given the task's explicit rule ("if you cannot safely fix one of the five, LEAVE IT and document
+precisely what you ruled out and how... a guessed fix is not [a real deliverable]"), and given a fix
+in any of these five would require editing code outside the stated scope (apply.rs, interact.rs,
+replay_common.rs mid-game reconstruction) with real regression risk on the other 305 already-passing
+completed games, I did not attempt speculative changes to any of those files. No code fix is landed
+for any of the five games. Two small, zero-behavior-change diagnostic debug hooks ARE landed (see
+below) because they were needed to pin down root cause and match the codebase's existing
+SCOREDIV_*-debug-hook convention (SCOREDIV_HAPPY_DUMP, SCOREDIV_POPULATION, SCOREDIV_EVENT_DEBUG,
+etc., all already in the base tree from prior sessions).
+
+============================================================================
+PER-GAME FINDINGS
+============================================================================
+
+--- 7522075 -------------------------------------------------------------------------------------
+engine=[84, 172] index=[81, 172] (2p). Purple off by +3 (engine too high).
+Final cards: Impact of Agriculture, Impact of Competition, Impact of Wonders, Impact of Balance.
+Journal (line ~49385): "Impact of Competition ... Orange scores 10 culture; Purple scores 3 culture"
+vs engine's own per-card dump: player0(Orange)=10 [MATCHES], player1(Purple)=6 [WRONG, journal wants
+3]. Agriculture/Wonders/Balance all matched exactly for both players -- this isolates the bug to
+Competition, Purple only.
+ROOT CAUSE (ruled in, not in scope): line 332 of the journal --
+  "Purple colonizes a Historic Territory Sacrificed Units:; 1 Air Forces; 1 Air Forces; 1 Air Forces;
+   ...; Total force: 21; Purple scores 11 culture"
+Purple sacrificed all THREE of their Air Forces (level 3 each) during colonization. `replay`'s own
+completion line for this game already flags "(colonize approximated)" -- confirmed via
+`replay_common.rs::approximate_colonize` (drain_colonize falls back to it whenever the journal's
+named sacrifice sequence stops being a legal continuation, then just takes the engine's own
+first-offered move repeatedly). This is a KNOWN, pre-existing, out-of-scope limitation --
+GUARD_METHOD-adjacent prior notes already call the identical situation on OTHER games "expected --
+colonize_approximated, known unrelated limitation" (see prior worker's homerfix session log, spot-
+check of 7523528). Doing the arithmetic backward (Knights level1*3=3 correctly counted, but only 1 of
+3 Air Forces [level3] apparently got zeroed rather than all 3: 3 + 1*3 = 6, matching the engine's
+wrong total exactly) confirms the mechanism: the sacrifice choice, once approximated, picked
+DIFFERENT (or fewer) units than the human actually sacrificed, leaving one live Air Forces worker
+that should not exist by end of game. The culture SCORED at the moment of colonization (11) is a
+deterministic function of total force (21) and matches regardless of which units were chosen, which
+is exactly why this divergence is invisible until Impact of Competition reads the post-colonization
+tableau at final scoring -- it fits the task's own "correct throughout play, wrong only at final
+scoring" signature perfectly, but the actual defect is in `replay_common.rs`'s colonize-sacrifice
+reconstruction (hidden information: WHICH of several legally-equivalent units the human chose),
+not in `events::evaluate_final_events`.
+RULED OUT. No safe fix within scope; a fix belongs in colonize-sacrifice reconstruction, already a
+known and accepted class of approximation elsewhere in the corpus.
+
+--- 7522277 -------------------------------------------------------------------------------------
+engine=[114, 213] index=[112, 213] (2p). Purple (player1) off by +2 on Impact of Happiness only
+(engine 14, journal 12); Impact of Science/Progress/Population all matched exactly for both players.
+Prior session (homerfix, see /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/homerfix__HOMERFIX.txt)
+already flagged this exact game and hypothesized `economy::discontent` under-counts Purple's
+discontent by 1 (2*7 - 2*1 = 12). I re-derived this INDEPENDENTLY and then went further:
+  - s.happy=7 for Purple, discontent=0, yellow_bank=6 -- verified `economy::happy_required(6)=5` is
+    EXACTLY what docs/RULES_SPEC.md section 6.1's own table says (row "6-5 | 5 | 3 | 5"), and
+    discontent = max(5-7,0) = 0 is correct BY THAT TABLE.
+  - Verified s.happy=7's OWN composition (SCOREDIV_HAPPY_DUMP): Religion (2 workers, happy 1 each) =
+    2; Homer's live +1 on Library of Alexandria (printed happy 0) = 1; St. Peter's Basilica's own
+    printed +1 = 1; St. Peter's Basilica's ExtraHappyPerHappySource bonus (1 per OTHER qualifying
+    source: Religion counts once PER WORKER, Library counts once for Homer) = 3. Total 2+1+1+3=7.
+  - The FAQ (sources/faq_v15.pdf p.6, Joan of Arc entry) explicitly confirms St. Peter's Basilica's
+    bonus is per WORKER on a Temple ("the Basilica may add a Happy Face to your Government card...
+    and to EACH of your Temple Workers"), so the per-worker counting in `happy_source_count` for
+    techs is CORRECT, not a bug.
+  - The Code of Laws errata (sources/cge_code_of_laws.pdf, "Homer" entry) explicitly sanctions
+    Homer's tucked wonder ALSO counting as a St. Peter's source ("St. Peter's Basilica adds a happy
+    face to that wonder"), so the `|| p.homer_wonder == w` arm is CORRECT, not a bug (this matches
+    the prior homerfix session's own "CRITICAL DISCOVERY" -- do not re-delete that arm).
+  - CROSS-CHECK that discontent=0 is genuinely right for this player: Impact of Population ALSO
+    subtracts the same `economy::discontent` value from `content worker` count, and Population's
+    computed amount for Purple (6) MATCHES the journal exactly. If the true discontent were 1 (not
+    0), Population would ALSO be off by 2 culture -- it is not. This is conclusive: discontent=0 is
+    correct, and the prior session's "discontent under-counted by 1" hypothesis is WRONG (a plausible
+    but, on this closer look, refuted guess -- flagging this explicitly since REMAINING.txt-style
+    guesses are exactly what this task warns against landing).
+  - Given discontent is right and the happy FORMULA is right per errata/FAQ, the only way to reach
+    the journal's implied happy=6 (not 7) is if Homer's wonder tuck landed on a DIFFERENT wonder than
+    our replay picked. Journal line 85 ("Purple elects Genghis Khan Homer dies") replaces Homer at a
+    moment where Purple has TWO completed wonders (Library of Alexandria, completed earlier, AND
+    St. Peter's Basilica, completed on the SAME turn just before the leader swap -- journal lines
+    31 and 84). `apply.rs::h_play_leader` (line ~821) tucks Homer under
+    `completed_wonders.as_slice()[0]` UNCONDITIONALLY -- i.e. whichever wonder was completed FIRST,
+    not a player choice. Per RULES_SPEC 9.1, replacing a leader is a real decision point, and the
+    actual TTA rule for Homer's special is a player CHOICE of which completed wonder to attach to --
+    a choice BGO's journal text does not record ("Homer dies" with no wonder named). Hand-simulating
+    the alternative (Homer tucked under St. Peter's Basilica instead of Library of Alexandria)
+    reproduces the journal's number exactly: St. Peter's Basilica excludes ITSELF from its own
+    ExtraHappyPerHappySource count (`grants_this_bonus_itself` in `happy_source_count`), so putting
+    Homer's live +1 face on THAT wonder "wastes" it relative to putting it on Library of Alexandria --
+    Religion(2) + Homer-on-StPeters(1) + StPeters-printed(1) + bonus(1*2 sources: Religion only, since
+    Library no longer qualifies) = 6, exactly matching 2*6=12.
+ROOT CAUSE (ruled in, not in scope): `apply::h_play_leader`'s Homer-tuck-target selection
+(`completed_wonders.as_slice()[0]`) is an ARBITRARY resolution of an unrecorded player choice, not a
+final-scoring bug. It is mid-game code (apply.rs), and the choice of WHICH wonder is genuinely hidden
+information the journal never names -- structurally identical to colonize_approximated and the
+discard-solver's "chosen arbitrarily" mechanism already documented elsewhere in this codebase. The
+observable effect is invisible until St. Peter's Basilica's final-scoring formula reads it, which is
+exactly why it fits the task's "correct throughout play, wrong only at final scoring" framing despite
+the true defect sitting upstream.
+RULED OUT. This REVISES the prior homerfix session's pickup-plan note ("the real bug is
+economy::discontent under-counting... different file, economy.rs") -- that hypothesis is refuted by
+the Population cross-check above. The actual, better-evidenced cause is the Homer-tuck arbitrary
+choice in apply.rs, still out of this session's stated scope (evaluate_final_events/end_of_game_bonus
+only) and, like the other four, a hidden-information limitation rather than a formula bug.
+
+--- 7522786 -------------------------------------------------------------------------------------
+engine=[227, 308] index=[299, 230] (2p, Purple=299 real / Orange=230 real per WINNER line).
+`SCOREDIV_DETAIL`'s own bulk-dump `final_event_cards` field said the true final set was
+["Impact of Wonders", "Impact of Colonies", "Impact of Agriculture", "Impact of Balance"] -- and the
+journal's own "End of game" line (411) confirms this EXACTLY. But re-running the SAME game through
+`SCOREDIV_EVENT_DEBUG=1` shows the ENGINE actually evaluated a DIFFERENT set: Impact of Population,
+Impact of Agriculture, Impact of Industry, Impact of Wonders. Same COUNT (4 cards), same card-deck
+size the engine itself reports (`current_events_len=4 future_events_len=0`), but two of the four
+CARD IDENTITIES are wrong (Population/Industry substituted for Colonies/Balance).
+Cross-check: the two cards common to both the engine's guess and the true set (Wonders, Agriculture)
+score EXACTLY the journal's numbers for BOTH players (Wonders: engine 14/13 vs journal Orange 14/
+Purple 13; Agriculture: engine 10/8 vs journal Orange 10/Purple 8) -- so `scoring_culture`'s formulas
+for these cards are provably correct; the bug is purely about WHICH cards remain pending, not how
+they are scored.
+Also checked docs/RULES_SPEC.md section 13 explicitly for a "2p Age III event deck gets trimmed"
+rule that might explain a systematic card-set difference: found NONE (only civil decks I-III get the
+9-card 2p trim; "event seeding/future-deck mechanics unchanged" is stated explicitly, and 2p's only
+event-related difference is pacts removed from military decks). So this is not a player-count-trim
+bug either.
+ROOT CAUSE (ruled in, not in scope): this game ALSO shows `discards=36 (solved=0 chosen=36
+forced_collision=0)` in its own completion line -- EVERY SINGLE military-hand discard in this game
+was ambiguous and had to be resolved arbitrarily. Age III events are drawn from within the shuffled
+military deck (RULES_SPEC 5.2/8), so the same hidden-shuffle-order uncertainty that makes every
+discard ambiguous in this particular game also makes "which specific Age III event cards are still
+face-down in the deck" ambiguous. The engine's reconstruction of `state.current_events`/
+`state.future_events` picked a plausible-COUNT but wrong-IDENTITY substitute set. This is a
+replay-reconstruction hidden-information limitation (likely in replay_common.rs's event-deck
+tracking), not an events.rs/game.rs scoring bug.
+RULED OUT.
+
+--- 7522864 -------------------------------------------------------------------------------------
+engine=[159, 191, 127] index=[191, 152, 127] (3p; player0=Orange, player1=Purple, player2=Green,
+confirmed unambiguously via 3-way exact matches on Impact of Government/Progress/Wonders/Balance).
+Orange off by +7 total; card-by-card only Impact of Architecture differs (engine 9, journal 6, +3 for
+Orange only -- Purple and Green's Architecture both matched exactly).
+Added a debug hook (`SCOREDIV_PRECULTURE`, gated behind existing SCOREDIV_EVENT_DEBUG, printed from
+`game::finish_game` right before `evaluate_final_events` runs) to settle whether the OTHER +4 was a
+pre-existing mid-game culture bug (which would contradict the task's framing) or hidden in final
+events some other way: Orange's pre-event culture is 88, which matches a hand-trace of the journal
+EXACTLY (86 after Orange's own last turn + 2 from Purple's later-turn "Impact of Agriculture"
+CURRENT-event trigger, which is NOT part of the final batch) -- so the task's "correct throughout
+play" guarantee DOES hold for the preceding culture. `end_of_game_bonus` (Bill Gates) is confirmed 0
+via the journal's own explicit "Bill Gates scoring Orange scores 0 culture" line, and Orange
+genuinely has zero Lab-type techs, so that path is also correctly 0 both ways. This means the
+remaining +4 (beyond Architecture's +3) has NOT been explained by any hypothesis tested here; my own
+hand-arithmetic of 88 + (event sum) did not cleanly reconcile to 159 either way I sliced it, and I
+did not chase it further given the budget -- see "WHAT'S LEFT UNPINNED" below.
+What IS pinned precisely: added a second debug hook (`SCOREDIV_TECHS_DUMP`, gated behind
+`state.game_over`, in `effects::compute`) to dump every tech CardId+worker count for a player at
+final scoring. Orange's dump shows "Scientific Method workers=2" UNCHANGED from what a plain build
+count implies (two separate "Orange upgrades Philosophy to Scientific Method" journal lines, one
+worker each = 2 originally). But journal line ~519 records:
+  "Green plays Raid against Orange ... Raid casualties 1 Scientific Method; 1 Scientific Method;
+   Green produces 8 resources"
+-- i.e. BOTH of Orange's Scientific Method copies should have been destroyed (workers -> 0), and
+ours still shows workers=2, unchanged. Traced the raid-choice machinery: `interact.rs`'s
+`QueueItem::Raid` handler (~line 1074) and its eligibility filter (`id.level() <= max_lv`) both look
+correct on inspection (confirmed the RULES_SPEC "Age III or older / Age II or older" phrasing means
+"at most that age", not "at least" -- the `<=` comparison matches); `combat.rs` (~line 481) correctly
+enqueues one `QueueItem::Raid` per printed age slot. The actual DEFECT (why the journal-driven replay
+never applied either destruction) sits somewhere in the replay-side resolution of a
+`Pending::Choice(Raid)` against the journal's named casualty lines (`replay_common.rs`, the
+`ChoiceKind::Raid` arm and its `raid_destroys` prescan/skip-forward logic) -- I did not fully trace
+the exact defect line given the time already spent, but the SYMPTOM (workers unchanged after two
+named casualties) is unambiguous and squarely a mid-game replay-application bug, not a
+final-scoring-formula bug: `scoring_culture`'s Impact of Architecture arm correctly reads
+`id.level() * slot.workers` off whatever tableau it is handed; the tableau itself is wrong.
+ROOT CAUSE (ruled in, not in scope): the raid-destroy choice, when driven by the journal during
+replay reconstruction, fails to reduce the victim's worker count for at least one (probably both) of
+the two named "Scientific Method" casualties. This is apply.rs/interact.rs/replay_common.rs territory,
+strictly BEFORE `finish_game` runs -- out of this session's stated scope, and, per the task's hard
+rule against guessed fixes, I am not attempting a patch to the raid-choice resolver without having
+pinned the exact defect line, since a wrong guess there risks the other 44 raid-touching games in the
+corpus.
+RULED OUT (with the caveat that the full +7 gap is not 100% reconciled -- see below).
+
+WHAT'S LEFT UNPINNED for 7522864: my own hand-reconciliation of Orange's final total (88 preceding +
+5-card event sum) does not land cleanly on 159 either with the RAW engine amounts (88+67=155) or with
+the "corrected" Architecture-only amounts (88+64=152, which IS the real answer). I could not identify
+a THIRD contributing factor beyond Architecture within budget. Since the Architecture/raid-destroy
+finding alone is well-evidenced and already out of scope, and the residual +4 (155 vs 159) points at
+something ELSE inside `finish_game`'s own event-application loop that I did not get to the bottom of,
+a future session should re-open this one specifically with the two new SCOREDIV_PRECULTURE/
+SCOREDIV_TECHS_DUMP hooks (both landed this session, see below) plus a similar dump of Green's
+raid-attacker-side resource gain, and print EVERY final-event amount actually applied (not just
+Architecture) to nail the residual arithmetically before concluding it is purely the raid-destroy bug.
+
+--- 7523162 -------------------------------------------------------------------------------------
+engine=[173, 205, 228, 236] index=[171, 205, 228, 236] (4p; Orange/Purple/Green/Grey, mapping to
+player0..3 confirmed via 3-way-plus exact matches on Agriculture/Government/Strength/Variety --
+Government alone matches all four players exactly). Only Green (player2)'s Impact of Population
+differs: engine 14, journal 12 (a 2-culture, i.e. exactly one discontent-worker's worth, gap).
+Extensive verification that the FORMULA and its OTHER inputs are right:
+  - `culture_per_content_worker_above_10 = 2` confirmed correct (matches journal's own printed card
+    text and three OTHER players' exact matches on the same card).
+  - Grey (player3), using the IDENTICAL yellow_bank=3 as Green, correctly computes discontent=1
+    (happy=5, happy_required(3)=6, disc=max(6-5,0)=1) and Grey's Population score MATCHES the
+    journal exactly (10) -- this is a clean, working positive control for the exact same formula and
+    the exact same yellow_bank value, which rules out a yellow_bank-banding bug in
+    `economy::happy_required` (already independently cross-checked against docs/RULES_SPEC.md
+    6.1's own table, row "4-3 | 7 | 4 | 6" -> happy_required(3)=6, matching the code exactly).
+  - Grey's own situation is FAR more complex than Green's (Grey has a flipped/Ravaged, Homer-hosted
+    wonder in the mix -- exactly the class of interaction the prior homerfix session worked on) and
+    still comes out right, which further weakens any "St. Peter's/Homer edge case" theory for Green.
+  - Green has NO St. Peter's Basilica, NO ExtraHappyPerHappySource card at all, and NO Homer -- their
+    raw_happy=7 is the simplest possible composition (`SCOREDIV_HAPPY_DUMP`): Organized Religion, 2
+    workers, printed happy 3 each = 6, plus Great Wall's printed +1 = 7. Both card values (Organized
+    Religion happy=3, Great Wall happy=1) verified directly against `card_table.rs` and are
+    unremarkable, ordinary printed values.
+  - Added `SCOREDIV_TECHS_DUMP` (see above) and hand-summed Green's full tech list at final scoring:
+    Bronze(1)+Philosophy(3)+Coal(2)+Cannon(3)+SelectiveBreeding(2)+OrganizedReligion(2)+
+    AirForces(1)+Riflemen(2) = 16 workers on cards, +1 workers_free = 17 total, matching
+    `on_card=16 workers_free=1` from the existing `SCOREDIV_POPULATION` dump exactly -- no missing or
+    phantom card found.
+  - The journal shows an "Emigration" event (line 597, mid-game, round IV18) that took "half of
+    [Green's] discontent workers, rounded up" and returned them to the yellow bank ("Green loses 1
+    population") -- confirming Green DID carry real discontent workers earlier in the game, which is
+    at least consistent with (though does not by itself prove) a genuine discontent-related edge case
+    persisting to the very end that this session could not isolate.
+CONCLUSION: every individual input to the discontent/happy/population formulas checks out correct in
+isolation, against RULES_SPEC, against card_table.rs, and against a same-yellow_bank positive control
+(Grey) in the SAME game -- yet the two-culture gap remains unexplained. I could not identify the exact
+mechanism within this session's budget and declined to guess (per the task's explicit rule against
+landing an unverified fix). This is the one game of the five where the eventual fix, if it exists,
+might plausibly still be inside `events.rs`/`economy.rs`'s discontent path rather than a pure
+hidden-information issue -- but I have no evidence strong enough to write a test against, so nothing
+is landed.
+RULED OUT for this session, genuinely unresolved (not hidden-information-explained like the other
+four) -- the strongest remaining candidate for a real, in-scope fix, and the best next place to
+resume.
+
+============================================================================
+WHAT CHANGED (the only diff in this session's patch)
+============================================================================
+Two small, env-gated, read-only debug hooks were added, following the EXISTING SCOREDIV_* debugging
+convention already present throughout this codebase (SCOREDIV_HAPPY_DUMP, SCOREDIV_POPULATION,
+SCOREDIV_EVENT_DEBUG, SCOREDIV_FINISH_GAME, SCOREDIV_DUMP_COMPLETED, SCOREDIV_DUMP_IDS -- all
+pre-existing, all landed by prior sessions for the exact same purpose). Both were essential to pin
+down 7522864 and 7523162's root causes above and are left in place for whichever session picks those
+two back up, exactly as prior sessions left their own diagnostic hooks in place.
+
+1. rust/src/game.rs, `finish_game`: prints each player's `p.culture` immediately before
+   `events::evaluate_final_events` runs, gated behind the EXISTING `SCOREDIV_EVENT_DEBUG` env var
+   (no new env var). Purely a read of already-computed state; does not touch control flow, scores,
+   or any player-visible behavior.
+
+2. rust/src/effects.rs, `compute`: at the very end (after `stats.happy` is clamped, before
+   `stats` is returned), prints every entry of `p.techs` (name + worker count) plus
+   `p.workers_free`/`p.yellow_bank`, gated behind a NEW env var `SCOREDIV_TECHS_DUMP` AND
+   `state.game_over` (so it never fires during normal play, matching `SCOREDIV_HAPPY_DUMP`'s own
+   existing `state.game_over` gate immediately above it in the same function). Purely a read; returns
+   the exact same `stats` value as before in all cases.
+
+Neither hook is reachable unless the corresponding env var is explicitly set, so neither changes any
+program behavior when unset (the normal/production/test/guard-check case). Verified this claim
+directly: with both hooks compiled in but unset, `replaystats`'s completed-ID set over the full 1011-
+game corpus is BYTE-IDENTICAL to the same run with the hooks reverted (`git stash`/`git stash pop`
+A/B, see VERIFICATION below) -- 310/310 completed, 281/310 exact matches, both exactly matching the
+documented baseline.
+
+No functional fix is landed for any of the five games, so no new `#[cfg(test)] mod` test was added
+(the task's "every fix gets a test, confirmed RED" rule applies to fixes; there is no fix here to
+test). `cargo clippy --all-targets -- -D warnings` passes clean (no wildcard match arms introduced --
+both hooks are simple `for`/`if` loops over existing iterators). `cargo test --profile difftest --lib`
+passes 1359/1359, unchanged from baseline.
+
+============================================================================
+VERIFICATION (guard check) -- IMPORTANT NOTE ON A STALE SHARED FILE
+============================================================================
+`/private/tmp/guard_ids.txt` was found to contain 350 lines (not the documented 310) partway through
+this session -- almost certainly overwritten by another concurrent worker on this shared box (per
+GUARD_METHOD.txt's own warning: "several workers run at once on a 6-core machine"). Running the
+prescribed `comm -23` guard check against that file initially reported 40 "regressions", which was a
+false alarm caused entirely by the stale/foreign guard file, NOT by this session's changes: verified
+by `git stash`-ing this session's two debug hooks, rebuilding replaystats from the CLEAN base0815
+tree, and re-running the exact same corpus sweep -- the SAME 40 IDs were absent from the clean tree's
+own completed-ID set too, and the clean tree's completed-ID set was BYTE-IDENTICAL to this session's
+modified tree's completed-ID set (`diff` returned nothing). This confirms two things at once: (a) the
+40-ID discrepancy predates and is unrelated to anything in this session, and (b) this session's own
+changes are a strict no-op on completion status.
+
+The trustworthy, freshly-generated numbers (this session's own clean build of ed3ccc9, matching the
+task's documented baseline exactly):
+  310/310 completed games actually flipped state.game_over
+  281/310 matched index.tsv exactly (sorted score-list compare)
+  29 diverging (unchanged from baseline; the five in scope are among them, still diverging, since no
+  fix was landed for any of them)
+
+No regressions, no wins. Landing this patch is a pure diagnostics-only addition.
+
+============================================================================
+COMMANDS RUN FOR THE RECORD
+============================================================================
+  cd rust && cargo build --profile difftest --bin replay        # 42s (first build after edits)
+  cd rust && cargo build --profile difftest --bin replaystats   # 54s (second build, same edits)
+  cd rust && cargo clippy --all-targets -- -D warnings           # clean, 27.56s
+  cd rust && cargo test --profile difftest --lib                 # 1359 passed, 1.80s
+  cd rust && ./target/difftest/replaystats ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+      # 310 completed, 281/310 exact-matched, matches documented baseline exactly

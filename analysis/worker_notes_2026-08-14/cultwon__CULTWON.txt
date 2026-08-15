@@ -1,0 +1,273 @@
+CULTWON -- culture-checkpoint oracle, BuildWonderStage bucket (fixed) and
+Discard bucket (investigated, left open with a named, isolated cause)
+Branch base0814 @ 8113a15, worked in /private/tmp/cultwon (deleted after this
+note + patch were emitted). Patch: cultwon.patch (150 lines, 3 files: apply.rs,
+effects.rs, game.rs).
+
+THE ASK
+replaystats' culture oracle cross-checks reconstructed state.players[_].culture
+against the journal's own "(now N)" running total at every "End turn" line,
+bucketed by the ActionClass immediately preceding the first divergence per
+game. Two named buckets this pass: BuildWonderStage (8 games, example
+7522665 line 340 Orange: journal (now 81), this binary computed 72, delta -9,
+UNDER) and Discard (8 games, example 7521751 line 347 Grey: journal (now 29),
+this binary computed 25, delta -4, UNDER). Explicitly told to treat these as
+two SEPARATE investigations with separate evidence, and to rule out the
+checkpoint-TIMING artifact (the War-over-Culture-resolves-in-start_turn shape,
+already fixed twice this session per docs/REPLAY.md) before writing any code.
+
+===========================================================================
+BUCKET 1: BuildWonderStage -- LANDED, one confirmed mechanism, 3/8 fixed
+===========================================================================
+
+STEP 1 -- RULED OUT THE TIMING ARTIFACT FIRST
+Hand-traced 7522665 line by line against the journal before touching code.
+Orange's own culture arithmetic in the raw journal is fully self-consistent:
+line 316 "(now 42)" -> line 332 "Orange plays event ... Orange scores 3
+culture; ...; Bill Gates dies; Orange scores 9 culture; Albert Einstein
+dies" (+3+9=+12, running total 54) -> line 338 "Orange builds 4 stages of
+Fast Food Chains ... Wonder completed; Orange scores 22 culture" (+22, 76)
+-> line 340 "End turn ... 5 culture (now 81)" (+5, 81). 42+3+9+22+5=81,
+matching the journal exactly. This binary's reconstruction was short by
+exactly 9 -- not a value read at the wrong INSTANT relative to a deferred
+cascade (the existing `last_end_of_turn_culture` snapshot mechanism,
+`game.rs`'s `resume_end_turn`, already handles that class of artifact and
+this checkpoint was captured correctly), but a value permanently missing 9
+points forever after (confirmed post-fix: zero "culture drift" debug lines
+for the WHOLE game, not just line 340 -- see VERIFICATION). A one-time score
+event that never gets applied does not "catch up" on a later line; it just
+stays wrong, which is exactly what was observed before the fix.
+
+STEP 2 -- ROOT CAUSE, CONFIRMED BY TRACE, AND ALREADY NAMED IN THE CODE'S
+OWN DOC COMMENT
+Line 332's "Bill Gates dies; Orange scores 9 culture" is the Iconoclasm event
+(RULES_SPEC discard_leader_unless_current_age) discarding Orange's leader
+Bill Gates for being off-age. Bill Gates' card (card_table.rs) carries TWO
+Special variants: `ResourcesPerLabEqualToLevel` (his in-play ability, wired)
+and `CultureOnLeaveEqualToLabResourceProduction` (Code of Laws: "When Bill
+Gates leaves play, score culture equal to the amount of resources you
+produce from labs") -- NOT wired. `apply::on_leave_play`'s own PRE-EXISTING
+doc comment named this exact gap outright: "`cultureOnLeaveEqualToLab
+ResourceProduction` (Bill Gates) is a genuine gap ... Left unported since
+Bill Gates is a rare leader swap." The formula it needs
+(`effects::lab_level_workers`, level*workers summed over staffed labs) was
+already implemented and used by his OTHER ability -- this was a wiring gap,
+not a missing formula. 9 is exactly `lab_level_workers` for Orange's own
+tableau at that point in the game (a level-III lab, Computers, staffed by 3
+workers: 3*3=9), matching the 9-culture gap bit for bit.
+
+There is a SECOND, structurally identical call site: `game.rs`'s own
+`on_leave_play` (a deliberate duplicate of `apply.rs`'s, used only by
+`antiquate` -- a leader too old for the current age discarded by age
+advancement rather than by an event) carried the SAME named-but-unfixed gap
+in its own doc comment ("Bill Gates' `cultureOnLeaveEqualToLabResourceProduction`
+is a gap `apply.rs` already names and carries; it is not re-opened here").
+Fixed both call sites for the same reason Bill Gates' ability does not care
+WHY he left play.
+
+STEP 3 -- FIX, LANDED
+`effects::lab_level_workers` made `pub(crate)` (was private to effects.rs)
+so `apply::on_leave_play` and `game::on_leave_play` can both call the SAME
+formula `ResourcesPerLabEqualToLevel` already uses, rather than re-deriving
+it -- matching this module's own stated preference (see that function's doc
+comment) for one formula per shared arithmetic shape.
+
+`on_leave_play` (both copies) now checks
+`id.get().special.contains(&Special::CultureOnLeaveEqualToLabResourceProduction)`
+and, if present, adds `effects::lab_level_workers(&p.techs)` to `p.culture`
+(clamped at 0, matching every other write to that field) BEFORE the existing
+token/civil-action bookkeeping runs (order does not matter -- independent
+fields).
+
+STEP 4 -- WHAT THIS DOES NOT EXPLAIN (RULED OUT, NOT CHASED)
+Of the 8 BuildWonderStage-bucket games, exactly 3 (7522665, 7522974,
+7523256) had a NEGATIVE delta (this binary UNDER the journal) -- all three
+are now fully fixed (gone from the bucket, zero remaining culture drift in
+either game start-to-finish, checked with REPLAY_DEBUG=1). The remaining 5
+(7522536, 7522212, 7521072, 7522426, 7522315) all have POSITIVE deltas (this
+binary OVER the journal) -- a structurally different, unrelated mechanism
+(an over-count, not an under-count; Bill Gates' fix can only ever ADD
+culture, never remove it). Not traced this pass, per the task's own
+instruction to prefer one confirmed mechanism over speculative multi-cause
+chasing -- bucket name is the symptom location, not the cause, and these 5
+now share nothing with the 3 that got fixed except the ActionClass label.
+Whoever picks these up next should hand-trace 7522536 line 337 (Purple,
+delta +4) first, exactly as this pass did for 7522665.
+
+===========================================================================
+BUCKET 2: Discard -- INVESTIGATED, left open. Named example (7521751) is a
+confirmed, isolated BGO journal defect, NOT an engine bug. Bill Gates' fix
+above does not touch this bucket (0/8 original games fixed by it; one
+UNRELATED game's first divergence moved INTO this bucket as a side effect
+of fixing BuildWonderStage/TakeCard earlier in that same game).
+===========================================================================
+
+STEP 1 -- RULED OUT THE TIMING ARTIFACT FIRST
+Hand-traced 7521751 line by line. Grey's last matching checkpoint is line
+307 "(now 19)". Between there and the line-347 checkpoint ("(now 29)"), the
+ONLY relevant event is line 337: "Grey builds 1 stage of Eiffel Tower Grey
+spends 3 resources; ; Wonder completed" -- ONE build action, paying for
+stage 1 of Eiffel Tower's OWN printed 3-stage cost table ([3, 7, 3],
+data/cards_wonders_leaders.json, cross-checked against card_table.rs),
+totalling 13 resources for full completion. The journal declares the
+wonder COMPLETE after paying only 3 of the 13. This binary's reconstruction
+correctly builds 1/3 stages (matching the parsed text and the correctly-
+computed 3-resource cost) and correctly does NOT mark the wonder complete
+-- Eiffel Tower's own permanent effect (culture:4, happy:1 per turn,
+card_table.rs) therefore never activates, and the checkpoint gap (-4, then
+-8 at the next End Turn, then -12 at the one after that -- confirmed via
+REPLAY_DEBUG=1, a steady per-round -4 growth, never closing) is exactly
+what a correctly-withheld +4/turn production bonus looks like. This is NOT
+the deferred-cascade timing shape (which closes on a later line); it is a
+STEADY, COMPOUNDING absence, consistent with an ongoing effect never
+turning on.
+
+STEP 2 -- WHY THIS IS THE JOURNAL'S FAULT, NOT THE ENGINE'S
+Grepped every OTHER Eiffel Tower build sequence in the full 1011-journal
+corpus (15 other completions found). EVERY other one follows the SAME
+3-stage pattern this binary's cost model expects: either three separate
+"1 stage"/3, then /7, then /3 lines across different turns, or (when a
+player has Masonry/Architecture's `wonderStagesPerAction` multiplier
+active) a SINGLE line correctly labelled "N stages" whose spent-resources
+total is the SUM of the N stage costs actually consumed (e.g. real corpus
+example, a different game: "Purple builds 3 stages of Transcontinental
+Railroad Purple spends 9 resources; ; Wonder completed" -- 3 stages * 3
+each = 9, textually consistent). 7521751's own Eiffel Tower line is the
+ONLY occurrence, across the whole sampled corpus, of "1 stage"/3 resources
+immediately declaring "Wonder completed" for a 3-stage, 13-resource wonder
+with NO preceding partial-progress lines. Grey never touches Eiffel Tower
+again for the rest of the game (grepped the full journal). This is a
+genuine, isolated BGO server-side logging anomaly local to this one game --
+per the task's own standing rule ("if our engine disagrees with a human's
+real move, our rules are wrong"), the converse also holds: when 15/16
+sampled instances of the identical wonder agree with the engine's cost
+model and exactly one disagrees with itself (spends 3, but the real total
+for what it claims is complete is 13), the ONE outlier is the corrupted
+record, not the rule. Forcing wonder completion off the "Wonder completed"
+trailer text alone (ignoring the stage-cost arithmetic) would have to be
+applied to EVERY wonder-build line in the corpus, and would silently paper
+over a genuine future cost-mismatch bug the exact same way the "GAME DATA
+UPDATED" corrections in `culttake__CULTTAKE.txt` were nearly missed --
+except here, unlike that pass, there is no independent ground-truth
+correction line to confirm the deficit against, only the trailer text
+contradicting the arithmetic on its own line. Left unfixed on purpose: an
+honest negative for the NAMED example.
+
+STEP 3 -- SURVEYED THE OTHER 7 GAMES IN THE BUCKET; NO SHARED MECHANISM
+Dumped the full bucket (REPLAY_DUMP_BUCKET=Discard, filtered to the
+culture-oracle's own "journal says (now N)" line shape, distinct from the
+unrelated discard-phase HAND-SIZE oracle which reuses the same bucket
+label): 7521751 (-4), 7523167 (+3), 7522009 (+9), 7523264 (+4), 7523236
+(-5), 7521985 (-5), 7521660 (+3), 7523127 (+6). Signs are MIXED (four
+positive, four negative) -- inconsistent with one single missing/duplicated
+source, which would only ever push one direction. Read the journal context
+immediately preceding each divergence line: no shared card, event, or
+mechanism recurs across all 7 (contexts span ordinary hand-limit discards
+with nothing unusual nearby, an Impact-of-* scoring event, a leader
+election, a wonder build with no anomaly). Concluded there is no ONE
+mechanism to name for this bucket as a whole -- consistent with
+docs/REPLAY.md's own standing warning, re-confirmed here, that a bucket
+name is the symptom location (the ActionClass immediately before a
+checkpoint), not a shared cause.
+
+ONE UNCONFIRMED LEAD, FLAGGED FOR HANDOFF, NOT CHASED: two of the eight
+(7522009, delta +9; 7523127, delta +6) both have a "wins War over Culture"
+line a few lines before their divergence, and in 7522009 the SAME +9/-9
+offset (winner over, loser under by the identical magnitude) recurs
+STABLY across every subsequent checkpoint in the game (five checkpoints
+traced, REPLAY_DEBUG=1) without ever closing -- suggestive of a genuine,
+constant War-over-Culture spoils miscalculation (`combat::apply_war_spoils`,
+"War over Culture" arm: `take = min(5 + advantage, loser_culture)`) rather
+than a timing artifact. NOT confirmed: the observed deltas (+9 and +6) do
+not cleanly match either `advantage` alone or `5+advantage` against the
+journal's own printed "Attacker's strength: N; Defender's strength: M"
+lines for either game, so the discrepancy may originate earlier (e.g. in
+`loser_culture` already being wrong BEFORE the war resolves, from some
+other cause) rather than in the spoils formula itself. Whoever picks this
+up next should hand-trace 7522009's own Orange/Purple culture from an
+earlier AGREEING checkpoint forward through the "Purple wins War over
+Culture Attacker's strength: 37; Defender's strength: 28" line (journal
+line ~322) with REPLAY_DEBUG_ALL=1, confirming or ruling out
+`effects::state_stats` strength agreement with BGO's own printed numbers
+BEFORE assuming the spoils arithmetic itself is at fault.
+
+===========================================================================
+MEASUREMENT
+===========================================================================
+Baseline (this session's own fresh measurement, HEAD 8113a15, before any
+edit -- the task-stated baseline of 40047/604 was not exactly reproduced by
+this environment's own /private/tmp/base0815 copy; used this pass's own
+measured baseline throughout rather than the stated figures, per this
+repo's own "compute over inference" rule):
+  completed games:              648/648
+  exact-score-match games:      604/648
+  culture-oracle checkpoints:   40048/40240 (99.5%)
+  games w/ >=1 culture divergence (first-divergence bucketed): 72/1011
+  BuildWonderStage bucket: 8 games (example 7522665 line 340, delta -9)
+  Discard bucket:          8 games (example 7521751 line 347, delta -4)
+
+After (this patch only):
+  completed games:              648/648 (unchanged)
+  exact-score-match games:      611/648 (+7)
+  culture-oracle checkpoints:   40050/40240 (99.5%) (+2)
+  games w/ >=1 culture divergence: 65/1011 (-7)
+  BuildWonderStage bucket: 5 games (-3: 7522665, 7522974, 7523256 fixed)
+  Discard bucket:          9 games (+1: 7522776 newly first-diverges here,
+                            an unrelated game whose EARLIER divergence in
+                            this same game -- previously under a different
+                            bucket -- was itself fixed by this patch,
+                            exposing a pre-existing, untouched later
+                            divergence at a Discard-classified checkpoint;
+                            the original 8 are all still present unchanged)
+
+Frozen 648-game completion guard (/private/tmp/guard_ids.txt) vs this
+patch's own completed-game IDs:
+  comm -23 /private/tmp/guard_ids.txt /tmp/cultwon_ids.txt   (REGRESSIONS):
+    <empty>
+  comm -13 /private/tmp/guard_ids.txt /tmp/cultwon_ids.txt   (WINS):
+    <empty>
+Both empty, as expected -- this is a score-correctness fix inside already-
+completing games (BuildWonderStage's UNDER-count subset), not a completion
+fix; it neither breaks nor newly completes any game.
+
+`cargo test --profile fasttest --lib`: 1398 passed (1395 baseline + 3 new),
+0 failed.
+`cargo clippy --all-targets --profile fasttest -- -D warnings`: clean.
+
+VERIFICATION (BuildWonderStage fix)
+- Unit tests in apply.rs's own #[cfg(test)] mod (all reuse the existing
+  `blank_player`/`card` test helpers already in that module):
+  * on_leave_play_scores_culture_equal_to_lab_level_workers_when_bill_gates_leaves
+    (Bill Gates + a level-III lab staffed by 3 workers -> +9 culture,
+    reproducing 7522665's own numbers exactly)
+  * on_leave_play_grants_no_culture_from_bill_gates_for_an_unstaffed_lab
+    (workers=0 -> +0, distinguishes "wired at all" from "wired correctly")
+  * on_leave_play_does_not_score_culture_for_a_leader_without_the_bill_gates_special
+    (Napoleon Bonaparte + the same staffed lab -> +0, the branch is gated
+    on the SPECIFIC special, not "any leader leaving play near a lab")
+  Confirmed RED by temporarily short-circuiting the new branch's condition
+  to `false` in `apply.rs`: the first test failed with "left: 0, right: 9"
+  (culture stayed 0 instead of gaining 9) -- the other two, which assert
+  0, were unaffected by construction and stayed green throughout, exactly
+  as expected for a guard against the branch firing when it should not.
+  Restored, confirmed GREEN, confirmed clippy-clean.
+- Traced 7522665 post-fix with REPLAY_DEBUG=1: zero "end-turn culture
+  drift" lines for the WHOLE game (not just line 340) -- the culture
+  oracle now agrees with the journal at every checkpoint in this game, not
+  merely the named one. Same check on 7522974 and 7523256 (the other two
+  games this fix resolves): zero drift lines in either.
+
+WHAT REMAINS (NOT CHASED THIS PASS, PER THE TASK'S SCOPE)
+- BuildWonderStage: 5 games with a POSITIVE (over-count) delta, a
+  structurally different mechanism from Bill Gates' fix. Next: hand-trace
+  7522536 line 337 (Purple, delta +4) with REPLAY_DEBUG_ALL=1.
+- Discard: 7 of 8 games (all but the confirmed-unfixable 7521751) surveyed
+  with no shared mechanism found; one unconfirmed War-over-Culture-spoils
+  lead flagged above for 2 of them (7522009, 7523127). Next: hand-trace
+  7522009's own strength numbers around its War over Culture resolution
+  before assuming the spoils formula itself is at fault.
+- Every other bucket from the original 72-game histogram (TakeCard 26->23,
+  BuildUnit 5, BuildBuilding 5->4, UpgradeProduction 4, WinWar 3,
+  PlayTactic 3, UpgradeUnit 3, ElectLeader 2, EndTurn 3->2,
+  DevelopTechnology 1, IncreasePopulation 1) is untouched by this pass,
+  exactly as scoped.

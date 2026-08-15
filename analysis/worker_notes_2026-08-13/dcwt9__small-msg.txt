@@ -1,0 +1,39 @@
+Cover store.py and media.py, where losing something is silent
+
+Two modules nothing tested, and in both the failure reads as the model
+being stupid rather than as a bug.
+
+store.py is the channel -> session map: bridge.sessions is loaded from it
+at boot and saved back whenever a channel learns its session id, so it is
+what makes the deploy, the auth recycle and _resume_channel resume a
+conversation instead of starting one. Neither direction was asserted on —
+`if False and cfg.SESSIONS_FILE.exists()` and dropping the write_text both
+left the suite green, and either one means every channel on the machine
+quietly begins again after the next restart. tests/test_store.py pins the
+round trip, the write (read back with json, so a dead save cannot be
+covered by a dead load), the first-boot case and the corrupt-JSON warning,
+against a per-test mkdtemp — never a fixed /tmp path, which is one file
+shared by every checkout.
+
+media.py had three: the msg_id prefix (two people sending screenshot.png
+overwrite each other, and the model is handed a plausible path to somebody
+else's bytes), the transcode WAV's unlink (silent disk growth, one 16 kHz
+file per voice memo forever), and the `and` in the whisper/model existence
+check — loosening that one is invisible in the return value, because the
+missing binary then raises inside create_subprocess_exec and the blanket
+except swallows it into the same None. The test for it therefore asserts
+that no process was spawned at all, which is the only observable there is.
+Faked at the subprocess seam: no real ffmpeg, no real whisper, no network.
+
+att.filename is the uploader's, joined straight onto the channel's
+directory, so a `../` in it would write outside cfg.ATTACH_DIR. Taken
+through Path(...).name — one line, no sanitiser and no whitelist, since
+cfg.ALLOWED_USER_IDS is the boundary that keeps strangers out of this code
+and this is defence in depth. It also stops a name with a slash in it
+failing the save and losing the attachment.
+
+Each of the five mutations above was re-applied and fails a new test; so
+does dropping the Path(...) hardening. 1030 -> 1050 tests, ruff and mypy
+clean.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

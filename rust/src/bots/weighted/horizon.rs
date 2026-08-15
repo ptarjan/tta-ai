@@ -341,6 +341,84 @@ pub fn lateness(state: &GameState) -> f64 {
     lv.clamp(0.0, 1.0)
 }
 
+/// RULE-DERIVED, RULES_SPEC 5.0/6.6.4: the earliest round in which ANY
+/// player's OWN Politics Phase can ever feature a military card that
+/// player actually holds. Two cited facts, chained, not fitted:
+///
+/// 1. No military card is drawn before round 2 (6.6.4, "none on round 1"),
+///    so `FIRST_DRAW_ROUND = 2` is the earliest ANY hand can gain a card at
+///    all (drawing happens in the END-of-turn sequence, so it is that
+///    player's round-2 turn that first produces one).
+/// 2. A card gained at the end of a turn cannot be played that same turn --
+///    the Politics Phase (5.0) where a political action is taken already
+///    happened earlier in that same turn's sequence -- so the earliest it
+///    can be PLAYED is that SAME player's next own turn, exactly one round
+///    later (5.0: one turn per player per round, fixed order).
+///
+/// `EARLIEST_COMBAT_ROUND = FIRST_DRAW_ROUND + 1 = 3`.
+const FIRST_DRAW_ROUND: u16 = 2;
+pub const EARLIEST_COMBAT_ROUND: u16 = FIRST_DRAW_ROUND + 1;
+
+/// RULE-DERIVED, RULES_SPEC 1.4/1.6/5.1-5.6/6.6.4/`EARLIEST_COMBAT_ROUND`:
+/// true while no active player can possibly hold an aggression or war card
+/// THAT THEY COULD ALREADY ACT ON, i.e. combat is not merely unlikely but
+/// structurally impossible this turn.
+///
+/// Two parts, both load-bearing:
+///
+/// * `state.round < EARLIEST_COMBAT_ROUND` -- a proven LOWER BOUND (see that
+///   constant's own derivation), independent of any specific game's actual
+///   draws. This half exists because raw current hand size ALONE is too
+///   eager within a round: turn order is fixed, so by the time the LAST
+///   seat to act in a round takes their turn, every EARLIER seat has
+///   already finished theirs, including its end-of-turn military draw --
+///   e.g. in a real round-2 2p game, seat 0 (2 unused MAs under Despotism)
+///   ends its round-2 turn holding 2 military cards, cards that will not be
+///   PLAYABLE by seat 0 until round 3, before seat 1 has even made its own
+///   round-2 build decision. A bare hand-size check would call combat
+///   "reachable" for seat 1 right there, reopening the overvaluation this
+///   whole gate exists to close, for a card that cannot be played by anyone
+///   for another full round. Confirmed by direct measurement, not assumed:
+///   `combat_unreachable` without this floor measured 47.2% military-first
+///   at 2p (STRGATE.txt section 7), against 0.0% with it.
+/// * `state.active().all(|p| p.hand_size_military() == 0)` -- once past that
+///   proven floor, falls back to the actual public fact instead of
+///   continuing to guess: an aggression or war card can only ever reach a
+///   hand via a military-deck draw (5.4/5.6, both "reveal" a card already
+///   in hand), and no Age A military card is EVER dealt to a hand at all
+///   (1.4/1.6 -- Age A's military deck is shuffled once, at setup, straight
+///   into the current-events deck, and its remainder goes "to the box
+///   unseen"). So this half can only ever EXTEND the unreachable window
+///   past the floor (never shrink it below the floor), for the actual
+///   games where nobody has drawn anything yet.
+///
+/// PUBLIC INFORMATION ONLY: the second half reads
+/// [`PlayerState::hand_size_military`] (a COUNT), never a hand's contents.
+/// A rival's military hand is kept face down but its SIZE is not secret --
+/// `state.rs`'s own `hidden_military` field exists specifically because the
+/// app harness mirrors a real opponent whose hand size is known even when
+/// its contents were not transcribed (see that field's doc comment) -- so
+/// this is the same public/private boundary the engine already draws
+/// elsewhere, not a new one invented for this function. `state.round` is
+/// global public state. Legal for every call site regardless of which
+/// player `idx` is being evaluated, because it never looks at any player's
+/// hand contents, including the evaluated player's own.
+///
+/// This is intentionally NOT "no rival has built military strength yet":
+/// that would be REACTIVE (it degenerates in self-play -- if nobody ever
+/// builds military, no rival ever shows strength, so the gate never closes,
+/// so strength never gets valued, so nobody ever builds it) and would read
+/// built units, which are a strategic CHOICE, not a rules-fixed fact.
+/// Military-card draws are not a choice: they happen automatically off
+/// unused military actions at every end of turn regardless of a player's
+/// strategy (6.6.4), so this gate closes on a fixed schedule even in a
+/// fully pacifist self-play population, the same way lateness/rounds_left
+/// do -- and `EARLIEST_COMBAT_ROUND` itself is a fixed structural constant,
+/// not a per-game observation, so it cannot be gamed by any strategy either.
+pub fn combat_unreachable(state: &GameState) -> bool {
+    state.round < EARLIEST_COMBAT_ROUND || state.active().all(|p| p.hand_size_military() == 0)
+}
+
 /// `horizon_scale`: `rounds_left`, normalised so an average-moment decision
 /// scores 1.0. Mean ~1.0 over a game by construction; ~1.9 at the deal,
 /// ~0.09 on the last turn. Never negative, because `rounds_left` never is.
@@ -583,6 +661,7 @@ pub fn wonder_outlook(state: &GameState, p: &PlayerState, resource_rate: i32) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cards::CardId;
     use crate::game as G;
 
     /// [`CIVIL_DECK_LEN`] must equal `game::build_deck(age, true, n).len()`
@@ -932,5 +1011,99 @@ mod tests {
         state.players[2].resigned = true;
         state.players[3].resigned = true;
         assert_eq!(live_count(&state), 2);
+    }
+
+    // ----------------------------------------------------- combat_unreachable
+
+    /// A freshly dealt game (round 1, Age A, nobody has drawn a military
+    /// card -- RULES_SPEC 1.4/6.6.4) has combat structurally unreachable:
+    /// every active player's military hand is empty.
+    #[test]
+    fn combat_unreachable_is_true_on_a_fresh_deal() {
+        let state = G::new_game(2, 200);
+        assert!(combat_unreachable(&state), "a fresh deal must have no military cards in any hand");
+    }
+
+    /// The gate opens the moment ANY single player -- attacker or defender,
+    /// doesn't matter which -- has at least one card in a military hand,
+    /// because that is the one precondition every aggression/war play
+    /// shares (RULES_SPEC 5.4/5.6, "reveal" a card already in hand).
+    #[test]
+    fn combat_unreachable_flips_the_moment_any_one_player_has_a_military_card() {
+        let mut state = G::new_game(3, 201);
+        // Past the [`EARLIEST_COMBAT_ROUND`] floor, so this isolates the
+        // hand-size half of the predicate rather than the round floor
+        // (see the dedicated floor test below for that half).
+        state.round = EARLIEST_COMBAT_ROUND;
+        assert!(combat_unreachable(&state));
+        // The specific card doesn't matter -- only that a hand is nonempty
+        // (`combat_unreachable` reads counts, never identity; see the
+        // dedicated legality test below).
+        state.players[2].hand_military.push(CardId(0));
+        assert!(!combat_unreachable(&state), "one player's nonempty military hand must open the gate for the whole game");
+    }
+
+    /// The [`EARLIEST_COMBAT_ROUND`] floor is a proven LOWER BOUND, not a
+    /// heuristic: it must hold even when a hand is (unrealistically, for
+    /// this test) already nonempty before the floor's own round -- pinning
+    /// that the floor half of the predicate is checked FIRST and actually
+    /// short-circuits, not merely "usually true in practice". This is the
+    /// regression test for the bug this floor was added to fix: without
+    /// it, `combat_unreachable` measured 47.2% military-first at 2p
+    /// (STRGATE.txt section 7) because one seat's automatic end-of-turn
+    /// military draw made a rival's hand nonempty mid-round, before that
+    /// seat's OWN round-2 build decision.
+    #[test]
+    fn the_earliest_combat_round_floor_holds_even_if_a_hand_is_already_nonempty() {
+        let mut state = G::new_game(2, 210);
+        state.round = EARLIEST_COMBAT_ROUND - 1;
+        state.players[1].hand_military.push(CardId(0));
+        assert!(combat_unreachable(&state), "the floor must protect every round below EARLIEST_COMBAT_ROUND regardless of hand contents");
+        state.round = EARLIEST_COMBAT_ROUND;
+        assert!(!combat_unreachable(&state), "once at/past the floor, a nonempty hand must open the gate");
+    }
+
+    /// A resigned player's hand does not keep the gate closed -- they can no
+    /// longer take a political action, so their leftover cards (if any) are
+    /// irrelevant to whether combat is reachable. Mirrors
+    /// [`GameState::active`]'s own resigned-player filter, which every
+    /// other horizon computation in this module already relies on
+    /// ([`live_count`] above).
+    #[test]
+    fn a_resigned_players_military_hand_does_not_keep_the_gate_closed() {
+        let mut state = G::new_game(2, 202);
+        state.players[1].hand_military.push(CardId(0));
+        state.players[1].resigned = true;
+        assert!(combat_unreachable(&state), "a resigned player can no longer play a political action, so their hand cannot make combat reachable");
+    }
+
+    /// LEGALITY: `combat_unreachable` may read a rival's hand SIZE (a public
+    /// count -- see the function's own doc comment) but must NEVER depend on
+    /// a rival's hand CONTENTS (which specific cards, which is private).
+    /// Proven here by constructing two states whose rival hand sizes are
+    /// identical but whose hand CONTENTS differ, and asserting the
+    /// predicate returns the identical answer for both -- if it ever started
+    /// reading a specific card's identity out of a rival's hand, this is the
+    /// test that must catch it.
+    ///
+    /// Confirmed this actually catches a violation (not just tautologically
+    /// green): temporarily rewrote `combat_unreachable`'s body to also
+    /// require `p.hand_military.as_slice().first() != Some(&CardId(0))`
+    /// -- i.e. made it peek at a specific card's IDENTITY, not just hand
+    /// SIZE -- reran, watched this test fail (see STRGATE.txt section 6 for
+    /// the verbatim failure), then reverted to the real, content-blind
+    /// implementation below.
+    #[test]
+    fn combat_unreachable_does_not_depend_on_which_cards_are_in_a_hand_only_how_many() {
+        let mut state_a = G::new_game(2, 203);
+        let mut state_b = state_a.clone();
+        // Same COUNT (one card each), deliberately different IDENTITY.
+        state_a.players[1].hand_military.push(CardId(0));
+        state_b.players[1].hand_military.push(CardId(1));
+        assert_eq!(
+            combat_unreachable(&state_a),
+            combat_unreachable(&state_b),
+            "the predicate must answer identically when only hand CONTENTS differ, not just hand SIZE"
+        );
     }
 }

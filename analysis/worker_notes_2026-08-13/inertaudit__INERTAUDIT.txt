@@ -1,0 +1,323 @@
+INERT MECHANISM CENSUS -- Through the Ages Rust bot (tta-ai/rust)
+Read-only census, no code changed. Generated 2026-08-13.
+Scope: rust/src (weighted evaluator + engine dispatch), docs/OPEN_ITEMS.md,
+experiments/rust_champion_{2p,3p,4p}.json, the live `climb` command line.
+
+===============================================================================
+SUMMARY -- ANSWERING THE QUESTION
+===============================================================================
+
+COUNT: 2 confirmed built-but-switched-off mechanisms, plus 1 already-known
+one re-confirmed still dead, plus a handful of "possibly still open, could
+not fully verify in a read-only pass" items pulled from docs/OPEN_ITEMS.md.
+That is a much smaller number than the framing worried about -- and the
+reason is not that I ran out of budget, it's that a same-day pre-emptive
+sweep (see below) already found and killed the biggest offenders.
+
+The short version: as of TODAY there was already a self-audit (referenced
+in comments as "SIGNAUDIT.txt" and "PHASECUT.txt", both 2026-08-13, git
+history not inspected per instructions) that found and retired exactly this
+bug class in three places (CardBoardGovernment/CardBoardAction/
+CardBoardWonder -- per-type offset keys permanently shadowed by dedicated
+board-aware pricing functions that always intercept first) and collapsed
+three more (WorkersEarly/TechLevelsEarly/HandValueEarly -- a proven,
+exact, redundant degree of freedom in the old 3-parameter phase blend).
+Separately, the codebase carries a LIVE, CI-enforced "coordinate registry"
+(rust/src/bots/weighted/registry.rs) with two tests that are exactly this
+audit, automated: one checks every WeightKey is named by a literal call
+site in production code outside its own declaration, the other drives 180
+self-play games and checks every WeightKey that features() is coded to
+write actually goes nonzero on at least one sampled position. Both carry a
+named, commented, ratcheted allow-list for genuine exceptions (marginal
+multipliers, phase blends reached only through .early()/.late()) --
+anything NOT on that list that fails either test fails `cargo test`. That
+is a real, structural defence against the exact incident that prompted
+this audit (three activating weights defaulting to 0.0 and absent from
+every champion file) recurring silently a fourth time.
+
+Cross-checking all 160 WeightKey table entries against all three live
+champion files (rust_champion_{2p,3p,4p}.json) found only ONE weight that
+is still exactly 0.0 in every champion: wonder_in_progress (#1 below) --
+it is fully wired and unit-tested, just apparently unlucky/low-signal so
+far, not blocked by anything. The other 75 weights that default to 0.0 in
+code have all been moved off zero by the climb in at least one of the
+three champion files -- the specific "weight seeded at 0.0 AND absent from
+every champion file" bug class does not currently recur elsewhere in the
+weight table.
+
+THE TWO THAT MOST LIKELY MATTER FOR PLAY STRENGTH, ranked:
+
+1. Special::AllPlayers event pricing gap (#3 below) -- ALREADY KNOWN
+   (matches the task's own framing), reconfirmed still dead. Real ceiling
+   on how well the bot can plan around "produce your rate" events
+   (Good Harvest-style allPlayers blocks), but currently provably
+   unreachable given the base-game card data, so the practical cost today
+   is close to zero -- it only starts costing something if new event cards
+   ever print those fields inside an allPlayers block.
+2. MilStance::Aggro (#2 below) -- a whole opponent-archetype military
+   posture is built and never assigned to any of the six ported gauntlet
+   archetypes. Low direct effect on the CHAMPION's own play (this is
+   sparring-partner diversity, not the trained evaluator), but it does
+   mean the league's gauntlet is narrower than the code supports, which
+   indirectly caps how well overfitting to the current gauntlet is caught.
+3. wonder_in_progress (#1 below) -- lowest-confidence entry on this list;
+   plausibly just an unclimbed-but-fine coordinate, not a defect.
+
+Everything else this pass looked at (the != 0.0 guards throughout cards.rs
+and eval.rs, the CLI flags climb.rs accepts vs what the live `climb`
+processes actually pass, the #[allow(dead_code)] sites, the effects.rs
+dispatch no-op arms) turned out to be deliberately and legibly designed:
+either a genuine performance short-circuit over an already-nonzero weight,
+a documented and tested hand-off to a different dispatch site, or a CLI
+default that keeps the mechanism ON rather than off. See sections 2-5 for
+the receipts. Section 6 lists items pulled from docs/OPEN_ITEMS.md (dated
+2026-08-05) that I could NOT fully re-verify against the current
+2026-08-13 code within this pass's budget -- flagged uncertain rather than
+either confirmed-dead or confirmed-fixed.
+
+===============================================================================
+SECTION 1: WeightKey defaults vs live champion files
+===============================================================================
+
+METHOD: extracted all 160 WeightKey table entries from
+rust/src/bots/weighted/weights.rs (macro `weight_key_table!`), diffed
+against the keys/values present in experiments/rust_champion_{2p,3p,4p}.json.
+Champion files are current: all 160 keys present in all three, no orphaned
+or missing keys. Of the 76 keys whose CODE DEFAULT is 0.0, 75 have moved
+away from 0.0 in at least one champion file. NOTE: this reads the raw JSON
+values, not the post-`dominance_repair` values the bot actually loads at
+runtime (see `eval::load_weights`/`dominance_repair`, weights.rs:1013
+`sign_intent`) -- if a champion file were ever hand-edited to a
+sign-violating value this check would over-report it as "live" when the
+loader would actually zero it back out. climb.rs saves through the same
+loader path (`eval::save_weights`), so in the ordinary training flow this
+should not diverge, but it was not independently re-derived from Rust
+here; flagged as a residual gap in this method.
+
+FINDING 1.1 -- wonder_in_progress is exactly 0.0 in all three champion files
+  File: rust/src/bots/weighted/weights.rs:653 (WeightKey table, default 0.0),
+        rust/src/bots/weighted/features.rs:646 (feature computation),
+        rust/src/legal.rs:1512-1541 (Infiltrate legality reads the same key)
+  Built to do: RULES_SPEC 5.5 cliff -- Infiltrate (Special::RemoveFromGame)
+  is illegal against a player with no leader AND no wonder in progress.
+  `Leader` weight already prices the leader half; `WonderInProgress` prices
+  "starting a wonder makes me Infiltrate-eligible" as a 0->1 step,
+  independent of `WonderProgress`'s continuous sunk-cost pricing.
+  Why it reads as inert: 0.0 in rust_champion_2p.json, _3p.json AND
+  _4p.json (checked 2026-08-13) -- the only one of the 76 zero-default
+  keys that never moved anywhere.
+  Path to fire: YES, nothing blocks it. features.rs:646 sets it correctly
+  and two unit tests (features.rs:1109, features.rs:1124) assert the 0->1
+  flip fires. Classified `SignIntent::Free` (weights.rs:1180), so the
+  climb is allowed to move it either direction -- unlike HasColony/HasUnit
+  (same shape, same 0.0 default, `Free`), which DID get nonzero values in
+  every champion file, this one just hasn't yet.
+  Would anything break if switched on: no -- it's a legality/pricing input
+  already exercised by tests.
+  Uncertainty: may simply be an unexplored, low-signal coordinate rather
+  than a defect (Infiltrate targeting a wonder-in-progress player is a
+  rare event to get gradient on). Distinct from the effect-pricing
+  incident: there is no blocking guard here, only an unlucky climb history
+  so far.
+  VERDICT: LEAVE (not a defect). If it matters, the fix is a training-side
+  nudge (a gauntlet/seed that exercises Infiltrate more), not a code change.
+
+===============================================================================
+SECTION 2: #[allow(dead_code)] and built-but-unassigned code
+===============================================================================
+
+FINDING 2.1 -- MilStance::Aggro is built and assigned to zero archetypes
+  File: rust/src/bots/variants/mod.rs:163 (`#[allow(dead_code)] Aggro,`)
+  Built to do: a "top-2 military position, more aggressively pursued" bot
+  opponent-archetype posture, ported to preserve the full domain of a
+  Python knob.
+  Why it's inert: the code's own comment says it plainly -- "Unused by
+  every current archetype (none of the six ported profiles set it --
+  `MilitaryBot` uses `Top2`)".
+  Path to fire: trivial (assign it to a Profile const) but nobody has.
+  Would anything break if switched on: no, it's an opponent-archetype
+  knob for gauntlet/training diversity, not the trained evaluator itself.
+  Impact ceiling: indirect -- a narrower gauntlet catches less overfitting,
+  it does not directly cap the champion's own ceiling.
+  VERDICT: LEAVE (explicitly a deliberate placeholder for a future
+  archetype per its own comment, not a silent gap) -- flagging because it
+  is the one clear case of "genuinely unused code with a real behavioural
+  effect if switched on" found in this pass, as opposed to the other two
+  dead_code sites below which are honestly test/Debug-only.
+
+  Other #[allow(dead_code)] sites checked and NOT flagged (both legitimate):
+  - rust/src/replay_common.rs:235 -- `MismatchKind` enum fields read only
+    through `{:?}` (Debug), which `dead_code` lint can't see through; the
+    annotation is honest, not a cover for something unused.
+  - rust/src/replay_common.rs:6924 -- `action_class_grounds_and_consumes_a_
+    card`, a test-only exhaustiveness-invariant checker kept as a plain
+    top-level fn (not moved inside `#[cfg(test)]`) specifically so the
+    exhaustiveness check itself can't be silently test-gated away.
+
+===============================================================================
+SECTION 3: Dispatcher no-op arms (Special::* match arms that do nothing)
+===============================================================================
+
+METHOD: read every `=> {}` / `=> None` block in rust/src/effects.rs (the
+Special-effect dispatch engine dispatches through) end to end, plus the
+one already flagged by the task brief.
+
+FINDING 3.1 (ALREADY KNOWN, reconfirmed) -- allPlayers event yields are
+  unpriced by the bot's own event-value estimator
+  File: rust/src/bots/weighted/events.rs:229 (`event_block_value`),
+        rust/src/bots/weighted/events.rs:305 (doc comment naming the gap),
+        rust/src/events.rs:652 (engine-level dispatch DOES handle
+        `Special::AllPlayers` correctly -- the gap is bot pricing only,
+        not a rules/engine bug)
+  Built to do: price a prepared event card's effect block through the
+  same weights as a real yield (Good Harvest, Barbarians, etc).
+  Why it's inert: `EventBlock` has no `produce_food`/`produce_resources`
+  fields at all, and `my_event_threat` (the only caller of
+  `event_block_value`) is documented as deliberately never calling it with
+  an `allPlayers` block in the first place, because such a block's
+  differential value to the seeder is genuinely zero (it hits every
+  player equally) -- so the omission is doubly justified, not merely
+  undiscovered. Confirmed against live card data as of 2026-08-05
+  (docs/OPEN_ITEMS.md, "What is a one-shot 'produce your rate' event
+  worth?").
+  Path to fire: none today -- provably no base-game card reaches this path
+  with those fields set, per the doc comment's citation trail.
+  Would anything break if switched on: needs a real definition of "one-shot
+  equivalent of a rate" first; not a mechanical flip.
+  VERDICT: LEAVE for now (correctly identified as unreachable, not
+  silently broken) -- becomes a real gap only if a future card ever prints
+  produceFood/produceResources inside an allPlayers block, or if the event
+  card pool changes.
+
+  ALL OTHER no-op arms in effects.rs's Special dispatch (~40 variants
+  across four `=> {}` groups, effects.rs:1171-1319) were individually
+  read and are each accompanied by a specific comment pointing to the
+  OTHER dispatch site that actually handles them (actions.rs by name,
+  combat.rs at aggression/war resolution, events.rs at event resolution,
+  economy.rs at end-of-turn, or apply_pacts for pact-specific A/B/
+  bothPlayers blocks) -- e.g. `OnReplacePutUnderCompletedWonderHappy(_) =>
+  {}` at effects.rs:1171 is explicitly "not a gap: `compute` below applies
+  the +1 itself when it walks `completed_wonders`". None of these read as
+  a silently-abandoned mechanism; this file is unusually disciplined about
+  stating why each no-op is safe. Not itemizing all ~40 individually here
+  -- read them at rust/src/effects.rs:1150-1319 if a spot check is wanted.
+
+===============================================================================
+SECTION 4: != 0.0 guards (correctness gates vs performance short-circuits)
+===============================================================================
+
+METHOD: grepped every `!= 0.0` / `x != 0.0` conditional in rust/src
+(65 non-test occurrences), concentrated in cards.rs's `card_potential_core`
+dispatch (the "which pricing function handles this card type" table) and
+eval.rs's per-key gated blocks.
+
+FINDING: every one of these gates a genuinely-priced weight, and per
+Section 1, 75 of 76 zero-default weights are now nonzero in at least one
+champion file -- so, for those champions, these guards are live
+short-circuits over real numbers, not correctness gates blocking an
+unreachable feature. The one place this pattern used to hide a real bug
+(cards.rs's `card_potential_core`: `CardBoardGovernment`/`CardBoardAction`/
+`CardBoardWonder` per-type offsets that could never be reached because
+`gov_value`/`action_value`/wonder's own board_yields branch always
+intercept FIRST whenever their own credit is nonzero, "which is every
+trained champion sampled") was found and fixed the same day this audit
+was requested (SIGNAUDIT.txt, 2026-08-13) -- the three keys are now in
+`RETIRED_KEYS` (weights.rs, doc comment at the RETIRED_KEYS entry) and are
+dropped from any loaded champion JSON rather than silently doing nothing.
+No other instance of "shadowed per-type key masked by a dispatch that
+always returns first" was found in the remaining `card_potential_core`
+branches (tactic/aggression/war/pact/event each have their OWN dedicated
+`*_board_credit` gate with no competing per-type fallback underneath them
+-- verified by reading cards.rs:1750-1930 in full).
+
+A per-champion-file caveat worth naming rather than a defect: several of
+these guarded weights are 0.0 in ONE player-count's champion but nonzero
+in the other two (e.g. `attack_cost_doubled`: 2p=0.0133, 3p=0.0, 4p=0.0;
+`build_discount`: 2p=0.0, 3p=3.857, 4p=0.095). For that specific player
+count, the guarded code path is genuinely a no-op today. This looks like
+ordinary per-player-count climb variance (some mechanisms matter more at
+some table sizes) rather than a structural block, since the SAME weight is
+live at other player counts through the identical code path -- but it
+wasn't independently verified further given time budget.
+
+===============================================================================
+SECTION 5: CLI flags / config fields (climb.rs vs the live process)
+===============================================================================
+
+Live command line (via `pgrep -fl '[c]limb --players'` on this Mac, three
+processes for 2p/3p/4p):
+  --players N --out PATH --log PATH --threads 2 --hours 6 --seed N
+  --gauntlet PATH (x6) --gauntlet-kind human --gauntlet PATH
+  --gauntlet-kind human --gauntlet-search PATH --gauntlet PATH
+
+NOT passed on the live command line: --start, --anchor, --kind, --lambda,
+--gens, --screen, --max-games, --anchor-games, --gauntlet-games,
+--gauntlet-every, --pool-k, --pool-games, --pool-confirm-games, --sigma,
+--sigma-floor, --stall-kick, --accept-z, --league-cap.
+
+Checked every one of those against `Args::default()` (rust/src/bin/
+climb.rs:715-762): none of them default to a value that disables its
+mechanism. Specifically the ones that COULD plausibly default to "off":
+--pool-k defaults to 3 (pool veto ON; 0 would disable it), --league-cap
+defaults to 6 (league ON; 0 would disable it), --gauntlet-every defaults
+to 50 (gauntlet measurement ON; 0 would disable it), --stall-kick defaults
+to 15 (forced-jump-on-stall ON; 0 would disable it), --pool-confirm-games
+defaults to 300 (stage-2 confirm ON; 0 would disable it). None of these
+are 0 in the shipped defaults -- every run-loop mechanism climb.rs
+supports is active on the live command line via its default, not
+silently switched off by omission.
+
+VERDICT: no finding here. This is a clean design -- every flag that gates
+a mechanism has a non-off default, so "flag never passed" does not mean
+"mechanism never runs" for this binary.
+
+===============================================================================
+SECTION 6: Carried over from docs/OPEN_ITEMS.md, NOT independently
+re-verified against current (2026-08-13) code -- flagged uncertain
+===============================================================================
+
+docs/OPEN_ITEMS.md is dated "Triaged 2026-08-05" and states outright that
+the codebase moves fast and it may already be stale. Several of its claims
+were checked directly in this pass and found ALREADY RESOLVED as of today
+(not itemized as findings above since they're fixed, only noted so nobody
+re-discovers them as new bugs): "Military Bonus cards have no board-credit
+entry" (false now -- `board_credit_key` returns `Some(CardBoardBonus)` for
+CardType::Bonus, cards.rs:523, with its own passing test); "gov_action_cost
+[...] nobody has climbed [it] off its 0.0 default yet" (false now --
+gov_action_cost is 0.064/12.12/-2.97 across the three live champions, moved
+well off zero, and its reader `gov_value`->`feature_marginal` is real and
+live, cards.rs:1201-1224); "wonder_overrun is doubly dead" (superseded --
+a NEW key, `wonder_age_overrun`, was added specifically to cover the case
+`wonder_overrun` structurally cannot see, per its own doc comment on
+weights.rs, and `wonder_overrun` itself is now nonzero in all three
+champions); the four military-deck classes pricing at exactly 0.0 (fixed
+2026-08-06 per cards.rs:1228-1238's own comment, well before this pass).
+
+The following OPEN_ITEMS.md claims were NOT re-checked against current
+code (budget) and should be treated as "possibly still true, possibly
+stale" rather than either confirmed findings or confirmed non-issues:
+  - Military unit technologies (10 cards) allegedly still price net
+    negative because only `strength_deficit` can flip a unit card
+    positive -- `unit_strength_credit` (the gate OPEN_ITEMS blamed) is no
+    longer 0.0 in any champion (0.13/1.81/0.07), so this specific claim's
+    premise may already be stale, but the structural claim about
+    `strength_deficit` was not re-examined.
+  - `defense_bonus` "has no board mirror by construction" (Military Bonus
+    card's defence value only means something while in hand) -- plausible
+    structural claim, not re-derived here.
+  - `row_urgency` "double-counts the row the same way hand_potential used
+    to double-count the hand" -- not re-checked against row.rs's current
+    state.
+  - `state.scoring_events` and `used_leader_ability` -- claimed genuinely
+    dead fields (declared, read/written by nothing) in both engines --
+    plausible, low-stakes if true (pure cleanup, not a play-strength gap),
+    not re-verified.
+  - `culture_rate_extra`/`science_rate_extra` -- claimed read by
+    `effects::compute` but written by nothing, so always zero -- not
+    re-verified; if still true this is a real "wired reader, no writer"
+    gap of exactly the kind this audit was asked to find, just not
+    confirmed within budget.
+
+===============================================================================
+END OF CENSUS
+===============================================================================

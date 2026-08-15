@@ -1,0 +1,3461 @@
+From 6de83de96d965bba8c0a4d29dcb6804e89d6235c Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Thu, 13 Aug 2026 17:53:54 -0600
+Subject: [PATCH 1/6] Bucket the silently-dropped "no mismatch, not completed"
+ replay outcome
+
+replaystats.rs was dropping 68/1011 corpus games from its own stop-reason
+histogram and denominator with a `continue // shouldn't happen` comment.
+It happens every time a journal's own "End of game" marker is placed after
+BGO's duplicated trailing "End turn" line pair instead of before it (the
+opposite of what replay_game's own completion check assumes) -- confirmed
+across all 68 with grep, 0 exceptions either direction against the 222
+working control games. Named "TruncatedAfterGameOver" and given its own
+ranked bucket so it's counted instead of vanishing. Diagnostic-only change;
+replay_game and every other file are untouched.
+
+See /private/tmp/gamedrop/GAMEDROP.txt for the full corpus reason table and
+the sizing of the recoverable prize this finding unlocks.
+---
+ rust/src/bin/replaystats.rs | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/rust/src/bin/replaystats.rs b/rust/src/bin/replaystats.rs
+index 6e88297..b52434d 100644
+--- a/rust/src/bin/replaystats.rs
++++ b/rust/src/bin/replaystats.rs
+@@ -338,7 +338,31 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             continue;
+         }
+         let Some(m) = &result.mismatch else {
+-            continue; // stopped with no reason recorded -- shouldn't happen, don't crash reporting on it
++            // Not completed AND no Mismatch recorded: the journal ran all the
++            // way out (no illegal move, no stuck pending, nothing) without
++            // this file ever seeing an explicit "End of game" text line --
++            // see `replay_game`'s own comment on this exact branch. GAMEDROP
++            // investigation (2026-08-13) found this is NOT the documented
++            // "journal ends mid-stream" case: for every one of these games,
++            // `r.state.game_over` was ALREADY true (that's the only way the
++            // loop's `if r.state.game_over { break; }` guard -- unlabeled,
++            // so it doesn't show up in a grep for `break 'lines` -- can fire
++            // without a Mismatch) when the loop stopped, one line short of a
++            // real "End of game" marker that WAS present later in the file.
++            // Bucketed here (rather than silently dropped, the previous
++            // behaviour) so it is counted instead of vanishing from both this
++            // histogram and its `count` denominator.
++            let key = "TruncatedAfterGameOver: journal ran out with state.game_over already true, one line short \
++                       of an 'End of game' marker later in the file (see GameResult::completed's own gap)"
++                .to_string();
++            let b = buckets.entry(key).or_insert_with(|| Bucket {
++                count: 0,
++                round_sum: 0,
++                example: format!("{} actions_consumed={} index_rounds={}", meta.id, result.actions_consumed, meta.rounds),
++            });
++            b.count += 1;
++            b.round_sum += meta.rounds as u32;
++            continue;
+         };
+         let round_reached: u32 = m.round.parse().unwrap_or(0);
+         round_reached_sum += round_reached as u64;
+-- 
+2.55.0
+
+
+From 3347765c5a25b7cc7cf2ea839997929f39daa11e Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Thu, 13 Aug 2026 19:29:19 -0600
+Subject: [PATCH 2/6] Snapshot rust/src from the live /Users/pt/tta-ai tree as
+ the new replay base
+
+/Users/pt/tta-ai/rust/src is untracked and is the code the league actually
+runs; it is ahead of this scratch lineage in files the 3 fixes being
+replayed (0170f8f, 1608f67, f3c78a0) never touched -- notably an Age A
+first-replenish rules fix in game.rs and a confirmed_legal_moves fix in
+advisor/advisor.rs. This commit replaces rust/src wholesale with an exact
+copy of the live tree (rsync --delete), so those fixes are never at risk of
+being reverted by the replay. rust/src/bin/leafdump.rs is removed because
+it does not exist in the live tree. rust/Cargo.toml, Cargo.lock, .gitignore,
+DESIGN.md, tests/, and trainer/ were diffed against live and found
+byte-identical -- no other changes needed.
+---
+ rust/src/advisor/advisor.rs    | 148 +++++++++++++++++++++-
+ rust/src/advisor/state_io.rs   |  23 +++-
+ rust/src/bin/leafdump.rs       | 216 ---------------------------------
+ rust/src/bin/replaystats.rs    |  26 +---
+ rust/src/bots/weighted/eval.rs | 148 ----------------------
+ rust/src/game.rs               | 175 ++++++++++++++++++++++++--
+ rust/src/harness/mod.rs        |   2 +-
+ 7 files changed, 332 insertions(+), 406 deletions(-)
+ delete mode 100644 rust/src/bin/leafdump.rs
+
+diff --git a/rust/src/advisor/advisor.rs b/rust/src/advisor/advisor.rs
+index 7dbb201..995542d 100644
+--- a/rust/src/advisor/advisor.rs
++++ b/rust/src/advisor/advisor.rs
+@@ -202,6 +202,28 @@ fn scoreable_candidates(moves: &[Move], include_end_turn: bool) -> Vec<Move> {
+     if without_end.is_empty() { base.to_vec() } else { without_end }
+ }
+ 
++/// Legal moves for the advisor's OWN board (never a search clone), with
++/// `Move::PrepareEvent` removed unless something has already confirmed which
++/// card the reveal resolves to. `Advisor::play` refuses to COMMIT that move
++/// for exactly this reason (see its own doc comment on `Board::
++/// confirmed_events`); if candidate generation didn't apply the identical
++/// rule, the bot would keep starring a move it will never let the operator
++/// commit, and an operator who accepts the star pick (Enter) would be told
++/// the same refusal forever with nothing about the position ever changing --
++/// that was `harness::play::tests::resync_demands_a_cause_and_taints_the_game`'s
++/// hang. Deeper search below the root (`plan::rank`/`one_ply_scored`) still
++/// explores `PrepareEvent` freely -- it only ever sees the cloned
++/// `GameState`, never `Board::confirmed_events`, by design (this module's
++/// top doc comment on why the refusal cannot live in `apply.rs`) -- this
++/// helper only keeps it out of what the advisor ever OFFERS to commit.
++fn confirmed_legal_moves(board: &Board) -> Vec<Move> {
++    let moves = legal::legal_moves(&board.state);
++    if board.confirmed_events > 0 {
++        return moves.as_slice().to_vec();
++    }
++    moves.as_slice().iter().copied().filter(|m| !matches!(m, Move::PrepareEvent { .. })).collect()
++}
++
+ /// Score every legal move with the bot's own evaluation and return the best
+ /// `top`. Mirrors `rank_moves`; see this module's top doc comment for the
+ /// three Python mechanisms (`rng`, `fastcopy`, per-candidate `try`/`except`)
+@@ -210,7 +232,7 @@ fn scoreable_candidates(moves: &[Move], include_end_turn: bool) -> Vec<Move> {
+ /// any caller that only ever wants the 1-ply baseline.
+ pub fn rank_moves(board: &Board, bot: &WeightedBot, top: usize, include_end_turn: bool) -> Vec<Candidate> {
+     let st = &board.state;
+-    let moves = legal::legal_moves(st);
++    let moves = confirmed_legal_moves(board);
+     if moves.is_empty() {
+         return Vec::new();
+     }
+@@ -358,7 +380,7 @@ fn rank_moves_beam(
+     include_end_turn: bool,
+ ) -> Vec<Candidate> {
+     let st = &board.state;
+-    let moves = legal::legal_moves(st);
++    let moves = confirmed_legal_moves(board);
+     if moves.is_empty() {
+         return Vec::new();
+     }
+@@ -405,7 +427,7 @@ fn rank_moves_human(
+     include_end_turn: bool,
+ ) -> Vec<Candidate> {
+     let st = &board.state;
+-    let moves = legal::legal_moves(st);
++    let moves = confirmed_legal_moves(board);
+     if moves.is_empty() {
+         return Vec::new();
+     }
+@@ -814,14 +836,33 @@ impl Advisor {
+     /// `mv` was not legal and nothing changed. Mirrors `play`; see this
+     /// module's top doc comment for why there is no engine-exception path
+     /// left to catch once legality is checked structurally first.
++    ///
++    /// `Move::PrepareEvent` gets one extra check on top of legality: it
++    /// reveals-and-resolves the top of `state.current_events`, and that pile
++    /// is the MIRROR's own shuffle, not the real table's -- see
++    /// `Board::confirmed_events`'s doc comment. `apply::apply` cannot tell
++    /// the two apart (search legitimately clones `state` and plays this same
++    /// move on a guess it then discards), so the refusal has to sit here, on
++    /// the one path that commits a move for real, rather than in `apply.rs`.
+     pub fn play(&mut self, mv: Move) -> (bool, String) {
+         let legal = legal::legal_moves(&self.board.state);
+         if !legal.as_slice().contains(&mv) {
+             return (false, format!("{mv:?} is not legal right now"));
+         }
++        if matches!(mv, Move::PrepareEvent { .. }) && self.board.confirmed_events == 0 {
++            return (
++                false,
++                "preparing an event reveals the top of the current-events pile, and nothing \
++                 has said which card that is -- report it first with `event <card name>`"
++                    .to_string(),
++            );
++        }
+         let text = describe::describe_move(&self.board.state, mv, Some(&self.board));
+         let row_before = self.board.state.card_row;
+         apply::apply(&mut self.board.state, mv);
++        if matches!(mv, Move::PrepareEvent { .. }) {
++            self.board.confirmed_events = self.board.confirmed_events.saturating_sub(1);
++        }
+         self.log.push(text.clone());
+         self.dealt_slots = new_slots(&row_before, &self.board.state.card_row);
+         (true, text)
+@@ -1192,6 +1233,107 @@ mod tests {
+         assert_eq!(adv.log.last().unwrap(), &msg);
+     }
+ 
++    /// The 2026-08-12 live-game incident this closes: `Move::PrepareEvent`
++    /// is legal and `apply::apply` would happily reveal-and-resolve the top
++    /// of `state.current_events` -- but that pile is the MIRROR's own
++    /// shuffle, not the real table's. Nobody told the mirror which card the
++    /// real prepare-event turn revealed, so committing this move must be
++    /// refused rather than silently applying a random card's effects to the
++    /// real player's board (that turn it was "Development of Agriculture",
++    /// +2 food, corrupting the mirror from turn 3 on).
++    #[test]
++    fn preparing_an_event_without_a_reported_event_card_is_an_error_not_a_random_reveal() {
++        let board = state_io::new_board(2, 0, 1);
++        let bot = WeightedBot::new(Weights::defaults());
++        let mut adv = Advisor::new(board, bot, "test".to_string());
++        let idx = adv.state().decider();
++        let event_card = CardId::by_name("Development of Agriculture").unwrap();
++        adv.board.state.phase = Phase::Politics;
++        adv.board.state.players[idx as usize].hand_military.push(event_card);
++        assert!(
++            legal::legal_moves(&adv.board.state)
++                .as_slice()
++                .contains(&Move::PrepareEvent { card: event_card }),
++            "test setup must make PrepareEvent legal, or this isn't testing the refusal"
++        );
++        let before = state_io::dumps(&adv.board);
++
++        let (ok, msg) = adv.play(Move::PrepareEvent { card: event_card });
++
++        assert!(!ok, "must refuse, not invent, which card the mirror's own pile reveals");
++        assert!(msg.contains("event <card name>"), "{msg}");
++        assert_eq!(state_io::dumps(&adv.board), before, "a refused move must not touch the mirror");
++    }
++
++    /// Once the operator has named the card (`event <name>` -- see
++    /// `state_io::Command::Event`), the same move must go through: the
++    /// refusal is about missing information, not about `PrepareEvent`
++    /// itself.
++    #[test]
++    fn preparing_an_event_after_it_was_reported_is_allowed() {
++        let board = state_io::new_board(2, 0, 1);
++        let bot = WeightedBot::new(Weights::defaults());
++        let mut adv = Advisor::new(board, bot, "test".to_string());
++        let idx = adv.state().decider();
++        let event_card = CardId::by_name("Development of Agriculture").unwrap();
++        adv.board.state.phase = Phase::Politics;
++        adv.board.state.players[idx as usize].hand_military.push(event_card);
++        adv.board.confirmed_events = 1;
++
++        let (ok, msg) = adv.play(Move::PrepareEvent { card: event_card });
++
++        assert!(ok, "{msg}");
++        assert_eq!(adv.board.confirmed_events, 0, "the reveal it was told about is now spent");
++    }
++
++    /// Regression for the 2026-08-13 hang: `Advisor::play`'s refusal (the
++    /// two tests above) is necessary but was not sufficient. `recommend()`
++    /// used to keep offering -- and starring -- an unconfirmed
++    /// `PrepareEvent` anyway, because it scored moves straight off
++    /// `legal::legal_moves`, which knows nothing about
++    /// `Board::confirmed_events`. A caller with the shape "ask, accept the
++    /// star pick, repeat" -- `harness::play`'s console loop, and a real
++    /// operator who just presses Enter -- would then get the SAME refusal
++    /// forever, since nothing about the position ever changes on a refused
++    /// move. That is exactly what hung
++    /// `harness::play::tests::resync_demands_a_cause_and_taints_the_game`
++    /// at ~100% CPU for 50+ minutes before it was force-killed.
++    ///
++    /// This asserts the stronger, order-independent property directly:
++    /// `PrepareEvent` must not appear ANYWHERE in `recommend()`'s output
++    /// while `confirmed_events == 0`, not merely "not first". Asking for
++    /// every legal move (`top = legal move count`) makes this deterministic
++    /// under `SearchMode::Greedy` (`Advisor::new`'s default -- see
++    /// `SearchConfig::default`'s doc comment), which scores and returns
++    /// every scoreable candidate: if the filter in
++    /// `confirmed_legal_moves` regresses, this fails on the very first
++    /// call, not after however many retries a hang would take -- an
++    /// assertion, not another hour of spinning.
++    #[test]
++    fn recommend_never_offers_an_unconfirmed_prepare_event() {
++        let board = state_io::new_board(2, 0, 1);
++        let bot = WeightedBot::new(Weights::defaults());
++        let adv = Advisor::new(board, bot, "test".to_string());
++        let idx = adv.state().decider();
++        let mut adv = adv;
++        let event_card = CardId::by_name("Development of Agriculture").unwrap();
++        adv.board.state.phase = Phase::Politics;
++        adv.board.state.players[idx as usize].hand_military.push(event_card);
++        assert!(
++            legal::legal_moves(&adv.board.state).as_slice().contains(&Move::PrepareEvent { card: event_card }),
++            "test setup must make PrepareEvent legal, or this isn't testing the gap"
++        );
++        assert_eq!(adv.board.confirmed_events, 0, "the whole point: nothing has confirmed the reveal yet");
++
++        let all_legal = legal::legal_moves(&adv.board.state).len();
++        let cands = adv.recommend(all_legal);
++        assert!(
++            !cands.iter().any(|c| matches!(c.mv, Move::PrepareEvent { .. })),
++            "recommend() offered a PrepareEvent that Advisor::play will always refuse to commit \
++             -- an operator (or harness) that accepts the star pick can never make progress"
++        );
++    }
++
+     #[test]
+     fn set_dealt_with_no_pending_slots_is_an_error() {
+         let board = state_io::new_board(2, 0, 1);
+diff --git a/rust/src/advisor/state_io.rs b/rust/src/advisor/state_io.rs
+index 78c742a..dea50db 100644
+--- a/rust/src/advisor/state_io.rs
++++ b/rust/src/advisor/state_io.rs
+@@ -227,6 +227,19 @@ pub struct Board {
+     pub state: GameState,
+     pub me: u8,
+     pub unknown: BTreeSet<UnknownField>,
++    /// How many of the NEXT reveals off `state.current_events` the operator
++    /// has already named with an `event <card name>` line, waiting to be
++    /// consumed by that many `Move::PrepareEvent` commits.
++    ///
++    /// `state.current_events` is the ENGINE's own shuffled pile, dealt (or
++    /// reshuffled on recycle) from cards nobody at the real table has seen
++    /// yet -- it is a fine stand-in for `rank_moves`' hypothetical searches,
++    /// which clone `state` alone and discard the clone, but committing a
++    /// `PrepareEvent` for real must reveal what actually happened at the
++    /// table, not the mirror's private guess. `Advisor::play` reads this
++    /// counter to refuse that commit until the operator has said which card
++    /// it is; `Command::Event` is its only writer.
++    pub confirmed_events: u32,
+ }
+ 
+ impl Board {
+@@ -276,7 +289,7 @@ impl Board {
+ 
+ /// A fresh game mirroring a freshly set-up physical board.
+ pub fn new_board(num_players: u8, me: u8, seed: u64) -> Board {
+-    Board { state: game::new_game(num_players, seed), me, unknown: BTreeSet::new() }
++    Board { state: game::new_game(num_players, seed), me, unknown: BTreeSet::new(), confirmed_events: 0 }
+ }
+ 
+ // ------------------------------------------------------- card resolution --
+@@ -781,7 +794,7 @@ pub fn loads(text: &str) -> Result<Board, String> {
+         .ok_or_else(|| "game line must say how many players, e.g. '3p'".to_string())?;
+     let n: u8 = parse_num(&n_text, "players")?;
+     let seed: u64 = parse_num(kv_get(&head, "seed").unwrap_or("0"), "seed")?;
+-    let mut board = Board { state: blank_state(n, seed), me: 0, unknown: BTreeSet::new() };
++    let mut board = Board { state: blank_state(n, seed), me: 0, unknown: BTreeSet::new(), confirmed_events: 0 };
+ 
+     // The deck line is applied LAST: it only carries counts, and loading the
+     // row adjusts deck composition, which would otherwise change the count.
+@@ -1660,6 +1673,10 @@ fn apply_command(board: &mut Board, cmd: Command) -> Result<String, String> {
+                 board.state.current_events.push(name);
+             }
+             crate::events::sync_current_events_age(&mut board.state);
++            // Each name is a promise: the next `n` reveals off this pile are
++            // now known, not guessed. `Advisor::play` spends one promise per
++            // committed `PrepareEvent` and refuses to commit one on credit.
++            board.confirmed_events = board.confirmed_events.saturating_add(n as u32);
+             Ok(format!("next {n} event(s) to resolve noted"))
+         }
+         Command::Age(age) => {
+@@ -2060,7 +2077,7 @@ mod tests {
+                 let mv = bots[st.decider() as usize].choose(&st, moves.as_slice());
+                 crate::apply::apply(&mut st, mv);
+             }
+-            let mut b = Board { state: st.clone(), me: 0, unknown: BTreeSet::new() };
++            let mut b = Board { state: st.clone(), me: 0, unknown: BTreeSet::new(), confirmed_events: 0 };
+             b.set_hidden(1, Hand::Civil, 2).unwrap();
+             b.unknown.insert(UnknownField { player: 2, field: PlayerField::Culture });
+             let text = dumps(&b);
+diff --git a/rust/src/bin/leafdump.rs b/rust/src/bin/leafdump.rs
+deleted file mode 100644
+index a5970e9..0000000
+--- a/rust/src/bin/leafdump.rs
++++ /dev/null
+@@ -1,216 +0,0 @@
+-//! `leafdump` -- the regression training-data dump for the leaf evaluation
+-//! (`docs/LEAFREG.txt` at the repo root; `bots::weighted::eval::WeightKey`'s
+-//! 162-coordinate linear scoring function). Where `bin/agreefit.rs` fits
+-//! weights against which MOVE a strong human chose (a ranking problem over
+-//! candidates), this binary produces the corpus for a different fit
+-//! entirely: given the STATE a real human decision was faced from, what did
+-//! the game eventually come to for that seat? One row per decision point,
+-//! not per candidate move.
+-//!
+-//! # Reused, not restated
+-//!
+-//! * [`tta::replay_common::replay_game`] (`record_decisions: true`) -- the
+-//!   SAME decision-point walker `bin/agreefit.rs`/`bin/humandata.rs` already
+-//!   use. This file adds no second replay walker.
+-//! * [`tta::bots::weighted::eval::linear_features`] -- the SAME feature
+-//!   vector `evaluate` itself is proven (by
+-//!   `bots::weighted::eval::tests::
+-//!   linear_features_dotted_with_the_champion_reproduces_evaluate_on_real_replayed_bgo_positions`)
+-//!   to dot-product-reproduce, on hundreds of real positions from this exact
+-//!   corpus -- not a second, drifting reimplementation of the evaluator's
+-//!   arithmetic.
+-//! * [`tta::game::scores`] -- the engine's own per-seat final culture total,
+-//!   the same array `game::winners` reads to decide who won.
+-//!
+-//! # Column order
+-//!
+-//! `game_id, players, seat, round, <one column per WeightKey::ALL, in ITS
+-//! declaration order>, win, final_score, final_rank`. The feature columns
+-//! are never a hand-written list -- see [`write_header`], which walks
+-//! `WeightKey::ALL` directly, so a 163rd key added to the enum widens this
+-//! file's output with no edit here at all.
+-//!
+-//! # Outcome labels
+-//!
+-//! `win`/`final_score`/`final_rank` all come from [`tta::game::scores`]
+-//! (culture by player index, snapshotted after `finish_game` folds in every
+-//! end-of-game bonus -- see that function's own doc comment), which is only
+-//! available when [`tta::replay_common::GameResult::engine_scores`] is
+-//! `Some`, i.e. the replay reached a real `state.game_over` with no
+-//! [`tta::replay_common::Mismatch`] along the way. A game that stops short
+-//! contributes ZERO rows -- there is no partial-game, no-outcome row in this
+-//! file, because a decision with no verified eventual result is not
+-//! training data, it's noise. `win` is `final_score == max(final_score over
+-//! all seats)`, ties sharing the win, exactly [`tta::game::winners`]'s
+-//! fallback branch -- the ONE case this proxy does not special-case is
+-//! §5.11's `forced_winner` (a resignation naming a winner independent of
+-//! score), because [`tta::replay_common::GameResult`] does not expose the
+-//! final `GameState` `forced_winner` lives on to check it (see
+-//! `LEAFREG.txt`'s outcome-labels section for how many games this could
+-//! plausibly touch).
+-//!
+-//! # Legality: public information only
+-//!
+-//! `linear_features` reads a rival's `hand_civil` (civil-card) IDENTITY --
+-//! `bots::weighted::cards::rival_hand_potential`'s own doc comment and
+-//! `docs/RULES_SPEC.md` §2.6 both establish this is legally public (cards
+-//! taken from the row are witnessed by every player at the table, the "open
+-//! civil cards convention") -- but never a rival's `hand_military` identity
+-//! or any deck's shuffle ORDER (only the public `.len()`/count of either).
+-//! [`tta::bots::weighted::eval::tests::
+-//! linear_features_never_depends_on_a_rivals_hidden_military_hand_card_identity`]
+-//! pins this structurally (and was confirmed to catch a real regression --
+-//! see that test's own doc comment and `LEAFREG.txt`'s legality section for
+-//! the RED/GREEN transcript), so this binary adds no separate privacy filter
+-//! of its own: it calls `linear_features` exactly as `WeightedBot` does at
+-//! play time.
+-//!
+-//! # Regeneration
+-//!
+-//! ```text
+-//! tar -xzf sources/bgo/journals.tar.gz -C /tmp/bgo-journals   # once
+-//! cargo run --profile difftest --bin leafdump -- \
+-//!     sources/bgo/index.tsv /tmp/bgo-journals/journals \
+-//!     > leaf_dataset.tsv 2> leaf_dataset_report.txt
+-//! ```
+-
+-use std::collections::HashMap;
+-use std::env;
+-use std::fs;
+-use std::io::{self, Write};
+-use std::process::ExitCode;
+-
+-use tta::bots::weighted::eval::linear_features;
+-use tta::bots::weighted::rivals;
+-use tta::bots::weighted::weights::{WeightKey, Weights};
+-use tta::corpus::{self, GameMeta};
+-use tta::replay_common::{build_card_index, replay_game};
+-
+-#[derive(Default)]
+-struct Stats {
+-    games_total: usize,
+-    games_no_journal: usize,
+-    games_no_outcome: usize,
+-    games_used: usize,
+-    decisions_written: usize,
+-    by_players: HashMap<u8, usize>,
+-}
+-
+-fn write_header(out: &mut impl Write) -> Result<(), String> {
+-    let mut cols: Vec<&'static str> = vec!["game_id", "players", "seat", "round"];
+-    for &k in WeightKey::ALL {
+-        cols.push(k.name());
+-    }
+-    cols.push("win");
+-    cols.push("final_score");
+-    cols.push("final_rank");
+-    writeln!(out, "{}", cols.join("\t")).map_err(|e| e.to_string())
+-}
+-
+-/// 1-based rank by `scores[seat]` among `scores`, ties sharing the BETTER
+-/// rank (a 3-way tie for first is rank 1 for all three, and the next distinct
+-/// score is rank 4) -- the standard "competition ranking" convention.
+-fn rank_of(scores: &[i32], seat: usize) -> usize {
+-    let my = scores[seat];
+-    1 + scores.iter().filter(|&&s| s > my).count()
+-}
+-
+-fn write_row(out: &mut impl Write, meta: &GameMeta, seat: u8, round: u16, feats: &[f64], scores: &[i32]) -> Result<(), String> {
+-    let my_score = scores[seat as usize];
+-    let best = scores.iter().copied().max().unwrap_or(my_score);
+-    let win = if my_score == best { 1 } else { 0 };
+-    let rank = rank_of(scores, seat as usize);
+-
+-    let mut fields: Vec<String> = vec![meta.id.clone(), meta.players.to_string(), seat.to_string(), round.to_string()];
+-    for &v in feats {
+-        fields.push(format!("{v}"));
+-    }
+-    fields.push(win.to_string());
+-    fields.push(my_score.to_string());
+-    fields.push(rank.to_string());
+-    writeln!(out, "{}", fields.join("\t")).map_err(|e| e.to_string())
+-}
+-
+-fn run(index_path: &str, journals_dir: &str, out: &mut impl Write) -> Result<Stats, String> {
+-    let games = corpus::parse_index(index_path)?;
+-    let card_index = build_card_index();
+-    // The champion's own numbers -- freezes the ten identity-aware,
+-    // otherwise-bilinear coordinates `linear_features`'s own doc comment
+-    // names (`HandPotential`, `WonderPotential`, ... `MyEventThreat`), the
+-    // same choice `bots::weighted::eval::tests::
+-    // linear_features_dotted_with_a_weight_vector_reproduces_evaluate_exactly`
+-    // and `bin/agreefit.rs`'s champion-vs-fitted comparison both already
+-    // make.
+-    let freeze = Weights::default();
+-
+-    let mut stats = Stats::default();
+-    write_header(out)?;
+-
+-    for meta in &games {
+-        stats.games_total += 1;
+-        let path = format!("{journals_dir}/{}.tsv", meta.id);
+-        let text = match fs::read_to_string(&path) {
+-            Ok(t) => t,
+-            Err(_) => {
+-                stats.games_no_journal += 1;
+-                continue;
+-            }
+-        };
+-        let result = replay_game(meta, &text, &card_index, true);
+-        let scores = match &result.engine_scores {
+-            Some(s) => s,
+-            None => {
+-                stats.games_no_outcome += 1;
+-                continue;
+-            }
+-        };
+-        stats.games_used += 1;
+-        *stats.by_players.entry(meta.players).or_insert(0) += 1;
+-
+-        for d in &result.decisions {
+-            let idx = d.state.decider();
+-            let ctx = rivals::rival_context(&d.state, idx, None, None);
+-            let feats = linear_features(&d.state, idx, Some(&ctx), &freeze);
+-            write_row(out, meta, idx, d.state.round, &feats, scores)?;
+-            stats.decisions_written += 1;
+-        }
+-    }
+-
+-    Ok(stats)
+-}
+-
+-fn main() -> ExitCode {
+-    let argv: Vec<String> = env::args().skip(1).collect();
+-    if argv.len() != 2 {
+-        eprintln!("usage: leafdump <index.tsv> <journals_dir>");
+-        return ExitCode::FAILURE;
+-    }
+-    let stdout = io::stdout();
+-    let mut out = io::BufWriter::new(stdout.lock());
+-    match run(&argv[0], &argv[1], &mut out) {
+-        Ok(stats) => {
+-            if let Err(e) = out.flush() {
+-                eprintln!("error flushing stdout: {e}");
+-                return ExitCode::FAILURE;
+-            }
+-            let mut by_players: Vec<(&u8, &usize)> = stats.by_players.iter().collect();
+-            by_players.sort_by_key(|(p, _)| **p);
+-            eprintln!(
+-                "{}/{} games had a journal, {} of those replayed to a verified outcome, {} skipped (no journal) \
+-                 + {} skipped (no verified outcome).",
+-                stats.games_total - stats.games_no_journal,
+-                stats.games_total,
+-                stats.games_used,
+-                stats.games_no_journal,
+-                stats.games_no_outcome
+-            );
+-            eprintln!("games used by player count: {by_players:?}");
+-            eprintln!("{} decision rows written, {} feature columns.", stats.decisions_written, WeightKey::ALL.len());
+-            ExitCode::SUCCESS
+-        }
+-        Err(e) => {
+-            eprintln!("error: {e}");
+-            ExitCode::FAILURE
+-        }
+-    }
+-}
+diff --git a/rust/src/bin/replaystats.rs b/rust/src/bin/replaystats.rs
+index b52434d..6e88297 100644
+--- a/rust/src/bin/replaystats.rs
++++ b/rust/src/bin/replaystats.rs
+@@ -338,31 +338,7 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
+             continue;
+         }
+         let Some(m) = &result.mismatch else {
+-            // Not completed AND no Mismatch recorded: the journal ran all the
+-            // way out (no illegal move, no stuck pending, nothing) without
+-            // this file ever seeing an explicit "End of game" text line --
+-            // see `replay_game`'s own comment on this exact branch. GAMEDROP
+-            // investigation (2026-08-13) found this is NOT the documented
+-            // "journal ends mid-stream" case: for every one of these games,
+-            // `r.state.game_over` was ALREADY true (that's the only way the
+-            // loop's `if r.state.game_over { break; }` guard -- unlabeled,
+-            // so it doesn't show up in a grep for `break 'lines` -- can fire
+-            // without a Mismatch) when the loop stopped, one line short of a
+-            // real "End of game" marker that WAS present later in the file.
+-            // Bucketed here (rather than silently dropped, the previous
+-            // behaviour) so it is counted instead of vanishing from both this
+-            // histogram and its `count` denominator.
+-            let key = "TruncatedAfterGameOver: journal ran out with state.game_over already true, one line short \
+-                       of an 'End of game' marker later in the file (see GameResult::completed's own gap)"
+-                .to_string();
+-            let b = buckets.entry(key).or_insert_with(|| Bucket {
+-                count: 0,
+-                round_sum: 0,
+-                example: format!("{} actions_consumed={} index_rounds={}", meta.id, result.actions_consumed, meta.rounds),
+-            });
+-            b.count += 1;
+-            b.round_sum += meta.rounds as u32;
+-            continue;
++            continue; // stopped with no reason recorded -- shouldn't happen, don't crash reporting on it
+         };
+         let round_reached: u32 = m.round.parse().unwrap_or(0);
+         round_reached_sum += round_reached as u64;
+diff --git a/rust/src/bots/weighted/eval.rs b/rust/src/bots/weighted/eval.rs
+index 9a039c5..aea0165 100644
+--- a/rust/src/bots/weighted/eval.rs
++++ b/rust/src/bots/weighted/eval.rs
+@@ -1653,154 +1653,6 @@ mod tests {
+         }
+     }
+ 
+-    /// LEAFREG task 1 precondition: the identity the test right above proves
+-    /// on `new_game` toy positions must ALSO hold on hundreds of REAL
+-    /// decision points reconstructed from actual BGO human games (not just a
+-    /// fresh deal), across every player count -- the leaf-regression plan
+-    /// (`LEAFREG.txt`) fits weights by treating `evaluate(state) == sum_k
+-    /// weights[k] * linear_features(state)[k]` as an exact identity for the
+-    /// state a decision was FACED from, so this is the thing to prove before
+-    /// trusting a single row of dumped training data. Reuses the identical
+-    /// `rivals::rival_context`/`evaluate`/`linear_features`/`dot` call
+-    /// sequence [`WeightedBot::rank_moves`] and the test above already use --
+-    /// no second implementation of "how do these two agree" to drift from
+-    /// that one.
+-    ///
+-    /// Walks `/tmp/bgo-journals/journals` (the extracted
+-    /// `sources/bgo/journals.tar.gz`, NOT `/private/tmp/bgoholdout` -- see
+-    /// `bin/leafdump.rs`'s own doc comment for the exact extraction command)
+-    /// via [`crate::replay_common::replay_game`]'s `record_decisions: true`
+-    /// path, the same walker `bin/leafdump.rs`/`bin/agreefit.rs`/
+-    /// `bin/humandata.rs` all share, so this test is checking the identity on
+-    /// literally the same states the dump binary emits, not a lookalike.
+-    /// Skips (rather than panics) when that directory is not populated on a
+-    /// given machine, but then asserts the walk still gathered enough real
+-    /// decisions to mean something.
+-    #[test]
+-    fn linear_features_dotted_with_the_champion_reproduces_evaluate_on_real_replayed_bgo_positions() {
+-        let index_path = format!("{}/../sources/bgo/index.tsv", env!("CARGO_MANIFEST_DIR"));
+-        let journals_dir = "/tmp/bgo-journals/journals";
+-        let games = match crate::corpus::parse_index(&index_path) {
+-            Ok(g) => g,
+-            Err(e) => panic!("{index_path}: {e}"),
+-        };
+-        let card_index = crate::replay_common::build_card_index();
+-        let w = Weights::default();
+-
+-        let mut checked_by_players: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
+-        let mut max_abs_diff = 0.0f64;
+-        let mut total = 0usize;
+-
+-        for meta in &games {
+-            let enough = [2u8, 3, 4]
+-                .iter()
+-                .all(|n| checked_by_players.get(n).copied().unwrap_or(0) >= 300);
+-            if enough || total > 12_000 {
+-                break; // a "few hundred" PER player count is the bar; stop once every count clears it
+-            }
+-            let path = format!("{journals_dir}/{}.tsv", meta.id);
+-            let text = match std::fs::read_to_string(&path) {
+-                Ok(t) => t,
+-                Err(_) => continue, // journals dir not extracted on this machine -- handled by the post-loop assert below
+-            };
+-            let result = crate::replay_common::replay_game(meta, &text, &card_index, true);
+-            for d in &result.decisions {
+-                let idx = d.state.decider();
+-                let ctx = rivals::rival_context(&d.state, idx, None, None);
+-                let evaluated = evaluate(&d.state, idx, &w, Some(&ctx), None);
+-                let linear = dot(&w, &linear_features(&d.state, idx, Some(&ctx), &w));
+-                let diff = (linear - evaluated).abs();
+-                if diff > max_abs_diff {
+-                    max_abs_diff = diff;
+-                }
+-                assert!(
+-                    diff < 1e-6,
+-                    "game {} line {} {}p idx {idx}: linear={linear} evaluate={evaluated} diff={diff}",
+-                    meta.id,
+-                    d.lineno,
+-                    meta.players
+-                );
+-                *checked_by_players.entry(meta.players).or_insert(0) += 1;
+-                total += 1;
+-            }
+-        }
+-
+-        assert!(
+-            total >= 300,
+-            "need a real corpus-scale sample, only checked {total} decisions across {checked_by_players:?} -- \
+-             is /tmp/bgo-journals/journals populated? (tar -xzf sources/bgo/journals.tar.gz -C /tmp/bgo-journals)"
+-        );
+-        for n in [2u8, 3, 4] {
+-            assert!(
+-                checked_by_players.get(&n).copied().unwrap_or(0) > 0,
+-                "no {n}p decisions checked at all, only {checked_by_players:?}"
+-            );
+-        }
+-        eprintln!("identity check: {total} real decisions across {checked_by_players:?}, max |linear-evaluate| = {max_abs_diff:e}");
+-    }
+-
+-    // -------------------------------------------------- LEAFREG legality
+-
+-    /// LEAFREG task 2 legality precondition, pinned structurally rather than
+-    /// by review alone: `linear_features` (and therefore `evaluate`, and
+-    /// therefore `bin/leafdump.rs`, which calls this exact function on real
+-    /// reconstructed BGO states) must never depend on WHICH specific card
+-    /// sits in a RIVAL's `hand_military`. Unlike `hand_civil` (legally
+-    /// public -- `docs/RULES_SPEC.md` §2.6's "open civil cards convention":
+-    /// cards taken from the row are witnessed by every player at the table,
+-    /// which is exactly why `cards::rival_hand_potential` is allowed to read
+-    /// `q.hand_civil`, see its own doc comment), a rival's MILITARY hand is
+-    /// genuinely private, and the replayer's own "RECONSTRUCTED" set
+-    /// (`replay_common.rs`'s module doc) includes every card a human is ever
+-    /// observed to TAKE -- so a real dumped state's rival `hand_military`
+-    /// slot is filled with a correctly-deduced real identity, not a
+-    /// placeholder. If any feature ever started reading it, this dump would
+-    /// leak private information into training data with no compiler or
+-    /// runtime signal to catch it.
+-    ///
+-    /// Two states identical in every respect except player 1's SINGLE
+-    /// `hand_military` card's IDENTITY (never its COUNT, which stays 1 in
+-    /// both) must score every one of the 162 `WeightKey`s identically for
+-    /// idx 0 (a rival of player 1) -- the full vector is diffed, not one
+-    /// spot-checked coordinate, so a leak landing in any coordinate is
+-    /// caught.
+-    ///
+-    /// CONFIRMED RED: temporarily changing this same block's
+-    /// `out[WeightKey::HandMilPotential as usize]` line to add
+-    /// `state.players[1].hand_military.as_slice().first().map_or(0.0, |c|
+-    /// f64::from(c.0))` (simulating exactly the kind of rival-military leak
+-    /// this test exists to catch) made this test fail with a nonzero
+-    /// `hand_mil_potential` diff (1.0, `CardId(0)` vs `CardId(1)`); reverted
+-    /// immediately after confirming the failure message named the right
+-    /// coordinate. See `LEAFREG.txt`'s legality section for the transcript.
+-    #[test]
+-    fn linear_features_never_depends_on_a_rivals_hidden_military_hand_card_identity() {
+-        let base = G::new_game(3, 41);
+-        let mut a = base.clone();
+-        a.players[1].hand_military = crate::state::CardList::new();
+-        a.players[1].hand_military.push(CardId(0));
+-        let mut b = base.clone();
+-        b.players[1].hand_military = crate::state::CardList::new();
+-        b.players[1].hand_military.push(CardId(1));
+-
+-        let w = Weights::default();
+-        let idx = 0u8;
+-        let ctx_a = rivals::rival_context(&a, idx, None, None);
+-        let ctx_b = rivals::rival_context(&b, idx, None, None);
+-        let fa = linear_features(&a, idx, Some(&ctx_a), &w);
+-        let fb = linear_features(&b, idx, Some(&ctx_b), &w);
+-
+-        for (i, &k) in WeightKey::ALL.iter().enumerate() {
+-            assert!(
+-                (fa[i] - fb[i]).abs() < 1e-12,
+-                "{}: {} vs {} -- a rival's hand_military IDENTITY must never change a feature (only its count may)",
+-                k.name(),
+-                fa[i],
+-                fb[i]
+-            );
+-        }
+-    }
+-
+     // ---------------------------------------------------------- dominance
+ 
+     /// The bug this gate was added for, reproduced with the champion's own
+diff --git a/rust/src/game.rs b/rust/src/game.rs
+index b064979..1bb0593 100644
+--- a/rust/src/game.rs
++++ b/rust/src/game.rs
+@@ -452,16 +452,12 @@ pub fn live_count(state: &GameState) -> usize {
+ /// §2.1: discard the leftmost N cards, slide the rest left, deal from the
+ /// current deck.
+ fn replenish(state: &mut GameState, rng: &mut LazyRandom) {
+-    // §1.10: the FIRST replenish ends Age A outright -- whatever is left of
+-    // the 20-card Age A deck is simply removed from the game, with no
+-    // antiquation and no yellow-token loss (that is what `advance_age`'s
+-    // `ended != A` guard buys). Note that those leftover cards are NOT
+-    // recorded in `civil_discard`/`civil_removed`: Python drops them the same
+-    // way, and the card census treats "never dealt" as unseen either way.
+-    if state.age_civil == Age::A {
+-        state.civil_deck = CardList::new();
+-        advance_age(state, rng);
+-    }
++    // §1.10: whether THIS replenish is the one that ends Age A. Captured
++    // before sweeping/dealing, and checked again below rather than assumed,
++    // because `deal` can itself already advance the age (see the fallback
++    // note below) -- in which case the check after `deal` must be a no-op,
++    // not a second advance.
++    let first_replenish = state.age_civil == Age::A;
+ 
+     let n = sweep_count(live_count(state)).min(ROW_SIZE);
+     for i in 0..n {
+@@ -484,7 +480,33 @@ fn replenish(state: &mut GameState, rng: &mut LazyRandom) {
+         }
+     }
+     state.card_row = kept;
++    // §1.10: fill from whatever deck is current -- for the first replenish
++    // that is the remaining (7-card) Age A civil deck, NOT Age I. `deal`
++    // already falls through to the next age if the deck it is drawing from
++    // runs dry mid-fill (its own doc comment, §2.2), which is exactly the
++    // "if Age A civil cards run out while filling, continue filling from the
++    // Age I deck" fallback -- nothing extra is needed here for that case. At
++    // the current card counts this deck never actually runs dry here (7
++    // available, `player_count + sweep_count` = 5 needed at every player
++    // count), but the fallback is implemented anyway since a resignation or
++    // future data change could reach it.
+     deal(state, rng);
++
++    // §1.10: the first replenish ends Age A outright, whether or not the
++    // deck emptied while filling above -- unlike Ages I/II/III, Age A's
++    // end is triggered by the replenish itself, not by deck exhaustion. If
++    // `deal` already advanced the age above (the deck-ran-dry fallback),
++    // `state.age_civil` is no longer `A` and this is a no-op guard. If it
++    // didn't (the normal case), this call boxes whatever Age A cards are
++    // still in `civil_deck` (overwritten by `advance_age`'s
++    // `build_deck(nxt, ..)`, so not separately recorded -- same "never
++    // dealt is unseen" reasoning as before) and installs the Age I civil
++    // and military decks. `advance_age`'s `ended != Age::A` guard still
++    // skips antiquation and the -2 yellow-token loss here, since `ended`
++    // reads `state.age_civil`, which is still `A` at this point.
++    if first_replenish && state.age_civil == Age::A {
++        advance_age(state, rng);
++    }
+ }
+ 
+ /// Fill empty row slots from the current civil deck (§2.1 step 3).
+@@ -1215,6 +1237,139 @@ mod tests {
+         }
+     }
+ 
++    /// Simulates §1.10's real precondition for the first replenish: by the
++    /// time it fires, each of the `p` players has already taken one card out
++    /// of the row (their first turn), so `p` slots are already empty before
++    /// the sweep. The rightmost `p` slots are picked (not the leftmost) so
++    /// they fall outside the sweep's `0..n` range and don't collide with it
++    /// -- see this test's callers for why that makes the arithmetic land on
++    /// exactly `p + sweep_count(p)` cards dealt.
++    fn simulate_first_turns_taken(s: &mut GameState, p: usize) {
++        for i in ROW_SIZE - p..ROW_SIZE {
++            s.card_row[i] = CardId::NONE;
++        }
++    }
++
++    /// §1.10: the first replenish fills from the remaining Age A civil deck
++    /// (7 cards after the 13 dealt at setup), NOT the Age I deck the old
++    /// code jumped to. Before the fix, `replenish` cleared `civil_deck` and
++    /// called `advance_age` FIRST, so every card dealt here was already Age
++    /// I; a real 2p game against the CGE digital edition (2026-08-12)
++    /// dealt Frugality, Patriotism, Pyramids, Caesar, Stock Pile on this
++    /// exact replenish, and Stock Pile/Pyramids/Caesar exist only in Age A.
++    ///
++    /// Checked by POSITION, not by scanning for card identity: `CardId` is
++    /// an index into the shared card table, so two physical copies of the
++    /// same printed card (e.g. a yellow action card with `count > 1`) share
++    /// one `CardId` -- a plain `.contains()` on a card-value miscounts the
++    /// moment the surviving row and the dealt cards happen to share a
++    /// duplicated type. Position is unambiguous: `slide` packs survivors to
++    /// `card_row[..kept]` in order (`replenish_sweeps_slides_and_refills`
++    /// already pins that down), so `deal`'s empties are exactly the trailing
++    /// `card_row[kept..]`, and `CardList::pop` (`state.rs`) takes from the
++    /// END of the deck -- so the deck's LAST card deals first, into the
++    /// leftmost of those trailing slots.
++    #[test]
++    fn the_first_replenish_deals_the_remaining_age_a_cards_not_age_i_cards() {
++        for p in [2usize, 3, 4] {
++            let mut s = new_game(p as u8, 5);
++            let mut rng = LazyRandom::new(1);
++            // The 7 cards left in the Age A deck after setup's 13-card deal.
++            let deck_before: Vec<CardId> = s.civil_deck.as_slice().to_vec();
++            assert_eq!(deck_before.len(), 7, "{p}p: Age A deck is 20 cards, 13 dealt at setup");
++
++            simulate_first_turns_taken(&mut s, p);
++            replenish(&mut s, &mut rng);
++
++            assert!(s.card_row.iter().all(|c| !c.is_none()), "{p}p: row refilled to 13");
++            assert!(
++                s.card_row.iter().all(|c| c.get().age == Age::A),
++                "{p}p: every row card is still Age A right after the first replenish"
++            );
++            // §1.10's own arithmetic: p players already took one card each,
++            // the sweep removes sweep_count(p) more, and the deal must
++            // refill both -- 5 at every player count, verified rather than
++            // assumed.
++            let dealt_count = p + sweep_count(p);
++            assert_eq!(dealt_count, 5, "{p}p: player_count + sweep_count is 5 at every count");
++
++            let dealt: Vec<CardId> = s.card_row[ROW_SIZE - dealt_count..].to_vec();
++            let expected: Vec<CardId> =
++                deck_before[deck_before.len() - dealt_count..].iter().rev().copied().collect();
++            assert_eq!(
++                dealt, expected,
++                "{p}p: the last {dealt_count} row slots are the deck's top cards, in pop order"
++            );
++        }
++    }
++
++    /// §9: the Age A civil deck is 20 cards; 13 go to the row at setup and
++    /// the first replenish deals `p + sweep_count(p)` (always 5) more --
++    /// leaving exactly 2 that are boxed, unseen, when Age A ends. Derived
++    /// positionally (see the previous test's doc comment for why): the two
++    /// cards that were at the FRONT of the deck (indices `0..2`, since `pop`
++    /// drains from the end) are the ones never reached by the fill.
++    #[test]
++    fn exactly_two_age_a_civil_cards_never_appear() {
++        for p in [2usize, 3, 4] {
++            let mut s = new_game(p as u8, 7);
++            let mut rng = LazyRandom::new(1);
++            let deck_before: Vec<CardId> = s.civil_deck.as_slice().to_vec();
++
++            simulate_first_turns_taken(&mut s, p);
++            replenish(&mut s, &mut rng);
++
++            let dealt_count = p + sweep_count(p);
++            // Same positional argument as the previous test: `pop` drains
++            // the deck from the end, so the cards actually dealt are the
++            // deck's LAST `dealt_count`, in reverse. Asserting this (not
++            // just the arithmetic `7 - 5 == 2`) is what makes this test
++            // depend on the fix rather than on a coincidence -- the old
++            // buggy code also dealt 5 cards, just from the wrong (Age I)
++            // deck, which would make a bare length check pass for the wrong
++            // reason.
++            let dealt: Vec<CardId> = s.card_row[ROW_SIZE - dealt_count..].to_vec();
++            let expected: Vec<CardId> =
++                deck_before[deck_before.len() - dealt_count..].iter().rev().copied().collect();
++            assert_eq!(dealt, expected, "{p}p: the dealt cards are the Age A deck's own top cards");
++
++            let boxed = &deck_before[..deck_before.len() - dealt_count];
++            assert_eq!(
++                boxed.len(),
++                2,
++                "{p}p: exactly 2 of the 7 remaining Age A cards are boxed, unseen"
++            );
++        }
++    }
++
++    /// §1.10's last sentence: no antiquation, no yellow-token loss at the
++    /// A -> I transition, unlike every later age change. Regression guard
++    /// for the fix to `replenish`: the new code explicitly calls
++    /// `advance_age` with `state.age_civil` still `A`, so `ended != Age::A`
++    /// must still be false here and the two side effects must still be
++    /// skipped.
++    #[test]
++    fn the_age_a_to_age_i_transition_skips_antiquation_and_yellow_token_loss() {
++        let mut s = new_game(2, 5);
++        let mut rng = LazyRandom::new(1);
++        let age_a_card = named("Bronze");
++        s.players[0].hand_civil.push(age_a_card);
++
++        replenish(&mut s, &mut rng);
++
++        assert_eq!(s.age_civil, Age::I, "§1.10: the first replenish ends Age A");
++        assert!(
++            s.players[0].hand_civil.as_slice().contains(&age_a_card),
++            "no antiquation at the A -> I transition"
++        );
++        assert!(
++            !s.civil_removed[Age::A as usize].contains(age_a_card),
++            "nothing culled, so nothing recorded as culled"
++        );
++        assert_eq!(s.players[0].yellow_bank, 18, "§12.2.4: no yellow-token loss at A -> I");
++        assert_eq!(s.players[1].yellow_bank, 18);
++    }
++
+     /// §2.2: the age ends the moment its last card is DEALT, and the rest of
+     /// the row comes out of the new age in the same deal.
+     #[test]
+diff --git a/rust/src/harness/mod.rs b/rust/src/harness/mod.rs
+index e76e45a..b478e71 100644
+--- a/rust/src/harness/mod.rs
++++ b/rust/src/harness/mod.rs
+@@ -43,6 +43,6 @@ pub(crate) mod test_support {
+             let mv = bot.choose(&st, moves.as_slice());
+             apply::apply(&mut st, mv);
+         }
+-        Board { state: st, me: seat, unknown: Default::default() }
++        Board { state: st, me: seat, unknown: Default::default(), confirmed_events: 0 }
+     }
+ }
+-- 
+2.55.0
+
+
+From 3084372d3a84c757eaae69310558b10314369594 Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Thu, 13 Aug 2026 18:54:53 -0600
+Subject: [PATCH 3/6] Make Raiders'/Foray's food-and-or-resources split a real
+ per-player choice
+
+events::food_or_resources applied a fixed "resources first" formula to
+Raiders' loss and Foray's gain, unconditionally, on the ordinary self-play
+path -- not a rule, per RULES_SPEC.md 5.3 ("multiple-player decisions
+resolve clockwise from the revealing player") and BGO journal evidence
+(game 7522886: "Green choses first", then differing real splits for an
+identical total-2 loss). Replace it with QueueItem::FoodOrResSplit /
+ChoiceKind::FoodOrResSplit, opened exactly like decrease_population's
+existing QueueItem::LosePop, enumerated by reusing plunder_split_options
+for the loss side (self-directed instead of attacker-directed) and a new
+food_or_res_gain_options for Foray's gain side. resolve_count_targets now
+walks the clockwise revealer order for resolution, not the strength-sorted
+selection order, when more than one player is targeted. pending_moves
+already turns any open choice into scored Move::Choose candidates with no
+ChoiceKind-specific code, so the weighted bot decides this split with its
+ordinary evaluation, not a hardcoded heuristic.
+
+replay_common.rs's post-hoc journal correction for this exact bug (patch
+p.food/p.resources after the fact) is now dead, since nothing applies a
+guess synchronously anymore; repointed resolve_intervening's drain match at
+resolving the real choice against the same produces_grants/spends_grants
+FIFOs instead.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit 0170f8fc8c317b00b9e32584e5186fc2c68f2cda)
+---
+ rust/src/bots/book.rs     |  21 ++++
+ rust/src/events.rs        | 181 ++++++++++++++++-----------
+ rust/src/interact.rs      | 190 +++++++++++++++++++++++++++-
+ rust/src/replay_common.rs | 253 +++++++++++++++++++++++---------------
+ rust/src/state.rs         |  27 ++++
+ 5 files changed, 496 insertions(+), 176 deletions(-)
+
+diff --git a/rust/src/bots/book.rs b/rust/src/bots/book.rs
+index 6289cf6..c943129 100644
+--- a/rust/src/bots/book.rs
++++ b/rust/src/bots/book.rs
+@@ -1460,6 +1460,27 @@ fn choice(state: &GameState, p: &PlayerState, ctx: &Ctx, c: &Choice) -> Move {
+                 }
+             }
+         }
++        ChoiceKind::FoodOrResSplit { lose } => {
++            // Same `ChoiceOption::Gain` shape as `PlunderSplit` just above,
++            // self-directed rather than attacker-directed (Raiders/Foray's
++            // §5.3 `foodAndOrResources` split): price each split by this
++            // book's own marginal food/resources value, negated for a loss
++            // (prefer losing whichever combination this book values LEAST).
++            for (i, o) in opts.iter().enumerate() {
++                if let ChoiceOption::Gain(g) = o {
++                    let prod = Production {
++                        food: g.food,
++                        resources: g.resources,
++                        science: 0,
++                        culture: 0,
++                        happy: 0,
++                        strength: 0,
++                    };
++                    let v = prod_value(prod, ctx);
++                    best.consider(i, if lose { -v } else { v });
++                }
++            }
++        }
+     }
+     Move::Choose { n: best.i as u8 }
+ }
+diff --git a/rust/src/events.rs b/rust/src/events.rs
+index 5654b43..4a2aabb 100644
+--- a/rust/src/events.rs
++++ b/rust/src/events.rs
+@@ -194,36 +194,22 @@ fn apply_resources_delta(state: &mut GameState, idx: u8, delta: i16, sign: i32)
+     }
+ }
+ 
+-/// §5.4.6/§11.5: move `amount` between food and resources, preferring
+-/// resources both ways -- gaining tops up resources first and spills the
+-/// remainder into food (blue-token limited, via [`economy::gain_resources`]/
+-/// [`economy::gain_food`]); losing drains resources first and only then
+-/// food (unlimited, floored at zero). Mirrors `engine/events.py::
+-/// _food_or_resources`.
+-///
+-/// This is [`apply_gains`]'s helper for its bare `foodAndOrResources` key --
+-/// reachable through the `gain`/`lose` blocks beside `strongestPlayers`/
+-/// `weakestPlayers` (Foray/Raiders), see this module's top doc comment.
+-///
+-/// It is `pub(crate)` rather than private for history, not a current second
+-/// caller: `combat::finish_aggression`'s Aggression: Plunder theft used to
+-/// route through this exact function too, hardcoding "resources first" for
+-/// BOTH sides of the theft. FAQ p.7 says that split is the ATTACKER's
+-/// choice, so Plunder now goes through `interact::offer_plunder_split`
+-/// instead -- a real decision, not this fixed order. This function is
+-/// unchanged and still correct for the cases that ARE a fixed order (an
+-/// event's own gain/lose block has no "attacker" to ask).
+-pub(crate) fn food_or_resources(p: &mut PlayerState, amount: i32, sign: i32) {
+-    let amount = amount.max(0) as u16;
+-    if sign > 0 {
+-        let got = economy::gain_resources(p, amount);
+-        economy::gain_food(p, amount - got);
+-    } else {
+-        let take = p.resources.min(amount);
+-        p.resources -= take;
+-        p.food = p.food.saturating_sub(amount - take);
+-    }
+-}
++// ENGINE BUG FIX (FOODFIX, 2026-08): §5.4.6/§11.5's bare `foodAndOrResources`
++// key used to be applied here by a fixed "resources first" formula --
++// mirroring `engine/events.py::_food_or_resources`, itself only ever a
++// reference-bot default, not a rule. RULES_SPEC.md §5.3 ("Multiple-player
++// decisions resolve clockwise from the revealing player") plus BGO journal
++// evidence (game 7522886: "Green choses first", then Green and Orange each
++// resolving an IDENTICAL total-2 loss with DIFFERENT real splits) show the
++// split is the TARGETED PLAYER's own choice, exactly like Plunder's already-
++// fixed `interact::offer_plunder_split` -- just self-directed rather than
++// attacker-directed. `apply_gains_block`'s `food_and_or_resources` arm below
++// now enqueues `QueueItem::FoodOrResSplit` instead of calling a fixed
++// formula (`decrease_population`'s existing `QueueItem::LosePop` enqueue,
++// three lines below in that same function, is the shape this copies). The
++// old `food_or_resources` function had exactly one caller -- this arm -- so
++// it is deleted outright rather than left dead; its resolution logic now
++// lives in `interact::resolve_choice`'s `ChoiceKind::FoodOrResSplit` arm.
+ 
+ // ==================================================== §12.5.2 final scoring
+ 
+@@ -1004,7 +990,16 @@ fn resolve_count_targets(state: &mut GameState, order: &[u8], card: CardId) {
+     if strongest_count > 0 {
+         let block = gain.unwrap_or(EventBlock::EMPTY);
+         let targets = rank_players(state, order, RankStat::Strength, true);
+-        for &q in targets.iter().take(strongest_count) {
++        let selected = &targets[..strongest_count];
++        // SELECTION is by strength (`targets`, above); RESOLUTION order is
++        // not -- RULES_SPEC.md §5.3 ("Multiple-player decisions resolve
++        // clockwise from the revealing player") governs whatever decision
++        // a selected player's own `apply_gains_block` call opens (Foray's
++        // new `FoodOrResSplit` choice, chiefly), so re-walk `order` --
++        // already clockwise from the revealer (`order_from`) -- filtered
++        // down to just the selected players, instead of iterating
++        // `targets` in its own strength-sorted order.
++        for &q in order.iter().filter(|q| selected.contains(q)) {
+             apply_gains_block(state, q, &block, 1);
+         }
+     }
+@@ -1030,7 +1025,12 @@ fn resolve_count_targets(state: &mut GameState, order: &[u8], card: CardId) {
+         // strength tie must protect the current player, not prefer them.
+         let protected_order = protect_current_from_bad_tie(order);
+         let targets = rank_players(state, &protected_order, RankStat::Strength, false);
+-        for &q in targets.iter().take(weakest_count) {
++        let selected = &targets[..weakest_count];
++        // Same RESOLUTION-order fix as `strongestPlayers` above: `selected`
++        // is the correct (tie-protected) SET, `order` gives the clockwise
++        // sequence to walk it in for whatever per-player decision this
++        // opens (Raiders' new `FoodOrResSplit` choice).
++        for &q in order.iter().filter(|q| selected.contains(q)) {
+             apply_gains_block(state, q, &block, sign);
+         }
+     }
+@@ -1070,8 +1070,8 @@ fn apply_player_block(state: &mut GameState, idx: u8, block: &EventBlock) {
+ /// vocabulary [`apply_gains`] already implements (science/culture/food/
+ /// resources/`foodAndOrResources`/blueTokens/`loseAllStoredFood`/
+ /// `drawMilitaryCards`/`decreasePopulation`), reusing that function's own
+-/// private helpers (`add_clamped`/`apply_food_delta`/`apply_resources_delta`/
+-/// `food_or_resources`) so the arithmetic is not a second copy. Also handles
++/// private helpers (`add_clamped`/`apply_food_delta`/`apply_resources_delta`)
++/// so the arithmetic is not a second copy. Also handles
+ /// `increasePopulation`, which [`apply_gains`] cannot reach (no base-game
+ /// aggression card prints it) but a `strongestPlayers`/`weakestPlayers`
+ /// `gain`/`lose` block or a player-targeting block can (Refugees, Immigration,
+@@ -1095,12 +1095,18 @@ fn apply_gains_block(state: &mut GameState, idx: u8, block: &EventBlock, sign: i
+         );
+     }
+     if block.food_and_or_resources != 0 {
+-        food_or_resources(&mut state.players[idx as usize], block.food_and_or_resources as i32, sign);
++        // §5.3: the TARGETED player's own choice of how to split the total
++        // between food and resources, clockwise from the revealer when more
++        // than one player is targeted -- see `QueueItem::FoodOrResSplit`'s
++        // own doc. Exactly `decrease_population`'s shape five lines below
++        // (also an "the affected player decides" rule), not a fixed
++        // formula applied here directly.
++        interact::enqueue(
++            state,
++            QueueItem::FoodOrResSplit { player: idx, amount: block.food_and_or_resources, lose: sign < 0 },
++        );
+         if crate::debugflags::replay_debug_all() {
+-            eprintln!(
+-                "DEBUG food_or_resources AFTER: idx={idx} food_after={} resources_after={}",
+-                state.players[idx as usize].food, state.players[idx as usize].resources
+-            );
++            eprintln!("DEBUG FoodOrResSplit enqueued: idx={idx} amount={} lose={}", block.food_and_or_resources, sign < 0);
+         }
+     }
+     if block.blue_tokens != 0 {
+@@ -1672,47 +1678,84 @@ mod tests {
+     }
+ 
+     // ------------------------------------------------------- food_or_resources
++    //
++    // FOODFIX: §5.3's `foodAndOrResources` gain/lose block (Raiders, Foray)
++    // used to be applied here by a fixed "resources first" formula
++    // (`events::food_or_resources`, deleted). RULES_SPEC.md line 119 ("Multiple-
++    // player decisions resolve clockwise from the revealing player") plus BGO
++    // journal evidence (game 7522886: "Green choses first", then Green and
++    // Orange resolving an IDENTICAL total-2 loss with DIFFERENT real splits --
++    // see /private/tmp/foodchoice/FOODCHOICE.txt) show it is really the
++    // targeted player's OWN choice. These tests cover `apply_gains_block`'s
++    // enqueue (both directions) and `resolve_event`'s clockwise multi-player
++    // ordering; `interact.rs` covers option enumeration (including a player
++    // who cannot pay one pool alone) and resolution.
+ 
+     #[test]
+-    fn food_or_resources_gain_prefers_resources_when_blue_tokens_cover_it() {
+-        let mut p = blank_player(0, card("Despotism"));
+-        p.blue_total = 10;
+-        food_or_resources(&mut p, 5, 1);
+-        assert_eq!(p.resources, 5);
+-        assert_eq!(p.food, 0);
++    fn apply_gains_block_food_and_or_resources_enqueues_a_split_choice_for_a_gain() {
++        // Foray prints `Special::Gain(EventBlock{food_and_or_resources: 3})`
++        // -- exactly `decrease_population`'s "the affected player decides"
++        // shape above, not a fixed formula applied inline.
++        let p0 = blank_player(0, card("Despotism"));
++        let mut state = one_player_state(p0);
++        apply_gains_block(&mut state, 0, &EventBlock { food_and_or_resources: 3, ..EventBlock::EMPTY }, 1);
++        assert_eq!(state.queue.pop_front(), Some(QueueItem::FoodOrResSplit { player: 0, amount: 3, lose: false }));
+     }
+ 
+     #[test]
+-    fn food_or_resources_gain_with_no_blue_tokens_grants_nothing() {
+-        // No blue tokens at all -- `gain_resources`/`gain_food` are each
+-        // capped by `blue_available`, which with `blue_total == 0` is 0, so
+-        // NEITHER can gain anything and the whole amount is dropped (both
+-        // draw from the SAME shared bank, so there is no separate "food
+-        // allowance" for the remainder to fall back on).
+-        let mut p = blank_player(0, card("Despotism"));
+-        food_or_resources(&mut p, 5, 1);
+-        assert_eq!(p.resources, 0);
+-        assert_eq!(p.food, 0);
++    fn apply_gains_block_food_and_or_resources_enqueues_a_split_choice_for_a_loss() {
++        // Raiders prints `Special::Lose(EventBlock{food_and_or_resources: 2})`.
++        let p0 = blank_player(0, card("Despotism"));
++        let mut state = one_player_state(p0);
++        apply_gains_block(&mut state, 0, &EventBlock { food_and_or_resources: 2, ..EventBlock::EMPTY }, -1);
++        assert_eq!(state.queue.pop_front(), Some(QueueItem::FoodOrResSplit { player: 0, amount: 2, lose: true }));
+     }
+ 
+     #[test]
+-    fn food_or_resources_lose_drains_resources_before_food() {
+-        let mut p = blank_player(0, card("Despotism"));
+-        p.resources = 3;
+-        p.food = 3;
+-        food_or_resources(&mut p, 5, -1);
+-        assert_eq!(p.resources, 0);
+-        assert_eq!(p.food, 1); // 3 resources covers 3 of the 5, food covers 2.
++    fn resolve_event_enqueues_raiders_food_or_res_splits_clockwise_from_the_revealer_not_by_strength() {
++        // Raiders' `WeakestPlayers([1, 2, 2])` targets 2 players at 4p.
++        // Seats 1 and 3 are tied at the lowest strength (0 vs seats 0/2's
++        // 10), so SELECTION genuinely ties between them; revealer is seat
++        // 1. Clockwise from seat 1 in a 4p game (`order_from`) is 1, 2, 3,
++        // 0 -- so the two `FoodOrResSplit` choices must enqueue seat 1 THEN
++        // seat 3, regardless of the strength tie-break `resolve_count_
++        // targets` uses to pick WHICH seats are selected (a different
++        // concern, `protect_current_from_bad_tie`'s own doc).
++        let mut p0 = blank_player(0, card("Despotism"));
++        p0.strength_extra = 10;
++        let p1 = blank_player(1, card("Despotism"));
++        let mut p2 = blank_player(2, card("Despotism"));
++        p2.strength_extra = 10;
++        let p3 = blank_player(3, card("Despotism"));
++        let mut state = multi_player_state(4, &[p0, p1, p2, p3], &[]);
++        resolve_event(&mut state, card("Raiders"), 1);
++        assert_eq!(
++            state.queue.pop_front(),
++            Some(QueueItem::FoodOrResSplit { player: 1, amount: 2, lose: true }),
++            "seat 1, the revealer, resolves first"
++        );
++        assert_eq!(
++            state.queue.pop_front(),
++            Some(QueueItem::FoodOrResSplit { player: 3, amount: 2, lose: true }),
++            "seat 3 resolves second -- clockwise from seat 1 is 1, 2, 3, 0"
++        );
+     }
+ 
+     #[test]
+-    fn food_or_resources_lose_floors_at_zero() {
+-        let mut p = blank_player(0, card("Despotism"));
+-        p.resources = 1;
+-        p.food = 1;
+-        food_or_resources(&mut p, 5, -1);
+-        assert_eq!(p.resources, 0);
+-        assert_eq!(p.food, 0);
++    fn resolve_event_enqueues_forays_two_gain_splits_at_4p() {
++        // Foray's own `StrongestPlayers([1, 2, 2])` mirror of the test
++        // above, on the gain side -- covers Foray explicitly (not just
++        // Raiders) and the multi-player case for the gain direction too.
++        let mut p0 = blank_player(0, card("Despotism"));
++        p0.strength_extra = 10;
++        let p1 = blank_player(1, card("Despotism"));
++        let mut p2 = blank_player(2, card("Despotism"));
++        p2.strength_extra = 10;
++        let p3 = blank_player(3, card("Despotism"));
++        let mut state = multi_player_state(4, &[p0, p1, p2, p3], &[]);
++        resolve_event(&mut state, card("Foray"), 0);
++        assert_eq!(state.queue.pop_front(), Some(QueueItem::FoodOrResSplit { player: 0, amount: 3, lose: false }));
++        assert_eq!(state.queue.pop_front(), Some(QueueItem::FoodOrResSplit { player: 2, amount: 3, lose: false }));
+     }
+ 
+     // -------------------------------------------------------- final scoring
+diff --git a/rust/src/interact.rs b/rust/src/interact.rs
+index 844c0b9..5fd5d78 100644
+--- a/rust/src/interact.rs
++++ b/rust/src/interact.rs
+@@ -559,12 +559,12 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+         ChoiceKind::PlunderSplit { victim } => {
+             let ChoiceOption::Gain(g) = opt else { wrong_option(&choice.kind, opt) };
+             // The defender's loss is unconditional (§5.4.6 losses are never
+-            // blue-token limited -- see `events::food_or_resources`'s
+-            // `sign < 0` arm, which this mirrors). The attacker's gain IS
+-            // blue-token limited, so a full bank can still cap what actually
+-            // crosses over even though the defender's share is already gone;
+-            // that half-degenerate outcome is inherited from the pre-choice
+-            // code (`events::food_or_resources`'s `sign > 0` arm) rather than
++            // blue-token limited -- see `FoodOrResSplit`'s `lose` arm below,
++            // which this mirrors). The attacker's gain IS blue-token
++            // limited, so a full bank can still cap what actually crosses
++            // over even though the defender's share is already gone; that
++            // half-degenerate outcome is inherited from the pre-choice
++            // fixed-formula code this choice replaced rather than
+             // introduced by this fix.
+             let (food, res) = (g.food.max(0) as u16, g.resources.max(0) as u16);
+             let v = &mut state.players[victim as usize];
+@@ -574,6 +574,27 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
+             economy::gain_food(pl, food);
+             economy::gain_resources(pl, res);
+         }
++        ChoiceKind::FoodOrResSplit { lose } => {
++            let ChoiceOption::Gain(g) = opt else { wrong_option(&choice.kind, opt) };
++            let (food, res) = (g.food.max(0) as u16, g.resources.max(0) as u16);
++            let pl = &mut state.players[p as usize];
++            if lose {
++                // §5.4.6: losses are never blue-token limited -- the option
++                // itself already respects what the player's own banks can
++                // supply (`plunder_split_options`, reused), so a plain
++                // saturating subtraction is safe and matches Plunder's own
++                // victim-side arm above.
++                pl.food = pl.food.saturating_sub(food);
++                pl.resources = pl.resources.saturating_sub(res);
++            } else {
++                // A gain: blue-token limited per bank, exactly like
++                // Plunder's own attacker-side arm above -- see
++                // `food_or_res_gain_options`'s doc for why the option list
++                // itself is not pre-capped.
++                economy::gain_food(pl, food);
++                economy::gain_resources(pl, res);
++            }
++        }
+     }
+ }
+ 
+@@ -781,6 +802,35 @@ pub fn offer_plunder_split(state: &mut GameState, attacker: u8, defender: u8, pr
+     push_choice(state, attacker, ChoiceKind::PlunderSplit { victim: defender }, opts, true);
+ }
+ 
++// -------------------------------------------------------- Raiders / Foray
++
++/// Foray's gain-direction enumeration for §5.3's `foodAndOrResources` split
++/// (`ChoiceKind::FoodOrResSplit { lose: false }`, opened from
++/// `QueueItem::FoodOrResSplit` below): every way to split `total` between
++/// food and resources, with NO cap at option-build time -- deliberately
++/// mirroring [`plunder_split_options`]'s own attacker-gain precedent just
++/// above (see that field's doc on `ChoiceKind::PlunderSplit` in `state.rs`):
++/// blue-token availability caps what actually lands, per bank, at
++/// RESOLUTION (`economy::gain_food`/`gain_resources`, in `resolve_choice`'s
++/// own `FoodOrResSplit` arm), not by filtering the option list here.
++/// Raiders' LOSS direction needs no sibling function: it reuses
++/// `plunder_split_options` directly against the player's OWN banks, since
++/// "how much of `total` can this player's two banks actually supply" is
++/// exactly the same question Plunder already answers for a victim's.
++fn food_or_res_gain_options(total: i16) -> OptionList {
++    let mut opts = OptionList::new();
++    let total = total.max(0);
++    if total == 0 {
++        return opts;
++    }
++    let mut r = total;
++    while r >= 0 {
++        opts.push(ChoiceOption::Gain(GainOption { food: total - r, resources: r }));
++        r -= 1;
++    }
++    opts
++}
++
+ // -------------------------------------------------- International Agreement
+ 
+ fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
+@@ -933,6 +983,21 @@ fn run_item(state: &mut GameState, item: QueueItem) {
+                 }
+             }
+         }
++        QueueItem::FoodOrResSplit { player, amount, lose } => {
++            // §5.3's `foodAndOrResources` gain/lose block (Raiders, Foray):
++            // the TARGETED player's own split choice -- see
++            // `ChoiceKind::FoodOrResSplit`'s doc in `state.rs`. Loss reuses
++            // `plunder_split_options` against the player's OWN banks (the
++            // same "what can actually be paid" windowing Plunder already
++            // does for a victim's); gain has no such cap at option-build
++            // time (`food_or_res_gain_options`'s own doc).
++            let opts = if lose {
++                plunder_split_options(&state.players[player as usize], amount as i32)
++            } else {
++                food_or_res_gain_options(amount)
++            };
++            push_choice(state, player, ChoiceKind::FoodOrResSplit { lose }, opts, true);
++        }
+         QueueItem::LoseColony { player } => {
+             let mut buf = [CardId::NONE; 8];
+             let n = sorted_unique_by_name(state.players[player as usize].colonies.as_slice(), &mut buf);
+@@ -2406,4 +2471,117 @@ mod tests {
+         }
+         assert_eq!(state.players[0].colonies.len(), 12);
+     }
++
++    // ------------------------------------------------- Raiders / Foray split
++    //
++    // FOODFIX: §5.3's `foodAndOrResources` gain/lose block used to be a
++    // fixed "resources first" formula (`events::food_or_resources`,
++    // deleted); it is now the targeted player's own choice, resolved
++    // through `QueueItem::FoodOrResSplit` / `ChoiceKind::FoodOrResSplit`
++    // exactly like Plunder's already-real `PlunderSplit`. `events.rs` covers
++    // the enqueue shape and clockwise multi-player ordering; these cover
++    // option enumeration (including a player who cannot pay one pool alone)
++    // and resolution, both directions.
++
++    /// Foray's gain side: every split of the total, with NO cap at
++    /// option-build time (blue tokens cap what actually lands at
++    /// resolution instead -- see `food_or_res_gain_options`'s own doc).
++    /// Ordered highest-resources-first, matching `plunder_split_options`'s
++    /// own convention (index 0 is the old fixed-formula default).
++    #[test]
++    fn food_or_res_gain_options_offers_every_split_with_no_pool_cap() {
++        let opts = food_or_res_gain_options(3);
++        assert_eq!(
++            opts.as_slice(),
++            &[
++                ChoiceOption::Gain(GainOption { food: 0, resources: 3 }),
++                ChoiceOption::Gain(GainOption { food: 1, resources: 2 }),
++                ChoiceOption::Gain(GainOption { food: 2, resources: 1 }),
++                ChoiceOption::Gain(GainOption { food: 3, resources: 0 }),
++            ]
++        );
++    }
++
++    /// Raiders' loss side, reusing `plunder_split_options` against the
++    /// player's OWN banks: a player who cannot cover the whole amount from
++    /// ONE pool alone (only 1 food, needs to cover up to 2 of the loss) must
++    /// not be offered an option that would drive that pool negative --
++    /// `(food: 2, resources: 0)` is illegal here and must be absent.
++    #[test]
++    fn plunder_split_options_omits_a_split_the_players_own_short_pool_cannot_cover() {
++        let mut p = blank_player(0);
++        p.food = 1;
++        p.resources = 5;
++        let opts = plunder_split_options(&p, 2);
++        assert_eq!(
++            opts.as_slice(),
++            &[
++                ChoiceOption::Gain(GainOption { food: 0, resources: 2 }),
++                ChoiceOption::Gain(GainOption { food: 1, resources: 1 }),
++            ],
++            "food:2 would need a food pool this player does not have -- must not be offered"
++        );
++    }
++
++    /// `QueueItem::FoodOrResSplit` -> `run_item` opens a REAL
++    /// `Pending::Choice`, and `pending_moves` (legal.rs's only caller, the
++    /// weighted bot's move source) turns it into ordinary `Move::Choose`
++    /// candidates with zero `ChoiceKind`-specific code -- i.e. the bot's
++    /// normal board-state evaluation decides this split like any other
++    /// move, not a hardcoded heuristic (`legal.rs`'s `pending_moves`).
++    #[test]
++    fn queued_food_or_res_split_opens_a_pending_choice_pending_moves_can_answer() {
++        let mut state = blank_state(2);
++        state.players[0].food = 5;
++        state.players[0].resources = 5;
++        enqueue(&mut state, QueueItem::FoodOrResSplit { player: 0, amount: 2, lose: true });
++        run_queue(&mut state);
++        let Some(Pending::Choice(c)) = state.pending.top() else { panic!("expected an open FoodOrResSplit choice") };
++        assert_eq!(c.player, 0);
++        assert_eq!(c.kind, ChoiceKind::FoodOrResSplit { lose: true });
++        // Full pools on both sides: r ranges 2..=0, three splits.
++        assert_eq!(c.options.len(), 3);
++        assert_eq!(
++            legal::legal_moves(&state).as_slice(),
++            &[Move::Choose { n: 0 }, Move::Choose { n: 1 }, Move::Choose { n: 2 }]
++        );
++    }
++
++    /// Resolving a LOSS split drains exactly the chosen amounts -- not
++    /// `events::food_or_resources`'s old "resources first" formula (which
++    /// would have drained all 2 from resources here, leaving food at 5).
++    #[test]
++    fn resolve_choice_food_or_res_split_loss_drains_the_chosen_split_only() {
++        let mut state = blank_state(2);
++        state.players[0].food = 5;
++        state.players[0].resources = 5;
++        let opts = plunder_split_options(&state.players[0], 2);
++        let choice = Choice { player: 0, kind: ChoiceKind::FoodOrResSplit { lose: true }, options: opts };
++        // Index 1 of `plunder_split_options(printed=2)` on a 5/5 player is
++        // the (food: 1, resources: 1) split (r_max=2 at index 0, r=1 next).
++        resolve_choice(&mut state, &choice, 1);
++        assert_eq!(state.players[0].food, 4, "5 - the chosen 1 food");
++        assert_eq!(state.players[0].resources, 4, "5 - the chosen 1 resource");
++    }
++
++    /// Resolving a GAIN split is blue-token limited per bank, exactly like
++    /// `PlunderSplit`'s own attacker-side arm (`resolve_choice`'s doc on
++    /// that variant) -- a chosen split can land short of what was picked.
++    #[test]
++    fn resolve_choice_food_or_res_split_gain_is_blue_token_limited_like_plunder_split() {
++        let mut state = blank_state(2);
++        state.players[0].blue_total = 2; // only 2 tokens free in the bank
++        let choice = Choice {
++            player: 0,
++            kind: ChoiceKind::FoodOrResSplit { lose: false },
++            options: {
++                let mut o = OptionList::new();
++                o.push(ChoiceOption::Gain(GainOption { food: 0, resources: 5 }));
++                o
++            },
++        };
++        resolve_choice(&mut state, &choice, 0);
++        assert_eq!(state.players[0].resources, 2, "capped by the 2 free blue tokens, not the chosen 5");
++        assert_eq!(state.players[0].food, 0);
++    }
+ }
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 5d5a965..68f4630 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -407,7 +407,8 @@ pub fn categorize_choice(pending: Option<&Pending>) -> Category {
+             | ChoiceKind::Infiltrate { .. }
+             | ChoiceKind::TakeRow { .. }
+             | ChoiceKind::WarTech { .. }
+-            | ChoiceKind::PlunderSplit { .. } => Category::Other,
++            | ChoiceKind::PlunderSplit { .. }
++            | ChoiceKind::FoodOrResSplit { .. } => Category::Other,
+         },
+         // A recorded `Move::Choose` always has an open `Pending::Choice` at
+         // record time (`try_apply` only records after its own legality
+@@ -1051,6 +1052,58 @@ impl<'a> Replayer<'a> {
+                         apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                         continue;
+                     }
++                    // A `Pending::Choice(FoodOrResSplit)` (Raiders'/Foray's §5.3
++                    // `foodAndOrResources` gain/lose block, FOODFIX) is SELF-
++                    // directed rather than attacker-directed -- opened for the
++                    // TARGETED player, who may not be `decider` (exactly
++                    // `LosePop` above: `resolve_count_targets` can target a
++                    // player other than whoever is nominally up next), so this
++                    // reads `c.player`, not `decider`, like that arm does.
++                    // Drained from `produces_grants` (gain, Foray) or
++                    // `spends_grants` (loss, Raiders) -- the SAME per-seat FIFOs
++                    // a prior pass built to POST-HOC patch `p.food`/`p.resources`
++                    // after `events::food_or_resources`'s old fixed-formula call
++                    // (`prescan_produces_grants`/`prescan_spends_grants`'s own
++                    // docs); now repointed at draining this real choice instead.
++                    // UNLIKE `PlunderSplit`'s FIFO above, a non-matching entry
++                    // here is NOT popped/discarded while scanning -- these two
++                    // FIFOs are filled by a broad, non-event-aware text-shape
++                    // scan (e.g. a `GainBlock` choice's own "produces" line can
++                    // sit in the same per-seat queue, see those prescans' own
++                    // docs), so an entry this exact draw does not want may still
++                    // belong to a LATER, real consumer further down the game;
++                    // this scans by POSITION and removes only the match, the
++                    // same non-destructive lookup the old post-hoc correction
++                    // this replaced already used (`Vec::remove`, not
++                    // `pop_front`) -- see `foray_skips_a_foreign_non_matching_
++                    // entry_queued_ahead_of_its_own_real_split`'s own regression
++                    // test for why popping the miss would be a real corpus bug.
++                    ChoiceKind::FoodOrResSplit { lose } => {
++                        let q = if lose {
++                            self.spends_grants.entry(c.player).or_default()
++                        } else {
++                            self.produces_grants.entry(c.player).or_default()
++                        };
++                        let Some(pos) = q.iter().position(|&(jf, jr)| {
++                            c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Gain(g) if g.food == jf && g.resources == jr))
++                        }) else {
++                            return Err(MismatchKind::StuckPending(format!(
++                                "FoodOrResSplit choice open for player {} but no journal-observed {} \
++                                 line left to resolve it with",
++                                c.player,
++                                if lose { "spends" } else { "produces" }
++                            )));
++                        };
++                        let (jf, jr) = q.remove(pos).expect("position just found by iter()");
++                        let idx = c
++                            .options
++                            .as_slice()
++                            .iter()
++                            .position(|o| matches!(o, ChoiceOption::Gain(g) if g.food == jf && g.resources == jr))
++                            .expect("this exact (food, resources) pair matched the `position` search above");
++                        apply::apply(&mut self.state, Move::Choose { n: idx as u8 });
++                        continue;
++                    }
+                     // A `Pending::Choice(Infiltrate)` (Aggression: Infiltrate's
+                     // "remove your rival's leader or incomplete wonder from
+                     // play" -- offered only when the victim has BOTH, otherwise
+@@ -8952,95 +9005,138 @@ mod tests {
+         assert_eq!(r.state.players[0].hand_military.len(), 0, "nothing to pop -- the wash is a wash, not an underflow");
+     }
+ 
++    /// FOODFIX: `resolve_political_decision`'s `PrepareEvent` handling used
++    /// to apply `events::food_or_resources`'s fixed-formula guess
++    /// synchronously and then POST-HOC patch `p.food`/`p.resources` against
++    /// the journal (the correction this whole section originally tested).
++    /// It now opens a REAL `Pending::Choice(FoodOrResSplit)` instead (the
++    /// engine-side fix -- see `state.rs`'s doc on that `ChoiceKind`), drained
++    /// by `resolve_intervening`'s own `FoodOrResSplit` arm against the SAME
++    /// `produces_grants`/`spends_grants` FIFOs the old post-hoc correction
++    /// read. These tests enqueue the choice directly (`QueueItem::
++    /// FoodOrResSplit` + `run_queue`, exactly like the sibling `LosePop`
++    /// tests just above do for that `ChoiceKind`) and drive
++    /// `resolve_intervening` itself, rather than reimplementing its own
++    /// drain logic a second time -- the real production arm is what gets
++    /// exercised, not a hand-written stand-in for it.
++    ///
+     /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7523357`):
+     /// Foray's `Special::StrongestPlayers` + `Gain(food_and_or_resources:
+-    /// 3)` grant resolves through `events::food_or_resources`, which mirrors
+-    /// the Python reference bot's own fixed "resources first" policy -- but
+-    /// the real BGO line for this exact game reads `"Grey produces 2 food;
+-    /// Grey produces 1 resource"` while `blue_available` had 13 tokens free
+-    /// the whole time (not a capacity effect: a genuine human choice the
+-    /// deterministic formula never asks). Left uncorrected, a food-heavy
+-    /// real split silently shows up as sim food short by however much the
+-    /// deterministic formula put into resources instead -- for the rest of
+-    /// the game, since every later `pop_cost` tier reads off the SAME
+-    /// `p.food`. `resolve_political_decision`'s `PrepareEvent` handling now
+-    /// overwrites the deterministic guess with the journal's own split,
+-    /// popped from `produces_grants`, whenever the revealed card is this
+-    /// exact shape and the popped entry's total matches what the
+-    /// deterministic formula actually granted.
++    /// 3)` grant used to resolve through the old fixed "resources first"
++    /// formula -- but the real BGO line for this exact game reads `"Grey
++    /// produces 2 food; Grey produces 1 resource"` while `blue_available`
++    /// had 13 tokens free the whole time (not a capacity effect: a genuine
++    /// human choice the old formula never asked).
+     #[test]
+     fn foray_resolves_the_journals_own_food_or_resources_split_not_the_deterministic_guess() {
+         let card_index = build_card_index();
+-        let plan = crate::event_plan::solve(
+-            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Foray; x")],
+-            &card_index,
+-            2,
+-        )
+-        .expect("a one-preparation journal is consistent");
+-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+-        r.current_lineno = 10;
+-        r.state.phase = Phase::Politics;
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
+         r.state.players[0].food = 5;
+         r.state.players[0].resources = 5;
++        r.state.players[0].blue_total = 20; // plenty of tokens -- not a capacity effect
++        crate::interact::enqueue(&mut r.state, crate::state::QueueItem::FoodOrResSplit { player: 0, amount: 3, lose: false });
++        crate::interact::run_queue(&mut r.state);
++        assert!(
++            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.player == 0 && matches!(c.kind, ChoiceKind::FoodOrResSplit { lose: false })),
++            "a real gain-direction choice must be open: {:?}",
++            r.state.pending.top()
++        );
+         // The journal's own resolution: 2 food, 1 resource (summing to the
+         // SAME 3 total `food_and_or_resources` grants) -- the deterministic
+-        // formula would instead put all 3 into resources (nothing capped:
+-        // fresh `blue_total`, both players' food/resources far under it).
++        // formula would instead put all 3 into resources.
+         r.produces_grants.insert(0, VecDeque::from([(2, 1)]));
+ 
+-        r.resolve_political_decision(0).expect("player 0's own logged preparation");
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+ 
++        assert!(result.is_ok(), "{result:?}");
++        assert!(r.state.pending.is_empty(), "the FoodOrResSplit choice must be fully resolved, not left open");
+         assert_eq!(r.state.players[0].food, 7, "5 + the journal's own 2 food, not the deterministic 0");
+         assert_eq!(r.state.players[0].resources, 6, "5 + the journal's own 1 resource, not the deterministic 3");
+         assert!(r.produces_grants[&0].is_empty(), "the journal-observed split is consumed, not left for a later event");
+     }
+ 
+     /// [`foray_resolves_the_journals_own_food_or_resources_split_not_the_
+-    /// deterministic_guess`]'s LOSS-side mirror (game `7522886`, chasing the
+-    /// `IllegalMove: Build` bucket's `resources_short` sub-bucket,
+-    /// `docs/REPLAY.md`'s handoff): `Special::WeakestPlayers` (Raiders,
+-    /// Crime Wave) resolves its own `Lose(food_and_or_resources)` block
+-    /// through the SAME `events::food_or_resources` deterministic guess,
+-    /// and the correction loop's ORIGINAL version unconditionally skipped
+-    /// every negative delta -- so this half never got corrected at all,
+-    /// even though the gate already covered `WeakestPlayers`/`Lose`. On a
+-    /// fresh 2p `Replayer::new`, both players start with identical
+-    /// (zero) strength; `resolve_count_targets`'s `weakestPlayers` branch
+-    /// runs `protect_current_from_bad_tie` (a LOSS is a bad outcome), which
+-    /// moves the revealer (player 0, `order[0]`) to the BACK among ties --
+-    /// so the single 2p `weakest_count` target is player 1, not player 0.
++    /// deterministic_guess`]'s LOSS-side mirror (game `7522886`): Raiders'
++    /// `Lose(food_and_or_resources)` block opens a real `ChoiceKind::
++    /// FoodOrResSplit { lose: true }` choice, resolved against
++    /// `spends_grants`. Enqueued directly for player 1 while `expected_actor`
++    /// is player 0 -- exactly `resolve_intervening_drains_a_lose_pop_
++    /// pending_open_for_a_different_player_than_expected_actor` above,
++    /// covering the same "the targeted player need not be the decider"
++    /// shape `FoodOrResSplit` inherits from `LosePop`.
+     #[test]
+     fn raiders_resolves_the_journals_own_food_or_resources_loss_split_not_the_deterministic_guess() {
+         let card_index = build_card_index();
+-        let plan = crate::event_plan::solve(
+-            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Raiders; x")],
+-            &card_index,
+-            2,
+-        )
+-        .expect("a one-preparation journal is consistent");
+-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+-        r.current_lineno = 10;
+-        r.state.phase = Phase::Politics;
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
+         r.state.players[1].food = 5;
+         r.state.players[1].resources = 5;
++        crate::interact::enqueue(&mut r.state, crate::state::QueueItem::FoodOrResSplit { player: 1, amount: 2, lose: true });
++        crate::interact::run_queue(&mut r.state);
++        assert!(
++            matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.player == 1 && matches!(c.kind, ChoiceKind::FoodOrResSplit { lose: true })),
++            "a real loss-direction choice must be open for player 1: {:?}",
++            r.state.pending.top()
++        );
+         // The journal's own resolution: all 2 as food, protecting resources
+         // entirely -- the deterministic formula would instead drain
+         // resources first (5 -> 3, food untouched).
+         r.spends_grants.insert(1, VecDeque::from([(2, 0)]));
+ 
+-        r.resolve_political_decision(0).expect("player 0's own logged preparation");
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+ 
++        assert!(result.is_ok(), "{result:?}");
++        assert!(r.state.pending.is_empty(), "the FoodOrResSplit choice must be fully resolved, not left open");
+         assert_eq!(r.state.players[1].food, 3, "5 - the journal's own 2 food, not the deterministic 0");
+         assert_eq!(r.state.players[1].resources, 5, "resources untouched, not the deterministic 3");
+         assert!(r.spends_grants[&1].is_empty(), "the journal-observed split is consumed, not left for a later event");
+     }
+ 
+-    /// The correction above must NOT fire for an ordinary event with no
++    /// REGRESSION (chasing the `IllegalMove: Pop` bucket's residual
++    /// food-short signature after the age-advance fix, game `7523052` round
++    /// 9): `prescan_produces_grants` queues EVERY standalone `"<Color>
++    /// produces N food[; ...]"` line in the whole journal, not just the ones
++    /// this correction ever consumes -- an `AllPlayers`-shaped grant (e.g.
++    /// Development of Markets, "gains 2 resources or 2 food, player's
++    /// choice") resolves through a real `Pending::Choice` (`ChoiceKind::
++    /// FoodOrRes`) that never reads `produces_grants` at all, so its own
++    /// line can sit in the FIFO ahead of a real Foray split. The consumer
++    /// arm scans by POSITION and removes only the match (`Vec::remove`, not
++    /// `pop_front`), so a foreign non-matching entry is left in place for
++    /// its own real consumer rather than discarded.
++    #[test]
++    fn foray_skips_a_foreign_non_matching_entry_queued_ahead_of_its_own_real_split() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        r.state.players[0].food = 5;
++        r.state.players[0].resources = 5;
++        r.state.players[0].blue_total = 20;
++        crate::interact::enqueue(&mut r.state, crate::state::QueueItem::FoodOrResSplit { player: 0, amount: 3, lose: false });
++        crate::interact::run_queue(&mut r.state);
++        // Front: a foreign entry from an earlier, unrelated `AllPlayers`
++        // grant (total 2, never one of this Foray's own total-3 options).
++        // Behind it: the real Foray split for THIS event (2 food, 1 resource).
++        r.produces_grants.insert(0, VecDeque::from([(2, 0), (2, 1)]));
++
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
++
++        assert!(result.is_ok(), "{result:?}");
++        assert_eq!(r.state.players[0].food, 7, "5 + the real entry's 2 food, not the deterministic 0");
++        assert_eq!(r.state.players[0].resources, 6, "5 + the real entry's 1 resource, not the deterministic 3");
++        assert_eq!(
++            r.produces_grants[&0].as_slices().0,
++            &[(2, 0)],
++            "the foreign front entry is skipped in place, not consumed or reordered"
++        );
++    }
++
++    /// `resolve_political_decision`'s `PrepareEvent` handling must not open
++    /// a `FoodOrResSplit` choice at all for an ordinary event with no
+     /// `Special::StrongestPlayers`/`WeakestPlayers` + `food_and_or_resources`
+-    /// shape at all -- gating on the delta alone (an earlier version of this
+-    /// fix) matched on totals ALONE and regressed the corpus (`IllegalMove:
+-    /// Pop` 184 -> 281) by occasionally consuming an unrelated FIFO entry
+-    /// for a card that never called `events::food_or_resources`.
++    /// shape -- a `produces_grants` entry queued for some OTHER mechanism
++    /// must be left untouched.
+     #[test]
+     fn a_produces_grants_entry_is_left_untouched_when_the_revealed_card_is_not_a_food_or_resources_grant() {
+         let card_index = build_card_index();
+@@ -9062,57 +9158,12 @@ mod tests {
+ 
+         r.resolve_political_decision(0).expect("player 0's own logged preparation");
+ 
++        assert!(r.state.pending.is_empty(), "Development of Settlement opens no FoodOrResSplit choice");
+         assert_eq!(r.state.players[0].food, 5, "Development of Settlement never touches food");
+         assert_eq!(r.state.players[0].resources, 5, "Development of Settlement never touches resources");
+         assert_eq!(r.produces_grants[&0].len(), 1, "the unrelated entry is left in the FIFO for its real consumer");
+     }
+ 
+-    /// REGRESSION (chasing the `IllegalMove: Pop` bucket's residual
+-    /// food-short signature after the age-advance fix, game `7523052` round
+-    /// 9): `prescan_produces_grants` queues EVERY standalone `"<Color>
+-    /// produces N food[; ...]"` line in the whole journal, not just the ones
+-    /// this correction ever consumes -- an `AllPlayers`-shaped grant (e.g.
+-    /// Development of Markets, "gains 2 resources or 2 food, player's
+-    /// choice") resolves through a real `Pending::Choice` that never reads
+-    /// `produces_grants` at all, so its own line sits in the FIFO forever.
+-    /// Only ever peeking the FRONT entry (this correction's original
+-    /// version) meant that one foreign, non-matching-total entry
+-    /// permanently blocked every REAL Foray/Raiders correction for that
+-    /// player behind it, for the rest of the game -- confirmed on
+-    /// `7523052`, where a stray `(2, 0)` from round 5 blocked round 9's real
+-    /// Foray `(1, 2)`. The fix scans forward for the first entry whose OWN
+-    /// total matches, the same "skip past a foreign entry" policy the
+-    /// sibling `PlunderSplit` consumer already uses.
+-    #[test]
+-    fn foray_skips_a_foreign_non_matching_entry_queued_ahead_of_its_own_real_split() {
+-        let card_index = build_card_index();
+-        let plan = crate::event_plan::solve(
+-            &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Foray; x")],
+-            &card_index,
+-            2,
+-        )
+-        .expect("a one-preparation journal is consistent");
+-        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+-        r.current_lineno = 10;
+-        r.state.phase = Phase::Politics;
+-        r.state.players[0].food = 5;
+-        r.state.players[0].resources = 5;
+-        // Front: a foreign entry from an earlier, unrelated `AllPlayers`
+-        // grant (total 2, never matches this Foray's total-3 delta). Behind
+-        // it: the real Foray split for THIS event (2 food, 1 resource).
+-        r.produces_grants.insert(0, VecDeque::from([(2, 0), (2, 1)]));
+-
+-        r.resolve_political_decision(0).expect("player 0's own logged preparation");
+-
+-        assert_eq!(r.state.players[0].food, 7, "5 + the real entry's 2 food, not the deterministic 0");
+-        assert_eq!(r.state.players[0].resources, 6, "5 + the real entry's 1 resource, not the deterministic 3");
+-        assert_eq!(
+-            r.produces_grants[&0].as_slices().0,
+-            &[(2, 0)],
+-            "the foreign front entry is skipped, not consumed or reordered"
+-        );
+-    }
+-
+     /// REGRESSION (BGO game `7522650`): the `"plays event"` line is skipped
+     /// as a confirmation, so the preparation it records is applied at the
+     /// NEXT line -- and with Julius Caesar armed, that next line is
+diff --git a/rust/src/state.rs b/rust/src/state.rs
+index 5e441ec..f3af631 100644
+--- a/rust/src/state.rs
++++ b/rust/src/state.rs
+@@ -956,6 +956,21 @@ pub enum ChoiceKind {
+     /// plunder_split_options`) is every way to reach the maximum takeable
+     /// total, one `ChoiceOption::Gain` per split. `victim` is who pays it.
+     PlunderSplit { victim: u8 },
++    /// Raiders'/Foray's `foodAndOrResources` gain/lose block (§5.3): a
++    /// SELF-directed split, not an attacker's -- the targeted player picks
++    /// their own food/resources split, clockwise from the revealer when
++    /// more than one player is targeted (`QueueItem::FoodOrResSplit`'s own
++    /// doc). `lose` is Raiders' direction (drain, floored at zero, capped
++    /// by `interact::plunder_split_options` reused against the player's
++    /// OWN banks); `!lose` is Foray's (gain, one `ChoiceOption::Gain` per
++    /// split of the total with no cap at option-build time -- exactly
++    /// `PlunderSplit`'s own attacker-gain precedent above: blue-token
++    /// availability caps what actually lands, per bank, at resolution via
++    /// `economy::gain_food`/`gain_resources`, not by filtering options).
++    /// Distinct from `FoodOrRes` above: that one is Reserves' bare "N food
++    /// OR N resources" (all-or-nothing, `gainFoodOrResources`), this one is
++    /// a SPLIT of a fixed total between the two (`foodAndOrResources`).
++    FoodOrResSplit { lose: bool },
+ }
+ 
+ /// An open `choice`: somebody must pick one of `options`.
+@@ -1248,6 +1263,17 @@ pub enum QueueItem {
+     Infiltrate { player: u8, victim: u8, per: u8 },
+     /// `_q_take_row`.
+     TakeRow { player: u8, budget: i16 },
++    /// §5.3's `foodAndOrResources` gain/lose block (Raiders, Foray): the
++    /// TARGETED player's own choice of how to split `amount` between food
++    /// and resources, not `events::food_or_resources`'s old fixed
++    /// "resources first" formula -- see `ChoiceKind::FoodOrResSplit`'s own
++    /// doc for the full rationale. One of these is enqueued per targeted
++    /// player, in the same clockwise-from-the-revealer order
++    /// `resolve_count_targets` already calls `apply_gains_block` in, so
++    /// RULES_SPEC.md §5.3's "multiple-player decisions resolve clockwise
++    /// from the revealing player" falls out of that existing order rather
++    /// than needing new ordering logic here.
++    FoodOrResSplit { player: u8, amount: i16, lose: bool },
+ }
+ 
+ impl QueueItem {
+@@ -1260,6 +1286,7 @@ impl QueueItem {
+             | CardGains { player, .. }
+             | FreeBuild { player, .. }
+             | DestroyOwn { player }
++            | FoodOrResSplit { player, .. }
+             | LosePop { player, .. }
+             | LoseColony { player }
+             | FlipWonder { player, .. }
+-- 
+2.55.0
+
+
+From 98508b3467dc6fd68fc76221647245c49cc8e747 Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Thu, 13 Aug 2026 18:19:46 -0600
+Subject: [PATCH 4/6] Recover the 68 TruncatedAfterGameOver human games
+ (222->290)
+
+68/789 skipped BGO journals (GAMEDROP.txt) log their duplicated trailing
+"End turn" pair BEFORE the real "End of game" marker instead of after, so
+finish_game's round-wrap check already flips state.game_over one line
+before replay_game ever reads the marker, and `completed` never gets set.
+
+Naively flipping `completed` there is not enough: finish_game already ran
+events::evaluate_final_events off the still-fictional event piles by that
+point, baking a wrong culture delta into player state before the real
+"End of game" text is even reached. The fix peeks ahead for the
+still-unread marker, subtracts back out the wrong award (recomputed off
+the untouched fictional piles), grounds the piles for real, and re-runs
+evaluate_final_events against them -- the same grounding/scoring path
+every already-working game's own "End of game" branch takes, just run
+after the fact for the minority whose journal orders it differently.
+
+Gated on `!completed`, so the new branch is unreachable for every
+already-working game (`completed` is already true by the time this guard
+could fire) -- confirmed byte-identical leafdump output on the original
+222 games, before vs after. Full leafdump run: 222->290 games verified,
+63,917->84,685 decision rows. Added a regression test on real game
+7522663 pinning the exact quirk, confirmed RED by reverting the fix and
+re-running before restoring it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit 1608f674b2cc0ef064813390485c01f8555432e0)
+---
+ rust/src/replay_common.rs | 123 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 123 insertions(+)
+
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 68f4630..8dbcc4e 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -5345,6 +5345,58 @@ pub fn replay_game(
+         // above). Stop reading rather than feed a finished game a move it
+         // will legally reject.
+         if r.state.game_over {
++            // TruncatedAfterGameOver (GAMEDROP.txt, 68/789 skipped games,
++            // 100% of a corpus-wide bucket, zero exceptions in either
++            // direction): a MINORITY of journals log the duplicated
++            // trailing "End turn" pair BEFORE their own "End of game" line
++            // instead of after -- so the FIRST copy's `finish_game` call
++            // (via `game::advance_turn`'s round-wrap check) already fired,
++            // `game_over` is already true, and this guard trips before the
++            // marker two lines above is ever reached. `completed` staying
++            // false there is correct: it is set ONLY by literally reading
++            // that line's text, and nothing has read it yet. Recover here,
++            // rather than widen the branch above, so every currently-
++            // completing game (`completed` already true by construction:
++            // it can only become true by having ALREADY read "End of game")
++            // takes zero-instruction-different code through this arm --
++            // this whole block is dead for them.
++            if !completed {
++                // Peek at the still-unread remainder for the same marker
++                // the branch above reads, exactly as it is for every other
++                // game (`docs/REPLAY.md`/GAMEDROP.txt: always present,
++                // always within 1-2 lines, 68/68 measured). Not found means
++                // a genuinely different truncation (e.g. a resignation) --
++                // leave `completed` false and reject, same as today.
++                if let Some(eog_line) = journal[i..].iter().find(|l| l.text.starts_with("End of game")) {
++                    // `finish_game` already ran `events::evaluate_final_events`
++                    // against the FICTIONAL piles this reconstruction had
++                    // filled in (`event_plan`'s own doc: "filled with
++                    // unused cards of the right age and kind", never
++                    // validated for final scoring) -- that wrong award is
++                    // already added into `p.culture` and must be undone
++                    // before the real, grounded award (the SAME function,
++                    // same call the branch above already makes) can be
++                    // applied in its place. Nothing has touched
++                    // `current_events`/`future_events` or any player's
++                    // culture since `finish_game` returned (the lines
++                    // between are exactly the duplicated trailer this
++                    // module's own doc above describes), so recomputing
++                    // the wrong award off the CURRENT (still fictional)
++                    // piles reproduces exactly what was just added.
++                    for (_card, steps) in crate::events::final_event_awards(&r.state) {
++                        for (idx, amount) in steps {
++                            if amount != 0 {
++                                let p = &mut r.state.players[idx as usize];
++                                p.culture = (p.culture as i32 - amount).max(0) as u16;
++                            }
++                        }
++                    }
++                    let real_final_events = parse_real_final_events(eog_line.text, card_index);
++                    ground_final_events(&mut r.state, &real_final_events);
++                    crate::events::evaluate_final_events(&mut r.state);
++                    completed = true;
++                }
++            }
+             break;
+         }
+         if putback_skips.contains(&i) {
+@@ -7166,6 +7218,77 @@ mod tests {
+         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+     }
+ 
++    /// REGRESSION (GAMEDROP.txt's "TruncatedAfterGameOver" bucket -- 68/789
++    /// skipped games corpus-wide, one narrow cause, zero exceptions either
++    /// direction across all 1011 journals). BGO logs a MINORITY of
++    /// journals' duplicated trailing "End turn" line pair -- see the long
++    /// comment above the `if line.text.starts_with("Last turn")`/`"End of
++    /// game"` handling -- BEFORE their own "End of game" marker instead of
++    /// after. Real game `7522663` (2p) is the concrete example this was
++    /// traced on: its journal's own last few lines are (line numbers from
++    /// `/tmp/bgo-journals/journals/7522663.tsv`)
++    ///   397  End turn Purple scores: ...      (real final turn; this is
++    ///        the one that genuinely triggers `game::advance_turn`'s
++    ///        round-wrap check, so `game::finish_game` fires HERE, off the
++    ///        still-fictional event piles)
++    ///   398  End turn Purple scores: ...      (BGO's own duplicate copy;
++    ///        the top-of-loop `if r.state.game_over { break; }` guard
++    ///        trips on this line, one line before the marker below)
++    ///   399  No Discard Phase
++    ///   400  End of game Check the journal ...
++    /// so by the time the guard fires, `state.game_over` is already
++    /// correctly `true` but `completed` -- set ONLY by literally reading
++    /// line 400's text -- has never had the chance to become `true`, and
++    /// the wrong (ungrounded) final-event award from line 397's premature
++    /// `finish_game` is already baked into `p.culture`. The `if
++    /// !completed { ... }` peek-and-correct block in the `if
++    /// r.state.game_over` arm just above is what recovers this: reverting
++    /// it (leaving a bare `break;`) reproduces the original bug exactly --
++    /// this game replays every move legally, reaches the real end, and is
++    /// STILL discarded as "no verified outcome".
++    #[test]
++    fn replay_game_completes_a_journal_whose_duplicated_end_turn_pair_is_logged_before_its_own_end_of_game_marker() {
++        let index_path = format!("{}/../sources/bgo/index.tsv", env!("CARGO_MANIFEST_DIR"));
++        let games = match crate::corpus::parse_index(&index_path) {
++            Ok(g) => g,
++            Err(e) => panic!("{index_path}: {e}"),
++        };
++        let Some(meta) = games.iter().find(|g| g.id == "7522663") else {
++            return; // index.tsv changed on this machine -- nothing to pin, same skip discipline as the fixture below
++        };
++        let path = "/tmp/bgo-journals/journals/7522663.tsv";
++        let Ok(text) = std::fs::read_to_string(path) else {
++            return; // journals dir not extracted on this machine (tar -xzf sources/bgo/journals.tar.gz -C /tmp/bgo-journals)
++        };
++        // Confirm the fixture still has the exact shape this regression
++        // depends on (the marker strictly after the last "End turn" line),
++        // rather than silently testing nothing if the corpus ever changes.
++        let eog_lineno = text.lines().position(|l| l.contains("End of game"));
++        let last_end_turn_lineno = text.lines().enumerate().filter(|(_, l)| l.contains("End turn")).map(|(i, _)| i).last();
++        match (eog_lineno, last_end_turn_lineno) {
++            (Some(eog), Some(let_)) => assert!(
++                eog > let_,
++                "game 7522663 no longer exhibits the trailing-line-order quirk (End of game at {eog}, last End turn at {let_}) -- picked the wrong fixture"
++            ),
++            _ => panic!("game 7522663's journal is missing an End of game or End turn line -- picked the wrong fixture"),
++        }
++
++        let card_index = build_card_index();
++        let result = replay_game(meta, &text, &card_index, false);
++
++        assert!(
++            result.mismatch.is_none(),
++            "expected a clean replay, got a mismatch at line {}: {:?}",
++            result.mismatch.as_ref().map_or(0, |m| m.lineno),
++            result.mismatch.as_ref().map(|m| &m.raw_text)
++        );
++        assert!(
++            result.completed,
++            "game 7522663 has a real End of game marker after its duplicated End turn pair -- must complete, not be discarded"
++        );
++        assert!(result.engine_scores.is_some(), "a completed game must have grounded final scores");
++    }
++
+     /// The real shape of `sources/bgo` journal `7522625`'s own final line
+     /// (`docs/REPLAY.md`'s "Final scores" section): the four real pending
+     /// cards sit between "Check the journal..." and the "; WINNER IS..."
+-- 
+2.55.0
+
+
+From 1374995506033eb6bea470df6a10b9d78a40981a Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Thu, 13 Aug 2026 19:08:50 -0600
+Subject: [PATCH 5/6] Add WeightKey::HasColony: price the Annex-target cliff
+ separately from the colony count
+
+RULES_SPEC 5.4 / legal.rs's aggression_target_qualifies gate Annex on
+q.colonies.is_empty() -- holding at least one colony makes a player a
+legal Annex target, a binary step at 0->1 colonies that the existing
+linear WeightKey::Colonies (already priced for production/culture/
+science/strength benefits, and for event exposure via
+EventScoringMargin) cannot express. Mirrors WeightKey::HasUnit's
+existing cliff-not-slope shape exactly. Seeded at 0.0 and left Free (no
+sign_intent) -- the direction is unmeasured and left for the league to
+climb, not hardcoded.
+
+(cherry picked from commit f3c78a0ae2799f71b43b86cdd031be724b60c65d)
+---
+ rust/src/bots/weighted/features.rs | 52 ++++++++++++++++++++++++++++++
+ rust/src/bots/weighted/weights.rs  | 21 ++++++++++--
+ rust/src/legal.rs                  | 40 +++++++++++++++++++++++
+ 3 files changed, 110 insertions(+), 3 deletions(-)
+
+diff --git a/rust/src/bots/weighted/features.rs b/rust/src/bots/weighted/features.rs
+index 27985b5..561ae77 100644
+--- a/rust/src/bots/weighted/features.rs
++++ b/rust/src/bots/weighted/features.rs
+@@ -555,6 +555,11 @@ pub fn features(
+     // asks whether that count is zero or not.
+     f.set(WeightKey::HasUnit, if unit_workers > 0 { 1.0 } else { 0.0 });
+     f.set(WeightKey::Colonies, p.colonies.len() as f64);
++    // RULES_SPEC 5.4 cliff, not a slope -- see `WeightKey::HasColony`'s own
++    // doc comment in `weights.rs`. `legal.rs`'s `aggression_target_qualifies`
++    // reads `q.colonies.is_empty()` for exactly this fact (Annex's printed
++    // target clause); this asks the same question of `p.colonies` here.
++    f.set(WeightKey::HasColony, if p.colonies.is_empty() { 0.0 } else { 1.0 });
+     f.set(WeightKey::Pacts, pacts + dc.pact_offers);
+     f.set(WeightKey::PactBlocksAttack, blocks_attack);
+     f.set(WeightKey::AuctionCommitted, dc.auction_committed);
+@@ -903,6 +908,53 @@ mod tests {
+         assert_eq!(after.get(WeightKey::HasUnit), 1.0, "has_unit must flip to 1.0 the instant any unit is staffed");
+     }
+ 
++    /// `has_colony` (RULES_SPEC 5.4, `WeightKey::HasColony`'s own doc
++    /// comment in `weights.rs`): 0.0 with no colonies at all, the state a
++    /// fresh deal starts in.
++    #[test]
++    fn has_colony_is_zero_with_no_colonies() {
++        let state = G::new_game(2, 40);
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::Colonies), 0.0, "a fresh deal starts with no colonies");
++        assert_eq!(f.get(WeightKey::HasColony), 0.0, "has_colony must be 0.0 with no colonies");
++    }
++
++    /// `has_colony` must flip to 1.0 the instant a player owns their FIRST
++    /// colony, moving `colonies` by exactly 1 -- the same +1 a second or
++    /// third colony would also produce on the linear `colonies` count,
++    /// which is exactly the distinction `colonies` cannot express and
++    /// `has_colony` exists to add (same shape as `has_unit`/`unit_workers`
++    /// above).
++    #[test]
++    fn has_colony_flips_to_one_with_the_first_colony() {
++        let mut state = G::new_game(2, 40);
++        let territory =
++            crate::cards::CardId::by_name("Vast Territory (I)").expect("Vast Territory (I) is a base-game colony");
++        state.players[0].colonies.push(territory);
++
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::Colonies), 1.0, "one colony must move the linear count by exactly 1");
++        assert_eq!(f.get(WeightKey::HasColony), 1.0, "has_colony must flip to 1.0 the instant any colony is owned");
++    }
++
++    /// The cliff, not a slope: `has_colony` must stay pinned at 1.0 as more
++    /// colonies pile up, while `colonies` keeps climbing linearly -- a
++    /// third colony is not a legal-target event the way the first one was
++    /// (`legal.rs`'s `aggression_target_qualifies` only ever asks
++    /// `q.colonies.is_empty()`, never how many).
++    #[test]
++    fn has_colony_stays_one_with_several_colonies_it_is_a_cliff_not_a_count() {
++        let mut state = G::new_game(2, 40);
++        for name in ["Vast Territory (I)", "Strategic Territory (I)", "Historic Territory (I)"] {
++            let territory = crate::cards::CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"));
++            state.players[0].colonies.push(territory);
++        }
++
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::Colonies), 3.0, "three colonies must move the linear count to 3");
++        assert_eq!(f.get(WeightKey::HasColony), 1.0, "has_colony must stay at 1.0, not climb to 3.0, with a third colony");
++    }
++
+     /// `happy_margin` resolves through the hand-rolled `margin` local, not a
+     /// `"happy"` weight lookup -- there is no `WeightKey::Happy` at all (only
+     /// `HappyMargin` is a real weight), so this just pins that the computed
+diff --git a/rust/src/bots/weighted/weights.rs b/rust/src/bots/weighted/weights.rs
+index bc6d2c5..16e385a 100644
+--- a/rust/src/bots/weighted/weights.rs
++++ b/rust/src/bots/weighted/weights.rs
+@@ -140,6 +140,7 @@ pub enum WeightKey {
+     TacticShort,
+     HasUnit,
+     Colonies,
++    HasColony,
+     Pacts,
+     PactBlocksAttack,
+     AuctionCommitted,
+@@ -558,6 +559,18 @@ weight_key_table! {
+     // over an unmeasured guess (docs/OPEN_ITEMS.md).
+     HasUnit => "has_unit", 0.0;
+     Colonies => "colonies", 2.0;
++    // RULES_SPEC 5.4 cliff, not a slope -- `legal.rs`'s
++    // `aggression_target_qualifies` gates Annex on `q.colonies.is_empty()`,
++    // the printed target clause "one opponent who owns at least one
++    // colony" [RULES_SPEC.md:123]. `Colonies` (the raw count above) already
++    // carries every colony's production/culture/science/strength benefit
++    // through the other priced coordinates it feeds, plus exposure to the
++    // "Impact of Colonies" event via `EventScoringMargin` -- what neither
++    // of those can express is that going from 0 to 1 colonies alone makes
++    // you a legal Annex target, a step function no linear count can price.
++    // Seeded at 0.0, same as `HasUnit`, and left `Free` in `sign_intent`
++    // below: the engine states the rulebook fact, the league prices it.
++    HasColony => "has_colony", 0.0;
+     Pacts => "pacts", 0.5;
+     PactBlocksAttack => "pact_blocks_attack", 0.5;
+     AuctionCommitted => "auction_committed", 2.0;
+@@ -887,8 +900,10 @@ impl WeightKey {
+             HappyMargin | Discontent | Uprising | HappySurplus => WeightGroup::Happiness,
+ 
+             Strength | StrengthRel | StrengthRelEarly | StrengthRelLate | StrengthDeficit
+-            | StrengthLead | TacticLevel | TacticGain | TacticShort | HasUnit | Colonies | Pacts
+-            | PactBlocksAttack | AuctionCommitted | AuctionBid => WeightGroup::Military,
++            | StrengthLead | TacticLevel | TacticGain | TacticShort | HasUnit | Colonies
++            | HasColony | Pacts | PactBlocksAttack | AuctionCommitted | AuctionBid => {
++                WeightGroup::Military
++            }
+ 
+             HandLimit | ColonizeBonus | BuildDiscount | FreeCivilAction | ResourceDiscount
+             | DefenseBonus | CardRateCredit | UnitStrengthCredit | TerritoryCredit
+@@ -1115,7 +1130,7 @@ impl WeightKey {
+             | MilitaryActions | TechLevels | GovLevel | BestFarm | BestMine | BestLab
+             | BestTemple | BestTheater | BestLibrary | BestArena | BestUnit | NumTechs
+             | SpecialTechs | WonderProgress | Leader | Strength | StrengthRel | StrengthLead
+-            | TacticLevel | HasUnit | Colonies | Pacts | PactBlocksAttack => Free,
++            | TacticLevel | HasUnit | Colonies | HasColony | Pacts | PactBlocksAttack => Free,
+             // `CorruptionHeadroom`/`ConsumptionHeadroom`: `features.rs`'s own
+             // comment on these two, verbatim -- "headroom is a deterministic
+             // function of `BlueFree`/`YellowBank`, so 'good all else equal'
+diff --git a/rust/src/legal.rs b/rust/src/legal.rs
+index dad42cf..87dc6a5 100644
+--- a/rust/src/legal.rs
++++ b/rust/src/legal.rs
+@@ -1469,6 +1469,46 @@ mod tests {
+         assert!(moves.as_slice().contains(&Move::Aggression { card: infiltrate, target: 1 }));
+     }
+ 
++    /// `WeightKey::HasColony` (`bots/weighted/weights.rs`'s own doc comment)
++    /// exists to price exactly the fact THIS module's `aggression_target_
++    /// qualifies` already gates Annex on: `q.colonies.is_empty()`. This
++    /// checks the feature and the legality gate cannot drift onto two
++    /// different notions of "annexable" -- reusing the same `politics_moves`
++    /// surface the two `annex_is_*` tests above use as the ground truth for
++    /// "is this player a legal Annex target", rather than re-deriving that
++    /// boolean locally where a copy-paste mistake could agree with itself
++    /// but not with `legal.rs`.
++    #[test]
++    fn has_colony_feature_agrees_with_annex_targeting_legality() {
++        let annex = card("Aggression: Annex");
++        let mut state = one_player_state(attacker_ready_to_win(annex));
++
++        let no_colony = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            no_colony.get(crate::bots::weighted::weights::WeightKey::HasColony),
++            0.0,
++            "target 1 starts with no colonies"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            !moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })),
++            "has_colony == 0.0 must agree with Annex not being offered"
++        );
++
++        state.players[1].colonies.push(card("Vast Territory (I)"));
++        let has_colony = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            has_colony.get(crate::bots::weighted::weights::WeightKey::HasColony),
++            1.0,
++            "target 1 now owns a colony"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            moves.as_slice().contains(&Move::Aggression { card: annex, target: 1 }),
++            "has_colony == 1.0 must agree with Annex being offered"
++        );
++    }
++
+     // ---------------------------------------------------------------- war
+ 
+     fn war_card_and_cost() -> (CardId, i32) {
+-- 
+2.55.0
+
+
+From e373f25974adbc48161e6b9a7760a0c5cff0d8a3 Mon Sep 17 00:00:00 2001
+From: Paul Tarjan <github@paulisageek.com>
+Date: Thu, 13 Aug 2026 21:54:37 -0600
+Subject: [PATCH 6/6] Snapshot the live tree after landing pricing coverage,
+ legality cliffs and the units fixes
+
+The live tree at /Users/pt/tta-ai is untracked, so this is the only
+lineage that has both the landed work and the two live-only weight-reader
+fixes. Warm-clone template for the next batch of workers.
+---
+ rust/src/bots/weighted/cards.rs    | 299 ++++++++++++++++++++++++++++-
+ rust/src/bots/weighted/eval.rs     |  71 ++++++-
+ rust/src/bots/weighted/features.rs | 171 ++++++++++++++++-
+ rust/src/bots/weighted/row.rs      | 118 ++++++++++--
+ rust/src/bots/weighted/weights.rs  |  64 +++++-
+ rust/src/human_policy.rs           |  62 +++++-
+ rust/src/legal.rs                  | 125 ++++++++++++
+ 7 files changed, 874 insertions(+), 36 deletions(-)
+
+diff --git a/rust/src/bots/weighted/cards.rs b/rust/src/bots/weighted/cards.rs
+index ddd2a73..288f51b 100644
+--- a/rust/src/bots/weighted/cards.rs
++++ b/rust/src/bots/weighted/cards.rs
+@@ -2854,7 +2854,7 @@ mod tests {
+         /// construction -- that is exactly what
+         /// `every_printed_card_effect_is_either_priced_or_explicitly_declared_unpriced`
+         /// below checks, over the real data.
+-        fn is_accounted_for(key: &str) -> bool {
++        pub(super) fn is_accounted_for(key: &str) -> bool {
+             DELIBERATELY_UNPRICED.iter().any(|&(k, _)| k == key) || PRICED_ELSEWHERE.iter().any(|&(k, _)| k == key)
+         }
+ 
+@@ -2941,6 +2941,303 @@ mod tests {
+             }
+             assert!(overlap.is_empty(), "key(s) claimed as both priced and deliberately unpriced: {overlap:?}");
+         }
++
++        // ------------------------ coverage: territory nested blocks (§11.5)
++        //
++        // The forward check above is scoped to the TOP LEVEL of a card's
++        // `effects` object only -- `printed_effect_keys` reads
++        // `card.get("effects")` and `continue`s past every card that has
++        // none, and a territory card's `effects` object IS `{}` in the
++        // source data (everything it prints lives in two SIBLING top-level
++        // keys instead, `immediateEffects`/`permanentEffects`, per
++        // `cards::ImmediateEffects`'s own doc comment). So all 12 base-game
++        // territory cards were silently skipped by every test above -- a
++        // second, genuine gap in the CHECK itself, found while extending
++        // this module, not a gap in the pricing (`card_yields`'s
++        // `CardType::Territory` branch, above in this file, already reads
++        // every one of these ten keys correctly). Closed the same way as
++        // the top-level check: gather every printed key from the two
++        // blocks, assert each is in a dedicated registry.
++        fn printed_territory_effect_keys() -> Vec<(String, String)> {
++            let mut out = Vec::new();
++            for card in load_part("cards_military_actions.json") {
++                if card.get("type").and_then(crate::fixtures::Json::as_str) != Some("territory") {
++                    continue;
++                }
++                let name = card
++                    .get("name")
++                    .and_then(crate::fixtures::Json::as_str)
++                    .unwrap_or_else(|| panic!("a territory card with no name"))
++                    .to_string();
++                for block in ["immediateEffects", "permanentEffects"] {
++                    let Some(obj) = card.get(block) else { continue };
++                    let entries = match obj {
++                        crate::fixtures::Json::Obj(entries) => entries,
++                        other => panic!("{name}.{block} is not an object: {other:?}"),
++                    };
++                    for (k, _) in entries {
++                        out.push((format!("{block}.{k}"), name.clone()));
++                    }
++                }
++            }
++            out
++        }
++
++        /// Every `immediateEffects`/`permanentEffects` key the 12 base-game
++        /// territory cards print, paired with the exact `card_yields` line
++        /// (this file, the `CardType::Territory` branch above) that reads
++        /// it. Both blocks fuse into `CardEffects`/`ImmediateEffects` at
++        /// parse time (`card_table.rs::baked_table_matches_source_data` is
++        /// the exhaustive PARSER-side guarantee -- an unrecognized key
++        /// there is a hard `panic!`, not a silent drop); this table is the
++        /// PRICING-side counterpart `PRICED_ELSEWHERE` is above, kept
++        /// separate rather than merged into it because `food`/`resources`/
++        /// `culture`/`science` already name DIFFERENT `CardEffects` fields
++        /// at the bare top level (`gainFood`, `culture`, ...) -- reusing
++        /// the same short keys here would silently satisfy the top-level
++        /// check for a key that was never actually printed at the top
++        /// level, the exact collision this module exists to prevent.
++        const TERRITORY_PRICED_ELSEWHERE: &[(&str, &str)] = &[
++            ("permanentEffects.strength", "card_yields: CardType::Territory branch -> WeightKey::Strength"),
++            ("permanentEffects.happiness", "card_yields: CardType::Territory branch -> WeightKey::HappyMargin"),
++            ("permanentEffects.yellowTokens", "card_yields: CardType::Territory branch -> WeightKey::YellowBank"),
++            ("permanentEffects.blueTokens", "card_yields: CardType::Territory branch -> WeightKey::BlueFree"),
++            (
++                "immediateEffects.food",
++                "card_yields: CardType::Territory branch -> WeightKey::FoodStock, off card.immediate_effects",
++            ),
++            (
++                "immediateEffects.resources",
++                "card_yields: CardType::Territory branch -> WeightKey::ResourceStock, off card.immediate_effects",
++            ),
++            (
++                "immediateEffects.culture",
++                "card_yields: CardType::Territory branch -> WeightKey::Culture, off card.immediate_effects",
++            ),
++            (
++                "immediateEffects.science",
++                "card_yields: CardType::Territory branch -> WeightKey::Science, off card.immediate_effects",
++            ),
++            (
++                "immediateEffects.population",
++                "card_yields: CardType::Territory branch -> WeightKey::FreeWorkers, off card.immediate_effects",
++            ),
++            (
++                "immediateEffects.drawMilitaryCards",
++                "card_yields: CardType::Territory branch -> WeightKey::HandMilitary, off card.immediate_effects",
++            ),
++        ];
++
++        /// The forward direction, territory flavor: every printed
++        /// `immediateEffects`/`permanentEffects` key on a real base-game
++        /// territory card must be in [`TERRITORY_PRICED_ELSEWHERE`]. Unlike
++        /// the top-level check, there is no "deliberately unpriced" bucket
++        /// here yet -- all ten keys the 12 live territory cards print are
++        /// genuinely priced today, so a missing key means either
++        /// `card_yields` needs a new line or this table needs a new entry,
++        /// never "add a reason and move on".
++        #[test]
++        fn every_printed_territory_block_key_is_priced() {
++            let mut by_key: BTreeMap<String, Vec<String>> = BTreeMap::new();
++            for (k, name) in printed_territory_effect_keys() {
++                by_key.entry(k).or_default().push(name);
++            }
++            let mut missing: Vec<String> = Vec::new();
++            for (key, cards) in &by_key {
++                if !TERRITORY_PRICED_ELSEWHERE.iter().any(|&(k, _)| k == key) {
++                    missing.push(format!("{key:?} (on: {})", cards.join(", ")));
++                }
++            }
++            assert!(
++                missing.is_empty(),
++                "territory immediateEffects/permanentEffects key(s) not in TERRITORY_PRICED_ELSEWHERE -- \
++                 either card_yields does not price it (a real gap -- price it) or the table just needs a \
++                 new entry citing where it is priced:\n  {}",
++                missing.join("\n  ")
++            );
++        }
++
++        /// The anti-rot reverse direction, same reasoning as
++        /// `every_priced_elsewhere_key_still_prints_on_a_real_card` above.
++        #[test]
++        fn every_territory_priced_elsewhere_key_still_prints_on_a_real_card() {
++            let printed: std::collections::BTreeSet<String> =
++                printed_territory_effect_keys().into_iter().map(|(k, _)| k).collect();
++            let mut stale: Vec<&str> = Vec::new();
++            for &(key, _) in TERRITORY_PRICED_ELSEWHERE {
++                if !printed.contains(key) {
++                    stale.push(key);
++                }
++            }
++            assert!(
++                stale.is_empty(),
++                "TERRITORY_PRICED_ELSEWHERE entry(ies) that print on no real territory card: {stale:?}"
++            );
++        }
++    }
++
++    // ------------------- coverage: exhaustive over the Special enum itself
++    //
++    // Everything above is keyed by the printed JSON string, so it only ever
++    // audits a key once some real base-game card prints it -- exactly the
++    // scope `DELIBERATELY_UNPRICED`/`PRICED_ELSEWHERE` have always had. This
++    // is the STRUCTURALLY stronger form the task that added this module
++    // asked for: an exhaustive `match` over `Special` ITSELF, with NO
++    // wildcard arm, so a variant added to the enum in `card_table.rs` is a
++    // COMPILE ERROR here -- before any card ever prints it, not after.
++    // `Special`'s own doc comment guarantees the pairing this relies on:
++    // "one [variant] per distinct one-off effect key" (`gen_cards.py`, now
++    // deleted, generated exactly one variant per printed JSON key, and
++    // `card_table.rs::baked_table_matches_source_data`'s own parser dispatch
++    // is still the living proof -- every arm below is transcribed from that
++    // match, not guessed).
++    //
++    // Deliberately returns the JSON key rather than a `Priced`/`Unpriced`
++    // reason: duplicating ~90 reasons a second time would itself rot (two
++    // registries holding "the same fact," the bug class this whole file
++    // exists to close). Instead this feeds the SAME `is_accounted_for` the
++    // string-keyed checks above use, so there is exactly one place that
++    // knows why each key is or isn't priced.
++    fn special_effect_key(sp: &Special) -> &'static str {
++        match sp {
++            Special::A(_) => "A",
++            Special::AllPlayers(_) => "allPlayers",
++            Special::B(_) => "B",
++            Special::BestTheaterDoubleCulture => "bestTheaterDoubleCulture",
++            Special::BothPlayers(_) => "bothPlayers",
++            Special::BuildDiscount(_) => "buildDiscount",
++            Special::CancelledIfPartiesAttackEachOther => "cancelledIfPartiesAttackEachOther",
++            Special::CannotPlayAggressionOrWar => "cannotPlayAggressionOrWar",
++            Special::CivilActionBackOnTechDevelop(_) => "civilActionBackOnTechDevelop",
++            Special::CivilActionUpgradeUrbanBuildingToTheater => "civilActionUpgradeUrbanBuildingToTheater",
++            Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) => "colonizeDiscardUpTo2MilitaryCardsForBonus",
++            Special::ColonyImmediateBonusApplies => "colonyImmediateBonusApplies",
++            Special::ColonyPermanentBonusTransfers => "colonyPermanentBonusTransfers",
++            Special::ComboFoodDiscount(_) => "comboFoodDiscount",
++            Special::ComboResourceDiscount(_) => "comboResourceDiscount",
++            Special::Condition(_) => "condition",
++            Special::CultureFirstColony(_) => "cultureFirstColony",
++            Special::CultureIfTopTwoStrength(_) => "cultureIfTopTwoStrength",
++            Special::CultureOnLeaveEqualToLabResourceProduction => "cultureOnLeaveEqualToLabResourceProduction",
++            Special::CultureOnRevolution(_) => "cultureOnRevolution",
++            Special::CultureOnTechDevelop(_) => "cultureOnTechDevelop",
++            Special::CulturePerAdditionalColony(_) => "culturePerAdditionalColony",
++            Special::CulturePerCivilizationWithMoreCulture(_) => "culturePerCivilizationWithMoreCulture",
++            Special::CulturePerHappyFromTemplesTheatersWonders(_) => "culturePerHappyFromTemplesTheatersWonders",
++            Special::CulturePerLabEqualToLevel => "culturePerLabEqualToLevel",
++            Special::CulturePerLibraryTheaterPair(_) => "culturePerLibraryTheaterPair",
++            Special::CulturePerTheater(_) => "culturePerTheater",
++            Special::DecreasePopulation(_) => "decreasePopulation",
++            Special::DestroyUrbanBuildings(_) => "destroyUrbanBuildings",
++            Special::DoubleBestMine => "doubleBestMine",
++            Special::DoublesTacticBonusOfOneArmy => "doublesTacticBonusOfOneArmy",
++            Special::ExtraHappyPerHappySource(_) => "extraHappyPerHappySource",
++            // Shares its JSON key with `AllPlayers`: the SAME printed
++            // `effects.allPlayers` dict becomes `FinalScoring` instead of
++            // `AllPlayers` when the card also prints `scoringEvent: true`
++            // (`card_table.rs`'s parser, right before this match's own
++            // source -- see `FinalScoringBlock`'s doc comment). Mutually
++            // exclusive per card, so `is_accounted_for("allPlayers")`
++            // covering both is correct, not a collision.
++            Special::FinalScoring(_) => "allPlayers",
++            Special::FreeCivilAction(_) => "freeCivilAction",
++            Special::FreePopIncreasePerTurn => "freePopIncreasePerTurn",
++            Special::Gain(_) => "gain",
++            Special::GainCulturePerLevelOfRemovedCard(_) => "gainCulturePerLevelOfRemovedCard",
++            Special::GainFoodOrResources(_) => "gainFoodOrResources",
++            Special::GainResources(_) => "gainResources",
++            Special::InfantryCountsAsCavalryForTactics => "infantryCountsAsCavalryForTactics",
++            Special::LastRoundSubstitute(_) => "lastRoundSubstitute",
++            Special::LeaderTakeCivilActionDiscount(_) => "leaderTakeCivilActionDiscount",
++            Special::LibraryDiscountsIfTheater => "libraryDiscountsIfTheater",
++            Special::Lose(_) => "lose",
++            Special::MilitaryActionAsCivilPerTurn(_) => "militaryActionAsCivilPerTurn",
++            Special::MilitaryActionCombinedPopIncreaseAndUnitBuild => "militaryActionCombinedPopIncreaseAndUnitBuild",
++            Special::NoAttacksBetweenParties => "noAttacksBetweenParties",
++            Special::OnAttackBetweenParties(_) => "onAttackBetweenParties",
++            Special::OnBuildCulture(_) => "onBuildCulture",
++            Special::OnBuildCulturePerTechLevelSum => "onBuildCulturePerTechLevelSum",
++            Special::OnReplacePutUnderCompletedWonderHappy(_) => "onReplacePutUnderCompletedWonderHappy",
++            Special::OncePerGameTwoPoliticalActions => "oncePerGameTwoPoliticalActions",
++            Special::OpponentDecreasesPopulation(_) => "opponentDecreasesPopulation",
++            Special::OpponentsPayDoubleMilitaryActionsToAttackYou => "opponentsPayDoubleMilitaryActionsToAttackYou",
++            Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost => {
++                "orTakesSpecialTechnologiesOfSameTotalScienceCost"
++            }
++            Special::PeekTopEventCardInPolitics => "peekTopEventCardInPolitics",
++            Special::PerTurnChoice => "perTurnChoice",
++            Special::PlayerWithLeastCulture(_) => "playerWithLeastCulture",
++            Special::PlayerWithMostCulture(_) => "playerWithMostCulture",
++            Special::PlayersWithMostDiscontentWorkers(_) => "playersWithMostDiscontentWorkers",
++            Special::PlayersWithMostHappyFaces(_) => "playersWithMostHappyFaces",
++            Special::PopIncreaseFoodDiscount(_) => "popIncreaseFoodDiscount",
++            Special::RemoveAsPoliticalActionForYellowToken(_) => "removeAsPoliticalActionForYellowToken",
++            Special::RemoveAsPoliticalActionFreeColonize => "removeAsPoliticalActionFreeColonize",
++            Special::RemoveFromGame => "removeFromGame",
++            Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) => "resourceOnMilitaryUnitBuildOrUpgrade",
++            Special::ResourceOnTechDevelop(_) => "resourceOnTechDevelop",
++            Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) => {
++                "resourcesForMilitaryUnitsPerStrongerCivilization"
++            }
++            Special::ResourcesPerLabEqualToLevel => "resourcesPerLabEqualToLevel",
++            Special::RevolutionUsesMilitaryActionsInstead => "revolutionUsesMilitaryActionsInstead",
++            Special::ScienceOnTechCardTake(_) => "scienceOnTechCardTake",
++            Special::SciencePerBestLabOrLibraryLevel => "sciencePerBestLabOrLibraryLevel",
++            Special::SciencePerLab(_) => "sciencePerLab",
++            Special::StealColony(_) => "stealColony",
++            Special::StrengthPerArtillery(_) => "strengthPerArtillery",
++            Special::StrengthPerInfantry(_) => "strengthPerInfantry",
++            Special::StrengthPerMilitaryUnit(_) => "strengthPerMilitaryUnit",
++            Special::StrengthPerTempleOrGovernmentHappy(_) => "strengthPerTempleOrGovernmentHappy",
++            Special::StrengthPerUnitType(_) => "strengthPerUnitType",
++            Special::StrongestPlayer(_) => "strongestPlayer",
++            Special::StrongestPlayers(_) => "strongestPlayers",
++            Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) => {
++                "takeCivilActionDiscountIfLeaderReplacedThisTurn"
++            }
++            Special::TakeFromOpponent(_) => "takeFromOpponent",
++            Special::TheaterResourceDiscountIfLibrary(_) => "theaterResourceDiscountIfLibrary",
++            Special::TheaterScienceDiscountIfLibrary(_) => "theaterScienceDiscountIfLibrary",
++            Special::TheaterTechScienceDiscount(_) => "theaterTechScienceDiscount",
++            Special::VictorTakesCulture => "victorTakesCulture",
++            Special::VictorTakesScienceUpTo(_) => "victorTakesScienceUpTo",
++            Special::VictorTakesYellowTokens => "victorTakesYellowTokens",
++            Special::WeakestPlayer(_) => "weakestPlayer",
++            Special::WeakestPlayers(_) => "weakestPlayers",
++            Special::WonderTakeNoExtraCivilActions => "wonderTakeNoExtraCivilActions",
++            // NO wildcard arm. A `Special` variant added to `card_table.rs`
++            // without a line added here is a compile error, full stop.
++        }
++    }
++
++    /// Every key [`special_effect_key`]'s exhaustive match can produce, for
++    /// every `Special` value actually printed on a real base-game card,
++    /// must be accounted for by [`DELIBERATELY_UNPRICED`] or
++    /// [`PRICED_ELSEWHERE`] (the same `is_accounted_for` the string-keyed
++    /// forward check uses). The exhaustiveness GUARANTEE is
++    /// `special_effect_key` itself compiling -- this test additionally
++    /// confirms the keys it can actually produce today are all registered,
++    /// closing the "the match compiles but nobody registered the key it
++    /// returns" half of the gap the string-keyed check alone would miss for
++    /// any card whose `Special` payload this session did not otherwise
++    /// exercise.
++    #[test]
++    fn every_special_value_on_a_real_card_maps_to_an_accounted_for_key() {
++        let mut missing: Vec<String> = Vec::new();
++        for card in crate::card_table::CARDS.iter() {
++            for sp in card.special {
++                let key = special_effect_key(sp);
++                if !coverage_of_printed_effect_keys::is_accounted_for(key) {
++                    missing.push(format!("{key:?} (Special variant on {})", card.name));
++                }
++            }
++        }
++        assert!(
++            missing.is_empty(),
++            "Special variant(s) whose printed key is not accounted for -- add a reason to \
++             DELIBERATELY_UNPRICED or PRICED_ELSEWHERE:\n  {}",
++            missing.join("\n  ")
++        );
+     }
+ 
+     // ============================================== the valuation layer
+diff --git a/rust/src/bots/weighted/eval.rs b/rust/src/bots/weighted/eval.rs
+index aea0165..c314c04 100644
+--- a/rust/src/bots/weighted/eval.rs
++++ b/rust/src/bots/weighted/eval.rs
+@@ -1056,7 +1056,7 @@ pub fn parse_weights(text: &str) -> Result<Weights, String> {
+     // zero-valued one, or a genuinely new-format file would get `old_base`
+     // spuriously added into its already-correct `_late` ("end") value on
+     // every single load.
+-    let mut legacy_early: [Option<f64>; LEGACY_PHASE_EARLY_FOLD.len()] = [None; LEGACY_PHASE_EARLY_FOLD.len()];
++    let mut legacy_early = LegacyPhaseEarly::new();
+     let mut w = Weights::defaults();
+     for (name, value) in fields {
+         if RETIRED_KEYS.contains(&name.as_str()) {
+@@ -1068,8 +1068,7 @@ pub fn parse_weights(text: &str) -> Result<Weights, String> {
+         if !v.is_finite() {
+             return Err(format!("weight {name:?} is not finite"));
+         }
+-        if let Some(i) = LEGACY_PHASE_EARLY_FOLD.iter().position(|&(n, _)| n == name.as_str()) {
+-            legacy_early[i] = Some(v);
++        if legacy_early.capture(name.as_str(), v) {
+             continue;
+         }
+         let key = WeightKey::by_name(name)
+@@ -1088,13 +1087,7 @@ pub fn parse_weights(text: &str) -> Result<Weights, String> {
+     // lateness (`A(0) = old_base + old_early`, `A(1) = old_base +
+     // old_late`) regardless of what order the three legacy names appeared
+     // in the source JSON.
+-    for (i, &(_, target)) in LEGACY_PHASE_EARLY_FOLD.iter().enumerate() {
+-        if let Some(early_v) = legacy_early[i] {
+-            let old_base = w.get(target);
+-            w.set(target, old_base + early_v);
+-            w.set(target.late(), old_base + w.get(target.late()));
+-        }
+-    }
++    legacy_early.apply(&mut w);
+ 
+     Ok(dominance_repair(&w).0)
+ }
+@@ -1124,6 +1117,64 @@ const LEGACY_PHASE_EARLY_FOLD: &[(&str, WeightKey)] = &[
+     ("hand_value_early", WeightKey::HandValue),
+ ];
+ 
++/// The legacy `_early` capture-and-fold, as a value both weight readers
++/// share rather than each open-coding.
++///
++/// There are two readers on purpose ([`parse_weights`] here and
++/// `human_policy::parse_weights_text`), and when the T1-A/C/D collapse
++/// landed only this one was taught the fold -- so every frozen human /
++/// anchor file on disk became unloadable by the other, which is precisely
++/// the failure its own comment says must never happen ("a file written
++/// before a key was retired must stay loadable by BOTH"). Duplicating six
++/// lines is what allowed the two to drift; the fold lives here once so the
++/// next retirement cannot silently break one reader and not the other.
++pub(crate) struct LegacyPhaseEarly([Option<f64>; LEGACY_PHASE_EARLY_FOLD.len()]);
++
++/// The legacy `_early` field names, for the cross-reader agreement test in
++/// `human_policy` -- enumerated from the fold table itself so a name added
++/// there is covered without anyone remembering to list it twice.
++#[cfg(test)]
++pub(crate) fn legacy_phase_early_names() -> &'static [(&'static str, WeightKey)] {
++    LEGACY_PHASE_EARLY_FOLD
++}
++
++impl LegacyPhaseEarly {
++    pub(crate) fn new() -> Self {
++        Self([None; LEGACY_PHASE_EARLY_FOLD.len()])
++    }
++
++    /// Record `name`'s value if it is a legacy `_early` field, reporting
++    /// whether it was one. A caller that gets `true` must NOT go on to
++    /// resolve the name against [`WeightKey::by_name`] -- there is no live
++    /// variant left to resolve it to, which is the whole reason a plain
++    /// `by_name` lookup rejects these files.
++    pub(crate) fn capture(&mut self, name: &str, v: f64) -> bool {
++        match LEGACY_PHASE_EARLY_FOLD.iter().position(|&(n, _)| n == name) {
++            Some(i) => {
++                self.0[i] = Some(v);
++                true
++            }
++            None => false,
++        }
++    }
++
++    /// `new_start = old_base + old_early`, `new_end = old_base + old_late`,
++    /// applied only for names the source file actually carried. `None` (not
++    /// `0.0`) is the absent state: see [`LEGACY_PHASE_EARLY_FOLD`] for why
++    /// a new-format file must apply NO fold rather than a zero-valued one.
++    /// `old_base` is read before either target is written, so the result is
++    /// independent of the order the names appeared in the JSON.
++    pub(crate) fn apply(&self, w: &mut Weights) {
++        for (i, &(_, target)) in LEGACY_PHASE_EARLY_FOLD.iter().enumerate() {
++            if let Some(early_v) = self.0[i] {
++                let old_base = w.get(target);
++                w.set(target, old_base + early_v);
++                w.set(target.late(), old_base + w.get(target.late()));
++            }
++        }
++    }
++}
++
+ /// Read a champion vector from disk. See [`parse_weights`].
+ pub fn load_weights(path: &std::path::Path) -> Result<Weights, String> {
+     let text = std::fs::read_to_string(path)
+diff --git a/rust/src/bots/weighted/features.rs b/rust/src/bots/weighted/features.rs
+index 561ae77..f10aba2 100644
+--- a/rust/src/bots/weighted/features.rs
++++ b/rust/src/bots/weighted/features.rs
+@@ -508,7 +508,31 @@ pub fn features(
+     // --- happiness
+     f.set(WeightKey::HappyMargin, margin.min(3.0));
+     f.set(WeightKey::Discontent, discontent);
+-    f.set(WeightKey::Uprising, if discontent > f64::from(p.workers_free) { 1.0 } else { 0.0 });
++    // UNITS FIX: this used to be a bare 0/1 indicator, so the fitted
++    // `WeightKey::Uprising` coefficient had to stand for "the cost of an
++    // uprising" at EVERY board size at once -- a catastrophic mid/late-game
++    // uprising and a nearly-free turn-1 one primed the identical penalty,
++    // and a climb chasing the worse case drove the single shared coefficient
++    // to the clamp trying (and failing) to also price the milder one (see
++    // the live log: "uprising = -60.000 (clamp 60.0) -- pinned
++    // coordinate"). RULES_SPEC 6.3: on an uprising "score/corruption/
++    // production/consumption all skipped" -- `economy::end_of_turn`'s step
++    // 2 (this file's own economy::end_of_turn doc comment) forfeits the
++    // ENTIRE production phase, not a fixed amount: science+culture scoring
++    // (step 3a), food production (3c), and resource production (3e). `s`
++    // (this function's own `effects::compute` reading, same Stats step 3
++    // itself applies) already carries exactly those four rates, so scaling
++    // the indicator by their sum makes the coefficient mean "evaluator-value
++    // per point of production actually at stake" -- fixed across positions
++    // -- instead of "value of an uprising at some unstated, unscalable board
++    // size". A rulebook fact computed by the engine, not a fitted constant:
++    // the climb still has to learn the PRICE, only the magnitude it prices
++    // is now the one the rules actually forfeit.
++    let uprising_production_at_stake = f64::from(s.science + s.culture + s.food + s.resources);
++    f.set(
++        WeightKey::Uprising,
++        if discontent > f64::from(p.workers_free) { uprising_production_at_stake } else { 0.0 },
++    );
+ 
+     // --- actions
+     f.set(WeightKey::CivilActions, f64::from(s.civil_actions) + g(GainFeature::CivilActions));
+@@ -562,6 +586,22 @@ pub fn features(
+     f.set(WeightKey::HasColony, if p.colonies.is_empty() { 0.0 } else { 1.0 });
+     f.set(WeightKey::Pacts, pacts + dc.pact_offers);
+     f.set(WeightKey::PactBlocksAttack, blocks_attack);
++    // RULES_SPEC 5.6 cliff, not a slope -- see `WeightKey::WarImmune`'s own
++    // doc comment in `weights.rs`. `combat::war_forbidden` ORs `s.war_immune`
++    // (a pact side printing `cannotBeDeclaredWarOnByAnyone`) alongside
++    // `pact_forbids_attack` (already `blocks_attack` above); this reads the
++    // same `Stats` field `s` already carries for this player.
++    f.set(WeightKey::WarImmune, if s.war_immune { 1.0 } else { 0.0 });
++    // RULES_SPEC 5.4/5.6 cliff, not a slope -- see `WeightKey::
++    // AttackCostDoubled`'s own doc comment in `weights.rs`. `legal.rs` and
++    // `combat.rs` both apply this doubling off `leader_is(q, "Mahatma
++    // Gandhi")`; read here off the printed special the leader card
++    // actually carries (`Special::OpponentsPayDoubleMilitaryActionsToAttackYou`)
++    // rather than the name, so the fact and the gate cannot drift onto two
++    // different leaders if a future card ever shares it.
++    let doubles_attack_cost = !p.leader.is_none()
++        && p.leader.get().special.contains(&Special::OpponentsPayDoubleMilitaryActionsToAttackYou);
++    f.set(WeightKey::AttackCostDoubled, if doubles_attack_cost { 1.0 } else { 0.0 });
+     f.set(WeightKey::AuctionCommitted, dc.auction_committed);
+     f.set(WeightKey::AuctionBid, dc.auction_bid);
+ 
+@@ -597,6 +637,13 @@ pub fn features(
+     f.set(WeightKey::WonderAgeOverrun, age_overrun);
+     f.set(WeightKey::WonderStagesPerAction, f64::from(s.wonder_stages - 1));
+     f.set(WeightKey::Leader, if p.leader.is_none() { 0.0 } else { 1.0 });
++    // RULES_SPEC 5.5 cliff, not a slope -- see `WeightKey::WonderInProgress`'s
++    // own doc comment in `weights.rs`. `legal.rs`'s `aggression_target_
++    // qualifies` reads `q.wonder.is_none()` (the same field `horizon::
++    // wonder_outlook` gates its `None` case on, hence `outlook.is_none()`
++    // implying `progress == 0` above) for the wonder half of Infiltrate's
++    // OR'd target clause; this asks the same question of `p.wonder` here.
++    f.set(WeightKey::WonderInProgress, if p.wonder.is_none() { 0.0 } else { 1.0 });
+ 
+     // --- board side of the card-pricing keys (docs/ANALYSIS_HISTORY.md,
+     // CARD_BLINDNESS.md verdict): the
+@@ -860,6 +907,51 @@ mod tests {
+         );
+     }
+ 
++    /// UNITS FIX for `WeightKey::Uprising`: it used to be a bare 0/1
++    /// indicator (`if discontent > workers_free { 1.0 } else { 0.0 }`), so a
++    /// single fitted coefficient had to price "an uprising" identically at
++    /// every board size -- a civilization with a big production forfeits
++    /// far more (RULES_SPEC 6.3: the WHOLE production phase is skipped) than
++    /// one with a small one, and no fixed number can be "correct" for both.
++    /// Two boards with the IDENTICAL discontent-vs-workers_free overshoot
++    /// (so the 0/1 condition never changes) but very different production
++    /// must now read different `Uprising` magnitudes, proportional to what
++    /// is actually at stake. Confirmed RED by reverting to the bare 0/1
++    /// formula: both boards read exactly `1.0`, this test's inequality
++    /// failed with `small=1 big=1`.
++    #[test]
++    fn uprising_scales_with_the_production_actually_at_stake_not_a_flat_0_1() {
++        let mut small = G::new_game(2, 51);
++        small.players[0].yellow_bank = 7; // happy_required(7) == 4, fresh happy == 0
++        small.players[0].workers_free = 3; // discontent 4 > 3 free -> an uprising
++
++        let small_feat = features(&small, 0, None, None, false).get(WeightKey::Uprising);
++        assert!(small_feat > 0.0, "must actually be an uprising, got feature {small_feat}");
++
++        // A bigger production base, same discontent/workers_free overshoot:
++        // the 0/1 CONDITION is identical, only the magnitude at stake grows.
++        let mut big = small.clone();
++        big.players[0].science_rate_extra = 20;
++        big.players[0].culture_rate_extra = 20;
++        let big_feat = features(&big, 0, None, None, false).get(WeightKey::Uprising);
++
++        assert!(
++            big_feat > small_feat,
++            "a bigger production base facing the IDENTICAL uprising condition must forfeit more: \
++             small={small_feat} big={big_feat}"
++        );
++
++        // No uprising at all must still read exactly zero, regardless of
++        // how much production is on the board -- the magnitude only prices
++        // the turns an uprising actually happens.
++        big.players[0].workers_free = 4; // discontent 4 == 4 free -> NOT an uprising
++        assert_eq!(
++            features(&big, 0, None, None, false).get(WeightKey::Uprising),
++            0.0,
++            "no uprising must still read exactly 0.0, no matter how much production is at stake"
++        );
++    }
++
+     /// A fresh deal has no wonder in progress -- all three finish-discipline
+     /// terms (`wonder_stages_left`/`wonder_turns_to_finish`/`wonder_overrun`)
+     /// must read exactly 0.0, matching Python's "0.0 with nothing in
+@@ -955,6 +1047,83 @@ mod tests {
+         assert_eq!(f.get(WeightKey::HasColony), 1.0, "has_colony must stay at 1.0, not climb to 3.0, with a third colony");
+     }
+ 
++    /// `war_immune` (RULES_SPEC 5.6, `WeightKey::WarImmune`'s own doc
++    /// comment): 0.0 with no pacts at all, the state a fresh deal starts in.
++    #[test]
++    fn war_immune_is_zero_with_no_pacts() {
++        let state = G::new_game(2, 40);
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::WarImmune), 0.0, "a fresh deal starts with no pacts, so no war immunity");
++    }
++
++    /// `war_immune` must flip to 1.0 the instant a player holds a pact side
++    /// printing `cannotBeDeclaredWarOnByAnyone` -- "Loss of Sovereignty"'s B
++    /// side, the same fixture `combat.rs`'s own
++    /// `war_forbidden_true_when_defender_is_war_immune` uses as ground truth.
++    #[test]
++    fn war_immune_flips_to_one_with_a_war_immunity_pact_side() {
++        let mut state = G::new_game(2, 40);
++        let pact = crate::cards::CardId::by_name("Loss of Sovereignty").expect("a base-game pact card");
++        state.players[0].pacts.push(crate::state::Pact { card: pact, owner: 0, partner: 1, a: 1, b: 0 });
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::WarImmune), 1.0, "war_immune must flip to 1.0 the instant its holder's own side (b == 0) grants it");
++    }
++
++    /// `attack_cost_doubled` (RULES_SPEC 5.4/5.6, `WeightKey::
++    /// AttackCostDoubled`'s own doc comment): 0.0 with no leader at all, the
++    /// state a fresh deal starts in.
++    #[test]
++    fn attack_cost_doubled_is_zero_with_no_leader() {
++        let state = G::new_game(2, 40);
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::AttackCostDoubled), 0.0, "a fresh deal starts with no leader in play");
++    }
++
++    /// `attack_cost_doubled` must flip to 1.0 the instant Mahatma Gandhi is
++    /// the player's leader -- and must NOT fire for an unrelated leader, so
++    /// this is reading the printed special, not just "any leader at all"
++    /// (`WeightKey::Leader` already covers that separate fact).
++    #[test]
++    fn attack_cost_doubled_flips_to_one_only_for_gandhi() {
++        let mut state = G::new_game(2, 40);
++        let moses = crate::cards::CardId::by_name("Moses").expect("a base-game leader");
++        state.players[0].leader = moses;
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::Leader), 1.0, "Moses is still a leader in play");
++        assert_eq!(f.get(WeightKey::AttackCostDoubled), 0.0, "Moses does not print the double-cost special");
++
++        let gandhi = crate::cards::CardId::by_name("Mahatma Gandhi").expect("a base-game leader");
++        state.players[0].leader = gandhi;
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::AttackCostDoubled), 1.0, "Gandhi's own special must flip this to 1.0");
++    }
++
++    /// `wonder_in_progress` (RULES_SPEC 5.5, `WeightKey::WonderInProgress`'s
++    /// own doc comment): 0.0 with no wonder under construction, the state a
++    /// fresh deal starts in.
++    #[test]
++    fn wonder_in_progress_is_zero_with_no_wonder() {
++        let state = G::new_game(2, 40);
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::WonderProgress), 0.0, "a fresh deal has no wonder in progress");
++        assert_eq!(f.get(WeightKey::WonderInProgress), 0.0, "wonder_in_progress must be 0.0 with nothing under construction");
++    }
++
++    /// The cliff, not a slope: `wonder_in_progress` must flip to 1.0 the
++    /// instant ANY wonder is taken, before a single stage is paid -- the
++    /// same "the step matters, not the count" shape `has_colony` exists to
++    /// add beside the linear `colonies`, mirrored here beside the linear
++    /// (sunk-cost) `wonder_progress`.
++    #[test]
++    fn wonder_in_progress_flips_to_one_the_instant_a_wonder_is_taken() {
++        let mut state = G::new_game(2, 40);
++        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
++        state.players[0].wonder = pyramids;
++        let f = features(&state, 0, None, None, false);
++        assert_eq!(f.get(WeightKey::WonderProgress), 0.0, "no stage has been paid yet, so the linear progress term is still 0");
++        assert_eq!(f.get(WeightKey::WonderInProgress), 1.0, "wonder_in_progress must flip to 1.0 the instant the wonder is taken, before any stage is paid");
++    }
++
+     /// `happy_margin` resolves through the hand-rolled `margin` local, not a
+     /// `"happy"` weight lookup -- there is no `WeightKey::Happy` at all (only
+     /// `HappyMargin` is a real weight), so this just pins that the computed
+diff --git a/rust/src/bots/weighted/row.rs b/rust/src/bots/weighted/row.rs
+index 231fc9a..77ced95 100644
+--- a/rust/src/bots/weighted/row.rs
++++ b/rust/src/bots/weighted/row.rs
+@@ -441,13 +441,34 @@ pub fn row_pressure(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalC
+ /// whether another copy is coming off the deck, so a last copy and a card
+ /// with three more behind it price identically.
+ ///
+-/// Each takeable slot contributes `card_potential * P(no further copy)`, and
+-/// that probability is `max(0, 1 - outlook)` where `outlook` is
+-/// `counting::civil_outlook`'s expected number of further copies. The clip
+-/// is the whole model and it has no fitted constant in it: at an outlook of
+-/// 0 the deck provably holds no more (an age's deck is always dealt out in
+-/// full), so the probability is exactly 1; at an outlook of 1 or more
+-/// another copy is expected, so it is 0; in between it interpolates.
++/// Each takeable slot contributes `P(no further copy)`, and that probability
++/// is `max(0, 1 - outlook)` where `outlook` is `counting::civil_outlook`'s
++/// expected number of further copies. The clip is the whole model and it has
++/// no fitted constant in it: at an outlook of 0 the deck provably holds no
++/// more (an age's deck is always dealt out in full), so the probability is
++/// exactly 1; at an outlook of 1 or more another copy is expected, so it is
++/// 0; in between it interpolates.
++///
++/// UNITS FIX (was `card_potential * P(no further copy)`, summed, then that
++/// sum multiplied AGAIN by `WeightKey::RowLastCopy`'s own coefficient in
++/// `eval::evaluate`): `card_potential(..., w, ...)` is itself already a
++/// composite the LIVE weight vector `w` prices (`*BoardCredit`/
++/// `card_rate_credit`/every printed-yield key `sum_yields` dots against) --
++/// feeding that composite into a second, outer coefficient made the outer
++/// coefficient's fitted number mean something different every time ANY
++/// OTHER weight in `w` moved, even though `row_last_copy`'s own coefficient
++/// never did (`weights.rs`'s own `sign_intent` comment on this key: "its
++/// defect is units, not sign" -- widening the clamp or flipping the sign
++/// cannot fix a term that is not measuring a fixed quantity to begin with).
++/// `card_potential` is still called -- it is still the right question ("do I
++/// want this card at all?") -- but only as a `> 0.0` GATE, never as a
++/// magnitude: what is actually summed is `gone` itself, a deterministic,
++/// `w`-independent count of wanted slots about to vanish for good. That
++/// makes `eval::evaluate`'s own `rlc * row_last_copy(...)` the ONLY weight
++/// this reading depends on, so the same `rlc` means the same thing (price
++/// per about-to-vanish wanted card) at every position, not a price that
++/// rides whatever the board-credit weights happen to be this generation.
++/// Pinned by `row_last_copy_depends_on_no_weight_but_its_own` below.
+ ///
+ /// Deliberately NOT folded into `row_pressure`'s return -- see that
+ /// function's own doc comment on why -- so the masking loop is duplicated
+@@ -482,13 +503,18 @@ pub fn row_last_copy(state: &GameState, idx: u8, w: &Weights, ctx: Option<&Rival
+         if !costs::can_take_gated(state, p, i as usize, &mine, Some(name)) {
+             continue;
+         }
++        // `card_potential` is a GATE here, not a magnitude -- see this
++        // function's own doc comment (UNITS FIX): summing its dollar value
++        // would feed a composite already priced by `w` into `rlc`'s own
++        // multiply below, a second weight on top of however many `w` already
++        // spent inside `card_potential`.
+         let val = cards::card_potential(name, w, Some(&base), Some(late), &mut scratch);
+         if val <= 0.0 {
+             continue;
+         }
+         let gone = 1.0 - counting::lookup(outlook, name, 0.0);
+         if gone > 0.0 {
+-            total += val * gone;
++            total += gone;
+         }
+     }
+     total
+@@ -764,17 +790,18 @@ mod tests {
+         assert_eq!(urgency, va.max(vb), "hand_swap_extra=0.0 must keep only the better doomed leader's value, not the sum of both");
+     }
+ 
+-    /// `row_last_copy` weights each takeable card by `max(0, 1 - outlook)`.
+-    /// Rather than assume a fresh deal's real `civil_outlook` for "Colossus"
+-    /// (a fitted/measured number, not a constant this test should hardcode),
++    /// `row_last_copy` weights each takeable card by `max(0, 1 - outlook)`
++    /// -- UNITS FIX: `card_potential` gates which cards count (must be
++    /// wanted, `> 0.0`) but no longer scales the sum, so the total is
++    /// exactly `gone` summed over wanted cards, not `val * gone`. Rather
++    /// than assume a fresh deal's real `civil_outlook` for "Colossus" (a
++    /// fitted/measured number, not a constant this test should hardcode),
+     /// this computes that same outlook independently via
+     /// `counting::civil_outlook` and checks `row_last_copy` against the
+     /// formula directly -- correct whichever side of 1.0 the real outlook
+-    /// happens to land on. Likewise `cards::card_potential` itself is called
+-    /// once, directly, to get the exact value `row_last_copy` must scale --
+-    /// its own arithmetic is `cards.rs`'s to pin, not this file's.
++    /// happens to land on.
+     #[test]
+-    fn row_last_copy_matches_the_one_minus_outlook_formula() {
++    fn row_last_copy_matches_the_gone_only_formula() {
+         let mut state = G::new_game(2, 31);
+         state.players[0].civil_actions = 6;
+         state.card_row = [CardId::NONE; ROW_SIZE];
+@@ -784,10 +811,67 @@ mod tests {
+         let late = horizon::lateness(&state);
+         let mut scratch = Vec::new();
+         let val = cards::card_potential(name, &w, Some(&Baseline::at(&state, 0)), Some(late), &mut scratch);
+-        assert!(val > 0.0, "val={val}");
++        assert!(val > 0.0, "val={val}, must be wanted for this test to exercise the gate");
+         let outlook = counting::lookup(&counting::civil_outlook(&state, 0), name, 0.0);
+         let gone = (1.0 - outlook).max(0.0);
+         let total = row_last_copy(&state, 0, &w, None);
+-        assert!((total - val * gone).abs() < 1e-9, "total={total} expected={}", val * gone);
++        assert!((total - gone).abs() < 1e-9, "total={total} expected={gone}");
++    }
++
++    /// THE UNITS BUG ITSELF, pinned directly: before this fix, `row_last_copy`
++    /// summed `card_potential(..., w, ...) * gone`, a composite the LIVE
++    /// weight vector already prices -- so moving ANY other weight (say
++    /// `card_rate_credit`, which scales every `Rate`-kind printed card
++    /// yield) moved this reading too, even though `row_last_copy`'s own
++    /// coefficient never did. `eval::evaluate` then multiplies this reading
++    /// by `RowLastCopy`'s own coefficient AGAIN, so that outer coefficient's
++    /// fitted number meant a different thing every time some unrelated
++    /// weight drifted -- "the coefficient has no consistent meaning" is
++    /// exactly this: not expressible as `price * f(state)` for any fixed
++    /// price. Confirmed RED by reverting the fix (`total += val * gone`
++    /// instead of `total += gone`): this loop found at least one weight
++    /// whose change moved `row_last_copy`'s reading (see this test's own
++    /// failure message for which one and by how much).
++    #[test]
++    fn row_last_copy_depends_on_no_weight_but_its_own() {
++        let mut state = G::new_game(2, 31);
++        state.players[0].civil_actions = 6;
++        state.card_row = [CardId::NONE; ROW_SIZE];
++        let name = card("Colossus");
++        state.card_row[0] = name;
++        let baseline = Weights::default();
++        let base_total = row_last_copy(&state, 0, &baseline, None);
++        assert!(base_total > 0.0, "must be pricing a wanted last copy to exercise anything, got {base_total}");
++
++        let late = horizon::lateness(&state);
++        let board = Baseline::at(&state, 0);
++        let mut scratch = Vec::new();
++        let mut checked = 0;
++        for &k in WeightKey::ALL {
++            if k == WeightKey::RowLastCopy {
++                continue; // its own coefficient is applied OUTSIDE this function, by `eval::evaluate`
++            }
++            let mut w = baseline;
++            w.set(k, w.get(k) + 7.0);
++            // Flipping whether the card is wanted at all is `card_potential`'s
++            // own legitimate `> 0.0` gate (every caller in this file relies on
++            // it) -- not the bug under test. The property this test pins is
++            // that, AS LONG AS the card stays wanted, the READING does not
++            // scale with `k`'s magnitude the way the old `val * gone` formula
++            // did; a gate flip is skipped, not asserted on.
++            if cards::card_potential(name, &w, Some(&board), Some(late), &mut scratch) <= 0.0 {
++                continue;
++            }
++            checked += 1;
++            let total = row_last_copy(&state, 0, &w, None);
++            assert_eq!(
++                total,
++                base_total,
++                "row_last_copy moved from {base_total} to {total} when only {} changed (card still \
++                 wanted under the new weight) -- it must depend on no weight but its own",
++                k.name()
++            );
++        }
++        assert!(checked > 0, "the sweep never left the card wanted after a perturbation, so it proved nothing");
+     }
+ }
+diff --git a/rust/src/bots/weighted/weights.rs b/rust/src/bots/weighted/weights.rs
+index 16e385a..a096843 100644
+--- a/rust/src/bots/weighted/weights.rs
++++ b/rust/src/bots/weighted/weights.rs
+@@ -143,6 +143,8 @@ pub enum WeightKey {
+     HasColony,
+     Pacts,
+     PactBlocksAttack,
++    WarImmune,
++    AttackCostDoubled,
+     AuctionCommitted,
+     AuctionBid,
+     TechLevels,
+@@ -204,6 +206,7 @@ pub enum WeightKey {
+     /// the day this lands.
+     WonderAgeOverrun,
+     Leader,
++    WonderInProgress,
+     HandLimit,
+     ColonizeBonus,
+     BuildDiscount,
+@@ -573,6 +576,35 @@ weight_key_table! {
+     HasColony => "has_colony", 0.0;
+     Pacts => "pacts", 0.5;
+     PactBlocksAttack => "pact_blocks_attack", 0.5;
++    // RULES_SPEC 5.6 cliff, not a slope -- "declare a war ... illegal if a
++    // pact forbids it" [RULES_SPEC.md:131] covers `pact_forbids_attack`
++    // (already priced by `PactBlocksAttack` above), but `combat::
++    // war_forbidden` ORs in a second, independent gate:
++    // `effects::state_stats(.., defender).war_immune`, set by a pact side
++    // printing `cannotBeDeclaredWarOnByAnyone` (`Special::B`/`A`/
++    // `BothPlayers`'s `PactBlock.war_immune`, e.g. "Loss of Sovereignty"'s B
++    // side). `cards.rs`'s `pact_value` and `rivals.rs`'s `add_pact_block`
++    // both name `war_immune` explicitly as one of the `PactBlock` fields
++    // deliberately left OUT of the RATE-shaped decomposition (not a
++    // per-turn yield, a boolean gate on legality) -- this is that gate's
++    // home. Holding it makes War against you categorically illegal, not
++    // merely less attractive, the same all-or-nothing shape `HasColony`/
++    // `HasUnit` already price elsewhere.
++    WarImmune => "war_immune", 0.0;
++    // A cost MULTIPLIER cliff, not a slope: `legal.rs`'s `action_moves`
++    // (Aggression and War branches alike) and `combat::start_aggression`
++    // all read `leader_is(q, "Mahatma Gandhi")` to double the military-
++    // action cost an OPPONENT pays to attack `q` -- the printed leader
++    // effect `Special::OpponentsPayDoubleMilitaryActionsToAttackYou`
++    // (`card_table.rs`), currently the only card carrying it. Computed
++    // here off the SPECIAL on the player's own leader card (mirroring the
++    // rules fact, not the engine's hardcoded name check) so a future card
++    // sharing the special is priced automatically. Distinct from
++    // `NoAggression` (`Special::CannotPlayAggressionOrWar`, same leader):
++    // that flag restricts what ITS OWN holder may play; this one restricts
++    // what OPPONENTS may afford to do to the holder -- the opposite
++    // direction, and the one this audit exists to catch.
++    AttackCostDoubled => "attack_cost_doubled", 0.0;
+     AuctionCommitted => "auction_committed", 2.0;
+     AuctionBid => "auction_bid", -0.4;
+     // T1-C collapse (PHASECUT.txt): folded start = 1.0 + 0.5 = 1.5. See
+@@ -606,6 +638,19 @@ weight_key_table! {
+     WonderPromise => "wonder_promise", 0.0;
+     WonderAgeOverrun => "wonder_age_overrun", 0.0;
+     Leader => "leader", 1.5;
++    // RULES_SPEC 5.5 cliff, not a slope -- "Infiltrate 2 (remove rival's
++    // leader or unfinished wonder from game...)" [RULES_SPEC.md:129].
++    // `legal.rs`'s `aggression_target_qualifies` gates Infiltrate
++    // (`Special::RemoveFromGame`) on `q.leader.is_none() && q.wonder.is_none()`
++    // -- `Leader` (above) already prices the leader half of that OR, but
++    // nothing priced the wonder half: `WonderProgress` is a RATE-shaped
++    // sunk-cost magnitude tuned to value how much a wonder is worth
++    // finishing, not whether starting one alone made its owner Infiltrate-
++    // able, the same conflation `Colonies` alone left for `HasColony`
++    // (going from no wonder to the first resource invested is a step no
++    // linear progress count can express). Seeded at 0.0 and left `Free`,
++    // same as `HasColony`.
++    WonderInProgress => "wonder_in_progress", 0.0;
+     HandLimit => "hand_limit", 0.0;
+     ColonizeBonus => "colonize_bonus", 0.0;
+     BuildDiscount => "build_discount", 0.0;
+@@ -901,7 +946,8 @@ impl WeightKey {
+ 
+             Strength | StrengthRel | StrengthRelEarly | StrengthRelLate | StrengthDeficit
+             | StrengthLead | TacticLevel | TacticGain | TacticShort | HasUnit | Colonies
+-            | HasColony | Pacts | PactBlocksAttack | AuctionCommitted | AuctionBid => {
++            | HasColony | Pacts | PactBlocksAttack | WarImmune | AttackCostDoubled
++            | AuctionCommitted | AuctionBid => {
+                 WeightGroup::Military
+             }
+ 
+@@ -936,7 +982,7 @@ impl WeightKey {
+             // The two new wonder coordinates: the value still ahead of the
+             // player, and the deadline the rules impose on reaching it.
+             | WonderPromise | WonderAgeOverrun
+-            | Leader => WeightGroup::Wonders,
++            | Leader | WonderInProgress => WeightGroup::Wonders,
+         }
+     }
+ 
+@@ -1130,7 +1176,8 @@ impl WeightKey {
+             | MilitaryActions | TechLevels | GovLevel | BestFarm | BestMine | BestLab
+             | BestTemple | BestTheater | BestLibrary | BestArena | BestUnit | NumTechs
+             | SpecialTechs | WonderProgress | Leader | Strength | StrengthRel | StrengthLead
+-            | TacticLevel | HasUnit | Colonies | HasColony | Pacts | PactBlocksAttack => Free,
++            | TacticLevel | HasUnit | Colonies | HasColony | Pacts | PactBlocksAttack
++            | WarImmune | AttackCostDoubled | WonderInProgress => Free,
+             // `CorruptionHeadroom`/`ConsumptionHeadroom`: `features.rs`'s own
+             // comment on these two, verbatim -- "headroom is a deterministic
+             // function of `BlueFree`/`YellowBank`, so 'good all else equal'
+@@ -1153,9 +1200,14 @@ impl WeightKey {
+             TakeCostPaid | TakeCostShare => Free,
+             // Row-reading and rival-row preference coordinates -- how much to
+             // weigh a rival wanting a card is a strategic read, not a rules
+-            // fact. `RowLastCopy` is explicitly out of scope for THIS audit's
+-            // fix set ("its defect is units, not sign") and is left exactly
+-            // as `Free` already left it, not touched.
++            // fact. `RowLastCopy`'s units defect ("its defect is units, not
++            // sign", once out of scope for the sign audit) is fixed now --
++            // `row::row_last_copy` no longer sums `card_potential(w) * gone`
++            // (a composite `w` already prices, feeding a second, outer
++            // coefficient with no fixed meaning); it sums `gone` alone,
++            // `card_potential` used only as the `> 0.0` "is this even wanted"
++            // gate. Still `Free` -- fixing the units did not establish a sign
++            // any rule cites, so this classification itself is untouched.
+             RowUrgency | RowBargainForgone | RowLastCopy | RivalDesire | RivalTakeShare => Free,
+             // Raw RIVAL board facts -- whether more of a rival's stock is
+             // something to race against, ignore, or exploit is itself the
+diff --git a/rust/src/human_policy.rs b/rust/src/human_policy.rs
+index dd4f0a6..a8a283a 100644
+--- a/rust/src/human_policy.rs
++++ b/rust/src/human_policy.rs
+@@ -583,6 +583,13 @@ pub fn parse_weights_text(text: &str) -> Result<Weights, String> {
+     for &k in WeightKey::ALL {
+         w.set(k, 0.0);
+     }
++    // Same reason as `RETIRED_KEYS` below, for the three names the T1-A/C/D
++    // phase collapse folded rather than discarded: they carry real values,
++    // so they can be neither rejected nor dropped. Shared with
++    // `eval::parse_weights` so the two readers cannot drift again -- they
++    // already did once, and every frozen human/anchor file on disk became
++    // unloadable here while the champion files kept working.
++    let mut legacy_early = crate::bots::weighted::eval::LegacyPhaseEarly::new();
+     for (name, value) in fields {
+         // A RETIRED name is dropped, not rejected -- exactly as
+         // `eval::load_weights` does. This loader is deliberately separate
+@@ -594,13 +601,17 @@ pub fn parse_weights_text(text: &str) -> Result<Weights, String> {
+         if crate::bots::weighted::weights::RETIRED_KEYS.contains(&name.as_str()) {
+             continue;
+         }
+-        let key = WeightKey::by_name(name).ok_or_else(|| format!("unknown weight {name:?}"))?;
+         let v = value.as_f64().ok_or_else(|| format!("weight {name:?} is not a number"))?;
+         if !v.is_finite() {
+             return Err(format!("weight {name:?} is not finite"));
+         }
++        if legacy_early.capture(name.as_str(), v) {
++            continue;
++        }
++        let key = WeightKey::by_name(name).ok_or_else(|| format!("unknown weight {name:?}"))?;
+         w.set(key, v);
+     }
++    legacy_early.apply(&mut w);
+     Ok(w)
+ }
+ 
+@@ -857,6 +868,55 @@ mod tests {
+         assert!(parse_weights_text(r#"{"not_a_real_weight": 1.0}"#).is_err());
+     }
+ 
++    /// Every name `eval::parse_weights` accepts, this reader must accept
++    /// too. This is the guard for the drift that actually happened: the
++    /// T1-A/C/D phase collapse taught only the champion reader to fold the
++    /// three legacy `_early` names, so `analysis/frozen/human_weights.json`
++    /// -- a FROZEN file that can never be rewritten -- stopped loading here
++    /// and every climb arm died at startup the moment the binary was
++    /// rebuilt. Asserting name-for-name agreement rather than testing the
++    /// three names by hand is what makes the NEXT retirement break a test
++    /// instead of the league.
++    #[test]
++    fn both_weight_readers_accept_exactly_the_same_key_names() {
++        for &(name, _) in crate::bots::weighted::eval::legacy_phase_early_names() {
++            let text = format!(r#"{{"{name}": 1.5, "culture": 2.0}}"#);
++            assert!(
++                crate::bots::weighted::eval::parse_weights(&text).is_ok(),
++                "champion reader rejected legacy name {name:?}"
++            );
++            assert!(
++                parse_weights_text(&text).is_ok(),
++                "human reader rejected legacy name {name:?}"
++            );
++        }
++        for &name in crate::bots::weighted::weights::RETIRED_KEYS {
++            let text = format!(r#"{{"{name}": 1.5, "culture": 2.0}}"#);
++            assert!(
++                crate::bots::weighted::eval::parse_weights(&text).is_ok(),
++                "champion reader rejected retired name {name:?}"
++            );
++            assert!(
++                parse_weights_text(&text).is_ok(),
++                "human reader rejected retired name {name:?}"
++            );
++        }
++    }
++
++    /// The legacy fold is not merely tolerated here, it produces the same
++    /// arithmetic both readers document: `new_start = old_base + old_early`.
++    /// Tolerating the name while dropping its value would keep the league
++    /// running and silently throw away every value ever climbed into it.
++    #[test]
++    fn the_human_reader_folds_a_legacy_early_value_rather_than_discarding_it() {
++        let folded = parse_weights_text(r#"{"hand_value": 0.25, "hand_value_early": 0.2}"#).unwrap();
++        let bare = parse_weights_text(r#"{"hand_value": 0.25}"#).unwrap();
++        assert!(
++            (folded.get(WeightKey::HandValue) - bare.get(WeightKey::HandValue) - 0.2).abs() < 1e-12,
++            "legacy `_early` value was accepted but not folded in"
++        );
++    }
++
+     /// [`load_weights`]/[`save_weights`] round-trip through an actual file on
+     /// disk, not just the in-memory text functions -- the path `humantrain`
+     /// and `HumanBot` actually use.
+diff --git a/rust/src/legal.rs b/rust/src/legal.rs
+index 87dc6a5..7a4ad3e 100644
+--- a/rust/src/legal.rs
++++ b/rust/src/legal.rs
+@@ -1509,6 +1509,46 @@ mod tests {
+         );
+     }
+ 
++    /// `WeightKey::WonderInProgress` (`bots/weighted/weights.rs`'s own doc
++    /// comment) exists to price the wonder half of the SAME OR clause
++    /// `has_colony_feature_agrees_with_annex_targeting_legality` above
++    /// checks the colony half of for Annex: `aggression_target_qualifies`
++    /// gates Infiltrate on `q.leader.is_none() && q.wonder.is_none()`. This
++    /// pins the feature and `politics_moves` (via `infiltrate_is_offered_
++    /// against_a_target_with_an_unfinished_wonder`'s own ground truth) to
++    /// the same notion of "targetable", with no leader in play at all so
++    /// only the wonder half is in play.
++    #[test]
++    fn wonder_in_progress_feature_agrees_with_infiltrate_targeting_legality() {
++        let infiltrate = card("Aggression: Infiltrate");
++        let mut state = one_player_state(attacker_ready_to_win(infiltrate));
++
++        let no_wonder = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            no_wonder.get(crate::bots::weighted::weights::WeightKey::WonderInProgress),
++            0.0,
++            "target 1 starts with no wonder and no leader"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            !moves.as_slice().iter().any(|m| matches!(m, Move::Aggression { .. })),
++            "wonder_in_progress == 0.0 (and no leader) must agree with Infiltrate not being offered"
++        );
++
++        state.players[1].wonder = card("Pyramids");
++        let has_wonder = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            has_wonder.get(crate::bots::weighted::weights::WeightKey::WonderInProgress),
++            1.0,
++            "target 1 now has an unfinished wonder"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            moves.as_slice().contains(&Move::Aggression { card: infiltrate, target: 1 }),
++            "wonder_in_progress == 1.0 must agree with Infiltrate being offered"
++        );
++    }
++
+     // ---------------------------------------------------------------- war
+ 
+     fn war_card_and_cost() -> (CardId, i32) {
+@@ -1558,6 +1598,91 @@ mod tests {
+         assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::War { .. })));
+     }
+ 
++    /// `WeightKey::WarImmune` (`bots/weighted/weights.rs`'s own doc comment)
++    /// exists to price exactly the fact `combat::war_forbidden` ORs in on
++    /// top of `pact_forbids_attack`: `effects::state_stats(..,
++    /// defender).war_immune`. This checks the feature and the legality gate
++    /// cannot drift apart, the same shape `has_colony_feature_agrees_with_
++    /// annex_targeting_legality` already uses for Annex.
++    #[test]
++    fn war_immune_feature_agrees_with_war_targeting_legality() {
++        let (war, cost) = war_card_and_cost();
++        let mut p = blank_player(0, card("Despotism"));
++        p.military_actions = cost as i8 + 2;
++        p.hand_military.push(war);
++        let mut state = one_player_state(p);
++
++        let no_immunity = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            no_immunity.get(crate::bots::weighted::weights::WeightKey::WarImmune),
++            0.0,
++            "target 1 starts with no pacts at all"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            moves.as_slice().contains(&Move::War { card: war, target: 1 }),
++            "war_immune == 0.0 must agree with War being offered"
++        );
++
++        // "Loss of Sovereignty" B side prints `cannotBeDeclaredWarOnByAnyone`
++        // (combat.rs's own `war_forbidden_true_when_defender_is_war_immune`
++        // fixture) -- b == 1 makes target 1 the immune party.
++        state.players[1]
++            .pacts
++            .push(crate::state::Pact { card: card("Loss of Sovereignty"), owner: 1, partner: 0, a: 0, b: 1 });
++        let immune = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            immune.get(crate::bots::weighted::weights::WeightKey::WarImmune),
++            1.0,
++            "target 1 now holds the war-immunity pact side"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            !moves.as_slice().contains(&Move::War { card: war, target: 1 }),
++            "war_immune == 1.0 must agree with War no longer being offered against target 1 specifically (fillers 2/3 are untouched and stay legal targets)"
++        );
++    }
++
++    /// `WeightKey::AttackCostDoubled` (`bots/weighted/weights.rs`'s own doc
++    /// comment) exists to price Gandhi's `opponentsPayDoubleMilitaryActionsToAttackYou`:
++    /// `legal.rs`'s own `mult` doubling (both the Aggression and War
++    /// branches read `leader_is(q, "Mahatma Gandhi")` identically; War is
++    /// exercised here). An attacker funded for exactly `cost` MA, no more,
++    /// can afford a plain target but not a Gandhi-led one.
++    #[test]
++    fn attack_cost_doubled_feature_agrees_with_war_cost_legality() {
++        let (war, cost) = war_card_and_cost();
++        let mut p = blank_player(0, card("Despotism"));
++        p.military_actions = cost as i8; // funded for cost*1, NOT cost*2
++        p.hand_military.push(war);
++        let mut state = one_player_state(p);
++
++        let no_double = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            no_double.get(crate::bots::weighted::weights::WeightKey::AttackCostDoubled),
++            0.0,
++            "target 1 starts with no leader at all"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            moves.as_slice().contains(&Move::War { card: war, target: 1 }),
++            "attack_cost_doubled == 0.0 must agree with War being affordable at cost*1"
++        );
++
++        state.players[1].leader = card("Mahatma Gandhi");
++        let doubled = crate::bots::weighted::features::features(&state, 1, None, None, false);
++        assert_eq!(
++            doubled.get(crate::bots::weighted::weights::WeightKey::AttackCostDoubled),
++            1.0,
++            "target 1 is now led by Gandhi"
++        );
++        let moves = politics_moves(&state, &state.players[0]);
++        assert!(
++            !moves.as_slice().contains(&Move::War { card: war, target: 1 }),
++            "attack_cost_doubled == 1.0 must agree with War no longer being affordable at cost*1 against target 1 specifically (fillers 2/3 are untouched and stay affordable)"
++        );
++    }
++
+     // ------------------------------------------------------------ action_moves
+ 
+     #[test]
+-- 
+2.55.0
+

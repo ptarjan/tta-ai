@@ -120,7 +120,7 @@ Unspent MAs at end of turn each draw 1 military card (max 3) — §6.7. Red toke
 
 5.4 **Play an aggression** (brown card, "Aggression:" in name) [CoL p.4]:
 1. Reveal; pay its military action cost; declare the rival.
-2. Illegal if: a pact forbids attacking them, or the rival's strength ≥ yours (include bonuses that trigger when you attack them; exclude pact bonuses that end if you attack). Annex and Infiltrate print their own narrower target clause and are additionally illegal against a rival who fails it: Annex requires "one opponent who owns at least one colony"; Infiltrate requires "one opponent with a leader in play or a wonder under construction" [digital-edition card text, `data/cards_military_actions.json`'s `target` field; Infiltrate's wonder-loss reading confirmed by FAQ p.11, "an incomplete Wonder is lost ... due to the Infiltrate Aggression"]. No other base-game aggression prints a narrower target than "one opponent".
+2. Illegal if: a pact forbids attacking them, or the rival's strength ≥ yours (include bonuses that trigger when you attack them; exclude pact bonuses that end if you attack).
 3. If you and rival have a pact that ends on attack, remove it now.
 4. Defense: rival may play military bonus cards (add printed DEFENSE value, top half; cards then discarded) and/or discard any other military cards face down for +1 strength each. Total cards played+discarded ≤ defender's military action total. NO unit sacrificing by either side (2015 change) [RB p.24].
 5. If defender's total ≥ attacker's strength: aggression fails, discard it, no effect (ties favor the defender; only the attacker can win an aggression) [FAQ p.16].
@@ -338,11 +338,8 @@ Resignation mid-game can convert a 4p game to 3p/2p: sweep by remaining player c
 *Migrated from `docs/OPEN_QUESTIONS.md` on 2026-07-30, which was deleted in the
 documentation consolidation.  Every item there was RESOLVED; what is preserved
 here is the **sourcing and the reasoning**, because that is what stops the same
-questions being reopened.  `data/validate_cards.py` used to be the standing
-regression check for any edit to the card data; it has since been ported into
-`rust/src/card_table.rs`'s test module (seven tests, e.g.
-`the_military_decks_are_the_sizes_the_component_list_prints`) and the Python
-file deleted — `cargo test --profile difftest` is the regression check now.*
+questions being reopened.  `data/validate_cards.py` is the standing regression
+check for any edit to the card data.*
 
 ### Card data
 1. ~~Action (yellow) card full list + counts per age~~ — RESOLVED 2026-07-26. Roster (14 distinct names, 33 age-variants) confirmed by three independent sources that agree exactly: the digital edition's localization keys (`CivilCards_card_names`: `RICH_LAND_0..2`, `URBAN_GROWTH_0..3`, …), throughtheages.fandom.com "Card List: Digital Edition", and faq_v15.pdf p.12 (which groups all 14 by type). Age A: Rich Land, Engineering Genius, Patriotism, Frugality, Urban Growth, Cultural Heritage, Stock Pile. Age I: + Breakthrough, Reserves; − Cultural Heritage stays, no Stock Pile. Age II: Rich Land, Engineering Genius, Revolutionary Idea, Patriotism, Frugality, Breakthrough, Efficient Upgrade, Wave of Nationalism, Urban Growth, Reserves. Age III: Engineering Genius, Revolutionary Idea, Patriotism, Efficient Upgrade, Endowment for the Arts, Military Build-Up, Urban Growth, Reserves. Exact effects taken from the digital-edition card texts (all values cross-check against an independent 2006-era spreadsheet except Age II Breakthrough, see item 16). Per-age TOTALS are sourced (10/13/13/13, see item 8); the split of those totals between names is now sourced too (item 17, RESOLVED), and Age II Breakthrough is confirmed at 3 science (item 16, RESOLVED).

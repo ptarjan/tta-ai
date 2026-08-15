@@ -1,0 +1,194 @@
+TRUNCFIX -- recovering the 68 TruncatedAfterGameOver games (GAMEDROP.txt)
+=========================================================================
+68/68 of the diagnosed TruncatedAfterGameOver games RECOVERED (measured,
+denominator 68, zero left ungrounded/rejected).
+The original 222 completed games are BYTE-IDENTICAL, before vs after the
+fix, on leafdump's full 63,918-line output (diff -q: zero differences).
+New totals: 290/1011 games verified (was 222/1011), 84,685 decision rows
+(was 63,917) -- +68 games / +20,768 rows, both MEASURED (leafdump run
+below), matching GAMEDROP.txt's HYPOTHESISED ~290 games / ~84,600 rows.
+Working copy: /private/tmp/truncfix (cp -Rc of /private/tmp/gamedrop, which
+was itself a cp -Rc of /private/tmp/leafreg). Never touched /Users/pt/tta-ai
+or any git command under /Users/pt -- confirmed not done, this whole task
+worked exclusively in /private/tmp/truncfix.
+=========================================================================
+
+--------------------------------------------------------------------------
+THE BUG, restated briefly (full trace already in GAMEDROP.txt, not
+re-derived here)
+--------------------------------------------------------------------------
+68/789 skipped journals log BGO's duplicated trailing "End turn" line pair
+BEFORE their own real "End of game" marker instead of after (100% of this
+one bucket, 0 exceptions, confirmed across all 1011 journals). The FIRST
+copy of that duplicated pair genuinely triggers `game::advance_turn`'s
+round-wrap check, which calls `game::finish_game` and flips
+`state.game_over` to `true` -- correctly. `replay_game`'s own
+`if r.state.game_over { break; }` guard then fires on the SECOND duplicate
+line, one line before the file's own "End of game" text is ever reached --
+so `completed` (set ONLY by literally reading that line) stays `false`
+forever, even though the engine's own state is already correctly finished.
+
+--------------------------------------------------------------------------
+WHY THIS WAS NOT A ONE-LINE FIX (confirmed by tracing, not just trusting
+the warning)
+--------------------------------------------------------------------------
+`game::finish_game` calls `events::evaluate_final_events(state)`
+UNCONDITIONALLY as part of flipping `game_over` -- it reads whatever is
+currently sitting in `state.current_events`/`state.future_events` (this
+reconstruction's own FICTIONAL filler piles, per `event_plan`'s own module
+doc: "filled with unused cards of the right age and kind", "nothing ever
+validates them" for final-scoring purposes) and adds the resulting culture
+delta into `p.culture` immediately, once, right there.
+
+For all 222 working games, "End of game" is read BEFORE the real trailing
+End Turn line, so `ground_final_events` (replacing the piles with the real
+cards the log names) runs BEFORE `finish_game`/`evaluate_final_events`
+ever reads them -- correct by construction.
+
+For the 68 broken games, the ORDER IS REVERSED: `finish_game` already ran
+-- and already baked in a WRONG culture delta computed from the fictional
+piles -- one or two lines before the real "End of game" marker is even
+reached. A naive `completed = true` flip at the `game_over`-guard break
+site would recover the COUNT but ship WRONG scores (verification
+theatre, not real verification) -- exactly the failure mode this task said
+not to produce.
+
+--------------------------------------------------------------------------
+THE FIX (rust/src/replay_common.rs, in the `if r.state.game_over { ... }`
+arm just after the "End of game"/"Last turn" handling, replay_game)
+--------------------------------------------------------------------------
+When that guard fires with `completed` still `false`:
+1. Peek at the STILL-UNREAD remainder of the journal (`journal[i..]`, i.e.
+   this line onward -- proven never more than 1-2 lines away, GAMEDROP.txt)
+   for the real "End of game" line. Not found -> leave `completed` false
+   and reject, exactly as before (a genuinely different truncation, e.g. a
+   resignation, is NOT waved through).
+2. If found: recompute `events::final_event_awards` off the CURRENT
+   (still-fictional) piles -- the exact wrong award `finish_game` already
+   applied, since nothing else has touched the piles or any player's
+   culture in between -- and subtract it back out of `p.culture`.
+3. Ground the piles for real (`ground_final_events`, the SAME function the
+   working 222's own branch already calls) off the real marker's text.
+4. Re-run `events::evaluate_final_events` -- the SAME function
+   `finish_game` itself calls -- now against the correctly grounded piles.
+5. Only THEN set `completed = true`.
+
+This is gated on `!completed`, which is ONLY ever false before "End of
+game" has actually been read -- so for all 222 already-working games this
+whole block is dead code (they always have `completed == true` by the time
+this guard could fire), which is WHY the 222 are provably, not just
+measuredly, unperturbed: the new code path is unreachable for them.
+Nothing in game.rs, events.rs, or any file outside replay_common.rs was
+touched -- the fix and its correction machinery live strictly in the
+replayer, same file as the pre-existing "End of game" grounding branch.
+
+--------------------------------------------------------------------------
+VERIFICATION 1 -- the 222 must still be byte-identical (MEASURED, not
+just "should be" from the reasoning above)
+--------------------------------------------------------------------------
+Method: built `leafdump` TWICE from the exact same corpus/index/journals --
+once with `rust/src/replay_common.rs` stashed back to its pre-fix state
+(`git stash push -- rust/src/replay_common.rs`), once with the fix
+restored -- and diffed.
+  before-fix leafdump:  222 games, 63,917 rows -> /tmp/leafdump_before.tsv
+  after-fix  leafdump:  290 games, 84,685 rows -> /tmp/leafdump_final.tsv
+  after-fix rows whose game_id is one of the 222 before-fix ids, extracted
+  in after-fix's own row order -> /tmp/final_subset.tsv (63,917 rows)
+  diff -q /tmp/leafdump_before.tsv /tmp/final_subset.tsv
+    -> IDENTICAL, zero differences (both header and all 63,917 data rows,
+       byte for byte, including row order).
+Also ran the FULL `cargo test --profile difftest --lib` suite (1324 tests,
+includes `bots::weighted::eval`'s own real-corpus identity test that walks
+`/tmp/bgo-journals/journals` via this same `replay_game`): 1324 passed, 0
+failed, 0 filtered differently -- no other test regressed.
+
+--------------------------------------------------------------------------
+VERIFICATION 2 -- the 68 must be genuinely grounded, not waved through
+(MEASURED)
+--------------------------------------------------------------------------
+`replaystats` (the same binary GAMEDROP.txt extended) re-run after the fix:
+  1011 games sampled, 290 completed to state.game_over (was 222).
+  The "TruncatedAfterGameOver" bucket that GAMEDROP.txt added is GONE from
+  the histogram entirely -- 0/68 fell through ungrounded, 68/68 recovered.
+  290/290 completed games actually flipped `state.game_over` (0 reached
+  "End of game" but hit a mismatch afterward).
+  262/290 completed games' engine_scores match index.tsv's own recorded
+  results exactly (was 202/222 pre-fix) -- the pre-existing ~9% exact-score
+  miss rate (already documented in docs/REPLAY.md's "Final scores" section,
+  unrelated to this bug: separate small culture-drift mechanisms already
+  tracked there) persists proportionally into the 68 recovered games (60/68
+  exact, 8/68 off by the same kind of small drift) rather than concealing
+  a NEW problem -- consistent with "genuinely verifies", not cause for
+  alarm on its own, and not something this pass's narrow fix should (or
+  safely could) also fix.
+
+--------------------------------------------------------------------------
+LEAFDUMP -- final totals (MEASURED, `rust/src/bin/leafdump.rs`, command
+below, this exact checkout)
+--------------------------------------------------------------------------
+  cd rust && export PATH="$HOME/.cargo/bin:$PATH"
+  cargo build --profile difftest --bin leafdump
+  ./target/difftest/leafdump ../sources/bgo/index.tsv /tmp/bgo-journals/journals \
+      > leaf_dataset.tsv 2> leaf_dataset_report.txt
+
+  BEFORE (baseline, pre-fix):  222 games verified, 63,917 decision rows
+                                (193 2p / 23 3p / 6 4p)
+  AFTER  (this fix):           290 games verified, 84,685 decision rows
+                                (245 2p / 34 3p / 11 4p)
+  Delta:                       +68 games (+30.6%), +20,768 rows (+32.5%)
+  (dataset TSVs deliberately NOT committed, per this project's "don't
+  commit datasets" rule -- same discipline GAMEDROP.txt/LEAFREG.txt used.)
+
+--------------------------------------------------------------------------
+TEST -- added inside rust/src/replay_common.rs's own `#[cfg(test)] mod
+tests` block
+--------------------------------------------------------------------------
+fn replay_game_completes_a_journal_whose_duplicated_end_turn_pair_is_logged_before_its_own_end_of_game_marker
+
+Reads real game 7522663 (2p) from `/tmp/bgo-journals/journals/7522663.tsv`
+via `sources/bgo/index.tsv` + `crate::corpus::parse_index` (same pattern
+`bots::weighted::eval`'s own real-corpus test already uses; skips rather
+than panics if the journals dir isn't extracted on a given machine, same
+discipline). Asserts the fixture still exhibits the quirk (End of game
+lineno > last End turn lineno) before trusting the rest of the assertions,
+then calls `replay_game` directly and asserts `mismatch.is_none()`,
+`completed == true`, `engine_scores.is_some()`.
+
+RED/GREEN, done explicitly this pass:
+  GREEN (fix in place): `cargo test --profile difftest --lib
+    replay_common::tests::replay_game_completes_a_journal_whose_duplicated_end_turn_pair_is_logged_before_its_own_end_of_game_marker`
+    -> 1 passed.
+  RED (fix reverted): temporarily changed `if !completed {` to
+    `if false && !completed {` in the recovery block (the ONLY change,
+    test left untouched) and re-ran the exact same test command ->
+    FAILED: "game 7522663 has a real End of game marker after its
+    duplicated End turn pair -- must complete, not be discarded"
+    (src/replay_common.rs:7233, panic message captured verbatim above).
+  Restored `if !completed {` immediately after, re-ran GREEN again, then
+  ran the FULL `cargo test --profile difftest --lib` suite once more:
+  1324 passed, 0 failed.
+
+--------------------------------------------------------------------------
+LEGALITY / SCOPE CHECK
+--------------------------------------------------------------------------
+git diff --stat -- rust/src/replay_common.rs: 1 file changed, 123
+insertions(+), 0 deletions -- the fix (the peek/undo/reground/redo block)
+plus the one new test, both inside replay_common.rs, the replayer. Nothing
+touched in game.rs, events.rs, or anywhere under bots/ -- grep confirms
+this diff never adds a new caller of anything in bots/, and the hand-
+reconstruction machinery (ground_final_events, final_event_awards
+undo/redo) stays exactly where the pre-existing "End of game" branch's own
+grounding already lived. /private/tmp/bgoholdout was never read, listed,
+or referenced (grepped this task's own diff and shell history for
+"bgoholdout": zero matches). sources/bgo/index.tsv was read-only
+throughout (parse_index, no writes). No dataset (leafdump*.tsv,
+replaystats output) was committed -- all left in /tmp.
+
+--------------------------------------------------------------------------
+COMMIT
+--------------------------------------------------------------------------
+Committed by pathspec (rust/src/replay_common.rs only), grepped for
+conflict markers first (none), `git -c commit.gpgsign=false commit -F
+<msgfile> -- rust/src/replay_common.rs`. Exhaustive match / Result<_,
+String> / no global mutable state conventions preserved -- no new match
+arms, no new error type, no new statics added by this change.

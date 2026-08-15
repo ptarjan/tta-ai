@@ -1,0 +1,27 @@
+## Source: 3ec60ad9-6768-4061-930f-de764c271303.jsonl, mtime Aug 10 06:44
+## 44fef513-bf8a-45db-8942-38b354a38957.jsonl, mtime Jul 29 02:20
+## 4710bb45-2602-448f-996a-702f850b57d9.jsonl, mtime Aug 5 08:41
+## c34378e4-cfd6-42ee-855d-9cd86bec2b02.jsonl, mtime Aug 2 16:53
+## 314c585d-0322-44ae-9738-d7294e69e8dc.jsonl, mtime Jul 31 09:10
+## Measurement: NONE FOUND
+## Data:
+Searched all 5 assigned files for tta-ai / Through the Ages AI content and measurement
+keywords (n_score_checked, n_score_exact, exact match, score_check; IllegalMove,
+StuckPending, ParserGap, UnrecoverableHiddenInfo, EventPlanInfeasible; census;
+win rate, gauntlet; diverg, mismatch, failing game) plus "tta-ai"/"through the ages"
+and per-message cwd values.
+
+Result: none of the 5 files relate to the tta-ai project. cwd is never
+/Users/pt/tta-ai in any of them. The few incidental "tta-ai" string hits were a
+crontab listing (proxy_watch.sh cron path) and a plain `ls` directory listing
+(folder name only) — not measurement content. All "mismatch"/"diverg" keyword
+hits were false positives from unrelated skill-listing metadata.
+
+Actual topics of these 5 files: Ingglish SEO/sitemap work (3ec60ad9, 44fef513),
+Plex/Tautulli/Whisparr media-server infra (44fef513), discord-claude bridge/cron
+administration (4710bb45, c34378e4), patio-timelapse (c34378e4), and
+nerdiversary/ptarjan.github.io (314c585d).
+
+No qualifying measurement data exists in this batch.
+
+---

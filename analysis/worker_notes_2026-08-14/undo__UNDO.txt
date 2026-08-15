@@ -1,0 +1,209 @@
+UNDO worker -- UnrecoverableHiddenInfo: unpaired BGO client-side undo
+2026-08-14
+
+TASK
+Bucket: UnrecoverableHiddenInfo("unpaired BGO client-side undo (\"puts X back
+in the row\" with no matching preceding take)") -- rust/src/replay_common.rs
+line ~8497-8499, raised by prescan_putback_skips's PutBack arm when it finds
+no open TakeCard to pair a PutBack with. 17 games hit this before the fix.
+
+CLASSIFICATION CONFIRMED
+This is a replayer/parser bug, not an engine rules bug, as the standing rule
+predicts. All 17 cases are prescan_putback_skips getting the pairing wrong
+(or genuinely having nothing to pair), never a real engine rejection.
+
+SETUP
+cp -Rc /private/tmp/base0815 /private/tmp/undo
+cd /private/tmp/undo/rust
+cargo build --profile difftest --bin replaystats
+
+PRECEDENT READ FIRST (commit 5ed0f20, same file, landed earlier the same day)
+"Pair a PutBack with the take it actually refunds, not the latest one" --
+fixed prescan_putback_skips's PutBack arm to match by refund amount instead
+of blindly popping "most recent," because a multi-copy action card (count
+other than [1,1,1], e.g. Frugality/Reserves at [2,2,2]) can have TWO open
+takes for the same actor at once. That fix left the OTHER arm of the same
+function untouched -- the one that pops an open take when the actor commits
+the card some other way (Build/Play/Develop/Elect/...). This turned out to
+have the exact same shape of bug.
+
+THE BUCKET SPLIT (before any fix; 17 games, quoted journal lines)
+
+GROUP A -- 12 games, the retain-all bug (FIXED)
+  Reserves (count [2,2,2]/[2,2,2]/[3,3,3] by age): 7522613, 7523030,
+    7521858, 7522189, 7522975, 7523164, 7522782, 7523147 (8 games)
+  Frugality (count [2,2,2]): 7523397, 7522301 (2 games)
+  Engineering Genius (count [1,2,2]... multi-copy in later ages): 7521158
+  Revolutionary Idea (multi-copy): 7521855
+
+  Shared symptom: actor has TWO open takes of the same-named multi-copy
+  card (one carried over from an earlier turn, one just taken this turn),
+  then a Play/Build/etc. line commits ONE of them. prescan_putback_skips's
+  non-PutBack arm did:
+      stack.retain(|&(_, a, _)| a != actor);
+  which drops EVERY open entry for that actor on that card, not just the
+  one the commit line actually resolved. With both entries wiped, the
+  later legitimate PutBack finds an EMPTY stack -> "unpaired," not merely
+  a wrong pairing (which is what the precedent's PutBack-side bug produced;
+  this one is strictly worse because it discards the evidence outright).
+
+  Representative quote, game 7522613 (rust/src/replay_common.rs's new test
+  mirrors this exactly):
+    line 177 (round 6): Green takes Reserves in hand Green uses 2 civil action
+    line 216 (round 7): Green takes Reserves in hand Green uses 1 civil action
+    line 217 (round 7): Green plays Reserves Green produces 2 resources
+    line 219 (round 7): Green puts Reserves back in the row Green gets 1 civil action
+  The refund (1 CA) is direct evidence the round-7 take (also 1 CA) is what
+  got put back, so the "plays" line at 217 must have consumed the round-6
+  take (2 CA) instead. retain-all wiped both, so line 219 found nothing.
+
+  FIX (rust/src/replay_common.rs, prescan_putback_skips, the non-PutBack
+  match arm): pop only the OLDEST open entry for that actor (FIFO -- the
+  first pushed, since TakeCard pushes are already in chronological order),
+  not every entry:
+      if let Some(pos) = stack.iter().position(|&(_, a, _)| a == actor) {
+          stack.remove(pos);
+      }
+  This is a no-op change for the overwhelmingly common single-open-entry
+  case (removing the one entry either way), and for tied-cost pairs (where
+  it doesn't matter mechanically which of two equal-cost takes is "the one"
+  committed) -- it only changes behaviour when costs differ, which is
+  exactly the case that was broken. FIFO order was picked because it is the
+  only choice consistent with the observed refund evidence in 7522613 (LIFO
+  would have left the wrong-cost entry open and either mis-paired the
+  putback via the existing cost-match/fallback logic, or still failed to
+  pair it).
+
+  Two tests added (both inside `#[cfg(test)] mod tests` in
+  rust/src/replay_common.rs, confirmed RED by reverting the fix and
+  re-running):
+    prescan_putback_skips_lets_a_commit_consume_only_the_oldest_open_take_not_every_open_take
+      -- reproduces game 7522613's exact 4 lines; asserts the round-7 take
+      and the putback pair, and the round-6 take stays a real applied move.
+    prescan_putback_skips_still_drops_a_lone_take_on_commit
+      -- confirms the single-open-entry case still degrades to "nothing
+      left to pair," i.e. no regression on the common case.
+
+GROUP B -- 5 games, NOT fixed, different and likely undecidable
+  7523665 line 72:  Orange puts Taj Mahal back in the row Orange gets 2 civil action
+  7522172 line 189: Purple puts Maximillien Robespierre back in the row Purple gets 3 civil action
+  7521739 line 506: Purple puts Architecture back in the row Purple gets 1 civil action
+  7522388 line 132: Purple puts Johannes Sebastian Bach back in the row Purple gets 1 civil action
+  7522396 line 91:  Orange puts Rich Land back in the row Orange gets 1 civil action
+
+  In every one of these, grepping the ENTIRE game journal (whole file, any
+  line) for that exact actor + card name turns up NO preceding TakeCard at
+  all -- this is not a "wrong take got matched" bug, there is genuinely
+  nothing open to pair with, by any pairing rule. Four of the five
+  (Architecture, Robespierre, Bach, Taj Mahal) show the SAME odd shape: the
+  PutBack line and a TakeCard of the identical card, by the identical actor,
+  for the identical civil-action amount, land at the SAME one-second-resolution
+  timestamp, PutBack first:
+    506: ...11:51:52  Purple puts Architecture back in the row Purple gets 1 civil action
+    507: ...11:51:52  Purple takes Architecture in hand Purple uses 1 civil action
+    189: ...13:10:55  Purple puts Maximillien Robespierre back in the row Purple gets 3 civil action
+    190: ...13:10:55  Purple takes Maximillien Robespierre in hand Purple uses 3 civil action
+    132: ...16:37:27  Purple puts Johannes Sebastian Bach back in the row Purple gets 1 civil action
+    133: ...16:37:27  Purple takes Johannes Sebastian Bach in hand Purple uses 1 civil action
+    72:  ...12:30:41  Orange puts Taj Mahal back in the row Orange gets 2 civil action
+    73:  ...12:30:41  Orange takes Taj Mahal in hand Orange uses 2 civil action
+  This looks like a BGO client/journal artifact (two UI actions landing on
+  the same one-second timestamp, possibly logged in the "wrong" order
+  relative to true causality) rather than a parseable rule. The fifth,
+  7522396, is different again: ONE real take followed by TWO consecutive
+  PutBack lines for the same card and cost:
+    89: Orange takes Rich Land in hand Orange uses 1 civil action
+    90: Orange puts Rich Land back in the row Orange gets 1 civil action
+    91: Orange puts Rich Land back in the row Orange gets 1 civil action  <- unpaired
+    92: Orange takes Rich Land in hand Orange uses 1 civil action
+  -- looks like a duplicated client-side log entry for the same undo click.
+  I did not find a principled pairing rule for either shape and did not
+  invent one; per the standing instructions this is an honest "undecidable"
+  verdict, not a bug I'm claiming to have root-caused. Left completely alone
+  -- no code touched for these 5.
+
+  I also checked (and ruled out) whether Group B could be the SAME
+  cross-age card-identity issue I initially suspected for some Group A
+  members (see below): Architecture/Robespierre/Bach/Taj Mahal are all
+  single-Card-table-entry names (leaders and the one non-age-suffixed
+  Architecture/Taj Mahal entries), so there is no other age-variant CardId
+  they could be silently misresolving to. Ruled out.
+
+A CROSS-AGE RESOLUTION ISSUE FOUND BUT NOT FIXED (out of scope, flagged for
+whoever picks this up next)
+  While tracing Group A, two of the eight Reserves games (7522975 line 249,
+  7523147 line 477) turned out to complete successfully after the FIFO fix
+  even though my manual trace flagged a possible SECOND issue: the "plays
+  Reserves ... produces N resources/food" line's printed N sometimes matches
+  a DIFFERENT age's table amount than the game's current age at that line
+  (Reserves (I)/(II)/(III) print GainFoodOrResources 2/3/4 respectively --
+  e.g. 7522975 line 247 is "III 14" context but prints "produces 3
+  resources," which is Reserves (II)'s amount, not (III)'s 4). This suggests
+  classify()'s bare-name-to-CardId resolution uses the CURRENT game age
+  (Line.age) rather than tracking which specific age-variant copy is
+  actually in the actor's hand, which could misattribute a play/putback to
+  the wrong CardId when a card taken in one age is used after the age
+  advances. In practice this did NOT block completion for either game (both
+  are in the WINS list below), so I did not chase or fix it -- flagging only
+  because the FIFO fix's correctness for these two games might be
+  coincidental (equal-refund/no-conflict luck) rather than because the
+  cross-age concern is actually a non-issue. Left alone; not in scope for
+  this bucket's mandate (it would be a different, likely much larger,
+  card_index/classify change).
+
+VERDICT
+Clean partial fix: 12/17 games' unpaired-undo bug is real and now fixed;
+8 of those 12 go on to complete (all 8 exactly matching). The other 4
+(7522613, 7523030, 7522975, 7523397) get past this specific stop and run
+further but hit unrelated, already-tracked mismatch buckets further into
+the game (IllegalMove: Build/Aggression/Upgrade, same shapes the sweep's
+own stop-reason histogram already ranks at the top) -- consistent with the
+precedent commit's own experience ("this game runs further ... but still
+stops later on an unrelated ... choice"). The remaining 5 games (Group B)
+are a genuinely different, undecided problem -- not fixed, not guessed at.
+
+THE BAR (run from /private/tmp/undo/rust)
+
+cargo test --profile fasttest --lib
+  -> 1424 passed; 0 failed (baseline 1422; +2 new tests)
+
+cargo clippy --all-targets -- -D warnings
+  -> clean, 0 warnings
+
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/undo_after.txt
+grep -E '^# replaystats|actually flipped' /tmp/undo_after.txt:
+  "# replaystats: 1011 games sampled, 706 completed to state.game_over"
+  "706/706 completed games actually flipped state.game_over (the other 0
+   reached the journal's own "End of game" marker but hit a mismatch
+   afterward, so game::scores was never computed for them); 679/706 of
+   those matched index.tsv exactly (sorted per-game score-list compare)."
+  (baseline: 698 completed / 671 exact)
+
+comm -23 /private/tmp/guard_ids_698.txt /tmp/undo_ids.txt   (REGRESSIONS)
+  -> EMPTY (verbatim, no output)
+
+comm -13 /private/tmp/guard_ids_698.txt /tmp/undo_ids.txt   (WINS)
+  -> 7521158
+     7521855
+     7521858
+     7522189
+     7522301
+     7522782
+     7523147
+     7523164
+  (exactly the 8 of the 12 Group A games that go all the way to completion;
+  all 8 land in the 679 exact-match count too, i.e. +8 completed = +8 exact,
+  no new score-divergent completions)
+
+REPLAY_DUMP_BUCKET="unpaired" bucket size: 17 -> 5 (exactly Group B, no
+other games newly entered or left this bucket).
+
+FILES
+  Fix + tests: rust/src/replay_common.rs, prescan_putback_skips (the
+    non-PutBack commit match arm), committed in /private/tmp/undo as
+    7ba82df "Let a commit consume only the oldest open take, not every
+    open take" (parent e642c90).
+  Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/undo.patch
+  This file: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/undo__UNDO.txt

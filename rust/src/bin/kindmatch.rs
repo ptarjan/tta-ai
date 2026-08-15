@@ -108,7 +108,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use tta::bots::greedy::{build_bots, Bot, BotKind, Seat};
+use tta::bots::greedy::{build_bots, Bot, BotKind, Search, Seat};
 use tta::bots::neural::net::ValueNet;
 use tta::bots::neural::policy_order::PolicyOrder;
 use tta::bots::neural::policy_train::load_policy_checkpoint;
@@ -360,37 +360,28 @@ fn play_one(args: &Args, index: usize, policy_net: Option<&Arc<ValueNet>>) -> f6
         .wrapping_mul(7919)
         .wrapping_add(17);
 
+    // `--a-search`/`--b-search`: give the flagged side `Search::
+    // HumanShortlistBeam` right in its `Seat`, so `build_bots` below
+    // constructs `Bot::human_plan` itself -- no more hand-built overwrite
+    // after the fact. `eval_weights` is the OTHER side's own weight vector,
+    // since that is the one real gameplay evaluator already loaded for this
+    // match (this file's module doc comment, "`--a-search`/`--b-search`").
     let seats: Vec<Seat> = (0..players)
         .map(|i| {
-            if i == seat {
-                Seat { kind: args.a, weights: args.a_weights }
+            let is_a = i == seat;
+            let (kind, weights) =
+                if is_a { (args.a, args.a_weights) } else { (args.b, args.b_weights) };
+            let search_on = if is_a { args.a_search } else { args.b_search };
+            let search = if search_on {
+                let eval_weights = if is_a { args.b_weights } else { args.a_weights };
+                Search::HumanShortlistBeam { eval_weights }
             } else {
-                Seat { kind: args.b, weights: args.b_weights }
-            }
+                Search::None
+            };
+            Seat { kind, weights, search }
         })
         .collect();
     let mut bots = build_bots(&seats, seed as i64);
-    // `--a-search`/`--b-search`: swap the flagged seat's plain, no-lookahead
-    // `Bot::Human` for `Bot::human_plan` -- built by hand, not through
-    // `build_bots`, since that variant needs a SECOND vector `Seat` has no
-    // slot for (this file's module doc comment, "`--a-search`/`--b-search`").
-    // `build_bots` above is still called first and unconditionally, so every
-    // OTHER seat's construction and seeding is byte-for-byte what it always
-    // was; only the flagged index is overwritten afterward.
-    for (i, s) in seats.iter().enumerate() {
-        let search = if i == seat { args.a_search } else { args.b_search };
-        if !search {
-            continue;
-        }
-        // The evaluator `plan::pick`'s beam scores every node with: the
-        // OTHER side's own weight vector, since that is the one real
-        // gameplay evaluator already loaded for this match (see this file's
-        // module doc comment).
-        let eval_weights = if i == seat { args.b_weights } else { args.a_weights };
-        let human_weights = human_policy::vector_from_weights(&s.weights);
-        let player_seed = (seed as i64).wrapping_mul(131).wrapping_add(i as i64);
-        bots[i] = Bot::human_plan(eval_weights, human_weights, player_seed);
-    }
     // `--a-policy`/`--b-policy`: swap the flagged seat's plain `Bot::Plan`
     // for `Bot::plan_with_policy` -- same `--a-search`/`--b-search` shape
     // just above (overwrite after the unconditional `build_bots`), but
@@ -755,7 +746,7 @@ mod tests {
         set_max_nodes(&mut plan_bot, 400);
         match plan_bot {
             Bot::Plan { cfg, .. } => assert_eq!(cfg.max_nodes, 400),
-            _ => panic!("kind must not change"),
+            Bot::Random(_) | Bot::Greedy(_) | Bot::Weighted(_) | Bot::Quiescent { .. } | Bot::Book(_) | Bot::Variant(_) | Bot::Human(_) | Bot::HumanPlan { .. } | Bot::PlanWithPolicy { .. } => panic!("kind must not change"),
         }
 
         let mut random_bot = Bot::Random(tta::bots::greedy::RandomBot::new(1));

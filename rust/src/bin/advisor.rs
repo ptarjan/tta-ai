@@ -32,7 +32,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use tta::advisor::advisor::{self, Advisor, Candidate, SearchConfig, SearchMode};
+use tta::advisor::session::{self as advisor, Advisor, Candidate, SearchConfig, SearchMode};
 use tta::advisor::state_io;
 use tta::bots::plan;
 use tta::game;
@@ -85,7 +85,7 @@ usage: advisor [options]
                    root candidates with a human-imitation move-ordering
                    prior, then runs the same beam over the survivors --
                    the one mode measured to beat greedy (68.3%). See
-                   `tta::advisor::advisor::SearchMode`'s doc comment for
+                   `tta::advisor::session::SearchMode`'s doc comment for
                    the full numbers.
   --load PATH     resume from a snapshot file instead of dealing fresh
   --save PATH     one-shot, non-interactive mode instead of the terminal
@@ -389,12 +389,11 @@ impl Console {
         // as over once the engine has actually run it out -- mirrors the
         // same check in Python's `handle_move_input`.
         let turn_settled = self.adv.state().pending.is_empty();
-        if ok && matches!(mv, Move::EndTurn) && turn_settled {
-            self.after_my_turn()?;
-        } else if ok
-            && matches!(mv, Move::Choose { .. })
-            && turn_settled
-            && self.adv.state().current != self.adv.board.me
+        if (ok && matches!(mv, Move::EndTurn) && turn_settled)
+            || (ok
+                && matches!(mv, Move::Choose { .. })
+                && turn_settled
+                && self.adv.state().current != self.adv.board.me)
         {
             self.after_my_turn()?;
         }

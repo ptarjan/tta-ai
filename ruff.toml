@@ -1,0 +1,41 @@
+# Static analysis, wired into tools/gate.sh as the first and cheapest arm.
+#
+# This exists because of one bug (docs/INFORMATION_AUDIT.md 6.3): a line that
+# read `ctx.get("root_row")` inside a method with no `ctx` in scope, wrapped in
+# `except Exception:`.  Every call raised NameError, the except swallowed it,
+# PlanBot played every quiesced opponent decision blind, and all 550 unit tests
+# passed.  `ruff check --select F821` flags that line in 200ms without playing a
+# single game.
+#
+# The rule set is deliberately NARROW: correctness only, no style.  This repo
+# has its own long-standing formatting and ~30k lines of it; turning on E/W/I
+# would produce thousands of findings, and a check nobody can keep at zero is
+# worse than no check (docs/PYPY.md 9.0 on gates that cry wolf).  The bar for
+# adding a rule here is that it can find a *bug*, and that the tree is at zero
+# for it today so the gate is a ratchet rather than a backlog.
+#
+#   F821  undefined name                 <- the bug above
+#   F811  redefinition of unused name    <- a def or import silently shadowed
+#   F632  `is` comparison with a literal <- always a bug
+#   F502-F522, F601-F602, ...            <- the rest of pyflakes' real checks
+#   E9    syntax / IO errors ruff cannot parse past
+#
+# EXCLUDED from the F set, with measured reasons rather than taste:
+#   F401  unused import (34 findings) -- bots/__init__.py re-exports on purpose,
+#         and the rest is dead-import debris worth its own cleanup pass.
+#   F541  f-string with no placeholders (9) -- harmless.
+#   F841  assigned-but-never-used local (10) -- I read all ten.  ZERO are bugs:
+#         they are dead lazy-loads and assignment-chain artifacts
+#         (`db = self.db = _db()`).  Worse, "fixing" three of them means
+#         deleting a CALL -- `_rng_for(state)`, `_load_game()`, `_db()` -- whose
+#         side effects are not obviously nil, so the cleanup is riskier than the
+#         findings are valuable.  A rule with a 0/10 hit rate does not earn a
+#         gate slot; revisit if a real one ever shows up in review.
+# The full list is `ruff check --select F401,F541,F841 .` whenever someone wants
+# to do that cleanup pass.
+target-version = "py311"
+extend-exclude = ["sources", "data", "**/__pycache__"]
+
+[lint]
+select = ["F", "E9"]
+ignore = ["F401", "F541", "F841"]

@@ -352,7 +352,7 @@ impl GameLog {
     fn write(&mut self, rec: Json) -> Json {
         self.records.push(rec.clone());
         if let Some(f) = self.file.as_mut() {
-            let _ = writeln!(f, "{}", rec.to_string());
+            let _ = writeln!(f, "{rec}");
             let _ = f.flush();
         }
         rec
@@ -361,6 +361,12 @@ impl GameLog {
     /// One of *our* decisions. `ranked` is the full candidate list, already
     /// turned into JSON by the caller (`harness::play`'s `Candidate` list),
     /// which keeps this module free of a dependency on `advisor::Candidate`.
+    // Grouping these into a config struct is a real fix but a larger,
+    // cross-cutting refactor (every call site would need updating too) --
+    // out of scope for this lint-gate pass, which must not change behaviour.
+    // The argument list itself is stable and each parameter is unambiguous
+    // at every call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn decision(
         &mut self,
         state_text: &str,

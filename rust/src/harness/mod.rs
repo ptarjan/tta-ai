@@ -25,7 +25,7 @@ pub(crate) mod test_support {
 
     /// A real position, reached by cheap self-play, wrapped in an advisor
     /// [`Board`]. Mirrors `midgame`. Python seeds `WeightedBot(seed=seed)`;
-    /// this port's bot has no rng field to seed (see `advisor::advisor`'s
+    /// this port's bot has no rng field to seed (see `advisor::session`'s
     /// top doc comment on why), so `seed` here only ever reaches the deal.
     pub(crate) fn midgame(num_players: u8, seat: u8, seed: u64, stop: u16) -> Board {
         let bot = WeightedBot::default();
@@ -43,6 +43,6 @@ pub(crate) mod test_support {
             let mv = bot.choose(&st, moves.as_slice());
             apply::apply(&mut st, mv);
         }
-        Board { state: st, me: seat, unknown: Default::default() }
+        Board { state: st, me: seat, unknown: Default::default(), confirmed_events: 0 }
     }
 }

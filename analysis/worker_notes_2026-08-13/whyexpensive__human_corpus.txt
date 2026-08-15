@@ -1,0 +1,235 @@
+Parsed 1011 games from /private/tmp/takecensus/sources/bgo/index.tsv.
+
+Included 1011 of 1011 indexed games (0 excluded).
+
+Parser coverage: 451403 / 451453 lines classified (99.99%).
+
+Top unclassified shapes:
+-      3  <C> annexes Vast Territory
+-      3  <C> cancels Trade Routes Agreement
+-      3  Insufficient task force; Sacrificed Units:; # Warrior; Total force: #; Colonists were unable to settle
+-      2  <C> cancels Open Borders Agreement
+-      2  Game renamed to PLAYER's Game ##BN AF# vs LG#.
+-      2  <C> annexes Developed Territory
+-      2  <C> cancels Military Alliance
+-      2  Game renamed to Gui # - # val (diz #-#) .
+-      2  Insufficient task force; Sacrificed Units:; # Warrior; # Colonization card +#; # Colonization card +#; Colonization bonus: +#; Total force: #; Colonists were un
+-      2  Insufficient task force; Sacrificed Units:; # Knights; # Warrior; Total force: #; Colonists were unable to settle
+-      2  <C> cancels Scientific Cooperation
+-      2  Insufficient task force; Sacrificed Units:; # Swordsmen; Total force: #; Colonists were unable to settle
+-      1  Insufficient task force; Sacrificed Units:; # Warrior; # Colonization card +#; Total force: #; Colonists were unable to settle
+-      1  Insufficient task force; Sacrificed Units:; # Swordsmen; # Swordsmen; # Colonization card +#; Total force: #; Colonists were unable to settle
+-      1  Insufficient task force; Sacrificed Units:; # Warrior; # Military card +#; # Military card +#; Colonization bonus: +#; Total force: #; Colonists were unable to 
+-      1  Game renamed to ManzoLeone - KaiserFranz #-# Game_war_time.
+-      1  <C> annexes Strategic Territory
+-      1  Insufficient task force; Sacrificed Units:; # Warrior; Colonization bonus: +#; Total force: #; Colonists were unable to settle
+-      1  Insufficient task force; Sacrificed Units:; # Knights; # Swordsmen; # Colonization card +#; # Colonization card +#; Total force: #; Colonists were unable to set
+-      1  <C> annexes Inhabited Territory
+
+## Overall (all 1011 games)
+
+### Action rates, overall
+
+| action class | all /game | all /turn |
+|---|---|---|
+| take card from row | 87.470 | 1.8808 |
+| build building | 17.041 | 0.3664 |
+| build unit | 14.868 | 0.3197 |
+| build wonder stage | 15.329 | 0.3296 |
+| increase population | 22.713 | 0.4884 |
+| upgrade unit | 3.939 | 0.0847 |
+| upgrade production (farm/mine) | 18.954 | 0.4075 |
+| develop technology | 28.427 | 0.6112 |
+| elect leader | 9.087 | 0.1954 |
+| change government | 0.729 | 0.0157 |
+| play tactic | 5.382 | 0.1157 |
+| declare war | 0.523 | 0.0113 |
+| win war | 0.509 | 0.0110 |
+| play aggression | 1.718 | 0.0369 |
+| propose pact | 0.646 | 0.0139 |
+| accept pact | 0.599 | 0.0129 |
+| colonize | 3.541 | 0.0761 |
+| discard | 22.865 | 0.4917 |
+| bid | 7.817 | 0.1681 |
+| win auction | 3.541 | 0.0761 |
+| destroy | 2.679 | 0.0576 |
+| disband | 1.275 | 0.0274 |
+| pass | 25.773 | 0.5542 |
+| play event | 17.694 | 0.3805 |
+| play action card | 14.826 | 0.3188 |
+| put card back (take-back upper bound) | 6.863 | 0.1476 |
+| end turn (player-turn denominator) | 46.507 | 1.0000 |
+| Alexander the Great: remove for a yellow token | 0.258 | 0.0056 |
+| Christopher Columbus: remove to colonize a territory | 0.279 | 0.0060 |
+| Frederick Barbarossa: free population increase + build | 0.420 | 0.0090 |
+| J. S. Bach: Temple/Library to Theater | 0.110 | 0.0024 |
+
+### Action rates by player count
+
+| action class | 2p /game | 2p /turn | 3p /game | 3p /turn | 4p /game | 4p /turn |
+|---|---|---|---|---|---|---|
+| take card from row | 74.510 | 1.9708 | 95.406 | 1.7747 | 130.011 | 1.7643 |
+| build building | 12.971 | 0.3431 | 21.594 | 0.4017 | 28.925 | 0.3925 |
+| build unit | 12.211 | 0.3230 | 15.135 | 0.2815 | 24.565 | 0.3334 |
+| build wonder stage | 12.373 | 0.3273 | 17.669 | 0.3287 | 24.656 | 0.3346 |
+| increase population | 17.779 | 0.4702 | 26.248 | 0.4883 | 38.543 | 0.5231 |
+| upgrade unit | 3.061 | 0.0810 | 3.902 | 0.0726 | 7.231 | 0.0981 |
+| upgrade production (farm/mine) | 15.461 | 0.4089 | 21.263 | 0.3955 | 30.296 | 0.4111 |
+| develop technology | 23.666 | 0.6260 | 31.083 | 0.5782 | 44.242 | 0.6004 |
+| elect leader | 7.367 | 0.1949 | 10.820 | 0.2013 | 14.247 | 0.1933 |
+| change government | 0.512 | 0.0135 | 0.910 | 0.0169 | 1.409 | 0.0191 |
+| play tactic | 4.240 | 0.1121 | 5.857 | 0.1090 | 9.290 | 0.1261 |
+| declare war | 0.507 | 0.0134 | 0.481 | 0.0090 | 0.613 | 0.0083 |
+| win war | 0.499 | 0.0132 | 0.474 | 0.0088 | 0.575 | 0.0078 |
+| play aggression | 1.389 | 0.0367 | 1.632 | 0.0303 | 3.005 | 0.0408 |
+| propose pact | 0.000 | 0.0000 | 0.940 | 0.0175 | 2.839 | 0.0385 |
+| accept pact | 0.000 | 0.0000 | 0.865 | 0.0161 | 2.640 | 0.0358 |
+| colonize | 3.014 | 0.0797 | 3.436 | 0.0639 | 5.575 | 0.0757 |
+| discard | 18.264 | 0.4831 | 28.549 | 0.5310 | 35.919 | 0.4875 |
+| bid | 6.431 | 0.1701 | 7.150 | 0.1330 | 13.452 | 0.1825 |
+| win auction | 3.014 | 0.0797 | 3.436 | 0.0639 | 5.575 | 0.0757 |
+| destroy | 2.149 | 0.0568 | 3.105 | 0.0578 | 4.344 | 0.0590 |
+| disband | 0.987 | 0.0261 | 1.571 | 0.0292 | 2.134 | 0.0290 |
+| pass | 19.163 | 0.5069 | 31.098 | 0.5785 | 46.559 | 0.6318 |
+| play event | 14.759 | 0.3904 | 19.293 | 0.3589 | 27.473 | 0.3728 |
+| play action card | 13.415 | 0.3548 | 15.398 | 0.2864 | 19.667 | 0.2669 |
+| put card back (take-back upper bound) | 6.197 | 0.1639 | 6.797 | 0.1264 | 9.387 | 0.1274 |
+| end turn (player-turn denominator) | 37.808 | 1.0000 | 53.759 | 1.0000 | 73.688 | 1.0000 |
+| Alexander the Great: remove for a yellow token | 0.192 | 0.0051 | 0.256 | 0.0048 | 0.505 | 0.0069 |
+| Christopher Columbus: remove to colonize a territory | 0.204 | 0.0054 | 0.391 | 0.0073 | 0.478 | 0.0065 |
+| Frederick Barbarossa: free population increase + build | 0.351 | 0.0093 | 0.173 | 0.0032 | 0.855 | 0.0116 |
+| J. S. Bach: Temple/Library to Theater | 0.072 | 0.0019 | 0.218 | 0.0041 | 0.172 | 0.0023 |
+
+### Action rates by BGO level tier
+
+| action class | Prince /game | Prince /turn | King /game | King /turn | Warlord /game | Warlord /turn | Emperor /game | Emperor /turn |
+|---|---|---|---|---|---|---|---|---|
+| take card from row | 88.679 | 1.8862 | 88.890 | 1.8962 | 84.726 | 1.8471 | 88.116 | 1.8917 |
+| build building | 18.115 | 0.3853 | 17.280 | 0.3686 | 18.012 | 0.3927 | 16.125 | 0.3462 |
+| build unit | 13.985 | 0.2975 | 14.293 | 0.3049 | 13.421 | 0.2926 | 16.108 | 0.3458 |
+| build wonder stage | 15.756 | 0.3351 | 15.555 | 0.3318 | 15.687 | 0.3420 | 14.935 | 0.3206 |
+| increase population | 23.496 | 0.4998 | 21.835 | 0.4658 | 22.591 | 0.4925 | 22.869 | 0.4910 |
+| upgrade unit | 3.824 | 0.0813 | 4.006 | 0.0855 | 2.869 | 0.0625 | 4.528 | 0.0972 |
+| upgrade production (farm/mine) | 19.603 | 0.4170 | 17.762 | 0.3789 | 19.087 | 0.4161 | 19.119 | 0.4104 |
+| develop technology | 28.893 | 0.6145 | 28.951 | 0.6176 | 27.417 | 0.5977 | 28.659 | 0.6153 |
+| elect leader | 9.153 | 0.1947 | 9.165 | 0.1955 | 8.901 | 0.1940 | 9.142 | 0.1963 |
+| change government | 0.687 | 0.0146 | 0.713 | 0.0152 | 0.702 | 0.0153 | 0.761 | 0.0163 |
+| play tactic | 5.137 | 0.1093 | 5.512 | 0.1176 | 4.714 | 0.1028 | 5.767 | 0.1238 |
+| declare war | 0.328 | 0.0070 | 0.518 | 0.0111 | 0.500 | 0.0109 | 0.593 | 0.0127 |
+| win war | 0.313 | 0.0067 | 0.500 | 0.0107 | 0.492 | 0.0107 | 0.578 | 0.0124 |
+| play aggression | 1.756 | 0.0373 | 1.738 | 0.0371 | 1.437 | 0.0313 | 1.853 | 0.0398 |
+| propose pact | 0.695 | 0.0148 | 0.585 | 0.0125 | 0.603 | 0.0131 | 0.677 | 0.0145 |
+| accept pact | 0.664 | 0.0141 | 0.512 | 0.0109 | 0.556 | 0.0121 | 0.636 | 0.0136 |
+| colonize | 3.985 | 0.0848 | 3.470 | 0.0740 | 3.774 | 0.0823 | 3.315 | 0.0712 |
+| discard | 22.359 | 0.4756 | 23.049 | 0.4917 | 23.365 | 0.5094 | 22.672 | 0.4867 |
+| bid | 8.832 | 0.1879 | 6.915 | 0.1475 | 8.405 | 0.1832 | 7.530 | 0.1617 |
+| win auction | 3.985 | 0.0848 | 3.470 | 0.0740 | 3.774 | 0.0823 | 3.315 | 0.0712 |
+| destroy | 2.817 | 0.0599 | 3.104 | 0.0662 | 2.413 | 0.0526 | 2.634 | 0.0565 |
+| disband | 1.069 | 0.0227 | 1.201 | 0.0256 | 1.266 | 0.0276 | 1.364 | 0.0293 |
+| pass | 26.282 | 0.5590 | 26.006 | 0.5548 | 24.865 | 0.5421 | 26.041 | 0.5591 |
+| play event | 18.885 | 0.4017 | 17.823 | 0.3802 | 18.234 | 0.3975 | 17.019 | 0.3654 |
+| play action card | 14.168 | 0.3013 | 15.561 | 0.3319 | 13.770 | 0.3002 | 15.325 | 0.3290 |
+| put card back (take-back upper bound) | 7.382 | 0.1570 | 6.659 | 0.1420 | 7.298 | 0.1591 | 6.552 | 0.1407 |
+| end turn (player-turn denominator) | 47.015 | 1.0000 | 46.878 | 1.0000 | 45.869 | 1.0000 | 46.580 | 1.0000 |
+| Alexander the Great: remove for a yellow token | 0.221 | 0.0047 | 0.268 | 0.0057 | 0.190 | 0.0042 | 0.302 | 0.0065 |
+| Christopher Columbus: remove to colonize a territory | 0.221 | 0.0047 | 0.238 | 0.0051 | 0.242 | 0.0053 | 0.330 | 0.0071 |
+| Frederick Barbarossa: free population increase + build | 0.496 | 0.0106 | 0.463 | 0.0099 | 0.210 | 0.0046 | 0.498 | 0.0107 |
+| J. S. Bach: Temple/Library to Theater | 0.099 | 0.0021 | 0.116 | 0.0025 | 0.202 | 0.0044 | 0.060 | 0.0013 |
+
+### Military summary, per game, by player count
+
+| | 2p (n=692) | 3p (n=133) | 4p (n=186) |
+|---|---|---|---|
+| games with >=1 war declared | 227 (32.8%) | 41 (30.8%) | 68 (36.6%) |
+| games with >=1 aggression played | 441 (63.7%) | 89 (66.9%) | 155 (83.3%) |
+| games with >=1 pact proposed | 0 (0.0%) | 73 (54.9%) | 178 (95.7%) |
+| wars declared /game | 0.507 | 0.481 | 0.613 |
+| aggressions played /game | 1.389 | 1.632 | 3.005 |
+| tactics played /game | 4.240 | 5.857 | 9.290 |
+| pacts proposed /game | 0.000 | 0.940 | 2.839 |
+| pacts accepted /game | 0.000 | 0.865 | 2.640 |
+
+### Game length and scoring, by player count
+
+| | 2p | 3p | 4p |
+|---|---|---|---|
+| mean rounds | 19.43 | 18.59 | 19.17 |
+| reached Age IV | 692/692 (100.0%) | 133/133 (100.0%) | 186/186 (100.0%) |
+| mean final score | 159.5 | 176.5 | 195.1 |
+| max final score seen | 409 | 372 | 428 |
+
+### Cards taken from the row (frequency)
+
+Total: 88432, distinct names: 102
+
+| rank | name | count | % of total |
+|---|---|---|---|
+| 1 | Reserves | 5109 | 5.78% |
+| 2 | Urban Growth | 4565 | 5.16% |
+| 3 | Engineering Genius | 3400 | 3.84% |
+| 4 | Breakthrough | 3216 | 3.64% |
+| 5 | Rich Land | 2943 | 3.33% |
+| 6 | Efficient Upgrade | 2860 | 3.23% |
+| 7 | Revolutionary Idea | 2634 | 2.98% |
+| 8 | Frugality | 2255 | 2.55% |
+| 9 | Iron | 1946 | 2.20% |
+| 10 | Patriotism | 1822 | 2.06% |
+| 11 | Irrigation | 1744 | 1.97% |
+| 12 | Cannon | 1632 | 1.85% |
+| 13 | Alchemy | 1590 | 1.80% |
+| 14 | Knights | 1581 | 1.79% |
+| 15 | Air Forces | 1551 | 1.75% |
+| 16 | Computers | 1485 | 1.68% |
+| 17 | Swordsmen | 1299 | 1.47% |
+| 18 | Selective Breeding | 1097 | 1.24% |
+| 19 | Constitutional Monarchy | 1078 | 1.22% |
+| 20 | Scientific Method | 1027 | 1.16% |
+| 21 | Military Theory | 979 | 1.11% |
+| 22 | Riflemen | 960 | 1.09% |
+| 23 | Organized Religion | 955 | 1.08% |
+| 24 | Movies | 946 | 1.07% |
+| 25 | Democracy | 943 | 1.07% |
+
+Long tail (rank 26+, 77 names): 38815 (43.89%)
+
+### Cards played/built/discovered (frequency)
+
+Total: 113351, distinct names: 144
+
+| rank | name | count | % of total |
+|---|---|---|---|
+| 1 | Knights | 4787 | 4.22% |
+| 2 | Warriors | 4626 | 4.08% |
+| 3 | Reserves | 4158 | 3.67% |
+| 4 | Cannon | 3542 | 3.12% |
+| 5 | Religion | 3096 | 2.73% |
+| 6 | Bronze | 2945 | 2.60% |
+| 7 | Engineering Genius | 2809 | 2.48% |
+| 8 | Swordsmen | 2647 | 2.34% |
+| 9 | Philosophy | 2226 | 1.96% |
+| 10 | Revolutionary Idea | 2123 | 1.87% |
+| 11 | Iron | 2042 | 1.80% |
+| 12 | Pyramids | 1994 | 1.76% |
+| 13 | Frugality | 1969 | 1.74% |
+| 14 | Alchemy | 1944 | 1.72% |
+| 15 | Air Forces | 1782 | 1.57% |
+| 16 | Irrigation | 1766 | 1.56% |
+| 17 | Library of Alexandria | 1738 | 1.53% |
+| 18 | Cavalrymen | 1686 | 1.49% |
+| 19 | Computers | 1570 | 1.39% |
+| 20 | Journalism | 1434 | 1.27% |
+| 21 | Drama | 1426 | 1.26% |
+| 22 | Printing Press | 1415 | 1.25% |
+| 23 | Patriotism | 1381 | 1.22% |
+| 24 | Opera | 1368 | 1.21% |
+| 25 | Hanging Gardens | 1265 | 1.12% |
+
+Long tail (rank 26+, 119 names): 55612 (49.06%)
+
+### Take cost, 2-player games only (civil-action price the human actually paid)
+
+Takes total: 51561 (1384 player-games, 37.26 takes/player-game)
+- 1 civil action:  34895 (67.7%)
+- 2 civil actions: 11821 (22.9%)
+- 3 civil actions: 3110 (6.0%)
+- other (0, or >3 -- wonder surcharge / Hammurabi / Taj Mahal discount): 1735 (3.4%)

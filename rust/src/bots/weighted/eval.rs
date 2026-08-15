@@ -101,7 +101,7 @@ use super::features::{self, Features};
 use super::horizon;
 use super::rivals::{self, RivalContext};
 use super::row;
-use super::weights::{Weights, WeightKey, PHASE_KEYS, RETIRED_KEYS};
+use super::weights::{self, Weights, WeightKey, PHASE_KEYS, RETIRED_KEYS};
 
 // ------------------------------------------------------------- evaluation
 
@@ -154,7 +154,27 @@ pub fn evaluate(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalConte
     // writes reads back `0.0` from [`Features::get`] (its documented zero
     // default), so its contribution here is `wk * 0.0 == 0.0` regardless of
     // `wk` -- the same nothing Python's dict simply never iterates over.
+    //
+    // `StrengthRel` is deliberately SKIPPED here (see the STRUCTURAL FIX
+    // note on the phase-blended body below) -- it is priced entirely in
+    // that loop instead of being both an always-on base term here AND a
+    // phase-blended nudge there.
     for &k in WeightKey::ALL {
+        // All four `PHASE_KEYS` are skipped here, for two different reasons
+        // that both land on "don't double-count":
+        //   * `Workers`/`TechLevels`/`HandValue` (T1-A/C/D, PHASECUT.txt,
+        //     2026-08-13) no longer carry a separate always-on base term --
+        //     `k` itself now IS the early-extreme ("start") coefficient of
+        //     the collapsed 2-parameter blend, added below (scaled by
+        //     `1 - lateness`) instead of unconditionally here.
+        //   * `StrengthRel` keeps its OLD 3-parameter shape (a parallel fix,
+        //     commit 578ee9e "earlymil", further round-gates its blend --
+        //     see the STRUCTURAL FIX note below) and is priced entirely in
+        //     the dedicated block below (its own base term included there),
+        //     not here, so it does not end up added twice either.
+        if PHASE_KEYS.contains(&k) {
+            continue;
+        }
         let wk = w.get(k);
         if wk == 0.0 {
             continue;
@@ -164,26 +184,142 @@ pub fn evaluate(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalConte
         total += wk * v * scale;
     }
 
-    // The phase-blended body: `w[k] + (1 - L) * w[k_early] + L * w[k_late]`,
-    // for the four [`PHASE_KEYS`]. The phase pair carries the same rate
-    // horizon as the base term -- see [`super::rivals::feature_marginal`],
-    // which sums exactly these three for a card pricer.
+    // The phase-blended body, for the four [`PHASE_KEYS`]. Two different
+    // formulas live here now, one per group:
+    //
+    //   * `Workers`/`TechLevels`/`HandValue` (T1-A/C/D collapse, PHASECUT.txt,
+    //     2026-08-13): the OLD 3-parameter `w[k] + (1-L)*w[k_early] +
+    //     L*w[k_late]` had only 2 real degrees of freedom for 3 raw numbers
+    //     -- a proven, exact, data-independent dead direction (moving
+    //     `(base,early,late) += t*(1,-1,-1)` changed nothing this ever
+    //     computed, at any lateness, on any board). Collapsed to the
+    //     equivalent, non-redundant `start*(1-L) + end*L`, where
+    //     `start = w.get(k)` (the base key, repurposed to hold the L=0
+    //     value) and `end = w.get(k.late())` (repurposed to hold the L=1
+    //     value). The phase pair carries the same rate horizon as the base
+    //     term -- see [`super::rivals::feature_marginal`], which sums
+    //     exactly these three for a card pricer.
+    //
+    //   * `StrengthRel` -- deliberately EXCLUDED from the collapse above
+    //     (PHASECUT.txt's scope note: a parallel fix, STRUCTURAL FIX below,
+    //     makes this ONE triple genuinely identifiable via a round-gated
+    //     blend, so collapsing it would delete a distinction that fix
+    //     depends on) and given its OWN dedicated block right below instead
+    //     of running through the generic loop above at all -- unlike the
+    //     collapsed three, its base term is no longer added in the generic
+    //     `WeightKey::ALL` loop (see that loop's own `PHASE_KEYS.contains`
+    //     skip), because the STRUCTURAL FIX changes what the base even
+    //     means depending on phase (see immediately below), which the
+    //     generic loop's unconditional `wk * v * scale` cannot express.
+    //
+    // STRUCTURAL FIX (earlymil, 2026-08-13): for the other three PHASE_KEYS
+    // an always-on base plus a small phase nudge is correct -- more
+    // workers/tech/hand is a genuine every-phase preference, and the phase
+    // pair only adjusts its size. For `StrengthRel` it is not:
+    // `strength_marginal`'s own arithmetic (mirrored here) showed the BASE
+    // term (+17.23 in the frozen 2p champion) applies in full at
+    // `lateness == 0`, the literal opening, before any war is remotely
+    // relevant -- the tiny `strength_rel_early` nudge (-0.19 in that same
+    // champion) can never bring that down anywhere close to zero, because
+    // it is only ever added ON TOP of the base, never scaling it. A real
+    // round-2 position (`bin/dumpweights.rs`, EARLYMIL.txt step 1) confirmed
+    // this dominates the champion's decision to build a military unit
+    // before a mine. Confirmed empirically NOT fixable by moving the base
+    // weight alone either: zeroing `strength_rel` collapses the opening
+    // habit (96.7% -> ~0% military-first over 300 self-play games) but also
+    // collapses genuine late-game strength value the SAME base term
+    // carries, and loses to the unmodified champion at 7.4% (n=600) -- the
+    // base is entangled across BOTH phases through one shared coefficient,
+    // which is exactly why 42,000 hill-climb generations never found this:
+    // any single-coordinate step that helps the opening also hurts the
+    // endgame, so the climb's own win-rate-vs-champion test rejects it
+    // before it can travel far enough to help.
+    //
+    // The fix: stop treating the base as an unconditional, phase-blind
+    // term. `strength_rel_early` becomes the WHOLE early-game coefficient
+    // (not a delta on the base), and the base folds into the LATE endpoint
+    // instead, alongside `strength_rel_late` -- `eff(L) = (1-L) *
+    // strength_rel_early + L * (strength_rel + strength_rel_late)`. At
+    // `L == 1` this is byte-identical to the old formula (late-game value,
+    // and every game already played near the endgame, is untouched). At
+    // `L == 0` it is exactly `strength_rel_early` alone -- already small
+    // (-0.19) in the trained champion, with no retuning needed for this
+    // structural change to take effect. [`linear_features`] mirrors this
+    // exactly (`out[StrengthRel] = late * v` instead of the generic `v`),
+    // which is what keeps `linear_features_dotted_with_a_weight_vector_
+    // reproduces_evaluate_exactly` green. This whole block is additionally
+    // gated on [`horizon::combat_unreachable`] rather than blended
+    // continuously off lateness -- see the `if`/`else` immediately below for
+    // why (STRGATE.txt, superseding the round<=3 literal this comment used
+    // to describe before that fix landed).
     let late = horizon::lateness(state);
     let early = 1.0 - late;
+    {
+        let v = f.get(WeightKey::StrengthRel);
+        if v != 0.0 {
+            // GATED to [`horizon::combat_unreachable`] -- true while no
+            // player can possibly hold an aggression or war card yet (see
+            // that function's doc comment for the RULES_SPEC derivation) --
+            // rather than blended continuously off `lateness()` for the
+            // WHOLE game. An earlier version of this fix used the
+            // continuous blend below unconditionally and measured
+            // DECISIVELY WORSE than the pre-fix champion (27.7% at n=3000,
+            // EARLYMIL.txt) -- diagnosed, not shrugged off: `lateness()`
+            // rises gradually across the WHOLE game, so an unconditional
+            // blend suppresses `StrengthRel`'s value through roughly the
+            // first half of every game, not merely the measured defect's
+            // actual window -- e.g. at `lateness == 0.5` (a real mid-game
+            // moment, not the opening) the unconditional blend priced this
+            // at ~11.3 against the old formula's ~19.9, undermining
+            // legitimate mid-game military value the MineFirst-forcing
+            // experiment never touched (it restricted only the FIRST
+            // build, then handed control straight back to the UNMODIFIED
+            // evaluator for the rest of the game). `combat_unreachable`
+            // reproduces that scope from an actual rules fact instead of a
+            // fitted round number (STRGATE.txt, superseding EARLYMIL.txt's
+            // `state.round <= 3`, itself chosen by measuring win rates --
+            // a fitted parameter that does not belong in engine code):
+            // outside it, `StrengthRel` prices EXACTLY as it did before
+            // this fix (see the `else` arm), so nothing changes once any
+            // player could plausibly hold a combat-capable card.
+            if horizon::combat_unreachable(state) {
+                let early_full = w.get(WeightKey::StrengthRel.early());
+                let late_full = w.get(WeightKey::StrengthRel) + w.get(WeightKey::StrengthRel.late());
+                total += early * early_full * v + late * late_full * v;
+            } else {
+                total += w.get(WeightKey::StrengthRel) * v;
+                total += early * w.get(WeightKey::StrengthRel.early()) * v + late * w.get(WeightKey::StrengthRel.late()) * v;
+            }
+        }
+    }
     for &k in PHASE_KEYS {
+        if k == WeightKey::StrengthRel {
+            continue;
+        }
         let v = f.get(k);
         if v == 0.0 {
             continue;
         }
         let scale = if hz != 1.0 && horizon::RATE_KEYS.contains(&k) { hz } else { 1.0 };
         let vv = v * scale;
-        let we = w.get(k.early());
-        if we != 0.0 {
-            total += we * early * vv;
-        }
-        let wl = w.get(k.late());
-        if wl != 0.0 {
-            total += wl * late * vv;
+        if matches!(k, WeightKey::Workers | WeightKey::TechLevels | WeightKey::HandValue) {
+            let start = w.get(k);
+            if start != 0.0 {
+                total += start * early * vv;
+            }
+            let end = w.get(k.late());
+            if end != 0.0 {
+                total += end * late * vv;
+            }
+        } else {
+            let we = w.get(k.early());
+            if we != 0.0 {
+                total += we * early * vv;
+            }
+            let wl = w.get(k.late());
+            if wl != 0.0 {
+                total += wl * late * vv;
+            }
         }
     }
 
@@ -266,6 +402,7 @@ pub fn evaluate(state: &GameState, idx: u8, w: &Weights, ctx: Option<&RivalConte
 /// does not carry (`rng`/`seed`/`name` fields, the journalled search path,
 /// the per-candidate exception guard) and why each omission is safe.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
 pub struct WeightedBot {
     pub weights: Weights,
     /// `("resign",)` (RULES_SPEC 5.11) is legal on almost every turn, and in
@@ -279,11 +416,6 @@ pub struct WeightedBot {
     pub allow_resign: bool,
 }
 
-impl Default for WeightedBot {
-    fn default() -> Self {
-        WeightedBot { weights: Weights::default(), allow_resign: false }
-    }
-}
 
 impl WeightedBot {
     pub fn new(weights: Weights) -> WeightedBot {
@@ -492,12 +624,44 @@ pub fn linear_features(state: &GameState, idx: u8, ctx: Option<&RivalContext>, f
     // `RATE_KEYS` (pinned by `horizon.rs`'s own set, `evaluate`'s `scale`
     // guard is therefore always 1.0 here, matching `evaluate` exactly), so
     // this is genuinely state-only, no `freeze` dependence at all.
+    //
+    // T1-A/C/D collapse (PHASECUT.txt, 2026-08-13): for `Workers`/
+    // `TechLevels`/`HandValue`, `out[k as usize]` was just set to the raw
+    // feature value `v` by the generic loop above -- overwritten here to
+    // `v * early`, so that `w.get(k) * out[k]` reproduces `start * early *
+    // v` (matching `evaluate`'s own new formula) instead of the old
+    // `base * v`.
+    //
+    // STRUCTURAL FIX (earlymil, 2026-08-13): `StrengthRel` is excluded from
+    // the collapse above (see PHASECUT.txt) -- `evaluate`'s own matching
+    // comment explains why it alone gets a different blend -- `eff(L) =
+    // (1-L) * strength_rel_early + L * (strength_rel + strength_rel_late)`
+    // instead of the other three PHASE_KEYS' `start*(1-L) + end*L`.
+    // `out[StrengthRel]` (written `v` by the generic loop above) is
+    // overridden to `late * v` here so that `sum_k w.get(k) * out[k]` over
+    // the three StrengthRel-family slots reproduces exactly `evaluate`'s new
+    // formula: `w[early] * (early * v) + w[base] * (late * v) + w[late] *
+    // (late * v)` == `early * w[early] * v + late * (w[base] + w[late]) *
+    // v`, byte-identical to `evaluate`'s own arithmetic above.
     let late = horizon::lateness(state);
     let early = 1.0 - late;
+    // Gated identically to `evaluate`'s own [`horizon::combat_unreachable`]
+    // check (see that function's doc comment for why the earlier, ungated
+    // version of this fix measured decisively worse) -- once combat is
+    // reachable, `out[StrengthRel]` stays the generic `v` the loop above
+    // already wrote, reproducing the untouched pre-fix formula exactly.
+    if horizon::combat_unreachable(state) {
+        out[WeightKey::StrengthRel as usize] *= late;
+    }
     for &k in PHASE_KEYS {
         let v = f.get(k);
-        out[k.early() as usize] = v * early;
-        out[k.late() as usize] = v * late;
+        if matches!(k, WeightKey::Workers | WeightKey::TechLevels | WeightKey::HandValue) {
+            out[k as usize] = v * early;
+            out[k.late() as usize] = v * late;
+        } else {
+            out[k.early() as usize] = v * early;
+            out[k.late() as usize] = v * late;
+        }
     }
 
     // The ten identity-aware, `freeze`-priced gates -- see this section's
@@ -589,20 +753,76 @@ pub fn dot(w: &Weights, f: &[f64]) -> f64 {
 
 /// Terms whose net weight (`k` plus either phase multiplier) may not go
 /// negative, because a pure gain of them cannot hurt under the rules. Empty
-/// since 2026-08-04 -- both entries that used to live here (`culture`,
-/// `wonder_progress`) have since had their phase pair deleted outright
-/// ([`PHASE_KEYS`] no longer lists either), so there is no multiplier left to
-/// drag their net weight below zero. Kept, and empty, because the next
-/// phase-multiplied stock -- if anyone adds one -- needs this loop; deleting
-/// it would delete the argument with it. See Python's own comment on this
-/// constant for the full citation trail.
+/// from 2026-08-04 until 2026-08-13, when [`WeightKey::HandValue`] joined it
+/// (SIGNAUDIT.txt) -- and empty again from 2026-08-13 onward, for a
+/// DIFFERENT reason (PHASECUT.txt, T1-D): `HandValue`'s three-parameter
+/// `{base, early, late}` shape (the shape this composite mechanism existed
+/// to police -- "the base alone can be negative as long as the phase
+/// partner offsets it") was collapsed to a non-redundant two-parameter
+/// `{start, end}` basis, `start*(1-L) + end*L`. That is a CONVEX
+/// combination of the two endpoints, so the net is `>= 0` at every lateness
+/// in `[0,1]` if and only if BOTH endpoints are `>= 0` individually --
+/// exactly what a plain per-key `SignIntent::NonNegative` gate on each
+/// already enforces (see `weights::WeightKey::sign_intent`'s `HandValue`/
+/// `HandValueLate` arm). The composite constraint this list existed for has
+/// nothing left to compose: two independent per-key gates are strictly
+/// simpler and not weaker, so this stays a live mechanism (kept, not
+/// deleted, in case a FUTURE key needs a genuine cross-key/cross-phase
+/// composite the plain per-key gates cannot express) but currently has no
+/// members.
 ///
-/// Python's own test of this (empty, currently unexercised) branch drives it
-/// with `mock.patch.object(weighted, "NET_NONNEG_PHASE", ("culture",))` --
-/// there is no monkeypatching a `const` in Rust, so that specific test has no
-/// direct port here; the branch itself is still exactly the code the next
-/// phase-multiplied stock would land on.
+/// (`culture`/`wonder_progress`, empty here from 2026-08-04 to 2026-08-13,
+/// had their phase pair deleted outright instead -- [`PHASE_KEYS`] no
+/// longer lists either -- a different reason for the same emptiness; see
+/// git history / SIGNAUDIT.txt for that citation trail.)
+///
+/// Python's own test of the formerly-empty branch drove it with
+/// `mock.patch.object(weighted, "NET_NONNEG_PHASE", ("culture",))` -- there
+/// is no monkeypatching a `const` in Rust, so that specific test has no
+/// direct port here.
 pub const NET_NONNEG_PHASE: &[WeightKey] = &[];
+
+/// The per-type "board credit" keys `cards::card_potential`'s generic
+/// swap-pricing path can ADD to [`WeightKey::CardBoardCredit`] before scaling
+/// a computed board-swap diff (`cards.rs`'s `credit_board = base +
+/// board_credit_key(id).map_or(0.0, |k| w.get(k))`) -- today
+/// `CardBoardLeader`/`CardBoardBonus`, one per [`cards::board_credit_key`]
+/// match arm that returns `Some`. `CardBoardGovernment`/`CardBoardAction`/
+/// `CardBoardWonder` used to be three more such arms; all three were
+/// RETIRED 2026-08-13 (SIGNAUDIT.txt) for being permanently shadowed by a
+/// dedicated board-aware pricing function that intercepts first -- see
+/// `weights::RETIRED_KEYS`'s own entry for the full account. Because this
+/// list is DERIVED from `board_credit_key` rather than hand-copied (next
+/// paragraph), that retirement needed no edit here at all: the function
+/// simply stopped returning `Some` for those three `CardType`s and this
+/// list shrank from five entries to two automatically.
+///
+/// Deliberately NOT hand-copied: this calls [`cards::board_credit_key`] over
+/// every real card in [`crate::card_table::CARDS`] and collects the distinct
+/// `Some` results, so a card type that function starts answering later is
+/// picked up automatically by [`dominance_repair`]'s gate below instead of
+/// landing outside it the way a hand-retyped list could silently drift --
+/// exactly the failure shape `board_credit_key`'s own doc comment names for
+/// itself (a card category present in the data but silently absent from a
+/// hand-rolled registry), one level up.
+///
+/// Cached behind a `OnceLock`: [`dominance_repair`] runs on every hillclimb
+/// mutation (`bin/climb.rs`'s `mutate` wrapper), not only at load, so this
+/// must not re-walk a few hundred cards on every single call.
+pub fn card_board_credit_keys() -> &'static [WeightKey] {
+    static KEYS: std::sync::OnceLock<Vec<WeightKey>> = std::sync::OnceLock::new();
+    KEYS.get_or_init(|| {
+        let mut keys: Vec<WeightKey> = crate::card_table::CARDS
+            .iter()
+            .filter_map(|c| {
+                cards::board_credit_key(crate::cards::CardId::by_name(c.name).expect("every card_table entry resolves by its own name"))
+            })
+            .collect();
+        keys.sort_by_key(|k| k.name());
+        keys.dedup();
+        keys
+    })
+}
 
 /// `(dominant, dominated)` -- `w[dominant] >= w[dominated]`, repaired by
 /// raising the dominant side. A resource in stock dominates the blue token it
@@ -626,256 +846,49 @@ pub const DOMINATES: &[(WeightKey, WeightKey)] = &[
     (WeightKey::WonderPotential, WeightKey::WonderPromise),
 ];
 
-/// Weights that scale a PRINTED BENEFIT on one card class and nothing else --
-/// none of them may be negative. Each is the ONLY per-card channel its class
-/// has, and raising it raises `card_potential` for every card in the class;
-/// you are never compelled to use a grant, so under the rules a card that
-/// prints one is never worse than the same card without it. The repair is to
-/// `0.0`, not upward: the rules say "not a cost", they do not say what it is
-/// worth -- pricing it is the league's job.
-pub const BENEFIT_GATES: &[WeightKey] = &[
-    WeightKey::BuildDiscount,
-    WeightKey::CardBoardCredit,
-    WeightKey::DefenseBonus,
-    WeightKey::FreeCivilAction,
-    WeightKey::HandLimit,
-    WeightKey::ResourceDiscount,
-    WeightKey::RestrictedResources,
-    WeightKey::UnitStrengthCredit,
-    WeightKey::WonderStagesPerAction,
-];
+/// THE STRUCTURAL FIX (SIGNAUDIT.txt): every simple per-key sign gate used to
+/// live here as EIGHT separate hand-typed `&[WeightKey]` lists (`BENEFIT_
+/// GATES`, `SHORTFALL_GATES`, `LOSS_GATES`, `REDUNDANCY_NONNEG_GATES`,
+/// `STOCK_NONNEG_GATES`, `WONDER_DEBT_GATES`, `PERISHABLE_GATES`,
+/// `WONDER_VALUE_GATES`), fed into two wrapper tables (`NON_POSITIVE_GATES`/
+/// `NON_NEGATIVE_GATES`) `dominance_repair` and `bin/climb.rs`'s
+/// under-mutation guard both iterated. That is exactly the shape that let
+/// `card_board_leader` sit unconstrained for months: a hand-typed list is a
+/// classification a NEW `WeightKey` variant can silently miss, with nothing
+/// failing until someone measures the damage.
+///
+/// All eight lists, and the two wrapper tables, are now DERIVED from
+/// [`WeightKey::sign_intent`]'s own exhaustive match (`weights.rs`) instead
+/// -- [`non_positive_gates`]/[`non_negative_gates`] below simply filter
+/// [`WeightKey::ALL`] by that classification. A key's direction and its
+/// diagnostic "why" text both live on the `SignIntent` value itself (see
+/// that enum's own doc comment), so there is exactly ONE place left to edit
+/// when a key's sign intent changes, and adding a 163rd `WeightKey` variant
+/// without extending `sign_intent`'s match is a compile error, not a silent
+/// gap in one of these two functions.
+///
+/// [`bin/climb.rs`]'s under-mutation guard calls these same two functions
+/// (not a copy), so a key reclassified in `sign_intent` is armed at both
+/// load time (`dominance_repair`, called from [`parse_weights`]) and
+/// mutation time automatically, exactly as the former table-driven design
+/// promised -- confirmed by `bin/climb.rs`'s own guard tests, which drive
+/// the mutator hard from a deliberately illegal vector built from these two
+/// functions and assert every mutant comes back legal.
+pub fn non_positive_gates() -> impl Iterator<Item = (WeightKey, &'static str)> {
+    WeightKey::ALL.iter().filter_map(|&k| match k.sign_intent() {
+        weights::SignIntent::NonPositive(why) => Some((k, why)),
+        weights::SignIntent::NonNegative(_) | weights::SignIntent::Free => None,
+    })
+}
 
-/// Weights that price a marginal-need SHORTFALL (`max(0, need - have)`,
-/// `features.rs`'s per-axis gap coordinates) -- none of them may be
-/// positive. A bigger shortfall is never an improvement under any reading of
-/// the rules a positive weight here would be scoring it as one, so unlike
-/// [`BENEFIT_GATES`] (repaired UP to zero) this repairs DOWN to zero: a
-/// climb is free to decide a shortfall does not matter (weight 0.0) or costs
-/// something (weight negative), never that it helps. The matching surplus
-/// coordinates (`food_surplus`, `worker_surplus`, ...) are deliberately NOT
-/// gated here -- whether banking more than you need is worth something or
-/// nothing is not unambiguous the way a shortfall's sign is, so the league
-/// prices it unconstrained.
-pub const SHORTFALL_GATES: &[WeightKey] = &[
-    WeightKey::FoodGap,
-    WeightKey::ResourceGap,
-    WeightKey::ScienceGap,
-    WeightKey::CultureGap,
-    WeightKey::CivilActionGap,
-    WeightKey::MilitaryActionGap,
-    WeightKey::WorkerGap,
-];
-
-/// Weights that price a PENALTY THE RULES IMPOSE -- none of them may be
-/// positive. Every feature here is a non-negative magnitude that is set
-/// larger the worse off the player is: `corruption(blue_available)` and
-/// `consumption(yellow_bank)` are the rulebook's own step tables (§6.2,
-/// §6.4), `discontent` is `max(0, -happy_margin)`, `uprising` is a 0/1
-/// indicator, `strength_deficit` is `max(0, -relative_strength)`. A positive
-/// weight scores "I am paying more corruption" or "I am facing an uprising"
-/// as an improvement, which no reading of the rules supports -- and because
-/// `corruption` and `consumption` are step functions OF another weighted
-/// coordinate (`BlueFree`, `YellowBank`), a positive weight there also
-/// inverts the cliff: at a band edge the evaluator comes to PREFER crossing
-/// into the worse band. That is a behavioural bug, not merely an odd price.
-///
-/// This gate exists because the league drifted all five positive in at least
-/// one arm despite every one of them being authored with a negative default
-/// (-0.9, -0.5, -3.0, -12.0, -0.6). The cause is confounding, not noise: a
-/// big civilization pays more corruption and more consumption than a small
-/// one, so a strictly-bad coordinate correlates with strength and a climb
-/// that only sees win rate is free to charge the correlation to the penalty.
-/// Repaired DOWN to 0.0, matching [`SHORTFALL_GATES`]: the league may decide
-/// a penalty does not matter, or costs something, never that it helps.
-pub const LOSS_GATES: &[WeightKey] = &[
-    WeightKey::Discontent,
-    WeightKey::Uprising,
-    WeightKey::StrengthDeficit,
-];
-
-/// `cards::redundancy_discount`'s gate -- never negative. A negative weight
-/// here would mean a redundant card gets MORE valuable the more of its
-/// `CardType` lane the player already covers, which is the discount's
-/// premise inverted, not just an unmeasured direction like every 0.0-default
-/// weight elsewhere in this table. Repaired down to 0.0, matching
-/// [`BENEFIT_GATES`]'s repair direction, kept as its own list rather than
-/// folded into that one: the two have different justifications ("a printed
-/// grant is never worse than not having it" vs. "redundancy cannot itself be
-/// an upside") even though both land on the same non-negative constraint.
-pub const REDUNDANCY_NONNEG_GATES: &[WeightKey] = &[WeightKey::TechRedundancyDiscount];
-
-/// Raw board STOCKS the rules only ever add effects for, never subtract
-/// them -- pricing a bigger stock as a penalty inverts a quantity the rules
-/// never punish.
-///
-/// `civil_actions`/`civil_action_surplus`: how many civil actions this
-/// player has available/unspent. Nothing in the rules costs you for
-/// holding a civil action you have not spent yet, so having more is never
-/// worse -- and the live 2p champion priced both negative
-/// (`civil_actions -0.520`, `civil_action_surplus -1.324`), which is
-/// exactly what makes overpaying for cards (spending down the surplus)
-/// look like an improvement.
-///
-/// `wonders`: the count of COMPLETED wonders. RULES_SPEC §9.2 -- "last
-/// stage covered -> ... effects begin" and "you may have any number of
-/// completed wonders" -- no completed wonder carries a negative permanent
-/// effect for its owner, so a lower count is never an improvement. (The
-/// §2.4 surcharge that makes taking the NEXT wonder cost 1 CA more per
-/// wonder already completed is a property of the take-a-wonder action,
-/// priced by the cards that trigger it; it says nothing about the value of
-/// wonders already banked.) The live 2p champion priced this key -1.20.
-///
-/// `card_board_wonder` and `science_rate` are deliberately NOT here.
-/// `card_board_wonder` is an internal valuation multiplier -- the per-type
-/// add-on `card_potential` folds into `card_board_credit` before scaling a
-/// COMPUTED swap-diff (`cards.rs`'s `credit_board = base +
-/// board_credit_key(id)...`), not a magnitude the rulebook describes, and
-/// its three siblings (`card_board_leader`/`_government`/`_action`,
-/// alongside `_bonus`) are deliberately left ungated in this same file --
-/// gating only the wonder one would be a carve-out with no rule behind it.
-/// `science_rate` has no RULES_SPEC citation establishing that more science
-/// production can never be a downside the way `civil_actions`' spare-action
-/// premise or `wonders`' "effects begin" are citable; guessing its sign is
-/// exactly what this table exists to refuse to do.
-pub const STOCK_NONNEG_GATES: &[WeightKey] =
-    &[WeightKey::CivilActions, WeightKey::CivilActionSurplus, WeightKey::Wonders];
-
-/// Weights that price WHAT AN UNFINISHED WONDER STILL OWES -- none of them
-/// may be positive. Every one is a non-negative magnitude that is larger the
-/// FURTHER the player is from finishing: `remaining` is the resources the
-/// unbuilt stages still owe, `stages_left` is how many of them there are,
-/// `turns_to_finish` is that debt expressed in turns of the player's whole
-/// output, and `overrun` is the part of it the game will not last long enough
-/// to pay. A positive weight scores "my wonder is further from done" as an
-/// improvement, and worse, makes PAYING A STAGE a loss: every one of these
-/// coordinates falls when a stage is bought, so a positive price on them
-/// turns `Move::WonderStep` into a move the evaluator will never choose.
-///
-/// This gate exists because the 2p arm did exactly that. Its champion priced
-/// `wonder_remaining` at **+11.51** (authored default -0.3) and
-/// `wonder_overrun` at **+1.11**, and a 200-game census of that champion
-/// found it completed **0 wonders in 400 player-games** -- it took 1106 of
-/// them, built almost no stages, and let 72% get antiquated at an age
-/// boundary. The 3p and 4p arms have all four negative and do finish wonders,
-/// which is the control: same code, same rules, opposite sign, opposite
-/// behaviour.
-///
-/// The confound that let the climb do it is the same one [`LOSS_GATES`]
-/// describes: a big expensive wonder owes more than a small one, so "still
-/// owes a lot" correlates with having reached for something valuable. That
-/// correlation has its own home already -- `cards::wonder_potential` is
-/// identity-aware and prices what completing a specific wonder would DO.
-/// These four are identity-blind stocks (see [`super::horizon::WonderOutlook`]),
-/// so they must not double as the value term. Repaired DOWN to 0.0: the
-/// league may decide an outstanding stage costs nothing, never that it pays.
-pub const WONDER_DEBT_GATES: &[WeightKey] = &[
-    WeightKey::WonderRemaining,
-    WeightKey::WonderStagesLeft,
-    WeightKey::WonderTurnsToFinish,
-    WeightKey::WonderOverrun,
-    // `wonder_overrun` measured against the deadline the RULES impose
-    // (`horizon::rounds_to_antiquation`) instead of the end of the game. Same
-    // shape, same non-negative magnitude, larger the worse off the player is,
-    // and falling on exactly the move that pays a stage -- so it needs the
-    // identical gate, for the identical reason.
-    WeightKey::WonderAgeOverrun,
-];
-
-/// `hand_perishable`'s gate -- never positive. The feature is a non-negative
-/// count of how much of the civil hand the next age boundary is about to
-/// discard (RULES_SPEC 12.2), so it is larger the more of the hand is about to
-/// be lost for nothing. A positive weight scores "more of my hand is about to
-/// evaporate" as an improvement, which no reading of the rules supports;
-/// holding the hand's SIZE and VALUE fixed (`hand_civil`, `hand_value`,
-/// `hand_potential` all price those separately), less remaining lifetime is
-/// never an upside. Repaired DOWN to 0.0, matching every other non-positive
-/// gate: the league may decide expiry does not matter, never that it helps.
-///
-/// Its own list rather than folded into [`LOSS_GATES`]: that gate's premise is
-/// "a penalty the rules IMPOSE" (corruption, discontent, uprising), and expiry
-/// is a deadline rather than a bill. Same constraint, different justification,
-/// and the justification is what a future reader has to check.
-pub const PERISHABLE_GATES: &[WeightKey] = &[WeightKey::HandPerishable];
-
-/// `cards::wonder_potential`'s own gate -- never negative. That function is
-/// the SOLE identity-aware channel that prices what completing the player's
-/// specific in-progress wonder would DO: it reads that wonder's own printed
-/// effects by name, its stage cost is excluded BY CONSTRUCTION
-/// (`gains_only_sum`/`gains_only_board_sum`, `cards.rs`, drop every Cost-kind
-/// triple before this function ever sees one), and its delayed-payoff
-/// discount ([`super::horizon::WonderOutlook::earned_share`]) is bounded in
-/// `[0, 1]` and rises monotonically as stages get paid -- it never falls.
-/// Every fact this function reads is therefore benefit-shaped, so a negative
-/// weight on it inverts the whole term into "a wonder that would be worth
-/// more once finished is worse" -- exactly the [`WONDER_DEBT_GATES`] bug one
-/// level up, and that gate's own doc comment names THIS function as the
-/// value correlation's rightful home. If the home itself were free to go
-/// negative, that citation would be hollow. Repaired down to 0.0, matching
-/// every other gate in this table: the rules never say a wonder's completion
-/// is a downside, they simply do not price it, and 0.0 is "unpriced".
-///
-/// The one honest caveat, so a future reader is not misled: `gains_only_sum`/
-/// `gains_only_board_sum` guarantee this function is gains-only in
-/// STRUCTURE -- no Cost-kind triple ever enters the sum -- but what it sums
-/// is itself a weighted combination of per-stat credits (`card_rate_credit`,
-/// `card_board_credit`, and everything each reads through) that the league
-/// climbs independently. So the function's raw return value is not PROVABLY
-/// non-negative in every position, only non-negative by construction on the
-/// printed-effect side. The gate is still sound regardless: repairing a
-/// negative [`WeightKey::WonderPotential`] to 0.0 only ever REMOVES this term
-/// from [`evaluate`]'s sum -- it can never invent a positive one -- so even a
-/// still-negative internal sum contributes exactly nothing at 0.0, never a
-/// wrong-signed price.
-///
-/// [`WeightKey::WonderPromise`] is gated here alongside it and by the same
-/// argument: it scales the SAME `board_yields` swap diff, through the same
-/// gains-only path, times a `[0, 1]` share (`horizon::WonderOutlook::
-/// promise_share`). A negative price on it means "a wonder that would be worth
-/// more once finished is worse to reach for", which is the take-time version
-/// of the very bug [`WONDER_DEBT_GATES`] documents. `DOMINATES` additionally
-/// keeps it at or below `wonder_potential`; that ordering is about the
-/// TRANSFER between the two terms, this gate is about the sign of one of them,
-/// and neither implies the other.
-pub const WONDER_VALUE_GATES: &[WeightKey] =
-    &[WeightKey::WonderPotential, WeightKey::WonderPromise];
-
-/// Every "this weight may never be positive" gate, paired with the sentence
-/// [`dominance_repair`] logs when it fires.
-///
-/// One table rather than one `for` loop per gate list, because the loops were
-/// byte-identical apart from that sentence: a fourth gate used to mean a
-/// fourth copy, and a copy that gets forgotten is a gate that silently does
-/// not run. `bin/climb.rs`'s under-mutation guard iterates this same table,
-/// so adding a list here arms both the load-time repair and the mutation-time
-/// one at once. The mirror-image, opposite-direction gates
-/// ([`BENEFIT_GATES`], [`REDUNDANCY_NONNEG_GATES`], [`WONDER_VALUE_GATES`])
-/// live in [`NON_NEGATIVE_GATES`] below, not here -- one table with a sign
-/// field whose only job is to be read back out would be no simpler than two
-/// direction-typed tables read the same way, and would blur the fact that
-/// the repair direction is a property of the RULE, not a runtime choice.
-pub const NON_POSITIVE_GATES: &[(&[WeightKey], &str)] = &[
-    (SHORTFALL_GATES, "prices a marginal-need shortfall"),
-    (LOSS_GATES, "prices a penalty the rules impose"),
-    (WONDER_DEBT_GATES, "prices an unpaid wonder debt as an upside"),
-    (PERISHABLE_GATES, "prices a hand about to expire as an upside"),
-];
-
-/// Every "this weight may never be negative" gate, paired with the sentence
-/// [`dominance_repair`] logs when it fires -- the mirror image of
-/// [`NON_POSITIVE_GATES`], same reason: one table rather than one hand-rolled
-/// loop per gate list, so a new gate ([`WONDER_VALUE_GATES`], then
-/// [`STOCK_NONNEG_GATES`], added alongside [`BENEFIT_GATES`] and
-/// [`REDUNDANCY_NONNEG_GATES`]) means one new entry, not one new copy of the
-/// loop. `bin/climb.rs`'s under-mutation guard
-/// iterates this table too, exactly as it already does [`NON_POSITIVE_GATES`],
-/// so adding a list here arms both the load-time repair and the mutation-time
-/// one at once, in this direction as well.
-pub const NON_NEGATIVE_GATES: &[(&[WeightKey], &str)] = &[
-    (BENEFIT_GATES, "scales a printed benefit"),
-    (REDUNDANCY_NONNEG_GATES, "discounts a redundant card, never rewards one"),
-    (WONDER_VALUE_GATES, "prices the in-progress wonder's completion value"),
-    (STOCK_NONNEG_GATES, "prices an available/completed stock the rules never subtract for"),
-];
+/// The mirror image of [`non_positive_gates`] -- see that function's own doc
+/// comment.
+pub fn non_negative_gates() -> impl Iterator<Item = (WeightKey, &'static str)> {
+    WeightKey::ALL.iter().filter_map(|&k| match k.sign_intent() {
+        weights::SignIntent::NonNegative(why) => Some((k, why)),
+        weights::SignIntent::NonPositive(_) | weights::SignIntent::Free => None,
+    })
+}
 
 /// One rule-level ordering `dominance_repair` had to fix -- Python's
 /// `{"weight": ..., "value": ..., "default": ..., "rule": ...}` dict,
@@ -916,33 +929,61 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
         }
     }
 
-    for &(keys, why) in NON_POSITIVE_GATES {
-        for &k in keys {
-            let v = out.get(k);
-            if v > 1e-12 {
-                viol.push(Violation {
-                    weight: k,
-                    value: v,
-                    default: k.default_weight(),
-                    rule: format!("{} <= 0 ({why})", k.name()),
-                });
-                out.set(k, 0.0);
-            }
+    // `CardBoardCredit`'s per-type offsets ([`card_board_credit_keys`]):
+    // the EFFECTIVE multiplier `card_potential` scales a board-swap diff by
+    // is `CardBoardCredit + <per-type key>`, not either term alone --
+    // [`BENEFIT_GATES`] above only gates `CardBoardCredit` itself, which is
+    // useless when the per-type key carries the negative sign instead (the
+    // live 2p champion: `card_board_credit = 0.0`, `card_board_leader =
+    // -15.003`). A negative EFFECTIVE scale on a diff that is genuinely
+    // positive for a helpful leader/government/wonder/action/bonus swap and
+    // genuinely negative for a harmful one does not mis-price one card, it
+    // inverts the entire ranking of that card TYPE against every other type
+    // priced with a sane sign -- exactly what `leadersign` (the investigation
+    // this gate was added for) measured: `Hammurabi` priced at -13.28 despite
+    // a +0.885 raw board benefit, `Julius Caesar` at +43.63 despite a -2.908
+    // raw diff. Same shape as [`NET_NONNEG_PHASE`] above (a base plus a
+    // modifier must not net negative), restated for a single fixed base
+    // (`CardBoardCredit`) against several per-type modifiers instead of a
+    // phase pair. Repaired by raising the per-type key to `-base`, never by
+    // lowering `base`: same direction as every other rule in this function.
+    let card_board_base = out.get(WeightKey::CardBoardCredit);
+    for &k in card_board_credit_keys() {
+        let m = out.get(k);
+        if card_board_base + m < -1e-12 {
+            viol.push(Violation {
+                weight: k,
+                value: m,
+                default: k.default_weight(),
+                rule: format!("{} + {} >= 0", WeightKey::CardBoardCredit.name(), k.name()),
+            });
+            out.set(k, -card_board_base);
         }
     }
 
-    for &(keys, why) in NON_NEGATIVE_GATES {
-        for &k in keys {
-            let v = out.get(k);
-            if v < -1e-12 {
-                viol.push(Violation {
-                    weight: k,
-                    value: v,
-                    default: k.default_weight(),
-                    rule: format!("{} >= 0 ({why})", k.name()),
-                });
-                out.set(k, 0.0);
-            }
+    for (k, why) in non_positive_gates() {
+        let v = out.get(k);
+        if v > 1e-12 {
+            viol.push(Violation {
+                weight: k,
+                value: v,
+                default: k.default_weight(),
+                rule: format!("{} <= 0 ({why})", k.name()),
+            });
+            out.set(k, 0.0);
+        }
+    }
+
+    for (k, why) in non_negative_gates() {
+        let v = out.get(k);
+        if v < -1e-12 {
+            viol.push(Violation {
+                weight: k,
+                value: v,
+                default: k.default_weight(),
+                rule: format!("{} >= 0 ({why})", k.name()),
+            });
+            out.set(k, 0.0);
         }
     }
 
@@ -984,9 +1025,11 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
 /// Accepts either the wrapper shape the trainer writes (`{"weights": {...},
 /// "gen": 41, ...}`) or a bare `{name: value}` map, matching Python's
 /// `d.get("weights", d)`. Missing keys keep their default, [`RETIRED_KEYS`]
-/// are dropped, unknown keys are an error, and [`dominance_repair`] is
-/// applied on the way out -- see this module's top doc comment for why the
-/// repair belongs here rather than only in the trainer.
+/// are dropped, [`LEGACY_PHASE_EARLY_FOLD`] names are losslessly folded into
+/// their T1-A/C/D collapse target (see that constant's own doc comment),
+/// unknown keys are an error, and [`dominance_repair`] is applied on the way
+/// out -- see this module's top doc comment for why the repair belongs here
+/// rather than only in the trainer.
 pub fn parse_weights(text: &str) -> Result<Weights, String> {
     let doc = crate::fixtures::parse_json(text).map_err(|e| format!("{e:?}"))?;
     let map = match doc.get("weights") {
@@ -995,25 +1038,137 @@ pub fn parse_weights(text: &str) -> Result<Weights, String> {
     };
     let fields = match map {
         crate::fixtures::Json::Obj(fields) => fields,
-        _ => return Err("champion JSON is not an object".to_string()),
+        crate::fixtures::Json::Null | crate::fixtures::Json::Bool(_) | crate::fixtures::Json::Num(_) | crate::fixtures::Json::Str(_) | crate::fixtures::Json::Arr(_) => return Err("champion JSON is not an object".to_string()),
     };
 
+    // Legacy `_early` values, captured by position in
+    // `LEGACY_PHASE_EARLY_FOLD` rather than resolved to a live `WeightKey`
+    // (there isn't one any more) -- folded into their target once the main
+    // loop below has finished, so the fold is independent of where in the
+    // file each name happens to sit. `None` (not `0.0`) is the "absent"
+    // state -- see the fold loop below for why that distinction is load-
+    // bearing: a file that never had `workers_early` at all (every file
+    // saved AFTER this collapse landed) must apply NO fold, not a
+    // zero-valued one, or a genuinely new-format file would get `old_base`
+    // spuriously added into its already-correct `_late` ("end") value on
+    // every single load.
+    let mut legacy_early = LegacyPhaseEarly::new();
     let mut w = Weights::defaults();
     for (name, value) in fields {
         if RETIRED_KEYS.contains(&name.as_str()) {
             continue;
         }
-        let key = WeightKey::by_name(name)
-            .ok_or_else(|| format!("unknown weight {name:?}"))?;
         let v = value
             .as_f64()
             .ok_or_else(|| format!("weight {name:?} is not a number"))?;
         if !v.is_finite() {
             return Err(format!("weight {name:?} is not finite"));
         }
+        if legacy_early.capture(name.as_str(), v) {
+            continue;
+        }
+        let key = WeightKey::by_name(name)
+            .ok_or_else(|| format!("unknown weight {name:?}"))?;
         w.set(key, v);
     }
+
+    // T1-A/C/D collapse (PHASECUT.txt): `new_start = old_base + old_early`,
+    // `new_end = old_base + old_late`, applied ONLY when the source JSON
+    // actually carried a legacy `_early` field (i.e. only for a file
+    // written before this collapse landed) -- a file with no such field is
+    // already in the new `{start, end}` shape and must round-trip
+    // unchanged. `old_base` is captured into a local BEFORE either `target`
+    // (the base key, becoming `start`) or `target.late()` (becoming `end`)
+    // is overwritten, so this reproduces the OLD formula's value at every
+    // lateness (`A(0) = old_base + old_early`, `A(1) = old_base +
+    // old_late`) regardless of what order the three legacy names appeared
+    // in the source JSON.
+    legacy_early.apply(&mut w);
+
     Ok(dominance_repair(&w).0)
+}
+
+/// The three legacy `_early` field names T1-A/C/D's collapse retired as
+/// live [`WeightKey`] variants (PHASECUT.txt, 2026-08-13), paired with the
+/// key their value folds into at [`parse_weights`] time. Unlike
+/// [`RETIRED_KEYS`] (whose values are thrown away outright, because nothing
+/// downstream still means the same thing), these three carry real
+/// information that must not be lost -- every value ever climbed into
+/// `workers_early`/`tech_levels_early`/`hand_value_early` is exactly
+/// preserved by the fold `parse_weights` applies (see that function's own
+/// comment for the arithmetic and PHASECUT.txt for the proof that it
+/// reproduces bit-for-bit identical PLAY on every champion file on disk).
+///
+/// A file that omits one of these three names entirely (rather than
+/// carrying it at `0.0`) is treated as contributing nothing to the fold --
+/// deliberately NOT re-derived from the retired key's own former default,
+/// since a file written by code that no longer HAS that variant (i.e. every
+/// file saved after this collapse lands) is indistinguishable from one that
+/// simply never specified it, and `save_weights` has always written every
+/// live key, so a real champion/gauntlet file missing one of these three
+/// outright is not a shape any file on disk actually has.
+const LEGACY_PHASE_EARLY_FOLD: &[(&str, WeightKey)] = &[
+    ("workers_early", WeightKey::Workers),
+    ("tech_levels_early", WeightKey::TechLevels),
+    ("hand_value_early", WeightKey::HandValue),
+];
+
+/// The legacy `_early` capture-and-fold, as a value both weight readers
+/// share rather than each open-coding.
+///
+/// There are two readers on purpose ([`parse_weights`] here and
+/// `human_policy::parse_weights_text`), and when the T1-A/C/D collapse
+/// landed only this one was taught the fold -- so every frozen human /
+/// anchor file on disk became unloadable by the other, which is precisely
+/// the failure its own comment says must never happen ("a file written
+/// before a key was retired must stay loadable by BOTH"). Duplicating six
+/// lines is what allowed the two to drift; the fold lives here once so the
+/// next retirement cannot silently break one reader and not the other.
+pub(crate) struct LegacyPhaseEarly([Option<f64>; LEGACY_PHASE_EARLY_FOLD.len()]);
+
+/// The legacy `_early` field names, for the cross-reader agreement test in
+/// `human_policy` -- enumerated from the fold table itself so a name added
+/// there is covered without anyone remembering to list it twice.
+#[cfg(test)]
+pub(crate) fn legacy_phase_early_names() -> &'static [(&'static str, WeightKey)] {
+    LEGACY_PHASE_EARLY_FOLD
+}
+
+impl LegacyPhaseEarly {
+    pub(crate) fn new() -> Self {
+        Self([None; LEGACY_PHASE_EARLY_FOLD.len()])
+    }
+
+    /// Record `name`'s value if it is a legacy `_early` field, reporting
+    /// whether it was one. A caller that gets `true` must NOT go on to
+    /// resolve the name against [`WeightKey::by_name`] -- there is no live
+    /// variant left to resolve it to, which is the whole reason a plain
+    /// `by_name` lookup rejects these files.
+    pub(crate) fn capture(&mut self, name: &str, v: f64) -> bool {
+        match LEGACY_PHASE_EARLY_FOLD.iter().position(|&(n, _)| n == name) {
+            Some(i) => {
+                self.0[i] = Some(v);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `new_start = old_base + old_early`, `new_end = old_base + old_late`,
+    /// applied only for names the source file actually carried. `None` (not
+    /// `0.0`) is the absent state: see [`LEGACY_PHASE_EARLY_FOLD`] for why
+    /// a new-format file must apply NO fold rather than a zero-valued one.
+    /// `old_base` is read before either target is written, so the result is
+    /// independent of the order the names appeared in the JSON.
+    pub(crate) fn apply(&self, w: &mut Weights) {
+        for (i, &(_, target)) in LEGACY_PHASE_EARLY_FOLD.iter().enumerate() {
+            if let Some(early_v) = self.0[i] {
+                let old_base = w.get(target);
+                w.set(target, old_base + early_v);
+                w.set(target.late(), old_base + w.get(target.late()));
+            }
+        }
+    }
 }
 
 /// Read a champion vector from disk. See [`parse_weights`].
@@ -1126,6 +1281,154 @@ mod tests {
                 assert!(v.is_finite(), "{n}p idx {idx}: {v}");
             }
         }
+    }
+
+    // ------------------------------------------------- earlymil StrengthRel
+
+    /// STRUCTURAL FIX regression (earlymil, 2026-08-13): at a genuinely
+    /// early, low-lateness state, `StrengthRel`'s effective coefficient must
+    /// be close to `strength_rel_early` ALONE, not `strength_rel +
+    /// strength_rel_early` (the pre-fix formula) -- the whole point of the
+    /// fix is that the always-on base no longer applies in full at the
+    /// opening. Isolates `StrengthRel`'s own contribution as a pure
+    /// before/after `evaluate` delta between two otherwise-identical states
+    /// (seat 0 with 2 Warriors workers staffed vs. none), the same
+    /// technique `bin/dumpweights.rs` used to confirm the mechanism in a
+    /// real position (see EARLYMIL.txt step 1) -- every OTHER coordinate
+    /// `Weights::default()` prices is identical between the two states and
+    /// cancels out of the delta, so this isolates exactly the `Strength`/
+    /// `StrengthRel` family, which the test zeroes out except for the three
+    /// keys under test.
+    #[test]
+    fn evaluate_prices_strength_rel_near_its_early_only_coefficient_at_low_lateness_not_the_old_always_on_base() {
+        let base = G::new_game(2, 60);
+        let mut strong = base.clone();
+        strong.players[0].techs.get_mut(CardId::by_name("Warriors").unwrap()).unwrap().workers = 2;
+
+        // Every OTHER coordinate zeroed, not merely left at
+        // `Weights::default()` -- staffing 2 Warriors workers moves more
+        // than `StrengthRel` (worker-count/military-action-gap features
+        // move too), so a delta taken against the full default vector picks
+        // up noise from every one of those. Zeroing everything except the
+        // three keys under test is what actually isolates `StrengthRel`.
+        let mut w = Weights::default();
+        for &k in WeightKey::ALL {
+            w.set(k, 0.0);
+        }
+        w.set(WeightKey::StrengthRel, 17.0);
+        w.set(WeightKey::StrengthRel.early(), -1.0);
+        w.set(WeightKey::StrengthRel.late(), 9.0);
+
+        let late = horizon::lateness(&base);
+        assert!(late < 0.15, "fixture assumption: a fresh deal must be genuinely early, got {late}");
+        let early = 1.0 - late;
+
+        // The raw feature delta (own-strength-minus-rival's-strength gained
+        // by staffing 2 Warriors workers), read directly rather than
+        // assumed, so this test does not silently drift if `rel`'s exact
+        // magnitude ever changes for an unrelated reason.
+        let ctx_base = rivals::rival_context(&base, 0, None, None);
+        let v_base = features::features(&base, 0, Some(&ctx_base), Some(&w), false).get(WeightKey::StrengthRel);
+        let ctx_strong = rivals::rival_context(&strong, 0, None, None);
+        let v_strong = features::features(&strong, 0, Some(&ctx_strong), Some(&w), false).get(WeightKey::StrengthRel);
+        let v_delta = v_strong - v_base;
+        assert!(v_delta > 0.0, "fixture assumption: staffing 2 Warriors workers must raise relative strength, got delta {v_delta}");
+
+        let delta = evaluate(&strong, 0, &w, None, None) - evaluate(&base, 0, &w, None, None);
+
+        // New formula: eff(L) = (1-L)*early + L*(base+late).
+        let new_expected = (-early + late * (17.0 + 9.0)) * v_delta;
+        assert!((delta - new_expected).abs() < 1e-9, "delta={delta} new_expected={new_expected}");
+
+        // The OLD (pre-fix) formula would have been base + (1-L)*early +
+        // L*late -- decisively bigger at this low lateness, since the base
+        // (17.0) used to apply in full regardless of phase. Pinning this
+        // negative comparison is what actually proves the fix moved
+        // behaviour, not just that some formula matches itself.
+        let old_formula_would_have_given = (17.0 + -early + late * 9.0) * v_delta;
+        assert!(
+            delta < old_formula_would_have_given - 1.0,
+            "the new formula must price this gain decisively below the old always-on-base formula at low lateness: delta={delta} old={old_formula_would_have_given}"
+        );
+    }
+
+    /// At `lateness == 1.0` the new formula is BYTE-IDENTICAL to the old one
+    /// (`(1-L)*early + L*(base+late)` collapses to `base+late` exactly when
+    /// `L == 1`) -- late-game strength pricing, and every champion snapshot
+    /// on disk trained assuming it, is untouched by this fix. Constructed by
+    /// calling `evaluate` directly with a hand-built `Features` at the
+    /// literal `L == 1` endpoint (via a fixed `late` passed through
+    /// `horizon::lateness`'s own clamp is state-derived and can't be forced
+    /// to exactly 1.0 from a real deal) is not needed here: this test
+    /// instead pins the ENDPOINT ALGEBRAICALLY, matching the doc comment in
+    /// `evaluate` itself, rather than hunting for a real state that happens
+    /// to clamp there.
+    #[test]
+    fn the_new_strength_rel_formula_collapses_to_the_old_one_exactly_at_full_lateness() {
+        let base_w = 17.0_f64;
+        let early_w = -1.0_f64;
+        let late_w = 9.0_f64;
+        let late = 1.0_f64;
+        let early = 1.0 - late;
+        let v = 3.0_f64;
+        let new_formula = (early * early_w + late * (base_w + late_w)) * v;
+        let old_formula = (base_w + early * early_w + late * late_w) * v;
+        assert!((new_formula - old_formula).abs() < 1e-12, "new={new_formula} old={old_formula}");
+    }
+
+    /// REVISION (STRGATE.txt, superseding the earlymil `state.round <= 3`
+    /// literal): the `StrengthRel` fix is gated to
+    /// [`horizon::combat_unreachable`] -- a computed rulebook fact (no
+    /// player can hold an aggression/war card) rather than a fitted round
+    /// number. Once ANY player could plausibly hold a combat-capable card,
+    /// `evaluate` must price a relative-strength gain EXACTLY as it did
+    /// before this fix existed -- this is what makes the fix a narrow,
+    /// targeted correction of the measured opening-only defect rather than
+    /// a blanket re-weighting of military value for the whole game (the
+    /// earlier, ungated version of this fix DID re-weight the whole game
+    /// and measured decisively worse, 27.7% at n=3000 -- see `evaluate`'s
+    /// own doc comment). Same before/after isolation technique as the
+    /// low-lateness test above, with the gate pushed open by hand -- NOT by
+    /// bumping `state.round` (that no longer controls this at all), but by
+    /// giving a rival a nonzero military hand COUNT
+    /// (`PlayerState::hidden_military`, a count-only field -- see
+    /// `combat_unreachable`'s own doc comment on why a count, not a real
+    /// card, is enough and is the only thing legal to use here).
+    #[test]
+    fn evaluate_prices_strength_rel_with_the_old_always_on_base_once_combat_is_reachable() {
+        let mut base = G::new_game(2, 61);
+        assert!(horizon::combat_unreachable(&base), "fixture assumption: a fresh deal has no military cards in any hand yet");
+        // Past `horizon::EARLIEST_COMBAT_ROUND` -- that floor holds
+        // regardless of hand contents (see its own dedicated test), so a
+        // hand-based fixture must clear it first to isolate the hand-size
+        // half of the predicate, same as `horizon.rs`'s own tests do.
+        base.round = horizon::EARLIEST_COMBAT_ROUND;
+        base.players[1].hidden_military = 1;
+        assert!(!horizon::combat_unreachable(&base), "fixture setup: a rival with 1 military card in hand, past the round floor, must open the gate");
+        let mut strong = base.clone();
+        strong.players[0].techs.get_mut(CardId::by_name("Warriors").unwrap()).unwrap().workers = 2;
+
+        let mut w = Weights::default();
+        for &k in WeightKey::ALL {
+            w.set(k, 0.0);
+        }
+        w.set(WeightKey::StrengthRel, 17.0);
+        w.set(WeightKey::StrengthRel.early(), -1.0);
+        w.set(WeightKey::StrengthRel.late(), 9.0);
+
+        let late = horizon::lateness(&base);
+        let early = 1.0 - late;
+
+        let ctx_base = rivals::rival_context(&base, 0, None, None);
+        let v_base = features::features(&base, 0, Some(&ctx_base), Some(&w), false).get(WeightKey::StrengthRel);
+        let ctx_strong = rivals::rival_context(&strong, 0, None, None);
+        let v_strong = features::features(&strong, 0, Some(&ctx_strong), Some(&w), false).get(WeightKey::StrengthRel);
+        let v_delta = v_strong - v_base;
+        assert!(v_delta > 0.0, "fixture assumption: staffing 2 Warriors workers must raise relative strength, got delta {v_delta}");
+
+        let delta = evaluate(&strong, 0, &w, None, None) - evaluate(&base, 0, &w, None, None);
+        let old_formula_expected = (17.0 + -early + late * 9.0) * v_delta;
+        assert!((delta - old_formula_expected).abs() < 1e-9, "delta={delta} old_formula_expected={old_formula_expected}");
     }
 
     /// `f: Some(...)` is used exactly as given, not silently re-derived from
@@ -1423,13 +1726,24 @@ mod tests {
         );
     }
 
-    /// A key only belongs in [`WONDER_DEBT_GATES`] if its author already
-    /// treated it as a cost or left it unmeasured. A positive default would
-    /// mean the crate itself disagrees with the gate, which is a
-    /// contradiction to resolve at the source, not to repair away every load.
+    /// A key only belongs in the wonder-debt bucket of [`WeightKey::
+    /// sign_intent`] if its author already treated it as a cost or left it
+    /// unmeasured. A positive default would mean the crate itself disagrees
+    /// with its own classification, which is a contradiction to resolve at
+    /// the source, not to repair away every load -- the general version of
+    /// this check now lives in `weights.rs`'s own `every_sign_intent_
+    /// classification_agrees_with_its_own_authored_default`; this pins the
+    /// specific five wonder-debt keys by name so a reader of THIS test file
+    /// still sees the claim spelled out for the bug it was written for.
     #[test]
     fn no_gated_wonder_debt_weight_is_authored_as_an_upside() {
-        for &k in WONDER_DEBT_GATES {
+        for k in [
+            WeightKey::WonderRemaining,
+            WeightKey::WonderStagesLeft,
+            WeightKey::WonderTurnsToFinish,
+            WeightKey::WonderOverrun,
+            WeightKey::WonderAgeOverrun,
+        ] {
             assert!(
                 k.default_weight() <= 0.0,
                 "{} defaults to {}, contradicting its own gate",
@@ -1492,23 +1806,26 @@ mod tests {
         }
     }
 
-    /// A key only belongs in [`NON_NEGATIVE_GATES`] if its author already
+    /// A key only belongs in [`non_negative_gates`] if its author already
     /// treated it as an upside or left it unmeasured -- the mirror of
     /// [`no_gated_wonder_debt_weight_is_authored_as_an_upside`] in the
-    /// opposite direction. A negative default would mean the crate itself
-    /// contradicts its own gate, which is a bug to fix at the source, not to
-    /// repair away on every load.
+    /// opposite direction, and the general form of the same claim
+    /// `weights.rs`'s `every_sign_intent_classification_agrees_with_its_
+    /// own_authored_default` also checks. A negative default would mean the
+    /// crate itself contradicts its own gate, which is a bug to fix at the
+    /// source, not to repair away on every load. Driven through
+    /// [`non_negative_gates`] itself (not a hand-copied list of the keys it
+    /// currently returns) so a future reclassification is covered here with
+    /// no edit needed.
     #[test]
     fn no_gated_non_negative_weight_is_authored_as_a_downside() {
-        for &(keys, _) in NON_NEGATIVE_GATES {
-            for &k in keys {
-                assert!(
-                    k.default_weight() >= 0.0,
-                    "{} defaults to {}, contradicting its own gate",
-                    k.name(),
-                    k.default_weight()
-                );
-            }
+        for (k, _) in non_negative_gates() {
+            assert!(
+                k.default_weight() >= 0.0,
+                "{} defaults to {}, contradicting its own gate",
+                k.name(),
+                k.default_weight()
+            );
         }
     }
 
@@ -1566,14 +1883,14 @@ mod tests {
     /// about to throw away, so a positive price on it scores "more of my hand
     /// is about to evaporate" as an improvement. Repaired DOWN to zero, the
     /// same direction and for the same reason as every other non-positive
-    /// gate. Driven through the [`NON_POSITIVE_GATES`] table itself so the
-    /// new list is checked as a member of it, not as a special case.
+    /// gate. Driven through [`non_positive_gates`] itself so `HandPerishable`
+    /// is checked as a member of it, not as a special case.
     #[test]
     fn a_hand_about_to_expire_may_not_be_priced_as_an_upside() {
         assert!(
-            NON_POSITIVE_GATES.iter().any(|&(keys, _)| keys.as_ptr() == PERISHABLE_GATES.as_ptr()),
-            "PERISHABLE_GATES must be armed through NON_POSITIVE_GATES, which is what also arms \
-             bin/climb.rs's under-mutation guard"
+            non_positive_gates().any(|(k, _)| k == WeightKey::HandPerishable),
+            "HandPerishable must be classified NonPositive by WeightKey::sign_intent, which is \
+             what arms both dominance_repair and bin/climb.rs's under-mutation guard"
         );
         let mut w = Weights::default();
         w.set(WeightKey::HandPerishable, 1.5);
@@ -1613,18 +1930,150 @@ mod tests {
         assert_eq!(out.get(WeightKey::BlueFree), 0.4220);
     }
 
-    /// NEGATIVE CONTROL: a phase multiplier outside `NET_NONNEG_PHASE` (all
-    /// of them, currently -- it is empty) is entitled to a negative net; the
-    /// guard must not touch it.
+    /// LEADERSIGN: `card_board_leader` deeply negative while `card_board_
+    /// credit` sits at its legal default of `0.0` is exactly the live 2p
+    /// champion's shape (`card_board_credit = 0.0`, `card_board_leader =
+    /// -15.003`) -- `BENEFIT_GATES` gates `CardBoardCredit` alone, which
+    /// does nothing here because `CardBoardCredit` itself is already legal;
+    /// the bug lives entirely in the per-type offset `BENEFIT_GATES` never
+    /// looks at. The repair must raise `CardBoardLeader` to `-card_board_
+    /// credit` (here, `0.0`) so the EFFECTIVE multiplier `card_potential`
+    /// uses lands at exactly the boundary, and it must log a `Violation`
+    /// naming `CardBoardLeader`, not `CardBoardCredit` (the innocent term).
+    #[test]
+    fn a_deeply_negative_per_type_board_credit_is_repaired_even_though_the_base_is_legal() {
+        let mut w = Weights::default();
+        w.set(WeightKey::CardBoardCredit, 0.0);
+        w.set(WeightKey::CardBoardLeader, -15.003_238_920_505_405);
+        let (out, viol) = dominance_repair(&w);
+        assert_eq!(out.get(WeightKey::CardBoardCredit), 0.0, "the base was already legal, must not move");
+        assert_eq!(out.get(WeightKey::CardBoardLeader), 0.0, "raised to -base, i.e. 0.0 here");
+        assert!(
+            viol.iter().any(|v| v.weight == WeightKey::CardBoardLeader),
+            "expected a CardBoardLeader violation, got {viol:?}"
+        );
+    }
+
+    /// LEADERSIGN, the behavioural half: with the illegal vector above run
+    /// straight through `card_potential` (unrepaired), a leader with a
+    /// genuinely helpful board swap must price NEGATIVELY -- the inversion
+    /// this whole gate exists to close. Once `dominance_repair` is applied,
+    /// the same leader on the same board must never price negative again.
+    ///
+    /// It lands at exactly `0.0`, not some other positive number, and that
+    /// is not a weaker guarantee slipped in here -- it is what THIS repair
+    /// rule always does when it fires, by the same construction as every
+    /// other rule in `dominance_repair`: raising the per-type key to
+    /// `-base` makes `base + key` land on exactly the boundary (`0.0`),
+    /// same as `BENEFIT_GATES` pinning a negative grant to exactly `0.0`
+    /// rather than to some positive replacement, or `DOMINATES` "clamping
+    /// to the boundary" per this file's own top doc comment. A `credit_
+    /// board` of exactly `0.0` then routes `card_potential` to its static
+    /// per-card table (`card_potential_core`'s own comment: every board-
+    /// aware branch is gated behind `credit_board != 0.0`), which for a
+    /// pure swap-type card like a leader carries no printed static price of
+    /// its own -- so `0.0` ("unpriced") is the correct, honest landing
+    /// spot, not `0.0` because the fix under-corrected.
+    #[test]
+    fn the_repaired_vector_no_longer_inverts_a_helpful_leaders_price() {
+        use crate::bots::board_yields::{self, Baseline};
+
+        let state = G::new_game(2, 42);
+        let baseline = Baseline::at(&state, 0);
+        let id = CardId::by_name("Hammurabi").expect("Hammurabi is a real leader");
+        let swap = board_yields::board_yields(id, &baseline).expect("a leader is always a swap type");
+        let raw_diff = cards::sum_board_triples(&swap, &Weights::default());
+        assert!(raw_diff > 0.0, "test needs a genuinely helpful swap to mean anything, got {raw_diff}");
+
+        // The live 2p champion's own shape: `card_board_credit` legal at its
+        // `0.0` default, `card_board_leader` deeply negative.
+        let mut illegal = Weights::default();
+        illegal.set(WeightKey::CardBoardCredit, 0.0);
+        illegal.set(WeightKey::CardBoardLeader, -15.003_238_920_505_405);
+        let mut scratch = Vec::new();
+        let inverted = cards::card_potential(id, &illegal, Some(&baseline), None, &mut scratch);
+        assert!(inverted < 0.0, "unrepaired: a helpful leader must price negative to prove the inversion, got {inverted}");
+
+        let (repaired, viol) = dominance_repair(&illegal);
+        assert!(viol.iter().any(|v| v.weight == WeightKey::CardBoardLeader), "{viol:?}");
+        scratch.clear();
+        let fixed = cards::card_potential(id, &repaired, Some(&baseline), None, &mut scratch);
+        assert!(fixed >= 0.0, "repaired: a helpful leader must never price negative, got {fixed}");
+        assert_eq!(fixed, 0.0, "credit_board lands on exactly the boundary, so this must be the static-table price, which is 0.0 for a pure swap-type card");
+    }
+
+    /// NEGATIVE CONTROL: a phase-family coordinate that is NOT gated
+    /// `NonNegative`/`NonPositive` (`Workers`'s late-extreme,
+    /// `StrengthRel`'s `_early` partner -- only `HandValue`'s own pair
+    /// moved to a plain per-key `NonNegative` gate, T1-D, PHASECUT.txt
+    /// 2026-08-13) is entitled to a negative value; the guard must not
+    /// touch it.
     #[test]
     fn a_phase_multiplier_may_still_go_negative() {
         let mut w = Weights::default();
-        w.set(WeightKey::WorkersEarly, -9.0);
-        w.set(WeightKey::TechLevelsLate, -9.0);
+        w.set(WeightKey::StrengthRelEarly, -9.0);
+        w.set(WeightKey::WorkersLate, -9.0);
         let (out, viol) = dominance_repair(&w);
-        assert_eq!(out.get(WeightKey::WorkersEarly), -9.0);
-        assert_eq!(out.get(WeightKey::TechLevelsLate), -9.0);
+        assert_eq!(out.get(WeightKey::StrengthRelEarly), -9.0);
+        assert_eq!(out.get(WeightKey::WorkersLate), -9.0);
         assert_eq!(viol, vec![]);
+    }
+
+    /// PHASECUT.txt (T1-D, 2026-08-13): after the collapse, `HandValue`
+    /// (the L=0/"start" coefficient) and `HandValueLate` (the L=1/"end"
+    /// coefficient) are each gated `NonNegative` INDIVIDUALLY -- the
+    /// composite `NET_NONNEG_PHASE` mechanism this replaced (which used to
+    /// raise a violating phase partner to exactly `-base`, SIGNAUDIT
+    /// instance 3) is gone for `HandValue`; a plain `NonNegative` gate
+    /// raises a violating coordinate straight to `0.0`, the same as every
+    /// other such gate (`BuildDiscount` etc). Driven from the same
+    /// real-world shape the old composite-mechanism test used (`hand_value`
+    /// legal, its late-phase partner deeply negative, e.g.
+    /// `champ_backup/rust_champion_2p.json`), to show the new mechanism
+    /// repairs the identical corpus shape.
+    #[test]
+    fn a_deeply_negative_hand_value_late_is_repaired_to_zero_even_though_start_is_legal() {
+        let mut w = Weights::default();
+        w.set(WeightKey::HandValue, 0.2);
+        w.set(WeightKey::HandValueLate, -27.683_553_904_987_917);
+        let (out, viol) = dominance_repair(&w);
+        assert_eq!(out.get(WeightKey::HandValue), 0.2, "the start value was already legal, must not move");
+        assert_eq!(out.get(WeightKey::HandValueLate), 0.0, "a NonNegative gate repairs straight to 0.0, not to -start");
+        assert!(
+            viol.iter().any(|v| v.weight == WeightKey::HandValueLate),
+            "expected a HandValueLate violation, got {viol:?}"
+        );
+    }
+
+    /// The behavioural guarantee the T1-D collapse exists for: `start*(1-L)
+    /// + end*L` is a CONVEX combination of `start` and `end`, so once
+    /// `dominance_repair` has made both individually `>= 0`, the net
+    /// coefficient `evaluate` actually applies to `hand_value` is `>= 0` at
+    /// EVERY lateness in `[0,1]`, not merely at the two endpoints a
+    /// composite `base + phase >= 0` check would have looked at -- checked
+    /// directly at several `L` values here rather than taken on the
+    /// convexity argument alone. Same "sits on unused civil actions" bug
+    /// shape SIGNAUDIT.txt originally found (a card-filled hand pricing
+    /// worse than an empty one in the opening) this now closes for every
+    /// lateness, not just `L == 0`.
+    #[test]
+    fn the_repaired_vector_never_prices_hand_value_negative_at_any_lateness() {
+        let illegal = {
+            let mut w = Weights::default();
+            w.set(WeightKey::HandValue, 0.2);
+            w.set(WeightKey::HandValueLate, -27.683_553_904_987_917);
+            w
+        };
+        let (repaired, viol) = dominance_repair(&illegal);
+        assert!(viol.iter().any(|v| v.weight == WeightKey::HandValueLate), "{viol:?}");
+        let start = repaired.get(WeightKey::HandValue);
+        let end = repaired.get(WeightKey::HandValueLate);
+        assert!(start >= 0.0 && end >= 0.0, "start={start} end={end}");
+        for &late in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            let early = 1.0 - late;
+            let net = start * early + end * late;
+            assert!(net >= 0.0, "lateness={late}: net={net}");
+        }
     }
 
     /// `BENEFIT_GATES` pins a negative printed-benefit weight at exactly
@@ -1656,17 +2105,25 @@ mod tests {
         assert!(viol.iter().all(|v| v.weight != WeightKey::WonderStagesPerAction));
     }
 
+    /// The specific "penalty the rules impose" keys `LOSS_GATES` used to name
+    /// as a hand-typed list -- now `WeightKey::sign_intent`'s own
+    /// classification (`weights.rs`), pinned here by name so the four tests
+    /// below still document the concrete bug they were written for rather
+    /// than a generic "whatever `non_positive_gates` happens to return".
+    const LOSS_GATES_FOR_TEST: &[WeightKey] =
+        &[WeightKey::Discontent, WeightKey::Uprising, WeightKey::StrengthDeficit];
+
     /// The real drift this gate was written for: every one of these was
     /// authored negative and the league still pushed it positive in at least
     /// one live arm, scoring a rulebook penalty as an upside.
     #[test]
     fn a_penalty_priced_as_a_benefit_is_pinned_back_to_zero() {
         let mut w = Weights::default();
-        for &k in LOSS_GATES {
+        for &k in LOSS_GATES_FOR_TEST {
             w.set(k, 3.5);
         }
         let (out, viol) = dominance_repair(&w);
-        for &k in LOSS_GATES {
+        for &k in LOSS_GATES_FOR_TEST {
             assert_eq!(out.get(k), 0.0, "{} must be repaired down to 0.0", k.name());
             assert!(viol.iter().any(|v| v.weight == k), "{} must report a violation", k.name());
         }
@@ -1677,11 +2134,11 @@ mod tests {
     #[test]
     fn a_penalty_priced_as_a_cost_is_left_alone() {
         let mut w = Weights::default();
-        for &k in LOSS_GATES {
+        for &k in LOSS_GATES_FOR_TEST {
             w.set(k, -7.25);
         }
         let (out, viol) = dominance_repair(&w);
-        for &k in LOSS_GATES {
+        for &k in LOSS_GATES_FOR_TEST {
             assert_eq!(out.get(k), -7.25, "{} must keep its negative price", k.name());
             assert!(viol.iter().all(|v| v.weight != k), "{} must not report a violation", k.name());
         }
@@ -1693,7 +2150,7 @@ mod tests {
     /// convention, so pin the convention here rather than trusting a comment.
     #[test]
     fn every_loss_gate_defaults_to_a_negative_price() {
-        for &k in LOSS_GATES {
+        for &k in LOSS_GATES_FOR_TEST {
             assert!(
                 k.default_weight() < 0.0,
                 "{} is gated as a penalty but its authored default is {}, which is not a cost",
@@ -1704,6 +2161,60 @@ mod tests {
     }
 
     // ------------------------------------------------------------------ io
+
+    /// HEADLINE TEST (PHASECUT.txt, T1-A/C/D collapse, 2026-08-13): loading
+    /// a LEGACY-format champion file -- one still carrying
+    /// `workers_early`/`tech_levels_early`/`hand_value_early`, retired as
+    /// live `WeightKey` variants by this collapse -- must reproduce EXACTLY
+    /// the same per-feature contribution the OLD 3-parameter blend
+    /// `w[base] + (1-L)*w[early] + L*w[late]` gave, at every lateness `L`
+    /// in `[0,1]`, not merely at the two endpoints the new `{start,end}`
+    /// basis is literally built from. This is the correctness obligation
+    /// this whole collapse rests on: every weight file on disk must produce
+    /// bit-identical play, and this is the algebraic half of that proof
+    /// (the empirical half -- arena self-play A-vs-A on the 5 real
+    /// champion/gauntlet files, before and after this change -- is recorded
+    /// in PHASECUT.txt, not as a `cargo test`).
+    ///
+    /// Uses the project's own OLD authored defaults as the legacy vector
+    /// (`workers`/`workers_early`/`workers_late` = `1.4`/`0.8`/`-0.6`, and
+    /// so on) so the same assertion doubles as a cross-check that the NEW
+    /// authored defaults (`Weights::defaults()`'s `Workers = 2.2`,
+    /// `WorkersLate = 0.8`, ...) are exactly the fold of the old ones, not
+    /// independently retyped numbers that happen to be close.
+    ///
+    /// Reverting the fold in `parse_weights` (making `LEGACY_PHASE_EARLY_
+    /// FOLD` a no-op) turns this test RED -- confirmed by hand while
+    /// developing this fix (see PHASECUT.txt's RED-confirmation section)
+    /// and left here as the permanent regression pin.
+    #[test]
+    fn parse_weights_folds_a_legacy_phase_triple_into_the_same_curve_at_every_lateness() {
+        let legacy = r#"{
+          "workers": 1.4, "workers_early": 0.8, "workers_late": -0.6,
+          "tech_levels": 1.0, "tech_levels_early": 0.5, "tech_levels_late": -0.4,
+          "hand_value": 0.25, "hand_value_early": 0.2, "hand_value_late": -0.2
+        }"#;
+        let w = parse_weights(legacy).expect("a legacy phase triple must still parse, not be rejected as unknown");
+
+        for &(base_v, early_v, late_v, key) in &[
+            (1.4_f64, 0.8_f64, -0.6_f64, WeightKey::Workers),
+            (1.0, 0.5, -0.4, WeightKey::TechLevels),
+            (0.25, 0.2, -0.2, WeightKey::HandValue),
+        ] {
+            let start = w.get(key);
+            let end = w.get(key.late());
+            for &late in &[0.0_f64, 0.25, 0.5, 0.75, 1.0] {
+                let early = 1.0 - late;
+                let old_formula = base_v + early * early_v + late * late_v;
+                let new_formula = start * early + end * late;
+                assert!(
+                    (old_formula - new_formula).abs() < 1e-12,
+                    "{}: at lateness {late}, old={old_formula} new={new_formula} (start={start} end={end})",
+                    key.name()
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_champion_round_trips_through_text() {
@@ -1881,7 +2392,7 @@ mod tests {
     /// champion file is read by the arena and by every tool as well.
     #[test]
     fn loading_repairs_a_rule_level_violation() {
-        let key = BENEFIT_GATES[0];
+        let (key, _) = non_negative_gates().next().expect("at least one NonNegative-classified key exists");
         let text = format!(r#"{{"{}": -3.0}}"#, key.name());
         assert_eq!(parse_weights(&text).unwrap().get(key), 0.0);
     }

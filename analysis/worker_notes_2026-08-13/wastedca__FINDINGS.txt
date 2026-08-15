@@ -1,0 +1,398 @@
+WASTED CIVIL ACTIONS -- bot vs human baseline, and WHY the bot wastes them
+=============================================================================
+STATUS: DONE. Commit sha at the bottom.
+
+HEADLINE (numbers first):
+
+  - At this engine commit (d4ba1ac) with the reference 2p champion
+    (champion_2p_now.json, gen 39258), 62.5% of player-turns (5111/8172)
+    end with at least one civil action unspent, totalling 20.3%... NO --
+    see "IMPORTANT: the inherited 20.3% figure did not reproduce" below.
+    The number that actually reproduces, three times, deterministically,
+    at this commit + this weights file, is: **45.0% of all civil actions
+    dealt out across the sample are left unspent** (14758 CA out of an
+    implied ~32800 total), not 20.3%. This supersedes the inherited figure
+    for this task -- see that section for why, and do not average the two.
+  - Of the turns that end with CA unspent, **100.0% (5110/5111) had at
+    least one legal, affordable, civil-action-costing alternative move**
+    the engine's own move generator offered. "Had nothing legal to spend
+    on" is not the story -- it happened ONCE in 5111 wasted turns.
+  - **Paul's hypothesis, tested directly and precisely as asked**: on those
+    "chose to stop" turns, is the BEST available alternative's raw
+    evaluator score <= 0? **No, only 3.7% of the time (187/5110)**. The
+    evaluator does not think "do nothing" beats every purchasable thing in
+    absolute terms -- see "WHY the raw-score test undersells the finding"
+    below for why this is the wrong lens on `evaluate()`'s own semantics,
+    and what the right one (the GAP) shows instead: a small, consistently
+    negative margin (median -9.3, against a typical board score in the
+    900-1500 range) that decides EndTurn over the best alternative almost
+    every single time it is close. This is real, it is just small relative
+    to `evaluate()`'s absolute scale -- see below.
+  - **Zeroing `civil_actions`/`civil_action_surplus` moves the waste rate
+    from 45.0% to 45.4% -- essentially flat, not a collapse.** This
+    directly contradicts the framing that the penalty is "holding the
+    line" against a much worse underlying valuation at the CURRENT
+    baseline (45%, not 20.3%). It does NOT rule out the penalty mattering
+    more at whatever baseline produced the original 20.3% figure -- that
+    baseline is not reproducible here (see below) -- but at the baseline
+    this task can actually measure, removing the penalty is a rounding
+    error, not a cliff.
+  - Human baseline: DEMOTED per Paul's mid-task steer and NOT computed to
+    the fidelity the original task asked for -- see "Human baseline" below
+    for what's cheaply available (a rate, not a waste fraction) and why a
+    real one was skipped.
+
+=============================================================================
+IMPORTANT: THE INHERITED 20.3% FIGURE DID NOT REPRODUCE -- READ THIS FIRST
+
+The previous worker's `/private/tmp/whyexpensive/FINDINGS.txt` (section (C),
+copied into this file's predecessor and not reproduced verbatim here --
+see git history of this file / the original task brief for its exact text)
+reports, from `actioncensus.rs`, 200 games / 2p / seeds 1..200 /
+`champion_2p_now.json` (gen 39258): 8028 player-turns, 20.3% of civil
+actions left unspent.
+
+Running the EXACT SAME unmodified binary (`actioncensus.rs`, unchanged --
+`git status` shows it clean, tracked, no diff) against the EXACT SAME
+filename (`champion_2p_now.json`, gen 39258, present at this path) with the
+EXACT SAME CLI (`--games 200 --players 2 --threads 4`, and separately
+verified with `--threads 1`, i.e. not a threading race -- three repeated
+runs are byte-identical) gives **8372 player-turns, 45.0% unspent** -- not
+8028 turns, not 20.3%.
+
+Investigated and RULED OUT:
+  - Threading/nondeterminism: threads=1 vs threads=4, and two repeat runs,
+    are byte-identical. The simulation is fully deterministic given
+    (seed, weights, engine commit).
+  - Weight-key default drift: every `WeightKey` whose engine-code default
+    is nonzero was checked against `champion_2p_now.json`'s own values;
+    only ONE key (`StrengthDeficit`, default -0.6, unrelated to civil
+    actions) is silently defaulted rather than explicit in the file, and
+    zeroing that one key's contribution manually does not explain a
+    45%-vs-20.3% gap on its own (not the mechanism -- checked, not fixed).
+  - A different engine commit: `git log` shows `d4ba1ac` ("Add dwell-time
+    and CA-allocation census tools for the take-cost pathology" -- the very
+    commit that ADDED `actioncensus.rs`/`dwellcensus.rs`) IS the current
+    HEAD of this clone, with nothing landed after it. The engine source
+    that produced 20.3% and the engine source running now should be the
+    same commit.
+
+NOT ruled out (could not be, given budget): `champion_2p_now.json` is
+**untracked** (`git status --short` lists it `??`) -- there is no git
+history to diff it against whatever file actually sat at that path when
+the 20.3% run happened. This same shared clone's working tree also carries
+`NOTES.md`, a wholly unrelated wonder-scoring investigation (branched
+`/private/tmp/cardfeat3`, merged into this history at `4f9d483`) that
+itself ran repeated `behavcensus` sweeps against "the live 2p champion" --
+if that investigation (or anything else touching this untracked file
+outside git) ever re-saved a file at this same path, its content today is
+not provably the file the 20.3% run actually used, gen number
+notwithstanding. This was not fully root-caused -- it did not block this
+task's real ask (the score histogram, which only needs ONE internally
+consistent weights file used identically for the baseline and the zeroed
+rerun, which is what happened here) and chasing it further was judged not
+worth the budget. Anyone who needs the exact 20.3% baseline reproduced
+should re-run `actioncensus`/`dwellcensus` at commit `d4ba1ac` against
+whatever champion the live league considers canonical NOW, and treat
+`champion_2p_now.json` as provenance-uncertain until then.
+
+Everything below uses `champion_2p_now.json` as found in this clone,
+labelled "the reference 2p champion" rather than "the 20.3% champion" --
+the two may or may not be the same file.
+
+=============================================================================
+STEER RECEIVED MID-TASK (governs the priority order below)
+
+Paul's position, verbatim in substance: civil-action waste rate must NOT
+become something the evaluator is scored on -- efficient use should EMERGE
+from correctly valuing the moves actions are spent on, not from a bolted-on
+"spend your actions" term. His hypothesis: `civil_actions`/
+`civil_action_surplus`'s negative weights ARE exactly that hack -- a direct
+penalty on unspent actions with no information about WHAT to spend on --
+and a prior experiment zeroing them reportedly made the bot bank 3 unspent
+CA on turn 1 instead of taking a card, suggesting the penalty props up an
+otherwise too-low valuation.
+
+Revised priority (this file follows it): (1) the best-available-move score
+histogram on "chose to stop" turns, testing whether those scores are <= 0;
+(2) the move family of the top forgone alternative, looking for one family
+clustering the negative scores; (3) a zeroed-weights rerun, comparing waste
+rate and take-cost split; (4) human baseline demoted to a yardstick, skip
+if it needs a full replay; (5) no finding here is to be framed as "add a
+punish-waste weight."
+
+=============================================================================
+METHOD
+
+New binary: `rust/src/bin/wastecensus.rs`. 200 games, 2p, seeds 1..200 (same
+convention as `actioncensus.rs`: `--seed 1 --games 200`, seed = 1+g).
+
+For every player-turn, the decision point is captured IMMEDIATELY BEFORE the
+`Move::EndTurn` that ends it (reusing `actioncensus.rs`'s own established fix
+for the `economy::end_of_turn`-overwrites-`civil_actions` trap -- `pre_ca` is
+read off `state.players[pre_current].civil_actions` before `game::step` is
+called on the EndTurn move, not after). If `pre_ca > 0`:
+
+  1. `moves = legal::legal_moves(&state)` -- the engine's own generator, at
+     the exact state the bot faced. Every non-`EndTurn` move it returns is
+     ALREADY known-affordable (legality itself gates on the real
+     civil/military/resource budget -- there is no separate "cost <=
+     remaining CA" filter layered on top by this file).
+  2. `WeightedBot::rank_moves(&state, moves)` -- NOT a re-implementation of
+     the bot's valuation. This is the exact function `WeightedBot::choose`
+     (what the champion actually calls to pick `EndTurn` in the first
+     place) is built on top of: same clone-per-candidate, same
+     `apply::apply`, same `evaluate`, same `end_turn_bias` treatment
+     (`rank_moves`'s own doc comment: `ranked[0].0 == choose(...)` always).
+     Reusing it means the scores reported here are PROVABLY what the bot
+     itself computed to make the choice, not an approximation of it.
+  3. Per candidate, whether it actually spends >=1 civil action is decided
+     empirically -- clone the state, `apply::apply` the move, compare
+     `civil_actions` before/after on the acting player -- rather than by a
+     hand-maintained "which `Move` variants cost CA" table (unit
+     `Build`/`Upgrade`/`Destroy` cost a MILITARY action instead, and
+     `moves.rs`'s own doc history records a prior bug from exactly this
+     kind of hand classification).
+  4. Bucket: **"nothing legal"** if no legal move besides EndTurn spends a
+     civil action; **"chose to stop"** otherwise, recording the best-scoring
+     (highest-`evaluate()`) civil-action-costing alternative's score, its
+     move family, and EndTurn's own score on the same ranked list.
+
+5 unit tests (`cargo test --profile difftest --bin wastecensus`, all
+passing): the exhaustive `move_family` match pins `Take`->`Take` and
+`EndTurn`->`Other`; `spends_civil_action` is pinned both ways (true for a
+round-1 Take, `None` for `EndTurn` itself because applying it changes whose
+turn it is -- documented as the reason `analyze_stop` never calls it on
+`EndTurn`); a full 2p game closes with at least one `EndTurn`; a turn with
+0 unspent CA is correctly skipped.
+
+The zeroed-weights vector (`champion_2p_zeroed.json`, NOT committed to the
+weights file's own history) is a plain Python-edited COPY of
+`champion_2p_now.json` with `civil_actions` and `civil_action_surplus` both
+set to 0.0 -- the live champion file was never touched.
+
+=============================================================================
+RESULTS -- (1) THE SCORE HISTOGRAM (the task's now-highest-priority output)
+
+`cargo run --profile difftest --bin wastecensus -- --games 200 --players 2
+--weights champion_2p_now.json --threads 4` (full output:
+`wastecensus_main.txt` in this directory).
+
+8172 player-turns; 5111 (62.5%) end with unspent CA; 14758 CA unspent in
+total (mean 2.887 CA per wasted turn, among turns that waste any at all).
+
+BUCKET SPLIT: nothing-legal 1/5111 (0.02%), chose-to-stop 5110/5111
+(99.98%). The "had nothing legal to do" explanation is essentially absent
+in this sample -- almost every wasted CA was a genuine choice against a
+real, engine-legal, affordable alternative.
+
+RAW SCORE of the best available alternative, on chose-to-stop turns:
+  min=-34119.10  p10=355.21  p25=557.34  median=928.04  p75=1483.96
+  p90=2231.16  max=5541.79  mean=1069.86  n=5110
+<= 0 on 187/5110 (3.7%).
+
+EndTurn's OWN score on those same turns:
+  min=-34111.62  p10=370.06  p25=574.87  median=940.35  p75=1498.40
+  p90=2244.77  max=5553.53  mean=1087.59  n=5110
+
+GAP (best_alt - end_turn, <=0 by construction since EndTurn won):
+  min=-13064.55  p10=-24.99  p25=-13.55  median=-9.32  p75=-5.18
+  p90=-2.14  max=-0.004  mean=-17.73  n=5110
+
+WHY THE RAW-SCORE TEST UNDERSELLS THE FINDING, AND WHAT THE GAP SHOWS
+INSTEAD: `evaluate()` returns an ABSOLUTE valuation of the whole resulting
+board (culture, resources, tech, wonders, everything, weighted and summed),
+not a marginal "was this specific move good" delta -- by round 10+ that
+absolute number is naturally in the hundreds-to-thousands range regardless
+of which of two very similar candidate boards (one with an extra card
+taken, one without) you're looking at. So "is the best alternative's raw
+score <= 0" is really asking "is the whole game going badly", which is a
+different, coarser question than "is this specific move worth making" --
+and the honest answer to THAT coarser question is NO, 96.3% of the time the
+game is going fine (positive absolute score) even on turns where the bot
+stops early. Read literally, this REFUTES the strongest form of the
+hypothesis ("the evaluator thinks doing nothing is better than everything
+it could buy, in absolute terms") for all but a small tail of turns.
+
+The GAP is the quantity that actually decided the choice, and it tells the
+sharper, truer story: on the median chose-to-stop turn, the best purchasable
+move's resulting board scores about 9.3 points BELOW leaving the board
+alone -- consistently negative (only ~0.1% of the mass is positive, since
+the bot always picks the higher-scoring option and EndTurn won every one of
+these turns by definition), but SMALL relative to the ~900-1500 typical
+scale of the boards themselves (under 1%). This is not "the evaluator
+thinks the game is lost" (it doesn't, per the raw-score result above) -- it
+is "the evaluator prices the marginal cost of spending this civil action
+(the resource/food/CA opportunity cost the move consumes, priced by
+`consumption_headroom -5.43`, `corruption_headroom 0.66`, `food_gap -0.40`,
+and similar per-unit-cost terms in the vector) as very slightly larger than
+the marginal benefit of what it buys" on the close calls, and the
+`end_turn_bias` weight (-0.252 in this champion, applied as a small
+ADDITIVE PENALTY to EndTurn's own score, not a bonus -- confirmed by
+reading `WeightedBot::rank_moves`'s source directly) is not enough to flip
+that near-tie back toward spending. This matches the mechanism Paul's
+hypothesis names (undervaluation of ordinary moves, not insufficient
+spend-pressure) far better than the raw-score framing does -- it just shows
+up as a small, close-call margin rather than a blowout.
+
+WHICH MOVE FAMILY DOMINATES THE FOREGONE ALTERNATIVES (chose-to-stop
+turns, n=5110):
+  Take         3450 (67.5%)  mean_score=1094.30
+  WonderStep    654 (12.8%)  mean_score=1134.46
+  Population    388 ( 7.6%)  mean_score= 972.95
+  Destroy       320 ( 6.3%)  mean_score= 936.15
+  Leader        113 ( 2.2%)  mean_score= 699.81
+  PlayAction     93 ( 1.8%)  mean_score= 928.09
+  Develop        53 ( 1.0%)  mean_score=2093.18
+  Build          24 ( 0.5%)  mean_score=-1080.20
+  Revolution     10 ( 0.2%)  mean_score=1848.67
+  Upgrade         5 ( 0.1%)  mean_score= 754.74
+
+Take dominates the forgone-alternatives list two-thirds of the time -- when
+the bot stops with CA left and a real alternative existed, that alternative
+is overwhelmingly "take one more card from the row", not some exotic
+family. Every family except `Build` has a strongly positive mean score
+(consistent with the raw-score result above: these are not bad boards, they
+score well, just marginally less well than doing nothing). `Build`'s
+negative mean (n=24, small) is the one family where the forgone alternative
+genuinely looked bad in absolute terms -- too small a sample (0.5% of
+chose-to-stop turns) to generalize from, flagged rather than over-read.
+
+WHERE THE WASTE CONCENTRATES: monotonically increasing with age/round, not
+concentrated at the start or a single phase --
+  Age I 22.3% of wasted turns / 18.8% of unspent CA
+  Age II 33.0% / 32.9%
+  Age III 35.7% / 39.2% (the peak, both by turn-count and by CA-volume)
+  Age IV 7.5% / 8.4% (fewer turns overall in age IV, not less wasteful)
+Round buckets tell the same story: waste share climbs steadily from 17.6%
+of wasted turns in rounds 1-5 to 29.3% in rounds 16-20 -- there is no early-
+game-specific or late-game-specific spike, waste grows roughly in step with
+how long the game has run, consistent with "more legal alternatives exist
+as the tableau grows, and the marginal-value miscalibration applies to all
+of them about equally" rather than a phase-specific bug.
+
+=============================================================================
+RESULTS -- (2) ZEROED-WEIGHTS RERUN (civil_actions=civil_action_surplus=0.0)
+
+Same 200 games / seeds / engine, `champion_2p_zeroed.json` (a copy; the live
+champion file was never modified).
+
+                              baseline (-0.822 / -1.351)   zeroed (0.0 / 0.0)
+Aggregate CA unspent share    45.0%  (14758/~32800 CA)      45.4% (15147 CA)
+Player-turns with CA unspent  62.5% (5111/8172)             63.5% (5125/8070)
+Mean unspent per wasted turn  2.887                          2.956
+Takes per player-game         13.68                          14.50
+Take-cost band 1 (cheap)      32.3%                          30.7%
+Take-cost band 2              27.5%                          31.9%
+Take-cost band 3 (expensive)  40.2%                          37.4%
+Round 1-5 share of wasted CA  14.6% (2150 CA)                16.1% (2439 CA)
+
+VERDICT: at the baseline this task can actually measure (45%, not the
+inherited-but-unreproducible 20.3%), removing the penalty entirely moves
+the overall waste rate by 0.4 percentage points -- noise, not a cliff, and
+in the WRONG direction if the penalty were the thing suppressing waste (it
+went up slightly, not down to near-zero). There is a real but small
+early-game effect in the predicted direction (round-1-5 share of wasted CA
+rises from 14.6% to 16.1%), consistent with SOME turn-1-ish banking effect
+existing, just far smaller in this data than "banks 3 actions on turn 1"
+implies as a general pattern across 200 games -- that anecdote may describe
+a different champion/weights snapshot, a more extreme zeroing, or a specific
+game this sample didn't happen to reproduce; it was not independently
+reproduced here. Take-cost band 3 share actually FALLS slightly (40.2% ->
+37.4%) when the penalty is removed, which is the opposite of "forced to
+spend, it spends on whatever's most expensive" -- if anything, at this
+baseline, the penalty's presence is very weakly associated with MORE
+expensive-band spending, not less.
+
+Read together with (1): this is consistent evidence for the same
+conclusion -- the ~45% waste rate is not substantially propped up or
+explained by these two weights either way. Whatever the load-bearing cause
+is, it is not "the penalty is currently the only thing making the bot
+spend" (zeroing it barely changes anything), and the score-histogram GAP
+analysis above already points at the more likely mechanism: ordinary moves
+(mostly Take, per the family breakdown) are priced with a small, systematic
+NEGATIVE marginal margin relative to doing nothing, close enough that a
+purely additive `end_turn_bias`/penalty term of the size in this vector
+cannot reliably flip it, in either direction. This is squarely a
+valuation-of-ordinary-moves finding, not a spend-pressure-strength finding
+-- consistent with Paul's framing that the fix, if there is one, belongs in
+correctly pricing what the civil action buys, not in the size of a
+stop-penalty.
+
+=============================================================================
+HUMAN BASELINE -- demoted per steer, not computed to full fidelity
+
+Per the mid-task steer, this was explicitly deprioritized and budget was
+NOT spent chasing a true per-turn CA-pool reconstruction. What IS available
+cheaply, already established by the PRIOR worker's `corpuscensus.rs` (not
+re-derived here): human 2p BGO players take **37.26 cards/player-game**,
+against the bot's rate in this session's own sample of **13.68-14.50
+takes/player-game** (roughly 2.6-2.7x fewer). This is a RATE, not a waste
+fraction -- the denominator (a human's true civil-action pool per turn,
+which depends on government and a handful of CA-granting techs/wonders --
+Code of Laws +1, Justice System +1, Civil Service +2, Pyramids +1, Kremlin
++1, established this session by reading `card_table.rs` and
+`effects::state_stats`) is not established anywhere in this repo, and BGO's
+journal never prints a player's remaining CA pool directly.
+
+Full reconstruction was judged not worth the (now-demoted) budget for two
+independent reasons, both established this session: (a) `docs/REPLAY.md`'s
+full journal->engine-state replay is 0/24 sample games complete (dominant
+blocker: genuinely unrecoverable hidden information, forced military
+discards, 58% of stops) -- a per-turn CA-pool binary built on top of that
+replay would inherit its incompleteness, not bypass it; (b) `replay_common
+.rs` DOES already carry a working CA-total-vs-spend cross-check
+(`ca_take_spend_this_turn`/`costs::ca_total` compared live per line, gated
+behind `TTA_REPLAY_DEBUG`) that a future worker could extend into a genuine
+per-turn "unspent CA" census WITHOUT re-deriving government/card-effect
+tracking from scratch -- flagged here as the concrete next step, not
+attempted, because it still inherits the same 0/24-completion ceiling as
+(a) for any game that runs long enough to hit a discard, which by
+`REPLAY.md`'s own estimate is most real games eventually.
+
+Bottom line: the human waste FRACTION is not established by this task. The
+human take RATE (37.26/player-game) is roughly 2.6-2.7x the bot's own rate
+in this exact sample, a large gap in the same direction the previous
+worker's take-cost/dwell-time investigation already characterized -- this
+new data neither strengthens nor undermines that finding, it just was not
+the priority this session and is reported honestly as skipped.
+
+=============================================================================
+FRAMING CHECK (per steer point 5)
+
+Nothing above is a recommendation to add or size a "punish waste" weight.
+The two candidate mispriced quantities this data points at, in order of
+how directly the evidence supports them:
+  1. The marginal value of an ordinary Take/WonderStep/Population/Destroy
+     move, net of its resource/food/CA opportunity cost, is priced with a
+     small but consistent negative margin relative to doing nothing on
+     exactly the turns where the bot stops (median gap -9.3, see the score
+     histogram above) -- this is a pricing-of-ordinary-moves finding, which
+     is where Paul's framing says to look.
+  2. `Build`'s forgone-alternative mean score is negative (n=24, 0.5% of
+     chose-to-stop turns) -- too small to generalize from in this sample,
+     named rather than acted on.
+Zeroing `civil_actions`/`civil_action_surplus` (the literal "punish waste"
+terms) changed the waste rate by 0.4 points either way -- confirming they
+are not the mechanism to adjust, consistent with not treating waste-rate
+itself as a target.
+
+=============================================================================
+FILES
+
+- `rust/src/bin/wastecensus.rs` -- new binary, this task's main tool. 5 unit
+  tests, `cargo test --profile difftest --bin wastecensus` passes.
+- `champion_2p_zeroed.json` -- a plain copy of `champion_2p_now.json` with
+  `civil_actions`/`civil_action_surplus` set to 0.0. Not committed as part
+  of the champion lineage; used only for the rerun in this file.
+- `wastecensus_main.txt`, `wastecensus_zeroed.txt`, `actioncensus_repro.txt`,
+  `actioncensus_zeroed.txt` -- raw stdout of every run cited above.
+
+COMMIT: d1a464be84fe40c49cf7c363f0a0c3da44fa3852 -- "Add wastecensus: split
+the champion's unspent civil actions into 'nothing legal' vs 'chose to
+stop', with the bot's own evaluator score on the best forgone alternative"
+(pathspec-committed as `rust/src/bin/wastecensus.rs` only, never
+`git add -A` -- this clone's other untracked scratch files, e.g. the
+`champion_2p_zeroed.json` copy and the `.txt` run logs and this FINDINGS.txt
+itself, are left untracked deliberately, matching how `champion_2p_now.json`
+itself was already untracked in this workspace).

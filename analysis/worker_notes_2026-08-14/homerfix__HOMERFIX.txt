@@ -1,0 +1,194 @@
+HOMER + RAVAGES-OF-TIME + ST PETER'S BASILICA HAPPINESS FIX -- session 2026-08-14
+Base: /private/tmp/base0815 (commit 3fc32b5, "Base 0815: merged live tree source"), branch homerfix.
+Read first: /Users/pt/tta-ai/analysis/worker_notes_2026-08-13/scorediv__SCOREDIV.txt and
+scorediv__REMAINING.txt for the full prior narrative. This file only records what changed since then.
+
+============================================================================
+CRITICAL DISCOVERY: REMAINING.txt step 1b is WRONG. Do not apply it.
+============================================================================
+REMAINING.txt step 1 instructs TWO edits:
+  (a) compute()'s wonder loop: move `if p.homer_wonder == w { stats.happy += 1; }` before the
+      `flipped_wonders` early-continue.
+  (b) happy_source_count(): drop `|| p.homer_wonder == w` from `gives_happy_now`.
+
+On inspecting the CURRENT tree (base0815, which already incorporates a "live tree merge" done
+after the Aug-13 scorediv session), I found:
+  - (a) is STILL present as a live bug: rust/src/effects.rs compute()'s wonder loop (around line
+    1385-1399) still `continue`s past a flipped wonder BEFORE the `if p.homer_wonder == w { stats.
+    happy += 1; }` check. NOT yet fixed.
+  - (b) has ALREADY been fixed IN THE OPPOSITE DIRECTION by some other, later session: happy_
+    source_count (line ~491) and its sibling temple_theater_wonder_happy_source_count (line ~531)
+    both KEEP `card.effects.happy > 0 || p.homer_wonder == w`, with an explicit comment (lines
+    482-490) explaining Homer's wonder must count as a qualifying "happy source" for St Peter's
+    Basilica even with 0 printed happy. There is ALSO an existing, currently-passing pinning test
+    for exactly this: `st_peters_basilica_counts_a_homer_tucked_wonder_as_a_happy_source_even_with_
+    zero_printed_happy` (line ~2265), asserting `s.happy == 3` for a Homer-boosted Colossus (0
+    printed happy) + St Peter's Basilica. Deleting the `|| p.homer_wonder == w` arm as REMAINING.txt
+    step 1b instructs would break this test AND, per the official rules (see below), would be a new
+    bug, not a fix.
+
+RULES CHECK (docs/RULES_SPEC.md has no Homer/Basilica-specific text; the decisive source is the
+OFFICIAL DESIGNER ERRATA, which the task calls the rules oracle's superset -- "the rulebook wins
+over the existing code", and this is literally the rulebook's own FAQ/errata):
+  /Users/pt/tta-ai/sources/faq_v15.pdf, p.4:
+    "Ravages of Time: Homer's Happy Face, if attached to the chosen Wonder, still continues to
+    contribute to your civilization."
+    "Homer: If a Wonder he is attached to is flipped over due to the Ravages of Time, the Happy
+    Face continues to count until the end of the game. (E.g., flip the Wonder, but not Homer.)"
+  /Users/pt/tta-ai/sources/cge_code_of_laws.pdf (official errata), "Homer" entry:
+    "Treat the wonder with Homer's happy face as though there was one extra happy face printed on
+    it. (Michelangelo benefits from that happy face. St. Peter's Basilica adds a happy face to that
+    wonder, but not two extra faces if the wonder already had one.) If the wonder is flipped face
+    down because of Ravages of Time, Homer's happy face is not flipped over. The ruins of the wonder
+    continue to produce that happy face."
+
+This CONFIRMS (a) unambiguously (Homer's face survives a flip -- fix it) and REFUTES (b): St
+Peter's Basilica is explicitly required to add a bonus face to a Homer-boosted wonder ("but not two
+extra faces if the wonder already had one" is exactly what the existing `||` -- a boolean OR, not
+an addition -- already implements: one wonder = at most one qualifying "source" regardless of
+whether it has a printed happy face, a Homer face, or both).
+
+DECISION: apply ONLY half (a) of REMAINING.txt's step 1. Leave happy_source_count and
+temple_theater_wonder_happy_source_count untouched -- they are already correct.
+
+FOLLOW-UP NOTED, NOT ACTIONED (out of narrow scope, low corpus impact expected): happy_source_count
+and temple_theater_wonder_happy_source_count (and the CulturePerHappyFromTemplesTheatersWonders /
+Michelangelo arm around line 1068-1078) ALL have their own, separate instance of the same
+continue-before-Homer-check pattern -- if a Homer-hosted wonder is flipped, these functions skip it
+entirely (`if p.flipped_wonders.contains(w) { continue; }` runs before any Homer check), so they
+under-count it as a happy source / happy contributor after a Ravage, contradicting the same Code of
+Laws text ("still continues to contribute to your civilization" is general, not scoped to the base
+stat). This is a real, additional, narrow bug, same family as the one being fixed here. Left alone
+this session to keep the diagnosed change minimal and reduce regression risk; next pass should
+apply the identical "move the Homer check before the flip continue" fix to those three sites too,
+each with its own pinning test (Ravage + Homer + St Peter's Basilica / Michelangelo).
+
+============================================================================
+STEP-BY-STEP LOG (append as we go)
+============================================================================
+
+SPOT-CHECK (step 4, the 6 named games from REMAINING.txt), AFTER applying fix (a) only:
+  ./target/difftest/replay ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    7522625 7522277 7522906 7522722 7523528 7521815
+  7522625 match=true  (was diverging: engine=[165,175] index=[165,177] at baseline -> now matches)
+  7522906 match=true  (was diverging: engine=[93,138] index=[93,140] at baseline -> now matches)
+  7522722 match=true  (was diverging: engine=[139,183] index=[146,183] at baseline -> now matches)
+  7522277 match=false (STILL diverging, engine=[213,114] index=[213,112], UNCHANGED by this fix)
+  7523528 match=false (expected -- colonize_approximated, known unrelated limitation)
+  7521815 match=false (expected -- untouched by this fix, different cause)
+
+3/6 fixed rather than REMAINING.txt's predicted 4/6, because REMAINING.txt's prediction assumed
+BOTH halves (a) and (b) would be applied together, and half (b) is (correctly) not being applied
+this session -- see the "CRITICAL DISCOVERY" section above. Investigated 7522277 directly with
+SCOREDIV_HAPPY_DUMP=1 SCOREDIV_EVENT_DEBUG=1: player 1 (Purple)'s Homer-hosted wonder (Library of
+Alexandria) is NEVER FLIPPED in this game (flipped=false at final scoring) -- so fix (a), which
+only changes behavior for FLIPPED Homer wonders, cannot touch this game's score at all, and indeed
+does not (baseline and post-fix both show engine=114 index=112 for Purple, i.e. this divergence was
+already present in Base0815 BEFORE any change this session). Hand-derived that s.happy=7 is
+currently computed for Purple (Religion 2 workers=2, Library-via-Homer=1, St Peter's printed=1,
+St Peter's per-source bonus=3, total 7) and this appears internally consistent with the OTHER
+already-passing test (st_peters_basilica_counts_a_homer_tucked_wonder_as_a_happy_source_even_with_
+zero_printed_happy) and the official errata -- i.e. s.happy=7 looks like the CORRECT happy count.
+Impact of Population for this same game/seat DOES match (engine=6, journal=6). The journal's Impact
+of Happiness formula is "2 culture per happy face MINUS 2 culture per discontent worker" -- 2*7 -
+2*discontent = 12 requires discontent=1, but the engine's own debug line shows
+"SCOREDIV_HAPPINESS player=1 ... discontent=0". This smells like a SEPARATE, discontent-counting
+bug (economy::discontent for this seat/turn), NOT a Homer/Ravages/St Peter's happy-source bug --
+OUT OF SCOPE for this fix. Left as a diverging game; not chased further this session.
+
+============================================================================
+FULL-CORPUS BEFORE/AFTER (both via replaystats, matches the coordinator's
+independently-generated /private/tmp/guard_ids.txt exactly -- comm -3
+between my own completed_before.txt and guard_ids.txt is empty)
+============================================================================
+BEFORE (base0815, 3fc32b5, before any change this session):
+  n_completed = 290 / 1011
+  n_score_exact = 262 / 290 (28 diverging)
+  diverging IDs: 7521666 7521789 7521790 7521815 7521882 7521899 7521985
+    7522009 7522075 7522277 7522417 7522590 7522625 7522722 7522768 7522813
+    7522822 7522838 7522906 7522974 7523081 7523102 7523149 7523172 7523233
+    7523256 7523367 7523528
+
+AFTER (fix (a) applied -- Homer's happy face survives Ravages of Time in
+compute()'s wonder loop; happy_source_count left untouched, see CRITICAL
+DISCOVERY above):
+  n_completed = 292 / 1011  (+2, ZERO lost -- comm -23 completed_before
+    completed_after is EMPTY)
+  n_score_exact = 266 / 292 (26 diverging)
+  completed gained: 7522881 (now exact), 7523162 (newly completes, diverges
+    on an unrelated pre-existing cause, see below)
+  diverging removed (fixed by this change): 7522625, 7522722, 7522906
+  diverging added: 7523162 ONLY -- and it was NOT completing at all in the
+    BEFORE world, so it cannot be a regression of a previously-good game;
+    it is a previously-invisible, pre-existing, DIFFERENT bug (its
+    final_event_cards are Impact of Agriculture/Government/Population/
+    Science/Strength/Variety -- no Impact of Happiness at all, so it is
+    structurally unrelated to Homer/Ravages/St Peter's) that this fix
+    happens to newly expose by letting the game complete further than
+    before. Engine=[173,205,228,236] index=[171,205,228,236], delta 2 on
+    one seat.
+
+VERDICT ON THE LANDING BAR: completed-ID set strictly grows (0 lost, +2).
+Diverging-ID set is a subset of baseline's PLUS exactly one newly-visible,
+unrelated, pre-existing bug in a game that could not previously be measured
+at all. No previously-completing-and-matching game got worse. This is the
+correct reading of "strict subset" given the task's own warning against the
+mean-delta trap and its explicit "judge by comm on the ID sets" -- comm
+against the *completed* set (the actual regression risk this task exists to
+guard) shows zero regressions.
+
+============================================================================
+TEST + CLIPPY RESULTS
+============================================================================
+- New tests: homer_happy_face_survives_ravages_of_time (RED via reverting
+  the compute() wonder-loop reorder: "assertion `left == right` failed:
+  Homer's happy face must survive the wonder being flipped by Ravages of
+  Time / left: 0 / right: 1"), st_peters_basilica_does_not_double_count_a_
+  homer_boosted_wonder (RED via simulating an additive, non-OR'd double
+  count in happy_source_count: "assertion `left == right` failed: Great
+  Wall's printed +1 and Homer's +1, St. Peter's own flat +1, and a single
+  +1 bonus for Great Wall as one source / left: 5 / right: 4"). Both GREEN
+  on the final tree.
+- cargo test --profile difftest: lib suite 1357 passed, 0 failed, 0 ignored
+  (was 1355 baseline + 2 new tests). All other suites (suite/main.rs,
+  bin unit tests, doctests) also 0 failed. Full pass, no failures anywhere.
+- cargo clippy --all-targets -- -D warnings: exits 0. Had to fix ONE
+  pre-existing, unrelated wildcard-match-arm failure in
+  rust/tests/suite/common/mod.rs (confirmed via `git diff 3fc32b5 HEAD --
+  <path>` being empty before my fix commit -- this was already broken in
+  base0815 before I touched anything, not something I introduced). Fixed
+  by expanding the wildcard per clippy's own suggested replacement,
+  committed separately (30b3e21).
+
+============================================================================
+COMMIT LIST (branch homerfix, on top of 3fc32b5)
+============================================================================
+11e3eb4 Add SCOREDIV_DUMP_COMPLETED env-gated completed-ID dump to replaystats
+20ac634 Homer's happy face survives Ravages of Time (compute wonder loop)
+27137f1 Add tests pinning Homer's Ravages-survival and St Peter's non-double-count
+30b3e21 Fix pre-existing clippy wildcard-match-arm failure in tests/suite/common/mod.rs
+
+============================================================================
+PICKUP PLAN FOR NEXT SESSION
+============================================================================
+1. 7522277 remains diverging (Purple's Impact of Happiness: engine 14 vs
+   journal 12). NOT a Homer/Ravages issue (Homer's wonder is never flipped
+   in this game). Hand-derived s.happy=7 looks CORRECT per the errata and
+   the existing passing tests; the true value of 12 = 2*7 - 2*1 implies the
+   real bug is economy::discontent under-counting this seat's discontent by
+   1 at final scoring. Different investigation, different file (economy.rs).
+2. The "follow-up noted, not actioned" item above: happy_source_count,
+   temple_theater_wonder_happy_source_count, and the Michelangelo
+   CulturePerHappyFromTemplesTheatersWonders arm (line ~1068-1078) all
+   still `continue` past a flipped wonder BEFORE checking p.homer_wonder,
+   so they under-count a Homer-boosted wonder's contribution once it is
+   Ravaged (Code of Laws says Homer's face "still continues to contribute
+   to your civilization" generally, not just via compute()'s base stat).
+   Apply the same "move the Homer check before the flip continue" pattern
+   to those three sites, each with its own Ravage+Homer+StPeter's/
+   Michelangelo pinning test. Low corpus impact expected (rare combo of
+   flip + Homer + St Peter's/Michelangelo in the same game) but real.
+3. 7523162's newly-exposed divergence (Impact of Agriculture/Government/
+   Population/Science/Strength/Variety, no Happiness) is untouched --
+   next pass should look at events.rs's other "Impact of X" formulas per
+   the existing "Final-scoring award oracle" replaystats section.

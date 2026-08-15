@@ -116,7 +116,7 @@ const ROOT_SHORTLIST: usize = 8;
 /// ([`plan::pick`]) scores with `weighted::eval::evaluate`, never this
 /// vector.
 ///
-/// `pub(crate)`: also the narrowing step [`crate::advisor::advisor::
+/// `pub(crate)`: also the narrowing step [`crate::advisor::session::
 /// rank_moves_human`] reuses so the advisor's own `--search human` mode
 /// shortlists the SAME way this bot's `choose_with_search` does, rather than
 /// re-deriving the shortlist rule a second time.

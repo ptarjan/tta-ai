@@ -378,6 +378,12 @@ fn train_softmax(train: &[CachedDecision], nfeat: usize, mean: &[f64], std: &[f6
         for &idx in &order {
             let d = &train[idx];
             let mut scores = vec![0.0f64; d.n];
+            // Same reasoning as bots/neural/train.rs's own needless_range_loop allows:
+            // this is dense training-math indexing several parallel arrays (`scores`,
+            // `p`, `grad`, `f = d.candidate(i, nfeat)`) together; a hand-zipped
+            // rewrite risks silently misaligning gradient math with no compiler
+            // signal, which is worse than the style lint it would silence.
+            #[allow(clippy::needless_range_loop)]
             for i in 0..d.n {
                 let f = d.candidate(i, nfeat);
                 let mut s = 0.0;
@@ -400,6 +406,12 @@ fn train_softmax(train: &[CachedDecision], nfeat: usize, mean: &[f64], std: &[f6
             n_steps += 1;
 
             let mut grad = vec![0.0f64; nfeat];
+            // Same reasoning as bots/neural/train.rs's own needless_range_loop allows:
+            // this is dense training-math indexing several parallel arrays (`scores`,
+            // `p`, `grad`, `f = d.candidate(i, nfeat)`) together; a hand-zipped
+            // rewrite risks silently misaligning gradient math with no compiler
+            // signal, which is worse than the style lint it would silence.
+            #[allow(clippy::needless_range_loop)]
             for i in 0..d.n {
                 let f = d.candidate(i, nfeat);
                 let coef = p[i] - if i == d.human_index { 1.0 } else { 0.0 };
@@ -559,7 +571,7 @@ fn print_blindspots(w: &[f64], nfeat: usize, train: &[CachedDecision]) {
             let top_score = scores[0].1;
             let human_score = scores[human_rank].1;
             let gap = top_score - human_score;
-            if worst.map_or(true, |(g, ..)| gap > g) {
+            if worst.is_none_or(|(g, ..)| gap > g) {
                 worst = Some((gap, d.game_id, d.lineno, human_rank + 1, d.n));
             }
         }
@@ -764,8 +776,8 @@ mod tests {
     fn top1_picks_the_strictly_highest_scoring_candidate() {
         let nfeat = 2;
         let mut candidates = vec![0.0f32; 3 * nfeat];
-        candidates[0 * nfeat..1 * nfeat].copy_from_slice(&[1.0, 0.0]);
-        candidates[1 * nfeat..2 * nfeat].copy_from_slice(&[0.0, 5.0]);
+        candidates[0..nfeat].copy_from_slice(&[1.0, 0.0]);
+        candidates[nfeat..2 * nfeat].copy_from_slice(&[0.0, 5.0]);
         candidates[2 * nfeat..3 * nfeat].copy_from_slice(&[2.0, 0.0]);
         let d = CachedDecision { game_id: 1, lineno: 1, category: 0, age: 0, human_index: 1, n: 3, candidates };
         let w = vec![1.0f64, 1.0f64];

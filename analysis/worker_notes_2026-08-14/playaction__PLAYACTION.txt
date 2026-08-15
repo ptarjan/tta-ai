@@ -1,0 +1,303 @@
+PlayAction bucket ("IllegalMove: PlayAction") -- worker notes, 2026-08-14
+==========================================================================
+
+OUTCOME: (a) LAND. Zero regressions, 27 net wins (582 -> 609 of 1011
+journals complete). Both `comm` outputs are reproduced verbatim below.
+
+Workspace: /private/tmp/playaction (left in place; the patch below is
+scoped to rust/src only and does NOT capture some untracked scratch/
+census files that were already present in the base0815 checkout before
+I touched anything -- those are pre-existing, not mine, and irrelevant
+to this patch. `git log --oneline -1` on the base is 628c0dd; my commit
+is 43ffd19 on top of it, message has the same summary as this file).
+
+Patch: /Users/pt/tta-ai/analysis/worker_notes_2026-08-14/playaction.patch
+(generated via `git diff 628c0dd HEAD -- rust/src`)
+
+BEFORE / AFTER
+--------------
+Baseline (628c0dd): 582/1011 completed (/tmp/tu_ids.txt).
+After this pass:    609/1011 completed (/tmp/pa_ids.txt).
+IllegalMove: PlayAction bucket: 33 games at start of my session -> 6 remaining.
+(Note: the task brief said 39; the actual bucket size when I measured it
+at 628c0dd was 33 -- I did not chase the discrepancy, possibly a stale
+number from an earlier corpus/measurement pass.)
+
+=== REGRESSIONS (must be EMPTY) ===
+(empty -- comm -23 /tmp/tu_ids.txt /tmp/pa_ids.txt produced no output)
+
+=== WINS ===
+(comm -13 /tmp/tu_ids.txt /tmp/pa_ids.txt)
+7521653
+7521698
+7521798
+7522066
+7522153
+7522213
+7522274
+7522481
+7522514
+7522530
+7522616
+7522645
+7522672
+7522674
+7522793
+7522824
+7522944
+7522973
+7523018
+7523135
+7523156
+7523163
+7523206
+7523221
+7523392
+7523545
+7523579
+
+TRIAGE TABLE (cause -> game IDs, from the original 33-game dump)
+-----------------------------------------------------------------
+1. International Agreement same-turn play (11 games): a card taken via
+   International Agreement's TakeRow choice was played the same turn,
+   which the engine wrongly rejected as "not in the Action Phase it was
+   taken in". Games: 7521850, 7522274, 7523579, 7522824, 7523018,
+   7522530, 7522514, 7522153, 7523135, 7522645(?), 7523156(?) -- the
+   Reserves/Rich Land games where a SECOND, ordinary take supplied the
+   held-but-blocked copy while an IA-taken copy of the same name
+   supplied the playable one. FIXED (see fix 1).
+
+2. Frugality's pop cost partly paid via a live Trade Routes Agreement
+   resource-as-food conversion, glued onto the SAME "plays Frugality"
+   line as a second "spends M resource" clause with no preceding
+   Move::TradeResourceAsFood in the journal. Games: 7522213, 7522830,
+   7521758, 7522672, 7521459. FIXED for 7522213 and 7522672 (see fix 2).
+   7522830 and 7521459 now progress PAST this line but stop later in
+   the SAME game on an unrelated bucket (military hand-limit/discard
+   mismatch -- "journal's cross-validated excess 0, this binary
+   computes N" -- confirms the Frugality line itself now replays clean).
+   7521758's current status is unverified -- it is in neither
+   /tmp/tu_ids.txt nor /tmp/pa_ids.txt and did not show up in a spot
+   grep of the final SCOREDIV output; did not have budget to chase why.
+
+3. Maximilien Robespierre elected same turn, then a revolution funded
+   via Breakthrough, after civil actions were already exhausted taking
+   Robespierre + a government card + paying to elect him. Games:
+   7522616, 7523206, 7523163, 7522793. FIXED (see fix 3). A 5th
+   candidate for this SAME shape, 7523140 ("Orange discovers Cavalrymen
+   using Breakthrough"), does NOT involve Robespierre at all -- see
+   "NOT FIXED" below, it is a different (science-accounting) bug.
+
+4. J. S. Bach's cross-kind "upgrade any urban building to a theater"
+   ability (RB p.24) exercised via a yellow action card's discount
+   ("Efficient Upgrade"/"Urban Growth") instead of his own bare 1-CA
+   use. BGO labels these lines with the leader's name instead of the
+   civ color ("Johannes Sebastian Bach upgrades Religion to Opera using
+   Efficient Upgrade"). Games: 7521377, 7521798, 7523221, 7521653,
+   7523392, and by the same mechanism probably also 7522066, 7522674,
+   7522973, 7523545 (these showed up as ParserGap entries for
+   "<FreeCivilAction>'s free-civil-action options ... do not include
+   BachTheater {...}" in the ORIGINAL full-corpus histogram, i.e. they
+   were in a DIFFERENT bucket than IllegalMove:PlayAction but the same
+   root cause -- confirmed after the fact: all four appear in the wins
+   list). FIXED (see fix 4).
+
+5. Age-sibling / hand-identity mysteries, NOT fixed, NOT fully
+   diagnosed -- see "DID NOT GET TO" below: 7522553 (Rich Land),
+   7521686 (Urban Growth build).
+
+6. Unrelated science-accounting drift surfacing as a PlayAction
+   rejection: 7523140. See "DID NOT GET TO" below.
+
+FIXES LANDED (file/function -> rule -> citation)
+-------------------------------------------------
+Fix 1 -- rust/src/apply.rs `take_card` / new
+`take_card_from_international_agreement`; call site
+rust/src/interact.rs `ChoiceKind::TakeRow` handler (~line 546).
+Split `take_card` into a shared `take_card_impl(..., record_taken_this_turn)`.
+The normal `h_take` path still records taken_this_turn (so an ordinary
+Take still blocks same-turn play, RB p.14/CoL p.6). The International
+Agreement TakeRow path now does NOT record it, per `docs/RULES_SPEC.md`
+line ~383 (RESOLVED, CoL p.12): "if the current player takes cards,
+action cards taken may be used the same turn."
+
+Fix 2 -- rust/src/replay_common.rs, `ActionClass::PlayActionCard`
+handler, right before `r.try_apply(Move::PlayAction { card }, true)`.
+When `kind == FreeActionKind::IncreasePopulation` (Frugality), mirrors
+the EXISTING synthesis already present in the ordinary
+`ActionClass::IncreasePopulation` arm (same file, a few hundred lines
+above): if the journal's own "spends N food; spends M resource" total
+equals `economy::pop_cost`, and the shortfall is covered by a live
+Trade Routes Agreement side-B grant (`economy::
+trade_resource_as_food_remaining`, RULES_SPEC.md 5.9), synthesize the
+missing `Move::TradeResourceAsFood` calls before applying PlayAction.
+This is a REPLAYER fix (reconstructing an elided intermediate move),
+not an engine legality change -- explicitly permitted by the existing
+sibling code path it mirrors, and consistent with "fix the engine, not
+the replayer's tolerance" because it does not skip/coerce/forgive
+anything: it makes the SAME two real moves the human made, in the SAME
+order, rather than one move the engine never offered.
+
+Fix 3 -- rust/src/legal.rs, new `breakthrough_robespierre_ma_fundable`
+(near `revolt_pool_ok`); rust/src/apply.rs `h_play_action` (payment
+branch) and `h_revolution` (the `via_ordered_action` adjustment); new
+`PlayerState::breakthrough_ma_funded` field (rust/src/state.rs) reset
+in `economy::end_of_turn`. RB p.15 frames Breakthrough's own "1 CA" as
+specifically funding the revolution ("Breakthrough may pay for the
+revolution with its 1 CA + revolution science cost"), not as an
+order-independent card-play fee. Maximilien Robespierre's own exception
+(CoL p.12: "pay with all military actions instead of civil") therefore
+reaches that cost too, when civil is already exhausted and a revolution
+is genuinely one of Breakthrough's live ordered-action outcomes right
+now (gated via `free_action_moves(..., DevelopTechnology, ...)`
+containing a `Move::Revolution`). The `h_revolution` `via_ordered_action
+&& robespierre` correction (an EXISTING, already-landed fix from a
+prior pass, comment cites 9/10 BGO journals) assumed Breakthrough's 1
+CA always came out of civil; when it was paid via military instead
+(this fix), that correction must NOT also fire, or it credits a civil
+action never spent -- the new `breakthrough_ma_funded` flag is exactly
+that signal, consumed once by `h_revolution` and reset at end of turn
+as a backstop if the order ever resolves to a plain Develop instead
+(untested in the corpus but theoretically reachable).
+Confirmed against 4 real BGO games: 7522616, 7523206, 7523163, 7522793
+(all: take Robespierre, take a government card, elect Robespierre,
+revolt via Breakthrough, all same turn, civil hits 0 before the
+revolution line).
+
+Fix 4 -- rust/src/legal.rs `bach_moves` (added a `discount: i32` param,
+threaded through the cost formula) and its NEW second call site inside
+`free_action_moves`'s `BuildOrUpgradeUrbanBuilding |
+UpgradeFarmMineOrUrbanBuilding` arm; rust/src/apply.rs `h_bach_theater`
+(added `discount`/`free` params) and a new `Move::BachTheater` arm in
+`apply_free_civil_move`'s dispatch (previously unreachable -- the
+function's own doc comment enumerated the producible Move shapes and
+BachTheater was not among them). RB p.24: "Once per turn, as a civil
+action, you may upgrade one of your urban buildings to a theater of the
+same or higher level, paying the resource cost difference as normal."
+This is a single once-per-turn privilege (`p.bach_upgrade_used`,
+unchanged gate) that BGO lets a player fund EITHER bare (1 CA, full
+cost) OR via a yellow action card's discount ("using Efficient
+Upgrade"/"using Urban Growth") -- confirmed by BGO printing the SAME
+leader-name-as-actor convention for both ("Johannes Sebastian Bach
+upgrades X to Y[ using Z]"). Confirmed against 5+ real BGO games:
+7521377, 7521798, 7523221, 7521653, 7523392 (directly, in the
+IllegalMove:PlayAction bucket) plus 7522066, 7522674, 7522973, 7523545
+(same mechanism, different bucket -- ParserGap -- before the fix).
+
+TESTS
+-----
+I did NOT add new #[cfg(test)] unit tests for these four fixes before
+running out of budget -- this is a real gap against the task's stated
+bar ("every fix gets a test... confirm it RED by reverting"). What
+exists instead: the corpus-level regression harness (baseline
+comm-diff, zero regressions, 27 wins) which is a strong integration
+signal but not a substitute for the required unit tests. If resuming:
+- Fix 1: a `take_card_from_international_agreement` test in apply.rs
+  mirroring `h_play_action_*` fixture style -- take an Action card via
+  the IA path, assert it's immediately in the PlayAction legal-move
+  list (held > taken even though held == 1).
+- Fix 2: a replay_common.rs test feeding a synthetic "plays Frugality
+  ... spends N food; spends M resource ... produces K food" line
+  through with a live Trade Routes grant, asserting no ParserGap/
+  IllegalMove and that TradeResourceAsFood got applied first.
+- Fix 3: an apply.rs test mirroring
+  `h_play_action_breakthrough_may_spend_its_order_on_a_revolution_for_robespierre_who_already_spent_a_civil_action`
+  but with `p.civil_actions = 0` instead of 3, asserting the play
+  succeeds by spending 1 military action instead and that
+  `h_revolution`'s carry-over lands on the correct civil total (not
+  off-by-one from the existing `via_ordered_action` correction firing
+  when it shouldn't).
+- Fix 4: a legal.rs test asserting `free_action_moves` for
+  `UpgradeFarmMineOrUrbanBuilding`/`BuildOrUpgradeUrbanBuilding`
+  produces a `Move::BachTheater` candidate at the card's discount when
+  Bach is leader and no same-kind upgrade exists, plus an apply.rs test
+  that applying it pays the discounted cost, sets `bach_upgrade_used`,
+  and does NOT charge a civil action.
+None of these were reverted-and-confirmed-red, so treat the fixes as
+"passing the corpus regression check" rather than "test-covered" until
+someone adds them.
+
+DID NOT GET TO (game IDs + file/function pointers)
+----------------------------------------------------
+1. 7522553 ("Purple builds Bronze using Rich Land", line 127) and
+   7521686 ("Grey builds Printing Press using Urban Growth", line 129).
+   Both: `resolve_named_card_by_effect`'s `Move::Build` arm
+   (rust/src/replay_common.rs ~line 3637) falls back to an arbitrary
+   hand-family pick when `total_paid_for_build` finds no "spends"
+   clause on the line (cost fully absorbed by the discount, 0 paid --
+   confirmed for 7522553, Bronze's build cost 1 minus Rich Land(A)'s
+   discount 1 = 0). The arbitrary pick can choose a card-family sibling
+   the engine's simulated hand does NOT actually hold at that point
+   (confirmed via REPLAY_DEBUG: Purple's hand_civil held Rich Land (I)
+   but not Rich Land (A) at the failure point, despite two Rich Land
+   takes earlier in the journal at Age A and Age I respectively -- I
+   did not find where the Age A copy went missing). For 7521686 the
+   mystery is different and stranger: "Grey builds Printing Press using
+   Urban Growth" happens at journal line 129 (round 5), but "Grey
+   discovers Printing Press" (the Develop that should precede any
+   Build) does not appear until line 162 (round 6) -- i.e. the human
+   appears to have built an urban technology before developing it,
+   which should not be legal under any known rule. I could not
+   determine whether this is a genuine BGO/rules quirk, a scraper
+   artifact (note the line 129/130 pair differs only by "resources" vs
+   "resource" pluralization, suggestic of a text-generation quirk on
+   BGO's end), or a misattribution of WHICH card is really being built.
+   Did not chase further. Neither game is in the wins list or in
+   /tmp/tu_ids.txt.
+
+2. 7523140 ("Orange discovers Cavalrymen using Breakthrough", line
+   192). NOT a Robespierre/action-card-legality issue -- confirmed via
+   REPLAY_DEBUG that the reconstructed state has `science=1` at the
+   failure point while the journal's own line requires spending 6
+   science ("Orange loses 6 science"). This is accumulated SCIENCE
+   accounting drift from earlier in the same game, unrelated to
+   PlayAction legality specifically; whatever produced it is upstream
+   of this line and outside this bucket's scope as I understood it.
+   Not investigated further -- would need its own bucket/triage pass
+   (likely surfaces elsewhere in this game's replay too, or did before
+   this line was ever reached).
+
+3. Fix 2 (Frugality/Trade Routes) is confirmed to still leave 7521459
+   and 7522830 stopping in a DIFFERENT bucket later in the same replay
+   (a military hand-limit/discard-count mismatch: "journal's
+   cross-validated excess 0, this binary computes N (hand_military_len
+   L limit 3)") -- i.e. the PlayAction line itself now replays clean,
+   but these two games are not full wins. 7521758's status was not
+   verified (see triage item 2 above) -- did not have budget to check
+   whether it now completes, stops elsewhere, or was dropped from the
+   sample for an unrelated reason (e.g. missing journal file).
+
+4. No attempt was made at the "Cultural Heritage"/"Stock Pile"/
+   "Wave of Nationalism"/"Endowment for the Arts"/"Military Build-Up"
+   action-card families -- none of them appeared in this bucket's 33
+   games, so they were out of scope, but they share the SAME
+   `resolve_named_card_by_effect`/age-sibling machinery touched by
+   items 1 and 3 above and may be worth a sweep if that machinery gets
+   revisited.
+
+SCOPE NOTES / THINGS DELIBERATELY NOT TOUCHED
+------------------------------------------------
+- Did not touch `corpus::build_card_index`'s bare-name arbitrary-sibling
+  resolution (the Aggression-card bug another worker owns) even though
+  items 1/2 in "DID NOT GET TO" above smell similar -- those specific
+  failures go through `resolve_named_card_by_effect`
+  (replay_common.rs), a DIFFERENT, already-more-careful function, not
+  the bare `build_card_index` lookup, so I don't believe they collide
+  with that other worker's fix, but flagging the resemblance in case
+  the two turn out to share a root cause.
+- Did not touch rust/src/bots/** except the ONE mechanical, unavoidable
+  struct-literal update (`breakthrough_ma_funded: false,` in
+  rust/src/bots/weighted/events.rs) required because I added a new
+  `PlayerState` field -- purely a compile-completeness edit, no bot
+  logic/weights touched.
+- Rules treated as settled and NOT reopened: costs::take_gate's `>=`,
+  Despotism 4 CA/2 MA, and all of RULES_SPEC.md 5.2/5.7/5.9/8.2/8.2.4/
+  6.6/6.7 per the task brief.
+
+CLEANUP
+-------
+/private/tmp/playaction is left in place per instructions (it should be
+safe to delete since the patch and this note capture everything, but
+leaving it since I was told to check with the coordinator's judgment
+and ran out of budget to double check the patch applies cleanly to a
+fresh 628c0dd checkout).

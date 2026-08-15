@@ -281,7 +281,7 @@ fn best_feature(kind: CardType) -> Option<Feature> {
         Library => Some(Feature::BestLibrary),
         Arena => Some(Feature::BestArena),
         Infantry | Cavalry | Artillery | Air => Some(Feature::BestUnit),
-        _ => None,
+        Government | SpecialTech | Wonder | Leader | Action | Tactic | Aggression | War | Pact | Bonus | Territory | Event => None,
     }
 }
 
@@ -310,7 +310,9 @@ fn swap_stats(state: &GameState, idx: u8, mutate: impl FnOnce(&mut PlayerState))
 /// whose delta means something on its own. Function pointers rather than a
 /// closure-capturing table: none of these capture anything, so this is a
 /// `const` array of plain `fn(&Stats) -> i32`, no allocation, no `HashMap`.
-const STATS_FEATURES: &[(fn(&Stats) -> i32, Feature)] = &[
+type StatsFeature = (fn(&Stats) -> i32, Feature);
+
+const STATS_FEATURES: &[StatsFeature] = &[
     (|s| s.culture, Feature::CultureRate),
     (|s| s.science, Feature::ScienceRate),
     (|s| s.food, Feature::FoodRate),
@@ -415,12 +417,47 @@ fn churchill(_state: &GameState, _p: &PlayerState, out: &mut Vec<Triple>) {
     out.push((Feature::CultureRate, 3.0, Kind::Gain));
 }
 
+/// Hammurabi: "On your turn, you may use one military action as a civil
+/// action" (`militaryActionAsCivilPerTurn: 1`,
+/// `data/cards_wonders_leaders.json`) -- civil actions are the scarcest
+/// resource in the game (see `docs/EVALUATOR_HISTORY.md`/the STOCK_NONNEG_GATES
+/// note on `civil_actions`/`civil_action_surplus` in `eval.rs`), so a printed
+/// conversion INTO one is a real per-turn grant, priced through the same
+/// `Feature::CivilActions` coordinate `government_plans` already prices a
+/// government's own civil-action count through -- not a flat per-card weight.
+///
+/// The RULE (`costs::hammurabi_conversion_available`/`pay_ca`) spends this
+/// LAZILY off whatever military actions are left THIS turn. That is the
+/// wrong quantity to read here: a fresh game's round-1 start-player handicap
+/// sets `p.military_actions` (the remaining-this-turn pool) to 0, which would
+/// misprice Hammurabi as worthless on exactly the turn a player is deciding
+/// whether to take him. `effects::state_stats(..).military_actions` is the
+/// GOVERNMENT's per-turn grant instead (a `Stats` field, default 2 under
+/// Despotism) -- the same production-level board fact [`genghis`]'s strength
+/// check reads above, not a spent/remaining counter.
+///
+/// ASSUMPTION, documented rather than fitted (`prefer-compute-over-inference`:
+/// a firing rate we do not have measured is not invented here): whenever the
+/// government grants >= 1 military action per turn, the printed cap (1 civil
+/// action) is priced as fully realized every turn. This leans generous --
+/// an army rarely spends 100% of its granted military actions every single
+/// turn, especially before Age I -- but no self-play measurement of
+/// Hammurabi's true firing rate exists yet to discount it by, and a board
+/// query that IS available (does the government grant a military action at
+/// all) is preferred over guessing one that is not.
+fn hammurabi(state: &GameState, p: &PlayerState, out: &mut Vec<Triple>) {
+    if effects::state_stats(state, p).military_actions >= 1 {
+        out.push((Feature::CivilActions, 1.0, Kind::Gain));
+    }
+}
+
 /// `RIDERS`: leader name -> rider function. Only the leaders whose value is
 /// not in `Stats` and IS computable.
 fn rider_of(leader_name: &str) -> Option<fn(&GameState, &PlayerState, &mut Vec<Triple>)> {
     match leader_name {
         "Genghis Khan" => Some(genghis),
         "Winston Churchill" => Some(churchill),
+        "Hammurabi" => Some(hammurabi),
         _ => None,
     }
 }
@@ -755,7 +792,7 @@ pub fn board_yields(name: CardId, base: &Baseline) -> Option<Vec<Triple>> {
         CardType::Leader => swap_stats(state, idx, |pl| pl.leader = name),
         CardType::Government => swap_stats(state, idx, |pl| pl.government = name),
         CardType::Wonder => swap_stats(state, idx, |pl| pl.completed_wonders.push(name)),
-        _ => unreachable!("is_swap_type gates this to Leader/Government/Wonder"),
+        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::SpecialTech | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => unreachable!("is_swap_type gates this to Leader/Government/Wonder"),
     };
     let mut out = Vec::new();
     delta_triples(before, &after, p, &mut out);
@@ -776,7 +813,7 @@ pub fn board_yields(name: CardId, base: &Baseline) -> Option<Vec<Triple>> {
             government_level(p, name, &mut out);
             government_cost(state, p, name, &mut out);
         }
-        _ => unreachable!(),
+        CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::SpecialTech | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => unreachable!(),
     }
     Some(merge(out))
 }
@@ -806,7 +843,7 @@ pub fn board_extra(name: CardId, base: &Baseline) -> Vec<Triple> {
     let mut out = Vec::new();
     if let Some(t) = card.special.iter().find_map(|&s| match s {
         Special::CulturePerCivilizationWithMoreCulture(t) => Some(t),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesForMilitaryUnitsPerStrongerCivilization(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     }) {
         let n = live_rivals(state, p).into_iter().filter(|q| q.culture > p.culture).count();
         if n > 0 {
@@ -815,7 +852,7 @@ pub fn board_extra(name: CardId, base: &Baseline) -> Vec<Triple> {
     }
     if let Some(t) = card.special.iter().find_map(|&s| match s {
         Special::ResourcesForMilitaryUnitsPerStrongerCivilization(t) => Some(t),
-        _ => None,
+        Special::A(_) | Special::AllPlayers(_) | Special::B(_) | Special::BestTheaterDoubleCulture | Special::BothPlayers(_) | Special::BuildDiscount(_) | Special::CancelledIfPartiesAttackEachOther | Special::CannotPlayAggressionOrWar | Special::CivilActionBackOnTechDevelop(_) | Special::CivilActionUpgradeUrbanBuildingToTheater | Special::ColonizeDiscardUpTo2MilitaryCardsForBonus(_) | Special::ColonyImmediateBonusApplies | Special::ColonyPermanentBonusTransfers | Special::ComboFoodDiscount(_) | Special::ComboResourceDiscount(_) | Special::Condition(_) | Special::CultureFirstColony(_) | Special::CultureIfTopTwoStrength(_) | Special::CultureOnLeaveEqualToLabResourceProduction | Special::CultureOnRevolution(_) | Special::CultureOnTechDevelop(_) | Special::CulturePerAdditionalColony(_) | Special::CulturePerCivilizationWithMoreCulture(_) | Special::CulturePerHappyFromTemplesTheatersWonders(_) | Special::CulturePerLabEqualToLevel | Special::CulturePerLibraryTheaterPair(_) | Special::CulturePerTheater(_) | Special::DecreasePopulation(_) | Special::DestroyUrbanBuildings(_) | Special::DoubleBestMine | Special::DoublesTacticBonusOfOneArmy | Special::ExtraHappyPerHappySource(_) | Special::FinalScoring(_) | Special::FreeCivilAction(_) | Special::FreePopIncreasePerTurn | Special::Gain(_) | Special::GainCulturePerLevelOfRemovedCard(_) | Special::GainFoodOrResources(_) | Special::GainResources(_) | Special::InfantryCountsAsCavalryForTactics | Special::LastRoundSubstitute(_) | Special::LeaderTakeCivilActionDiscount(_) | Special::LibraryDiscountsIfTheater | Special::Lose(_) | Special::MilitaryActionAsCivilPerTurn(_) | Special::MilitaryActionCombinedPopIncreaseAndUnitBuild | Special::NoAttacksBetweenParties | Special::OnAttackBetweenParties(_) | Special::OnBuildCulture(_) | Special::OnBuildCulturePerTechLevelSum | Special::OnReplacePutUnderCompletedWonderHappy(_) | Special::OncePerGameTwoPoliticalActions | Special::OpponentDecreasesPopulation(_) | Special::OpponentsPayDoubleMilitaryActionsToAttackYou | Special::OrTakesSpecialTechnologiesOfSameTotalScienceCost | Special::PeekTopEventCardInPolitics | Special::PerTurnChoice | Special::PlayerWithLeastCulture(_) | Special::PlayerWithMostCulture(_) | Special::PlayersWithMostDiscontentWorkers(_) | Special::PlayersWithMostHappyFaces(_) | Special::PopIncreaseFoodDiscount(_) | Special::RemoveAsPoliticalActionForYellowToken(_) | Special::RemoveAsPoliticalActionFreeColonize | Special::RemoveFromGame | Special::ResourceOnMilitaryUnitBuildOrUpgrade(_) | Special::ResourceOnTechDevelop(_) | Special::ResourcesPerLabEqualToLevel | Special::RevolutionUsesMilitaryActionsInstead | Special::ScienceOnTechCardTake(_) | Special::SciencePerBestLabOrLibraryLevel | Special::SciencePerLab(_) | Special::StealColony(_) | Special::StrengthPerArtillery(_) | Special::StrengthPerInfantry(_) | Special::StrengthPerMilitaryUnit(_) | Special::StrengthPerTempleOrGovernmentHappy(_) | Special::StrengthPerUnitType(_) | Special::StrongestPlayer(_) | Special::StrongestPlayers(_) | Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn(_) | Special::TakeFromOpponent(_) | Special::TheaterResourceDiscountIfLibrary(_) | Special::TheaterScienceDiscountIfLibrary(_) | Special::TheaterTechScienceDiscount(_) | Special::VictorTakesCulture | Special::VictorTakesScienceUpTo(_) | Special::VictorTakesYellowTokens | Special::WeakestPlayer(_) | Special::WeakestPlayers(_) | Special::WonderTakeNoExtraCivilActions => None,
     }) {
         // Already computed for this player -- the whole point of `Baseline`.
         let mine = base.stats().strength;
@@ -1063,5 +1100,485 @@ mod tests {
     #[test]
     fn losing_a_pool_already_past_the_cap_costs_only_the_capped_amount() {
         assert_eq!(ma_left_delta(5.0, 0.0), -3.0);
+    }
+
+    // ------------------------------------------------ Hammurabi's rider
+
+    /// The valuation hole this module closes: Hammurabi's printed
+    /// "on your turn, you may use one military action as a civil action"
+    /// (`militaryActionAsCivilPerTurn`) used to be in `cards::
+    /// DELIBERATELY_UNPRICED` and worth exactly nothing to the evaluator. A
+    /// fresh 2p game's starting government is Despotism, which grants 2
+    /// military actions/turn (`effects::state_stats().military_actions`) even
+    /// though round 1's start-player handicap (`game.rs`, §1.9) has already
+    /// zeroed `p.military_actions` itself (the REMAINING-this-turn pool) --
+    /// exactly the trap [`hammurabi`]'s own doc comment calls out: reading
+    /// the remaining pool here would misprice him as worthless on the very
+    /// turn a player decides whether to take him.
+    #[test]
+    fn hammurabis_military_action_conversion_is_worth_a_civil_action_to_the_evaluator() {
+        let state = crate::game::new_game(2, 0);
+        let base = Baseline::at(&state, 0);
+        let swap =
+            board_yields(CardId::by_name("Hammurabi").unwrap(), &base).expect("Hammurabi is a swap type (Leader)");
+        assert!(
+            swap.contains(&(Feature::CivilActions, 1.0, Kind::Gain)),
+            "expected a +1 CivilActions gain triple for Hammurabi's MA-as-CA conversion, got {swap:?}"
+        );
+    }
+
+    // -------------------------------------------------- board-scaled riders
+    //
+    // 17 printed effects (`cards::DELIBERATELY_UNPRICED`'s former bucket 8)
+    // turned out to already be priced by the GENERIC swap diff above --
+    // every carrier is a Leader or Wonder, `effects::apply_special` folds
+    // the board-scaled math straight into `Stats`, and `delta_triples`
+    // reads `Stats` before/after. No bespoke rider function exists for any
+    // of these; these tests exist to PIN that behaviour (the coefficient
+    // really does scale with the board fact, not just "is nonzero") so a
+    // future refactor of `apply_special` or `delta_triples` cannot silently
+    // flatten it back to a constant. See BOARDSCALED.txt for the full
+    // reclassification writeup and the empirical proof this was already
+    // true before any of these tests were added.
+
+    /// J. S. Bach: 1 culture per theater WORKER (not per theater card) --
+    /// two theaters staffed with 3 workers total must yield 3x what one
+    /// theater staffed with 1 worker yields, pinning that this is a
+    /// per-worker count, not a flat per-card bonus.
+    #[test]
+    fn bachs_culture_per_theater_scales_with_theater_workers() {
+        let mut state = crate::game::new_game(2, 0);
+        state.players[0].techs.insert(CardId::by_name("Drama").unwrap(), TechSlot { workers: 1, stored: 0 });
+        let one = board_yields(CardId::by_name("J. S. Bach").unwrap(), &Baseline::at(&state, 0))
+            .expect("Bach is a swap type (Leader)");
+
+        let mut state3 = crate::game::new_game(2, 0);
+        state3.players[0].techs.insert(CardId::by_name("Drama").unwrap(), TechSlot { workers: 3, stored: 0 });
+        let three = board_yields(CardId::by_name("J. S. Bach").unwrap(), &Baseline::at(&state3, 0))
+            .expect("Bach is a swap type (Leader)");
+
+        let culture_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::CultureRate).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(culture_at(&one), 1.0, "1 theater worker: {one:?}");
+        assert_eq!(culture_at(&three), 3.0, "3 theater workers must be exactly 3x 1 worker's yield: {three:?}");
+    }
+
+    /// Sid Meier prints BOTH `culturePerLabEqualToLevel` (a bonus) and
+    /// `sciencePerLab` (value -1, a REDUCTION -- effects.rs's own doc
+    /// comment on this arm calls out that a naive port drops the sign).
+    /// 2 labs of level 1 staffed with 1 worker each must show +2 culture
+    /// (2 labs x level 1) and -2 science (2 labs x -1), and doubling to 4
+    /// labs must double both deltas -- proving the sign survives the swap
+    /// diff, not just the magnitude.
+    #[test]
+    fn sid_meiers_culture_and_science_per_lab_scale_with_lab_level_and_count() {
+        // Alchemy, not Philosophy: `new_game`'s starting kit already staffs
+        // Philosophy (Age A, level 0 -- `Tableau::insert` panics on a
+        // duplicate, and level 0 would zero out the level-scaled culture
+        // half of this test anyway). Alchemy is Age I / level 1 and starts
+        // unstaffed, so it can be inserted fresh.
+        let lab = CardId::by_name("Alchemy").unwrap();
+        assert_eq!(lab.level(), 1);
+
+        let mut state2 = crate::game::new_game(2, 0);
+        // Zero the starting kit's own Philosophy lab worker -- it is a lab
+        // too, and would silently add to `workers_on(Lab)` (sciencePerLab
+        // counts every lab worker, not just Alchemy's) if left staffed.
+        state2.players[0].techs.get_mut(CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state2.players[0].techs.insert(lab, TechSlot { workers: 2, stored: 0 });
+        let two = board_yields(CardId::by_name("Sid Meier").unwrap(), &Baseline::at(&state2, 0))
+            .expect("Sid Meier is a swap type (Leader)");
+
+        let mut state4 = crate::game::new_game(2, 0);
+        state4.players[0].techs.get_mut(CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state4.players[0].techs.insert(lab, TechSlot { workers: 4, stored: 0 });
+        let four = board_yields(CardId::by_name("Sid Meier").unwrap(), &Baseline::at(&state4, 0))
+            .expect("Sid Meier is a swap type (Leader)");
+
+        let at = |t: &[Triple], f: Feature| t.iter().find(|&&(ff, _, _)| ff == f).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(at(&two, Feature::CultureRate), 2.0, "2 labs x level 1: {two:?}");
+        assert_eq!(at(&two, Feature::ScienceRate), -2.0, "2 labs x sciencePerLab(-1): {two:?}");
+        assert_eq!(at(&four, Feature::CultureRate), 4.0, "4 labs must be exactly 2x 2 labs: {four:?}");
+        assert_eq!(at(&four, Feature::ScienceRate), -4.0, "4 labs must be exactly 2x 2 labs (still negative): {four:?}");
+    }
+
+    /// William Shakespeare: culture per MATCHED library/theater pair --
+    /// min(library workers, theater workers), so 2 libraries + 3 theaters
+    /// (min 2) must yield exactly 2x what 1 library + 1 theater (min 1)
+    /// yields, and the excess (unmatched) theater worker must contribute
+    /// nothing beyond that.
+    #[test]
+    fn shakespeares_culture_scales_with_matched_library_theater_pairs() {
+        let mut one = crate::game::new_game(2, 0);
+        one.players[0].techs.insert(CardId::by_name("Printing Press").unwrap(), TechSlot { workers: 1, stored: 0 });
+        one.players[0].techs.insert(CardId::by_name("Drama").unwrap(), TechSlot { workers: 1, stored: 0 });
+        let pair1 = board_yields(CardId::by_name("William Shakespeare").unwrap(), &Baseline::at(&one, 0))
+            .expect("Shakespeare is a swap type (Leader)");
+
+        let mut two = crate::game::new_game(2, 0);
+        two.players[0].techs.insert(CardId::by_name("Printing Press").unwrap(), TechSlot { workers: 2, stored: 0 });
+        two.players[0].techs.insert(CardId::by_name("Drama").unwrap(), TechSlot { workers: 3, stored: 0 });
+        let pair2 = board_yields(CardId::by_name("William Shakespeare").unwrap(), &Baseline::at(&two, 0))
+            .expect("Shakespeare is a swap type (Leader)");
+
+        let culture_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::CultureRate).map_or(0.0, |&(_, a, _)| a);
+        assert!(culture_at(&pair1) > 0.0, "1 matched pair must be a real gain: {pair1:?}");
+        assert_eq!(
+            culture_at(&pair2),
+            2.0 * culture_at(&pair1),
+            "min(2 lib, 3 theater) = 2 matched pairs, exactly 2x 1 matched pair: {pair1:?} vs {pair2:?}"
+        );
+    }
+
+    /// Michelangelo: culture per happy face from temples/theaters/wonders
+    /// ONLY (not government/leader/colony happy). A temple with 2 happy
+    /// workers must yield exactly 2x a temple with 1 happy worker.
+    #[test]
+    fn michelangelos_culture_scales_with_temple_theater_wonder_happy() {
+        let temple = CardId::by_name("Religion").unwrap();
+        assert!(temple.get().production.happy > 0, "Religion must print happy for this test to mean anything");
+        let per_worker = temple.get().production.happy as f64;
+
+        // Religion is already in `new_game`'s starting kit, unstaffed (0
+        // workers) -- `get_mut`, not `insert` (which panics on a duplicate).
+        let mut one = crate::game::new_game(2, 0);
+        one.players[0].techs.get_mut(temple).unwrap().workers = 1;
+        let happy1 = board_yields(CardId::by_name("Michelangelo").unwrap(), &Baseline::at(&one, 0))
+            .expect("Michelangelo is a swap type (Leader)");
+
+        let mut two = crate::game::new_game(2, 0);
+        two.players[0].techs.get_mut(temple).unwrap().workers = 2;
+        let happy2 = board_yields(CardId::by_name("Michelangelo").unwrap(), &Baseline::at(&two, 0))
+            .expect("Michelangelo is a swap type (Leader)");
+
+        let culture_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::CultureRate).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(culture_at(&happy1), per_worker, "1 worker's happy: {happy1:?}");
+        assert_eq!(culture_at(&happy2), 2.0 * per_worker, "2 workers must be exactly 2x 1 worker: {happy2:?}");
+    }
+
+    /// Charlie Chaplin: doubles the BEST staffed theater's own printed
+    /// culture. A level-3 theater (Movies) must double for more than a
+    /// level-1 theater (Drama) -- pinning that this reads the best
+    /// theater's LEVEL-scaled production, not a flat per-theater constant.
+    #[test]
+    fn chaplins_culture_scales_with_the_best_theaters_level() {
+        let drama = CardId::by_name("Drama").unwrap();
+        let movies = CardId::by_name("Movies").unwrap();
+        assert!(movies.get().production.culture > drama.get().production.culture);
+
+        let mut low = crate::game::new_game(2, 0);
+        low.players[0].techs.insert(drama, TechSlot { workers: 1, stored: 0 });
+        let low_swap = board_yields(CardId::by_name("Charlie Chaplin").unwrap(), &Baseline::at(&low, 0))
+            .expect("Chaplin is a swap type (Leader)");
+
+        let mut high = crate::game::new_game(2, 0);
+        high.players[0].techs.insert(movies, TechSlot { workers: 1, stored: 0 });
+        let high_swap = board_yields(CardId::by_name("Charlie Chaplin").unwrap(), &Baseline::at(&high, 0))
+            .expect("Chaplin is a swap type (Leader)");
+
+        let culture_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::CultureRate).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(culture_at(&low_swap), drama.get().production.culture as f64, "best theater is Drama: {low_swap:?}");
+        assert_eq!(culture_at(&high_swap), movies.get().production.culture as f64, "best theater is Movies (higher level): {high_swap:?}");
+        assert!(culture_at(&high_swap) > culture_at(&low_swap), "a higher-level best theater must double for more");
+    }
+
+    /// Leonardo da Vinci / Isaac Newton / Albert Einstein: extra science
+    /// equal to the best staffed lab-or-library's LEVEL. A level-3 lab
+    /// (Scientific Method) must yield more than a level-1 lab (Philosophy).
+    #[test]
+    fn leonardos_science_scales_with_the_best_lab_or_library_level() {
+        // Alchemy (level 1) vs Scientific Method (level 2) -- not Philosophy
+        // (already in `new_game`'s starting kit at level 0, which this
+        // special would never pick as "best" anyway once a higher-level lab
+        // is staffed, so it is not a confound here the way it is for
+        // sciencePerLab's worker-SUM, but starting at level 0 makes it a
+        // weak "best lab" example on its own).
+        let alchemy = CardId::by_name("Alchemy").unwrap();
+        let scientific_method = CardId::by_name("Scientific Method").unwrap();
+        assert!(scientific_method.level() > alchemy.level());
+
+        let mut low = crate::game::new_game(2, 0);
+        low.players[0].techs.insert(alchemy, TechSlot { workers: 1, stored: 0 });
+        let low_swap = board_yields(CardId::by_name("Leonardo da Vinci").unwrap(), &Baseline::at(&low, 0))
+            .expect("Leonardo is a swap type (Leader)");
+
+        let mut high = crate::game::new_game(2, 0);
+        high.players[0].techs.insert(scientific_method, TechSlot { workers: 1, stored: 0 });
+        let high_swap = board_yields(CardId::by_name("Leonardo da Vinci").unwrap(), &Baseline::at(&high, 0))
+            .expect("Leonardo is a swap type (Leader)");
+
+        let science_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::ScienceRate).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(science_at(&low_swap), alchemy.level() as f64, "best lab is Alchemy: {low_swap:?}");
+        assert_eq!(science_at(&high_swap), scientific_method.level() as f64, "best lab is Scientific Method (higher level): {high_swap:?}");
+        assert!(science_at(&high_swap) > science_at(&low_swap), "a higher-level best lab must give more science");
+    }
+
+    /// Bill Gates: the same lab_level_workers formula as Sid Meier's
+    /// culturePerLabEqualToLevel, but into resources. 2 labs must yield
+    /// exactly 2x 1 lab.
+    #[test]
+    fn bill_gatess_resources_scale_with_lab_level_and_count() {
+        // Alchemy, not Philosophy -- same reason as Sid Meier's test above:
+        // `resourcesPerLabEqualToLevel` sums level x workers over EVERY
+        // staffed lab, and the starting kit's Philosophy (level 0) would
+        // contribute 0 to the sum but cannot be `insert`-ed a second time,
+        // so it is zeroed rather than reused.
+        let lab = CardId::by_name("Alchemy").unwrap();
+
+        let mut one = crate::game::new_game(2, 0);
+        one.players[0].techs.get_mut(CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        one.players[0].techs.insert(lab, TechSlot { workers: 1, stored: 0 });
+        let r1 = board_yields(CardId::by_name("Bill Gates").unwrap(), &Baseline::at(&one, 0))
+            .expect("Bill Gates is a swap type (Leader)");
+
+        let mut two = crate::game::new_game(2, 0);
+        two.players[0].techs.get_mut(CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        two.players[0].techs.insert(lab, TechSlot { workers: 2, stored: 0 });
+        let r2 = board_yields(CardId::by_name("Bill Gates").unwrap(), &Baseline::at(&two, 0))
+            .expect("Bill Gates is a swap type (Leader)");
+
+        let resources_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::ResourceRate).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(resources_at(&r1), 1.0, "1 lab worker x level 1: {r1:?}");
+        assert_eq!(resources_at(&r2), 2.0, "2 lab workers must be exactly 2x 1: {r2:?}");
+    }
+
+    /// Transcontinental Railroad (a Wonder): doubles the best staffed
+    /// mine's own printed resources. A level-3 mine (Coal) must double for
+    /// more than a level-1 mine (Bronze).
+    #[test]
+    fn transcontinental_railroads_resources_scale_with_the_best_mines_level() {
+        let bronze = CardId::by_name("Bronze").unwrap();
+        let coal = CardId::by_name("Coal").unwrap();
+        assert!(coal.get().production.resources > bronze.get().production.resources);
+
+        // Bronze is already in `new_game`'s starting kit, staffed -- used
+        // as-is rather than `insert`-ed again (which would panic).
+        let low = crate::game::new_game(2, 0);
+        let low_swap = board_yields(CardId::by_name("Transcontinental Railroad").unwrap(), &Baseline::at(&low, 0))
+            .expect("Transcontinental Railroad is a swap type (Wonder)");
+
+        let mut high = crate::game::new_game(2, 0);
+        high.players[0].techs.insert(coal, TechSlot { workers: 1, stored: 0 });
+        let high_swap = board_yields(CardId::by_name("Transcontinental Railroad").unwrap(), &Baseline::at(&high, 0))
+            .expect("Transcontinental Railroad is a swap type (Wonder)");
+
+        let resources_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::ResourceRate).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(resources_at(&low_swap), bronze.get().production.resources as f64, "best mine is Bronze: {low_swap:?}");
+        assert_eq!(resources_at(&high_swap), coal.get().production.resources as f64, "best mine is Coal (higher level): {high_swap:?}");
+        assert!(resources_at(&high_swap) > resources_at(&low_swap), "a higher-level best mine must double for more");
+    }
+
+    /// St. Peter's Basilica (a Wonder): a coefficient times a count of
+    /// happy-giving sources already in play (buildings counted per
+    /// WORKER, government/leader/wonder/colony counted per CARD -- see
+    /// `effects::happy_source_count`'s own doc comment). A temple alone is
+    /// 1 source; adding a government that itself prints happy (Theocracy)
+    /// is a second, independent source, so the bonus must strictly
+    /// increase, not just stay flat.
+    #[test]
+    fn st_peters_happy_scales_with_distinct_happy_producing_sources() {
+        let temple = CardId::by_name("Religion").unwrap();
+        assert!(temple.get().production.happy > 0);
+        // Theocracy (a government) prints happy: 1 -- a second, independent
+        // happy SOURCE, distinct in kind from a temple, to prove this counts
+        // sources, not just temple copies.
+        let theocracy = CardId::by_name("Theocracy").unwrap();
+        assert!(theocracy.get().production.happy > 0);
+
+        let mut one_source = crate::game::new_game(2, 0);
+        one_source.players[0].techs.get_mut(temple).unwrap().workers = 1;
+        let s1 = board_yields(CardId::by_name("St. Peter's Basilica").unwrap(), &Baseline::at(&one_source, 0))
+            .expect("St. Peter's Basilica is a swap type (Wonder)");
+
+        let mut two_sources = crate::game::new_game(2, 0);
+        two_sources.players[0].techs.get_mut(temple).unwrap().workers = 1;
+        two_sources.players[0].government = theocracy;
+        let s2 = board_yields(CardId::by_name("St. Peter's Basilica").unwrap(), &Baseline::at(&two_sources, 0))
+            .expect("St. Peter's Basilica is a swap type (Wonder)");
+
+        // NOT asserted as an exact 2x multiplier: `happy_source_count`
+        // counts building sources PER WORKER (not per building type -- see
+        // its own doc comment), so the temple's contribution to the source
+        // count does not move between `s1`/`s2` the same way a simple
+        // "distinct types" count would; what must hold regardless is that
+        // adding a second, independently-triggering source (the
+        // government's own happy) strictly increases the bonus.
+        let happy_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::HappyMargin).map_or(0.0, |&(_, a, _)| a);
+        assert!(happy_at(&s1) > 0.0, "1 happy source (the temple) must be a real gain: {s1:?}");
+        assert!(
+            happy_at(&s2) > happy_at(&s1),
+            "adding a second distinct happy source (the government's) must increase the bonus: {s1:?} vs {s2:?}"
+        );
+    }
+
+    /// Great Wall (a Wonder) prints BOTH `strengthPerInfantry` and
+    /// `strengthPerArtillery`. 2 infantry + 1 artillery must show a
+    /// strength gain proportional to (2, 1), and doubling infantry alone
+    /// must change only the infantry-attributable share.
+    #[test]
+    fn great_walls_strength_scales_with_infantry_and_artillery_counts() {
+        // Warriors (infantry) is already in `new_game`'s starting kit at 1
+        // worker -- `get_mut`, not `insert`, to change its count.
+        let infantry = CardId::by_name("Warriors").unwrap();
+        let artillery = CardId::by_name("Cannon").unwrap();
+
+        let mut base = crate::game::new_game(2, 0);
+        base.players[0].techs.insert(artillery, TechSlot { workers: 1, stored: 0 });
+        let s_base = board_yields(CardId::by_name("Great Wall").unwrap(), &Baseline::at(&base, 0))
+            .expect("Great Wall is a swap type (Wonder)");
+
+        let mut more_infantry = crate::game::new_game(2, 0);
+        more_infantry.players[0].techs.get_mut(infantry).unwrap().workers = 2;
+        more_infantry.players[0].techs.insert(artillery, TechSlot { workers: 1, stored: 0 });
+        let s_more = board_yields(CardId::by_name("Great Wall").unwrap(), &Baseline::at(&more_infantry, 0))
+            .expect("Great Wall is a swap type (Wonder)");
+
+        let strength_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::Strength).map_or(0.0, |&(_, a, _)| a);
+        let base_val = strength_at(&s_base);
+        let more_val = strength_at(&s_more);
+        assert!(base_val > 0.0, "1 infantry + 1 artillery must be a real gain: {s_base:?}");
+        assert!(more_val > base_val, "doubling infantry alone must increase the total: {s_more:?}");
+    }
+
+    /// Alexander the Great: strength per military unit WORKER of ANY type.
+    /// 4 units total must yield exactly 2x 2 units total (mixed types).
+    #[test]
+    fn alexanders_strength_scales_with_total_military_units() {
+        // Warriors (infantry) is already in the starting kit at 1 worker.
+        let infantry = CardId::by_name("Warriors").unwrap();
+        let cavalry = CardId::by_name("Knights").unwrap();
+
+        let mut two_units = crate::game::new_game(2, 0);
+        two_units.players[0].techs.insert(cavalry, TechSlot { workers: 1, stored: 0 });
+        let s2 = board_yields(CardId::by_name("Alexander the Great").unwrap(), &Baseline::at(&two_units, 0))
+            .expect("Alexander is a swap type (Leader)");
+
+        let mut four_units = crate::game::new_game(2, 0);
+        four_units.players[0].techs.get_mut(infantry).unwrap().workers = 2;
+        four_units.players[0].techs.insert(cavalry, TechSlot { workers: 2, stored: 0 });
+        let s4 = board_yields(CardId::by_name("Alexander the Great").unwrap(), &Baseline::at(&four_units, 0))
+            .expect("Alexander is a swap type (Leader)");
+
+        let strength_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::Strength).map_or(0.0, |&(_, a, _)| a);
+        assert!(strength_at(&s2) > 0.0, "2 unit workers must be a real gain, not just a tautological 0 == 0: {s2:?}");
+        assert_eq!(strength_at(&s4), 2.0 * strength_at(&s2), "4 unit workers must be exactly 2x 2 unit workers: {s2:?} vs {s4:?}");
+    }
+
+    /// Napoleon Bonaparte: strength per DISTINCT unit TYPE present, not per
+    /// worker. 4 infantry workers (1 type) must give LESS than 1 infantry +
+    /// 1 cavalry + 1 artillery (3 types), pinning that this counts types,
+    /// not bodies.
+    #[test]
+    fn napoleons_strength_scales_with_distinct_unit_types() {
+        // Warriors (infantry) is already in the starting kit at 1 worker.
+        let infantry = CardId::by_name("Warriors").unwrap();
+        let cavalry = CardId::by_name("Knights").unwrap();
+        let artillery = CardId::by_name("Cannon").unwrap();
+
+        let mut one_type = crate::game::new_game(2, 0);
+        one_type.players[0].techs.get_mut(infantry).unwrap().workers = 4;
+        let s1 = board_yields(CardId::by_name("Napoleon Bonaparte").unwrap(), &Baseline::at(&one_type, 0))
+            .expect("Napoleon is a swap type (Leader)");
+
+        let mut three_types = crate::game::new_game(2, 0);
+        three_types.players[0].techs.insert(cavalry, TechSlot { workers: 1, stored: 0 });
+        three_types.players[0].techs.insert(artillery, TechSlot { workers: 1, stored: 0 });
+        let s3 = board_yields(CardId::by_name("Napoleon Bonaparte").unwrap(), &Baseline::at(&three_types, 0))
+            .expect("Napoleon is a swap type (Leader)");
+
+        let strength_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::Strength).map_or(0.0, |&(_, a, _)| a);
+        assert!(strength_at(&s1) > 0.0, "1 type present must be a real gain, not just a tautological 0 == 0: {s1:?}");
+        assert_eq!(strength_at(&s3), 3.0 * strength_at(&s1), "3 distinct types must be exactly 3x 1 type, regardless of the extra 3 infantry workers in s1: {s1:?} vs {s3:?}");
+    }
+
+    /// Joan of Arc: strength per happy face from temples AND the
+    /// government's own printed happy. A temple alone under Despotism
+    /// (0 government happy) vs the same temple under Theocracy (+1
+    /// government happy) must show more strength under Theocracy.
+    #[test]
+    fn joan_of_arcs_strength_scales_with_temple_and_government_happy() {
+        // Religion is already in the starting kit, unstaffed.
+        let temple = CardId::by_name("Religion").unwrap();
+
+        let mut despotism = crate::game::new_game(2, 0);
+        despotism.players[0].techs.get_mut(temple).unwrap().workers = 1;
+        let s_despotism = board_yields(CardId::by_name("Joan of Arc").unwrap(), &Baseline::at(&despotism, 0))
+            .expect("Joan of Arc is a swap type (Leader)");
+
+        let mut theocracy = crate::game::new_game(2, 0);
+        theocracy.players[0].techs.get_mut(temple).unwrap().workers = 1;
+        theocracy.players[0].government = CardId::by_name("Theocracy").unwrap();
+        let s_theocracy = board_yields(CardId::by_name("Joan of Arc").unwrap(), &Baseline::at(&theocracy, 0))
+            .expect("Joan of Arc is a swap type (Leader)");
+
+        let strength_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::Strength).map_or(0.0, |&(_, a, _)| a);
+        assert!(
+            strength_at(&s_theocracy) > strength_at(&s_despotism),
+            "Theocracy's own +1 government happy must add strength on top of the temple's: despotism={s_despotism:?} theocracy={s_theocracy:?}"
+        );
+    }
+
+    /// James Cook prints BOTH `cultureFirstColony` (fires once ANY colony is
+    /// held) and `culturePerAdditionalColony` (scales with colonies beyond
+    /// the first). A player with 1 colony must show only the first-colony
+    /// bonus; a player with 3 must show the first-colony bonus PLUS 2x the
+    /// per-additional-colony coefficient.
+    #[test]
+    fn james_cooks_culture_fires_once_a_colony_is_held() {
+        let territory = CardId::by_name("Vast Territory (I)").unwrap();
+        let none = crate::game::new_game(2, 0);
+        let s_none = board_yields(CardId::by_name("James Cook").unwrap(), &Baseline::at(&none, 0))
+            .expect("James Cook is a swap type (Leader)");
+        let culture_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::CultureRate).map_or(0.0, |&(_, a, _)| a);
+        assert_eq!(culture_at(&s_none), 0.0, "no colony: no bonus yet: {s_none:?}");
+
+        let mut one = crate::game::new_game(2, 0);
+        one.players[0].colonies.push(territory);
+        let s_one = board_yields(CardId::by_name("James Cook").unwrap(), &Baseline::at(&one, 0))
+            .expect("James Cook is a swap type (Leader)");
+        assert!(culture_at(&s_one) > 0.0, "1 colony must fire the first-colony bonus: {s_one:?}");
+    }
+
+    /// The other half of James Cook: additional colonies beyond the first
+    /// must scale the delta further, on top of the first-colony floor.
+    #[test]
+    fn james_cooks_culture_scales_with_colonies_beyond_the_first() {
+        let territory = CardId::by_name("Vast Territory (I)").unwrap();
+        let culture_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::CultureRate).map_or(0.0, |&(_, a, _)| a);
+
+        let mut one = crate::game::new_game(2, 0);
+        one.players[0].colonies.push(territory);
+        let s_one = board_yields(CardId::by_name("James Cook").unwrap(), &Baseline::at(&one, 0))
+            .expect("James Cook is a swap type (Leader)");
+
+        let mut three = crate::game::new_game(2, 0);
+        three.players[0].colonies.push(territory);
+        three.players[0].colonies.push(territory);
+        three.players[0].colonies.push(territory);
+        let s_three = board_yields(CardId::by_name("James Cook").unwrap(), &Baseline::at(&three, 0))
+            .expect("James Cook is a swap type (Leader)");
+
+        assert!(
+            culture_at(&s_three) > culture_at(&s_one),
+            "3 colonies (1 first-colony + 2 additional) must be worth more than 1 colony (1 first-colony + 0 additional): 1={s_one:?} 3={s_three:?}"
+        );
+    }
+
+    /// [`rider_delta`] subtracts the OUTGOING leader's rider when replacing
+    /// them -- holding Hammurabi and taking a leader with no rider of their
+    /// own (Aristotle: `scienceOnTechCardTake`, still deliberately unpriced,
+    /// carries no rider function) must show the conversion being GIVEN UP,
+    /// not silently dropped. Mirrors the existing Genghis Khan/Winston
+    /// Churchill replacement behaviour this module already relies on.
+    #[test]
+    fn replacing_hammurabi_with_a_leader_with_no_rider_prices_the_conversion_as_lost() {
+        let mut state = crate::game::new_game(2, 0);
+        state.players[0].leader = CardId::by_name("Hammurabi").unwrap();
+        let base = Baseline::at(&state, 0);
+        let swap =
+            board_yields(CardId::by_name("Aristotle").unwrap(), &base).expect("Aristotle is a swap type (Leader)");
+        assert!(
+            swap.contains(&(Feature::CivilActions, -1.0, Kind::Gain)),
+            "expected the -1 CivilActions loss of Hammurabi's conversion when replacing him, got {swap:?}"
+        );
     }
 }

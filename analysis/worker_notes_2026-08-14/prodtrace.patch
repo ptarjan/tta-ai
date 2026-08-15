@@ -1,0 +1,53 @@
+diff --git i/rust/src/economy.rs w/rust/src/economy.rs
+index 93b5381..fac2451 100644
+--- i/rust/src/economy.rs
++++ w/rust/src/economy.rs
+@@ -1022,12 +1022,25 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         // no bank mutation, since it exists only to compute `bonus_food`.
+         {
+             let farm_full = worker_capped_production(&p.techs, CardType::Farm, u16::MAX);
+-            let farm_got = credit_production(&p.techs, CardType::Farm, blue_available(p), &mut p.food_tokens);
+-            p.food += farm_got;
++            // PRODTRACE (2026-08-14): credit the non-worker bonus (leader/
++            // wonder/government flat food, e.g. Transcontinental Railroad's
++            // `DoubleBestMine` sibling on the resource side) BEFORE the
++            // mandatory per-worker `credit_production` step, not after.
++            // Both draw from the SAME shrinking `blue_available` pool this
++            // turn; crediting the forced per-worker placement first (the old
++            // order) can exhaust the pool and silently drop the entire flat
++            // bonus even though it is real, rules-correct income the true
++            // game received -- see game 7521459 round 17, where Grey's
++            // Transcontinental Railroad (`DoubleBestMine`) bonus vanished
++            // this way every round the bank was tight, compounding into an
++            // eventual illegal Build. See
++            // analysis/worker_notes_2026-08-14/prodtrace__PRODTRACE.txt.
+             let bonus_food = (s.food as u16).saturating_sub(farm_full);
+             if bonus_food > 0 {
+                 gain_food(p, bonus_food);
+             }
++            let farm_got = credit_production(&p.techs, CardType::Farm, blue_available(p), &mut p.food_tokens);
++            p.food += farm_got;
+         }
+         if crate::debugflags::replay_debug_all() {
+             eprintln!("DEBUG end_of_turn post-production: idx={idx} food={} yellow_bank={}", p.food, p.yellow_bank);
+@@ -1050,12 +1063,18 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         // only for the uncapped `mine_full` call just below).
+         {
+             let mine_full = worker_capped_production(&p.techs, CardType::Mine, u16::MAX);
+-            let mine_got = credit_production(&p.techs, CardType::Mine, blue_available(p), &mut p.resource_tokens);
+-            p.resources += mine_got;
++            // PRODTRACE (2026-08-14): same reordering as 3c's food step
++            // above -- see that comment. `DoubleBestMine` (Transcontinental
++            // Railroad) is the concrete repro: it adds the best staffed
++            // mine's own printed value once more, flat, not tied to any
++            // worker, so it is entirely a `bonus_resources` credit here, not
++            // part of `credit_production`'s forced per-worker placement.
+             let bonus_resources = (s.resources as u16).saturating_sub(mine_full);
+             if bonus_resources > 0 {
+                 gain_resources(p, bonus_resources);
+             }
++            let mine_got = credit_production(&p.techs, CardType::Mine, blue_available(p), &mut p.resource_tokens);
++            p.resources += mine_got;
+         }
+         if crate::debugflags::replay_debug_all() {
+             eprintln!(

@@ -2090,10 +2090,10 @@ pub static CARDS: [Card; NUM_CARDS] = [
         resource_cost: 0,
         count: [1, 1, 1],
         production: Production { food: 0, resources: 0, culture: 0, science: 0, happy: 0, strength: 0 },
-        effects: CardEffects { culture: 0, science: 0, strength: 4, happy: 0, civil_actions: 0, military_actions: 0, gain_culture: 0, gain_science: 0, gain_food: 0, gain_resources: 0, resource_discount: 0, resources_for_military_units: 0, defense_bonus: 0, colonization_bonus: 0, colonize_bonus: 0, blue_tokens: 0, on_build_culture: 0, wonder_stages_per_action: 0, civil_hand_limit: 0, military_hand_limit: 0, free_civil_action: 0, urban_building_limit: 0, food: 0, resources: 0, yellow_tokens: 0 },
+        effects: CardEffects { culture: 0, science: 0, strength: 5, happy: 0, civil_actions: 0, military_actions: 0, gain_culture: 0, gain_science: 0, gain_food: 0, gain_resources: 0, resource_discount: 0, resources_for_military_units: 0, defense_bonus: 0, colonization_bonus: 0, colonize_bonus: 0, blue_tokens: 0, on_build_culture: 0, wonder_stages_per_action: 0, civil_hand_limit: 0, military_hand_limit: 0, free_civil_action: 0, urban_building_limit: 0, food: 0, resources: 0, yellow_tokens: 0 },
         military_action_cost: 1,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 2, air: 0 },
-        obsolete_strength: 2,
+        obsolete_strength: 3,
         special: &[],
         stages: &[],
         peaceful_cost: 0,
@@ -4725,7 +4725,7 @@ mod baked_table_matches_source_data {
     fn obj_entries(v: &Json) -> &[(String, Json)] {
         match v {
             Json::Obj(entries) => entries,
-            other => panic!("expected a JSON object, got {other:?}"),
+            other @ Json::Null | other @ Json::Bool(_) | other @ Json::Num(_) | other @ Json::Str(_) | other @ Json::Arr(_) => panic!("expected a JSON object, got {other:?}"),
         }
     }
 
@@ -4745,7 +4745,7 @@ mod baked_table_matches_source_data {
     fn as_bool(v: &Json, what: &str) -> bool {
         match v {
             Json::Bool(b) => *b,
-            other => panic!("{what}: expected a bool, got {other:?}"),
+            other @ Json::Null | other @ Json::Num(_) | other @ Json::Str(_) | other @ Json::Arr(_) | other @ Json::Obj(_) => panic!("{what}: expected a bool, got {other:?}"),
         }
     }
 

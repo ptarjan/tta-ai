@@ -227,6 +227,19 @@ pub struct Board {
     pub state: GameState,
     pub me: u8,
     pub unknown: BTreeSet<UnknownField>,
+    /// How many of the NEXT reveals off `state.current_events` the operator
+    /// has already named with an `event <card name>` line, waiting to be
+    /// consumed by that many `Move::PrepareEvent` commits.
+    ///
+    /// `state.current_events` is the ENGINE's own shuffled pile, dealt (or
+    /// reshuffled on recycle) from cards nobody at the real table has seen
+    /// yet -- it is a fine stand-in for `rank_moves`' hypothetical searches,
+    /// which clone `state` alone and discard the clone, but committing a
+    /// `PrepareEvent` for real must reveal what actually happened at the
+    /// table, not the mirror's private guess. `Advisor::play` reads this
+    /// counter to refuse that commit until the operator has said which card
+    /// it is; `Command::Event` is its only writer.
+    pub confirmed_events: u32,
 }
 
 impl Board {
@@ -276,7 +289,7 @@ impl Board {
 
 /// A fresh game mirroring a freshly set-up physical board.
 pub fn new_board(num_players: u8, me: u8, seed: u64) -> Board {
-    Board { state: game::new_game(num_players, seed), me, unknown: BTreeSet::new() }
+    Board { state: game::new_game(num_players, seed), me, unknown: BTreeSet::new(), confirmed_events: 0 }
 }
 
 // ------------------------------------------------------- card resolution --
@@ -331,7 +344,7 @@ impl Pool {
     }
 }
 
-// `pub(crate)`, not private: `advisor::advisor`'s `parse_move` needs these
+// `pub(crate)`, not private: `advisor::session`'s `parse_move` needs these
 // same three primitives to fuzzy-match a human's typed move argument against
 // ONE already-known candidate string (a legal move's own card name, or a
 // bare keyword like Churchill's "culture"/"military") -- a narrower job than
@@ -781,7 +794,7 @@ pub fn loads(text: &str) -> Result<Board, String> {
         .ok_or_else(|| "game line must say how many players, e.g. '3p'".to_string())?;
     let n: u8 = parse_num(&n_text, "players")?;
     let seed: u64 = parse_num(kv_get(&head, "seed").unwrap_or("0"), "seed")?;
-    let mut board = Board { state: blank_state(n, seed), me: 0, unknown: BTreeSet::new() };
+    let mut board = Board { state: blank_state(n, seed), me: 0, unknown: BTreeSet::new(), confirmed_events: 0 };
 
     // The deck line is applied LAST: it only carries counts, and loading the
     // row adjusts deck composition, which would otherwise change the count.
@@ -845,6 +858,8 @@ fn blank_state(n: u8, seed: u64) -> GameState {
         pending: PendingStack::new(),
         queue: Queue::new(),
         last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
+        last_end_of_turn_science: [None; MAX_PLAYERS],
+        last_end_of_turn_resources: [None; MAX_PLAYERS],
     }
 }
 
@@ -879,6 +894,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         yellow_bank: 18,
         yellow_granted: 0,
         workers_free: 1,
+        raid_loot_pending: 0,
         blue_total: 16,
         food: 0,
         resources: 0,
@@ -896,6 +912,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         ca_spent_taking: 0,
         hammurabi_used: false,
         hammurabi_replaced_this_turn: false,
+        breakthrough_ma_funded: false,
         replaced_leader_this_turn: false,
         trade_food_as_resource_used_this_turn: 0,
         trade_resource_as_food_used_this_turn: 0,
@@ -912,6 +929,8 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         mil_sci_discount: 0,
         one_time_discount: crate::state::OneTimeDiscount::default(),
         resigned: false,
+            food_tokens: crate::state::TokenBank::default(),
+            resource_tokens: crate::state::TokenBank::default(),
     }
 }
 
@@ -1660,6 +1679,10 @@ fn apply_command(board: &mut Board, cmd: Command) -> Result<String, String> {
                 board.state.current_events.push(name);
             }
             crate::events::sync_current_events_age(&mut board.state);
+            // Each name is a promise: the next `n` reveals off this pile are
+            // now known, not guessed. `Advisor::play` spends one promise per
+            // committed `PrepareEvent` and refuses to commit one on credit.
+            board.confirmed_events = board.confirmed_events.saturating_add(n as u32);
             Ok(format!("next {n} event(s) to resolve noted"))
         }
         Command::Age(age) => {
@@ -2060,7 +2083,7 @@ mod tests {
                 let mv = bots[st.decider() as usize].choose(&st, moves.as_slice());
                 crate::apply::apply(&mut st, mv);
             }
-            let mut b = Board { state: st.clone(), me: 0, unknown: BTreeSet::new() };
+            let mut b = Board { state: st.clone(), me: 0, unknown: BTreeSet::new(), confirmed_events: 0 };
             b.set_hidden(1, Hand::Civil, 2).unwrap();
             b.unknown.insert(UnknownField { player: 2, field: PlayerField::Culture });
             let text = dumps(&b);

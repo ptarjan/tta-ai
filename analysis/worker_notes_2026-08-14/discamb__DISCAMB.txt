@@ -1,0 +1,250 @@
+DISCARD-AMBIGUITY WORKER (BGO's own two discard-count renderings disagree
+with each other) -- 2026-08-14
+================================================================================
+
+SETUP: clone /private/tmp/discamb branched from c772970 (verified via
+`git log --oneline -1`).
+
+STEP 1 -- POPULATION MEASUREMENT (done BEFORE any fix, per task instructions)
+================================================================================
+Added a TEMPORARY `#[ignore]`d analysis test,
+`temp_discard_disagreement_population_count`, directly inside
+`replay_common.rs`'s test module (reverted before the final diff -- see
+"WHAT WAS REVERTED" below). It walks the full 1011-game journal corpus
+directly (bypassing `replay_game`) and, per `(game, actor seat, round)`,
+counts entries where BOTH the phase-header announcement
+(`parse_discard_phase_announcement`) and the resolution line
+(`parse_discard_count_line`) are present, and of those, how many disagree --
+literally the same two maps `prescan_discard_phase_oracle` already builds
+internally, just not thrown away afterward.
+
+    cd /private/tmp/discamb/rust
+    PATH=$HOME/.cargo/bin:$PATH cargo test --profile fasttest --lib \
+      temp_discard_disagreement_population_count -- --ignored --nocapture
+
+    RESULT: both_present=22481 disagree=418
+
+NOT tiny -- 418 corpus-wide (close to the pre-existing module doc comment's
+own "45,590 of 46,009 (99.1%) agree" claim -- 46009-45590=419, same order of
+magnitude, different exact denominator because that comment counts something
+adjacent, not the same query).
+
+STEP 1b -- BUT the raw 418 is NOT all one mechanism. Extending the probe to
+also record how many DISTINCT "<Color> discards N cards" resolution LINES
+contributed to each `actual` total (`actual_lines`) split the 418 cleanly
+into two unrelated populations:
+
+  A) actual_lines == 1 (a single resolution line for that actor+round) -- 312
+     of 418.
+  B) actual_lines >= 2 (two-or-more separate "discards N cards" lines summed
+     under the same (actor, round) key) -- 106 of 418.
+
+Population B is a MEASUREMENT ARTIFACT of my probe's own simplistic
+(actor, round) key, not a real same-fact disagreement. Concrete example,
+game 7523183 round 16, Purple: line 584 is Purple's OWN "Politics of
+Strength" event ("The weakest civilization discards 3 military cards; Green
+must discard 3 cards") which the journal renders as TWO separate lines under
+a DIFFERENT actor's turn-block ("Purple discards 1 card" / "Purple discards
+2 cards", attributed under color=Green's turn-processing window because
+that's when the event resolved) -- entirely unrelated to Purple's OWN later
+"No Discard Phase" (announced=0) end-of-turn modal for round 16. My probe's
+key collapses these two logically distinct triggers into one (announced=0,
+actual=3) "disagreement" that isn't one.
+
+Restricting to population A (single resolution line) and further splitting
+by whether the announcement was non-zero (a REAL "Discard Phase N" modal, as
+opposed to "No Discard Phase" == 0, which is what the event-collision cases
+above show even at actual_lines==1 -- same artifact, just without a second
+resolution line):
+
+    diff=1  announced>0 : 239   (100% of all diff=1 cases)
+    diff=2  announced>0 :  20   announced=0 (artifact):  1
+    diff=3  announced>0 :   8   announced=0 (artifact): 43
+    diff=4  announced>0 :   1
+
+TRUE POPULATION (single resolution line, non-zero announcement, i.e. one
+real Discard-Phase modal immediately followed by one real resolution line
+for the SAME actor's SAME turn, with no unrelated event in between):
+
+    268 (actor, round) entries corpus-wide, diff always POSITIVE
+    (actual > announced), NEVER negative -- 0 of 418 raw disagreements, 0 of
+    268 narrowed ones, have actual < announced.
+
+This 268 is the actual target population for the narrow fix. Not single
+digits; a meaningfully-sized, well-defined subset.
+
+STEP 2 -- WHICH RENDERING IS RIGHT, AND WHY (checked 7 instances, not just
+the traced game)
+================================================================================
+Cheap check done FIRST, per task instructions: is this a "header counts only
+military cards, resolution line counts all cards" units bug? NO -- ruled out.
+Manually inspected the raw journal context around 6 more diff=1/announced>0
+instances (7521911 rd10, 7522830 rd15, 7523390 rd15, 7523262 rd16, 7523176
+rd10, 7521683 rd4) plus the already-traced 7523376 rd9. All seven show the
+IDENTICAL shape: a single "Discard Phase N military card(s) must be
+discarded" line immediately followed (within the SAME actor's own turn
+block, no intervening event) by a single "<Color> discards N+1 cards"
+resolution line -- e.g. 7521683 rd4 Orange: "Discard Phase 1 military card
+must be discarded" then "Orange discards 2 cards", nothing else attributable
+in between. No sign of a units mismatch (military-only vs all-card-types) --
+TTA's base game has no other hand-limit mechanic that would bundle a
+non-military card into this same resolution line, and the resolution line's
+own text ("discards N cards", not "N military cards and M other cards")
+gives no indication of a mixed count either.
+
+Verdict: the RESOLUTION line ("<Color> discards N cards") is the reliable
+number; the ANNOUNCEMENT modal under-counts by a small, always-positive
+margin. This matches decisive prior evidence already in the codebase's own
+module doc comment (`replay_common.rs` ~4270-4281): on game `7522614` (one
+of the 29 games that replays clean through `game_over`), the resolution
+line's count was independently corroborated end-to-end while THIS BINARY's
+own reconstruction was what was wrong -- i.e. the resolution line has
+already been proven trustworthy against ground truth once; this pass adds
+seven more same-shape instances all pointing the same direction, with a
+uniform sign across the whole 268-entry population.
+
+I could not determine the RULE that makes the announcement modal
+under-count (matches decider's own earlier finding for 7523376: no
+candidate mechanism -- Robespierre, Republic revolution, Patriotism -- has
+a documented rule that forces an extra hand-limit-independent discard).
+Given the sign is 100% consistent and the resolution line is independently
+corroborated on a clean game, this pass proceeds on the resolution line's
+authority without needing the exact upstream BGO mechanism.
+
+STEP 3 -- THE FIX (see discamb.patch for the exact diff)
+================================================================================
+Narrow, evidence-scoped, and deliberately NOT a re-run of the closed
+universal experiment:
+
+- New prescan `prescan_discard_disagreement_shortfall` builds a THIRD map,
+  `Replayer::discard_target: HashMap<(u8, String), u32>`, populated ONLY
+  when, for a given (actor, round): exactly one resolution line exists,
+  the announcement was non-zero, and the resolution line's count exceeds
+  the announcement's. Value stored is the resolution line's own count (the
+  ground truth target), not a bare delta -- kept honest against whatever the
+  live engine actually manages to discard on its own, rather than assuming
+  the live engine's natural count equals `announced`.
+- `apply_one`'s `ActionClass::Discard` arm calls the existing (unmodified)
+  `resolve_discard(actor)`, then, if `discard_target` has an entry for this
+  (actor, round) and fewer cards were actually removed than the target,
+  calls a new `Replayer::force_extra_discards(actor, n)` to make up EXACTLY
+  the observed gap.
+- `force_extra_discards` picks each extra victim via `interact::
+  discard_options` (called read-only, its own ordering/logic is completely
+  untouched -- HARD CONSTRAINT respected) wrapped through the EXISTING
+  `interact::push_choice` + `Replayer::resolve_one_discard_choice` +
+  `discard_solver` pipeline, the SAME machinery an ordinary discard already
+  uses -- no new "which card" heuristic invented, no bypass of the discard
+  solver's own journal-hint logic.
+- This is deliberately NOT the closed universal experiment: that one forced
+  the journal's count for EVERY discard action regardless of whether the
+  two journal renderings agreed (measured 456 regressions : 1 win). This
+  fix only ever engages on the self-flagged 268-entry ambiguous subset;
+  every other discard in the corpus (agreement, or no announcement at all)
+  is completely untouched -- `discard_target` is empty for them, so the new
+  code in `apply_one`'s Discard arm is a pure no-op.
+
+MEASUREMENT BUG FOUND MID-PASS, FIXED, RE-MEASURED
+================================================================================
+First implementation measured "how many cards resolve_discard actually
+removed" as `hand_military.len()` before minus after the call. WRONG: on
+game `7521072` round 6 (Orange), the debug trace showed
+`before=5 after=7` -- the hand GREW across the call. Reason:
+`resolve_discard`'s `Move::Choose` can resume the REST of
+`economy::end_of_turn` in the very same call, including that turn's own
+military draw ("End turn ... Orange draws 3 military cards" is logged
+BEFORE the "discards" line but mechanically resolves AFTER the discard
+choice, as part of the same suspended continuation) -- confirmed via
+`REPLAY_DEBUG_ALL=1` trace (`DEBUG discard_excess_military` /
+`DEBUG discard:` lines). `before.saturating_sub(after)` floors at 0
+whenever this happens, so the shortfall computed as `target - 0` instead of
+`target - 1`, forcing ONE EXTRA discard beyond what was warranted --
+directly caused 44 of the first pass's regressions (evicting real cards a
+later action needed).
+
+Fixed by replacing the hand-size delta with a discard-DECISION counter:
+new `Replayer::discards_resolved_since_reset: u32`, incremented inside
+`resolve_one_discard_choice` (the one place both the natural path and
+`force_extra_discards` funnel through), reset to 0 at the top of
+`apply_one`'s `ActionClass::Discard` arm before calling `resolve_discard`.
+Immune to whatever else the same continuation does (draws, production,
+etc.) since only actual `DiscardMilitary` choice resolutions increment it.
+
+RESULT AFTER THE FIX (both iterations measured against the full corpus,
+`SCOREDIV_DUMP_COMPLETED=1` sweep, ids compared with `guard_ids_687.txt`):
+
+  Iteration 1 (hand-size delta, the bug):
+    643/1011 completed (baseline 687). 44 regressions, 0 wins. Reverted the
+    measurement approach, not the whole idea, given the bug was identified
+    and understood, not just observed.
+
+  Iteration 2 (discard-decision counter, the fix):
+    686/1011 completed (baseline 687). 1 regression (`7522318`), 0 wins.
+
+Traced the 1 remaining regression (`7522318`): the narrow rule correctly
+fires at round 7 (Orange: announced=2, actual=3, a genuine same-shape
+disagreement) and correctly forces exactly 1 extra discard with the correct
+count. But `interact::discard_options` + `discard_solver.choose` (the SAME
+machinery an ordinary discard uses, untouched) picks a card that turns out,
+several rounds later (round 15), to matter to a LATER divergence that
+eventually crosses the stop threshold -- an unavoidable consequence of
+correctly matching the COUNT while `discard_solver`'s `needed_after` can
+only protect cards it has independent evidence (a later named play in the
+journal) are needed; it has no way to know in advance which of several
+same-defense-value candidates the REAL player actually kept. This is
+exactly the "which card" hazard `HARD CONSTRAINTS` flags `interact::
+discard_options`' ordering as load-bearing for -- the fix does not touch
+that ordering, but even a correctly-counted forced discard can still pick
+the "wrong" (real-game-inconsistent) card when the count crosses genuine
+identity ambiguity.
+
+DECISION: DO NOT LAND. Even with the measurement bug fixed, the narrow
+rule nets 1 regression and, more importantly, 0 WINS -- not one of the
+97-bucket target games (`7523376` included: its round-9 Purple divergence
+IS resolved by this fix, but the SAME game still stops two rounds later at
+an unrelated Orange divergence the fix does not touch) reaches
+`state.game_over` as a result. Per this task's own instructions ("If the
+narrow version also regresses, that is a clean and complete answer -- write
+it up and stop. DO NOT then broaden it back toward the universal version"),
+this is exactly that outcome: a real, correctly-measured, well-understood
+population (268 entries, verdict confirmed on 7 spot-checked instances)
+whose narrow correction is provably safer than the closed universal
+experiment (1 regression vs 456) but still nets ZERO improvement to the
+actual bucket this task exists to shrink, because the 97-bucket games each
+carry multiple independent small divergences -- fixing this one alone does
+not complete any of them, and even the narrow version cannot avoid the
+card-identity hazard on at least one game elsewhere in the corpus.
+
+REVERTED: `git -c commit.gpgsign=false checkout -- rust/src/replay_common.rs`
+back to `c772970`. `discamb.patch` is EMPTY.
+
+BAR CHECK (unmodified tree, `c772970`, confirmed via `git diff --stat` on
+`rust/src/replay_common.rs` showing nothing):
+
+  SCOREDIV_DUMP_COMPLETED=1 sweep header: "1011 games sampled, 687 completed
+  to state.game_over" (`/tmp/da_clean.txt`).
+  comm -23 /private/tmp/guard_ids_687.txt /tmp/da_clean_ids.txt -> EMPTY (no regressions)
+  comm -13 /private/tmp/guard_ids_687.txt /tmp/da_clean_ids.txt -> EMPTY (no wins, expected: no code changed)
+  cargo test --profile fasttest --lib:
+    "test result: ok. 1410 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+  cargo clippy --all-targets --profile fasttest -- -D warnings:
+    "Checking tta v0.1.0 (/private/tmp/discamb/rust)" / "Finished `fasttest`
+    profile [unoptimized] target(s) in 36.79s" -- zero warnings.
+
+RECOMMENDATION FOR THE NEXT PASS
+================================================================================
+The discard-count self-disagreement mechanism (268 entries, resolution line
+always correct) is real and now precisely characterized, but fixing it
+alone is not worth landing: it helps zero games in the 97-bucket target
+because each of those games has multiple independent small divergences
+stacked on top of each other (matches the decider pass's own "long tail of
+per-game hand-count drift, each individually small" framing). A future pass
+would need to either (a) find and fix SEVERAL of a single game's
+divergences together before any one game in the bucket flips to
+`game_over` (expensive, per-game work, does not obviously generalize), or
+(b) find a genuinely different, larger-blast-radius cause still hiding in
+this bucket rather than incrementally patching this one already-small
+mechanism further. Do not re-attempt the discard-count self-disagreement
+angle without new evidence beyond what's here -- it has now been measured
+twice (universal: 456:1 against; narrow: 1 regression / 0 wins) and both
+paths are closed.

@@ -195,7 +195,7 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
             CardType::Theater if lv > best.theater => best.theater = lv,
             CardType::Library if lv > best.library => best.library = lv,
             CardType::Arena if lv > best.arena => best.arena = lv,
-            _ => {}
+            CardType::Farm | CardType::Mine | CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::Government | CardType::SpecialTech | CardType::Wonder | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => {}
         }
 
         match kind {
@@ -225,7 +225,7 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
             // rather than omitted because `Tableau` itself does not enforce
             // that invariant, and a silent no-op here is the correct
             // response if it ever were.
-            _ => {}
+            CardType::Government | CardType::Wonder | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => {}
         }
 
         workers += slot.workers as i32;
@@ -508,7 +508,31 @@ pub fn features(
     // --- happiness
     f.set(WeightKey::HappyMargin, margin.min(3.0));
     f.set(WeightKey::Discontent, discontent);
-    f.set(WeightKey::Uprising, if discontent > f64::from(p.workers_free) { 1.0 } else { 0.0 });
+    // UNITS FIX: this used to be a bare 0/1 indicator, so the fitted
+    // `WeightKey::Uprising` coefficient had to stand for "the cost of an
+    // uprising" at EVERY board size at once -- a catastrophic mid/late-game
+    // uprising and a nearly-free turn-1 one primed the identical penalty,
+    // and a climb chasing the worse case drove the single shared coefficient
+    // to the clamp trying (and failing) to also price the milder one (see
+    // the live log: "uprising = -60.000 (clamp 60.0) -- pinned
+    // coordinate"). RULES_SPEC 6.3: on an uprising "score/corruption/
+    // production/consumption all skipped" -- `economy::end_of_turn`'s step
+    // 2 (this file's own economy::end_of_turn doc comment) forfeits the
+    // ENTIRE production phase, not a fixed amount: science+culture scoring
+    // (step 3a), food production (3c), and resource production (3e). `s`
+    // (this function's own `effects::compute` reading, same Stats step 3
+    // itself applies) already carries exactly those four rates, so scaling
+    // the indicator by their sum makes the coefficient mean "evaluator-value
+    // per point of production actually at stake" -- fixed across positions
+    // -- instead of "value of an uprising at some unstated, unscalable board
+    // size". A rulebook fact computed by the engine, not a fitted constant:
+    // the climb still has to learn the PRICE, only the magnitude it prices
+    // is now the one the rules actually forfeit.
+    let uprising_production_at_stake = f64::from(s.science + s.culture + s.food + s.resources);
+    f.set(
+        WeightKey::Uprising,
+        if discontent > f64::from(p.workers_free) { uprising_production_at_stake } else { 0.0 },
+    );
 
     // --- actions
     f.set(WeightKey::CivilActions, f64::from(s.civil_actions) + g(GainFeature::CivilActions));
@@ -547,7 +571,7 @@ pub fn features(
     f.set(WeightKey::Strength, strength);
     f.set(WeightKey::StrengthRel, rel);
     f.set(WeightKey::StrengthDeficit, (-rel).max(0.0));
-    f.set(WeightKey::StrengthLead, rel.max(0.0).min(6.0));
+    f.set(WeightKey::StrengthLead, rel.clamp(0.0, 6.0));
     f.set(WeightKey::TacticLevel, if p.tactic.is_none() { 0.0 } else { f64::from(p.tactic.level()) });
     // RULES_SPEC 11.3 cliff, not a slope -- see `WeightKey::HasUnit`'s own
     // doc comment in `weights.rs`. `unit_workers` (the sweep total above)
@@ -555,8 +579,29 @@ pub fn features(
     // asks whether that count is zero or not.
     f.set(WeightKey::HasUnit, if unit_workers > 0 { 1.0 } else { 0.0 });
     f.set(WeightKey::Colonies, p.colonies.len() as f64);
+    // RULES_SPEC 5.4 cliff, not a slope -- see `WeightKey::HasColony`'s own
+    // doc comment in `weights.rs`. `legal.rs`'s `aggression_target_qualifies`
+    // reads `q.colonies.is_empty()` for exactly this fact (Annex's printed
+    // target clause); this asks the same question of `p.colonies` here.
+    f.set(WeightKey::HasColony, if p.colonies.is_empty() { 0.0 } else { 1.0 });
     f.set(WeightKey::Pacts, pacts + dc.pact_offers);
     f.set(WeightKey::PactBlocksAttack, blocks_attack);
+    // RULES_SPEC 5.6 cliff, not a slope -- see `WeightKey::WarImmune`'s own
+    // doc comment in `weights.rs`. `combat::war_forbidden` ORs `s.war_immune`
+    // (a pact side printing `cannotBeDeclaredWarOnByAnyone`) alongside
+    // `pact_forbids_attack` (already `blocks_attack` above); this reads the
+    // same `Stats` field `s` already carries for this player.
+    f.set(WeightKey::WarImmune, if s.war_immune { 1.0 } else { 0.0 });
+    // RULES_SPEC 5.4/5.6 cliff, not a slope -- see `WeightKey::
+    // AttackCostDoubled`'s own doc comment in `weights.rs`. `legal.rs` and
+    // `combat.rs` both apply this doubling off `leader_is(q, "Mahatma
+    // Gandhi")`; read here off the printed special the leader card
+    // actually carries (`Special::OpponentsPayDoubleMilitaryActionsToAttackYou`)
+    // rather than the name, so the fact and the gate cannot drift onto two
+    // different leaders if a future card ever shares it.
+    let doubles_attack_cost = !p.leader.is_none()
+        && p.leader.get().special.contains(&Special::OpponentsPayDoubleMilitaryActionsToAttackYou);
+    f.set(WeightKey::AttackCostDoubled, if doubles_attack_cost { 1.0 } else { 0.0 });
     f.set(WeightKey::AuctionCommitted, dc.auction_committed);
     f.set(WeightKey::AuctionBid, dc.auction_bid);
 
@@ -592,6 +637,13 @@ pub fn features(
     f.set(WeightKey::WonderAgeOverrun, age_overrun);
     f.set(WeightKey::WonderStagesPerAction, f64::from(s.wonder_stages - 1));
     f.set(WeightKey::Leader, if p.leader.is_none() { 0.0 } else { 1.0 });
+    // RULES_SPEC 5.5 cliff, not a slope -- see `WeightKey::WonderInProgress`'s
+    // own doc comment in `weights.rs`. `legal.rs`'s `aggression_target_
+    // qualifies` reads `q.wonder.is_none()` (the same field `horizon::
+    // wonder_outlook` gates its `None` case on, hence `outlook.is_none()`
+    // implying `progress == 0` above) for the wonder half of Infiltrate's
+    // OR'd target clause; this asks the same question of `p.wonder` here.
+    f.set(WeightKey::WonderInProgress, if p.wonder.is_none() { 0.0 } else { 1.0 });
 
     // --- board side of the card-pricing keys (docs/ANALYSIS_HISTORY.md,
     // CARD_BLINDNESS.md verdict): the
@@ -634,7 +686,7 @@ pub fn features(
     // most expensive entry in the vector by a wide margin (Python's own
     // profiling: 22% of ALL evaluation time on a vector that prices it at
     // 0.0).
-    let unpriced = priced_only && w.map_or(true, |w| w.get(WeightKey::EventScoringMargin) == 0.0);
+    let unpriced = priced_only && w.is_none_or(|w| w.get(WeightKey::EventScoringMargin) == 0.0);
     f.set(
         WeightKey::EventScoringMargin,
         if unpriced { 0.0 } else { events::event_scoring_margin(state, idx, Some(&ctx.event_pool)) },
@@ -855,6 +907,51 @@ mod tests {
         );
     }
 
+    /// UNITS FIX for `WeightKey::Uprising`: it used to be a bare 0/1
+    /// indicator (`if discontent > workers_free { 1.0 } else { 0.0 }`), so a
+    /// single fitted coefficient had to price "an uprising" identically at
+    /// every board size -- a civilization with a big production forfeits
+    /// far more (RULES_SPEC 6.3: the WHOLE production phase is skipped) than
+    /// one with a small one, and no fixed number can be "correct" for both.
+    /// Two boards with the IDENTICAL discontent-vs-workers_free overshoot
+    /// (so the 0/1 condition never changes) but very different production
+    /// must now read different `Uprising` magnitudes, proportional to what
+    /// is actually at stake. Confirmed RED by reverting to the bare 0/1
+    /// formula: both boards read exactly `1.0`, this test's inequality
+    /// failed with `small=1 big=1`.
+    #[test]
+    fn uprising_scales_with_the_production_actually_at_stake_not_a_flat_0_1() {
+        let mut small = G::new_game(2, 51);
+        small.players[0].yellow_bank = 7; // happy_required(7) == 4, fresh happy == 0
+        small.players[0].workers_free = 3; // discontent 4 > 3 free -> an uprising
+
+        let small_feat = features(&small, 0, None, None, false).get(WeightKey::Uprising);
+        assert!(small_feat > 0.0, "must actually be an uprising, got feature {small_feat}");
+
+        // A bigger production base, same discontent/workers_free overshoot:
+        // the 0/1 CONDITION is identical, only the magnitude at stake grows.
+        let mut big = small.clone();
+        big.players[0].science_rate_extra = 20;
+        big.players[0].culture_rate_extra = 20;
+        let big_feat = features(&big, 0, None, None, false).get(WeightKey::Uprising);
+
+        assert!(
+            big_feat > small_feat,
+            "a bigger production base facing the IDENTICAL uprising condition must forfeit more: \
+             small={small_feat} big={big_feat}"
+        );
+
+        // No uprising at all must still read exactly zero, regardless of
+        // how much production is on the board -- the magnitude only prices
+        // the turns an uprising actually happens.
+        big.players[0].workers_free = 4; // discontent 4 == 4 free -> NOT an uprising
+        assert_eq!(
+            features(&big, 0, None, None, false).get(WeightKey::Uprising),
+            0.0,
+            "no uprising must still read exactly 0.0, no matter how much production is at stake"
+        );
+    }
+
     /// A fresh deal has no wonder in progress -- all three finish-discipline
     /// terms (`wonder_stages_left`/`wonder_turns_to_finish`/`wonder_overrun`)
     /// must read exactly 0.0, matching Python's "0.0 with nothing in
@@ -901,6 +998,130 @@ mod tests {
         let after = features(&state, 0, None, None, false);
         assert_eq!(after.get(WeightKey::UnitWorkers), 1.0, "staffing one unit must move unit_workers by exactly 1");
         assert_eq!(after.get(WeightKey::HasUnit), 1.0, "has_unit must flip to 1.0 the instant any unit is staffed");
+    }
+
+    /// `has_colony` (RULES_SPEC 5.4, `WeightKey::HasColony`'s own doc
+    /// comment in `weights.rs`): 0.0 with no colonies at all, the state a
+    /// fresh deal starts in.
+    #[test]
+    fn has_colony_is_zero_with_no_colonies() {
+        let state = G::new_game(2, 40);
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::Colonies), 0.0, "a fresh deal starts with no colonies");
+        assert_eq!(f.get(WeightKey::HasColony), 0.0, "has_colony must be 0.0 with no colonies");
+    }
+
+    /// `has_colony` must flip to 1.0 the instant a player owns their FIRST
+    /// colony, moving `colonies` by exactly 1 -- the same +1 a second or
+    /// third colony would also produce on the linear `colonies` count,
+    /// which is exactly the distinction `colonies` cannot express and
+    /// `has_colony` exists to add (same shape as `has_unit`/`unit_workers`
+    /// above).
+    #[test]
+    fn has_colony_flips_to_one_with_the_first_colony() {
+        let mut state = G::new_game(2, 40);
+        let territory =
+            crate::cards::CardId::by_name("Vast Territory (I)").expect("Vast Territory (I) is a base-game colony");
+        state.players[0].colonies.push(territory);
+
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::Colonies), 1.0, "one colony must move the linear count by exactly 1");
+        assert_eq!(f.get(WeightKey::HasColony), 1.0, "has_colony must flip to 1.0 the instant any colony is owned");
+    }
+
+    /// The cliff, not a slope: `has_colony` must stay pinned at 1.0 as more
+    /// colonies pile up, while `colonies` keeps climbing linearly -- a
+    /// third colony is not a legal-target event the way the first one was
+    /// (`legal.rs`'s `aggression_target_qualifies` only ever asks
+    /// `q.colonies.is_empty()`, never how many).
+    #[test]
+    fn has_colony_stays_one_with_several_colonies_it_is_a_cliff_not_a_count() {
+        let mut state = G::new_game(2, 40);
+        for name in ["Vast Territory (I)", "Strategic Territory (I)", "Historic Territory (I)"] {
+            let territory = crate::cards::CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"));
+            state.players[0].colonies.push(territory);
+        }
+
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::Colonies), 3.0, "three colonies must move the linear count to 3");
+        assert_eq!(f.get(WeightKey::HasColony), 1.0, "has_colony must stay at 1.0, not climb to 3.0, with a third colony");
+    }
+
+    /// `war_immune` (RULES_SPEC 5.6, `WeightKey::WarImmune`'s own doc
+    /// comment): 0.0 with no pacts at all, the state a fresh deal starts in.
+    #[test]
+    fn war_immune_is_zero_with_no_pacts() {
+        let state = G::new_game(2, 40);
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WarImmune), 0.0, "a fresh deal starts with no pacts, so no war immunity");
+    }
+
+    /// `war_immune` must flip to 1.0 the instant a player holds a pact side
+    /// printing `cannotBeDeclaredWarOnByAnyone` -- "Loss of Sovereignty"'s B
+    /// side, the same fixture `combat.rs`'s own
+    /// `war_forbidden_true_when_defender_is_war_immune` uses as ground truth.
+    #[test]
+    fn war_immune_flips_to_one_with_a_war_immunity_pact_side() {
+        let mut state = G::new_game(2, 40);
+        let pact = crate::cards::CardId::by_name("Loss of Sovereignty").expect("a base-game pact card");
+        state.players[0].pacts.push(crate::state::Pact { card: pact, owner: 0, partner: 1, a: 1, b: 0 });
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WarImmune), 1.0, "war_immune must flip to 1.0 the instant its holder's own side (b == 0) grants it");
+    }
+
+    /// `attack_cost_doubled` (RULES_SPEC 5.4/5.6, `WeightKey::
+    /// AttackCostDoubled`'s own doc comment): 0.0 with no leader at all, the
+    /// state a fresh deal starts in.
+    #[test]
+    fn attack_cost_doubled_is_zero_with_no_leader() {
+        let state = G::new_game(2, 40);
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::AttackCostDoubled), 0.0, "a fresh deal starts with no leader in play");
+    }
+
+    /// `attack_cost_doubled` must flip to 1.0 the instant Mahatma Gandhi is
+    /// the player's leader -- and must NOT fire for an unrelated leader, so
+    /// this is reading the printed special, not just "any leader at all"
+    /// (`WeightKey::Leader` already covers that separate fact).
+    #[test]
+    fn attack_cost_doubled_flips_to_one_only_for_gandhi() {
+        let mut state = G::new_game(2, 40);
+        let moses = crate::cards::CardId::by_name("Moses").expect("a base-game leader");
+        state.players[0].leader = moses;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::Leader), 1.0, "Moses is still a leader in play");
+        assert_eq!(f.get(WeightKey::AttackCostDoubled), 0.0, "Moses does not print the double-cost special");
+
+        let gandhi = crate::cards::CardId::by_name("Mahatma Gandhi").expect("a base-game leader");
+        state.players[0].leader = gandhi;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::AttackCostDoubled), 1.0, "Gandhi's own special must flip this to 1.0");
+    }
+
+    /// `wonder_in_progress` (RULES_SPEC 5.5, `WeightKey::WonderInProgress`'s
+    /// own doc comment): 0.0 with no wonder under construction, the state a
+    /// fresh deal starts in.
+    #[test]
+    fn wonder_in_progress_is_zero_with_no_wonder() {
+        let state = G::new_game(2, 40);
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WonderProgress), 0.0, "a fresh deal has no wonder in progress");
+        assert_eq!(f.get(WeightKey::WonderInProgress), 0.0, "wonder_in_progress must be 0.0 with nothing under construction");
+    }
+
+    /// The cliff, not a slope: `wonder_in_progress` must flip to 1.0 the
+    /// instant ANY wonder is taken, before a single stage is paid -- the
+    /// same "the step matters, not the count" shape `has_colony` exists to
+    /// add beside the linear `colonies`, mirrored here beside the linear
+    /// (sunk-cost) `wonder_progress`.
+    #[test]
+    fn wonder_in_progress_flips_to_one_the_instant_a_wonder_is_taken() {
+        let mut state = G::new_game(2, 40);
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        state.players[0].wonder = pyramids;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WonderProgress), 0.0, "no stage has been paid yet, so the linear progress term is still 0");
+        assert_eq!(f.get(WeightKey::WonderInProgress), 1.0, "wonder_in_progress must flip to 1.0 the instant the wonder is taken, before any stage is paid");
     }
 
     /// `happy_margin` resolves through the hand-rolled `margin` local, not a

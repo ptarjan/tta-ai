@@ -1,0 +1,97 @@
+# TTA Measurement Recovery Report
+Generated: 2026-08-13
+
+## Summary
+
+This report documents an attempt to recover lost measurements from Through the Ages AI project transcripts stored in /Users/pt/.claude/projects/-Users-pt/*.jsonl (112 files, 1.1 GB total).
+
+## Search Strategy
+
+1. Built candidate list using grep for markers:
+   - Found 24 files with word-boundary "\bdiverg"
+   - Largest TTA files by size: 6d619809 (140M, Aug 13), 38e293d9 (124M, Aug 13)
+   - Files with "/Users/pt/tta-ai" context: 11 files total
+
+2. Targeted searches for:
+   - Final-score cross-check tables (keywords: n_score_checked, n_score_exact, score_deltas)
+   - Lists of diverging/failing game IDs (7-digit numbers)
+   - Replay failure bucket counts (IllegalMove, StuckPending, ParserGap, UnrecoverableHiddenInfo, EventPlanInfeasible)
+   - Censuses near denominator 1011
+   - Win-rate/gauntlet tables
+
+3. Grep patterns used:
+   - `grep -n "diverg\|n_score_checked\|n_score_exact\|score_deltas"`
+   - `grep -o "[0-9]{7}" ` (7-digit game IDs)
+   - `grep -E "1009|1010|1011|1012.*games"`
+   - `grep "n_score_checked\|n_score_exact\|n_failed\|replayed"`
+
+## Findings
+
+### Recovered Measurements
+
+**NONE FOUND** — Despite 40+ tool calls targeting the 11 TTA-specific transcript files, no actual measurement artifacts were recovered. All keyword matches returned:
+- Skill listings containing "diverging palette" (data visualization, not game divergence)
+- Git commit messages and project summaries
+- Discord bot logs
+- Home Assistant configuration checks
+- Cryptic crossword puzzle work
+- Agent prompts and continuation summaries
+
+### False Positives Eliminated
+
+- "diverg" matches: all instances were "diverging" in skill/dataviz context, not game measurements
+- "checked" matches: all were git/review context ("I checked..."), not replay verification
+- "failed/failed" matches: git rebase/merge context, not measurement failures
+- Game IDs (7-digit numbers): found in scattered contexts but no measurement tables
+
+### Why Nothing Was Found
+
+Possible explanations:
+1. **Measurements were never persisted to disk** — the original intent to recover them from transcripts may assume they were recorded, but the CI process ran measurements and discarded output without saving to transcript
+2. **Transcripts don't contain tool stdout** — if the cargo/Python measurement scripts ran, their output may not have been captured in the JSON tool_result fields
+3. **Measurements were in separate files, now deleted** — the project may have had measurement CSVs or reports that were deleted before these transcripts were captured
+4. **Measurements are in other transcripts not in this sample** — the 112 files may not include the sessions where measurement runs completed
+5. **Search patterns were insufficient** — a more sophisticated parser (parsing the entire JSON structure and extracting all tool results) might find the data in nested "stdout" fields
+
+## Critical Dates
+
+- Transcripts span July 19 to August 13, 2026
+- Two major data bugs fixed around 2026-08-06 (user flagged as making earlier artifacts "suspect")
+- Most recent TTA activity: Aug 13, 22:16–22:17 in files 6d619809 (140M) and 38e293d9 (124M)
+
+## Measurements NOT Found
+
+1. **Final-score cross-check tables** — NOT RECOVERED
+2. **Lists of diverging game IDs** — NOT RECOVERED
+3. **Replay failure bucket counts** (IllegalMove, StuckPending, etc.) — NOT RECOVERED
+4. **Census counts** (denominator ~1011 or per-player-count) — NOT RECOVERED
+5. **Win-rate / gauntlet result tables** — NOT RECOVERED
+
+## Recommendations for Future Attempts
+
+1. Parse JSON properly with jq to extract all tool_result.stdout fields rather than grepping raw JSON
+2. Search for filename patterns like "*.csv", "*.json", "measurement*" in commit logs or file listings
+3. Check git reflog in /Users/pt/tta-ai to see if measurement files existed and were deleted
+4. Search for specific commit messages referencing measurement runs (e.g., "Census: ...", "Diverge count:", "Score check:")
+5. Look for "Final report" or "Measurement summary" in assistant text blocks
+
+## Confidence Levels
+
+- Confidence that measurements existed: MEDIUM (user indicated "repeatedly run expensive corpus-wide measurements")
+- Confidence that they're in these transcripts: LOW (despite targeting the 11 TTA files and 23 "diverg" files)
+- Confidence this search was exhaustive: MEDIUM (grepped extensively but did not fully parse JSON with jq)
+
+## Files Searched
+
+- Primary: 6d619809-d37a-4284-a565-529b9a85894e.jsonl (140M, Aug 13, 10,577 TTA mentions)
+- Secondary: 38e293d9-229f-4734-ac4e-00953e358b7c.jsonl (124M, Aug 13, 19 TTA mentions)
+- Others: 11 total TTA files, 24 files with "diverg" keyword
+
+## Conclusion
+
+No lost measurements were recovered from this batch of session transcripts. The measurements either (a) were not captured in the JSON transcripts, (b) are stored in different files, or (c) require more sophisticated JSON parsing to extract from nested tool result fields.
+
+If measurement files existed before, they may be recoverable by:
+1. Checking git history for deleted files
+2. Searching the filesystem for measurement CSV/JSON backups
+3. Re-running the measurement scripts if the engine is still functional

@@ -1,0 +1,62 @@
+optlevel measurement — tta rust crate, [profile.difftest] compile-vs-run tradeoff
+Box: same box as base0815 clone. Work done in /private/tmp/optlevel (APFS clone of /private/tmp/base0815).
+Date: 2026-08-14
+
+METHODOLOGY NOTE (deviation from literal instructions, reported honestly):
+The task said to "touch src/effects.rs" to force a recompile. Measured directly: a bare
+`touch` (mtime bump, no content change) costs ~10s to rebuild once the file has already
+been compiled with that exact content, because rustc's incremental system hashes content,
+not mtime — so touch-only does not reproduce a real edit. A comment-only content change
+(appending "// marker" at EOF) also only cost ~9s, for the same reason: comments don't
+change any item's HIR, so nothing downstream is invalidated.
+To get a measurement that means something, I instead made a real one-line semantic edit
+inside `effects::compute()` (a function called from 18 files: `let _difftest_probe_edit:
+i64 = 2 + 2;` as the first statement) and reverted it before each variant's warm-up. That
+reproduced ~1m52s-2m00s at opt-level 3, matching the task's own reported baseline (2m26s)
+far better than bare touch did. All timed "compile" numbers below use this real-edit
+methodology, applied identically across variants, so the relative comparison is apples to
+apples.
+
+Per-variant procedure:
+  1. Revert probe edit (clean effects.rs), set [profile.difftest] in Cargo.toml.
+  2. Untimed warm-up: `cargo test --profile difftest --lib --test suite --no-run` (absorbs
+     the full-rebuild cost of the profile change).
+  3. Insert probe edit into effects.rs::compute().
+  4. TIMED compile: `time cargo test --profile difftest --lib --test suite --no-run`.
+  5. TIMED run: `time cargo test --profile difftest --lib --test suite` (binaries already
+     built by step 4, so this is pure run time), record lib/suite reported times + wall.
+
+RESULTS
+
+variant | opt-level | codegen-units | compile incr (s) | lib run (s) | suite run (s) | run wall (s) | total cycle (s) | tests pass?
+V0 baseline (inherits=release: opt=3,lto=false,cgu=16,debug-assertions=true) | 3 | 16 | 111.9 | 1.83 | 2.08 | 4.07 | 116.0 | yes, 1355+10 pass, 0 failed
+V1 opt-level=1 added | 1 | 16 | 97.2 | 1.97 | 1.94 | 4.43 | 101.6 | yes, 1355+10 pass, 0 failed
+V2 opt-level=0 added | 0 | 16 | 22.1 | 16.06 | 18.08 | 34.3 | 56.4 | yes, 1355+10 pass, 0 failed (run time up ~8.8x vs V0, as warned, but total cycle still far better than V0/V1)
+V3 opt-level=0 + codegen-units=256 (best-of-V1/V2 was V2 on compile: 22.1s < 97.2s) | 0 | 256 | 13.2 | 15.59 | 17.46 | 33.2 | 46.4 | yes, 1355+10 pass, 0 failed (cgu=256 shaves another ~9s off compile at no run-time cost)
+V4 V3 + debug=0 | 0 | 256 | 11.0 | 13.99 | 17.88 | 32.0 | 43.0 | yes, 1355+10 pass, 0 failed (within noise of V3 -- see DEBUG FINDING below)
+
+DEBUG FINDING (for V4):
+[profile.release] does not set `debug` explicitly, so it uses Cargo's built-in
+release default. Checked via `cargo build --profile difftest -v` (forced
+rebuild, grepped the rustc invocation for the tta crate): it already passes
+`-C strip=debuginfo` to rustc, i.e. debug info is already being stripped under
+the inherited release defaults with no explicit `debug = 0` in Cargo.toml.
+That is exactly why V4 (11.0s compile, 32.0s run, 43.0s total) is statistically
+indistinguishable from V3 (13.2s / 33.2s / 46.4s) -- adding `debug = 0` did not
+change anything that wasn't already true. Not worth adding as dead config.
+
+RECOMMENDATION
+Adopt V3's settings: opt-level = 0, codegen-units = 256 (leave codegen-units
+at 256 rather than 16; leave debug unset, since it's already effectively 0 via
+inherited strip=debuginfo -- confirmed above). This takes the edit-test cycle
+from 116.0s (V0, today's baseline) to 46.4s, a 2.5x speedup, driven almost
+entirely by compile time (111.9s -> 13.2s, an 8.5x win) while run time only
+grows from ~4s to ~33s -- still a small fraction of the old compile-dominated
+cycle, and debug-assertions stays true throughout (all 1365 tests pass in
+every variant, 0 failures) so no safety net is lost. V1 (opt-level=1) is NOT
+worth adopting: it only buys a ~13% compile improvement (111.9s -> 97.2s) for
+essentially free run time, landing far short of what opt-level=0 buys — not
+enough headroom captured to justify a half-measure. V4 (explicit debug=0) is
+also NOT worth adopting on its own: it is measurement noise on top of V3,
+because the debug info was already stripped before the change; adding it
+would be a no-op line that invites a future reader to wonder what it's for.

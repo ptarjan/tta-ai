@@ -1,0 +1,311 @@
+TARGET: settle "how does BGA break a TIE" for events::conditional_target's
+multi-target cutoff (Barbarians' "the two weakest civilizations"), which
+buildbk__BUILDBK.txt traced as the likely cause of game 7521544's divergence
+but explicitly did NOT re-open, per weakest__WEAKEST.txt's own "settled,
+singular/untied case only" scope. Worked in a warm clone at /private/tmp/ties,
+base commit 9860400 (698 completed / 671 exact, matches guard_ids_698.txt).
+
+RESULT: NO RULE CHANGE LANDS. This is a MEASURED NEGATIVE on the primary
+question: the shipped tie-break code (culture pick favors the current player,
+strength cutoff protects the current player) is ALREADY the best-scoring rule
+on the whole census, out of six candidates tested -- including a specific
+alternative hypothesis the coordinator asked to be tested against the data
+(reverse the culture ranking too, since Barbarians' overall effect is a
+penalty). That hypothesis scores WORSE, not better: 94.7% vs the shipped
+99.3% overall, 80.8% vs 98.6% on the tied subset. ties.patch carries ONLY the
+permanent census instrumentation (TIE_CENSUS env var + tie_context module),
+which is a genuine, reusable deliverable on its own even though the rule
+question it was built to answer came back negative -- exactly the outcome the
+task brief said was fine to report honestly. Guard sweep: 698 completed / 671
+exact, identical ID set to guard_ids_698.txt (comm -23 and comm -13 both
+empty -- the instrumentation is inert on any run without TIE_CENSUS set).
+
+One SECONDARY finding, out of the primary scope, reported but NOT acted on:
+`PlayerWithLeastCulture` (Terrorism, the one base-game card using that key)
+is 0/3 on its own tied resolutions -- see "SECONDARY FINDING" section below.
+
+============================================================
+INSTRUMENTATION: TIE_CENSUS
+============================================================
+
+Added a permanent (not temporary/reverted) diagnostic env var, TIE_CENSUS,
+wired the same way SCOREDIV_DUMP_COMPLETED/REPLAY_DUMP_BUCKET already are
+(one flag in `debugflags.rs`, checked at each call site, no behavior change
+when unset). When set, every superlative-target selection in
+`events::apply_single_target`/`events::conditional_target`/
+`events::resolve_count_targets` prints one stderr row:
+
+  TIE_ROW game=<id> line=<journal lineno> card=<name> kind=<selection key>
+    stat=<Strength|Culture> order=[<colors, clockwise from revealer>]
+    values=[<that stat's value for each color in order>]
+    selected=[<colors the engine actually picked>]
+
+Deliberately dumps RAW inputs (every live seat's stat value, in the
+UNMODIFIED clockwise-from-revealer order -- never whatever protected/
+reversed order a caller actually ranked with) rather than a precomputed
+verdict, so a script can replay ANY candidate tie-break rule against the same
+census without a recompile -- this is what let six candidate rules get
+scored in one afternoon instead of six edit-compile-sweep cycles.
+`apply_single_target` rows are gated on the card's own block being non-empty
+(`EventBlock::EMPTY` is a proven no-op -- every card triggers all four
+singular keys unconditionally per `resolve_event`'s own doc, so without this
+gate every ordinary card with no `strongestPlayer`/etc. clause at all would
+contribute four meaningless rows).
+
+New `tie_context` module: a diagnostic-only thread-local `(game id, journal
+line, card name)` label. `events.rs` has no journal/game-id of its own to
+thread through every targeting function's signature, so this is a small,
+explicitly-documented thread-local (replay is single-game, single-threaded
+per process) rather than a signature change to a dozen call sites. Set from:
+  - `replay_common::replay_game`'s own `meta.id` (once per game).
+  - `resolve_political_decision`'s own `prep.lineno`, right before the
+    `apply::apply(Move::PrepareEvent)` call that synchronously resolves the
+    revealed event inside `apply::h_prepare_event` -> `events::
+    reveal_current_event`. NOT `self.current_lineno`: that field tracks the
+    OUTER per-journal-line loop, but `resolve_political_decision` is called
+    from the political-phase machinery, which can run before or after that
+    line's own journal row is reached -- using `current_lineno` here silently
+    mislabeled every row with the WRONG journal line (caught by a systematic
+    "journal line has no 'Current event:' clause at all" failure during
+    validation: 0/281 clean Barbarians resolutions on the first sweep,
+    fixed by switching to `prep.lineno`, which `event_plan::solve` derives
+    directly from the SAME journal row BGO itself logs the reveal+resolution
+    text on).
+
+Guard: `cargo test --profile fasttest --lib` 1420 passed (baseline 1419, +1
+for `tie_context`'s own round-trip test), 0 failed. `cargo clippy
+--all-targets`: 0 warnings/errors.
+
+============================================================
+CENSUS METHODOLOGY
+============================================================
+
+Full-corpus sweep (`TIE_CENSUS=1 ./target/difftest/replaystats
+sources/bgo/index.tsv /tmp/bgo-journals/journals`) over all 1011 games
+produced 4719 TIE_ROW lines. Breakdown by selection key:
+
+    1321  single:Strength:best=false:favor_current=false   (WeakestPlayer)
+    1301  single:Strength:best=true:favor_current=true      (StrongestPlayer)
+     291  strongest_count:1
+     281  barbarians_outcome
+     281  barbarians_culture
+     276  strongest_count:2
+     210  weakest_count:1
+     180  single:Culture:best=true:favor_current=true        (PlayerWithMostCulture)
+     150  weakest_count:2
+     147  single:Culture:best=false:favor_current=true        (PlayerWithLeastCulture)
+     146  barbarians_strength:among=1
+     135  barbarians_strength:among=2
+
+Cross-referenced against the journal's own "Current event:" outcome clause(s)
+for each row's (game, line). Following weakest__WEAKEST.txt's own established
+(and re-validated) rule: ONLY journal lines whose "Current event:" DESCRIPTION
+is a single '.'-terminated sentence are trusted -- a card with a combined
+multi-effect description (e.g. Refugees: "The strongest scores... The
+weakest... loses...") has multiple outcome clauses with no sound way to pair
+them back to a specific effect from the text alone (that file's own "Border
+Conflict" counter-example still applies; not re-litigated here). Barbarians,
+Reign-of-Terror-style singular keys, and all four count-based cards
+(Foray/Cold War/Raiders/Crime Wave) all happen to have single-sentence
+descriptions in the base game, so this filter costs little coverage for this
+question specifically. For the two count-based keys (cutoff > 1), ground
+truth is the SET of colour names mentioned anywhere in the outcome clause(s)
+(robust to Foray/Raiders' extra "X choses first" clause and to Cold War/Crime
+Wave's clean two-clause shape), compared as a set against the engine's own
+`selected` set.
+
+"Tied at cutoff" definition: sorting all live players by the ranked stat,
+the value at the last SELECTED rank equals the value at the first EXCLUDED
+rank (e.g. for weakest-2, ranks[1] == ranks[2]). For Barbarians specifically,
+"tied" covers EITHER a culture tie at the top (2+ players share the max
+culture, so WHO is "the civilization with the most culture" is itself
+ambiguous) OR a strength tie at the weakest-N cutoff boundary -- either one
+makes the final population-loss decision tie-break-sensitive.
+
+============================================================
+BARBARIANS CENSUS -- the primary question
+============================================================
+
+  total clean Barbarians resolutions: 281
+    culture tied at top:        15
+    strength tied at cutoff:    64
+    either tied:                73
+    neither tied (clean untied):208
+
+Six candidate rules scored on the SAME 281-row census (culture_reverse /
+strength_reverse mean "protect the current player from a bad culture-pick /
+weakest-cutoff tie by reversing `order` before ranking", exactly
+`protect_current_from_bad_tie`'s own existing mechanism, just tested on both
+ranking steps independently):
+
+  RULE                                                          overall  untied   tied
+  --------------------------------------------------------------------------------------
+  CURRENT (favor-current culture, protect-current strength)     99.3%    99.5%    98.6%
+  reverse culture tie too (coordinator's hypothesis)             94.7%    99.5%    80.8%
+  favor current on BOTH (no protection anywhere)                 83.3%    99.5%    37.0%
+  protect on both, but culture direction inverted (control)      81.5%    99.5%    30.1%
+  exclude current player entirely from both selections           47.7%    44.7%    56.2%
+  nobody selected whenever strength tie sits at the cutoff        88.3%    99.5%    56.2%
+
+  Exact counts:
+  CURRENT:                    279/281   untied 207/208   tied 72/73
+  reverse-culture-too:        266/281   untied 207/208   tied 59/73
+  favor-both:                 234/281   untied 207/208   tied 27/73
+  protect-both-wrong-dir:     229/281   untied 207/208   tied 22/73
+  exclude-current:            134/281   untied  93/208   tied 41/73
+  no-select-on-strength-tie:  248/281   untied 207/208   tied 41/73
+
+CONCLUSION: the shipped rule wins outright, and by a wide margin on the tied
+subset specifically (98.6% vs the next-best candidate's 80.8%). The
+coordinator's specific hypothesis -- "conditional_target's culture ranking
+(line 1005) uses unreversed `order`, favoring the current player INTO a
+culture tie that then feeds a penalty, the same inversion already fixed for
+the strength cutoff 4 lines later" -- is a reasonable-sounding prior (the
+overall Barbarians effect IS a penalty), but the 1011-game corpus does not
+bear it out: reversing the culture step breaks 14 more of the 73 tied games
+than it fixes (72 -> 59 correct). BGA's real tie-break asymmetry (favor
+current on WHO has the most culture, protect current on WHO counts as
+weakest) does not reduce to "penalty outcome -> protect current on every
+ranked step feeding it". Not changed.
+
+`resolve_count_targets`'s `strongestPlayers` path (events.rs:1054, plain
+unreversed `order`) was also checked directly against the card table, not
+just reasoned about: `Special::StrongestPlayers` is printed by exactly two
+base-game cards (`card_table.rs` line 3275 Foray, line 3636 Cold War), and
+BOTH pair it with `Special::Gain` only -- neither ever prints `Lose`. So
+there is no base-game card where this path's direction is exercisable as a
+penalty; the current unreversed order is correct for every card that exists
+today. (`WeakestPlayers` is printed by exactly Raiders and Crime Wave, both
+`Lose`-only, already correctly reversed -- matches that function's own doc
+comment, re-confirmed rather than assumed.) The "drive direction off
+gain/lose structurally instead of auditing per-key" idea (coordinator's point
+3) is safe in principle but there is currently no failing case to motivate
+restructuring working, tested code around -- left alone.
+
+Every tied Barbarians resolution (game/line/order/culture/strength/among/
+engine-pick/journal-victim) is in /tmp/tie_rows.txt's full census and the
+raw script output; the SINGLE remaining mismatch under the current rule is
+game 7521544 line 339 -- the exact game buildbk__BUILDBK.txt traced by hand
+(engine picks Purple, journal says "No effect"). Culture is UNTIED there
+(Purple=25 outright highest); the anomaly is entirely in the 3-way
+strength=11 tie among Purple/Orange/Green (current player). No candidate
+rule tested reproduces BGO's "No effect" outcome for this specific game
+without breaking other games elsewhere in the census -- consistent with
+weakest__WEAKEST.txt's own ~1.2% "genuinely unexplained BGA divergence, no
+available oracle" rate for strength-tie selections generally. Left as the
+same already-documented, unfixable-without-a-BGA-source anomaly.
+
+============================================================
+BROADER CENSUS -- the other five superlative-target families
+(secondary; the already-shipped tie-break code, not a rule sweep)
+============================================================
+
+Same single-sentence-description filter, engine's OWN pick (already
+tie-break-corrected by the shipped code) compared against the journal:
+
+  KEY                        clean   tied  untied   overall   tied-rate
+  ---------------------------------------------------------------------
+  StrongestPlayer             0       0     0        n/a       n/a       (every base-game
+                                                                          card pairing this key
+                                                                          also had a multi-
+                                                                          clause description in
+                                                                          this sample -- see note)
+  WeakestPlayer               440    70    370       99.1%     100.0%
+  PlayerWithMostCulture       180     4    176       100.0%    100.0%
+  PlayerWithLeastCulture      147     3    144        98.0%      0.0%   <- see SECONDARY FINDING
+  StrongestPlayers (count)    567    90    477       99.1%      97.8%
+  WeakestPlayers (count)      360    49    311       99.7%     100.0%
+
+Note on StrongestPlayer's 0 rows: every base-game card using bare
+`strongestPlayer` (as opposed to `strongestPlayers`, the count-based key)
+apparently also carries a multi-clause "Current event:" description in this
+corpus sample, so the single-sentence filter excluded all of them from this
+PARTICULAR cross-check; this does not mean the selection never fires (1301
+raw TIE_ROW rows exist for this key). Not chased further -- StrongestPlayer's
+own `favor_current=true` direction already matches `PlayerWithMostCulture`'s
+independently-confirmed 100%/100% and the prior worker's WeakestPlayer
+result, and re-deriving a looser ground-truth parser for this one key alone
+was not a good use of the remaining budget given the primary question was
+already answered decisively.
+
+WeakestPlayer (99.1%/100.0% tied) and the two count-based families
+(99.1%/97.8%, 99.7%/100.0%) reconfirm the prior workers' conclusions: no
+systemic tie-break bug in the already-shipped directions for these five
+keys, consistent with (not a re-litigation of) weakest__WEAKEST.txt's 98.8%
+corpus-wide WeakestPlayer result and buildbk__BUILDBK.txt's Cannon-bucket
+trace.
+
+============================================================
+SECONDARY FINDING (reported, NOT fixed -- sample too thin to act on)
+============================================================
+
+`PlayerWithLeastCulture` (Terrorism, the ONE base-game card using this key:
+"the civilization with the least culture points destroys 1 urban building of
+each other civilization") is 0/3 on its own culture ties -- ALL THREE tied
+resolutions picked the NON-current tied player, the opposite of the current
+`favor_current=true` code:
+
+  7522249 line=670 order=[Grey,Orange,Purple,Green] culture={Grey:112,Orange:112,Purple:151,Green:113}
+           engine picks Grey (current) -- journal: "Orange launches terrorist attacks"
+  7521602 line=609 order=[Orange,Purple,Green,Grey] culture={Orange:101,Purple:67,Green:67,Grey:77}
+           engine picks Purple (earliest tied in order) -- journal names Green
+  7522403 line=422 order=[Green,Grey,Orange,Purple] culture={Green:24,Grey:24,Orange:28,Purple:51}
+           engine picks Green (current) -- journal names Grey
+
+Hand-verified line 670 directly against the raw journal text (not just the
+parsed clause): "Grey plays event Grey scores 3 culture; Current event:; II /
+Terrorism; The civilization with the least culture points destroys 1 urban
+building of each other civilization.; Orange launches terrorist attacks" --
+Grey (112, current/revealer) and Orange (112) are tied lowest; Orange, not
+Grey, is who the real game picked. Same SHAPE as the original WeakestPlayer
+bug (`apply_single_target`'s own doc: 62/63 wrong before the fix), on a
+key nobody has separately audited before (weakest__WEAKEST.txt only tested
+the "weakest civilization" text pattern, not Terrorism's "least culture"
+one). n=3 is far too thin to change code against -- the task's own "pick the
+rule that maximises agreement across the WHOLE census, not the one that fixes
+a single game" standard applies at least as strongly to a 3-game sample as
+to a 1-game one. Flagging for whoever next has budget to grow this census
+(the raw TIE_ROW rows for this key already exist in the corpus dump; no new
+instrumentation would be needed, just more games or a way to recover the
+lower-coverage multi-clause-description cases this pass's filter dropped).
+
+============================================================
+GUARD SWEEP
+============================================================
+
+cd /private/tmp/ties/rust
+PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest --bin replaystats
+SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/ties_after.txt 2>&1
+
+Header lines (read directly, not reconstructed):
+  "# replaystats: 1011 games sampled, 698 completed to state.game_over"
+  "698/698 completed games actually flipped state.game_over ... 671/698 of
+   those matched index.tsv exactly (sorted per-game score-list compare)."
+
+Before: 698 completed / 671 exact (guard_ids_698.txt, 698 lines).
+After:  698 completed / 671 exact (identical -- diagnostic-only change).
+
+comm -23 /private/tmp/guard_ids_698.txt /tmp/ties_ids.txt   (REGRESSIONS):
+<empty>
+
+comm -13 /private/tmp/guard_ids_698.txt /tmp/ties_ids.txt   (WINS):
+<empty>
+
+cargo test --profile fasttest --lib: 1420 passed (baseline 1419, +1 new
+tie_context test), 0 failed.
+cargo clippy --all-targets: 0 warnings/errors.
+
+============================================================
+FILES
+============================================================
+
+ties.patch: `git diff 9860400..HEAD -- rust` (283 lines) -- the TIE_CENSUS
+instrumentation ONLY (debugflags.rs, events.rs, lib.rs, replay_common.rs,
+new tie_context.rs). No rule/behavior change; this is a permanent oracle
+landing on its own merit per the task brief, even though the rule question
+it exists to answer came back negative.
+
+Clone /private/tmp/ties KEPT: HEAD is d0ba2a3, one commit ahead of 9860400
+(the TIE_CENSUS instrumentation), matching ties.patch exactly.

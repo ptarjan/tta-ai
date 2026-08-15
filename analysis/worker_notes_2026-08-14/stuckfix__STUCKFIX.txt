@@ -1,0 +1,297 @@
+STUCKFIX -- finishing worker for the stuckdecider bucket
+Session 2026-08-14, clone /private/tmp/stuckfix, base commit 628c0dd.
+============================================================================
+LANDING OUTCOME: (c) REGRESSIONS REMAIN -- DO NOT LAND.
+2 of 3 originally-reported regressions are now fixed with a genuine engine
+fix (not a tolerance hack). The 3rd class collapsed to 2 DIFFERENT games
+(582-ID baseline shifted the regression set) that are NOT explained by the
+same mechanism and were not root-caused before the budget ran out. Patch is
+saved but not landed. Read "WHAT I DID NOT FINISH" below before continuing.
+
+/private/tmp/stuckfix is LEFT IN PLACE (not deleted): stuckfix.patch does
+capture the full committed diff (verified via `git diff 628c0dd HEAD`), but
+per the task's own instruction a patch with remaining regressions must not
+be described as ready to land, and a fresh worker will want the built
+binaries / mini-index files already warm. Clone status: 2 commits ahead of
+628c0dd (9c210f6 = the original stuckdecider patch as-is, 2796ab9 = this
+session's Raid-decline fix). Working tree clean.
+
+WHAT I CHANGED ON TOP OF THE ORIGINAL PATCH
+---------------------------------------------
+The original stuckdecider patch (commit 9c210f6, `resolve_aggression_age`
+in replay_common.rs) was correct as written and did NOT need any changes
+to itself. What it exposed needed fixing elsewhere:
+
+Root cause of the false regressions: correctly resolving Raid II/III (2/3
+MA, TWO printed age brackets each: card_table.rs's `Special::
+DestroyUrbanBuildings(&[Age::II, Age::I])` for Raid II, `&[Age::III,
+Age::II]` for Raid III) means `combat::finish_aggression` now genuinely
+enqueues TWO separate `QueueItem::Raid` destroy choices per Raid II/III
+play, instead of the old code's always-wrong-but-single-bracket Raid I.
+Each bracket's "destroy UP TO N urban buildings" (RULES_SPEC.md line
+82/98) is an OPTIONAL choice -- a human attacker can leave an eligible
+building standing. But `interact.rs`'s `QueueItem::Raid` handling (around
+line 1076, pre-patch) built the candidate list and called `push_choice(...,
+auto: true)` with NO way to decline. `push_choice`'s own `auto`+`len()==1`
+rule (interact.rs ~line 171) force-resolves a lone remaining candidate
+IMMEDIATELY, with no `Pending::Choice` ever created -- so the replay's own
+journal-aware `ChoiceKind::Raid` handler in `replay_common.rs`'s
+`resolve_intervening` (the one that checks the prescanned `raid_destroys`
+queue against what the journal's "Raid casualties ..." lines actually
+report) never got a chance to see that the human declined the second
+bracket. Net effect: whenever the FIRST bracket happened to leave exactly
+one eligible building standing for the SECOND bracket, this binary
+force-destroyed it even though the real player left it alone and the
+journal has no record of it -- confirmed on game `7522647` (Orange's own
+starting `Philosophy` lab, force-destroyed by Raid II's second bracket at
+journal line 171/round 12, only surfacing as a failure 4 lines later at
+line 221 when Orange tries to `Upgrade Philosophy` and this binary's own
+`workers(Philosophy)` is wrongly already 0).
+
+Fix (commit 2796ab9, two files):
+1. `rust/src/interact.rs`, `QueueItem::Raid` handling (~line 1076): after
+   building the candidate `opts` list, append `ChoiceOption::Word(Keyword::
+   Stop)` -- but ONLY when `!no_loot`. `no_loot` is the one field the two
+   real call sites already differ on: `combat::finish_aggression`'s real
+   Raid-card enqueue passes `no_loot: false` (all 3 Raid tiers); `events.rs`
+   `destroy_one_urban_building_of_each_opponent` (Terrorism) passes
+   `no_loot: true` and is MANDATORY, not "up to" -- so it must never get a
+   Stop option. Appending Stop naturally defeats `push_choice`'s
+   `len()==1` auto-resolve for a lone-candidate Raid bracket (list becomes
+   len 2: the candidate + Stop), so `auto: true` on the `push_choice` call
+   itself did not need to change.
+2. `rust/src/interact.rs`, `resolve_choice`'s `ChoiceKind::Raid` arm
+   (~line 447): if `opt` is `Word(Stop)`, return without destroying/looting
+   (declined).
+3. `rust/src/replay_common.rs`, `ChoiceKind::Raid` handling inside
+   `resolve_intervening` (~line 1479): now precomputes `stop_idx` (the
+   position of the `Stop` option, if this choice offers one). The loop
+   still prefers a `raid_destroys` front-entry match (pop and take it) same
+   as before; if the front entry does NOT match this choice's own options,
+   it now takes `Stop` (if offered) WITHOUT touching the queue -- the front
+   entry, if any, belongs to a later Raid/Terrorism event. Only when `Stop`
+   is not offered (Terrorism) does a mismatch fall back to the OLD "skip
+   past an earlier already-auto-resolved single-option Raid/Terrorism and
+   keep looking" behaviour, preserved unchanged for that case.
+4. `rust/src/replay_common.rs`, `resolve_aggression_age`'s doc comment
+   updated to describe and cross-reference this mechanism instead of
+   excluding Raid (an earlier, abandoned attempt at this session literally
+   excluded `"Aggression: Raid"` from the function to sidestep the bug --
+   DO NOT reintroduce that; it was measured at 0 wins / 0 regressions, a
+   dead end, and is not part of the committed patch).
+
+Bots: `bots/book.rs`'s `ChoiceKind::Raid { .. } | ChoiceKind::Annex { .. }`
+arm (~line 1378) only ever calls `best.consider(i, v)` for `ChoiceOption::
+Card` entries -- a `Word(Stop)` option is silently never considered, so
+`Best`'s default (`i:0`, unset) still resolves to whichever real candidate
+scored highest, i.e. the bot's behaviour is UNCHANGED (it never declines,
+same as before this session -- previously it never got the choice not to).
+Checked the `Best::new()`/`consider()` default-index-0 fallback explicitly
+(interact.rs ~1254-1272) for the n==0-candidates-only-Stop-left case too:
+still correct (only Stop exists, only Stop can be at index 0). `weighted`/
+`neural` bots do not pattern-match `ChoiceKind` at all (grepped; only
+`book.rs` does) -- they must route through generic legal-move enumeration,
+so they are structurally unaffected by a new option appearing in `c.
+options`. NOT independently verified by running self-play/training after
+this change -- see "WHAT I DID NOT FINISH".
+
+BEFORE/AFTER COMPLETED COUNTS (baseline: /tmp/tu_ids.txt, 582 IDs, the
+games that complete at 628c0dd)
+----------------------------------------------------------------------
+Before this session (commit 9c210f6, the original stuckdecider patch
+as-is, re-measured against the TRUE 582-ID baseline -- the 3 regressions
+named in the handoff notes, 7521946/7522072/7522647, were measured against
+an OLDER 509-ID baseline and do NOT match what a 582-ID re-measurement
+shows):
+    33 wins, 3 regressions: 7522053, 7522290, 7522647.
+
+After this session's Raid-decline fix (commit 2796ab9, `SCOREDIV_DUMP_
+COMPLETED=1`, difftest profile, full corpus, 1011-game sweep):
+
+    === REGRESSIONS (must be EMPTY) ===
+    7522053
+    7522290
+
+    === WINS ===
+    7520707
+    7521213
+    7521243
+    7521833
+    7521915
+    7521917
+    7521922
+    7521943
+    7521971
+    7521996
+    7522037
+    7522074
+    7522272
+    7522318
+    7522331
+    7522668
+    7522717
+    7522726
+    7522773
+    7522790
+    7522977
+    7523072
+    7523073
+    7523079
+    7523091
+    7523127
+    7523159
+    7523176
+    7523193
+    7523198
+    7523338
+    7523402
+    7523460
+    7523510
+    (34 wins total)
+
+7522647 is FIXED (no longer a regression -- confirmed root-caused and
+fixed by the Raid-decline mechanism above, hand-verified against
+`replay_common.rs`'s own `REPLAY_DEBUG_ALL` trace: patched now shows
+Purple's Raid II choosing "Bread and Circuses" over "Philosophy" on the
+FIRST bracket, matching the journal's own "Raid casualties 1 Bread &
+Circuses", then correctly DECLINING the second bracket instead of
+force-destroying Philosophy). One NEW win also appeared, `7522790`, not in
+the original 3-regression measurement's win list (582-ID baseline drift,
+not itself investigated -- plausibly another Raid-II/III game this same
+fix also unblocks).
+
+Net across this whole session (stuckdecider's original patch + this
+session's Raid-decline fix, both together, vs. 628c0dd): +34 wins, 2
+regressions remaining. NOT landable per the task's hard rule.
+
+WHAT I DID NOT FINISH -- 7522053 and 7522290
+------------------------------------------------
+Both still stop with the SAME bucket shape as before: `StuckPending:
+decider # != expected actor #, phase Actions, no pending` (7522290 line
+224 "Purple discards 2 cards"; 7522053 line 424 "Orange discards 2 cards").
+
+Both games DO play a Raid card (7522290 line 197 "Purple plays Raid
+against Orange... 2 military action"; 7522053 line 343 "Orange plays Raid
+against Purple... 2 military action") -- but in BOTH games this specific
+Raid's own DEFENSE TIES OR LOSES for the attacker (7522290: atk=23 dfn=23;
+7522053: atk=18 dfn=18), so `combat::finish_aggression`'s own guard `if
+ctx.dfn >= ctx.atk { return false; }` fires FIRST and no
+`QueueItem::Raid` is EVER enqueued for either game's Raid play. This
+session's Raid-decline fix (interact.rs/replay_common.rs) is provably NOT
+exercised for either remaining regression -- confirmed by hand-tracing
+both journals (no "Raid casualties" line exists for either play; the
+journal's own "X strength: N; Y strength: N" tie confirms the failed
+attack independently of any code reading).
+
+So what's left is a DIFFERENT, separate divergence that `resolve_
+aggression_age`'s now-correct Raid MA-cost deduction (2 MA charged for the
+attack attempt, spent regardless of whether the raid itself succeeds --
+the journal's own "Purple/Orange uses 2 military action" text is
+unconditional, this part is unambiguously correct and not in question)
+newly exposes further downstream. This is the EXACT "your fix removed a
+compensating error that was masking a pre-existing one" shape the
+9f6104d-base session already flagged for game `7522072` (see
+`stuckdecider__STUCKDECIDER.txt`'s "ROOT-CAUSE PROGRESS ON 7522072"
+section) -- and may be the SAME underlying bug, not independently
+confirmed.
+
+Traced as far as (game `7522290`, the simpler 2p case, comparing
+`REPLAY_DEBUG_ALL=1` traces between `/private/tmp/base0815` (pristine
+628c0dd, unpatched) and `/private/tmp/stuckfix` (this session's patch) on
+a 2-game mini `index.tsv`, `/tmp/mini_index2.tsv` -- regenerate with `{
+head -1 sources/bgo/index.tsv; grep -E '^(7522053|7522290)\b'
+sources/bgo/index.tsv; } > /tmp/mini_index2.tsv` if `/tmp` has been
+cleared):
+
+  - Immediately after the (failed) Raid at journal line 197/round 12,
+    baseline and patched hands both settle at 6 military cards (baseline:
+    one stray "Aggression: Raid (I)" AND one "Aggression: Raid (II)" both
+    present simultaneously -- the old code's wrong-card removal accidentally
+    lands on a SEPARATE, independently-owned Raid I copy Purple also held,
+    so the miscount is invisible at this exact point; patched: two
+    "Aggression: Raid (I)" copies, correctly having removed the actually-
+    played Raid II). Card COUNTS match (6 either way) at this checkpoint,
+    only composition differs -- not yet a divergence.
+  - `military_actions` legitimately differs from here on (baseline 4
+    unused at end of turn vs patched 3 -- the intended, correct effect of
+    charging 2 MA instead of 1 for the Raid). Both computed `n_drawn=3` at
+    `economy::draw_military_step` despite the differing `military_actions_
+    unused` input (3 vs 4) -- NOT itself verified whether that's supposed
+    to be sensitive to the unused count or is coincidentally capped
+    elsewhere; worth checking `economy::draw_military_step`'s exact formula
+    (economy.rs) if picking this back up.
+  - The DIVERGENCE that actually matters: at round 13's end of turn (one
+    full round later), baseline's `discard_excess_military` correctly
+    finds `hand_military_len=7 > limit=6` and drives a real discard,
+    matching the journal's own "Purple discards 2 cards" at line 224.
+    Patched's trace shows NO `discard_excess_military` call at all before
+    that same `EndTurn` -- it jumps straight through to `phase=Politics
+    round=14` with nothing pending, i.e. patched's reconstruction believes
+    Purple's hand never exceeded the limit that turn. This is the literal
+    mechanism behind `StuckPending("decider 0 != expected actor 1 ...")`:
+    the journal's next line (224, "Purple discards 2 cards") has no
+    corresponding pending choice on patched's side to resolve it against.
+  - NOT DETERMINED: why patched's hand stays under the limit when its own
+    starting composition one round earlier had the SAME total count (6) as
+    baseline's. A `DeclareWar` play happens in between (journal line ~216,
+    "Purple declares War over Territory on Orange... 2 military action") --
+    `ActionClass::DeclareWar` routes through `consume_named_military_card`
+    with NO age-sibling correction at all (same gap the original
+    `stuckdecider__DECIDER.txt`/`STUCKDECIDER.txt` notes flagged as
+    unexamined for `DeclareWar`/`ProposePact`), so it's plausible but NOT
+    confirmed that a war card removed from hand differently (or a
+    different exact card consumed) between baseline and patched is what
+    changes the round-13 hand count enough to dodge the discard threshold.
+    The very next, most direct step for a fresh session: add a temporary
+    `eprintln!` in `ActionClass::DeclareWar`'s arm (replay_common.rs, grep
+    for `ActionClass::DeclareWar =>`) printing the resolved card identity
+    and `r.state.players[actor].hand_military` length/contents immediately
+    before and after `consume_named_military_card`, for both `/private/tmp/
+    base0815` and `/private/tmp/stuckfix`, and diff -- this is the exact
+    method that found the Raid-decline bug in this session (see
+    `/tmp/mini_index2.tsv`, or regenerate) and was interrupted by the
+    session's budget ending, not by any dead end.
+  - `7522053` (3p, more complex) was NOT traced this deeply -- only
+    confirmed its own Raid also fails its defense (tied strength) and so
+    is also provably unaffected by the Raid-decline fix. Whether it shares
+    7522290's exact "hand count dodges the discard threshold a round
+    later" shape, or is independent, is unknown.
+
+FALSE START THIS SESSION (for anyone re-deriving)
+-----------------------------------------------------
+Before finding the real Raid-decline fix, this session tried excluding
+`"Aggression: Raid"` entirely from `resolve_aggression_age` (a one-line
+change, `card.get().base_name == "Aggression: Raid"` added to the early
+return) to sidestep the newly-exposed bug without fixing it. Measured:
+0 wins, 0 regressions -- a complete no-op (Raid's bare-name resolution
+reverts to `best_age_sibling`'s old wrong-but-harmless guess, so nothing
+in the 582-game baseline changes either direction). This is NOT useful and
+is NOT in the committed patch; do not re-do it. It's mentioned only so a
+future session doesn't waste time re-discovering that a Raid exclusion,
+unlike the Plunder exclusion the original patch already has, buys nothing.
+
+CLIPPY / TESTS
+-----------------
+NOT RUN this session (explicit wind-down instruction from the
+coordinator). No `#[cfg(test)]` unit test was written for either the
+original `resolve_aggression_age` (already flagged as missing by the prior
+session -- still missing) or this session's `Stop`/decline mechanism.
+MUST run `cargo test --profile fasttest` and `cargo clippy --all-targets
+--profile difftest -- -D warnings`, and write tests for both, before this
+patch can land, IN ADDITION to root-causing and fixing the 2 remaining
+regressions above.
+
+PATCH CONTENTS
+------------------
+`rust/src/interact.rs`: `QueueItem::Raid` handling gets a conditional
+`Stop` option (gated on `!no_loot`); `resolve_choice`'s `ChoiceKind::Raid`
+arm handles `Stop` as a no-op decline.
+`rust/src/replay_common.rs`: the original stuckdecider `resolve_
+aggression_age` (unchanged in substance, doc comment updated) plus a
+rewritten `ChoiceKind::Raid` handler inside `resolve_intervening` that
+prefers a `raid_destroys` match, falls back to `Stop` when offered and no
+match exists, and only falls back to the old skip-and-keep-looking
+behaviour when `Stop` is not offered (Terrorism).
+Diff is `analysis/worker_notes_2026-08-14/stuckfix.patch`
+(`git diff 628c0dd HEAD` from `/private/tmp/stuckfix`, 2 commits: 9c210f6
+the original patch verbatim, 2796ab9 this session's fix).

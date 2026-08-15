@@ -260,7 +260,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                             | ActionClass::PlayActionCard => {
                                 *plays_freq.entry(name).or_insert(0) += 1;
                             }
-                            _ => {}
+                            ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::WinWar | ActionClass::AcceptPact | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PutBack | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => {}
                         }
                     }
                 }

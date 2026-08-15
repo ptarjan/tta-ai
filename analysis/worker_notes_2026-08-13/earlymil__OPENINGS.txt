@@ -1,0 +1,305 @@
+CANONICAL OPENINGS: HUMAN VS BOT (measurement pass only)
+==========================================================
+Scope: 2-player base-game (2015) BGO corpus only, 692 games / 1384 player-
+games (the sub-corpus with a champion self-play comparison point). The
+holdout at /private/tmp/bgoholdout/ was never read.
+
+Definition of "the opening" used throughout: each player's own moves from
+the start of the game through the end of round 3 (Age A plus the first
+couple of Age I rounds, per game_state.round <= 3), described the way a
+human would: which card they took and at what civil-action cost, what they
+built/developed/upgraded first and what kind of thing it was, whether they
+elected a leader, whether they increased population, and how many civil
+actions they left unspent.
+
+
+WHAT WAS REUSED (Step 0)
+-------------------------
+- `rust/src/bin/behavcensus.rs` already had an "openings" section for BOT
+  self-play (first take in Age A, first develop, first wonder round) --
+  reused and EXTENDED (not replaced) with a new "Opening (human-comparable
+  schema)" section that mirrors this task's exact field list, so the two
+  sides are diffable line-for-line.
+- `rust/src/bin/agreement.rs` / `replay_common::replay_game` (the human
+  journal replayer) is the backbone of the new `rust/src/bin/humanopenings.rs`
+  binary -- no new reconstruction logic, only a new per-move field extractor
+  pointed at `Decision::state`/`Decision::human_move`.
+- `rust/src/bin/humanwinners.rs` (pointed out mid-task) already had
+  ~100%-coverage TEXT-based win/loss detection ("WINNER IS ... AS <COLOR>")
+  that beats gating outcome on full engine-replay completion. Its
+  `parse_winner_line`/`find_ascii_ci`/`title_case`/`leading_int` helpers were
+  MOVED (not copied) into `tta::corpus` as `pub` functions, with 2 new
+  regression tests, so both `humanwinners` and the new `humanopenings` call
+  the one real implementation. `Color::from_seat` (already public in
+  corpus.rs) supplied the seat->colour mapping for free. This raised outcome
+  coverage on the new binary from 384/1384 (engine-replay-completion gated)
+  to 1382/1384 (text-gated) known win/loss labels.
+- `docs/CHAMPION_VS_HUMANS.md` (an existing corpus-wide `agreement.rs` run)
+  already established that per-DECISION agreement in Age A is unusually high
+  (56.4% top-1, "worse" only 0.3%) and gets steadily worse by age. That
+  measures something different from this pass: agreement asks "given what a
+  human already did, did the bot's #1 choice match" one decision at a time;
+  this pass asks "what STATISTICAL SHAPE does each side's own self-directed
+  opening take." The two are compatible -- see the "first build kind"
+  finding below, which is exactly a case where per-decision agreement can
+  look fine while the aggregate opening shape diverges sharply, because nine
+  different bot-preferred move types can each individually look "close" to
+  a human's while still summing to a totally different overall pattern.
+- No prior opening-analysis doc existed in `docs/` (checked; only
+  `docs/OPEN_ITEMS.md` existed, unrelated).
+
+Tools built/extended, all under this scratch clone, /private/tmp/openings:
+- `rust/src/bin/humanopenings.rs` (new) -- one TSV line per player-game.
+- `rust/src/bin/behavcensus.rs` (extended) -- matching self-play section.
+- `rust/src/corpus.rs` (extended) -- `parse_winner_line` and friends moved
+  here as `pub`, 2 new tests, confirmed RED then GREEN.
+
+
+1. HUMAN OPENING DISTRIBUTION (n=1384 player-games, 1382 with a known
+   win/loss outcome)
+------------------------------------------------------------------------
+
+First card taken, round <= 1..3 (top 15 by frequency), with win rate and
+its own sample size:
+
+  card                        count   share   win-rate (n)
+  Pyramids                      239   17.3%   50.6% (121/239)
+  Engineering Genius (A)        230   16.6%   54.3% (125/230)
+  Hammurabi              [LEADER]183   13.2%   50.8% (93/183)
+  Rich Land (A)                  130    9.4%   46.2% (60/130)
+  Library of Alexandria         120    8.7%   55.0% (66/120)
+  Urban Growth (A)                99    7.2%   59.6% (59/99)
+  Hanging Gardens                 79    5.7%   41.8% (33/79)
+  Aristotle              [LEADER] 69    5.0%   52.2% (36/69)
+  Frugality (A)                   57    4.1%   42.1% (24/57)
+  Julius Caesar          [LEADER] 39    2.8%   46.2% (18/39)
+  Alexander the Great    [LEADER] 29    2.1%   48.3% (14/29)
+  Moses                  [LEADER] 28    2.0%   28.6% (8/28)
+  Homer                  [LEADER] 24    1.7%   41.7% (10/24)
+  Stock Pile                      23    1.7%   56.5% (13/23)
+  Colossus                        18    1.3%   38.9% (7/18)
+
+Rolled up: humans take a LEADER first 26.9% of the time (372/1384, win-rate
+48.1%, n=372) and take a WONDER first 32.9% of the time (456/1384, win-rate
+49.8%, n=456). Neither is a "canonical strong" line by itself (both sit at
+~50% win rate on hundreds of games -- these are CONVENTIONS, not edges); the
+strongest of the common lines is Urban Growth (A) at 59.6% (n=99) and
+Engineering Genius (A) at 54.3% (n=230) -- both technology/action takes, not
+leaders or wonders.
+
+First build/develop/upgrade, round <= 3:
+
+  kind        count   share   win-rate (n)
+  Mine          834   60.3%   54.2% (452/834)
+  none          439   31.7%   45.5% (199/437)
+  Lab            62    4.5%   40.3% (25/62)
+  Military       40    2.9%   32.5% (13/40)
+  Other/Temple/Farm  9  0.7%  low n, not reportable
+
+Humans overwhelmingly build a MINE (worker/resource production) before
+anything else once they do build (60.3% of all opening player-games), and
+it is genuinely a strong, common convention: 54.2% win rate on 834 games. A
+third of humans (31.7%) haven't built ANYTHING yet by round 3 -- still
+taking/positioning. Building a military unit first is rare (2.9%) and,
+where it happens, LOSING (32.5% win rate, n=40) -- a real, if smaller-n,
+signal that rushing military in the opening is a bad human habit too, not
+just a bot one.
+
+Leader elected by round 3 (any time, not just first move): 83.9% of all
+player-games (1161/1384, win-rate 50.1%, n=1161) -- this is the single most
+universal human opening habit measured here. Increased population by round
+3: 83.8% (1160/1384, win-rate 50.8%). Civil actions left unused across
+rounds 1-3: humans waste one essentially never (1373/1384 = 99.2% waste
+exactly 0; only 11 player-games waste any at all).
+
+
+2. BOT OPENING DISTRIBUTION (champion self-play, 200 games / 400
+   player-games, /private/tmp/rowdig/frozen_champion_2p.json, threads=2)
+------------------------------------------------------------------------
+
+NOTE ON THE FROZEN VECTOR: the raw file's `card_board_leader` is
+-15.0032389... (the known "leadersign" bug). `load_weights`/`parse_weights`
+(rust/src/bots/weighted/eval.rs:1054-1083) applies `dominance_repair`
+(eval.rs:934) automatically on every load, which is confirmed (checked the
+JSON directly, then re-derived through the repair's own unit test at
+eval.rs:1683-1701) to neutralize this specific value to exactly 0.0, not to
+a genuinely-repriced positive number. So this run is NOT running under the
+raw poisoned value -- but, as detailed in finding #2 below, "neutralized to
+zero" still produces most of the same avoidance behaviour as "poisoned
+negative" did, because zero is also not "priced right."
+
+First card taken, round <= 3 (top 15):
+
+  card                        count   share   win-rate (n)
+  Colossus              [WONDER] 86   21.5%   52.3% (45/86)
+  Library of Alexandria [WONDER] 72   18.0%   45.8% (33/72)
+  Pyramids               [WONDER] 70   17.5%   50.0% (35/70)
+  Hanging Gardens        [WONDER] 58   14.5%   53.4% (31/58)
+  Frugality (A)                   27    6.8%   37.0% (10/27)
+  Cultural Heritage (A)           21    5.2%   57.1% (12/21)
+  Homer                 [LEADER]  17    4.2%   41.2% (7/17)
+  Rich Land (A)                    9    2.2%   33.3% (3/9)
+  Stock Pile                       7    1.8%   57.1% (4/7)
+  Urban Growth (A)                 7    1.8%   28.6% (2/7)
+  St. Peter's Basilica  [WONDER]   5    1.2%   80.0% (4/5)
+  Alexander the Great   [LEADER]   4    1.0%   75.0% (3/4)
+  Hammurabi             [LEADER]   4    1.0%   75.0% (3/4)
+  Aristotle             [LEADER]   3    0.8%   66.7% (2/3)
+  Moses                 [LEADER]   3    0.8%   66.7% (2/3)
+
+Rolled up: bot takes a WONDER first 72.75% of the time (291/400) and a
+LEADER first only 7.75% of the time (31/400).
+
+First build/develop/upgrade, round <= 3:
+
+  kind        count   share   win-rate (n)
+  Military      391   97.8%   50.4% (197/391)
+  Mine             5    1.2%   40.0% (2/5)
+  Farm             2    0.5%    0.0% (0/2)
+
+Leader elected by round 3: 46.2% (185/400, win-rate 44.3%) vs. 53.2% never
+(213/400, win-rate 54.9% -- NOT electing a leader in the opening actually
+WINS MORE for the bot in this sample, a note for the force-play half of this
+project). Increased population by round 3: 94.0% (376/400).
+
+Civil actions left unused across rounds 1-3: 0 -> 145 (36.2%), 1 -> 29,
+2 -> 67, 3 -> 88, 4 -> 23, 5 -> 18, 6 -> 22, 7 -> 7, 8 -> 1. So 63.8% of bot
+player-games waste AT LEAST one civil action somewhere in the opening,
+against essentially 0% for humans (0.8%). This cuts against the general
+"ca_left pushes the bot to always spend" fact -- worth a closer look
+separately, since it may instead be an Age-A affordability/legality
+artifact (few cheap takes available yet) rather than a preference; flagged
+here, not chased further (out of this pass's scope).
+
+
+3. DIVERGENCE TABLE (ranked by gap size, noting human win rate)
+------------------------------------------------------------------------
+
+  category                      human          bot            gap (pp)
+  ------------------------------------------------------------------------
+  First build = Military         2.9% (n=40)   97.8% (n=391)   94.9  <- bot rushes this humans almost never do
+  First build = Mine             60.3% (n=834)  1.2% (n=5)     59.1  <- humans' single most common opening line, bot essentially never plays it
+  First build = none (not yet)   31.7% (n=439)  ~0% (n=2)      31.7
+  Leader elected by round 3      83.9% (n=1161) 46.2% (n=185)  37.7  <- humans' most universal habit, bot does it under half the time
+  First take = Wonder            32.9% (n=456)  72.75%(n=291)  39.9  <- bot massively OVER-plays this vs. humans
+  First take = Leader            26.9% (n=372)   7.75% (n=31)  19.2
+  CA left unused in opening       0.8%          63.8%          63.0  <- flagged above, not chased for a mechanism this pass
+  Increased pop by round 3       83.8%          94.0%          10.2  <- bot does this MORE than humans, smallest gap of the set
+
+The two largest, cleanest gaps by percentage points are the first-build-kind
+split (Military vs. Mine, a combined ~95pp swing on the SAME field) and the
+leader-election rate. Both have a traced mechanism below. The wonder
+over-take and the CA-waste finding are real but the CA-waste one has no
+mechanism traced in this pass (see note above -- flagged for a later pass,
+not invented).
+
+
+4. THE WHY -- top 3 divergences traced to code
+------------------------------------------------------------------------
+
+### #1: Humans build a Mine first; the bot builds a military unit first
+(94.9pp gap on the same field -- the single biggest, cleanest divergence)
+
+Mechanism, traced: a military unit card's printed strength is tagged as a
+`WeightKey::Strength` yield of `YieldKind::Unit`
+(`rust/src/bots/weighted/cards.rs:242-244`, `card_yields`). That yield is
+priced through `feature_marginal` (`rust/src/bots/weighted/rivals.rs:849-859`),
+which special-cases `WeightKey::Strength` to call `strength_marginal`
+(`rivals.rs:737-748`). `strength_marginal` sums FOUR weights from the frozen
+vector: `strength` (-7.152), `strength_rel` (+17.231), plus a phase blend of
+`strength_rel_early` (-0.195) and `strength_rel_late` (+5.606) weighted by
+lateness (`rivals.rs:745-747`; weight values confirmed directly from
+`/private/tmp/rowdig/frozen_champion_2p.json`; defaults at
+`rust/src/bots/weighted/weights.rs:513,648,649`). Even at lateness≈0 (the
+literal opening), this nets to roughly +9.9 -- a strongly POSITIVE marginal
+value on any move that raises the player's own strength, in the opening,
+before any war is remotely relevant. A cheap early Warriors-to-Swordsmen
+upgrade (once Swordsmen is developed -- and Swordsmen is already the bot's
+single most common first-develop tech at 41.8%, from the pre-existing
+`first_develop_card` census) scores this large positive delta essentially
+for free, every game, while Farm/Mine production yields are priced through
+the ordinary flat per-worker weights (`FoodRate`/`ResourceRate`,
+`cards.rs:232-233`) with no comparable early-game amplification. Confidence:
+high on the pricing-channel mechanism (every citation above is a direct
+read, not inference); medium on "this is THE reason it wins the comparison
+against Mine specifically" -- did not diff the two candidate moves' raw
+scores side-by-side in a real position, which would close the loop
+completely (out of this measurement pass's scope; flagged for the
+force-play half).
+
+### #2: Humans elect a leader by round 3 83.9% of the time; the bot does it
+46.2% of the time (and takes one FIRST only 7.75% vs. humans' 26.9%)
+
+Mechanism, traced: `card_potential_core` (`rust/src/bots/weighted/cards.rs:1733`)
+gives FIVE card kinds a dedicated, always-live per-type board-pricing gate
+before falling through to a generic path: unit techs (`UnitTechCredit`,
+:1745), levelled techs (`TechBoardCredit`, :1749), governments
+(`GovBoardCredit`, :1752), actions (`ActionBoardCredit`, :1757), and --
+notably -- WONDERS get their own dedicated gate too (`WonderBoardCredit`,
+:1778, confirmed nonzero at 0.1123 in the frozen vector). Leaders get NO
+such dedicated gate: `CardType::Leader` is not one of the `kind ==` branches
+in that function at all. A leader instead falls through to the generic
+fallback (`cards.rs:1808-1815`): `credit_board = card_board_credit (0.0) +
+card_board_leader`. `card_board_leader` is the field poisoned by the
+"leadersign" bug (raw value -15.003, confirmed in the frozen JSON); the
+newly-landed `dominance_repair` gate (`eval.rs:934`, applied at load time,
+`eval.rs:1083`) neutralizes it to exactly `-card_board_credit = 0.0`
+(confirmed via the repair's own unit test, `eval.rs:1683-1732`, which states
+explicitly that a repaired leader lands at "0.0 (unpriced), not because the
+fix under-corrected" -- the repair's job was only to stop the SIGN
+INVERSION, not to restore genuine value). With `credit_board == 0.0` AND
+`card_board_credit == 0.0`, `card_potential_core` takes its
+static-per-card-table early return (`cards.rs:1811-1815`), which the same
+test comment confirms carries "no printed static price" for a leader. Net
+effect: the fix that already landed in this clone stopped leaders from
+pricing NEGATIVE (the acute form of the bug), but leaders still price at
+essentially ZERO board value through this channel, structurally unlike
+wonders, governments, actions and techs, which each kept (or already had) a
+genuine dedicated positive gate. That is exactly consistent with what this
+pass measures: bot leader uptake is way down from human, but not literally
+zero -- residual value leaks in only through row-scarcity
+(`row_last_copy`), the same channel every other card gets, with no
+leader-specific credit on top. Confidence: high -- every step is a direct
+code read plus a confirmed value from the actual frozen file used in this
+run's bot self-play.
+
+### #3: The bot takes a Wonder first 72.75% of the time vs. humans' 32.9%
+(the "vice versa" case -- bot over-plays what humans do more moderately)
+
+Mechanism, traced: this is the mirror image of #2's missing gate -- wonders
+DO have the dedicated gate (`WonderBoardCredit`, `cards.rs:1778`, value
+0.1123, nonzero and positive in the frozen vector), which fires BEFORE the
+generic fallback and prices a row wonder's genuine long-run board benefit
+via `board_yields::board_yields`/`sum_board_triples` (`cards.rs:1779-1780`).
+This is the composite, already-weight-priced `card_potential` the
+project's own facts note is then MULTIPLIED AGAIN by `row_last_copy`'s
+row-scarcity term (`rust/src/bots/weighted/row.rs:459-494`, `total += val *
+gone` at :491) -- so a wonder's card_potential, already boosted by its own
+dedicated gate, gets a second multiplicative boost from sitting in a
+scarce/about-to-disappear row slot, which a first-round Age A row often is
+(only 6-7 slots, cleared fast in 2p). Humans do value wonders in the opening
+(32.9%, and it's a roughly-average-win-rate convention, not a losing one:
+49.8%) -- the gap here isn't "bot values something worthless," it's that the
+SAME genuinely-positive signal is applied through two multiplicative,
+uncapped channels for wonders specifically (dedicated gate x row-scarcity),
+while leaders (finding #2) get neither. Confidence: high on the mechanism
+existing; medium on the exact multiplicative-double-count framing, since
+this reuses the project's own already-established `row_last_copy`
+dominance finding (from the task brief) rather than re-deriving the
+"double-counting" claim from scratch in this pass.
+
+
+WHAT WAS NOT CHASED (explicitly out of scope for this measurement pass)
+------------------------------------------------------------------------
+- Forcing either opening and re-measuring win rate -- that is the next
+  worker's job, not this one's.
+- The CA-left-unused-in-opening divergence (63.8% bot vs 0.8% human) has no
+  traced mechanism here; flagged, not invented.
+- Did not diff the bot's actual candidate-move scores side by side in a
+  real position for finding #1 (would need a live `rank_moves` trace on a
+  specific game state) -- the yield-tagging/weight-value chain is confirmed
+  by direct code read, but the final "and this is why it beats Mine in a
+  real position" step was not run.
+- 3p/4p corpora were not measured (no 3p/4p champion vector was specified
+  as a stable input for this pass; 2p is also the corpus's largest bucket
+  at 692/1011 games).

@@ -1,0 +1,186 @@
+COLONIZE-SACRIFICE RECONSTRUCTION FIDELITY -- FIX
+==================================================
+Worker: colofix, clone /private/tmp/colofix, base commit 58e4cd9 (same base
+popor.patch/popor__POPOR.txt and drift.patch/drift__DRIFT.txt used).
+Date: 2026-08-14
+
+OUTCOME: (a) -- fix landed clean. ZERO regressions against the frozen
+644-id guard, 5 wins, exact-score matches up 592->603.
+
+===========================================================================
+0. TWO BUGS, NOT ONE
+===========================================================================
+Went in expecting a single "ground the named unit" reconstruction repair
+(`Replayer::approximate_colonize`, `rust/src/replay_common.rs:2312` in the
+brief's line numbering). Found and fixed TWO independent defects, both
+required to move the needle without regressing:
+
+  A. `parse_sacrifice_clauses` (`rust/src/replay_common.rs`, ~line 5030) --
+     a genuine PARSING BUG, not a hidden-information gap. Its unit-clause
+     match arm was `[unit] => sacrificed_unit_card(unit, ...)`, a
+     single-word slice pattern. Every base-game unit name IS one word
+     ("Warrior"/"Cannon"/"Knights"/"Swordsmen"/...) except ONE: "Modern
+     Infantry" (age IV, the only two-word unit in the card table). A
+     "1 Modern Infantry" clause split into `["Modern", "Infantry"]`, missed
+     the `[unit]` arm, and fell into the same `_ => None` catch-all this
+     function's own doc says is for SKIPPING non-card bookkeeping clauses
+     ("Colonization bonus: +N", "Total force: N") -- i.e. a real sacrificed
+     unit was silently indistinguishable from "nothing was sacrificed here
+     at all". Confirmed on real game `7522267` (line 321): journal says
+     "1 Cannon; 1 Warrior; 1 Modern Infantry", parse only produced
+     `[Unit(Cannon), Unit(Warriors)]`.
+
+     Fix: replace the single-word arm with a catch-all that joins ALL
+     remaining words with a space before the lookup (`words =>
+     sacrificed_unit_card(&words.join(" "), card_index)`). Handles every
+     unit name, one word or several, without special-casing "Modern
+     Infantry" by string. The two earlier, more specific match arms
+     ("Colonization card +N", "Military card +1") still take priority since
+     Rust matches top-to-bottom.
+
+  B. `Replayer::drain_colonize`'s fallback (`approximate_colonize`,
+     `rust/src/replay_common.rs:2312` per the brief) -- the actual named
+     defect. When the journal's next owed clause is `SacrificeClause::
+     Unit(card)` and `card` is not currently in `Pending::Colonize::pool`
+     (this binary's own reconstructed army snapshot), the old code gave up
+     immediately and let `approximate_colonize` grab whatever `legal_moves`
+     offers first -- typically MORE, WEAKER substitute units, exactly as the
+     brief described.
+
+     Fix: new `Replayer::ground_army_unit_for_consumption` (mirrors the
+     existing `ground_for_consumption` hidden-hand repair, extended from
+     `hand_military` to the ARMY). Before falling back, SWAP one worker off
+     whichever OTHER unit the pool already has onto the named card instead
+     -- net army size unchanged, only WHICH unit types this binary believes
+     make up the army gets corrected. Never steals a unit `owed` still needs
+     for a LATER clause of the same sacrifice (same caution the existing
+     `ground_auction_winner_hand` already uses for bonus cards).
+
+===========================================================================
+1. THE GRANT-WITHOUT-A-VICTIM VARIANT THAT WAS TRIED AND REJECTED
+===========================================================================
+First attempt mirrored `ground_for_consumption` EXACTLY, including its
+"always push, victim-removal is best-effort" shape: when no swap victim was
+available, grant the named unit anyway (grow army size by one) rather than
+leave `drain_colonize` stuck. Measured:
+  - Fixed the then-only regression (game `7522267`, via mechanism A above
+    actually, not this).
+  - Introduced a NEW regression: game `7522866`, 4p. Granting a Knights
+    worker with no compensating removal pushed a player's `p.techs` worker
+    total past what an UNRELATED, otherwise-correct later
+    `ChoiceKind::LosePop` "destroy something" choice expected -- that
+    choice's own candidate-matching logic (`replay_common.rs:1426`,
+    `lose_pop_destroys` queue) could no longer find the journal's real
+    "destroys" line among its options, and the whole replay stalled
+    ("LosePop choice open for player 0 but no journal-observed destroy line
+    left to resolve it with"). Net effect measured: -1 completing game vs.
+    baseline, 0 wins -- a regression the brief's hard rule ("never make the
+    replayer skip/coerce/forgive... to manufacture a completion") reads as
+    exactly the wrong direction: it would have been trading one kind of
+    fidelity gap for another, invisible one (worker-count/population
+    mismatch instead of wrong-unit-sacrificed).
+
+Reverted to the strict SWAP-ONLY version: if no non-owed victim exists in
+the pool, `ground_army_unit_for_consumption` is a no-op and
+`drain_colonize` falls through to the pre-existing `approximate_colonize`
+fallback UNCHANGED -- strictly no worse than baseline for that one clause.
+Combined with fix A (which independently unblocked several of the
+`illegal-move` fallback fires that swap-only alone could not reach), this
+is the version that landed with zero regressions.
+
+===========================================================================
+2. MEASUREMENTS
+===========================================================================
+Fallback-fire instrumentation: new `COLONIZE_FALLBACK_DUMP` debug flag
+(`rust/src/debugflags.rs`, follows the existing `REPLAY_DEBUG*` pattern --
+one static bool read, inert when unset). One stderr line per
+`approximate_colonize` invocation naming why (`reason=illegal-move` /
+`reason=queue-empty` / `reason=wrong-actor` / `reason=cook-discard-
+unavailable`), plus one `GROUND_ARMY_SWAP` line per successful swap.
+
+  Before (base 58e4cd9, instrumentation added but fix disabled):
+    COLONIZE_FALLBACK fires: 79 total
+      reason=illegal-move:    43   <- what this fix targets
+      reason=queue-empty:      9   <- different failure mode, untouched
+      reason=wrong-actor:     27   <- different failure mode, untouched
+    Guard: 644/644 completed (matches frozen baseline exactly, confirming
+    the instrumentation itself is behaviourally inert with the env var
+    unset).
+    Exact-score matches: 592/644.
+
+  After (fix A + fix B together):
+    COLONIZE_FALLBACK fires: 58 total (-21, -27%)
+      reason=illegal-move:    21   (-22 from 43, -51%)
+      reason=queue-empty:     10   (+1 -- a knock-on side effect of fix A
+                               changing which state a LATER, unrelated
+                               colonize event opens against; not chased
+                               further, see section 3)
+      reason=wrong-actor:     27   (unchanged -- out of this pass's lane,
+                               see below)
+    GROUND_ARMY_SWAP fires: 1 (the swap-only condition -- pool must have a
+                               spare non-owed unit -- is narrow; most of the
+                               43->21 illegal-move drop is fix A, the parser
+                               fix, not the swap grounding. Both are real
+                               and both were needed: swap-only WITHOUT fix A
+                               still regressed 7522267, see section 1's
+                               measurement history in the diff/test
+                               commentary.)
+
+  GUARD (the authoritative check):
+    Before: 644/644 (frozen /private/tmp/guard_ids.txt)
+    After:  649/649
+    REGRESSIONS: (empty)
+    WINS: 7521864, 7522156, 7522349, 7523061, 7523597
+    Exact-score matches: 603/649 (up from 592/644)
+
+===========================================================================
+3. LANE NOTE -- I TOUCHED `parse_sacrifice_clauses`
+===========================================================================
+The task brief explicitly warned another worker is on `parse_sacrifice_
+clauses` RIGHT NOW for a DIFFERENT bug (the `hand_military` +1 phantom,
+game `7520718`). I touched the SAME function for an orthogonal, additive
+fix: recognising a two-word unit name that the old code silently dropped.
+This is a widen-the-match fix (adds clause recognition it previously
+lacked), not a change to bonus-card/discard counting logic, so it should be
+structurally non-conflicting with a `+1`-phantom fix in the same function --
+but the two patches DO touch the same `match` block and will need manual
+reconciliation if applied together (mine changes the `[unit]` / `_ => None`
+arms into a single `words =>` catch-all). Flagging loudly per the task's
+lane-discipline instruction. Did NOT touch `apply.rs`'s colonize
+`hand_military` bookkeeping (item 3 in the task's own order-of-work) --
+inspected it (`interact.rs:1581-1588`'s `Move::SendBonus`/`SendDiscard`
+handlers, both correctly `hand_military.remove_first(card)` for their own
+distinct card, so two differently-valued bonus cards ARE both dropped
+correctly) and found it already correct; no change needed there.
+
+===========================================================================
+4. REMAINING FALLBACK MODES (NOT THIS PASS'S SCOPE)
+===========================================================================
+`reason=wrong-actor` (27, unchanged) and `reason=queue-empty` (10, was 9)
+are a DIFFERENT failure shape: the `colonize_sacrifices` queue's front
+entry does not belong to the player who currently has `Pending::Colonize`
+open at all (queue misalignment), not "the named unit isn't legal". Named
+as the next suspect for whoever resumes this: worth its own hand-trace
+before attempting a fix, since (per this pass's own experience) the
+"obvious" repair can easily trade one invisible fidelity gap for another.
+
+===========================================================================
+FILES
+===========================================================================
+Clone: /private/tmp/colofix -- deleted after this file and the patch were
+       written and verified non-empty.
+Patch: analysis/worker_notes_2026-08-14/colofix.patch --
+       `git diff 58e4cd9 HEAD -- rust/src/debugflags.rs
+       rust/src/replay_common.rs` (scoped to only the two files this pass
+       touched; the base clone's own pre-existing untracked scratch/
+       analysis files were excluded, not part of this fix). Did not apply
+       popor.patch/drift.patch to this clone at all, so nothing to exclude
+       on that front.
+Tests added (both confirmed RED by reverting their respective fix and
+re-running, then restored):
+  - `a_colonize_line_names_a_two_word_unit_card_and_does_not_drop_it`
+    (fix A, parse_sacrifice_clauses).
+  - `a_colonization_grounds_a_named_unit_missing_from_the_reconstructed_
+    army_by_swapping_it_in` (fix B, ground_army_unit_for_consumption).
+Full test suite: 1389 passed, 0 failed (`cargo test --profile fasttest
+--lib`). `cargo clippy --all-targets -- -D warnings`: clean.

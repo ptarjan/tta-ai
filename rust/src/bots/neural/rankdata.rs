@@ -461,7 +461,7 @@ pub fn play_and_record(
 
         // Sample BEFORE picking, so the (much more expensive) collecting
         // pick only runs on decisions whose rows will actually be kept.
-        let sample = ply % stride == 0 && live.len() > 1;
+        let sample = ply.is_multiple_of(stride) && live.len() > 1;
         let bot = &mut bots[dec as usize];
         let (chosen, leaves) = if sample {
             bot.pick_collecting(&state, &live)

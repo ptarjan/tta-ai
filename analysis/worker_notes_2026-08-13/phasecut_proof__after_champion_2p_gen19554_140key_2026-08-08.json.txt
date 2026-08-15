@@ -1,0 +1,13 @@
+games        20 (10 deals x 2 seats)
+players      2
+kind         weighted
+A            champion_2p_gen19554_140key_2026-08-08
+B            champion_2p_gen19554_140key_2026-08-08
+mean moves   246.3
+elapsed      0.7s  (29.5 games/s)
+
+win rate     50.0%  +/- 0.0   (null 50.0%)   p = 1.0000
+             [naive +/- 22.5, rho -1.00, deff 0.00, 10 deals]
+culture      A 34.8   best other 34.8   lead +0.0 +/- 0.0
+
+verdict      inconclusive -- the interval still straddles the null

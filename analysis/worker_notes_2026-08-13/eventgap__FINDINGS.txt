@@ -1,0 +1,289 @@
+EVENT-GAP FIX -- FINDINGS (in progress, updated as work proceeds)
+====================================================================
+
+THE BUG
+-------
+The advisor mirrors a human's real game. `Move::PrepareEvent` (a Politics-
+phase move) is legal whenever the actor holds an Event/Territory card in
+hand_military. Applying it (`apply::h_prepare_event`, src/apply.rs:1372)
+does two unrelated things:
+  1. Moves the PLAYED card (known -- it's the human's own hand card) into
+     `state.future_events`.
+  2. Calls `events::reveal_current_event(state)` (src/events.rs:530), which
+     pops and resolves the TOP of `state.current_events` -- a completely
+     different pile.
+
+`state.current_events` for the advisor's mirror is dealt by
+`game::new_game` at board setup (src/game.rs:431-439): a REAL shuffle of
+the actual Age-A military cards, from the ENGINE's own RNG. It is not, and
+was never meant to be, the real table's actual event order. The advisor
+already has a mechanism for correcting it -- an `event <card name>` update
+line (src/advisor/state_io.rs, `Command::Event`) that swaps the named
+card onto the top of the pile before a reveal pops it -- but nothing
+enforced that this happens before a `PrepareEvent` commits. If the
+operator didn't report it first, `reveal_current_event` popped whatever
+the mirror's own fake shuffle had on top and applied ITS real card effects
+to the real player's board. That's exactly what happened 2026-08-12:
+"Development of Agriculture" (+2 food) got silently applied, corrupting
+the board from turn 3 on.
+
+CODE PATHS THAT COULD INVENT AN EVENT
+--------------------------------------
+Audited every call site of `events::reveal_current_event` in the whole
+tree (only ONE production call site exists):
+  - src/apply.rs:1377, inside `h_prepare_event` -- THE path. Closed.
+There is no separate "end-of-turn reveal" code path in this codebase --
+all event reveals go through `h_prepare_event` -> `reveal_current_event`.
+(The task brief anticipated a possible second path; there isn't one here.)
+
+`h_prepare_event`/`apply::apply`/`events::reveal_current_event` are shared
+verbatim by self-play, the bot search inside the advisor's own
+`rank_moves` (which clones `GameState` and discards the clone -- see
+src/advisor/advisor.rs:230), and the advisor's real commit path
+(`Advisor::play`). Self-play's `current_events` is ALWAYS a real dealt/
+shuffled pile (never sentineled), and rank_moves' speculative clones
+legitimately need to explore "what if I prepare an event" without knowing
+the real card -- so the fix could not live in the core engine (`apply.rs`/
+`events.rs`) without either breaking self-play's assumptions or crashing
+search. `apply::apply` also has no `Result` return at all and is called
+from hot bot-search loops, so changing its signature was out of scope for
+a tight fix.
+
+THE FIX
+-------
+Added `Board::confirmed_events: u32` (src/advisor/state_io.rs) -- a count
+of how many of the NEXT reveals off `current_events` the operator has
+already named via `event <card name>`. `Command::Event` is its only
+writer (increments by however many cards were named in that line).
+
+`Advisor::play` (src/advisor/advisor.rs) -- the ONE place that commits a
+move to the mirror for real, as opposed to search's throwaway clones --
+now refuses to commit `Move::PrepareEvent` when `confirmed_events == 0`,
+returning `(false, "preparing an event reveals the top of the
+current-events pile, and nothing has said which card that is -- report it
+first with `event <card name>`")`. On a successful commit it decrements
+the counter by one (the promise it just spent).
+
+This is gated on the advisor context implicitly and structurally: search
+(`rank_moves`, `one_ply_scored`) clones only `GameState`, never `Board`,
+so `confirmed_events` and the new check never apply to speculative
+evaluation -- only to the single real commit path. Self-play never touches
+`Board`/`Advisor::play` at all. No change to `apply.rs`, `events.rs`,
+`GameState`, or `apply::apply`'s signature -- zero blast radius on the bot
+search hot path or self-play/climb.
+
+TEST
+----
+File: src/advisor/advisor.rs, `#[cfg(test)] mod tests`.
+Name: preparing_an_event_without_a_reported_event_card_is_an_error_not_a_random_reveal
+(companion: preparing_an_event_after_it_was_reported_is_allowed, confirms
+the fix doesn't just block PrepareEvent outright)
+
+Confirmed RED by reverting the `Advisor::play` guard (restoring the
+pre-fix body) and rerunning:
+
+  thread 'advisor::advisor::tests::preparing_an_event_without_a_reported_event_card_is_an_error_not_a_random_reveal' (48432670) panicked at src/advisor/advisor.rs:1230:9:
+  must refuse, not invent, which card the mirror's own pile reveals
+
+Re-applied the fix; both new tests pass.
+
+FILES TOUCHED
+-------------
+  src/advisor/state_io.rs   -- new `Board::confirmed_events` field,
+                                incremented in `Command::Event`, and the
+                                new field added to all 3 Board literals
+                                in this file.
+  src/advisor/advisor.rs    -- `Advisor::play` gate + two new tests.
+  src/harness/mod.rs        -- 4th `Board` literal (test harness), added
+                                the new field there too (found only when
+                                cargo caught the missing-field error).
+
+FULL SUITE
+----------
+`cargo test --profile difftest` from rust/ -- STATUS UNKNOWN / STILL
+RUNNING at the time this was written. The targeted test module
+(`advisor::advisor::tests`, run alone) is green -- see above. A `cargo
+build --profile difftest` of the whole tree (which necessarily typechecks
+every file, including the 4 Board literal sites) succeeded cleanly. I
+started a full `cargo test --profile difftest` run and it was still
+executing (not compiling -- the binary finished compiling within a couple
+of minutes; the remaining time is test EXECUTION, this repo's suite is
+large) after ~25 minutes of wall time across several polls. I did not
+wait for it to finish -- stopping here per explicit instruction from the
+coordinator, who flagged that I had violated the "never end a turn to
+wait" rule and told me to wrap up now rather than keep grinding.
+UNVERIFIED: whether the full suite is green. Nothing about my change
+should affect unrelated tests (it only touches src/advisor/advisor.rs,
+src/advisor/state_io.rs, src/harness/mod.rs -- pure additions plus one
+new gate inside Advisor::play, no signature changes to any shared/engine
+function), but this is not the same as having watched it finish.
+
+SAME CLASS OF BUG ELSEWHERE (found, NOT fixed, per instructions)
+------------------------------------------------------------------
+`Advisor::skip_opponent_turn` (src/advisor/advisor.rs, ~line 841-873):
+whenever the mirror hits an open `state.pending` decision while skipping
+an opponent's turn (a rival's hidden military discard, or any other
+pending Bid/Defend/Choose/Send* decision), it resolves it by picking
+`legal::legal_moves(state)[0]` -- the first option the engine offers --
+and applies it as fact, with nothing requiring the operator to ever
+report which one actually happened. This is the same shape of bug: hidden
+information (which card a rival privately discarded, which option a
+pending decision resolved to) gets invented by the mirror and silently
+becomes part of the "real" board state. It's called out in that
+function's own doc comment as a deliberate, documented simplification
+("the least-committal guess available"), so it may be an accepted
+trade-off rather than an oversight -- but it is structurally the same
+class of "silently invent hidden info instead of demanding it be
+reported" as the PrepareEvent bug this task fixed, and is worth a second
+look if mirror-corruption bugs keep turning up.
+
+COMMIT
+------
+See below -- committed with the full suite's outcome unverified (per
+coordinator instruction to wrap up now); flagged in the commit message.
+
+====================================================================
+2026-08-13 FOLLOW-UP -- THE FULL SUITE HANG (harness::play::tests::
+resync_demands_a_cause_and_taints_the_game)
+====================================================================
+
+ROOT CAUSE
+----------
+Commit 2774194 gated the REFUSAL correctly (`Advisor::play` alone, not
+`apply.rs`/search clones -- see the FINDINGS above), but never gated
+CANDIDATE GENERATION to match. `Advisor::recommend()` -> `rank_moves`/
+`rank_moves_beam`/`rank_moves_human` (src/advisor/advisor.rs) all take
+`board: &Board` -- the SAME real `Board`, with `confirmed_events` fully
+visible, that `Advisor::play` checks -- but scored their candidates
+straight from `legal::legal_moves(&board.state)`, which knows nothing
+about `confirmed_events`. Result: whenever `Move::PrepareEvent` was
+legal and `confirmed_events == 0`, `recommend()` could still SCORE and
+STAR it, and `Advisor::play` would then refuse it, every single time,
+with nothing about the board changing on a refusal. Any caller shaped
+"ask, accept the star pick (Enter/blank), repeat" -- which is exactly
+`harness::play`'s console `my_turn` loop (src/harness/play.rs:199-218),
+and exactly how `ScriptedOperator::ask` answers "your move> " when
+`overrides_left == 0` (`line.is_empty()` -> `cands.first()`) -- got the
+identical refusal forever: `recommend()` returns the same starred
+`PrepareEvent`, `play()` refuses it, state is untouched, loop repeats.
+Confirmed by manual bisection (killing and reproducing under a bounded
+background run): the offending test spins at ~100% CPU
+(target/difftest/deps/tta-*, 97.5% CPU observed) with zero output,
+matching the reported 50+ minute hang exactly. This is
+`harness::play::tests::resync_demands_a_cause_and_taints_the_game`
+specifically (not the other harness tests) because it is the one test
+in that file that both (a) resyncs (picks 'r', not 'a') and (b) keeps
+playing afterward (`stop_round = 5`) -- every other drift/desync test
+either aborts immediately or stops before reaching a round where a
+Politics-phase actor holding an event/territory card makes `PrepareEvent`
+legal (and, with this deterministic seed-0 board, apparently the bot's
+top pick) again.
+
+WHICH FIX, AND WHY
+-------------------
+Chose (b)-shaped, not (a): scope/consistency between the two things
+that share the SAME real `Board`, rather than making the harness retry
+loop treat the refusal as terminal. `harness::play`'s loop is not
+self-play and not a search clone -- per its own top doc comment it is a
+faithful port of a REAL physical-table operator session
+(`HarnessConsole`), so a human sitting at that prompt, upon reading
+`Advisor::play`'s refusal message, is expected to type
+`event <card name>` and move on; that is the exact interaction the
+2774194 fix was designed to force. Making the retry loop "fail the run
+with a clear message" (option a) would have papered over the real defect
+(a recommendation the advisor can never honor) and would have made a
+harness session hard-abort on a condition a human can trivially resolve
+by typing one line -- exactly the kind of workflow the whole harness
+exists to support.
+
+The actual fix (`confirmed_legal_moves`, src/advisor/advisor.rs, used by
+`rank_moves`/`rank_moves_beam`/`rank_moves_human` in place of a bare
+`legal::legal_moves(&board.state)` call): filters `Move::PrepareEvent`
+out of the ROOT candidate list whenever `board.confirmed_events == 0`,
+so `recommend()` and `Advisor::play` now agree on what is offerable, on
+the ONE path (the real `Board`, not a search clone) where both can see
+`confirmed_events`. Deeper search (`plan::rank`/`one_ply_scored`) is
+untouched -- those only ever see the cloned `GameState`, never `Board`,
+exactly as designed by 2774194, so this does not change search's
+internal exploration, self-play, or any bot-vs-bot code path (verified:
+`rank_moves`/`rank_moves_beam`/`rank_moves_human`/`rank_moves_search` in
+advisor.rs are called only from `Advisor::recommend` and this module's
+own tests -- grepped every call site). An operator who explicitly TYPES
+`prepare event <card>` by hand (bypassing the candidate list) still hits
+`Advisor::play`'s legality-then-confirmation check exactly as before and
+gets refused ONCE with the same message -- the refusal itself is
+unchanged and unweakened; only the thing recommend() ever STARS changed.
+
+Edge case considered: if `PrepareEvent` were ever the ONLY legal move for
+an actor, filtering it out would empty the candidate list, and
+`harness::play::my_turn` treats an empty `cands` as "nothing to do this
+turn" (returns `Ok(true)`) while `HarnessConsole::play_loop`'s outer loop
+re-checks `adv.my_turn()` -- which would still be true, since no move was
+applied -- reproducing a (different) infinite loop one level up. Did not
+observe this in practice (the suite ran to completion -- see below) and
+consider it very unlikely given the game rules (a Politics-phase actor
+who can PrepareEvent can essentially always also EndTurn or take another
+action), but flagging it here rather than silently asserting it can never
+happen.
+
+FILES TOUCHED (this follow-up)
+-------------------------------
+  src/advisor/advisor.rs -- new `confirmed_legal_moves(board: &Board)
+                             -> Vec<Move>` helper; `rank_moves`,
+                             `rank_moves_beam`, `rank_moves_human` now
+                             call it instead of a bare
+                             `legal::legal_moves(&board.state)`. Plus one
+                             new regression test (below). No change to
+                             `Advisor::play`, `apply.rs`, `events.rs`, or
+                             any self-play/bot-search code path.
+
+REGRESSION TEST
+----------------
+File: src/advisor/advisor.rs, `#[cfg(test)] mod tests`, right after the
+two existing PrepareEvent tests from the original fix.
+Name: recommend_never_offers_an_unconfirmed_prepare_event
+
+Asserts the order-independent property directly: with `PrepareEvent`
+legal and `confirmed_events == 0`, `adv.recommend(<all legal moves>)`
+must not contain a `PrepareEvent` candidate ANYWHERE in its output.
+`top = <full legal-move count>` makes this deterministic under
+`SearchMode::Greedy` (`Advisor::new`'s default), which scores and
+returns literally every scoreable candidate -- so the test does not
+depend on the bot's evaluation happening to rank `PrepareEvent` first;
+it fails on iteration 0 regardless of scoring, the moment the move is
+present at all. This is a plain assertion (not a bounded retry loop),
+so a regression here fails in well under a second with a clear message,
+never as a hang -- verified by temporarily reverting
+`confirmed_legal_moves` to a bare `legal::legal_moves(&board.state).
+as_slice().to_vec()` and re-running just this test:
+
+    thread 'advisor::advisor::tests::recommend_never_offers_an_unconfirmed_prepare_event' (48729351) panicked at src/advisor/advisor.rs:1327:9:
+    recommend() offered a PrepareEvent that Advisor::play will always refuse to commit -- an operator (or harness) that accepts the star pick can never make progress
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1266 filtered out; finished in 0.00s
+
+Fix re-applied immediately after (restored from a pre-edit backup, diffed
+clean against the working copy). Also re-ran the ORIGINAL hanging test,
+`harness::play::tests::resync_demands_a_cause_and_taints_the_game`, alone
+under a background+poll harness bounded to 120s (never let it sit at
+99%+ CPU unattended): it now completes in 0.03s, `1 passed; 0 failed`.
+
+FULL SUITE (this follow-up)
+-----------------------------
+`cargo test --profile difftest` run to completion in the background,
+polled, output appended to /private/tmp/eventgap/suite2.log with a
+trailing `EXIT=$?` line. See that file for the authoritative pass/fail
+counts -- not restated here to avoid this file going stale if the run's
+tail changes after this paragraph is written.
+
+FULL SUITE RESULT (authoritative, this follow-up)
+----------------------------------------------------
+/private/tmp/eventgap/suite2.log, `cargo test --profile difftest` run to
+completion (EXIT=0 appended at the end of the log):
+
+  1448 passed, 0 failed, across all 28 test binaries/suites
+  (main lib.rs alone: 1267 passed, 0 failed -- the 2 new tests from this
+  follow-up plus the 1265 that were there before).
+
+No hang. No failures. Full run completed well inside a normal suite
+wall-clock (the earlier partial run's ~25+ minutes was largely the
+now-fixed hang itself, not compile or unrelated test time).

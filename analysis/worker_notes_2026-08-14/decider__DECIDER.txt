@@ -1,0 +1,215 @@
+DECIDER WORKER (StuckPending: decider N != expected actor M bucket) -- 2026-08-14
+====================================================================================
+
+RESULT: NO FIX LANDED. decider.patch is EMPTY (git diff d6a9fa3 HEAD is zero
+lines). Root cause for the dominant subgroup (discard-count mismatches) was
+found and traced to a specific line pair in real game 7523376, but the two
+fixes that would naturally address it are BOTH already-documented dead ends
+in this exact codebase (one measured 456 regressions to 1 win in a previous
+pass, the other is explicitly off-limits/load-bearing for bot gameplay --
+see "WHY NO FIX" below). Reporting a measured negative with the required
+subgroup histogram, per this pass's own instructions that this is an
+acceptable outcome.
+
+Baseline (read from the sweep's own header, unmodified d6a9fa3 tree):
+  687/1011 completed, 651/687 exact score match.
+Bar check after this pass (tree confirmed byte-identical to d6a9fa3 --
+`git diff d6a9fa3 HEAD` is empty for the whole rust/ tree):
+  687/1011 completed (SCOREDIV_DUMP_COMPLETED=1 sweep, /tmp/dec_after.txt).
+  comm -23 /private/tmp/guard_ids_687.txt /tmp/dec_ids.txt   -> EMPTY (no regressions)
+  comm -13 /private/tmp/guard_ids_687.txt /tmp/dec_ids.txt   -> EMPTY (no wins, expected: no code changed)
+  cargo test --profile fasttest --lib: 1410 passed; 0 failed; 0 ignored.
+  cargo clippy --all-targets --profile fasttest -- -D warnings: clean, zero warnings.
+
+
+THE BUCKET, ENUMERATED PRECISELY
+==================================
+`replaystats` already has a `REPLAY_DUMP_BUCKET` env var (no new instrumentation
+needed for this step -- `src/bin/replaystats.rs` line ~416) that dumps every
+game+line whose bucket key contains a given substring. Ran:
+
+  REPLAY_DUMP_BUCKET="!= expected actor" ./target/difftest/replaystats \
+    /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals \
+    > /tmp/dec_bucket_out2.txt 2> /tmp/dec_bucket_dump2.txt
+
+97 DUMP lines -- matches the histogram's own count exactly (`StuckPending:
+decider # != expected actor #, phase Actions, no pending`, count 97, mean
+round 13.0, example `7523354 line 251: Purple discards 1 card`). (Note: a
+naive `REPLAY_DUMP_BUCKET="decider"` substring also catches the unrelated
+"no auto-resolution for pending choice ... (decider #, options #)" buckets,
+giving 103 -- use "!= expected actor" for the precise 97.)
+
+
+SUBGROUP HISTOGRAM (required deliverable) -- grouped by the journal line
+shape at the stop point:
+
+  count | shape
+  ------|------------------------------------------------
+     77 | "<Color> discards 1 card"
+     10 | "<Color> discards 2 cards"
+      1 | "<Color> discards 3 cards"
+   ---- | (discards subtotal: 88/97 = 91%)
+      2 | "<Color> destroys <Resource>" (Bronze/Agriculture)
+      2 | "Johannes Sebastian Bach upgrades ... using Urban Growth"/"..."
+      1 | "<Color> passes Political Phase"
+      1 | "<Color> increases population"
+      1 | "<Color> discovers Printing Press ..."
+      1 | "<Color> discovers Irrigation ..."
+      1 | "<Color> disbands Warrior"
+      1 | "<Color> bids 13"
+
+The "discards" shape (88/97) is overwhelmingly the largest subgroup and is
+what this pass traced. It is not one bug: per this file's own doc comments
+(see below), earlier passes already fixed several large causes that used to
+feed this exact bucket (WinAuction/WinWar/Colonize/PlayEvent confirmation-
+line mis-ordering: 59+59 games; Raid age-sibling mis-resolution: ~75% of an
+earlier, larger version of this bucket). What's left is a long tail of
+per-game hand-count drift, each individually small.
+
+
+TRACE: game 7523376 (the KNOWN RELATED FACT game)
+====================================================
+Isolated per the method (`/tmp/one.tsv` = header + this game's index.tsv
+row). REPLAY_DEBUG_ALL=1 trace + two temporary eprintln probes (added,
+used, then `git checkout -- rust/src/replay_common.rs`'d back out --
+NOT part of the final diff) pinned the mechanism precisely:
+
+The stop is at line 265 ("Orange discards 1 card", round 14), but the
+`Replayer::check_discard_phase_oracle`/`prescan_military_hand_ledger` cross-
+check (already in the codebase, not added by this pass) independently flags
+the FIRST hand-size divergence for PURPLE two rounds earlier:
+
+  "7523376 line 203 (round 11 age II, Purple): journal's cross-validated
+  excess 0, this binary computes 1 (hand_military_len 4 limit 3)"
+  classified `SimulatorBug` (ledger agrees with journal; the FORWARD
+  SIMULATOR's own hand_military is wrong), last ledger event PrepareEvent.
+
+Walking the ledger-vs-simulator comparison at EVERY checkpoint (not just the
+flagged one -- added via a temporary `TMPDEBUG3` print in
+`check_discard_phase_oracle`, reverted after use) for Purple across the
+whole game shows simulator and ledger agree exactly through round 8
+(both 4), then FIRST disagree at round 10 (simulator=3, ledger=2) -- one
+round earlier than where it crosses the visible discard-limit threshold and
+gets reported. Between the round-8 and round-10 checkpoints the journal
+shows (lines 165-167, game `7523376.tsv`):
+
+  165: "Purple ... Discard Phase 2 military cards must be discarded"
+  166: "Purple ... End turn ..." (no draw clause this round)
+  167: "Purple ... discards 3 cards"
+
+BGO's own two independent renderings of "how many to discard" DISAGREE with
+each other here: the modal announcement says 2, the actual resolution line
+says 3. `prescan_discard_phase_oracle` (already in the codebase) correctly
+refuses to trust this entry when the two disagree (`out.insert` only fires
+when `announced == actual`, `replay_common.rs` ~line 4344), so round 9's
+checkpoint is silently dropped from the oracle rather than either number
+being blindly believed -- exactly the right call given the ambiguity.
+
+But `prescan_military_hand_ledger` (the OTHER, always-on bookkeeping used
+for cross-validation) unconditionally trusts the "discards 3 cards" line
+(-3) with no gate at all, while the LIVE SIMULATOR's own discard resolution
+is driven purely by its own live `hand_len - limit` computation at that
+moment (computed 2, not 3) via `interact::discard_excess_military` /
+`Pending::Choice(DiscardMilitary)` -- NOT by reading the journal's count.
+So the simulator discards 2 real cards where the true game discarded 3,
+landing 1 card over -- a silent, single-card "phantom" that sits under the
+visible excess threshold for two more rounds before crossing it at line 203,
+and it is what game `7523376`'s eventual stop at line 265 traces back to.
+
+I could not determine from the text alone why BGO's own two renderings
+disagree by exactly 1 here (no candidate mechanism -- Robespierre's
+election, the Republic revolution, or Patriotism's one-time "+1 military
+action" immediately before it -- has a documented TTA rule that forces an
+extra, hand-limit-independent military discard; `Patriotism`'s own
+`CardEffects.military_actions: 1` looks like a one-time immediate grant,
+not a permanent stat contribution, so it should not even move
+`state_stats().military_actions`, the field `check_discard_phase_oracle`'s
+own `limit` formula reads). This looks like an as-yet-undocumented THIRD
+"BGO discard-line-timing quirk" (the module doc at `replay_common.rs`
+~4234 already documents one: discard-before-End-turn ordering instability
+on game `7523347`) rather than a bug in this binary's own bookkeeping.
+
+
+WHY NO FIX WAS LANDED
+========================
+The two changes that would naturally address "simulator's live discard
+count should match the journal's real discard count" are BOTH explicitly
+closed off by this task's own forbidden list, and for exactly this shape:
+
+1. Force `apply_one`'s `ActionClass::Discard` arm to make the simulator
+   discard the journal's own count instead of its live-computed count.
+   FORBIDDEN -- already measured 456 regressions to 1 win by a prior pass.
+   This is precisely the fix this bug wants: the failure mode (simulator's
+   live excess computation disagreeing with the journal's true discard
+   count) is generic across the whole "discards" subgroup, and forcing the
+   journal's count is the obvious generalization -- which is exactly why it
+   was already tried, and exactly why it was this catastrophic. Reasonable
+   inference: for most of the OTHER 87 games in this subgroup, the
+   simulator's live count is actually CORRECT and it's the eventual
+   consuming code path (or a different, unrelated card-identity mismatch)
+   that trips later -- forcing the count blind breaks all of those.
+
+2. Change which cards `interact::discard_options`' auto-resolution evicts,
+   or its ordering, so a genuinely-uncertain 1-card gap gets absorbed
+   differently. FORBIDDEN outright by this task -- "load-bearing for bot
+   gameplay".
+
+Both are closed for good reason (the corpus-wide regression count on #1 is
+concrete, measured evidence, not a hypothesis), and I could not find a
+third, narrower intervention that fixes 7523376's specific 2-vs-3 BGO
+mid-turn discard-count disagreement without touching either of these two
+surfaces. No fix was landed rather than risk reproducing either measured
+regression.
+
+
+WHAT'S ALREADY FIXED (context for the next pass, all pre-existing in
+d6a9fa3, found while reading `replay_common.rs`'s own doc comments -- NOT
+new work by this pass):
+  - `is_pure_confirmation_line` skips `resolve_intervening` for
+    PlayEvent/WinAuction/Colonize/WinWar lines (BGO logs these
+    confirmations before the real action that causes them) -- fixed 59+59
+    games of an earlier, larger version of this bucket (`docs/REPLAY.md`).
+  - `resolve_aggression_age`/`resolve_plunder_age` (Raid/Plunder
+    age-sibling resolution from the line's own printed MA cost) -- fixed
+    ~75% of an earlier, larger version of this bucket (game `7523354`'s
+    original root cause).
+  - `resolve_political_decision`'s `PrepareEvent` handling and
+    `ground_for_consumption`/`consume_named_military_card` both record a
+    `military_hand_deficit` instead of silently washing to net-zero when no
+    disposable filler card exists, repaid on the next real draw
+    (`repay_military_hand_deficit`, which itself prefers non-Event/
+    Territory victims -- "8113a15", confirmed fixed on this SAME game
+    `7523376` for a different seat/round).
+
+None of these cover the round-9 discard-count-disagreement shape traced
+above -- confirmed by instrumenting the live deficit array for Purple across
+the whole game: it stayed `[0, 0, 0, 0]` throughout, so this is not an
+unpaid-deficit bug, it's a genuine untracked extra card from a live discard
+resolution that discarded fewer cards than the real game did.
+
+
+RECOMMENDATION FOR THE NEXT PASS
+===================================
+Do not re-attempt #1/#2 above without new evidence. Two possible narrower
+angles neither tried nor ruled out by this pass, both would need a fresh
+`/private/tmp` clone and full corpus measurement before landing:
+  - Check whether the "announced != actual" disagreement (in
+    `prescan_discard_phase_oracle`) has a consistent SIGN/mechanism across
+    the corpus (always actual = announced + 1? correlated with a specific
+    card, government, or leader active that turn?) -- this pass only
+    checked one instance (`7523376` round 9, Patriotism/Robespierre/
+    Republic-revolution all fired that same turn, none looks obviously
+    responsible). If a real rule is found, the fix belongs in whatever
+    computes the DISCARD TRIGGER's limit (upstream of `interact::
+    discard_options`, not touching its ordering), not in forcing the
+    journal's count downstream.
+  - Extend `prescan_discard_phase_oracle`'s trust gate itself: currently an
+    entry is dropped entirely when announced != actual. A "prefer the
+    resolution line's own count when the two disagree" policy (matching the
+    logic already used at `replay_common.rs` ~4277-4288 for a DIFFERENT,
+    already-confirmed case where the resolution line is authoritative over
+    this binary's own state) might recover trustworthy signal for cross-
+    validation on these games WITHOUT touching the live simulator's discard
+    behavior at all -- but this only improves the ORACLE's own diagnostic
+    power, it does not by itself fix the simulator's live count, so this
+    only helps FIND more of these, not fix them.

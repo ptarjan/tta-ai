@@ -527,7 +527,7 @@ mod tests {
     fn expand_data_paths_rejects_a_directory_with_no_shards() {
         let dir = std::env::temp_dir().join(format!("neuraltrain_test_empty_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let err = expand_data_paths(&[dir.clone()]).unwrap_err();
+        let err = expand_data_paths(std::slice::from_ref(&dir)).unwrap_err();
         assert!(err.contains("no .rkd"), "{err}");
         std::fs::remove_dir(&dir).ok();
     }

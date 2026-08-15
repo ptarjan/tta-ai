@@ -1,0 +1,13 @@
+games        20 (10 deals x 2 seats)
+players      2
+kind         weighted
+A            human_weights
+B            human_weights
+mean moves   229.0
+elapsed      0.1s  (169.2 games/s)
+
+win rate     50.0%  +/- 0.0   (null 50.0%)   p = 1.0000
+             [naive +/- 22.5, rho -1.00, deff 0.00, 10 deals]
+culture      A 25.1   best other 25.1   lead +0.0 +/- 0.0
+
+verdict      inconclusive -- the interval still straddles the null

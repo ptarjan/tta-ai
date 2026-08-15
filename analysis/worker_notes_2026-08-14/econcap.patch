@@ -1,0 +1,268 @@
+diff --git a/rust/src/economy.rs b/rust/src/economy.rs
+index 518a3b8..8bf12b6 100644
+--- a/rust/src/economy.rs
++++ b/rust/src/economy.rs
+@@ -372,12 +372,7 @@ impl Denoms {
+         let mut d = Denoms { values: [0; 8], len: 0 };
+         d.push(1);
+         for (id, _) in techs.of_type(kind) {
+-            let prod = id.get().production;
+-            let v = match kind {
+-                CardType::Farm => prod.food,
+-                CardType::Mine => prod.resources,
+-                CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater | CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air | CardType::Government | CardType::SpecialTech | CardType::Wonder | CardType::Leader | CardType::Action | CardType::Tactic | CardType::Aggression | CardType::War | CardType::Pact | CardType::Bonus | CardType::Territory | CardType::Event => 0,
+-            };
++            let v = production_denom(kind, &id.get().production);
+             if v > 0 && v <= u8::MAX as i16 {
+                 d.push(v as u8);
+             }
+@@ -399,6 +394,107 @@ impl Denoms {
+     }
+ }
+ 
++/// A farm/mine card's blue-token denomination: printed `food` for a farm,
++/// `resources` for a mine (§6.4), `0` for anything else. Shared by
++/// [`Denoms::of`] and [`worker_capped_production`] so a newly added
++/// `CardType` variant only ever needs handling in one exhaustive match
++/// (clippy denies `_ =>` wildcards -- DESIGN.md).
++fn production_denom(kind: CardType, prod: &crate::cards::Production) -> i16 {
++    match kind {
++        CardType::Farm => prod.food,
++        CardType::Mine => prod.resources,
++        CardType::Lab
++        | CardType::Temple
++        | CardType::Library
++        | CardType::Arena
++        | CardType::Theater
++        | CardType::Infantry
++        | CardType::Cavalry
++        | CardType::Artillery
++        | CardType::Air
++        | CardType::Government
++        | CardType::SpecialTech
++        | CardType::Wonder
++        | CardType::Leader
++        | CardType::Action
++        | CardType::Tactic
++        | CardType::Aggression
++        | CardType::War
++        | CardType::Pact
++        | CardType::Bonus
++        | CardType::Territory
++        | CardType::Event => 0,
++    }
++}
++
++/// §6.6 steps 3c/3e ("Food Production"/"Resource Production"): Code of Laws
++/// p.6's EXACT wording is WORKER-COUNT-based, not value-based -- "For each
++/// worker on your [farm/mine] technology cards, move ONE blue token from the
++/// blue bank to that card. If there are not enough tokens, move all that you
++/// can to the [farm/mine] technology cards, beginning with those of the
++/// highest level." This is a DIFFERENT rule from CoL p.11's general "gain N
++/// food/resources" (implemented by [`gain`]/[`tokens_for`], still correct
++/// for card/tactic effects -- see [`gain_food`]/[`gain_resources`]): once
++/// placed, a token on a level-L card is worth L regardless of how many
++/// workers or tokens are involved, but the number of NEW tokens the bank
++/// must supply this step is bounded by the WORKER count, not by the minimal
++/// token representation of the resulting total. The two models coincide for
++/// an all-denomination-1 tableau (a lone un-upgraded Bronze/Agriculture,
++/// where 1 worker always costs exactly 1 token either way) but diverge once
++/// a card is upgraded past level 1 with several workers on it, or when
++/// producing cards of different levels compete for a short bank -- see the
++/// `#[cfg(test)]` cases below and
++/// `analysis/worker_notes_2026-08-14/econcap__ECONCAP.txt`.
++///
++/// Returns the VALUE gained: at most `free` tokens are spent, one per
++/// worker, offered to cards in DESCENDING level order first (CoL p.6:
++/// "beginning with those of the highest level" -- when tokens are short,
++/// this is also the value-maximizing allocation, since moving a token to a
++/// lower-level card instead of a higher one still wanting tokens can only
++/// lose value).
++fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
++    // (denomination, summed worker count) pairs, one per DISTINCT
++    // denomination actually printed on a `kind` card in the tableau --
++    // multiple cards sharing a level pool their workers (the base game never
++    // actually has two simultaneously-owned farm or mine cards at the same
++    // printed level, but nothing here assumes that). Same fixed 8-slot
++    // capacity as `Denoms` (DESIGN.md rule 3): at most four levels per card
++    // type exist in the base game today.
++    let mut pairs: [(u16, u16); 8] = [(0, 0); 8];
++    let mut len = 0usize;
++    for (id, slot) in techs.of_type(kind) {
++        if slot.workers == 0 {
++            continue;
++        }
++        let v = production_denom(kind, &id.get().production);
++        if v <= 0 || v > u8::MAX as i16 {
++            continue;
++        }
++        let v = v as u16;
++        let workers = slot.workers as u16;
++        if let Some(ix) = pairs[..len].iter().position(|&(d, _)| d == v) {
++            pairs[ix].1 += workers;
++        } else {
++            debug_assert!(len < pairs.len(), "worker_capped_production pairs overflow");
++            pairs[len] = (v, workers);
++            len += 1;
++        }
++    }
++    pairs[..len].sort_unstable_by_key(|&(denom, _)| std::cmp::Reverse(denom));
++
++    let mut remaining = free;
++    let mut value: u16 = 0;
++    for &(denom, workers) in &pairs[..len] {
++        if remaining == 0 {
++            break;
++        }
++        let take = workers.min(remaining);
++        value += take * denom;
++        remaining -= take;
++    }
++    value
++}
++
+ /// Minimal number of blue tokens holding `amount`, greedy over `denoms`
+ /// (§6.4; 1 is always a present denomination in practice). NOT monotonic in
+ /// `amount`: e.g. with denominations `[3, 1]`, `amount=2` costs 2 tokens
+@@ -696,7 +792,23 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         }
+ 
+         // ---- 3c. food production --------------------------------------
+-        gain_food(p, s.food as u16);
++        // CoL p.6 caps this step by WORKER count on farm cards, not by
++        // `gain_food`'s value/denomination model -- see
++        // `worker_capped_production`. Anything `s.food` carries beyond the
++        // farm cards' own printed production (leader/wonder/government/
++        // special flat bonuses -- none of them are literally "a worker on a
++        // farm technology card") stays under the general CoL p.11 "gain"
++        // rule, spent from whatever blue tokens the farm-card production
++        // above didn't use.
++        {
++            let farm_full = worker_capped_production(&p.techs, CardType::Farm, u16::MAX);
++            let farm_got = worker_capped_production(&p.techs, CardType::Farm, blue_available(p));
++            p.food += farm_got;
++            let bonus_food = (s.food as u16).saturating_sub(farm_full);
++            if bonus_food > 0 {
++                gain_food(p, bonus_food);
++            }
++        }
+         if crate::debugflags::replay_debug_all() {
+             eprintln!("DEBUG end_of_turn post-production: idx={idx} food={} yellow_bank={}", p.food, p.yellow_bank);
+         }
+@@ -712,7 +824,16 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         }
+ 
+         // ---- 3e. resource production ----------------------------------
+-        gain_resources(p, s.resources as u16);
++        // Same CoL p.6 worker-count split as 3c's food production above.
++        {
++            let mine_full = worker_capped_production(&p.techs, CardType::Mine, u16::MAX);
++            let mine_got = worker_capped_production(&p.techs, CardType::Mine, blue_available(p));
++            p.resources += mine_got;
++            let bonus_resources = (s.resources as u16).saturating_sub(mine_full);
++            if bonus_resources > 0 {
++                gain_resources(p, bonus_resources);
++            }
++        }
+         if crate::debugflags::replay_debug_all() {
+             eprintln!(
+                 "DEBUG end_of_turn POST: idx={idx} resources={} food={} science={} culture={}",
+@@ -1380,6 +1501,52 @@ mod tests {
+         assert_eq!(blue_available(&p), 7);
+     }
+ 
++    // ------------------------------------------- worker_capped_production
++    //
++    // THE BUG (analysis/worker_notes_2026-08-14/econcap__ECONCAP.txt): CoL
++    // p.6's "Resource/Food Production" step is WORKER-COUNT-based ("for each
++    // worker on your mine/farm technology cards, move ONE blue token ...
++    // beginning with those of the highest level"), not the VALUE/
++    // denomination-based `gain`/`tokens_for` model that (correctly) governs
++    // CoL p.11's general "gain N resources" card effects. These two tests
++    // exercise `worker_capped_production` directly; the integration test
++    // below (`end_of_turn_resource_production_caps_by_worker_count_not_the_
++    // minimal_token_representation`) confirms it is actually wired into
++    // `end_of_turn`'s step 3e.
++
++    /// A card's value is irrelevant to how many tokens IT can absorb: a
++    /// level-2 mine with 3 workers can only ever receive 3 tokens (one per
++    /// worker), no matter how many more sit free in the bank. The old
++    /// value-based model had no such notion of "workers" at all -- it would
++    /// have kept granting value for as long as the bank could represent a
++    /// bigger total, i.e. unboundedly with enough free tokens.
++    #[test]
++    fn worker_capped_production_is_bounded_by_worker_count_not_by_free_tokens() {
++        let mut techs = Tableau::new();
++        techs.insert(card("Iron"), TechSlot { workers: 3, stored: 0 }); // level 2
++        assert_eq!(
++            worker_capped_production(&techs, CardType::Mine, 10),
++            6,
++            "3 workers * level 2 = 6, capped by workers even though 10 tokens are free"
++        );
++    }
++
++    /// CoL p.6, verbatim: "If there are not enough tokens, move all that you
++    /// can to the [farm/mine] technology cards, beginning with those of the
++    /// highest level." With only 2 free tokens and workers on both a
++    /// level-3 and a level-2 card, the level-3 card's worker must be
++    /// serviced first.
++    #[test]
++    fn worker_capped_production_services_the_highest_level_card_first_when_short() {
++        let mut techs = Tableau::new();
++        techs.insert(card("Iron"), TechSlot { workers: 3, stored: 0 }); // level 2
++        techs.insert(card("Coal"), TechSlot { workers: 1, stored: 0 }); // level 3
++        // Coal's 1 worker takes the first token (value 3), Iron's takes the
++        // second (value 2): 3 + 2 = 5. Servicing Iron first instead would
++        // still spend 2 tokens but only realize 2 + 2 = 4.
++        assert_eq!(worker_capped_production(&techs, CardType::Mine, 2), 5);
++    }
++
+     // =================================================== end-of-turn tests
+     //
+     // Everything below needs `effects::compute`, which dereferences
+@@ -1593,6 +1760,45 @@ mod tests {
+         );
+     }
+ 
++    /// THE BUG, wired end-to-end: reproduces the exact numbers found
++    /// hand-tracing BGO game 7521775 (round 15, Purple) --
++    /// `analysis/worker_notes_2026-08-14/econcap__ECONCAP.txt`. After
++    /// corruption (6) and food production leave exactly 1 free blue token,
++    /// a level-2 mine (Iron) staffed by 3 workers can supply only ONE of
++    /// those workers a token -- worth 2 -- per CoL p.6 ("for each worker...
++    /// move one blue token... if not enough, move all you can"). The OLD
++    /// value/denomination-based model (still correct for CoL p.11's general
++    /// "gain N resources" -- see the `gain_food`/`gain_resources` tests
++    /// above) wrongly allowed 3 there: reasoning about the SCALAR total (23
++    /// -> 26 needs only one more token in `tokens_for`'s minimal
++    /// representation) rather than which worker's token can actually move.
++    #[test]
++    fn end_of_turn_resource_production_caps_by_worker_count_not_the_minimal_token_representation() {
++        let mut st = duel();
++        {
++            let p = &mut st.players[0];
++            p.techs.insert(card("Iron"), TechSlot { workers: 3, stored: 0 }); // level 2
++            p.techs.insert(card("Selective Breeding"), TechSlot { workers: 2, stored: 0 }); // level 3
++            p.resources = 29;
++            p.food = 4;
++            p.blue_total = 17;
++            p.yellow_bank = 9; // consumption(9)=2, happy_required(9)=3
++            p.workers_free = 3; // >= discontent(3): no uprising
++        }
++        assert!(!uprising(&st, &st.players[0]), "the scenario must reach step 3 to exercise production");
++        assert!(end_of_turn(&mut st, 0));
++
++        // 29 - 6 (corruption) + 2 (1 of Iron's 3 workers gets the lone free
++        // token, worth its level, 2) = 25. The old model reached 26 here
++        // (see the doc comment above and the .txt handoff for the by-hand
++        // trace) -- reverting `worker_capped_production`'s call sites back
++        // to a plain `gain_resources(p, s.resources as u16)` turns this RED.
++        assert_eq!(
++            st.players[0].resources, 25,
++            "worker-count cap: only 1 free token this step, 1 worker's-worth of value (2), not the value-based 3"
++        );
++    }
++
+     /// Step 3c before step 3d: a civilization eats what it just grew.
+     #[test]
+     fn end_of_turn_feeds_the_population_from_this_turns_harvest() {

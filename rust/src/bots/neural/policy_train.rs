@@ -216,6 +216,13 @@ impl PolicyTrainer {
         assert!(n > 0, "train_decision: no legal moves");
         self.ensure_capacity(n);
         let mut logits = Vec::with_capacity(n);
+        // Real fix would zip several parallel arrays/struct-of-arrays fields
+        // (some self-field-borrowed, some 2D via a flat row/col slice) in a
+        // dense numeric training hot loop -- correctness here is gradient
+        // correctness, which a misaligned hand-written zip could silently
+        // break with no compiler error and no obvious test failure. Not worth
+        // that risk for a style lint; the loop is otherwise unremarkable.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             debug_assert_eq!(rows[i].len(), self.net.in_dim, "train_decision: row {i} width");
             widen_into(&rows[i], &mut self.conv[i]);
@@ -223,6 +230,13 @@ impl PolicyTrainer {
             logits.push(y);
         }
         let (loss, dlogits) = softmax_cross_entropy(&logits, chosen);
+        // Real fix would zip several parallel arrays/struct-of-arrays fields
+        // (some self-field-borrowed, some 2D via a flat row/col slice) in a
+        // dense numeric training hot loop -- correctness here is gradient
+        // correctness, which a misaligned hand-written zip could silently
+        // break with no compiler error and no obvious test failure. Not worth
+        // that risk for a style lint; the loop is otherwise unremarkable.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             backward_train(&self.net, &self.caches[i], &self.conv[i], dlogits[i] * scale, &mut self.grad, &mut self.scratch);
         }
@@ -341,6 +355,12 @@ fn epoch_verdict(top1: f64, best_top1: f64, min_delta: f64) -> EpochVerdict {
     EpochVerdict { is_new_best: top1 > best_top1, resets_patience: top1 > best_top1 + min_delta }
 }
 
+// Grouping these into a config struct is a real fix but a larger,
+// cross-cutting refactor (every call site would need updating too) --
+// out of scope for this lint-gate pass, which must not change behaviour.
+// The argument list itself is stable and each parameter is unambiguous
+// at every call site.
+#[allow(clippy::too_many_arguments)]
 pub fn train_until_early_stop(
     trainer: &mut PolicyTrainer,
     train: &[DecisionRecord],

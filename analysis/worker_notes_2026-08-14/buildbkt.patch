@@ -1,0 +1,314 @@
+diff --git a/rust/src/replay_common.rs b/rust/src/replay_common.rs
+index 894ab67..f76d46a 100644
+--- a/rust/src/replay_common.rs
++++ b/rust/src/replay_common.rs
+@@ -1528,33 +1528,73 @@ impl<'a> Replayer<'a> {
+                     ChoiceKind::Raid { .. } => {
+                         let stop_idx =
+                             c.options.as_slice().iter().position(|o| matches!(o, ChoiceOption::Word(Keyword::Stop)));
+-                        let n = loop {
+-                            if let Some(&card) = self.raid_destroys.front() {
+-                                if let Some(idx) = c
+-                                    .options
+-                                    .as_slice()
+-                                    .iter()
+-                                    .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+-                                {
+-                                    self.raid_destroys.pop_front();
+-                                    break idx;
+-                                }
++                        let matches_options = |card: CardId| {
++                            c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
++                        };
++                        // Discard any LEADING entries that don't match this
++                        // choice's own options at all -- orphaned answers to
++                        // an earlier, already auto-resolved single-candidate
++                        // Raid/Terrorism (see this arm's own doc) -- same
++                        // cleanup the old front-only loop already did.
++                        while let Some(&card) = self.raid_destroys.front() {
++                            if matches_options(card) {
++                                break;
+                             }
+-                            if let Some(idx) = stop_idx {
+-                                break idx;
++                            self.raid_destroys.pop_front();
++                        }
++                        // ENGINE BUG this closes (found chasing the
++                        // `IllegalMove: Build` bucket's `workers_free == 0`
++                        // sub-cluster, 2026-08-14 session, game `7522513`
++                        // round 13): a real Raid II/III has TWO or THREE
++                        // brackets with NESTED, not independent, eligibility
++                        // (`interact.rs`'s `QueueItem::Raid`: `id.level() <=
++                        // max_lv`, RULES_SPEC.md's "one of level 0-1 AND one
++                        // of level 0-2") -- a low-level casualty can satisfy
++                        // EITHER bracket while a high-level one can only ever
++                        // satisfy the WIDE one. The journal's own `"Raid
++                        // casualties ..."` line lists them by CARD NAME, not
++                        // bracket-resolution order (confirmed: `7522513`
++                        // prints "1 Alchemy; 1 Organized Religion", plain
++                        // alphabetical order, and Organized Religion, level
++                        // II, is not even a legal option for the level-0-1
++                        // bracket) -- so taking whichever matching FIFO entry
++                        // came first, as this code used to, can hand the
++                        // WIDE bracket a casualty that the NARROW bracket
++                        // could ALSO have taken, stranding the high-level one
++                        // with nowhere left to go and wrongly declining it
++                        // (`Stop`), permanently under-counting the victim's
++                        // `workers_free` by one destroyed building's worth.
++                        // Fix: among the CONTIGUOUS run of entries that DO
++                        // match this bracket's own options (this bracket's
++                        // own casualty group -- a non-match ends the run,
++                        // the same boundary the leading-discard loop above
++                        // already trusts), prefer the HIGHEST-level one --
++                        // it has the fewest alternative homes -- leaving
++                        // lower-level, more flexible entries in the FIFO for
++                        // whichever bracket opens next.
++                        let mut best: Option<(usize, CardId)> = None;
++                        for (i, &card) in self.raid_destroys.iter().enumerate() {
++                            if !matches_options(card) {
++                                break;
+                             }
+-                            if self.raid_destroys.front().is_none() {
+-                                return Err(MismatchKind::StuckPending(format!(
+-                                    "Raid choice open for player {decider} but no journal-observed \
+-                                     Raid/Terrorism destroy line left to resolve it with"
+-                                )));
++                            if best.is_none_or(|(_, b)| card.level() > b.level()) {
++                                best = Some((i, card));
+                             }
+-                            // Terrorism, no `Stop` offered: belongs to an
+-                            // earlier, single-option Raid/Terrorism this same
+-                            // game already auto-resolved silently (see this
+-                            // arm's own doc) -- not this choice's answer,
+-                            // skip past it and keep looking.
+-                            self.raid_destroys.pop_front();
++                        }
++                        let n = if let Some((fifo_idx, card)) = best {
++                            self.raid_destroys.remove(fifo_idx);
++                            c.options
++                                .as_slice()
++                                .iter()
++                                .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
++                                .expect("just matched by matches_options above")
++                        } else if let Some(idx) = stop_idx {
++                            idx
++                        } else {
++                            return Err(MismatchKind::StuckPending(format!(
++                                "Raid choice open for player {decider} but no journal-observed \
++                                 Raid/Terrorism destroy line left to resolve it with"
++                            )));
+                         };
+                         apply::apply(&mut self.state, Move::Choose { n: n as u8 });
+                         continue;
+@@ -3495,6 +3535,43 @@ fn spent_food_after_resource(text: &str) -> i32 {
+     rest[..digits_end].parse().unwrap_or(0)
+ }
+ 
++/// The TOTAL a build/upgrade/wonder-stage line states it paid, INCLUDING a
++/// Trade-Routes-Agreement food clause -- [`total_paid_for_build`]'s own
++/// resource-only total plus [`spent_food_after_resource`]'s optional food
++/// clause, but unlike a bare `.map()` composition of the two, still returns
++/// a real total when the WHOLE payment was converted food and no `"spends N
++/// resources"`/`"loses N military resource"` clause appears on the line at
++/// all.
++///
++/// ENGINE BUG this fixes (found chasing the `IllegalMove: Build` bucket,
++/// 2026-08-14 session, game `7522518` round 4: `"Orange builds 1 stage of
++/// Pyramids Orange spends 1 food; ; Wonder completed"`, Orange holding an
++/// accepted Trade Routes Agreement as side A): [`total_paid_for_build`]
++/// returns `None` for this line (correctly -- it only ever reads the
++/// resource-shaped clauses, per its own doc, and must keep doing so for its
++/// OTHER caller, [`resolve_named_card_by_effect`], which solves for a
++/// resource DISCOUNT and would be wrongly fed a food-derived number). But
++/// every caller further down this file that wants "how much did this line
++/// TOTAL" was composing that `None` with `.map(|base| base +
++/// spent_food_after_resource(...))`, which stays `None` for an all-food
++/// line -- indistinguishable from [`total_paid_for_build`]'s OWN `None`
++/// case, a genuinely free build/upgrade/wonder-stage with no clause at all
++/// (`total_paid_for_build("Purple builds 1 stage of Pyramids")` == `None`,
++/// its own doc-tested case). [`convert_trade_food_shortfall`]'s gate below
++/// then silently skipped the whole conversion, leaving the caller's own
++/// `Move::Build`/`Move::WonderStep`/`Move::Upgrade` to charge `true_cost`
++/// straight out of `p.resources` -- resources the real player never spent,
++/// permanently short for the rest of the game (exactly this bucket's
++/// dominant "resources short by 1" signature).
++fn stated_build_payment(text: &str) -> Option<i32> {
++    let food = spent_food_after_resource(text);
++    match total_paid_for_build(text) {
++        Some(base) => Some(base + food),
++        None if food > 0 => Some(food),
++        None => None,
++    }
++}
++
+ /// Converts whatever shortfall Trade Routes Agreement's side-A "1 food as 1
+ /// resource" grant (`Move::TradeFoodAsResource`, §5.9) explains between `p`'s
+ /// CURRENT resources and `true_cost`, as that many `Move::TradeFoodAsResource`
+@@ -3505,19 +3582,20 @@ fn spent_food_after_resource(text: &str) -> i32 {
+ /// doc comment for why the direction differs: Pop is priced in food, a
+ /// build/upgrade/wonder-stage is priced in resources).
+ ///
+-/// Gated on the journal's OWN stated total ([`total_paid_for_build`] plus
+-/// [`spent_food_after_resource`]'s optional food clause) matching
+-/// `true_cost` EXACTLY: if they disagree, the real bug is a mispriced cost
+-/// (a missing discount, drifted resources, ...), not a missing conversion,
+-/// and converting food here would only mask that bug behind a
+-/// wrong-for-a-different-reason success (docs/REPLAY.md's Civil Life
+-/// warning: never loosen a check just to make a mismatch disappear). A
+-/// caller whose gate does not hold gets `shortfall == 0` and this is a
+-/// no-op -- every existing failure mode this function does not explain is
+-/// unchanged, it only ever ADDS a path to success.
++/// Gated on the journal's OWN stated total ([`stated_build_payment`],
++/// [`total_paid_for_build`] plus [`spent_food_after_resource`]'s optional
++/// food clause, including the all-food case) matching `true_cost` EXACTLY:
++/// if they disagree, the real bug is a mispriced cost (a missing discount,
++/// drifted resources, ...), not a missing conversion, and converting food
++/// here would only mask that bug behind a wrong-for-a-different-reason
++/// success (docs/REPLAY.md's Civil Life warning: never loosen a check just
++/// to make a mismatch disappear). A caller whose gate does not hold gets
++/// `shortfall == 0` and this is a no-op -- every existing failure mode this
++/// function does not explain is unchanged, it only ever ADDS a path to
++/// success.
+ fn convert_trade_food_shortfall(r: &mut Replayer, actor: u8, raw_text: &str, true_cost: i32) -> Result<(), MismatchKind> {
+     let p = &r.state.players[actor as usize];
+-    let stated = total_paid_for_build(raw_text).map(|base| base + spent_food_after_resource(raw_text));
++    let stated = stated_build_payment(raw_text);
+     // Convert exactly the food the journal ITSELF says was spent, not a
+     // shortfall derived from what the player could have afforded without the
+     // pact. A human may use the conversion even when their plain resources
+@@ -7278,7 +7356,7 @@ fn apply_one(
+             }
+             maybe_synthesize_churchill_military(r, actor, raw_text)?;
+             if let (Some(want), Some(got)) = (
+-                total_paid_for_build(raw_text).map(|base| base + spent_food_after_resource(raw_text)),
++                stated_build_payment(raw_text),
+                 costs::build_cost_for(&r.state, &r.state.players[actor as usize], card),
+             ) {
+                 if want != got {
+@@ -9896,6 +9974,61 @@ mod tests {
+         assert_eq!(r.state.players[0].food, 3);
+     }
+ 
++    /// A build/upgrade/wonder-stage paid ENTIRELY in converted food -- no
++    /// `"spends N resources"`/`"loses N military resource"` clause on the
++    /// line at all, only the food one. `total_paid_for_build` correctly
++    /// stays `None` for this line (it must, for `resolve_named_card_by_
++    /// effect`'s unrelated resource-discount solve), but that must not make
++    /// the WHOLE stated payment look like `None` too, indistinguishable
++    /// from a genuinely free build/upgrade/wonder-stage this function
++    /// deliberately does nothing for. Before `stated_build_payment` existed,
++    /// `convert_trade_food_shortfall`'s own `.map()` composition of the two
++    /// stayed `None` here, the conversion never fired, and the caller's own
++    /// `Move::WonderStep`/`Move::Build`/`Move::Upgrade` charged `true_cost`
++    /// straight out of `p.resources` -- resources the real player never
++    /// touched. Repro: game `7522518` round 4, `"Orange builds 1 stage of
++    /// Pyramids Orange spends 1 food; ; Wonder completed"`.
++    #[test]
++    fn convert_trade_food_shortfall_covers_a_build_paid_entirely_in_food() {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.round = 2;
++        give_trade_routes_side_a(&mut r);
++        r.state.players[0].resources = 3;
++        r.state.players[0].food = 4;
++
++        convert_trade_food_shortfall(&mut r, 0, "Orange builds 1 stage of Pyramids Orange spends 1 food", 1)
++            .expect("converting the stated food is a legal move in this position");
++
++        assert_eq!(r.state.players[0].resources, 4, "the converted food must land in resources");
++        assert_eq!(r.state.players[0].food, 3, "and must come out of food, not be a phantom free build");
++    }
++
++    /// `stated_build_payment` itself: the three shapes it must tell apart --
++    /// resource-only, all-food, and genuinely free (`total_paid_for_build`'s
++    /// own doc-tested free-build case) -- confirmed RED (returned `None` for
++    /// the all-food case, indistinguishable from free) by reverting
++    /// `stated_build_payment` to a bare `total_paid_for_build(text).map(|base|
++    /// base + spent_food_after_resource(text))` before this fix.
++    #[test]
++    fn stated_build_payment_tells_all_food_apart_from_genuinely_free() {
++        assert_eq!(stated_build_payment("Purple builds Bronze Purple spends 2 resources"), Some(2));
++        assert_eq!(
++            stated_build_payment("Orange upgrades Philosophy to Alchemy Orange spends 2 resources; Orange spends 1 food"),
++            Some(3)
++        );
++        assert_eq!(
++            stated_build_payment("Orange builds 1 stage of Pyramids Orange spends 1 food"),
++            Some(1),
++            "paid entirely in converted food -- not the same as free"
++        );
++        assert_eq!(
++            stated_build_payment("Purple builds 1 stage of Pyramids"),
++            None,
++            "no clause at all is a genuinely free build, still None"
++        );
++    }
++
+     #[test]
+     fn parse_defense_clauses_reads_a_single_bonus_card_and_skips_the_strength_trailer() {
+         let text = "Orange defends 1 Defense card +6 played; Orange strength: 26; Purple strength: 26";
+@@ -11253,6 +11386,64 @@ mod tests {
+         );
+     }
+ 
++    /// A real Raid II's two NESTED-eligibility brackets (`interact.rs`'s
++    /// `QueueItem::Raid`: `id.level() <= max_lv`) must not be resolved by
++    /// blind FIFO order. Repro: game `7522513` round 13, Raid II against
++    /// Green -- journal line `"Raid casualties 1 Alchemy; 1 Organized
++    /// Religion"` (plain alphabetical order, NOT bracket-resolution order).
++    /// Organized Religion (level II) is only a legal option for the WIDE
++    /// (level 0-2) bracket; Alchemy (level <=I) is legal for either. The
++    /// WIDE bracket opens first (`card_table.rs`'s `DestroyUrbanBuildings(&
++    /// [Age::II, Age::I])`, widest-listed-first). Taking the FIFO's front
++    /// entry (Alchemy) for the wide bracket, as this code used to, leaves
++    /// Organized Religion impossible for the narrow bracket that opens next
++    /// (not among its options at all) -- it gets wrongly declined (`Stop`),
++    /// permanently under-counting Green's `workers_free` by one. The fix:
++    /// prefer the HIGHEST-level matching FIFO entry for the CURRENT
++    /// bracket, since a higher level has fewer alternative homes.
++    #[test]
++    fn resolve_intervening_prefers_the_highest_level_raid_casualty_for_a_wide_bracket_leaving_a_lower_level_one_for_the_narrow_bracket_that_opens_next(
++    ) {
++        let card_index = build_card_index();
++        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
++        r.state.phase = Phase::Actions;
++        let alchemy = CardId::by_name("Alchemy").expect("Alchemy is a known urban building");
++        let organized_religion = CardId::by_name("Organized Religion").expect("Organized Religion is a known urban building");
++        assert!(
++            organized_religion.level() > alchemy.level(),
++            "the repro depends on Organized Religion outranking Alchemy"
++        );
++        r.state.players[1].techs.insert(alchemy, crate::state::TechSlot { workers: 1, stored: 0 });
++        r.state.players[1].techs.insert(organized_religion, crate::state::TechSlot { workers: 1, stored: 0 });
++        // The WIDE (level 0-2) bracket: both casualties are legal options.
++        let mut wide_options = crate::state::OptionList::new();
++        wide_options.push(ChoiceOption::Card(alchemy));
++        wide_options.push(ChoiceOption::Card(organized_religion));
++        wide_options.push(ChoiceOption::Word(Keyword::Stop));
++        r.state.pending.push(Pending::Choice(Choice { player: 0, kind: ChoiceKind::Raid { victim: 1, loot: false }, options: wide_options }));
++        // Journal order (alphabetical, not bracket order): Alchemy first.
++        r.raid_destroys = VecDeque::from([alchemy, organized_religion]);
++
++        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
++
++        assert!(result.is_ok(), "{result:?}");
++        assert_eq!(
++            r.state.players[1].techs.workers(organized_religion),
++            0,
++            "the wide bracket must spend its slot on the higher-level casualty"
++        );
++        assert_eq!(
++            r.state.players[1].techs.workers(alchemy),
++            1,
++            "the lower-level casualty, eligible for either bracket, must be left for the narrow one"
++        );
++        assert_eq!(
++            r.raid_destroys.as_slices().0,
++            &[alchemy],
++            "only the picked casualty leaves the FIFO -- the other stays for the next bracket"
++        );
++    }
++
+     /// [`parse_terrorism_destroy_line`]: the Terrorism event's own
+     /// destruction line names the VICTIM's colour, not an attacker -- this
+     /// must still resolve the destroyed card's identity.

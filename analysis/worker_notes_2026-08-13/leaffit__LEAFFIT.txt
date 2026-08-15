@@ -1,0 +1,417 @@
+LEAFFIT -- regression fit of the leaf-evaluation weight vector on real human
+game outcomes, and match play against the live 2p champion.
+=============================================================================
+
+HEADLINE (MEASURED, n=1000 games = 500 seat-paired deals, 2 players):
+  UNCONSTRAINED fit vs champion_2p_now.json (gen 39258):
+    win rate 3.2% +/- 1.1  (null 50.0%, p = 0.0000)   REJECT -- decisively worse
+  SIGN-CONSTRAINED fit vs the same champion, same n:
+    win rate 3.1% +/- 1.1  (null 50.0%, p = 0.0000)   REJECT -- decisively worse
+  Both intervals are far clear of the 50% null -- NOT inconclusive, a clean loss.
+  Seat arrangement: arena's own seat-paired design (arena.rs's own doc
+  comment) -- each of the 500 deals is played twice with the challenger
+  rotated through every seat, so the unfair-seating-order confound (more
+  civil actions for an earlier seat) cancels exactly rather than being
+  averaged over.
+
+THIS IS A NEGATIVE RESULT, reported plainly as the task instructions
+require: fitting the leaf evaluation by logistic regression on real human
+outcomes, in the form implemented here, produces a WORSE 2p player than the
+existing hill-climbed champion, not a better one. See "WHY IT LOST (MEASURED
+vs HYPOTHESISED)" below for what is actually known about the cause.
+
+=============================================================================
+SETUP
+=============================================================================
+Workspace: /private/tmp/leaffit (cp -Rc of /private/tmp/leafreg, which is
+itself LEAFREG.txt's own workspace -- read FIRST, per instructions).
+Dataset copied aside before starting any fitting work, to:
+  /private/tmp/leaffit_workspace/leaf_dataset.tsv.bak
+  md5 419c21f2d00d198b71d6dcb0610b76fe -- matches /tmp/leaf_dataset.tsv and
+  /private/tmp/leaf_dataset.tsv at task start (all three identical).
+Dataset: 63,917 decision rows x 163 columns (game_id, players, seat, round,
+156 WeightKey feature columns in WeightKey::ALL declaration order, win,
+final_score, final_rank), from 222 real BGO human games that replayed to a
+verified engine outcome (LEAFREG.txt's own task 2 measured this exactly:
+2p=52,400 rows/193 games, 3p=8,367 rows/23 games, 4p=3,150 rows/6 games --
+193+23+6 = 222, matches).
+
+The dot-product identity `evaluate(state) == dot(weights, linear_features(
+state))` was already proven exactly (max error 1.4e-13) on 6,457 real
+replayed positions by a prior task (LEAFREG.txt task 1) -- this task did not
+re-derive that identity, only relies on it: `leafdump`'s feature columns ARE
+`linear_features(state)`, so a linear fit on them is a fit of the actual
+evaluator, and (see "round-trip ordering check" below) `Weights::get` read
+back in `WeightKey::ALL` order reproduces the same dot product the fit
+itself computed, with no re-derivation of `evaluate` needed here.
+
+=============================================================================
+CODE
+=============================================================================
+rust/src/bin/leaffit.rs (new binary, ~470 lines with tests). Style follows
+rust/src/human_policy.rs's conventions (Normalizer, vector_to_weights reused
+directly from that module, not reimplemented). 5 new #[cfg(test)] tests,
+full-sentence names, all confirmed RED by breaking the thing under test and
+rerunning (transcript below), then restored and reconfirmed GREEN:
+  - split_of_is_deterministic_and_hits_all_three_buckets_over_real_looking_ids
+  - parse_tsv_rejects_a_header_whose_feature_columns_are_not_in_weight_key_order
+    RED transcript: with the header-order check replaced by a no-op,
+    `parse_tsv` silently accepted a REVERSED WeightKey column order; the test
+    failed with "a reversed feature column order must be rejected, not
+    silently accepted". Restored, reran clean.
+  - denormalizing_a_fit_preserves_pairwise_score_ordering_over_raw_features
+  - sign_constrained_training_never_produces_a_coefficient_that_violates_its_declared_intent
+    RED transcript: with the sign-projection step replaced by a no-op inside
+    the Adam loop, the constrained fit on a toy dataset (feature negatively
+    correlated with winning) converged to w[0] = -5.607 despite being told
+    that coordinate is NonNegative; the assertion failed with "a
+    NonNegative-constrained coefficient must never go negative, got
+    -5.607360570438825". Restored, reran clean.
+  - vector_to_weights_then_dot_product_matches_the_raw_slice_dot_product_in_weight_key_order
+All 5 pass: `cd rust && cargo test --profile difftest --bin leaffit --
+--test-threads=1` -> "test result: ok. 5 passed; 0 failed".
+
+=============================================================================
+METHOD
+=============================================================================
+Plain logistic regression of `win` (0/1) on the 156 standardised feature
+columns (mean/std fit on TRAIN only, applied to every split), full-batch
+Adam (no external optimizer crate -- Cargo.toml's [dependencies] stays
+empty), L2-regularised. This is a MARGINAL state-value regression (one row =
+one state, no candidate-move grouping), per the task's explicit
+instruction ("Logistic regression of `win` on the 156 feature columns") --
+NOT the conditional-logit "which move did the human pick" model
+`human_policy::train` already implements for a different project. See "WHY
+IT LOST" for why this distinction plausibly matters.
+
+SPLIT BY GAME, NEVER BY ROW (MEASURED game-level split sizes):
+  FNV-1a hash of game_id, %10: {0,1}->test (~20%), {2,3}->val (~20%),
+  {4..9}->train (~60%). Deterministic, same construction as
+  human_policy::is_held_out, widened from 2 buckets to 3.
+
+  Split   2p games   3p games   4p games   total games
+  train      112         11          2         125
+  val         49          6          2          57
+  test        32          6          2          40
+  TOTAL      193         23          6         222
+
+  Row counts: train=35,606  val=16,415  test=11,896  (train+val=52,021)
+
+L2 chosen by GRID SEARCH on validation log-loss (NOT picked by hand):
+  candidates {0, 1e-4, 1e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1, 3, 10}, 400 epochs
+  each on TRAIN only, evaluated on VAL:
+    l2=0        val_logloss=0.67961  val_acc=0.6222
+    l2=0.0001   val_logloss=0.67848  val_acc=0.6223
+    l2=0.001    val_logloss=0.67042  val_acc=0.6225
+    l2=0.01     val_logloss=0.64037  val_acc=0.6266
+    l2=0.03     val_logloss=0.62344  val_acc=0.6319
+    l2=0.1      val_logloss=0.61699  val_acc=0.6370   <- chosen (lowest val logloss)
+    l2=0.3      val_logloss=0.62748  val_acc=0.6378
+    l2=1        val_logloss=0.65110  val_acc=0.6431
+    l2=3        val_logloss=0.67145  val_acc=0.6385
+    l2=10       val_logloss=0.68409  val_acc=0.5928
+Chosen l2=0.1. Final models refit on TRAIN+VAL (52,021 rows) at that l2,
+1500 epochs, normalizer refit on train+val; reported ONLY on the untouched
+TEST split (11,896 rows / 40 games), which was never used for L2 selection
+or for either final fit.
+
+=============================================================================
+HELD-OUT RESULTS (MEASURED, test split, vs base rate)
+=============================================================================
+Base rate here = the TRAIN+VAL win frequency (0.4785) used as the constant
+prediction; per-player-count rows also report that subset's OWN local base
+rate for a fair majority-class comparison.
+
+UNCONSTRAINED fit:
+  overall (11,896 rows, 40 games): accuracy 0.6821 (base rate 0.5314),
+    logloss 0.58143 (base rate 0.69138)
+  2p (8,701 rows, 32 games): accuracy 0.6668 (base rate 0.5280),
+    logloss 0.59373 (base rate 0.69158)
+  3p (2,144 rows, 6 games): accuracy 0.7043 (base rate 0.6679),
+    logloss 0.58318 (base rate 0.63565)
+  4p (1,051 rows, 2 games): accuracy 0.7631 (base rate 0.7441),
+    logloss 0.47604 (base rate 0.56877)
+    -- 4p rests on only 2 held-out games; report but do not lean on it.
+
+SIGN-CONSTRAINED fit:
+  overall (11,896 rows, 40 games): accuracy 0.6900 (base rate 0.5314),
+    logloss 0.58067 (base rate 0.69138)
+  2p (8,701 rows, 32 games): accuracy 0.6739 (base rate 0.5280),
+    logloss 0.59325 (base rate 0.69158)
+  3p (2,144 rows, 6 games): accuracy 0.7215 (base rate 0.6679),
+    logloss 0.58030 (base rate 0.63565)
+  4p (1,051 rows, 2 games): accuracy 0.7583 (base rate 0.7441),
+    logloss 0.47729 (base rate 0.56877)
+    -- same 2-game caveat as above.
+
+Both fits beat the base rate comfortably on every player count with enough
+held-out games to matter (2p, 3p) -- this is a real, measured predictive
+signal for "who wins", not noise. It does NOT translate into a better
+1-ply move-ranking function; see match play above and "WHY IT LOST" below.
+
+=============================================================================
+SIGN AUDIT (MEASURED) -- every fitted coefficient contradicting WeightKey::sign_intent
+=============================================================================
+On the UNCONSTRAINED fit's raw (denormalized) coefficients, 7 of 156
+coordinates contradict their declared sign intent (all SMALL in magnitude --
+none exceed 0.094 in absolute value, out of a fitted vector whose largest
+coefficient anywhere is 1.14):
+
+  pop_cost            = +0.016197  declared NonPositive ("prices a rulebook
+                          population-growth cost as an upside")
+  wonder_overrun      = +0.050548  declared NonPositive ("prices an unpaid
+                          wonder debt as an upside")
+  wonder_age_overrun  = +0.050548  declared NonPositive (same rule)
+  food_gap            = +0.006948  declared NonPositive ("prices a marginal-
+                          need shortfall")
+  worker_gap          = +0.031768  declared NonPositive (same rule)
+  hand_limit          = -0.093988  declared NonNegative ("scales a printed
+                          benefit")
+  hand_value          = -0.006472  declared NonNegative ("hand_value's
+                          feature is always >= 0")
+
+Not silently clamped -- these are reported as found. Given their small
+magnitude relative to the fit's own scale, this reads more like mild
+regression noise on rarely-informative coordinates than a structural
+mistuning, but it is reported in full per the instructions rather than
+characterised away.
+
+What arena's OWN load path (`eval::dominance_repair`, called by
+`eval::load_weights`, which `arena --a`/`--b` always uses) does to each fit
+at load time -- called DIRECTLY here (not only inferred from round-tripping
+through JSON), so this is exact:
+  UNCONSTRAINED: 7 violations found and repaired (all 7 above, each set to
+    its gate boundary/0.0 -- see eval::dominance_repair's own rule text,
+    reproduced verbatim in fit_out/leaffit_metrics.txt).
+  SIGN-CONSTRAINED: 0 violations -- passes through dominance_repair
+    UNCHANGED, exactly as expected (it was fit under the same constraints
+    dominance_repair enforces).
+
+=============================================================================
+SECOND FIT: SIGN-CONSTRAINED (MEASURED)
+=============================================================================
+Same data, same chosen L2, same optimizer, but a per-coordinate PROJECTED
+gradient step: after every Adam update, a coordinate whose WeightKey::
+sign_intent is NonNegative/NonPositive is clipped back to 0.0 if it crossed
+that boundary -- a true projected-gradient fit of the CONSTRAINED optimum,
+not a post-hoc clamp of the unconstrained one. Confirmed to produce zero
+sign violations (see above) and to be a genuinely different vector from the
+unconstrained fit (not merely the same vector with 7 coordinates zeroed --
+e.g. best_theater/leader appear in the constrained fit's own top-20 list but
+not the unconstrained one's).
+
+=============================================================================
+LARGEST-MAGNITUDE FITTED COEFFICIENTS (MEASURED) -- and the colony/bid check
+=============================================================================
+A parallel worker measured that colony-auction BID decisions cost ~188
+evaluation points per shortlist miss in the CURRENT champion's play -- 17 to
+40x any other decision category -- and asked whether that is a genuine
+tuning signal or a SCALING defect. This fit's own top-20 largest-magnitude
+coefficients (both fits, raw/denormalized units, the units `evaluate` reads):
+
+  UNCONSTRAINED top 8:            SIGN-CONSTRAINED top 8:
+  pact_blocks_attack  -1.137      pact_blocks_attack  -1.083
+  no_aggression       +0.334      no_aggression       +0.339
+  has_unit            -0.184      has_unit            -0.206
+  best_library        +0.184      best_library         +0.189
+  pacts               -0.158      pacts                -0.155
+  uprising            -0.140      rival_free_ca        -0.127
+  rival_free_ca       -0.122      uprising             -0.120
+  urban_limit         +0.108      rival_mil_actions    -0.103
+
+Colony/auction-related coordinates specifically, in the UNCONSTRAINED fit
+(sign-constrained values are nearly identical, both listed for completeness):
+  colonies         (own colony count):  +0.0653 unconstrained / +0.0605 constrained
+  colonize_bonus:                       -0.0146 / -0.0121
+  rival_colonies:                       -0.1031 / -0.1013
+  auction_bid:                           0.0000 / 0.0000
+  auction_committed:                     0.0000 / 0.0000
+  aggression_board_credit:               0.0000 / 0.0000
+  war_board_credit:                      0.0000 / 0.0000
+
+MEASURED, and directly relevant to the scaling-vs-tuning question:
+  - `auction_bid` and `auction_committed` are NONZERO IN ZERO of the 63,917
+    rows in this whole corpus (checked directly against the raw TSV
+    columns). This fit has NO real-game evidence at all to speak to those
+    two coordinates -- they were never observed, so the regression correctly
+    left them at their zero-initialized value. This neither confirms nor
+    refutes the ~188-point-per-miss finding; it is a DATA COVERAGE gap in
+    this corpus (leafdump snapshots the state a decision is made FROM, not
+    the mid-auction candidate-trial states a search evaluates), not a
+    measurement this fit can make either way.
+  - `colonies` (the acting player's OWN colony count, `p.colonies.len()`,
+    confirmed by reading features.rs:557) fires in 38.7% of rows (24,752/
+    63,917) -- plenty of real signal. The CURRENT 2p champion prices it at
+    -2.09 (i.e. treats owning more colonies as a substantial PENALTY). This
+    fit, trained directly on real human win outcomes, prices the identical
+    coordinate at a small POSITIVE +0.065/+0.061. That is a SIGN FLIP on a
+    well-observed, non-gated (`Free`-classified, so never auto-repaired)
+    coordinate between the champion and what real outcomes support -- this
+    reads like a genuine TUNING defect in the champion's `colonies`
+    coefficient specifically, not a scaling artifact, though it was not
+    investigated further here (out of this task's scope).
+  - Overall vector SCALE differs enormously: L2 norm of the champion's 158
+    stored weights is 182.4 (mean |w|=5.20, max |w|=60.0); this fit's L2
+    norm is 1.30 unconstrained / 1.25 constrained (mean |w| ~0.032, max |w|
+    ~1.1) -- roughly 140x smaller. Per the task's own framing, an overall
+    POSITIVE scalar multiple of the whole vector cannot change which
+    candidate move a single 1-ply argmax picks (see "Standardise-then-
+    denormalise" in leaffit.rs's own doc comment for the algebra), so this
+    alone does not explain a 3% match-play result by itself -- but see "WHY
+    IT LOST" below for why it is flagged as a live hypothesis anyway.
+
+=============================================================================
+ROUND-TRIP ORDERING CHECK (MEASURED)
+=============================================================================
+Sampled 1000 TEST rows; for each fit, compared the SCORE ORDERING computed
+two ways: (a) `dot(w_raw, features)` directly, the fitted model's own
+ranking, vs (b) `Weights::get` read back key-by-key in WeightKey::ALL order
+AFTER `eval::dominance_repair` (the exact path `arena --a`/`--b` runs on
+load) -- pairwise concordance over a ~200x200 subsample of pairs:
+  UNCONSTRAINED:      19030/20100 pairs agree (94.68%) -- the 7 sign
+    violations' repair measurably moves some pairwise comparisons, as
+    expected (a coordinate being zeroed changes relative scores for rows
+    where it fired).
+  SIGN-CONSTRAINED:   20100/20100 pairs agree (100.00%) -- exact, because
+    dominance_repair found nothing to change.
+Separately (not part of this sampled check, but exact by construction):
+`vector_to_weights_then_dot_product_matches_the_raw_slice_dot_product_in_
+weight_key_order` (unit test, see above) confirms bit-for-bit that packing a
+raw fitted vector into `Weights` and reading it back via `WeightKey::ALL`
+reproduces the identical dot product -- the indexing itself never scrambles
+anything; the 94.68% figure above is ENTIRELY attributable to
+dominance_repair's 7 real sign repairs, not to any round-trip bug.
+This, combined with the already-proven `evaluate(state) == dot(weights,
+linear_features(state))` identity (LEAFREG.txt task 1, not re-derived here),
+is what licenses "loading the weights.json and calling evaluate() ranks
+states the same way the fitted model does" for the sign-constrained fit
+exactly, and for the unconstrained fit modulo the 7 listed, small-magnitude
+repairs.
+
+=============================================================================
+MATCH PLAY (MEASURED, the measurement that decides it)
+=============================================================================
+Champion: /private/tmp/leaffit/champion_2p_now.json (gen 39258, confirmed by
+NOTES.md as "the unmodified live 2p champion" in this workspace), COPIED
+ASIDE to fit_out/champion_2p_defender.json before use, per instructions --
+arena was pointed at the copy.
+
+  arena --a fit_out/leaffit_unconstrained.json \
+        --b fit_out/champion_2p_defender.json \
+        --players 2 --games 1000 --threads 2
+
+    games        1000 (500 deals x 2 seats)
+    win rate     3.2%  +/- 1.1   (null 50.0%)   p = 0.0000
+                 [naive +/- 1.1, rho +0.03, deff 1.04, 500 deals]
+    culture      A 18.8   best other 85.7   lead -66.9 +/- 2.2
+    verdict      REJECT -- leaffit_unconstrained is WORSE than the champion
+
+  arena --a fit_out/leaffit_constrained.json \
+        --b fit_out/champion_2p_defender.json \
+        --players 2 --games 1000 --threads 2
+
+    games        1000 (500 deals x 2 seats)
+    win rate     3.1%  +/- 1.1   (null 50.0%)   p = 0.0000
+                 [naive +/- 1.1, rho +0.03, deff 1.04, 500 deals]
+    culture      A 18.8   best other 86.4   lead -67.6 +/- 2.2
+    verdict      REJECT -- leaffit_constrained is WORSE than the champion
+
+Both intervals sit at ~3% +/- 1.1%, nowhere near the 50% null -- a clean,
+decisive REJECT for both fits, not an inconclusive result. Sign-constraining
+the fit did not materially change the outcome (3.1% vs 3.2%, within each
+other's CI) -- the loss is not attributable to the 7 small sign violations.
+
+=============================================================================
+WHY IT LOST -- MEASURED vs HYPOTHESISED
+=============================================================================
+MEASURED facts, not in dispute:
+  - The fit predicts win/loss from a single state well above base rate on
+    held-out games (2p: 66.7-67.4% accuracy vs 52.8% base rate; logloss
+    0.59 vs 0.69) -- a real, replicated statistical signal.
+  - The SAME fitted vector, used as a 1-ply move-ranking evaluator in actual
+    play, loses to the current champion at ~3% (n=1000, tight CI).
+  - The fitted vector's overall scale (L2 norm ~1.3) is ~140x smaller than
+    the champion's (L2 norm ~182), and its largest single coefficient
+    (pact_blocks_attack, ~1.1) is smaller than the champion's mean |weight|
+    (~5.2).
+  - This task's earlier documented lesson (a search-imitation student that
+    copied a WEAKER teacher's judgement lost match play at 29.9%) is a
+    DIFFERENT project and a different mechanism -- this fit is not imitating
+    the champion's search at all, it is fit directly on human outcomes,
+    which are a genuinely stronger signal for position value in principle.
+    That the result is even WORSE here (3% vs 29.9%) is measured, not
+    assumed to follow from the same cause.
+
+HYPOTHESIS (plausible, NOT verified within this task's budget -- flagged for
+whoever picks this up next, not asserted as fact):
+  - Marginal single-state P(win) regression optimises a DIFFERENT objective
+    than 1-ply move discrimination needs. It rewards a coefficient direction
+    for HOW WELL a raw feature correlates with eventual victory averaged
+    over the whole corpus (dominated by broad, slow-moving game-progress
+    signals -- culture/science stocks, round number proxies), not for how
+    much that feature should move the SCORE GAP between two candidate next-
+    states reachable by one move THIS turn. `human_policy::train`'s existing
+    conditional-logit ("softmax over the legal-move list", fit on human
+    MOVE CHOICES rather than eventual win/loss) is the model shape this
+    project already built for exactly the move-discrimination objective;
+    this task was explicitly instructed to fit `win` by plain logistic
+    regression instead, which is a materially different target. Whether
+    THAT difference (rather than the L2 shrinkage, rather than the 7 sign
+    violations already ruled out by the constrained-fit comparison above)
+    is the dominant cause of the match-play loss was not isolated here --
+    would need, e.g., a conditional-logit fit on this same corpus's implied
+    "which state resulted from the move actually taken" for direct
+    comparison, which is out of scope for this task's budget.
+  - The 140x scale gap is flagged as a live, UNRESOLVED hypothesis, not
+    dismissed: an overall positive scalar multiple is provably free for a
+    SINGLE 1-ply argmax (see the round-trip section), but this codebase's
+    search is not necessarily a single flat 1-ply argmax end to end
+    (`bots::plan`/`bots::human::choose_with_search` reference a "root
+    shortlist" and deeper lookahead) -- whether any deeper-search mechanism
+    combines `evaluate()` scores in a way that is NOT scale-invariant (e.g.
+    across plies, or against some other quantity) was not checked here.
+    A quick grep for absolute-threshold/temperature logic in
+    bots/weighted/eval.rs and bots/plan.rs found none obviously, but this
+    was not an exhaustive audit.
+
+=============================================================================
+REPRODUCTION (exact commands)
+=============================================================================
+cd /private/tmp/leaffit/rust
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# tests (5 new, all green; RED transcripts recorded above)
+cargo test --profile difftest --bin leaffit -- --test-threads=1
+
+# the fit itself (dataset path is the safety copy made before this task)
+cargo build --profile difftest --bin leaffit
+./target/difftest/leaffit /private/tmp/leaffit_workspace/leaf_dataset.tsv.bak /private/tmp/leaffit/fit_out
+# writes fit_out/leaffit_metrics.txt, fit_out/leaffit_unconstrained.json,
+# fit_out/leaffit_constrained.json
+
+# match play (champion copied aside first, per instructions)
+cp /private/tmp/leaffit/champion_2p_now.json /private/tmp/leaffit/fit_out/champion_2p_defender.json
+cargo build --profile difftest --bin arena
+./target/difftest/arena --a /private/tmp/leaffit/fit_out/leaffit_unconstrained.json \
+  --b /private/tmp/leaffit/fit_out/champion_2p_defender.json --players 2 --games 1000 --threads 2
+./target/difftest/arena --a /private/tmp/leaffit/fit_out/leaffit_constrained.json \
+  --b /private/tmp/leaffit/fit_out/champion_2p_defender.json --players 2 --games 1000 --threads 2
+
+=============================================================================
+WHAT WAS NOT DONE (explicitly out of scope / not attempted)
+=============================================================================
+- No conditional-logit ("which move did the human pick") fit on this leafdump
+  corpus was attempted for direct comparison -- flagged above as the most
+  promising next step given the hypothesis about the objective mismatch.
+- No attempt was made to rescale the fitted vector up to the champion's L2
+  norm and re-test match play, even though scale is provably free for a
+  single-ply argmax -- would have been a cheap, high-value follow-up check
+  against the "search combines scores non-scale-invariantly somewhere"
+  hypothesis, not run here due to budget.
+- The `colonies` sign-flip (champion -2.09 vs this fit +0.065) is reported
+  as a finding, not investigated further (e.g. by checking whether it
+  changed sign recently, or whether some OTHER coordinate is compensating
+  for it in the champion's own vector).
+- 3p (23 games total) and especially 4p (6 games total, 2 held out) results
+  are reported per the task's own instruction to state small-sample caveats,
+  not treated as reliable standalone findings.

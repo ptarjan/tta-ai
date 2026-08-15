@@ -1,0 +1,452 @@
+diff --git c/rust/src/advisor/state_io.rs i/rust/src/advisor/state_io.rs
+index 5d7e2ad..57657d3 100644
+--- c/rust/src/advisor/state_io.rs
++++ i/rust/src/advisor/state_io.rs
+@@ -928,6 +928,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
+         mil_sci_discount: 0,
+         one_time_discount: crate::state::OneTimeDiscount::default(),
+         resigned: false,
++        turn_start_denoms: crate::state::TurnStartDenoms::default(),
+     }
+ }
+ 
+diff --git c/rust/src/apply.rs i/rust/src/apply.rs
+index d1d0a48..d56211a 100644
+--- c/rust/src/apply.rs
++++ i/rust/src/apply.rs
+@@ -1736,6 +1736,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+diff --git c/rust/src/bots/weighted/events.rs i/rust/src/bots/weighted/events.rs
+index efc1c66..317fabc 100644
+--- c/rust/src/bots/weighted/events.rs
++++ i/rust/src/bots/weighted/events.rs
+@@ -624,6 +624,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+         }
+     }
+ 
+diff --git c/rust/src/combat.rs i/rust/src/combat.rs
+index 7a325b5..afe8d3d 100644
+--- c/rust/src/combat.rs
++++ i/rust/src/combat.rs
+@@ -591,6 +591,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+         }
+     }
+ 
+diff --git c/rust/src/costs.rs i/rust/src/costs.rs
+index 0314111..8c70e33 100644
+--- c/rust/src/costs.rs
++++ i/rust/src/costs.rs
+@@ -828,6 +828,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+diff --git c/rust/src/economy.rs i/rust/src/economy.rs
+index 5dcb3a8..a5951cf 100644
+--- c/rust/src/economy.rs
++++ i/rust/src/economy.rs
+@@ -39,7 +39,7 @@ use crate::cards::{Age, CardId, CardType, Special};
+ use crate::effects;
+ use crate::interact;
+ use crate::rng::{shuffle_cards, PyRandom};
+-use crate::state::{CardList, GameState, PlayerState, Tableau, MAX_PLAYERS};
++use crate::state::{CardList, GameState, PlayerState, Tableau, TurnStartDenoms, MAX_PLAYERS};
+ 
+ // --------------------------------------------------------------- tables
+ 
+@@ -392,6 +392,29 @@ impl Denoms {
+     fn as_slice(&self) -> &[u8] {
+         &self.values[..self.len as usize]
+     }
++
++    /// Rebuild from an already-sorted-descending, already-deduplicated
++    /// `(values, len)` pair -- i.e. exactly what [`Self::snapshot`] handed
++    /// back earlier and `PlayerState::turn_start_denoms` has been carrying
++    /// since. Still routes through [`Self::push`] (skipped only in the
++    /// impossible case of a corrupted snapshot) rather than a direct field
++    /// copy, so a future caller that hands in unsorted or duplicate values
++    /// does not silently break `tokens_for`'s greedy assumption.
++    fn from_raw(values: [u8; 8], len: u8) -> Self {
++        let mut d = Denoms { values: [0; 8], len: 0 };
++        for &v in &values[..len as usize] {
++            d.push(v);
++        }
++        d.values[..d.len as usize].sort_unstable_by(|a, b| b.cmp(a));
++        d
++    }
++
++    /// Plain `(values, len)` copy of `self`, for [`PlayerState::
++    /// turn_start_denoms`] to carry across the `game.rs`/`economy.rs`
++    /// boundary (that field's own doc comment has the full citation).
++    fn snapshot(&self) -> ([u8; 8], u8) {
++        (self.values, self.len)
++    }
+ }
+ 
+ /// A farm/mine card's blue-token denomination: printed `food` for a farm,
+@@ -548,6 +571,64 @@ pub fn blue_available(p: &PlayerState) -> u16 {
+     (p.blue_total as u16).saturating_sub(blue_used(p))
+ }
+ 
++/// `(food, mine)` [`Denoms::of`] snapshots for [`PlayerState::
++/// turn_start_denoms`] -- called once per player per turn, from
++/// `game::start_turn`, before that turn's own civil actions can develop or
++/// upgrade a Farm/Mine card. Not used by [`blue_used`]/[`blue_available`]
++/// themselves (gaining/paying legitimately reads the LIVE tableau -- see
++/// [`gain`]'s own doc); only the corruption step needs the frozen copy, via
++/// [`blue_used_committed`].
++pub(crate) fn turn_start_denoms_snapshot(techs: &Tableau) -> TurnStartDenoms {
++    let (food, food_len) = Denoms::of(techs, CardType::Farm).snapshot();
++    let (mine, mine_len) = Denoms::of(techs, CardType::Mine).snapshot();
++    TurnStartDenoms { food, food_len, mine, mine_len }
++}
++
++/// The [`blue_used`] a corruption check (§6.2, `end_of_turn` step 3b) must
++/// use: farm/mine denominations FROZEN as of the start of this player's own
++/// turn ([`PlayerState::turn_start_denoms`] -- see its own doc for the
++/// corpus-confirmed bug this closes), not `p.techs` live. Stock levels
++/// (`p.food`/`p.resources`) and wonder steps are still read live -- only the
++/// denominations are frozen, exactly mirroring [`blue_used`] otherwise.
++///
++/// `pub(crate)`, not private: `replay_common.rs`'s `record_corruption_check`
++/// reproduces this SAME computation ahead of `end_of_turn` actually running,
++/// and its own doc comment promises it stays byte-for-byte identical to
++/// what `end_of_turn` is about to do internally -- see there.
++pub(crate) fn blue_used_committed(p: &PlayerState) -> u16 {
++    let d = &p.turn_start_denoms;
++    let food_denoms = if d.food_len > 0 {
++        Denoms::from_raw(d.food, d.food_len)
++    } else {
++        Denoms::of(&p.techs, CardType::Farm)
++    };
++    let mine_denoms = if d.mine_len > 0 {
++        Denoms::from_raw(d.mine, d.mine_len)
++    } else {
++        Denoms::of(&p.techs, CardType::Mine)
++    };
++    let food_tokens = tokens_for(p.food, food_denoms.as_slice());
++    let mine_tokens = tokens_for(p.resources, mine_denoms.as_slice());
++    let mut used = food_tokens + mine_tokens;
++    if !p.wonder.is_none() {
++        used += p.wonder_steps as u16;
++    }
++    if crate::debugflags::replay_debug_all() {
++        eprintln!(
++            "DEBUG blue_used_committed: food={} food_denoms={:?} food_tokens={food_tokens} resources={} mine_denoms={:?} mine_tokens={mine_tokens} wonder={} wonder_steps={} total={used}",
++            p.food, food_denoms.as_slice(), p.resources, mine_denoms.as_slice(),
++            if p.wonder.is_none() { "none" } else { p.wonder.get().name }, p.wonder_steps
++        );
++    }
++    used
++}
++
++/// The [`blue_available`] a corruption check must use -- see
++/// [`blue_used_committed`]. `pub(crate)` for the same reason.
++pub(crate) fn blue_available_committed(p: &PlayerState) -> u16 {
++    (p.blue_total as u16).saturating_sub(blue_used_committed(p))
++}
++
+ /// Shared body of `gain_food`/`gain_resources` (Python `effects._gain`):
+ /// searches DOWNWARD from `n` for the largest amount that can be gained
+ /// without the token cost exceeding what is free in the bank. Downward,
+@@ -769,11 +850,17 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
+         // Resources first; food covers whatever the resources could not.
+         // `pay_resources` never pays more than it was asked for, so the
+         // shortfall cannot go negative.
+-        let corr = corruption(blue_available(p));
++        //
++        // `blue_available_committed`, NOT `blue_available`: a Farm/Mine card
++        // developed or upgraded earlier THIS turn must not retroactively
++        // "consolidate" stock nobody has actually moved yet -- see
++        // `PlayerState::turn_start_denoms`'s own doc comment for the full
++        // citation and the 166-game corpus evidence this closes.
++        let corr = corruption(blue_available_committed(p));
+         if crate::debugflags::replay_debug_all() {
+             eprintln!(
+-                "DEBUG end_of_turn pre-corruption: idx={idx} resources={} food={} blue_total={} blue_used={} corr={} s.resources={} s.food={}",
+-                p.resources, p.food, p.blue_total, blue_used(p), corr, s.resources, s.food
++                "DEBUG end_of_turn pre-corruption: idx={idx} resources={} food={} blue_total={} blue_used_committed={} corr={} s.resources={} s.food={}",
++                p.resources, p.food, p.blue_total, blue_used_committed(p), corr, s.resources, s.food
+             );
+             if crate::debugflags::replay_debug_techs() {
+                 for (id, slot) in p.techs.iter() {
+@@ -1103,6 +1190,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+@@ -1846,6 +1934,59 @@ mod tests {
+         assert_eq!(st.players[0].food, 0);
+     }
+ 
++    /// Regression for the 166-game corpus miss `PlayerState::turn_start_
++    /// denoms` closes (`analysis/worker_notes_2026-08-14/
++    /// corrskip__CORRSKIP.txt`): a Farm/Mine card developed or upgraded
++    /// THIS SAME turn must not retroactively "consolidate" stock nobody has
++    /// actually moved onto it, or corruption goes uncharged entirely.
++    /// Mirrors BGO journal 7522658 (round 7, Orange, line 201): 2 food
++    /// already sit on a denom-1 Agriculture card from a PRIOR turn (that
++    /// turn's own `game::start_turn` is simulated here by setting `turn_
++    /// start_denoms` directly rather than driving the whole turn loop),
++    /// then Irrigation (denom 2) is developed mid-turn -- the real board
++    /// still has 2 tokens on Agriculture, not 1 consolidated token on
++    /// Irrigation, so the LIVE recompute (what `blue_available` alone would
++    /// see) undercounts occupied blue tokens by exactly 1.
++    #[test]
++    fn end_of_turn_corruption_ignores_a_farm_card_developed_this_same_turn() {
++        let mut st = duel();
++        {
++            let p = &mut st.players[0];
++            p.yellow_bank = 17; // consumption 0, happy_required 0 -- isolates step 3b
++            p.blue_total = 16;
++            p.food = 2; // placed on Agriculture (denom 1) before this turn
++            p.resources = 4; // placed on Bronze (denom 1), unaffected either way
++            p.techs.insert(card("Agriculture"), TechSlot { workers: 0, stored: 0 });
++            p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
++            // Frozen at this turn's own `start_turn`, BEFORE Irrigation below
++            // ever entered play.
++            p.turn_start_denoms = crate::state::TurnStartDenoms {
++                food: [1, 0, 0, 0, 0, 0, 0, 0],
++                food_len: 1,
++                mine: [1, 0, 0, 0, 0, 0, 0, 0],
++                mine_len: 1,
++            };
++            // Irrigation (denom 2) enters play mid-turn, same as the
++            // journal's "Orange discovers Irrigation" a few lines before
++            // "End turn".
++            p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
++        }
++        // Live recompute would consolidate the 2 stored food onto Irrigation
++        // (1 token instead of 2), undercounting blue_used by 1: available 11
++        // (band 11..=16 -> corruption 0) instead of the true 10 (band
++        // 6..=10 -> corruption 2) -- exactly the band edge 7522658 crosses.
++        assert_eq!(blue_used(&st.players[0]), 5, "live: 1 food token (Irrigation) + 4 mine tokens");
++        assert_eq!(
++            blue_used_committed(&st.players[0]), 6,
++            "committed: 2 food tokens (still on Agriculture, per turn_start_denoms) + 4 mine tokens"
++        );
++        assert!(end_of_turn(&mut st, 0));
++        assert_eq!(
++            st.players[0].resources, 2,
++            "corruption 2 must be paid from resources (4 - 2), not skipped"
++        );
++    }
++
+     #[test]
+     fn end_of_turn_scores_science_and_culture_at_the_stat_rate() {
+         let mut st = duel();
+diff --git c/rust/src/effects.rs i/rust/src/effects.rs
+index 0a48fdf..2578304 100644
+--- c/rust/src/effects.rs
++++ i/rust/src/effects.rs
+@@ -1766,6 +1766,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+         }
+     }
+ 
+diff --git c/rust/src/events.rs i/rust/src/events.rs
+index 4d3527e..163093b 100644
+--- c/rust/src/events.rs
++++ i/rust/src/events.rs
+@@ -1720,6 +1720,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+         }
+     }
+ 
+diff --git c/rust/src/game.rs i/rust/src/game.rs
+index 1d5f572..117b0c4 100644
+--- c/rust/src/game.rs
++++ i/rust/src/game.rs
+@@ -304,6 +304,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
+         mil_sci_discount: 0,
+         one_time_discount: crate::state::OneTimeDiscount::default(),
+         resigned: false,
++        turn_start_denoms: crate::state::TurnStartDenoms::default(),
+     }
+ }
+ 
+@@ -923,6 +924,15 @@ fn start_turn(state: &mut GameState, rng: &mut LazyRandom) {
+         }
+     }
+ 
++    // Freeze this turn's farm/mine denominations BEFORE any of this turn's
++    // own civil actions can develop or upgrade a Farm/Mine card -- see
++    // `PlayerState::turn_start_denoms`'s own doc comment. Placed after the
++    // war-spoils/tactic bookkeeping above (which is pre-turn carry-over, not
++    // this player's own decision) and before the Politics/Actions phases
++    // below (which are).
++    state.players[idx as usize].turn_start_denoms =
++        economy::turn_start_denoms_snapshot(&state.players[idx as usize].techs);
++
+     state.last_round = state
+         .final_round_end
+         .is_some_and(|end| state.round >= end);
+diff --git c/rust/src/interact.rs i/rust/src/interact.rs
+index 1437125..5cbb673 100644
+--- c/rust/src/interact.rs
++++ i/rust/src/interact.rs
+@@ -1785,6 +1785,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+         }
+     }
+ 
+diff --git c/rust/src/legal.rs i/rust/src/legal.rs
+index 548aa19..ab9916d 100644
+--- c/rust/src/legal.rs
++++ i/rust/src/legal.rs
+@@ -1164,6 +1164,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+diff --git c/rust/src/replay_common.rs i/rust/src/replay_common.rs
+index e116941..126a7a6 100644
+--- c/rust/src/replay_common.rs
++++ i/rust/src/replay_common.rs
+@@ -1083,25 +1083,30 @@ impl<'a> Replayer<'a> {
+     /// dispatch arm at the SAME point as [`Self::check_discard_phase_
+     /// oracle`] (right after `resolve_intervening`, right before `try_apply
+     /// (Move::EndTurn, ..)`), which is deliberate: `economy::end_of_turn`'s
+-    /// own step 3b (`corr = corruption(blue_available(p))`) reads
+-    /// `p.food`/`p.resources`/`p.blue_total`/`p.wonder_steps` -- none of
+-    /// which step 3a (science/culture scoring, which runs first inside that
+-    /// SAME function) or anything earlier this turn touches -- so
+-    /// recomputing the identical two pure functions here, on `self.state`
+-    /// as it stands right now, reproduces EXACTLY the value `end_of_turn`
+-    /// is about to compute internally, without needing that mutating call
+-    /// to have run yet (it may not even run immediately -- a pending
+-    /// military discard can defer production past this line -- so reading a
+-    /// post-hoc field back would be unreliable; this is not). An uprising
+-    /// (`economy::uprising`) skips step 3 entirely, so it forces
+-    /// `engine_charges` to `false` regardless of the blue-token math, same
+-    /// as the real function.
++    /// own step 3b (`corr = corruption(blue_available_committed(p))`) reads
++    /// `p.food`/`p.resources`/`p.blue_total`/`p.wonder_steps`/`p.turn_start_
++    /// denoms` -- none of which step 3a (science/culture scoring, which runs
++    /// first inside that SAME function) or anything earlier this turn
++    /// touches -- so recomputing the identical two pure functions here, on
++    /// `self.state` as it stands right now, reproduces EXACTLY the value
++    /// `end_of_turn` is about to compute internally, without needing that
++    /// mutating call to have run yet (it may not even run immediately -- a
++    /// pending military discard can defer production past this line -- so
++    /// reading a post-hoc field back would be unreliable; this is not).
++    /// `blue_available_committed`, not `blue_available`: `p.turn_start_
++    /// denoms` was already frozen back at `game::start_turn`, before this
++    /// turn's own actions, so it reads the same here as it will inside
++    /// `end_of_turn` (see that field's own doc for why the committed,
++    /// not-live, denominations are the correct ones for a corruption
++    /// check). An uprising (`economy::uprising`) skips step 3 entirely, so
++    /// it forces `engine_charges` to `false` regardless of the blue-token
++    /// math, same as the real function.
+     fn record_corruption_check(&mut self, actor: u8, line: &Line) {
+         let p = &self.state.players[actor as usize];
+         let engine_charges = if economy::uprising(&self.state, p) {
+             false
+         } else {
+-            economy::corruption(economy::blue_available(p)) > 0
++            economy::corruption(economy::blue_available_committed(p)) > 0
+         };
+         let journal_charges = line.text.contains("CORRUPTION!");
+         let cards_in_play = player_cards_in_play(p);
+@@ -9232,6 +9237,7 @@ mod tests {
+             mil_sci_discount: 0,
+             one_time_discount: crate::state::OneTimeDiscount::default(),
+             resigned: false,
++            turn_start_denoms: crate::state::TurnStartDenoms::default(),
+             taken_leader_ages: 0,
+             war_declared_by_me: CardId::NONE,
+             war_target: 0,
+diff --git c/rust/src/state.rs i/rust/src/state.rs
+index d0609ca..4f56164 100644
+--- c/rust/src/state.rs
++++ i/rust/src/state.rs
+@@ -655,6 +655,57 @@ pub struct PlayerState {
+     pub trade_resource_as_food_used_this_turn: u8,
+ 
+     pub resigned: bool,
++
++    /// Farm/mine blue-token denominations as they stood at the START of
++    /// THIS player's own current turn (`game::start_turn`), frozen for
++    /// `economy::end_of_turn`'s corruption step (§6.2/§6.4) to read instead
++    /// of `p.techs` live. RULES_SPEC §6.4 ties a placed token's value to the
++    /// specific card it sits on and only ever lets a PAYMENT make change
++    /// DOWNWARD ("NEVER move tokens to higher-value cards"); a Farm/Mine
++    /// technology developed or upgraded mid-turn (`Move::DevelopTechnology`/
++    /// `UpgradeProduction`/`BuildBuilding`) introduces a NEW higher
++    /// denomination that food/resources stored BEFORE this turn have not
++    /// actually been moved onto, so recomputing `economy::Denoms::of` live
++    /// at end-of-turn silently -- and for free -- "consolidates" that old
++    /// stock onto the new card, undercounting occupied blue tokens and
++    /// therefore corruption for exactly this one turn. Confirmed against
++    /// BGO journals 7522658 (round 7, Orange, line 201: develops Irrigation
++    /// mid-turn while 2 food already sit on Agriculture) and 7522639 (round
++    /// 8, Orange, line 113: upgrades Agriculture to Irrigation mid-turn) --
++    /// see `analysis/worker_notes_2026-08-14/corrskip__CORRSKIP.txt` for the
++    /// full corpus trace (166 games, all sharing this exact shape: the
++    /// engine's corruption deduction is skipped entirely, by exactly the
++    /// stated corruption amount, and the resulting resource-total offset
++    /// stays flat for the rest of the game because it is a one-time missed
++    /// deduction, not a wrong ongoing rate). `_len == 0` means "never
++    /// snapshotted" (a hand-built `PlayerState` in a unit test, or round 1
++    /// before the first `start_turn` call, which RULES_SPEC's own note at
++    /// §1's End-of-Turn Sequence line already exempts from corruption
++    /// entirely) -- callers fall back to the live `Denoms::of(&p.techs,
++    /// ..)` recompute, i.e. today's pre-fix behavior, so nothing that never
++    /// goes through `game::start_turn` changes behavior.
++    pub turn_start_denoms: TurnStartDenoms,
++}
++
++/// See [`PlayerState::turn_start_denoms`]. Plain `(values, len)` pairs
++/// mirroring `economy::Denoms`'s own private representation (kept private
++/// to `economy.rs`, DESIGN.md rule 3's fixed-capacity-no-`Vec` shape) --
++/// this type only carries the snapshot across the `game.rs`/`economy.rs`
++/// boundary, it does not duplicate `Denoms`'s dedup/sort logic.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct TurnStartDenoms {
++    pub food: [u8; 8],
++    pub food_len: u8,
++    pub mine: [u8; 8],
++    pub mine_len: u8,
++}
++
++impl Default for TurnStartDenoms {
++    /// `_len: 0` -- see [`PlayerState::turn_start_denoms`]'s "never
++    /// snapshotted" fallback.
++    fn default() -> Self {
++        TurnStartDenoms { food: [0; 8], food_len: 0, mine: [0; 8], mine_len: 0 }
++    }
+ }
+ 
+ /// The one-time cost discount `events::apply_extras` writes onto EVERY

@@ -1,0 +1,34 @@
+diff --git a/rust/src/economy.rs b/rust/src/economy.rs
+index 93b5381..4adbb90 100644
+--- a/rust/src/economy.rs
++++ b/rust/src/economy.rs
+@@ -1728,6 +1728,29 @@ mod tests {
+         assert_eq!(blue_used(&p), 1, "a single denom-3 token covers all 3 food gained in one call");
+     }
+ 
++    /// Symmetric to [`gain_food_places_newly_gained_food_on_the_highest_available_denomination`]
++    /// but for `gain_resources`, and stronger: exercises the REMAINDER path
++    /// (5 does not divide evenly into denom-2 tokens), pinning that the
++    /// greedy packing takes the fewest possible tokens -- two denom-2 tokens
++    /// plus ONE denom-1 token for the leftover 1, not five denom-1 tokens
++    /// (the owner's own words, 2026-08-14: "in practice you always want to
++    /// take the highest denomination" for a free non-production gain, since
++    /// overflowing the player's finite blue-token supply permanently loses
++    /// the excess -- see `credit_production`'s cap).
++    #[test]
++    fn gain_resources_places_newly_gained_resources_greedily_from_the_highest_denomination_down_with_the_remainder_in_smaller_ones() {
++        let mut p = blank_player(0);
++        p.techs.insert(card("Iron"), TechSlot { workers: 0, stored: 0 }); // denom 2
++        p.blue_total = 10;
++        let got = gain_resources(&mut p, 5);
++        assert_eq!(got, 5);
++        assert_eq!(p.resources, 5);
++        assert_eq!(
++            blue_used(&p), 3,
++            "5 = 2+2+1: two denom-2 tokens plus one denom-1 remainder token, never five denom-1 tokens"
++        );
++    }
++
+     #[test]
+     fn pay_resources_caps_at_what_is_owned() {
+         let mut p = blank_player(0);

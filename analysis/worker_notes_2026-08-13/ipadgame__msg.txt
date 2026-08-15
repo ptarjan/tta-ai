@@ -1,0 +1,21 @@
+Apply the reported board after handing the turn back, not before
+
+advisor --load ran patch_all first and only then skipped the rival's
+turn, so the engine's own start-of-turn replenish landed on top of the
+row Paul had just typed in: at 2p that sweeps the three leftmost cards,
+slides every survivor three slots left and deals three cards from its
+own deck that are not on the table. Every slot number the advisor
+printed was off by three, and the cheap end of the row -- the 1-CA
+band -- was populated entirely by guesses.
+
+The update lines describe the table as it stands now, after the rival
+moved and after the replenish, so they have to be applied to that
+position. Extract the advance-then-patch pair as sync_to_my_turn so the
+ordering has a name and a docstring, and so the test can stop at the
+position the bot is about to score instead of running a whole exchange
+(ending our turn advances the mirror into the rival's own replenish,
+which legitimately refills the row).
+
+Caught in the first live game against the app AI.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
