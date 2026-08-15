@@ -434,12 +434,14 @@ def scoring_culture(state, p, block, order):
             for w in p.completed_wonders:
                 total += int(raw.get(db.age_of(w), 0))
         elif key == "culturePerContentWorkerAbove10":
-            # A yellow token in the worker pool is a worker too: a discontent
-            # worker is physically an UNUSED worker moved onto the happiness
-            # track (ubg "A Discontent Worker"), so the population this card
-            # counts is on-card workers PLUS unused ones, minus discontent.
-            workers = (sum(t.workers for t in p.techs.values())
-                       + p.workers_free)
+            # FAQ v1.5, "Impact of Population": "Count the number of yellow
+            # markers that are not in your Population Bank. Subtract from this
+            # the number of Discontent Workers that you have. This is your
+            # number of Content Workers. Finally, subtract ten."  Unused
+            # workers (the pool) are NOT yellow markers, so they are excluded
+            # even though a discontent worker is physically one of them moved
+            # onto the happiness track.
+            workers = sum(t.workers for t in p.techs.values())
             content = max(0, workers - economy.discontent(state, p))
             total += int(v or 0) * max(0, content - 10)
         elif key == "culturePerColony":

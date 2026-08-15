@@ -155,6 +155,13 @@ _BUILDING_OUTPUT = {
     "resourcesPerLabEqualToLevel":     (frozenset({"lab"}), "resources"),
     "sciencePerBestLabOrLibraryLevel": (frozenset({"lab", "library"}),
                                         "science"),
+    # FAQ v1.5, "Internet": "Sid Meier does affect the amount of Culture
+    # which the Internet Wonder gives you, as do William Shakespeare,
+    # J. S. Bach, Charlie Chaplin, Isaac Newton, and Albert Einstein."
+    # The Hollywood note names only Bach/Shakespeare/Chaplin, so the two
+    # lab/library-science entries above count for the Internet but not for
+    # Hollywood -- the `mtypes <= types` check in `building_output` enforces
+    # exactly that split.
     "culturePerLibraryTheaterPair":    (frozenset({"library", "theater"}),
                                         "culture"),
     "doubleBestMine":                  (frozenset({"mine"}), "resources"),
