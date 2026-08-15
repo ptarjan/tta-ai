@@ -2112,6 +2112,31 @@ impl<'a> Replayer<'a> {
             )));
         }
 
+        // FIX (found chasing 7522967's `SimulatorBug`/`PrepareEvent` ledger
+        // bucket -- a `military_hand_deficit` under-repayment, the SAME
+        // net-zero-push shape the comment below already fixed once, at a
+        // DIFFERENT call site): snapshot every seat's `hand_military` length
+        // HERE, before the grounding `push` two statements down, not after
+        // it. The decider's own entry in `hand_military_len_before` (read
+        // much further down, right before `self.apply_move(mv)`) is used to
+        // measure how much the decider's hand GREW from this call so
+        // `repay_military_hand_deficit` knows how much debt an `AllPlayers`/
+        // `StrongestPlayer` immediate draw just repaid. Reading it AFTER the
+        // grounding push below inflates the decider's own baseline by the
+        // 1 phantom card that push adds (and `apply_move`'s own `Move::
+        // PrepareEvent` removal cancels right back out) -- invisible whenever
+        // nothing ELSE grows the decider's hand in the same `apply_move`
+        // call, but for a revealed card whose own immediate effect ALSO
+        // draws for the decider (Development of Politics, Politics of
+        // Strength, ...), it undercounts that seat's real growth by exactly
+        // one, so `repay_military_hand_deficit` credits one fewer unit than
+        // the decider actually just drew -- deferring, not losing, the
+        // correction, but leaving an extra card in the reconstructed hand
+        // until whatever pays down the remainder. Snapshotting before ANY
+        // mutation this function makes gives every seat, decider included,
+        // its true pre-preparation length.
+        let hand_military_len_before: [usize; MAX_PLAYERS] =
+            std::array::from_fn(|i| self.state.players[i].hand_military.len());
         // The real player already held this card before preparing it: their
         // hand shrinks by exactly one (N -> N-1). Left alone, the `push`
         // immediately below followed by `apply`'s own removal of the same
@@ -2210,11 +2235,11 @@ impl<'a> Replayer<'a> {
         // block draws for every seat in one call -- so the debt stays on
         // the books forever while the drawn card(s) sit uncompensated in
         // hand: a permanent phantom card, not the temporary window the
-        // deficit mechanism is supposed to guarantee. Snapshot every
-        // seat's `hand_military` length before this call and repay growth
-        // after it, mirroring `try_apply`'s own loop exactly.
-        let hand_military_len_before: [usize; MAX_PLAYERS] =
-            std::array::from_fn(|i| self.state.players[i].hand_military.len());
+        // deficit mechanism is supposed to guarantee. `hand_military_len_
+        // before` is snapshotted at the TOP of this function now (see the
+        // comment there for why it must run before the grounding push
+        // above, not here), and repaid against growth after `apply_move`
+        // below, mirroring `try_apply`'s own loop exactly.
         // TIE_CENSUS labelling only: `current_lineno` tracks the outer
         // per-journal-line loop, but THIS call (a political decision) is not
         // driven from that loop at all -- it can run before that line's own
@@ -11907,6 +11932,70 @@ mod tests {
             "player 1 never owed anything -- their own repay call must be a no-op"
         );
         assert_eq!(r.state.players[1].hand_military.len(), 3, "player 1 just draws their full 3 cards, untouched");
+    }
+
+    /// FIX (found chasing game `7522967`'s `SimulatorBug`/`PrepareEvent`
+    /// ledger bucket -- `analysis/worker_notes_2026-08-14/handmil__HANDMIL.
+    /// txt`): the sibling test just above (`preparing_an_event_that_
+    /// immediately_reveals_a_card_drawing_military_cards_repays_its_own_
+    /// fresh_deficit`) starts the decider's OWN debt at zero, so the ONE unit
+    /// this call's own "no disposable filler" branch adds is always small
+    /// enough that `owed = deficit.min(growth)` lands on the same answer
+    /// whether `growth` is measured correctly or undercounted by one -- it
+    /// cannot tell the two apart. This test starts the decider with a
+    /// PRE-EXISTING debt of 2 (simulating an earlier, unrelated no-filler
+    /// wash) on top of the fresh one this call's own empty hand adds (debt
+    /// -> 3), so the fix and the bug disagree on the answer: reading `hand_
+    /// military_len_before` AFTER the grounding `push` (the bug) measures
+    /// this call's own growth as 2 (the push's own +1 cancels against `apply`'s
+    /// -1 removal of the same identity, invisibly baked into the "before"
+    /// snapshot), so `owed = min(3, 2) = 2` -- one unit of debt is left
+    /// permanently owed even though the decider's hand really did grow by 3
+    /// raw cards drawn minus the 1 net spent grounding this preparation (net
+    /// +3), enough to cover the whole debt. Reading the snapshot before ANY
+    /// mutation (the fix) measures growth correctly as 3, so `owed = min(3,
+    /// 3) = 3` -- the debt clears completely.
+    #[test]
+    fn a_preexisting_deficit_is_fully_repaid_by_a_preparations_own_immediate_all_players_draw() {
+        let card_index = build_card_index();
+        let plan = crate::event_plan::solve(
+            &[(
+                5,
+                0,
+                "Orange plays event Orange scores 1 culture; Current event:; A / Development of Politics; \
+                 Each player draws 3 military cards.; Orange draws 3 military cards; Purple draws 3 military cards",
+            )],
+            &card_index,
+            2,
+        )
+        .expect("a one-preparation journal is consistent");
+        let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.current_lineno = 10;
+        r.state.phase = Phase::Politics;
+        r.state.age_military = crate::Age::I;
+        r.state.military_deck = crate::game::build_deck(crate::Age::I, false, 2);
+        // A debt of 2 already on the books BEFORE this preparation, from
+        // some earlier, unrelated no-filler wash this test does not model
+        // directly (the sibling test above shows how one such wash arises).
+        r.military_hand_deficit[0] = 2;
+        // No fillers seeded for player 0 (Orange, the decider) here either --
+        // this preparation's own grounding adds ONE MORE unit of debt (2 ->
+        // 3) before the revealed card's immediate draw ever runs.
+
+        r.resolve_political_decision(0).expect("player 0's own logged preparation, revealing a self-drawing event");
+
+        assert_eq!(
+            r.military_hand_deficit[0], 0,
+            "this call's own immediate 'each player draws 3' effect grows the decider's hand by 3 net -- enough \
+             to clear the full 3-unit debt (2 pre-existing + 1 fresh), not just the 2 units an undercounted \
+             growth measurement would cover"
+        );
+        assert_eq!(
+            r.state.players[0].hand_military.len(),
+            0,
+            "3 cards drawn, all 3 immediately spent repaying the full debt: net +0, not +1 (one unit of debt \
+             left stranded by an undercounted growth measurement)"
+        );
     }
 
     /// FIX (traced on real game `7523376`, round 10-11): `repay_military_
