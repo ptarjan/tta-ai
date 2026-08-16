@@ -646,6 +646,33 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              totals Orange 42 / Purple 36 vs its own WINNER line \
                              Orange 54 / Purple 11; no bonus set bridges the gap -- \
                              BGO record error, not an engine/formula bug)"
+                        } else if meta.id == "7522397" {
+                            // 7522397 (2p, BGO record error): the engine's own
+                            // running culture matches BGO's "(now M)" at all 36
+                            // "End turn" checkpoints (culture oracle 36/36), so
+                            // the in-play reconstruction is correct. But the
+                            // journal is internally inconsistent: BGO's last
+                            // "End turn Orange" running total is "now 79", and
+                            // the journal's OWN stated final awards for Orange
+                            // (Strength 0, Population 2, Competition 8,
+                            // Happiness 6) sum to 16 -- so BGO's own numbers
+                            // give Orange 95, yet the index row says 110. The
+                            // engine (116) is off from the index by +6, of
+                            // which +4 is the single mismatching final-award
+                            // pair (Impact of Happiness seat0: journal 6 vs
+                            // engine 10 -- the engine counts Orange's 5 happy
+                            // faces: Leonardo Da Vinci + 3 completed wonders +
+                            // 1, all real on the board) and +2 is the
+                            // unbridgeable index-vs-own-totals gap. No engine
+                            // formula change reconciles a journal that
+                            // contradicts itself, so this is pinned as a BGO
+                            // record error rather than re-attempted.
+                            " note=journal-internally-inconsistent(last \
+                             'End turn Orange' running total 79 + its own stated \
+                             final awards 16 = 95, but index row is 110; engine \
+                             +6 is the Happiness seat0 pair (j6/e10, 5 real \
+                             happy faces) plus the index-vs-own-totals gap -- \
+                             BGO record error, not an engine/formula bug)"
                         } else {
                             ""
                         };

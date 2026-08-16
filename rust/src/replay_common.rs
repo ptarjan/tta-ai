@@ -7277,7 +7277,28 @@ pub fn replay_game(
                     real_final_events.iter().map(|c| c.name()).collect::<Vec<_>>()
                 );
             }
+            if r.state.game_over {
+                // `finish_game` already fired (via `advance_turn`'s round-wrap
+                // check) against the FICTIONAL event piles this reconstruction
+                // had in place -- that wrong award is already in `p.culture`.
+                // Undo it off the current (still-fictional) piles, then ground
+                // and re-apply the real award. Mirrors the TruncatedAfterGameOver
+                // correction a few lines down; the only difference is that here
+                // we are sitting ON the "End of game" line itself rather than
+                // having to peek for it.
+                for (_card, steps) in crate::events::final_event_awards(&r.state) {
+                    for (idx, amount) in steps {
+                        if amount != 0 {
+                            let p = &mut r.state.players[idx as usize];
+                            p.culture = (p.culture as i32 - amount).max(0) as u16;
+                        }
+                    }
+                }
+            }
             ground_final_events(&mut r.state, &real_final_events);
+            if r.state.game_over {
+                crate::events::evaluate_final_events(&mut r.state);
+            }
             continue;
         }
         // Once the engine's own `finish_game` has fired, nothing after it
