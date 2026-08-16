@@ -1,0 +1,276 @@
+PYTHON-AUTHORITY COMMENT AUDIT -- PASS 3 -- SCOPE: rust/src/bots/ and rust/src/advisor/
+Date: 2026-08-15
+Method: grepped all files in scope for python/.py/engine-*.py/advisor-*.py references
+(637 raw hits across 37 files), split into 4 file groups, each audited in full by a
+dedicated subagent, then spot-verified the highest-signal findings directly (oracle
+text, call graphs, module wiring, default weight values). Read-only throughout; no
+edits, no git commands run in tta-ai.
+
+=====================================================================
+BUCKET COUNTS (sum across all 37 files in scope)
+=====================================================================
+Bucket 1 (PROVENANCE only):        ~87 (variants+advisor) + ~231 (bots top-level)
+                                    + ~267 (weighted) + ~123 (neural) = ~708 comment
+                                    lines/sites. Not itemized (per instructions).
+
+Bucket 2 (VALUE/TUNING citing Python): 9 (weighted) + 9 (neural) + 9 (bots top-level)
+                                    + 3 (variants+advisor) = 30 distinct citation sites.
+  Of which claim CORRECTNESS (not just inheritance): 2, both in neural/train.rs:
+    - train.rs:22-28  and train.rs:1058-1062 -- both argue Python's *code*
+      (F.smooth_l1_loss / Huber, beta=1.0) overrides Python's own docstring
+      ("value_mse"), i.e. "the script is the spec, code wins over prose" for
+      which loss shape was actually used. This is a claim about what Python's
+      code did, used to justify choosing smooth-L1 as the target shape to
+      replicate -- defensible as provenance-with-receipts, not a rules claim,
+      not flagged further (it's a training-loss shape decision, not weight
+      tuning masquerading as rule).
+  All other 28 sites explicitly use "mirrors"/"inherited"/"pinned against
+  Python"/"matching Python's X" language and do NOT claim the value is right,
+  only where it came from. Per the standing project rule, fitted parameters
+  are never to be replaced by a rederived formula -- none of these are flagged
+  as defects.
+
+Bucket 3 (LOAD-BEARING RULE, Python as sole support): 2 confirmed items (both
+  are also RULE REIMPLEMENTATIONS). Full detail below. One additional
+  structural finding (dead module, not a Bucket-3 comment) also reported.
+
+=====================================================================
+BUCKET 3 ITEM 1 -- events.rs:279-287, fn live_order (used by my_event_threat)
+=====================================================================
+Location: /Users/pt/tta-ai/rust/src/bots/weighted/events.rs:279-287
+
+Quote:
+  "Live player indices in raw (not seating/turn) order, `idx` first excluded
+  by nobody -- mirrors Python's `order = [q for q in state.players if not
+  q.resigned]`, which is deliberately NOT `_order_from`'s clockwise-from-a-
+  start-index order: ties in [events::rank_players] break by POSITION in
+  whatever `order` it is given, and Python's tie-break here is raw index
+  order, not seating order. Reusing [events::order_from_start] (clockwise
+  from `state.start_player`) would tie-break differently and silently
+  disagree with Python on which of two equal-strength players a
+  `strongestPlayer` block lands on."
+
+Rule asserted: when 2+ players tie on a ranking stat (strength/culture/
+happy/discontent) for a strongestPlayer/weakestPlayer-style event effect,
+ties are broken by raw player-seat-index order.
+
+Oracle check:
+  - docs/RULES_SPEC.md:119 (section 5.3, "Evaluating events"):
+    "Statistic comparisons (strongest/weakest = strength rating [FAQ p.11]):
+    ties broken in favor of the current player, then proximity in clockwise
+    order after the current player; at game-end evaluation, treat the
+    starting player as current [CoL p.7]."
+  - The crate already has the RULES_SPEC-correct machinery for this:
+    crate::events::order_from / order_from_start (src/events.rs:258-271).
+    This comment explicitly documents choosing NOT to reuse it, to match
+    Python's raw-index behavior instead.
+
+VERDICT: CONTRADICTED. The comment's own text states plainly that it
+diverges from the clockwise-from-current-player tie-break RULES_SPEC
+requires, and justifies that divergence purely by appeal to Python parity
+("would... silently disagree with Python"), never citing the rulebook.
+
+OBSERVABLE: YES, in a real base-game position. Tied strength/culture/happy/
+discontent between two live players is routine, and a strongestPlayer-class
+event effect (or a bot considering seeding one) is normal play.
+
+RULE REIMPLEMENTATION: YES. live_order is a second, diverging copy of "what
+order to rank players in for a tie", sitting in the same crate as the
+already-correct order_from_start, chosen specifically to match Python
+instead of the engine's own canonical tie-break helper.
+
+CAVEAT (mitigating factor, not a dismissal): this lives inside a 1-ply bot
+heuristic (my_event_threat, valuing the acting bot's OWN seeded events, not
+real event resolution) where "who is the current player at actual
+resolution time" is genuinely unknown to the evaluator, so SOME
+approximation is defensible. But the comment does not defend raw-index
+order as a reasoned approximation of "current player" -- it defends it only
+as "matches Python" and actively rejects the already-correct
+order_from_start to preserve that match. That is exactly the anti-pattern
+this audit is looking for: comment as a lock against consulting the actual
+rule. Recommend re-deriving the tie-break intent from RULES_SPEC 5.3
+(clockwise-from-current-player, or a reasonable board-position proxy for
+"current player" in a 1-ply heuristic) rather than treating Python's
+raw-index behavior as ground truth. Left as a finding, not fixed (read-only
+pass).
+
+=====================================================================
+BUCKET 3 ITEM 2 -- board_yields.rs:489-495, fn government_cost
+=====================================================================
+Location: /Users/pt/tta-ai/rust/src/bots/board_yields.rs:489-495, called from
+board_yields.rs:814 inside board_yields() (CardType::Government arm).
+
+Quote:
+  "`_government_cost`: the science a government actually costs (the
+  revolution price, cheaper on every card in the deck -- see the Python
+  module's doc comment for why that route is the one priced) and the civil
+  actions it burns."
+  fn government_cost(...) {
+      let sci = if card.revolution_cost != 0 { card.revolution_cost as i32 }
+                else { card.peaceful_cost as i32 };
+      ...
+  }
+
+Rule asserted: a government card's price should always be its (lower)
+revolution science cost whenever the card prints a nonzero revolution_cost,
+regardless of whether revolution is actually legal for the player right now.
+
+Oracle check:
+  - docs/RULES_SPEC.md section 8.3 (verified via board_yields.rs's own
+    comment at line ~505 citing it, and via legal::can_revolt at
+    src/legal.rs:788-806) gates a legal revolution on: all civil actions
+    unspent this turn (or Robespierre's all-military-actions variant),
+    sufficient pact-discounted science, and pact partners able to pay their
+    own science share.
+  - The SIBLING function in the SAME FILE, government_routes
+    (board_yields.rs:531-589), gets this right: it only offers the
+    revolution route `if legal::can_revolt(state, p, name)`, falling back to
+    the (higher) peaceful cost otherwise. Confirmed by direct read.
+  - government_cost has NO such gate at all -- it unconditionally prefers
+    revolution_cost whenever nonzero (i.e., for every printed government
+    except Despotism).
+
+VERDICT: CONTRADICTED. government_cost silently underprices a government
+card whenever revolution is not actually legal this turn (e.g., a civil
+action was already spent, science is short, or a pact partner can't pay) --
+the common case, not an edge case -- while its sibling function in the same
+file implements the gate correctly.
+
+OBSERVABLE / REACHABILITY: Confirmed via call-graph trace. government_cost
+is reached from weighted/cards.rs's card_potential_core() ONLY when
+WeightKey::GovBoardCredit == 0.0 (the dedicated, correctly-gated gov_value/
+government_plans/government_routes path is taken whenever GovBoardCredit is
+nonzero, which is the normal case) AND the generic CardBoardCredit/
+board_credit_key fallback is nonzero. GovBoardCredit's DEFAULT weight is 1.0
+(weights.rs:685), so a bot using default or typically-trained weights should
+not hit this path. It becomes live for any bot/ablation config that drives
+GovBoardCredit to exactly 0.0 while leaving the generic board-credit path
+on -- plausible for an ablation run or a training run that pushes the
+weight to zero, but I did not find evidence a currently-deployed champion
+does this. Recommend a quick grep of live champion weight files
+(experiments/rust_champion_*.json) for gov_board_credit == 0 before treating
+this as urgent; the bug is real regardless of current reach.
+
+RULE REIMPLEMENTATION: YES. government_cost duplicates, incorrectly, the
+cost-routing legality check legal::can_revolt/government_routes already
+implements correctly in the same file, instead of delegating to it or
+calling government_routes and taking the cheapest legal route.
+
+=====================================================================
+STRUCTURAL FINDING (not a Bucket-3 comment, but load-bearing for the whole
+advisor/ group and worth reporting) -- src/advisor/advisor.rs is DEAD CODE
+=====================================================================
+src/advisor/mod.rs declares only:
+    pub mod session;
+    pub mod describe;
+    pub mod state_io;
+There is no `pub mod advisor;` inside src/advisor/mod.rs. lib.rs's
+`pub mod advisor;` (lib.rs:12) resolves to src/advisor/mod.rs (the directory
+module), which never pulls in src/advisor/advisor.rs at all. Verified: no
+`#[path = ...]` or other inclusion mechanism anywhere in src/ references
+advisor/advisor.rs.
+
+src/advisor/advisor.rs is a 1234-line near-duplicate of session.rs
+(1376 lines) that is missing the PrepareEvent/confirmed_events fix that
+closed a 2026-08-12 live-game mirror-corruption incident and a 2026-08-13
+hang (per session.rs's own history comments). It contains 12 Python-citing
+comments (module doc's load_bot/rank_moves/parse_move, rank_moves,
+scoreable_candidates, move_kind, ArgToken/arg_matches, test helpers) that
+are all provenance-only (Bucket 1) but sit inside code nothing calls --
+`cargo build --lib` compiles without it (confirmed, since it is simply not
+part of the module tree). This is GONE code by the audit's definition (dead,
+only reachable from within itself), not a live risk today, but it is a
+stale, incorrect fork of the module the REPL (bin/advisor.rs) actually uses,
+sitting in the tree where a future edit could target it by mistake. Flagged
+for cleanup; not touched (read-only pass, and deletions are a code change).
+
+=====================================================================
+BUCKET 2 -- full list of the 30 value/tuning citation sites (all "inherited",
+not "correct", phrasing unless noted above)
+=====================================================================
+weighted/ (9):
+  cards.rs:621 restricted_resource_credit weight semantics
+  eval.rs:16 four module-scope Python weight tables -> WeightKey::default_weight
+  weights.rs:7 module ports shape+values "pinned against Python byte-for-byte"
+  row.rs:59-64 RIVAL_TAKE_SHARE default 0.5
+  horizon.rs:456 TURNS_CAP = 20.0
+  events.rs:60, events.rs:135 SCORING_MARGIN_CAP
+
+neural/ (9):
+  net.rs:58-59 MARGIN_NORM = 100.0
+  bot.rs:57 end_turn_bias default 0.0
+  plan.rs:123-126 max_nodes beam budget (1200)
+  plan.rs:131-132 drain_weights default
+  encode.rs:482-487 CIVIL_DISCARD_SCALE / MIL_DISCARD_SCALE (30.0/20.0)
+  train.rs:22-28, train.rs:1058-1062 Huber loss choice (the 2 "correctness"
+    citations, see Bucket 2 summary above)
+  train.rs:1108-1110 AdamW optimizer choice
+  train.rs:1150-1151 cosine-annealing LR schedule
+
+bots/ top-level (9):
+  board_yields.rs:649-652 FREE_POP_UTIL = 0.17
+  board_yields.rs:413-415 Churchill culture-floor pricing rationale
+  book.rs:213-215 v2_homer default 6.0
+  book.rs:275-280 V2Tunables mirrors Python's V2_TUNABLES
+  greedy.rs:10-28 WEIGHTS/GreedyKey table ("FROZEN ON PURPOSE" -- Rust-side
+    fingerprint control decision, not a Python correctness claim)
+  greedy.rs:94-103 seed shape / BotKind::Plan width=2 default
+  greedy.rs:420-423 happy_margin.min(2.0) clamp
+  plan.rs:245-249 QUIESCE_CAP = 12
+  quiescent.rs:47-56 levels = 1 default
+
+variants+advisor (3):
+  variants/science.rs:31-32 prod_weights flat 1.6 on science
+  variants/science.rs:100 "unspent science was the single largest defect
+    measured in the Python-era strength check" (historical defect note,
+    doesn't vouch for current ordering's optimality)
+  variants/mod.rs:992 weakest()'s tie-break: "matches Python's `<` check"
+
+None of these were second-guessed or flagged as defects -- per the standing
+project rule, a fitted/tuned parameter is not replaced by a rederived
+formula, and none of them assert a game rule.
+
+=====================================================================
+DEAD / GONE FUNCTION CITATIONS (comment names a Python function with no
+live Rust counterpart to check, or the named artifact no longer exists)
+=====================================================================
+- horizon.rs:85 TAKE_PRIOR constants justified by "tools/deal_rate.py,
+  deleted 2026-08-04" -- measurement can no longer be reproduced by anything
+  in the repo. Not flagged for replacement (fitted value, off-limits-style
+  guidance applies), just noted as unreproducible provenance.
+- cards.rs / rivals.rs (~10+ sites): tools/gen_cards.py (generator of
+  CardEffects/Special) confirmed gone from tools/, but its output artifact
+  (data/*.json, card_table.rs) persists and is independently cross-checked
+  against live data/*.json per the comments -- provenance-only, not a live
+  correctness dependency.
+- encode.rs:810-834, test encoding_dim_matches_python: cites a python3.13
+  one-liner against engine.bots.neural_encode, which no longer exists. The
+  comment itself already flags this as historical-only; the Rust assertion
+  (ENCODING_DIM == 1906) is self-contained, not runtime-dependent on Python.
+- counting.rs:338 -- weighted.py::my_seeds, "not yet ported" (no Rust
+  equivalent exists; feature is simply absent, not a divergence).
+- mod.rs (bots/), greedy.rs, quiescent.rs -- engine/bots/fastcopy.py,
+  engine/bots/trial.py (TrialRandom/fresh_trial_rng), engine/journal.py,
+  engine/bots/census.py: all explicitly documented as deliberately never
+  ported. Not hidden risks, extensively self-explained in the source.
+- src/advisor/advisor.rs: entire file is dead (see structural finding
+  above) -- every Python-named function inside it (load_bot, rank_moves,
+  parse_move, Advisor, _arg_matches, _move_tokens) is cited by code nothing
+  calls.
+
+=====================================================================
+FILES WITH ZERO PYTHON REFERENCES IN SCOPE
+=====================================================================
+bots/human.rs; bots/neural/action.rs, dump.rs, policy_order.rs,
+policy_train.rs; bots/variants/mod.rs (zero at advisor/mod.rs specifically,
+i.e. advisor/mod.rs itself has none, only its siblings do).
+
+=====================================================================
+OFF-LIMITS TOPICS -- confirmed none flagged as problems
+=====================================================================
+ca_left's weight (features.rs:552, off-limits, skipped), row_last_copy's
+weight (row.rs:166, off-limits, skipped), shortlist widening, move ordering
+with the policy prior, the aggression declare-time strength gate in
+legal.rs: none of these appeared as Bucket-3 candidates in any file group;
+where mentioned in Bucket 1/2 passing references they were excluded from
+counts per instructions.

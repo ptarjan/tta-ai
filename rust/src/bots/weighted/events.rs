@@ -276,15 +276,20 @@ pub fn my_seeded_pending(state: &GameState, idx: u8) -> f64 {
     my_seeds(state, idx).iter().map(|c| f64::from(c.level())).sum()
 }
 
-/// Live player indices in raw (not seating/turn) order, `idx` first excluded
-/// by nobody -- mirrors Python's `order = [q for q in state.players if not
-/// q.resigned]`, which is deliberately NOT `_order_from`'s clockwise-from-a-
-/// start-index order: ties in [`events::rank_players`] break by POSITION in
-/// whatever `order` it is given, and Python's tie-break here is raw index
-/// order, not seating order. Reusing `events::order_from_start` (clockwise
-/// from `state.start_player`) would tie-break differently and silently
-/// disagree with Python on which of two equal-strength players a
-/// `strongestPlayer` block lands on.
+/// Live player indices in raw (not seating/turn) order, excluding nobody.
+///
+/// Deliberately NOT [`events::order_from_start`], and this is an
+/// APPROXIMATION, not the rule. RULES_SPEC §5.3 breaks a `strongestPlayer`
+/// tie in favour of the CURRENT player, then clockwise from them -- but this
+/// helper prices an event the bot is merely SEEDING, which resolves an
+/// unknown number of turns later with an unknown player current, so the real
+/// tie-break is not computable here. Raw index order is a stable stand-in for
+/// a coin flip, nothing more.
+///
+/// It is therefore a bot-heuristic choice and not an engine rule: the engine
+/// itself must always use `order_from_start`. If this ever wants improving,
+/// clockwise from the seeding player is the better guess -- but it changes
+/// bot play, so it needs a gauntlet, not a corpus sweep.
 fn live_order(state: &GameState) -> Vec<u8> {
     (0..state.num_players).filter(|&i| !state.players[i as usize].resigned).collect()
 }

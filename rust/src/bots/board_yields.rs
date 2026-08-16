@@ -486,13 +486,18 @@ fn rider_delta(state: &GameState, p: &PlayerState, name: CardId, out: &mut Vec<T
 
 // ------------------------------------------------------- government costs
 
-/// `_government_cost`: the science a government actually costs (the
-/// revolution price, cheaper on every card in the deck -- see the Python
-/// module's doc comment for why that route is the one priced) and the civil
-/// actions it burns.
+/// `_government_cost`: the science a government actually costs and the civil
+/// actions it burns. The revolution price is cheaper on every card in the
+/// deck, so it is the one priced -- but only when RULES_SPEC §8.3 would
+/// actually let you take that route, exactly as [`government_routes`] gates
+/// it. Quoting the revolution price unconditionally makes an illegal
+/// discount look available; the port did that because the Python it came
+/// from did, with no gate anywhere in the function.
 fn government_cost(state: &GameState, p: &PlayerState, name: CardId, out: &mut Vec<Triple>) {
     let card = name.get();
-    let sci = if card.revolution_cost != 0 { card.revolution_cost as i32 } else { card.peaceful_cost as i32 };
+    let revolution_available = card.revolution_cost != 0 && legal::can_revolt(state, p, name);
+    let sci =
+        if revolution_available { card.revolution_cost as i32 } else { card.peaceful_cost as i32 };
     if sci != 0 {
         out.push((Feature::Science, -(sci as f64), Kind::Cost));
     }
