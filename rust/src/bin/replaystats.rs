@@ -42,7 +42,10 @@ use std::process::ExitCode;
 
 use tta::corpus;
 use tta::corpus::ActionClass;
-use tta::replay_common::{build_card_index, replay_game, HandLedgerVerdict, LedgerEventKind, MismatchKind};
+use tta::replay_common::{
+    build_card_index, replay_game, CultureOracleDivergence, FinalEventAwardDivergence, HandLedgerVerdict,
+    LedgerEventKind, MismatchKind,
+};
 
 /// A stable, printable bucket key for [`HandLedgerVerdict`] -- collapses the
 /// carried/looked-up [`LedgerEventKind`] to its `Debug` name so the
@@ -153,6 +156,87 @@ struct Bucket {
     example: String,
 }
 
+/// The JOURNAL-ARITHMETIC-ERROR GATE's own predicate: `Some((seat, d))`
+/// when this game's final-score divergence is EXACTLY ONE seat's score
+/// being off by EXACTLY one final-award pair's `(engine - journal)` delta,
+/// and the game's own in-play culture checkpoints matched the engine to the
+/// point (no `culture_oracle_divergence`) -- i.e. the engine's
+/// end-of-game recompute is the formula's ground truth, the journal's
+/// stated amount for that (card, seat) is BGO's own record error (a stale
+/// in-play magnitude, a mis-announced number, or a "scores N" where the
+/// true clause is "loses N"), and nothing ELSE in the game disagrees.
+/// `None` otherwise: multiple seats off (the deltas might cancel in the
+/// sorted compare and still hide two real engine bugs), no award pair
+/// matching the seat's delta (the divergence is not a final-award error at
+/// all), a DIRECTION FLIP (journal and engine disagree on SIGN, not just
+/// magnitude -- a genuine `scoring_culture` formula bug that must surface),
+/// or any in-play culture drift at all (the engine's own running totals
+/// disagreed with the journal somewhere, so "the engine is right" is not
+/// proven for this game). `a`/`b` are the PER-SEAT (unsorted) score lists --
+/// `a` is the engine's own `game::scores` in seating order (Orange=0,
+/// Purple=1, Green=2, Grey=3), `b` is the journal's index.tsv totals in the
+/// same order; the caller only calls this in the sorted-compare `a != b`
+/// case, having kept the unsorted copies for this check.
+/// First corpus case: game 7521849's "Impact of Progress" (journal's
+/// "Purple scores 12" is a stale in-play magnitude; the true end-board
+/// scores 14 under the card's own wording -- see
+/// `events::scoring_culture`'s own doc). The `scorediv_gate` test module
+/// below pins every branch of this predicate against fixtures.
+fn journal_arithmetic_error_suppression(
+    a: &[i32],
+    b: &[i32],
+    divergences: &[FinalEventAwardDivergence],
+    culture_oracle_divergence: Option<&CultureOracleDivergence>,
+) -> Option<(String, FinalEventAwardDivergence)> {
+    if culture_oracle_divergence.is_some() {
+        return None;
+    }
+    let mut candidates: Vec<(&FinalEventAwardDivergence, i32)> = Vec::new();
+    for d in divergences {
+        let delta = d.engine_amount - d.journal_amount;
+        // A direction flip (journal and engine disagree on SIGN, not just
+        // magnitude) is a genuine `scoring_culture` formula bug, never
+        // suppressed.
+        if (d.journal_amount >= 0 && d.engine_amount < 0) || (d.journal_amount < 0 && d.engine_amount >= 0) {
+            continue;
+        }
+        candidates.push((d, delta));
+    }
+    // Exactly one (card, seat) pair may explain the whole game.
+    if candidates.len() != 1 {
+        return None;
+    }
+    let (d, delta) = candidates.pop().unwrap();
+    if a.len() != b.len() || delta == 0 {
+        return None;
+    }
+    // The pair's own seat must be the ONLY seat whose score differs, and
+    // by exactly this pair's delta. `a` and `b` are sorted ascending, so
+    // we compare element-wise: exactly one position has a non-zero diff,
+    // that diff equals `delta`, and that position's index is `d.seat`.
+    // This works because in BGO the fixed seating is Orange=0, Purple=1,
+    // Green=2, Grey=3, and the index.tsv scores are in seating order, so
+    // the sorted position IS the seat index.
+    let mut non_zero: Vec<(usize, i32)> = Vec::new();
+    for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+        let diff = x - y;
+        if diff != 0 {
+            non_zero.push((i, diff));
+        }
+    }
+    if non_zero.len() != 1 {
+        return None;
+    }
+    let (pos, diff) = non_zero[0];
+    if diff != delta {
+        return None;
+    }
+    if pos as u8 != d.seat {
+        return None;
+    }
+    let seat = crate::corpus::Color::from_seat(d.seat)?.as_str().to_string();
+    Some((seat, d.clone()))
+}
 fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_game_ids: Option<&[String]>) -> Result<(), String> {
     let card_index = build_card_index();
     let mut games = corpus::parse_index(index_path)?;
@@ -177,6 +261,12 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
     let mut decisions_age_two_plus = 0u64;
     let mut n_score_checked = 0u32;
     let mut n_score_exact = 0u32;
+    // JOURNAL-ARITHMETIC-ERROR GATE counter: games whose ONLY final-score
+    // divergence is a final-award pair the gate itself re-derives as BGO's
+    // own record error (see `journal_arithmetic_error_suppression`) --
+    // reported after `n_score_exact` so the two add up to the full
+    // non-mismatch set.
+    let mut n_gate_suppressed = 0u32;
     // One entry per non-matching player-score, `engine - index` after
     // sorting both lists ascending (see the module doc for why sorted, not
     // seated) -- a systematic non-zero skew here (rather than a spread
@@ -423,10 +513,58 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                 n_score_checked += 1;
                 let mut a = engine.clone();
                 let mut b = result.index_scores.clone();
+                // Per-seat (unsorted) copies for the journal-arithmetic-error
+                // gate: `a` and `b` are sorted for the cross-check below, but
+                // the gate needs to know WHICH seat's score differs, which
+                // requires the original seating order.
+                let a_seated = engine.clone();
+                let b_seated = result.index_scores.clone();
                 a.sort_unstable();
                 b.sort_unstable();
                 if a == b {
                     n_score_exact += 1;
+                } else if let Some((seat, d)) =
+                    journal_arithmetic_error_suppression(
+                        &a_seated,
+                        &b_seated,
+                        &result.final_event_award_divergences,
+                        result.culture_oracle_divergence.as_ref(),
+                    )
+                {
+                    // JOURNAL-ARITHMETIC-ERROR GATE (2026-08-16, closing
+                    // 7521849's false positive): this game's TOTAL matches
+                    // index.tsv except for exactly one seat, and that
+                    // seat's whole delta is explained by ONE final-award
+                    // (card, seat) pair whose journal-stated amount is BGO's
+                    // own record error (a stale in-play magnitude, a
+                    // mis-announced number) -- the engine's own
+                    // end-of-game recompute is the formula's ground truth,
+                    // and the game's own culture checkpoints match the
+                    // engine to the point, so the engine is right and the
+                    // journal line is wrong. The game is EXCLUDED from the
+                    // SCOREDIV_DIVERGING_ID / SCOREDIV_DETAIL lines below --
+                    // the per-card `final_event_award_buckets` and
+                    // `n_games_with_final_event_award_divergence` still
+                    // count every (game, card, seat) pair whose amount
+                    // differs (the corpus-wide "which card is wrong"
+                    // ranking is unchanged), and the SCOREDIV_SUPPRESSED
+                    // line below reports the game once with the exact
+                    // tuple, so the suppression is visible and auditable
+                    // rather than silent. 7521849's "Impact of Progress"
+                    // (journal's "Purple scores 12" is a stale in-play
+                    // magnitude; the true end-board scores 14 under the
+                    // card's own wording) is the first corpus case; the
+                    // gate's own test pins the shape against a fixture
+                    // (the `scorediv_gate` module in this file).
+                    n_gate_suppressed += 1;
+                    if std::env::var("SCOREDIV_DUMP_IDS").is_ok() {
+                        eprintln!(
+                            "SCOREDIV_SUPPRESSED {} -- journal-arithmetic-error final-award divergence: {} seat{} \
+                             journal={} engine={} (delta {}); engine total {a:?} vs index {b:?}",
+                            meta.id, seat, d.seat, d.journal_amount, d.engine_amount,
+                            d.engine_amount - d.journal_amount,
+                        );
+                    }
                 } else {
                     score_deltas.extend(a.iter().zip(b.iter()).map(|(x, y)| x - y));
                     // `experiments/measure_replaystats.sh`'s own diverging-ID
@@ -492,7 +630,9 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
         "{n_score_checked}/{n_completed} completed games actually flipped state.game_over (the other \
          {} reached the journal's own \"End of game\" marker but hit a mismatch afterward, so \
          `game::scores` was never computed for them); {n_score_exact}/{n_score_checked} of those matched \
-         index.tsv exactly (sorted per-game score-list compare).",
+         index.tsv exactly (sorted per-game score-list compare); {n_gate_suppressed} of the non-matching \
+         remainder were suppressed as journal-arithmetic-error final-award divergences (the engine's \
+         own final-score cross-check proves the engine right in each -- see SCOREDIV_SUPPRESSED).",
         n_completed.saturating_sub(n_score_checked)
     );
     if score_deltas.is_empty() {
@@ -729,6 +869,102 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One fixture pair for [`journal_arithmetic_error_suppression`]'s own
+    /// branches -- mirrors the field names of
+    /// [`FinalEventAwardDivergence`] (a `&'static str` card name, so a real
+    /// `"Impact of ..."` card's name is fine, the predicate never looks it
+    /// up).
+    fn gate_div(card: &'static str, seat: u8, journal: i32, engine: i32) -> FinalEventAwardDivergence {
+        FinalEventAwardDivergence { card, seat, journal_amount: journal, engine_amount: engine }
+    }
+
+    #[test]
+    fn scorediv_gate_suppresses_one_seat_one_pair_whole_game() {
+        // 7521849's own shape: seat 1 (Purple)'s score is exactly 2 above
+        // the journal's own total, and exactly one final-award pair explains
+        // it (Impact of Progress, journal 12, engine 14). Every "End turn"
+        // matched the engine (no culture drift). Suppressed.
+        let d = gate_div("Impact of Progress", 1, 12, 14);
+        // Seated lists: seat 0 = [137, 137], seat 1 = [176, 174] (delta 2 = 14-12).
+        let r = journal_arithmetic_error_suppression(&[137, 176], &[137, 174], &[d], None);
+        assert!(matches!(&r, Some((seat, x)) if seat == "Purple" && x.card == "Impact of Progress"));
+    }
+
+    #[test]
+    fn scorediv_gate_negative_delta_is_still_suppressed() {
+        // The seat's TOTAL is BELOW the journal's own total because the
+        // journal OVER-stated the award (journal 14, engine 12): same shape,
+        // delta -2, one seat, one pair, no drift. Suppressed.
+        let d = gate_div("Impact of Progress", 1, 14, 12);
+        // Seated lists: seat 0 = [137, 137], seat 1 = [172, 174] (delta -2 = 12-14).
+        let r = journal_arithmetic_error_suppression(&[137, 172], &[137, 174], &[d], None);
+        assert!(matches!(&r, Some((seat, _)) if seat == "Purple"));
+    }
+
+    #[test]
+    fn scorediv_gate_direction_flip_is_never_suppressed() {
+        // Journal and engine disagree on SIGN (journal "scores 12", engine
+        // computes a net -4 loss): a genuine `scoring_culture` formula bug,
+        // must surface as a diverging game.
+        let d = gate_div("Impact of Progress", 1, 12, -4);
+        // Direction flip: journal=12, engine=-4. The flip check should reject
+        // before the delta comparison even matters.
+        let r = journal_arithmetic_error_suppression(&[137, 158], &[137, 174], &[d], None);
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn scorediv_gate_two_seats_off_is_never_suppressed() {
+        // Two award pairs, two seats: the deltas could cancel in a sorted
+        // compare and still hide two real engine bugs. The gate demands
+        // EXACTLY one pair.
+        let d0 = gate_div("Impact of Progress", 0, 12, 14);
+        let d1 = gate_div("Impact of Strength", 1, 10, 8);
+        // Two seats off: seat 0 delta +2, seat 1 delta -2.
+        let r = journal_arithmetic_error_suppression(&[139, 172], &[137, 174], &[d0, d1], None);
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn scorediv_gate_one_pair_but_two_seats_off_is_never_suppressed() {
+        // One award pair but BOTH seats' scores differ: the pair explains
+        // one seat's delta, the other seat's is something else entirely.
+        let d = gate_div("Impact of Progress", 1, 12, 14);
+        // Both seats differ by 2, but the pair only explains seat 1.
+        let r = journal_arithmetic_error_suppression(&[139, 176], &[137, 174], &[d], None);
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn scorediv_gate_in_play_culture_drift_is_never_suppressed() {
+        // The game's own culture checkpoints disagreed with the engine
+        // somewhere (a real in-play bug), so "the engine is right" is not
+        // proven for this game: even the cleanest one-pair shape must
+        // surface.
+        let d = gate_div("Impact of Progress", 1, 12, 14);
+        let drifted = CultureOracleDivergence {
+            lineno: 367,
+            actor: "Purple",
+            journal_now: 128,
+            reconstructed: 129,
+            last_action_class: None,
+        };
+        let r = journal_arithmetic_error_suppression(&[137, 175], &[137, 174], &[d], Some(&drifted));
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn scorediv_gate_seat_mismatch_between_pair_and_lists_is_never_suppressed() {
+        // The one pair's delta matches ONE seat's difference, but the pair's
+        // own SEAT is the OTHER one: the journal's own line is consistent
+        // with the engine for the pair's seat, so the pair is not the
+        // error. Must surface.
+        let d = gate_div("Impact of Progress", 1, 12, 14);
+        // Seat 0's score is the one off by 2; the pair says seat 1.
+        let r = journal_arithmetic_error_suppression(&[139, 174], &[137, 174], &[d], None);
+        assert!(r.is_none());
+    }
 
     #[test]
     fn hand_ledger_verdict_key_names_the_mechanism_for_simulator_bug_via_the_passed_in_last_event() {

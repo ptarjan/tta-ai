@@ -913,18 +913,20 @@ pub struct FinalEventAwardDivergence {
 /// for those cards to be compared against, so they are silently absent from
 /// the returned map rather than reported as false disagreements.
 ///
-/// One card can announce its award TWICE in a real journal, for two
-/// different reasons, and BOTH copies are read -- `finish_game`'s
-/// `evaluate_final_events` scores every still-pending card once per seat
-/// at game end, so the journal's end-of-game re-award is the one that
-/// must be compared against the engine's end-of-game award, not the
-/// earlier in-play one (a card that fires mid-game via a "plays event"
-/// line AND is still pending at game end re-announces at the end, e.g.
-/// game `7521849`'s "Impact of Progress"). This map therefore keeps the
-/// LATEST (i.e. end-of-game) reading per (card, seat) and discards the
-/// earlier in-play one; `extend` (the pre-fix behaviour) summed them
-/// instead, and the oracle compared that sum against a single
-/// end-of-game engine award, reporting a phantom divergence.
+/// A card that fires mid-game via a "plays event" line AND is still
+/// pending at game end is announced TWICE in its journal -- but ONLY the
+/// end-of-game line is read here: `finish_game`'s `evaluate_final_events`
+/// scores every still-pending card once per seat at game end, so the
+/// journal's end-of-game re-award is the one that must be compared
+/// against the engine's end-of-game award. The in-play line (whose first
+/// clause is the player's own age-bank, not a payout) is skipped by the
+/// `plays event` check in the loop body -- it was evaluated one or two
+/// rounds early, so its amounts are not ground truth for any end-of-game
+/// comparison. The per-seat OVERWRITE that remains is a no-op in real
+/// journals (no card has two END-OF-GAME lines; the only other line
+/// shape, "End of game ... Impact of X; ..." the summary marker, carries
+/// no amounts and is dropped by the `awards.is_empty()` guard below),
+/// kept as a safety net rather than a load-bearing rule.
 fn parse_final_event_journal_amounts(
     journal: &[Line<'_>],
     card_index: &HashMap<&'static str, CardId>,
@@ -936,7 +938,39 @@ fn parse_final_event_journal_amounts(
     let scoring_cards: Vec<(&'static str, CardId)> =
         card_index.iter().filter(|(name, _)| name.starts_with("Impact of ")).map(|(&n, &c)| (n, c)).collect();
     for line in journal {
-        let Some(first_clause) = line.text.split(';').next() else { continue };
+        // IN-PLAY PAYOUT LINES ARE NOT END-OF-GAME GROUND TRUTH. BGO logs a
+        // `<Colour> plays event <Colour> scores N culture; Current event:;
+        // III / <Impact of X>; <description>; <seat> scores M culture; ...`
+        // line the moment a scoring event is revealed MID-GAME (71 of the
+        // 749-game corpus do this for Impact of Progress alone). The line's
+        // first clause is the playing player's own age-bank ("scores 3
+        // culture" -- the +3 of the Age-III card's level), NOT a payout
+        // amount; the rest of the line is the card's MID-BOARD payout,
+        // evaluated one or two rounds before game end, so it is ground
+        // truth for NO end-of-game comparison. The oracle below compares
+        // `final_event_awards` -- the game-END recompute -- so only the
+        // end-of-game line's clauses may be read here. The end-of-game
+        // line ALWAYS follows its in-play twin (checked 2026-08-16: zero
+        // corpus games have an in-play line without an end-of-game line
+        // for the same card), so skipping in-play lines loses nothing and
+        // kills the phantom divergence the OVERWRITE rule below used to
+        // produce: the in-play line was read first, then the end-of-game
+        // line's clauses overwrote it per seat -- except the in-play line's
+        // own first clause ("<Colour> scores 3 culture") was never
+        // overwritten for its seat when that seat's end-of-game amount sat
+        // in a LATER clause, leaving the stale mid-game value in the map.
+        // Game `7521849` (2026-08-16): its end-of-game line states "Orange
+        // scores 12 culture; Purple scores 12 culture" -- the journal's own
+        // arithmetic error (Purple's board scores 14 under the card's own
+        // wording; the engine's 14 is the final-score cross-check's value)
+        // -- and the engine's per-seat awards now compare against exactly
+        // that line.
+        let first_clause = line.text.split(';').next().map(str::trim);
+        let is_in_play = first_clause.is_some_and(|c| c.contains("plays event"));
+        let Some(first_clause) = first_clause else { continue };
+        if is_in_play {
+            continue;
+        }
         let Some(&(_, card)) = scoring_cards.iter().find(|(name, _)| first_clause.starts_with(name)) else {
             continue;
         };

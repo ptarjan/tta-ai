@@ -1,0 +1,82 @@
+SCOREDIV SCAN AT HEAD 1bbcb4b (post-58175fd scan) + GATE FIX -- 2026-08-16
+=========================================================================
+The uncommitted working-tree changes from the previous session (before the
+context reset) contained a JOURNAL-ARITHMETIC-ERROR GATE for replaystats.rs
+that was BROKEN in three ways:
+
+1. The gate was defined INSIDE the `else` branch of `if a == b { ... }`
+   (the diverging case), but the `continue` statement that was supposed to
+   skip the SCOREDIV_DIVERGING_ID print for suppressed games was never
+   reached -- the gate's `if suppress_scorediv_for_this_game { continue; }`
+   sat AFTER the `println!` calls, so suppressed games still printed their
+   SCOREDIV_DIVERGING_ID lines.
+
+2. The gate's predicate was a closure over `a`/`b` (the sorted score
+   lists), but sorted lists do not preserve seat order -- two seats can
+   swap positions when sorted, so the gate could not determine WHICH seat
+   was off, only that SOME seat was off.
+
+3. The gate suppressed a game if ANY (card, seat) pair had both amounts
+   non-negative (or both non-positive) -- far too broad. Games like
+   7523162 and 7523253, which had a real one-seat divergence PLUS a
+   final-award pair with both amounts positive, were incorrectly
+   suppressed even though the award pair did NOT explain the seat's
+   delta.
+
+FIX (this session): rewrote the gate as a top-level function
+`journal_arithmetic_error_suppression(a_seated, b_seated, divergences,
+culture_oracle_divergence)` that:
+- Takes PER-SEAT (unsorted) score lists, so seat identity is preserved.
+- Requires EXACTLY ONE (card, seat) pair in `final_event_award_divergences`
+  (after filtering out direction flips).
+- Checks that exactly one seat's score differs between engine and index,
+  that the diff equals the pair's `(engine_amount - journal_amount)` delta,
+  and that the differing seat IS the pair's own seat.
+- Requires no in-play culture drift (`culture_oracle_divergence` is None).
+
+Seven fixture tests (`scorediv_gate_*` in `replaystats.rs`'s test module)
+pin every branch of the predicate. All 7 pass.
+
+CORPUS RESULT (749 completed games, difftest profile, post-fix):
+  - 24 games diverge (down from 26 at 1bbcb4b).
+  - 2 games suppressed as journal-arithmetic-error:
+      7521849  Impact of Progress seat1 journal=12 engine=14 (delta +2)
+               -- the original case; Purple's end-board scores 14 under
+                  the card's own wording; BGO's own line carried a stale
+                  in-play magnitude.
+      7522277  Impact of Happiness seat1 journal=12 engine=14 (delta +2)
+               -- same shape; all 38 culture checkpoints matched exactly;
+                  the journal's own "Impact of Happiness" line states 12
+                  but the engine's recompute gives 14.
+
+The 24 remaining diverging games are the real queue:
+  7523341 7520722 7521833 7522212 7522239 7522838 7522866 7523367
+  7521141 7523474 7522473 7522672 7523167 7523159 7522776 7522786
+  7521985 7521695 7523115 7523154 7522397 7522446 7523162 7523253
+
+Per-game notes from this session:
+  7523159  engine=[137,175] index=[137,174], Purple +1.
+           Culture oracle: 37/38 matched; first divergence at line 367
+           (Purple, UpgradeUnit, delta 1). The +1 is an in-play culture
+           bug, not a final-award error. Final events: Impact of Colonies,
+           Strength, Wonders, Variety -- no final-award divergence.
+           OPEN: trace the UpgradeUnit at line 367.
+
+  7523162  engine=[173,205,228,236] index=[171,205,228,236].
+           Seat 0 (Orange) is off by +2. Culture oracle: 72/72 matched
+           (100%), no in-play drift. Final-award divergence: Impact of
+           Population seat2 (Green) journal=12 engine=14 (delta +2).
+           The gate CORRECTLY does NOT suppress: the differing seat is 0
+           (Orange) but the award pair's seat is 2 (Green) -- the pair
+           does not explain the score divergence. The Orange +2 is a
+           separate, unexplained bug. OPEN.
+
+  7523253  engine=[198,199,215,242] index=[198,199,215,240].
+           Seat 3 (Grey) is off by +2. Culture oracle: 76/76 matched
+           (100%), no in-play drift. Final-award divergence: Impact of
+           Happiness seat2 (Green) journal=10 engine=12 (delta +2).
+           Same shape as 7523162: the pair's seat (2) does not match the
+           differing seat (3). Gate correctly does NOT suppress. The Grey
+           +2 is a separate, unexplained bug. OPEN.
+
+GUARD SWEEP: 749/725 (24 diverging, 2 suppressed) is the new baseline.
