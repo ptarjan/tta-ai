@@ -1,0 +1,184 @@
+PYTHON-AUTHORITY COMMENT AUDIT -- PASS 2 -- rust/src/legal.rs, rust/src/effects.rs
+2026-08-15. Scope: exactly these two files (under-sampled by the first pass, see
+analysis/worker_notes_2026-08-15/python_authority_audit.txt, whose findings are NOT
+repeated here except where this pass adds new information about the same item).
+
+METHOD: grepped every Python/*.py hit in the two files (46 in legal.rs, 93 in
+effects.rs -- 139 total), read all of them in context, classified. For every
+bucket-3 (load-bearing) candidate: checked docs/RULES_SPEC.md, then
+/private/tmp/{faq,col,rb}.txt, then grepped rust/src for callers of any named
+function to check liveness (the specific ask for this pass).
+
+BUCKET COUNTS:
+  1. PROVENANCE: majority of the 139 raw hits (naming ported functions/files/line
+     numbers with no rule claim attached).
+  2. PARITY NOTE / explicitly-moot-by-game-rule: ~10, including the two items in
+     the "DOWNGRADED" section below.
+  3. LOAD-BEARING (game-rule assertion, Python as cited support): 4 items below.
+
+OFF-LIMITS CHECK: legal.rs:299-341 (the Aggression declare-time strength gate) was
+read in full. It is NOT a bare Python appeal -- the comment explains in detail (BGO
+corpus evidence, 3 games, both tie and higher-strength declarations) why the gate
+was REMOVED, and is careful to say the removal does not weaken CoL/FAQ's other,
+still-enforced half (`combat::finish_aggression`'s `dfn >= atk` check). Per
+instructions this is settled and was not re-litigated. `costs::take_gate`'s `>=`
+does not appear in either of these two files (it's in costs.rs, out of this pass's
+scope) and was likewise not touched.
+
+=====================================================================
+RANKED FINDINGS (bucket 3)
+=====================================================================
+
+--- #1 UNSUPPORTED but CONFIRMED-elsewhere-in-repo -- miscited, not miscoded ---
+--- (highest value fix: redirect a future reader off the dead Python file) ---
+
+FILE: rust/src/effects.rs:601-607 (`count_armies_genghis`), called from
+`army_strength_units` (effects.rs:711-712).
+
+RULE ASSERTED: Genghis Khan's infantry-may-fill-cavalry-slots substitution is
+computed by a brute-force search maximizing the number of complete armies
+formable (`k*(need_inf+need_cav) <= avail_inf+avail_cav && k*need_cav <=
+avail_inf+avail_cav`), matching Python's nested loop. Comment: "Genghis Khan
+... [mirrors] the nested `count_armies` inside Python's `_army_strength_counts`
+Genghis branch literally, loop included ... independent bounds in Python's own
+formula, not re-derived here (if this ever needs re-justifying against the
+rulebook, START FROM `engine/effects.py::_army_strength_counts`, NOT FROM FIRST
+PRINCIPLES)." That instruction points a future engineer at a file that no
+longer exists.
+
+FUNCTION STATUS: LIVE. `count_armies_genghis` is called from
+`army_strength_units` (effects.rs:711-712), which is `pub` and is the function
+`army_strength` (effects.rs:656, also `pub`, called from `state_stats`/`compute`,
+the main per-turn stats recompute) delegates to whenever a player's leader is
+Genghis Khan. Not dead, not test-only.
+
+ORACLE CHECK: Code of Laws errata, Genghis Khan entry (/private/tmp/col.txt
+~line 1190-1198): "When forming armies, each infantry unit can be either
+cavalry or infantry (but not both) TO MAXIMIZE THE CIVILIZATION'S TOTAL STRENGTH
+RATING. The infantry units are still considered infantry for other cards, such
+as the Great Wall, regardless of their role in forming armies." This same CoL
+page is ALREADY cited correctly elsewhere in this codebase:
+docs/RULES_SPEC.md:267 -- "10.6 Composition matching: ... Genghis Khan: infantry
+may count as cavalry or infantry [CoL p.12]."
+
+VERDICT: CONFIRMED. Maximizing the count of complete armies IS equivalent to
+maximizing total strength rating here, because every army of a given tactic
+contributes the same per-army value (fresh vs. outdated is a function of the
+army's age relative to the tactic, not of which role an infantry unit is
+playing) -- so "most armies" and "highest strength" are the same objective for
+this formula, matching the CoL text's stated goal exactly. Not a rule risk. But
+the comment's OWN internal pointer ("if this ever needs re-justifying... start
+from engine/effects.py") sends a future reader to a deleted file instead of
+RULES_SPEC.md:267 / CoL p.12, which already settle it -- worth a one-line
+citation fix so nobody goes looking for the Python file this comment names.
+
+--- #2 UNSUPPORTED, but self-disclosed as moot -- same underlying game-rule fact
+    covers two separate arithmetic choices (MAX vs SUM) ---
+
+FILE: rust/src/effects.rs:89-91 (`Stats::wonder_stages` doc comment) and
+effects.rs:1199-1206 (`apply_special`'s `BuildDiscount` arm), both about
+Masonry/Architecture/Engineering (the three tiers of the Construction special
+technology).
+
+RULE ASSERTED: when multiple `wonderStagesPerAction`-printing sources are held
+at once, the wonder-stages-per-action stat takes the MAX across sources; when
+multiple `buildDiscount`-printing sources are held at once, the per-age
+resource discount stat SUMS across sources. Two DIFFERENT combination rules for
+data that lives on the same three cards. Comment (1199-1206): "matching
+`_apply_special`'s `bd[age] = bd.get(age, 0) + d` -- not maxed, which is what
+`wonderStagesPerAction` ... does ... Holding two of the three at once is
+UNREACHABLE IN THE BASE GAME (§7.6 allows one construction special-tech in
+play), so nothing today tells the two rules apart at runtime; Python sums, so
+this sums."
+
+ORACLE CHECK: Code of Laws, "Limitation" note (/private/tmp/col.txt ~line 927-
+930): "You can never be affected by two special technologies of the SAME TYPE.
+If you have two of the same type [a newer replaces the older]." Masonry/
+Architecture/Engineering are all `specialType: construction` (verified via
+`data/cards_civil.json`: all three, and only these three cards in the whole
+civil-card set, print `wonderStagesPerAction`). This CONFIRMS the comment's own
+"unreachable in the base game" claim independent of Python -- a player can never
+hold two Construction techs simultaneously, so MAX and SUM produce IDENTICAL
+results (both degenerate to "the one source's own value") in every real game.
+
+VERDICT: CONFIRMED-moot. The MAX-vs-SUM distinction cited to Python cannot
+currently diverge from a CoL-backed correct answer given the game's own
+same-type-technology exclusivity rule, which the code's author had evidently
+already worked out (hence "unreachable," independently correct) but supported
+with a Python citation rather than the CoL rule that actually proves it. Low
+risk; recommend citing CoL's "same type" limitation instead of "Python sums, so
+this sums" -- if a future card (expansion, house rule, or bugfix elsewhere)
+ever let two Construction techs coexist, this comment gives no way to tell
+which combination rule would then be correct, whereas the CoL-based reasoning at
+least explains why it doesn't matter today.
+
+--- #3 CONFIRMATION of pass-1 finding #5 (effects.rs:242-249, `best_staffed`) --
+    liveness check requested specifically for this pass ---
+
+Pass 1 flagged `best_staffed`'s build-order tie-break (effects.rs:242-249) as
+UNSUPPORTED, Python-only. This pass verified the liveness question pass 1 could
+not check: `best_staffed` is LIVE, not dead. Callers: effects.rs:366, 389, 402
+(inside `output_modifier_value`, feeding `building_output` for Charlie Chaplin /
+Sid Meier / Bill Gates-style "your best X" modifiers) and effects.rs:1010, 1016,
+1024 (inside `apply_special`'s own match, same three leader bonuses' RATING
+variants). All six call sites are reached from `compute`/`state_stats`, the
+main per-turn recompute -- this is squarely on the scoring hot path, not a
+leftover. Pass 1's risk assessment (narrow blast radius, but a genuine rule gap)
+stands; this pass adds no new oracle evidence for or against the tie-break rule
+itself, only confirms it is live code, which raises rather than lowers priority
+relative to a dead-code false alarm.
+
+--- #4 legal.rs: no CONTRADICTED or UNSUPPORTED legality-gate hazard found ---
+
+Read all 46 Python-citing comments in legal.rs in context, with particular
+attention (per instructions) to comments justifying why a move is or is not
+offered. None asserts a legality-gate rule with ONLY Python as support that
+isn't also independently backed:
+  - the has_military / 2p-pact-removal / Barbarossa / Bach / Breakthrough-
+    Robespierre / action_card_playable comments all cite CoL/RB/FAQ page numbers
+    or corpus game IDs alongside the Python cross-reference (bucket 2, not 3);
+  - `free_action_moves`'s `IncreasePopulation` arm ("Python's `increase_population`
+    branch does not apply `discount` here either") is self-evidently correct
+    independent of Python: the `discount` parameter is `card.effects.
+    resource_discount` (a RESOURCE discount), and population increase costs
+    FOOD -- a resource discount cannot structurally apply to a food cost, so
+    this needs no rule oracle, only the type of the number being passed;
+  - `politics_moves`' leader-actions-appended-last ordering (legal.rs:385-388)
+    affects only MoveList enumeration order, not which moves are legal -- no
+    legality-gate impact, out of this audit's risk category even though its
+    only citation is Python.
+This is a genuinely different result from legal.rs's neighbor files audited in
+pass 1 (events.rs, economy.rs) -- worth stating plainly rather than manufacturing
+a finding: this file's Python citations are, on close reading, mostly load-
+bearing-LOOKING but actually already cross-checked against CoL/RB/FAQ or corpus
+data by whoever wrote them.
+
+=====================================================================
+NOT RE-LITIGATED / DOWNGRADED TO BUCKET 2
+=====================================================================
+- effects.rs:461-467 + 474-513 (`happy_source_count`, St. Peter's Basilica /
+  Homer / Ravages of Time interaction): reads as a bare Python appeal at first
+  glance ("A colony counts too (docs/AUDIT_HISTORY.md, quoted in Python)") but
+  docs/AUDIT_HISTORY.md independently and explicitly documents this exact
+  behavior (unstaffed-excluded, ruined-wonder-excluded, colony-included,
+  Homer-tucked-happy-survives-ravaging) with a named corpus game (7522616) as
+  the trace. CONFIRMED, not a risk -- the Python mention is decorative, the real
+  citation is already in-repo and current.
+- effects.rs:1490-1495 ("phase 3: army strength ... Last, like Python's `s.
+  strength += army_strength(...)`"): the comment itself immediately proves the
+  ordering claim doesn't matter ("addition commutes ... regardless of
+  ordering"). Not load-bearing despite the phrasing -- it cites Python then
+  explains why the citation is unnecessary.
+
+=====================================================================
+TRUNCATION NOTE
+=====================================================================
+All 139 raw hits in the two files were read in context (not sampled) -- this
+pass is exhaustive for these two files, unlike pass 1's budget-limited triage
+of the other 11. Not separately re-checked: apply.rs's own duplicate
+`barbarossa_discounts` (apply.rs:156) vs. legal.rs's `pub(crate)` copy
+(legal.rs:662) -- both files' own comments already disclose the duplication and
+why (apply.rs:152-154: "duplicated ... legal.rs's copy is private"), the two
+implementations read identical, and this is a code-duplication observation, not
+a Python-authority-comment hazard, so it's noted here rather than promoted to a
+ranked finding.

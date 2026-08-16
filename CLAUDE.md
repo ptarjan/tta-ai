@@ -40,7 +40,8 @@ rewrites them every few minutes.
 
 ## The only metric that counts
 
-The corpus of 1011 replayed human BGO games. Current: **748 complete / 721 exact**.
+The corpus of 1011 replayed human BGO games. Current: **749 complete / 722 exact**
+(guard list `analysis/guard_ids_749.txt`).
 A clean build and green tests prove nothing about the engine — verify with the sweep
 in `analysis/GUARD_METHOD.txt`, comparing ID SETS against the frozen guard list,
 never a mean.
