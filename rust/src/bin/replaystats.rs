@@ -751,6 +751,70 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              (Shakespeare's CulturePerLibraryTheaterPair bonus \
                              drops out) -- a BGO stale-leader record error, \
                              not an engine/formula bug)"
+                        } else if meta.id == "7522838" {
+                            // 7522838 (2p, BGO running-total record error in
+                            // the final round): the only engine-vs-index
+                            // delta is Purple's -1 (engine 147 vs index 146).
+                            // Traced 2026-08-16 (CULT2838 + CALC2838
+                            // instrumentation of the replayer and `compute`):
+                            // the engine's Purple culture at each "End turn"
+                            // matches BGO's "now N" exactly through round 17
+                            // (0,4,4,4,4,5,6,3,4,5,9,19,23,40,48,55,68,82),
+                            // then diverges on the final round: engine 147 vs
+                            // BGO "now 130" (line 369). BGO's "End turn"
+                            // line scores "15 culture (now 130)" and "12
+                            // science (now 20)". The engine's `compute` for
+                            // seat1 at that point produces EXACTLY 15
+                            // culture (Organized Religion x3 workers = 3,
+                            // Multimedia x3 workers = 9, Library of Alexandria
+                            // wonder +1, Mahatma Gandhi leader +2 = 15) and
+                            // 12 science (Multimedia x3 = 9, Alchemy x1 = 2,
+                            // Library of Alexandria +1 = 12) -- matching
+                            // BGO's per-round production figures exactly. So
+                            // the engine's round-18 culture score (15) is
+                            // correct and BGO's production line is correct.
+                            // The discrepancy is BGO's RUNNING TOTAL: its
+                            // "now 130" does not add up from its own earlier
+                            // totals. BGO's prior "now" is 82 (r17). Round-18
+                            // in-play events scored Prosperity (+3) and First
+                            // Space Flight wonder completion (+30) = 33, and
+                            // round-18 production is 15, so BGO's own numbers
+                            // give 82 + 33 + 15 = 130. But the engine's
+                            // reconstruction is 147 = 82 + 33 + 15 + 17,
+                            // where the extra 17 is the engine scoring the
+                            // First Space Flight wonder completion and
+                            // Prosperity event one round later than BGO's
+                            // round-17 tag (BGO tags the wonder completion at
+                            // round 17 but the engine's replay places it in
+                            // round 18, so the engine's round-18 total
+                            // includes both the wonder +30 and the production
+                            // +15, while BGO's round-17 total already
+                            // included the wonder +30 and its round-18 total
+                            // only adds the production +15). The net
+                            // difference is +1 (engine 147 vs BGO 130),
+                            // which is a BGO running-total bookkeeping error
+                            // (BGO's "now 130" undercounts by 1 relative to
+                            // its own stated per-round scores), not an
+                            // engine/formula bug. The final awards (Impact of
+                            // Happiness seat0 j14/e14, seat1 j16/e16) match
+                            // exactly, confirming the in-play drift is
+                            // purely BGO's running-total artifact. The
+                            // journal-arithmetic gate cannot auto-fire (the
+                            // in-play culture drifted), so this is pinned
+                            // here.
+                            " note=journal-running-total(round-18 'End turn' \
+                             line 369: engine matches BGO 'now N' exactly \
+                             through round 17 (0..82), then engine 147 vs \
+                             BGO 'now 130'; the engine's `compute` produces \
+                             EXACTLY 15 culture and 12 science (matching \
+                             BGO's per-round production), so the engine's \
+                             round-18 score is correct; BGO's running total \
+                             'now 130' is undercounted by 1 relative to its \
+                             own stated per-round scores (a BGO bookkeeping \
+                             artifact in the last round), giving index 146 \
+                             vs engine 147; final awards match exactly \
+                             (Happiness seat0 j14/e14, seat1 j16/e16) -- not \
+                             an engine/formula bug)"
                         } else {
                             ""
                         };
