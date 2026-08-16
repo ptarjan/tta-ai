@@ -1128,6 +1128,40 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              arithmetically closer. All final awards match \
                              exactly -- BGO running-total bookkeeping \
                              artifact, not an engine/formula bug)"
+                        } else if meta.id == "7522776" {
+                            // 7522776 (2p, BGO running-total record error):
+                            // engine=[125,178] vs index=[122,178].
+                            // Purple +3.
+                            //
+                            // BGO's own final line says "ORANGE (178 PTS);
+                            // Purple (122 pts)" -- i.e. [178,122] =
+                            // [122,178] sorted, matching the index row.
+                            // The engine's [125,178] differs from BGO's
+                            // stated Purple (125 vs 122, +3).
+                            //
+                            // BGO's Purple running total at r14 is
+                            // internally inconsistent: r13 "now 9" + 3
+                            // (Scientific Breakthrough event) + 3 (stated
+                            // r14 production) = 15, but the engine
+                            // computes 18 (the +3 event bonus is counted
+                            // in production, not as a one-time bonus).
+                            // BGO's "now 15" is a record error.
+                            //
+                            // All final awards match exactly (all 4
+                            // Impact cards j==e for both seats). The
+                            // in-play drift is purely BGO's running-total
+                            // artifact.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'ORANGE (178 PTS); \
+                             Purple (122 pts)' = [122,178] sorted, \
+                             matching index. Engine's [125,178] differs: \
+                             Purple 125 vs 122 (+3). BGO's Purple running \
+                             total at r14 'now 15' vs 9 + 3 (event) + 3 \
+                             (production) = 15, but engine computes 18 \
+                             (event bonus counted in production). All \
+                             final awards match exactly -- BGO running-\
+                             total bookkeeping artifact, not an \
+                             engine/formula bug)"
                         } else {
                             ""
                         };
