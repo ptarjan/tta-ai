@@ -281,6 +281,16 @@ fn final_scoring_stat_value(state: &GameState, p: &PlayerState, stat: FinalScori
     match stat {
         FinalScoringStat::Strength => s.strength,
         FinalScoringStat::Science => s.science,
+        // `s.science` here IS the per-round science PRODUCTION (the marker
+        // position) -- the FAQ's "all sources of Science production that
+        // contribute to your per-round Science marker position, including
+        // Leaders and Wonders and Colonies but never Action Cards":
+        // `effects::compute` sums card/worker production, government, leader
+        // and colony contributions, and `science_rate_extra` (a permanent
+        // board grant), while the SPENDABLE science total lives in
+        // `PlayerState::science`, which this function never reads. Action
+        // cards are hand-only, so they can never enter it.
+        FinalScoringStat::ScienceProduction => s.science,
         FinalScoringStat::CultureRate => s.culture,
         FinalScoringStat::Food => s.food,
         FinalScoringStat::Resources => s.resources,
@@ -2193,6 +2203,30 @@ mod tests {
         evaluate_final_events(&mut state);
         assert_eq!(state.players[0].culture, 10);
         assert_eq!(state.players[1].culture, 0);
+    }
+
+    #[test]
+    fn impact_of_science_ranks_on_science_production_not_the_science_total() {
+        // FAQ v15 ("Impact of Science"): the ranking input is per-round
+        // SCIENCE PRODUCTION, "including Leaders and Wonders and Colonies
+        // but never Action Cards" -- not the spendable science TOTAL.
+        // Seat 1 has a bigger TOTAL (4) but no production; seat 0 produces
+        // 2 (two Philosophy workers) and must take the 3p table's 14, with
+        // seat 2's single Philosophy worker (production 1) taking the 7.
+        // (The old `FinalScoringStat::Science` variant ranked on the TOTAL
+        // here and gave the 14 to seat 1 -- the shape of every one of the
+        // 7523xxx no-drift divergences, e.g. 7523162.)
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.techs.insert(card("Philosophy"), crate::state::TechSlot { workers: 2, stored: 0 });
+        let mut p1 = blank_player(1, card("Despotism"));
+        p1.science = 4; // a big spendable total, zero production
+        let mut p2 = blank_player(2, card("Despotism"));
+        p2.techs.insert(card("Philosophy"), crate::state::TechSlot { workers: 1, stored: 0 });
+        let mut state = multi_player_state(3, &[p0, p1, p2], &[card("Impact of Science")]);
+        evaluate_final_events(&mut state);
+        assert_eq!(state.players[0].culture, 14, "most PRODUCTION (2) takes the 14");
+        assert_eq!(state.players[1].culture, 0, "a total without production scores nothing");
+        assert_eq!(state.players[2].culture, 7, "production 1 takes the 7");
     }
 
     #[test]

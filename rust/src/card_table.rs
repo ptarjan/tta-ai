@@ -3975,7 +3975,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::FinalScoring(FinalScoringBlock { culture_per_resource_produced_by_mines: 0, culture_per_food_produced_by_farms: 0, bonus_if_production_exceeds_consumption: 0, culture_per_level_of_military_units_and_arenas: 0, culture_per_level_of_special_techs_and_government: 0, culture_per_completed_wonder_by_age: [0, 0, 0, 0, 0], culture_per_content_worker_above_10: 0, culture_per_colony: 0, culture_per_civil_action: 0, culture_per_military_action: 0, culture_per_level_of_urban_buildings: 0, culture_per_happy_face: 0, max_culture_from_happy_faces: 0, culture_per_discontent_worker: 0, culture_per_age_iii_technology: 0, culture_times_lowest_production: 0, culture_per_distinct_type_of_unit_urban_building_and_special_tech: 0, has_ranking: true, ranking_stat: FinalScoringStat::Science, ranking_2p: [10, 0], ranking_3p: [14, 7, 0], ranking_4p: [15, 10, 5, 0] })],
+        special: &[Special::FinalScoring(FinalScoringBlock { culture_per_resource_produced_by_mines: 0, culture_per_food_produced_by_farms: 0, bonus_if_production_exceeds_consumption: 0, culture_per_level_of_military_units_and_arenas: 0, culture_per_level_of_special_techs_and_government: 0, culture_per_completed_wonder_by_age: [0, 0, 0, 0, 0], culture_per_content_worker_above_10: 0, culture_per_colony: 0, culture_per_civil_action: 0, culture_per_military_action: 0, culture_per_level_of_urban_buildings: 0, culture_per_happy_face: 0, max_culture_from_happy_faces: 0, culture_per_discontent_worker: 0, culture_per_age_iii_technology: 0, culture_times_lowest_production: 0, culture_per_distinct_type_of_unit_urban_building_and_special_tech: 0, has_ranking: true, ranking_stat: FinalScoringStat::ScienceProduction, ranking_2p: [10, 0], ranking_3p: [14, 7, 0], ranking_4p: [15, 10, 5, 0] })],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -5054,9 +5054,12 @@ mod baked_table_matches_source_data {
         // unrecognized `statistic` value rather than erroring. Reproduced
         // faithfully, not hardened away -- no base-game card exercises the
         // fallback (only `strengthRating`/`scienceProduction` are ever
-        // printed).
+        // printed). "science" (the marker TOTAL) is the wrong input for
+        // Impact of Science -- see `FinalScoringStat::ScienceProduction`
+        // -- so it is not aliased here.
         match statistic {
-            "scienceProduction" => FinalScoringStat::Science,
+            "scienceProduction" => FinalScoringStat::ScienceProduction,
+            "science" => FinalScoringStat::Science,
             "cultureProduction" => FinalScoringStat::CultureRate,
             "foodProduction" => FinalScoringStat::Food,
             "resourceProduction" => FinalScoringStat::Resources,

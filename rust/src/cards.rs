@@ -350,6 +350,15 @@ pub enum FinalScoringStat {
     #[default]
     Strength,
     Science,
+    /// Impact of Science's real ranking input (FAQ v15, "Impact of Science":
+    /// "Count all sources of Science production that contribute to your
+    /// per-round Science marker position, including Leaders and Wonders and
+    /// Colonies but never Action Cards"): a player's per-round SCIENCE
+    /// PRODUCTION. The old `Science` variant ranked on the SCIENCE TOTAL
+    /// (the marker position itself) instead, which the corpus contradicts
+    /// (e.g. 7523087: 14/7/0 went to 14/7/6 production, not to the 17/6/6
+    /// totals).
+    ScienceProduction,
     CultureRate,
     Food,
     Resources,
