@@ -356,11 +356,17 @@ fn scoring_culture(
         total += block.culture_per_completed_wonder_by_age[w.get().age as usize] as i32;
     }
 
-    // culturePerContentWorkerAbove10 -- "Impact of Population". A yellow
-    // token in the worker pool is a worker too (events.py's own comment: "a
-    // discontent worker is physically an unused worker moved onto the
-    // happiness track"), so this counts on-card workers PLUS
-    // `workers_free`, minus discontent.
+    // culturePerContentWorkerAbove10 -- "Impact of Population". FAQ v15:
+    // "Count the number of yellow markers that are not in your Population
+    // Bank. Subtract from this the number of Discontent Workers that you
+    // have. This is your number of Content Workers." `yellow_bank` IS the
+    // Population Bank, so the set is on-card workers PLUS `workers_free`.
+    // The pool is NOT excluded -- excluding it costs 141 exact score matches
+    // over the corpus (see analysis/worker_notes_2026-08-15/
+    // impact_of_population_pool_exclusion.txt). And note the same FAQ page
+    // says discontent workers are "never associated with any specific yellow
+    // cubes", so the old folklore that a discontent worker is a pool token
+    // moved onto a happiness track is simply false; it is an abstract count.
     let on_card: i32 = p.techs.iter().map(|(_, slot)| slot.workers as i32).sum::<i32>();
     let workers: i32 = on_card + p.workers_free as i32;
     let disc = economy::discontent(state, p);
@@ -2202,6 +2208,46 @@ mod tests {
         let mut state = multi_player_state(2, &[p0, p1], &[card("Impact of Happiness")]);
         evaluate_final_events(&mut state);
         assert_eq!(state.players[0].culture, 0);
+    }
+
+    #[test]
+    fn scoring_culture_counts_unused_workers_as_content_workers() {
+        // "Impact of Population" (`culturePerContentWorkerAbove10: 2`). FAQ
+        // v15 counts every yellow marker OUTSIDE the Population Bank, so the
+        // unused-worker pool is in. An agent once "fixed" this to count only
+        // on-card workers, for parity with the deleted Python engine; it cost
+        // 141 exact score matches over the corpus. A full `yellow_bank` (18)
+        // pins `happy_required` at 0, so discontent is 0 and the count here
+        // is exactly 6 + 6 = 12 content workers, 2 above ten, 4 culture.
+        let mut p0 = blank_player(0, card("Despotism"));
+        p0.yellow_bank = 18;
+        p0.techs.insert(card("Bronze"), crate::state::TechSlot { workers: 6, stored: 0 });
+        p0.workers_free = 6;
+        let block = final_scoring_block(card("Impact of Population")).unwrap();
+        let state = one_player_state(p0.clone());
+        assert_eq!(scoring_culture(&state, &p0, block), 4);
+    }
+
+    #[test]
+    fn scoring_culture_is_unchanged_by_moving_a_worker_out_of_the_pool() {
+        // Discontent depends only on the yellow bank and happy faces, never
+        // on where a token that has left the bank is standing -- so putting a
+        // worker to work cannot change an "Impact of Population" award. This
+        // is the invariant the on-card-only version broke: under it, the same
+        // twelve tokens score 0 in the pool and 4 on a card.
+        let mut pooled = blank_player(0, card("Despotism"));
+        pooled.yellow_bank = 18;
+        pooled.techs.insert(card("Bronze"), crate::state::TechSlot { workers: 6, stored: 0 });
+        pooled.workers_free = 6;
+        let mut employed = blank_player(0, card("Despotism"));
+        employed.yellow_bank = 18;
+        employed.techs.insert(card("Bronze"), crate::state::TechSlot { workers: 12, stored: 0 });
+        employed.workers_free = 0;
+        let block = final_scoring_block(card("Impact of Population")).unwrap();
+        assert_eq!(
+            scoring_culture(&one_player_state(pooled.clone()), &pooled, block),
+            scoring_culture(&one_player_state(employed.clone()), &employed, block),
+        );
     }
 
     #[test]
