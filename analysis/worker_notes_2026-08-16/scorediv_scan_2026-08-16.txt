@@ -1,0 +1,57 @@
+SCOREDIV SCAN AT HEAD 828c9f9 (Impact of Science landing) -- 2026-08-16
+=========================================================================
+Command (from rust/):
+    SCOREDIV_DUMP_IDS=1 ./target/difftest/replaystats \
+        ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+Result: 749/749 completed flipped state.game_over; 722/749 exact
+against index.tsv -- the 749/722 guard baseline reproduced byte-for-byte
+(27 diverging games). Raw output: /tmp/scorediv_2026-08-16b.txt (untracked,
+regenerable).
+
+23 of the 27 have NO in-play culture drift (culture_oracle clean), so their
+whole divergence sits in final scoring or in index.tsv itself. The four
+drifting ones (7523341 7520722 7521833 7522212 7522838 7522866 7523367
+7521141 7523474 7522473 7522446 7522672 7523167 7523159 -- 13, not four; the
+rest drift) are mid-game bugs and are NOT this pass's target.
+
+GAME-BY-GAME VERDICTS SO FAR
+-------------------------------------------------------------------------
+7522075  INDEX IS WRONG; ENGINE CORRECT.
+    BGO's own stated final awards (Impact of Balance 12, Wonders 9,
+    Competition 10, Agriculture 13 = 44; pre-final 60) sum to 104, not the
+    recorded 81. Engine [84, 172] vs index [81, 172]: the -3 is BGO's own
+    arithmetic/record error. No engine change.
+
+7522239  JOURNAL VS INDEX INCONSISTENCY (Bill Gates bonus), not an engine bug.
+    Journal's last end-turn total: Orange 42. Bill Gates bonus line: +12
+    (Orange's 20 science production = 2 labs x 2 workers; Bill Gates'
+    CultureOnLeaveEqualToLabResourceProduction). 42 + 12 = 54 = the
+    INDEX score. The JOURNAL's own final total line never records the
+    bonus. Engine 54 == index 54... wait, engine is [14, 54] vs index
+    [11, 54]: the +3 on the OTHER seat (Purple 14 vs 11) is unexplained
+    by the Gates line (it pays Orange only). Re-check before concluding.
+    [UPDATE after re-read: Purple's 11 is the index value; journal last
+    end-turn Purple total was 36 pre-round-19, then round 19's end turn
+    is the "UPRISING - NO PRODUCTION PHASE" line, so no production that
+    round. The +3 needs its own trace -- OPEN.]
+
+7522277  GENGHIS KHAN 2p RULE QUESTION (open, see below).
+    Engine [114, 213] vs index [112, 213]. The +2 is exactly 2 turns of
+    the +3 Genghis bonus where BGO's own lines say "Genghis Khan scores
+    0 culture" while the engine's top-two rule pays 3. See
+    genghis_2p_corpus_survey.txt for the corpus-wide picture.
+
+OPEN QUESTION FOR THE USER (asked via buttons 2026-08-16 ~02:00, no answer
+yet; keep current errata behaviour unless answered):
+    Genghis Khan 2p: keep the CoL/FAQ errata ("the stronger", ties won)
+    or match BGO's looser top-two behaviour? Corpus: BGO pays the bonus
+    on 695/863 two-player Genghis turns; strict top-1 explains 438/863,
+    top-2 explains 631/863. 171 awards go to clearly-weaker civs.
+    Do NOT change the engine on BGO behaviour alone.
+
+REMAINING NO-DRIFT DIVERGING GAMES TO TRACE (this pass's queue):
+    7521849 7523087 7523159 7523162 7523253 (and the rest of the 23 minus
+    the three above)
+
+GUARD SWEEP: not yet re-run for this session (no code change landed yet,
+so the 749/722 sets stand; re-run before landing anything).

@@ -153,10 +153,14 @@ struct Bucket {
     example: String,
 }
 
-fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Result<(), String> {
+fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_game_ids: Option<&[String]>) -> Result<(), String> {
     let card_index = build_card_index();
     let mut games = corpus::parse_index(index_path)?;
-    if let Some(n) = sample_size {
+    if let Some(ids) = only_game_ids {
+        let keep: Vec<String> = games.iter().filter(|g| ids.contains(&g.id)).map(|g| g.id.clone()).collect();
+        games = corpus::parse_index(index_path)?;
+        games.retain(|g| keep.contains(&g.id));
+    } else if let Some(n) = sample_size {
         games.truncate(n);
     }
 
@@ -696,15 +700,28 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>) -> Resu
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
     if argv.len() < 2 {
-        eprintln!("usage: replaystats <index.tsv> <journals_dir> [sample_size]");
+        eprintln!("usage: replaystats <index.tsv> <journals_dir> [sample_size | --game ID ...]");
         return ExitCode::FAILURE;
     }
     let sample_size = argv.get(2).and_then(|s| s.parse().ok());
-    match run(&argv[0], &argv[1], sample_size) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
+    // `--game ID ...` replays ONLY the named games, in the order given, so
+    // a single-game trace does not wait on the full 1,011-game corpus.
+    if argv.get(2).map(String::as_str) == Some("--game") {
+        let ids: Vec<String> = argv[3..].to_vec();
+        match run(&argv[0], &argv[1], None, Some(&ids)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        }
+    } else {
+        match run(&argv[0], &argv[1], sample_size, None) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
         }
     }
 }

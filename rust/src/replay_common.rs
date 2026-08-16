@@ -847,11 +847,25 @@ fn set_current_events(state: &mut GameState, reveal_order: &[CardId]) {
 /// grounding is strictly no worse than the pre-existing fictional pile this
 /// replaces it with.
 fn parse_real_final_events(text: &str, card_index: &HashMap<&'static str, CardId>) -> Vec<CardId> {
-    text.split(';')
-        .map(str::trim)
-        .filter(|clause| clause.starts_with("Impact of"))
-        .filter_map(|name| card_index.get(name).copied())
-        .collect()
+    // `dedup` on CardId, not on the clause string: two DIFFERENT card names
+    // can never collide here (each maps to a distinct id), but the SAME name
+    // can appear twice in one announcement. BGO logs the marker line
+    // per-seat (one line per player's turn, identical text), and the
+    // replay's top-of-loop `game_over` guard stops after the first copy --
+    // which works only for journals whose FIRST copy is the one whose seat
+    // triggered game end. A journal that logs the trigger seat's copy LAST
+    // (7523253: Grey's copy precedes Orange's) reaches the "End of game"
+    // marker with `game_over` still false and feeds this function a line
+    // whose pending SET is already scored TWICE -- one card per logged copy.
+    // The announced SET is a set, so keep one entry per card, in order.
+    let mut out = Vec::new();
+    for clause in text.split(';').map(str::trim).filter(|c| c.starts_with("Impact of")) {
+        let Some(&card) = card_index.get(clause) else { continue };
+        if !out.contains(&card) {
+            out.push(card);
+        }
+    }
+    out
 }
 
 /// Overwrite the still-pending event piles with exactly the real cards
@@ -899,12 +913,18 @@ pub struct FinalEventAwardDivergence {
 /// for those cards to be compared against, so they are silently absent from
 /// the returned map rather than reported as false disagreements.
 ///
-/// `scores`/`loses` are BGO's own two verbs for a positive/negative net
-/// award (mirrors `apply_final_scoring_block_live`'s in-play announcement,
-/// same shape); a card/seat pair that would have awarded exactly 0 prints no
-/// clause at all for that seat (confirmed against every sampled example),
-/// so an ABSENT seat is not itself evidence of anything and is left out
-/// rather than assumed to mean zero.
+/// One card can announce its award TWICE in a real journal, for two
+/// different reasons, and BOTH copies are read -- `finish_game`'s
+/// `evaluate_final_events` scores every still-pending card once per seat
+/// at game end, so the journal's end-of-game re-award is the one that
+/// must be compared against the engine's end-of-game award, not the
+/// earlier in-play one (a card that fires mid-game via a "plays event"
+/// line AND is still pending at game end re-announces at the end, e.g.
+/// game `7521849`'s "Impact of Progress"). This map therefore keeps the
+/// LATEST (i.e. end-of-game) reading per (card, seat) and discards the
+/// earlier in-play one; `extend` (the pre-fix behaviour) summed them
+/// instead, and the oracle compared that sum against a single
+/// end-of-game engine award, reporting a phantom divergence.
 fn parse_final_event_journal_amounts(
     journal: &[Line<'_>],
     card_index: &HashMap<&'static str, CardId>,
@@ -933,8 +953,18 @@ fn parse_final_event_journal_amounts(
             };
             awards.push((colour.seat(), signed));
         }
-        if !awards.is_empty() {
-            out.entry(card).or_default().extend(awards);
+        if awards.is_empty() {
+            continue;
+        }
+        // Overwrite, not extend: a later line for the same (card, seat) is
+        // the end-of-game re-award and supersedes the earlier in-play one.
+        let entry = out.entry(card).or_default();
+        for (seat, signed) in awards {
+            if let Some(slot) = entry.iter_mut().find(|(s, _)| *s == seat) {
+                slot.1 = signed;
+            } else {
+                entry.push((seat, signed));
+            }
         }
     }
     out
@@ -7031,6 +7061,38 @@ pub fn replay_game(
     let mut civil_deck_premature_advance: Option<PrematureCivilAdvance> = None;
 
     'lines: for (i, line) in journal.iter().enumerate() {
+        if std::env::var("YBANK_DEBUG").is_ok()
+            && (line.text.contains("End turn")
+                || line.text.starts_with("End of turn")
+                || line.text.contains("End of game"))
+        {
+            for pi in 0..r.state.num_players {
+                let p = &r.state.players[pi as usize];
+                eprintln!(
+                    "YBANK_DEBUG game={} line={} player={} yellow_bank={} workers_free={} culture={}",
+                    meta.id, line.lineno, pi, p.yellow_bank, p.workers_free, p.culture
+                );
+            }
+        }
+        if std::env::var("WARTIME_DEBUG").is_ok()
+            && line.text.contains("declares War over")
+        {
+            for pi in 0..r.state.num_players {
+                let p = &r.state.players[pi as usize];
+                let st = crate::effects::state_stats(&r.state, p);
+                let army = crate::effects::army_strength(p);
+                eprintln!(
+                    "WARTIME_DEBUG game={} line={} player={} total={} army={} base={} leader={:?}",
+                    meta.id,
+                    line.lineno,
+                    pi,
+                    st.strength,
+                    army,
+                    st.strength - army,
+                    p.leader.get().name
+                );
+            }
+        }
         if std::env::var("SCOREDIV_LINE_DEBUG").is_ok() {
             eprintln!(
                 "SCOREDIV_LINE i={i} lineno={} game_over={} completed={} text={:.60?}",
@@ -9606,6 +9668,25 @@ mod tests {
                 card("Impact of Happiness"),
                 card("Impact of Architecture"),
             ]
+        );
+    }
+
+    /// The SAME card can be announced TWICE in one marker line: BGO logs
+    /// the line per seat, and a journal whose trigger seat's copy is not
+    /// the first one (7523253: Grey's copy precedes Orange's) reaches the
+    /// "End of game" marker with `game_over` still false and a line whose
+    /// pending SET is duplicated. The announced SET is a set, so the
+    /// parse must keep one entry per card, in order of first appearance --
+    /// otherwise `ground_final_events` plants the duplicate in
+    /// `future_events` and `evaluate_final_events` scores that card twice.
+    #[test]
+    fn parse_real_final_events_keeps_one_entry_per_card_when_the_line_announces_one_twice() {
+        let card_index = build_card_index();
+        let text = "End of game Check the journal to get the final impacts effects :; Impact of Progress; \
+                    Impact of Progress; ; WINNER IS PIOTR AS ORANGE (240 PTS); 2nd is X as Purple (199 pts)";
+        assert_eq!(
+            parse_real_final_events(text, &card_index),
+            vec![card("Impact of Progress")]
         );
     }
 

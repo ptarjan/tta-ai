@@ -354,6 +354,20 @@ fn scoring_culture(
     }
 
     // culturePerLevelOfSpecialTechsAndGovernment -- "Impact of Progress".
+    // §12.5.2 / card text: "Each civilization scores 2 culture per level of
+    // each of its government and special (blue) technologies." The card
+    // counts the government's level plus every SpecialTech (blue tech) the
+    // player has built. It does NOT count Temples (Religion / Theology /
+    // Organized Religion): those are a separate card type in this engine
+    // (`CardType::Temple`) and BGO's own journals confirm they are excluded
+    // from this award. Game `7521849` (2026-08-16) is the decisive example:
+    // its journal line states "Orange scores 12 culture; Purple scores 12
+    // culture" for Impact of Progress, and the engine (gov + SpecialTech
+    // only) computed exactly 12/12. A version that also counted Temples
+    // would have scored Orange 14 (the extra +2 from his Age-A "Religion"
+    // temple, which is not a "special (blue) technology" by the card's own
+    // wording) -- that is the bug the 2026-08-16 pass's first draft of this
+    // comment proposed, and the journal's own numbers reject it.
     let mut tech_and_gov_levels = p.government.level() as i32;
     for (id, _) in p.techs.of_type(CardType::SpecialTech) {
         tech_and_gov_levels += id.level() as i32;
@@ -2203,6 +2217,32 @@ mod tests {
         evaluate_final_events(&mut state);
         assert_eq!(state.players[0].culture, 10);
         assert_eq!(state.players[1].culture, 0);
+    }
+
+    #[test]
+    fn impact_of_progress_counts_government_and_special_techs_but_not_temples() {
+        // Game `7521849` (2026-08-16 score-divergence pass): its journal's
+        // own "Impact of Progress" line states "Orange scores 12 culture;
+        // Purple scores 12 culture", and the engine (gov + SpecialTech only)
+        // computed exactly 12/12. A version that also counted Temples would
+        // have scored Orange 14 (the extra +2 from his Age-A "Religion"
+        // temple) -- the journal's own numbers reject that reading, so the
+        // card must count government + SpecialTech only, not Temples.
+        //
+        // Seat 0: government Republic (II, level 2), one SpecialTech
+        // (Masonry, I, level 1) -> 2+1 = 3 levels -> 6 culture.
+        // Seat 1: government Democracy (III, level 3), one SpecialTech
+        // (Masonry, I, level 1), one Temple (Theology, I, level 1) ->
+        // 3+1 = 4 levels (Temple excluded) -> 8 culture.
+        let mut p0 = blank_player(0, card("Republic"));
+        p0.techs.insert(card("Masonry"), crate::state::TechSlot { workers: 1, stored: 0 });
+        let mut p1 = blank_player(1, card("Democracy"));
+        p1.techs.insert(card("Masonry"), crate::state::TechSlot { workers: 1, stored: 0 });
+        p1.techs.insert(card("Theology"), crate::state::TechSlot { workers: 1, stored: 0 });
+        let mut state = multi_player_state(2, &[p0, p1], &[card("Impact of Progress")]);
+        evaluate_final_events(&mut state);
+        assert_eq!(state.players[0].culture, 6, "seat 0: (gov 2 + special 1) * 2");
+        assert_eq!(state.players[1].culture, 8, "seat 1: (gov 3 + special 1) * 2, Temple excluded");
     }
 
     #[test]

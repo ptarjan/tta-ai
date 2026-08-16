@@ -281,14 +281,36 @@ pub fn uprising(state: &GameState, p: &PlayerState) -> bool {
 /// never even computes `pop_cost`) so it cannot consume a discount it never
 /// looked at.
 pub fn increase_population(p: &mut PlayerState, cost: u16, consume_one_time: bool) -> bool {
-    if p.yellow_bank == 0 {
-        return false;
-    }
     if p.food < cost {
         return false;
     }
     pay_food(p, cost);
-    p.yellow_bank -= 1;
+    // §3.3/FAQ p.15: a population increase moves a token out of the
+    // Population Bank, and the bank IS the supply -- but a GRANT still
+    // succeeds when the bank runs empty: BGO's own journals grant
+    // population at yellow_bank 0 (game 7522397, Orange round 17: bank 0,
+    // workers_free 0 before the grant; the journal's own end-turn line shows
+    // the resulting consumption of 3, which is only possible with a token on
+    // the board). The old `yellow_bank == 0 -> return false` guard was an
+    // ENGINE BUG: it silently dropped such grants, and every caller swallows
+    // the `false` (events.rs's `free_increase_population` breaks, h_pop's
+    // debug_assert never fires in release). The drop then showed up as a
+    // +2/+4 culture mismatch in every late-game Impact-of-Population /
+    // Impact-of-Happiness settlement whose real game had granted past the
+    // empty bank. The `yellow_bank` field's own doc calls the extra tokens
+    // "bookkeeping only" for exactly this reason: the board is the
+    // population, not the bank.
+    if p.yellow_bank > 0 {
+        p.yellow_bank -= 1;
+    } else {
+        // The grant outlived the bank: one extra token entered the supply
+        // from outside it. `yellow_granted` is the field's own bookkeeping
+        // for exactly this (state.rs: "lets tests assert nothing else ever
+        // creates a token") -- every OTHER grant route (grant_yellow,
+        // events' take_yellow_tokens_from_weakest, the yellow action card's
+        // gain) already records it.
+        p.yellow_granted = p.yellow_granted.saturating_add(1);
+    }
     p.workers_free += 1;
     // Development of Civil Life's grant is ONE mutually-exclusive choice
     // (pop XOR build XOR develop), not three independent discounts -- using
@@ -1499,9 +1521,16 @@ mod tests {
         assert!(!increase_population(&mut p, 4, false));
         assert_eq!(p.food, 2, "a rejected attempt must not spend anything");
 
+        // An EMPTY bank no longer rejects a grant -- see
+        // `increase_population`'s own §3.3 comment (the 7522397 fix):
+        // BGO's journals grant population at yellow_bank 0, and the bank's
+        // own doc calls the extra tokens "bookkeeping only". Only a paid
+        // increase can be rejected, and only on food.
         p.yellow_bank = 0;
         p.food = 100;
-        assert!(!increase_population(&mut p, 0, false));
+        assert!(increase_population(&mut p, 0, false));
+        assert_eq!(p.workers_free, 1, "a grant succeeds past the empty bank");
+        assert_eq!(p.yellow_bank, 0, "the bank stays at zero, not negative");
     }
 
     /// THE REGRESSION: fixed 2026-08-05.  Development of Civil Life's

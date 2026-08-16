@@ -1105,6 +1105,15 @@ fn finish_game(state: &mut GameState) {
     // field to read here and the call is unconditional.
     events::evaluate_final_events(state);
 
+    // §12.5.3: end-of-game culture a card pays for what it leaves behind --
+    // Bill Gates' `CultureOnLeaveEqualToLabResourceProduction` (the only
+    // base-game carrier) included. Applied here, after `evaluate_final_events`
+    // and before `game_over` flips, because BGO's own journal shows it inside
+    // the final-scoring sequence: game `7523253`'s announcement line states
+    // "Bill Gates scoring Grey scores 6 culture" between the "End of game"
+    // marker and the "Impact of ..." lines, and Grey's recorded final 198 is
+    // exactly 192 (every pending Impact award, all matching the journal to
+    // the point) plus that 6.
     for idx in 0..state.num_players as usize {
         let bonus = end_of_game_bonus(&state.players[idx]);
         let p = &mut state.players[idx];
@@ -1257,6 +1266,48 @@ pub fn step(state: &mut GameState, mv: Move) {
 }
 
 // ================================================================== tests
+
+#[cfg(test)]
+mod finish_game_tests {
+    use super::*;
+    use crate::state::TechSlot;
+
+    /// §12.5.3: at GAME END Bill Gates' owner scores `lab level * workers` --
+    /// the same quantity his `ResourcesPerLabEqualToLevel` pays every turn.
+    /// Traced live to game `7523253` (2026-08-16 score-divergence pass): the
+    /// journal's announcement line states "Bill Gates scoring Grey scores 6
+    /// culture" AFTER the "End of game" marker, Grey's recorded final 198 is
+    /// exactly 192 (every pending "Impact of ..." award, each matching the
+    /// journal to the point) plus that 6, and this function's pre-fix
+    /// absence was the sole +6 gap -- so it belongs in `finish_game`'s final
+    /// scoring, not anywhere else.
+    #[test]
+    fn finish_game_scores_bill_gates_lab_production_at_game_end() {
+        let mut state = new_game(2, 1);
+        state.players[0].techs.insert(named("Computers"), TechSlot { workers: 2, stored: 0 });
+        state.players[0].leader = named("Bill Gates");
+        finish_game(&mut state);
+        // Computers is level III with 2 workers -> 3 * 2 = 6.
+        assert_eq!(scores(&state), vec![6, 0]);
+    }
+
+    /// The guard itself: a leader WITHOUT the special carries nothing, and a
+    /// player with no leader at all scores nothing, whatever their labs.
+    #[test]
+    fn finish_game_scores_no_bonus_without_the_special() {
+        let mut state = new_game(2, 1);
+        state.players[0].techs.insert(named("Computers"), TechSlot { workers: 2, stored: 0 });
+        state.players[0].leader = named("Albert Einstein");
+        finish_game(&mut state);
+        assert_eq!(scores(&state), vec![0, 0]);
+
+        let mut state = new_game(2, 1);
+        state.players[0].techs.insert(named("Computers"), TechSlot { workers: 2, stored: 0 });
+        state.players[0].leader = CardId::NONE;
+        finish_game(&mut state);
+        assert_eq!(scores(&state), vec![0, 0]);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1893,3 +1944,4 @@ mod tests {
         assert_eq!(s.phase, Phase::Done);
     }
 }
+
