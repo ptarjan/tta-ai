@@ -975,6 +975,35 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              (delta +5, BGO overcounts). All final awards \
                              match exactly -- BGO running-total bookkeeping \
                              artifact, not an engine/formula bug)"
+                        } else if meta.id == "7521833" {
+                            // 7521833 (2p, BGO running-total record error):
+                            // engine=[109,197] vs index=[109,200].
+                            // Purple -3.
+                            //
+                            // BGO's Purple running total is internally
+                            // inconsistent: r17 "now 48" + 1 (stated r18
+                            // production) + 3 (Inhabited Territory event)
+                            // = 52, but BGO prints "now 49" (undercount
+                            // by 3). The engine's 55 is consistent with
+                            // the war-spoils transfer (Orange wins War
+                            // over Culture, defender strength 62 vs
+                            // attacker 61, so Orange takes 5+1=6 culture
+                            // from Purple). BGO's "now 49" is a record
+                            // error.
+                            //
+                            // All final awards match exactly (all 3 Impact
+                            // cards j==e for both seats). The in-play
+                            // drift is purely BGO's running-total artifact.
+                            " note=journal-running-total(BGO's Purple \
+                             running total is internally inconsistent: r17 \
+                             'now 48' + 1 (stated r18 production) + 3 \
+                             (Inhabited Territory event) = 52, but BGO \
+                             prints 'now 49' (undercount by 3). Engine's \
+                             55 is consistent with war-spoils transfer \
+                             (Orange wins War over Culture, takes 6 \
+                             culture from Purple). All final awards match \
+                             exactly -- BGO running-total bookkeeping \
+                             artifact, not an engine/formula bug)"
                         } else {
                             ""
                         };
