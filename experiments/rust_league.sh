@@ -124,7 +124,17 @@ for PLAYERS in 2 3 4; do
     # picks up a rebuilt binary without anyone having to remember to restart
     # it, and re-reads its own checkpoint on the way in, which is the path
     # worth exercising regularly rather than only after a crash.
-    nohup "$CLIMB" \
+    # `nice -n 15`: the climb is the IDLE-time job.  This box is a 6-core
+    # i5-8500B with no hyperthreading, and three arms will happily saturate
+    # it, so an interactive build or a corpus sweep started while they run
+    # would otherwise contend with them for every core.  At nice 15 the
+    # scheduler hands the CPU to anything else that wants it and the arms
+    # soak up only what is left -- they lose nothing but wall-clock, which is
+    # exactly the trade wanted, and they no longer have to be stopped by hand
+    # before doing real work.  It must be here rather than a `renice` after
+    # the fact: cron re-runs this script every 10 minutes and `--hours 6`
+    # makes each arm re-exec, so any hand-applied priority is transient.
+    nohup nice -n 15 "$CLIMB" \
         --players "$PLAYERS" \
         --out "$OUT" \
         --log "$LOGDIR/rust_climb_${PLAYERS}p.jsonl" \

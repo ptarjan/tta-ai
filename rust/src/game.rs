@@ -451,18 +451,17 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
 
 /// Player count for deck trimming and event tables (§13, and resignations).
 /// Clamped to 2..=4: a one-player endgame still has to price a deck.
-/// The number of civilizations still in the game. Unlike every other
-/// call site, this must NOT clamp to a minimum of two: §5.11 ends the
-/// game at the FIRST resignation (BGO lets a seat "concede" mid-round),
-/// and `final_event_awards` needs to see the resulting one-civ game to
-/// skip §12.5.2's `rankingCulture` tables, which BGO applies only to two
-/// or more civilizations (see that function's comment and game
-/// `7522397`, whose journal states only the survivor's awards). The
-/// other two call sites (`replenish`'s row sweep, `advance_age`'s
-/// dealing) are round-bound and therefore see at least two civs in
-/// practice, where `clamp` and `max(1)` agree.
+///
+/// The clamp is part of the contract, not a defensive tic. Every consumer
+/// indexes a two-to-four-wide table with it -- [`build_deck`]'s
+/// `num_players - 2` slot (which UNDERFLOWS below two), [`sweep_count`],
+/// and [`crate::events::live_count_idx`] -- so a caller that wants the RAW
+/// number of surviving civilizations wants `state.active().count()`, not
+/// this. §5.11 ends the game at the first resignation, so a one-civ state is
+/// reachable; the two final-scoring sites in [`crate::events`] that care
+/// about that case read the raw count themselves and say why.
 pub fn live_count(state: &GameState) -> usize {
-    state.active().count().max(1)
+    state.active().count().clamp(2, 4)
 }
 
 /// §2.1: discard the leftmost N cards, slide the rest left, deal from the

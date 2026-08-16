@@ -7,7 +7,6 @@ use std::process::ExitCode;
 use tta::{
     corpus::{self},
     replay_common::{build_card_index, replay_game},
-    CardType,
 };
 
 fn main() -> ExitCode {

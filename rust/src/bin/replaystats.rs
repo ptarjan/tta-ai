@@ -598,6 +598,56 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                                 d.reconstructed - d.journal_now
                             ))
                         );
+                        // AUDIT line: the journal's OWN final lines, per card,
+                        // per seat (journal-stated amount), next to this
+                        // binary's computed award for the same (card, seat).
+                        // The gate above already proved the single-pair
+                        // games; this line makes EVERY diverging game's
+                        // final-scoring residual checkable against BGO's
+                        // own arithmetic without re-reading the journal --
+                        // a game whose whole residual sits in these pairs is
+                        // a journal-side record error, not an engine bug.
+                        // Diverging seats carry the JOURNAL amount (that is
+                        // the point: what BGO itself stated); agreeing seats
+                        // carry the computed amount (journal == computed
+                        // there, so the same value either way).
+                        let mut journal_by_seat: std::collections::HashMap<(String, u8), i32> =
+                            std::collections::HashMap::new();
+                        for (card, steps) in &result.final_event_awards_computed {
+                            let mut by_seat: std::collections::HashMap<u8, i32> =
+                                std::collections::HashMap::new();
+                            for &(seat, amount) in steps {
+                                *by_seat.entry(seat).or_insert(0) += amount;
+                            }
+                            for (seat, amount) in by_seat {
+                                let entry = journal_by_seat
+                                    .entry((card.to_string(), seat))
+                                    .or_insert(amount);
+                                if let Some(d) = result
+                                    .final_event_award_divergences
+                                    .iter()
+                                    .find(|d| d.card == *card && d.seat == seat)
+                                {
+                                    *entry = d.journal_amount;
+                                }
+                            }
+                        }
+                        for (card, steps) in &result.final_event_awards_computed {
+                            let mut by_seat: std::collections::HashMap<u8, i32> =
+                                std::collections::HashMap::new();
+                            for &(seat, amount) in steps {
+                                *by_seat.entry(seat).or_insert(0) += amount;
+                            }
+                            let mut seats: Vec<u8> = by_seat.keys().copied().collect();
+                            seats.sort_unstable();
+                            for seat in seats {
+                                let j = journal_by_seat[&(card.to_string(), seat)];
+                                eprintln!(
+                                    "SCOREDIV_FINAL {} {} seat{} j{}/e{}",
+                                    meta.id, card, seat, j, by_seat[&seat]
+                                );
+                            }
+                        }
                     }
                 }
             }

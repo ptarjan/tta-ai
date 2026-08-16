@@ -510,23 +510,21 @@ pub fn final_event_awards(state: &GameState) -> Vec<(CardId, Vec<(u8, i32)>)> {
         let block = final_scoring_block(card).expect(
             "pending_final_events only returns cards final_scoring_block resolves to Some",
         );
-        let mut ranked: Option<Vec<u8>> = None;
-        if block.has_ranking {
-            if live >= 2 {
-                // §12.5.2's ranking tables are defined only for two or more
-                // civilizations: a game that ended by resignation (BGO lets
-                // a seat "concede" mid-round, and §5.11 ends the game at the
-                // first resignation -- see `finish_game`'s comment) can have
-                // exactly ONE player left standing, and the journal's own
-                // final lines then state only that player's award (game
-                // `7522397`: "Purple scores 10 culture" alone on Impact of
-                // Strength/Population, no 2p table applied). BGO also never
-                // applies a table to a resigned seat, and `order` excludes
-                // the resigned players, so skipping the table here (rather
-                // than clamping `live` to 2) matches the journal exactly.
-                ranked = Some(rank_by_final_scoring_stat(state, &order, block.ranking_stat));
-            }
-        }
+        // §12.5.2's ranking tables are defined only for two or more
+        // civilizations. A game that ended by resignation (BGO lets a seat
+        // "concede" mid-round, and §5.11 ends the game at the first
+        // resignation) can have exactly ONE civilization left standing, and
+        // the journal's own final lines then state only that player's award
+        // (game `7522397`: "Purple scores 10 culture" alone on Impact of
+        // Strength/Population, with no 2p table applied). So the gate reads
+        // the RAW survivor count, not `game::live_count` -- that one is
+        // clamped to 2..=4 because its other consumers index tables with it,
+        // and clamping here would invent a two-player ranking nobody played.
+        let ranked = if block.has_ranking && state.active().count() >= 2 {
+            Some(rank_by_final_scoring_stat(state, &order, block.ranking_stat))
+        } else {
+            None
+        };
         let table: &[i16] = match live {
             2 => &block.ranking_2p,
             3 => &block.ranking_3p,
@@ -1664,7 +1662,11 @@ fn apply_final_scoring_block_live(
     block: &crate::cards::FinalScoringBlock,
 ) {
     let live = game::live_count(state);
-    let ranked = if block.has_ranking {
+    // Same §12.5.2 gate, and for the same reason, as [`final_event_awards`]:
+    // this is the twin that actually MUTATES culture, so a gate applied to
+    // only one of the two would make the scoring the engine performs disagree
+    // with the scoring it reports.
+    let ranked = if block.has_ranking && state.active().count() >= 2 {
         Some(rank_by_final_scoring_stat(state, order, block.ranking_stat))
     } else {
         None

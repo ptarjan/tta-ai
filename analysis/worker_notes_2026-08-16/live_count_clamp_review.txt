@@ -1,0 +1,93 @@
+REVIEW OF THE 2026-08-16 RESIGNATION / live_count WORK
+======================================================
+
+Context: another agent landed 58175fd..f11ab7a and left an uncommitted change
+to rust/src/game.rs and rust/src/events.rs gating §12.5.2's rankingCulture
+tables on there being two or more surviving civilizations (game 7522397, which
+ended by resignation with one civilization standing). The finding is right and
+is kept. This note records what was wrong with the mechanism and what replaced
+it, so the same shape is not rebuilt.
+
+
+1. HEAD DID NOT COMPILE
+-----------------------
+rust/src/bin/replaystats.rs:625
+
+    for (seat, amount) in by_seat {          // by-value, `amount` is i32
+        let entry = journal_by_seat
+            .entry((card.to_string(), seat))
+            .or_insert(*amount);             // E0614
+
+Fixed to `.or_insert(amount)`. This was committed, so origin/master's CI
+(`cargo clippy --all-targets -- -D warnings`) was red. Worth noting that
+`cargo test --profile fasttest --lib` does NOT build the analysis binaries and
+would not have caught it -- only `--all-targets` does.
+
+
+2. THE CLAMP IS PART OF live_count'S CONTRACT
+---------------------------------------------
+The uncommitted change was:
+
+    -    state.active().count().clamp(2, 4)
+    +    state.active().count().max(1)
+
+That is a global change to every consumer, not a local one, and two of them
+break below two:
+
+  * `game::build_deck` opens with `let slot = num_players - 2;` on a `usize`.
+    A live count of 1 underflows to usize::MAX and then panics on
+    `c.count[slot]`. `replay_common.rs:7004` calls
+    `build_deck(state.age_civil, true, game::live_count(state))` directly, so
+    this is reachable from the replayer, not just in theory. `build_deck`'s
+    own doc comment already says "`num_players` must be `2..=4`; callers below
+    that ... must not call this".
+  * `game::sweep_count(1)` falls into the `_ => 1` arm -- the FOUR-player
+    sweep -- rather than 2p's 3. Silent, no panic.
+
+`events::live_count_idx` happens to be safe (`saturating_sub(2).min(2)` maps 1
+and 2 to the same index), which is what makes this the dangerous kind of
+change: two of four consumers are fine, so a spot check passes.
+
+The gate now lives at the two sites that actually want it, reading the raw
+count instead:
+
+    let ranked = if block.has_ranking && state.active().count() >= 2 { ... }
+
+`live_count` keeps `.clamp(2, 4)` and its doc comment now says why, and points
+callers who want the raw number at `state.active().count()`.
+
+
+3. THE GATE WAS APPLIED TO ONLY ONE OF THE TWO TWINS
+----------------------------------------------------
+`events::final_event_awards` computes the awards and returns them; it is what
+replay_common's divergence reporting and `bots::weighted::events` call.
+`events::apply_final_scoring_block_live` (events.rs ~1666, called from
+events.rs:744) is the one that actually MUTATES culture, and its own doc
+comment describes it as "deliberately a second, small copy" of the first.
+
+Only the reporting twin was gated. The engine would therefore have scored the
+one-civ game one way and reported it another -- and since the corpus compares
+the REPORTED awards, the sweep would have looked like it agreed with the
+journal while the played score did not. Both twins now carry the gate and each
+comment points at the other.
+
+This is the second time this pair has drifted. If a third reason to touch both
+appears, merge them.
+
+
+4. STYLE
+--------
+`if block.has_ranking { if live >= 2 {` trips clippy::collapsible_if under
+`-D warnings`. The old two-line `live_count` doc comment ("Clamped to 2..=4")
+was left stacked directly above the new one, so the file asserted the opposite
+of the line beneath it -- the exact defect class the 2026-08-15 comment audit
+was cleaning up.
+
+
+5. UNRELATED, SAME COMMIT
+-------------------------
+The three climb arms ran at nice 0 on a 6-core box with no hyperthreading, so
+they contended with interactive builds and corpus sweeps. `nice -n 15` is now
+in `experiments/rust_league.sh` at the `nohup` line. It has to be there rather
+than applied by hand: cron re-runs that script every 10 minutes and `--hours 6`
+makes each arm re-exec, so a `renice` does not survive.
