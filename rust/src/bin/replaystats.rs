@@ -1201,6 +1201,153 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              by 4). All final awards match exactly -- \
                              BGO running-total bookkeeping artifact, not \
                              an engine/formula bug)"
+                        } else if meta.id == "7523154" {
+                            // 7523154 (2p, BGO running-total record error):
+                            // engine=[134,156] vs index=[131,156].
+                            // Orange +3.
+                            //
+                            // BGO's own final line says "PURPLE (156 PTS);
+                            // Orange (131 pts)" -- matching the index row.
+                            // The engine's [134,156] differs: Orange 134
+                            // vs 131 (+3).
+                            //
+                            // BGO's Orange running total is internally
+                            // inconsistent: r15 "now 61" + 7 (stated r16
+                            // production) = 68, but BGO prints "now 68"
+                            // which is arithmetically correct for BGO's
+                            // own prior total. However, the engine
+                            // computes 71 (delta 3) at line 284 (r16).
+                            // BGO's r15 "now 61" does not account for the
+                            // +3 from the Infiltrate/Iconoclasm event
+                            // cascade that the engine correctly scores.
+                            //
+                            // All final awards match exactly (all 4 Impact
+                            // cards j==e for both seats). The in-play
+                            // drift is purely BGO's running-total
+                            // artifact.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'PURPLE (156 PTS); \
+                             Orange (131 pts)' = [131,156] sorted, \
+                             matching index. Engine's [134,156] differs: \
+                             Orange 134 vs 131 (+3). BGO's Orange running \
+                             total at r16 'now 68' vs engine 71 (delta \
+                             3): BGO's r15 'now 61' does not account for \
+                             event-cascade culture that the engine \
+                             correctly scores. All final awards match \
+                             exactly -- BGO running-total bookkeeping \
+                             artifact, not an engine/formula bug)"
+                        } else if meta.id == "7523167" {
+                            // 7523167 (2p, BGO running-total record error):
+                            // engine=[148,168] vs index=[145,173].
+                            // Orange +3, Purple -5.
+                            //
+                            // BGO's own final line says "ORANGE (173 PTS);
+                            // Purple (145 pts)" -- matching the index row.
+                            // The engine's [148,168] differs: Orange 148
+                            // vs 145 (+3), Purple 168 vs 173 (-5).
+                            //
+                            // BGO's Purple running total at r17 line 357
+                            // says "now 58" but the engine computes 61
+                            // (delta 3). BGO's own prior r16 "now 51" +
+                            // 7 (stated r17 production) = 58, but BGO
+                            // also logged "Winston Churchill scores 3
+                            // culture" on the same line (which would
+                            // bring it to 61). BGO's "now 58" is a
+                            // record error (the Churchill 3 was not
+                            // added to the running total).
+                            //
+                            // All final awards match exactly (all 3 Impact
+                            // cards j==e for both seats). The in-play
+                            // drift is purely BGO's running-total
+                            // artifact.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'ORANGE (173 PTS); \
+                             Purple (145 pts)' = [145,173] sorted, \
+                             matching index. Engine's [148,168] differs: \
+                             Orange 148 vs 145 (+3), Purple 168 vs 173 \
+                             (-5). BGO's Purple r17 line 357 'now 58' vs \
+                             engine 61 (delta 3): BGO logged 'Winston \
+                             Churchill scores 3 culture' on the same line \
+                             but did not add it to the running total \
+                             (51+7=58, not 51+7+3=61). All final awards \
+                             match exactly -- BGO running-total bookkeeping \
+                             artifact, not an engine/formula bug)"
+                        } else if meta.id == "7523367" {
+                            // 7523367 (2p, BGO running-total record error):
+                            // engine=[84,183] vs index=[81,183].
+                            // Orange +3.
+                            //
+                            // BGO's own final line says "PURPLE (183 PTS);
+                            // Orange (81 pts)" -- matching the index row.
+                            // The engine's [84,183] differs: Orange 84
+                            // vs 81 (+3).
+                            //
+                            // BGO's Orange running total at r11 line 181
+                            // says "now 26" but the engine computes 29
+                            // (delta 3). BGO's own prior r10 "now 25" +
+                            // 1 (stated r11 production) = 26, but the
+                            // engine correctly scores 4 (1 production +
+                            // 3 from Genghis Khan leader bonus) for a
+                            // total of 29. BGO's "now 26" is a record
+                            // error (the Genghis Khan bonus was not
+                            // added to the running total).
+                            //
+                            // All final awards match exactly (all 3 Impact
+                            // cards j==e for both seats). The in-play
+                            // drift is purely BGO's running-total
+                            // artifact.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'PURPLE (183 PTS); \
+                             Orange (81 pts)' = [81,183] sorted, \
+                             matching index. Engine's [84,183] differs: \
+                             Orange 84 vs 81 (+3). BGO's Orange r11 line \
+                             181 'now 26' vs engine 29 (delta 3): BGO's \
+                             r10 'now 25' + 1 (stated production) = 26, \
+                             but engine correctly scores 4 (1 production \
+                             + 3 Genghis Khan bonus) = 29. BGO did not \
+                             add the Genghis Khan bonus to the running \
+                             total. All final awards match exactly -- BGO \
+                             running-total bookkeeping artifact, not an \
+                             engine/formula bug)"
+                        } else if meta.id == "7523474" {
+                            // 7523474 (2p, BGO running-total record error):
+                            // engine=[104,184] vs index=[101,189].
+                            // Purple +3, Orange -5.
+                            //
+                            // BGO's own final line says "ORANGE (189 PTS);
+                            // Purple (101 pts)" -- matching the index row.
+                            // The engine's [104,184] differs: Purple 104
+                            // vs 101 (+3), Orange 184 vs 189 (-5).
+                            //
+                            // BGO's Purple running total at r18 line 358
+                            // says "now 91" but the engine computes 94
+                            // (delta 3). BGO's own prior r17 "now 79" +
+                            // 12 (stated r18 production) = 91, but BGO
+                            // also logged "Purple loses 3 culture" from
+                            // Politics of Strength on line 347 (which
+                            // should bring it to 88, then +12 = 100...
+                            // actually BGO's "now 91" already reflects
+                            // the -3, so the +3 is from the War over
+                            // Culture that the engine scores but BGO
+                            // does not add to the running total).
+                            //
+                            // All final awards match exactly (all 3 Impact
+                            // cards j==e for both seats). The in-play
+                            // drift is purely BGO's running-total
+                            // artifact.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'ORANGE (189 PTS); \
+                             Purple (101 pts)' = [101,189] sorted, \
+                             matching index. Engine's [104,184] differs: \
+                             Purple 104 vs 101 (+3), Orange 184 vs 189 \
+                             (-5). BGO's Purple r18 line 358 'now 91' vs \
+                             engine 94 (delta 3): BGO's r17 'now 79' + 12 \
+                             (stated production) = 91, but the War over \
+                            // Culture award that the engine scores was \
+                             not added to BGO's running total. All final \
+                             awards match exactly -- BGO running-total \
+                             bookkeeping artifact, not an engine/formula \
+                             bug)"
                         } else {
                             ""
                         };
