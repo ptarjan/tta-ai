@@ -16,6 +16,16 @@ whole session fixing bugs in it and changed no measured result. The surviving Py
 under `tools/` is standalone utilities only (e.g. `tools/scrape_bgo.py`, which needs
 `--edition 2015`).
 
+**"Python did it this way" is never a reason to change behaviour.** `rust/src` still
+carries ~1500 comments citing `engine/*.py`. They are provenance for how the port was
+made, not authority for what is correct, and the file they name no longer exists to
+check. The rules oracle is `docs/RULES_SPEC.md`, then `sources/faq_v15.pdf` and
+`sources/cge_code_of_laws.pdf` (official errata), then `sources/` for card text. If a
+comment's only support is Python, treat the comment as unverified — fix the comment,
+not the code. On 2026-08-15 an agent "fixed" Impact of Population to match a Python
+comment and cost 141 exact score matches; see
+`analysis/worker_notes_2026-08-15/impact_of_population_pool_exclusion.txt`.
+
 ## Git
 
 `/Users/pt/tta-ai` is the tree the training league runs from, and as of 2026-08-15 it
@@ -34,3 +44,8 @@ The corpus of 1011 replayed human BGO games. Current: **748 complete / 721 exact
 A clean build and green tests prove nothing about the engine — verify with the sweep
 in `analysis/GUARD_METHOD.txt`, comparing ID SETS against the frozen guard list,
 never a mean.
+
+**A scoring change is not gated by completions.** A wrong culture total still reaches
+game over, so the completion set can be byte-identical while scores rot — the Impact
+of Population regression moved completions 748 → 748 and exact matches 721 → 580.
+Read the exact-match count on both sides, in one clone, or you have measured nothing.
