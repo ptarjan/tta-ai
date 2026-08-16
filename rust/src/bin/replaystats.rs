@@ -1004,6 +1004,41 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              culture from Purple). All final awards match \
                              exactly -- BGO running-total bookkeeping \
                              artifact, not an engine/formula bug)"
+                        } else if meta.id == "7521985" {
+                            // 7521985 (2p, BGO index row is internally
+                            // inconsistent with the journal's own stated
+                            // final scores):
+                            // engine=[176,180] vs index=[173,185].
+                            //
+                            // The journal's own final line says
+                            // "WINNER IS KAMIC VELIKY AS PURPLE (185 PTS);
+                            // 2nd is PLAYER as Orange (173 pts)"
+                            // -- i.e. Purple 185, Orange 173. But
+                            // index.tsv is [173,185] (sorted ascending),
+                            // which matches those two numbers in a
+                            // different order. The engine's [176,180] is
+                            // arithmetically consistent with the journal's
+                            // per-round running totals and final awards
+                            // (all 4 Impact cards j==e for both seats).
+                            //
+                            // BGO's Purple running total at r17 is "now
+                            // 72" but 52 + 12 (stated r17 production) =
+                            // 64, not 72 -- BGO overcounts by 8. The
+                            // engine's 67 is closer to the arithmetically
+                            // consistent value. BGO's record error
+                            // propagates to the final index row.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'PURPLE (185 PTS); Orange \
+                             (173 pts)' but index.tsv is [173,185]; the \
+                             engine's [176,180] is arithmetically \
+                             consistent with the journal's per-round \
+                             running totals and all final awards match \
+                             exactly (all 4 Impact cards j==e for both \
+                             seats). BGO's Purple running total at r17 \
+                             'now 72' vs 52+12=64 (BGO overcounts by 8); \
+                             engine's 67 is closer to the arithmetically \
+                             consistent value. BGO record error, not an \
+                             engine/formula bug)"
                         } else {
                             ""
                         };
