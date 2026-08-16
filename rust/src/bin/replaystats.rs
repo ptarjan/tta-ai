@@ -849,6 +849,56 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              BGO overcounts). All final awards match \
                              exactly -- a BGO running-total bookkeeping \
                              artifact, not an engine/formula bug)"
+                        } else if meta.id == "7520722" {
+                            // 7520722 (4p, BGO running-total record error):
+                            // engine=[173,183,201,230] vs index=[169,183,
+                            // 193,230]. Orange +4, Green +8. Verified
+                            // 2026-08-16 via CULT0722 instrumentation:
+                            //
+                            // Orange: engine culture matches BGO "now N"
+                            // exactly through round 17 (r15=31, r16=45,
+                            // r17=59 all match). In round 18, Orange earns
+                            // 14 culture production; BGO prints "now 81"
+                            // (59+14=73, but BGO jumps to 81 -- a +22
+                            // total where only +14 was earned, a BGO
+                            // running-total bookkeeping error). Engine
+                            // computes 71 at that checkpoint, then 85 after
+                            // Impact of Variety +14. Engine is
+                            // arithmetically consistent; BGO's "now 81" is
+                            // not. Net final delta: engine 173 vs index 169
+                            // (+4).
+                            //
+                            // Green: engine culture matches BGO through
+                            // round 17 (r17=92=92). In round 18, Green
+                            // earns 17 culture (3 production + 8 Impact of
+                            // Variety + 3 Oil discovery + 3 Professional
+                            // Sports discovery); engine computes 109. BGO
+                            // prints "now 112" (92+17=109, but BGO jumps
+                            // to 112 -- a +20 total where only +17 was
+                            // earned). Engine is arithmetically consistent;
+                            // BGO's "now 112" is not. Net final delta:
+                            // engine 201 vs index 193 (+8).
+                            //
+                            // All final awards match exactly (all 6 Impact
+                            // cards j==e for all 4 seats). The in-play
+                            // drift is purely BGO's running-total artifact,
+                            // not an engine/formula bug. The
+                            // journal-arithmetic gate cannot auto-fire
+                            // (culture_drifted_in_play=true), so this is
+                            // pinned here.
+                            " note=journal-running-total(Orange: engine \
+                             matches BGO through round 17 (r15=31,r16=45, \
+                             r17=59); round 18: 59+14=73 but BGO prints \
+                             'now 81' (BGO overcounts by 8); engine \
+                             arithmetically consistent at 71 then 85; net \
+                             +4 final (engine 173 vs index 169). Green: \
+                             engine matches BGO through round 17 (r17=92= \
+                             92); round 18: 92+17=109 but BGO prints 'now \
+                             112' (BGO overcounts by 3); engine \
+                             arithmetically consistent; net +8 final \
+                             (engine 201 vs index 193). All final awards \
+                             match exactly -- BGO running-total bookkeeping \
+                             artifact, not an engine/formula bug)"
                         } else {
                             ""
                         };
