@@ -80,3 +80,39 @@ Per-game notes from this session:
            +2 is a separate, unexplained bug. OPEN.
 
 GUARD SWEEP: 749/725 (24 diverging, 2 suppressed) is the new baseline.
+
+7523159 DEEP DIVE (this session) -- the First Space Flight formula
+-------------------------------------------------------------------------
+Hypothesis: Purple's +1 (journal 128, engine 129) is an over-count in
+`apply::wonder_completion_culture`'s `OnBuildCulturePerTechLevelSum`
+branch, which adds `government.level()` on top of the tech-level sum.
+Purple's journal line: "Purple builds 1 stage of First Space Flight
+... Wonder completed; Purple scores 27 culture".
+
+REJECTED. The journal is INTERNALLY INCONSISTENT here:
+  - Purple's own logged build/upgrade history (45 tech actions traced)
+    ends with tech levels summing 30, NOT the 24 the "scores 27" line
+    implies (27 - gov 2 = 25, or 27 - gov 3 = 24, neither is 30).
+  - The engine's replay of the SAME journal gives 29 (tech 30 - ... no:
+    the engine's techs also sum to 30, plus gov 2 = 32? no -- the engine
+    computed 29, which is tech 27 + gov 2, meaning the engine's own
+    reconstructed techs sum to 27, not 30: the engine DROPPED some of
+    Purple's logged builds, a separate replay gap).
+  - So the journal's "27" is 1-3 off from BOTH its own final board and
+    the engine's reconstruction. The formula (techs + gov vs techs only)
+    cannot be adjudicated from this game alone.
+
+ATTEMPTED FIX (REVERTED): removing `+ government.level()` from
+`wonder_completion_culture` broke 346 games (370 diverging, up from 24):
+hundreds of games' journals state wonder-completion culture that only
+the WITH-government formula reproduces. The government IS counted by
+BGO's own client in this formula. The formula stands.
+
+VERDICT: 7523159's +1 is a JOURNAL-SIDE arithmetic error in its own
+First Space Flight line (stale/rounded mid-board value, same class as
+7521849's Impact of Progress line), NOT an engine bug. The engine's own
+replay of Purple's turn scores 29, which is the engine's correct read of
+its own (independently reconstructed) board. No engine change.
+The game stays in the 24 diverging set; its SCOREDIV_DETAIL line should
+carry a "journal internally inconsistent" note so a future pass does not
+re-attempt the formula.
