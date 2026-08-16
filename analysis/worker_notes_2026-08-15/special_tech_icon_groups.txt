@@ -1,0 +1,116 @@
+SPECIAL TECHNOLOGY ICON GROUPING -- read-only investigation, 2026-08-15
+Scope: 2015 BASE GAME ONLY ("A New Story of Civilization"), not the expansion.
+
+WHERE THE DATA ACTUALLY LIVES (correction to task brief)
+----------------------------------------------------------
+The task brief said special-tech cards live in data/cards_military_actions.json
+and data/cards_wonders_leaders.json. That is wrong. All 12 base-game special
+technologies live in data/cards_civil.json, tagged "type": "special-tech".
+(cards_military_actions.json only has military-deck/action-deck card types:
+event/action/pact/territory/tactic/war/bonus/aggression. cards_wonders_leaders.json
+only has wonder/leader.)
+
+THE 12 BASE-GAME SPECIAL TECHS AND THEIR COMPUTED special_icon() BRANCH
+----------------------------------------------------------------------
+Computed by hand-reading each card's "effects" object in data/cards_civil.json
+against rust/src/costs.rs::special_icon (line ~270): checks BuildDiscount
+variant first, then colonize_bonus != 0, then military_actions != 0, then
+civil_actions != 0, else Other.
+
+Name             | Age | techCost | key effect field(s)          | -> SpecialIcon
+-----------------+-----+----------+-------------------------------+---------------
+Masonry          | I   | 3        | buildDiscount {I:1,II:1,III:1} | Construction
+Architecture      | II  | 6        | buildDiscount {I:1,II:2,III:2} | Construction
+Engineering       | III | 9        | buildDiscount {I:1,II:2,III:3} | Construction
+Cartography       | I   | 4        | colonizeBonus 2                | Exploration
+Navigation        | II  | 6        | colonizeBonus 3                | Exploration
+Satellites         | III | 8        | colonizeBonus 4                | Exploration
+Warfare            | I   | 5        | militaryActions 1               | Warfare
+Strategy           | II  | 8        | militaryActions 2               | Warfare
+Military Theory    | III | 11       | militaryActions 3               | Warfare
+Code of Laws       | I   | 6        | civilActions 1                  | Law
+Justice System      | II  | 7        | civilActions 1, blueTokens 3      | Law
+Civil Service        | III | 10       | civilActions 2, blueTokens 3      | Law
+
+(A "strength" bonus rides along on several cards -- Cartography/Navigation/
+Satellites and Warfare/Strategy/Military Theory both also grant flat
+`strength`, but `special_icon` never looks at `strength`, so it doesn't
+perturb the classification.)
+
+GROUPING VERDICT
+-----------------
+Every one of the 12 base-game special techs lands in Construction, Exploration,
+Warfare, or Law -- three cards per family, one per age (I/II/III), which is
+exactly the base game's known structure (4 tech lines x 3 levels = 12 cards).
+
+SpecialIcon::Other bucket for the base game: EMPTY. Zero cards fall through to
+the `Other` catch-all branch. There is therefore no way, with base-game data,
+for two DIFFERENT icon families to collide inside `Other` -- there is nothing
+in `Other` to collide.
+
+CROSS-CHECK AGAINST BGA'S OWN IMPLEMENTATION (oracle)
+-------------------------------------------------------
+sources/bga_throughtheages_material.inc.php carries an EXPLICIT printed-icon
+field for every card: 'category' => 'Special' marks the 12 special techs, and
+a sibling 'type' => '<Family>' field names the icon directly. Grepped all 12
+"category = Special" entries:
+
+BGA 'type'    | Card            | Age
+--------------+-----------------+----
+Construction  | Masonry         | I
+Construction  | Architecture    | II
+Construction  | Engineering     | III
+Colonization  | Cartography     | I
+Colonization  | Navigation      | II
+Colonization  | Satellites      | III
+Military      | Warfare         | I
+Military      | Strategy        | II
+Military      | Military Theory | III
+Civil         | Code of Laws    | I
+Civil         | Justice System  | II
+Civil         | Civil Service   | III
+
+This is a perfect 1:1 match with the hand-computed special_icon() branches
+above (BGA "Construction"->Construction, "Colonization"->Exploration,
+"Military"->Warfare, "Civil"->Law). Independent confirmation: the "text" field
+on every card in data/cards_civil.json also literally starts with the words
+"Construction tech.", "Exploration tech.", "Military tech.", or "Civil tech."
+-- an unstructured but human-legible echo of the same four families baked
+into the card text.
+
+DOES data/cards_civil.json CARRY AN EXPLICIT ICON/GROUP FIELD?
+------------------------------------------------------------------
+No. Each special-tech card object has: name, age, type ("special-tech" for
+all 12 -- this is the CARD TYPE, not the icon), count, techCost, buildCost,
+effects, text. There is no dedicated "icon"/"group"/"family" key. The closest
+thing to an explicit field is the free-text `text` string's leading words
+("Construction tech." / "Civil tech." / "Military tech." / "Exploration
+tech."), which special_icon() could in principle read (prefix match) instead
+of inferring from `effects`, but that would be text-matching a prose field
+rather than reading structured data -- worse, not better, than the current
+inference. The BGA source (above) is the only place with a genuinely
+structured, explicit icon field, and it agrees with special_icon()'s
+inference on all 12 cards.
+
+CONCLUSION: NO BUG (for base-game data as it exists today)
+--------------------------------------------------------------
+special_icon()'s catch-all `Other` branch is currently DEAD CODE for the
+2015 base game: none of the 12 special techs reach it, so develop_special's
+"discard the other card sharing this icon" logic (rust/src/apply.rs ~line
+1031) can never conflate two distinct families under a shared `Other` label,
+because `Other` is never populated at all.
+
+This is still a LATENT landmine, worth flagging even though it's not live:
+- special_icon() infers the icon from effect shape rather than reading an
+  explicit field, so it happens to be correct today only because every
+  base-game special tech's distinguishing effect (buildDiscount /
+  colonizeBonus / militaryActions / civilActions) is unique per family and
+  none of the four families overlaps in effect shape.
+- If any future/expansion special tech were added whose defining effect is
+  none of those four (e.g. a science- or culture-granting special tech with
+  no buildDiscount/colonizeBonus/militaryActions/civilActions field), it
+  would silently fall into `Other`, and a second such card of a genuinely
+  different family would trigger develop_special's wrong-card discard. Not
+  a base-game concern per CLAUDE.md scope, but worth a comment/assert in
+  special_icon() noting the invariant "no base-game special tech reaches
+  Other" so a future edit that breaks it fails loudly instead of silently.

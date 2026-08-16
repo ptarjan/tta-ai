@@ -1146,6 +1146,59 @@ mod tests {
         assert_eq!(special_icon(card("Bronze").get()), SpecialIcon::Other);
     }
 
+    /// [`special_icon`] INFERS the icon from a card's effects rather than
+    /// reading it, and `SpecialIcon::Other` is the catch-all every card that
+    /// prints none of the four telltale fields falls into. `develop_special`
+    /// then treats one icon as one slot -- so if two special techs of DIFFERENT
+    /// printed families ever both landed in `Other`, developing the second
+    /// would silently discard the first, and nothing else in the crate would
+    /// notice.
+    ///
+    /// The base game does not have that problem: its 12 special technologies
+    /// are exactly four families of three, one per age I/II/III, and `Other`
+    /// is empty. BGA's own data agrees card for card -- every special tech
+    /// there carries an explicit `'type'` of `Construction`/`Colonization`/
+    /// `Military`/`Civil` (our Exploration/Law under other names), and each
+    /// card's printed text opens with "Construction tech." and so on.
+    ///
+    /// This test is the guard for the inference, since our `data/*.json`
+    /// carries no icon field to look up instead: it fails the moment a card
+    /// arrives that the four branches cannot classify, rather than letting
+    /// `Other` quietly swallow it.
+    #[test]
+    fn every_special_technology_has_a_real_icon_and_the_catch_all_stays_empty() {
+        let mut families: [Vec<(&str, u8)>; 4] = [vec![], vec![], vec![], vec![]];
+        for (i, c) in crate::CARDS.iter().enumerate() {
+            let id = CardId(i as u16);
+            if id.kind() != CardType::SpecialTech {
+                continue;
+            }
+            let slot = match special_icon(c) {
+                SpecialIcon::Construction => 0,
+                SpecialIcon::Exploration => 1,
+                SpecialIcon::Warfare => 2,
+                SpecialIcon::Law => 3,
+                SpecialIcon::Other => {
+                    panic!("special tech {} falls into the SpecialIcon::Other catch-all", c.name)
+                }
+            };
+            families[slot].push((c.name, id.level()));
+        }
+
+        let total: usize = families.iter().map(Vec::len).sum();
+        assert_eq!(total, 12, "the base game has 12 special technologies: {families:?}");
+
+        for fam in &families {
+            let mut levels: Vec<u8> = fam.iter().map(|&(_, lvl)| lvl).collect();
+            levels.sort_unstable();
+            assert_eq!(
+                levels,
+                vec![1, 2, 3],
+                "each icon family is one tech per age I/II/III: {fam:?}",
+            );
+        }
+    }
+
     // -------------------------------------------------------- urban_count
 
     #[test]
