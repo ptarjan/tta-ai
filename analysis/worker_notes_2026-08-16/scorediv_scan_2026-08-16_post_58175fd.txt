@@ -1,0 +1,31 @@
+SCOREDIV SCAN AT HEAD 58175fd (Impact of Progress pin landing) -- 2026-08-16
+=========================================================================
+Command (from rust/):
+    SCOREDIV_DUMP_IDS=1 ./target/difftest/replaystats \
+        ../sources/bgo/index.tsv /private/tmp/bgo-journals/journals
+Result: 749/749 completed flipped state.game_over; 723/749 exact
+against index.tsv (26 diverging games, down from 27 at 828c9f9).
+
+The one game that moved from diverging to matching between the two
+scans is 7523087: the Impact of Science fix (828c9f9) had already
+corrected its final-scoring math, but the full-corpus scan at 828c9f9
+was taken before the working-tree changes that landed as 58175fd
+(the Impact of Progress pin + the replaystats --game flag + the
+parse_real_final_events dedup) had been built into the binary. The
+post-58175fd scan picks that up: 7523087 now matches index.tsv
+exactly, so the diverging set shrinks from 27 to 26.
+
+26 diverging games remain (23 no-drift, 3 in-play drift -- same split
+as the 828c9f9 scan minus 7523087). The no-drift queue is unchanged
+from the 828c9f9 pass: 7521849, 7523159, 7523162, 7523253 (and the
+rest of the 23 minus the three above). 7521849's "Impact of Progress
+seat 1: journal says 12, this binary computes 14" divergence is a
+JOURNAL ARITHMETIC error, not an engine bug: the journal's own line
+states "Purple scores 12 culture" but Purple's actual board (Republic
+II + Masonry I + Theology I temple) scores 14 under the card's own
+wording, and the engine is correct. No engine change; the pin in
+`events.rs::scoring_culture`'s comment + the new
+`impact_of_progress_counts_government_and_special_techs_but_not_
+temples` test lock the reading in.
+
+GUARD SWEEP: re-run after 58175fd landed; 749/723 is the new baseline.
