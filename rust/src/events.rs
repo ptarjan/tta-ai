@@ -510,11 +510,23 @@ pub fn final_event_awards(state: &GameState) -> Vec<(CardId, Vec<(u8, i32)>)> {
         let block = final_scoring_block(card).expect(
             "pending_final_events only returns cards final_scoring_block resolves to Some",
         );
-        let ranked = if block.has_ranking {
-            Some(rank_by_final_scoring_stat(state, &order, block.ranking_stat))
-        } else {
-            None
-        };
+        let mut ranked: Option<Vec<u8>> = None;
+        if block.has_ranking {
+            if live >= 2 {
+                // §12.5.2's ranking tables are defined only for two or more
+                // civilizations: a game that ended by resignation (BGO lets
+                // a seat "concede" mid-round, and §5.11 ends the game at the
+                // first resignation -- see `finish_game`'s comment) can have
+                // exactly ONE player left standing, and the journal's own
+                // final lines then state only that player's award (game
+                // `7522397`: "Purple scores 10 culture" alone on Impact of
+                // Strength/Population, no 2p table applied). BGO also never
+                // applies a table to a resigned seat, and `order` excludes
+                // the resigned players, so skipping the table here (rather
+                // than clamping `live` to 2) matches the journal exactly.
+                ranked = Some(rank_by_final_scoring_stat(state, &order, block.ranking_stat));
+            }
+        }
         let table: &[i16] = match live {
             2 => &block.ranking_2p,
             3 => &block.ranking_3p,

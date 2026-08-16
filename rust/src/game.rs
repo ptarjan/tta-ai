@@ -451,8 +451,18 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
 
 /// Player count for deck trimming and event tables (§13, and resignations).
 /// Clamped to 2..=4: a one-player endgame still has to price a deck.
+/// The number of civilizations still in the game. Unlike every other
+/// call site, this must NOT clamp to a minimum of two: §5.11 ends the
+/// game at the FIRST resignation (BGO lets a seat "concede" mid-round),
+/// and `final_event_awards` needs to see the resulting one-civ game to
+/// skip §12.5.2's `rankingCulture` tables, which BGO applies only to two
+/// or more civilizations (see that function's comment and game
+/// `7522397`, whose journal states only the survivor's awards). The
+/// other two call sites (`replenish`'s row sweep, `advance_age`'s
+/// dealing) are round-bound and therefore see at least two civs in
+/// practice, where `clamp` and `max(1)` agree.
 pub fn live_count(state: &GameState) -> usize {
-    state.active().count().clamp(2, 4)
+    state.active().count().max(1)
 }
 
 /// §2.1: discard the leftmost N cards, slide the rest left, deal from the
