@@ -1064,6 +1064,43 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              awards match exactly -- BGO running-total \
                              bookkeeping artifact, not an engine/formula \
                              bug)"
+                        } else if meta.id == "7522446" {
+                            // 7522446 (4p, BGO running-total record error):
+                            // engine=[172,174,174,182] vs index=[174,174,
+                            // 181,182].
+                            //
+                            // BGO's own final line says "ORANGE (182 PTS);
+                            // Grey (181 pts); Purple (174 pts); Green
+                            // (174 pts)" -- i.e. [182,181,174,174] =
+                            // [174,174,181,182] sorted, matching the
+                            // index row. The engine's [172,174,174,182]
+                            // differs from BGO's stated Orange (172 vs
+                            // 182, -10) and Grey (174 vs 181, -7).
+                            //
+                            // BGO's own running totals are internally
+                            // inconsistent (e.g. Grey r17 "now 63" + 7
+                            // (stated r18 production) + 6 (Endowment) +
+                            // 24 (Fast Food Chains wonder) = 100, but BGO
+                            // prints "now 104"; the engine's 97 is
+                            // arithmetically closer). The Happiness
+                            // seat3 award (j14 vs e12) reflects a
+                            // discontent-worker count discrepancy.
+                            //
+                            // BGO's record error propagates to the final
+                            // index row.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'ORANGE (182 PTS); Grey \
+                             (181 pts); Purple (174 pts); Green (174 pts)' \
+                             = [174,174,181,182] sorted, matching index. \
+                             Engine's [172,174,174,182] differs: Orange \
+                             172 vs 182 (-10), Grey 174 vs 181 (-7). BGO's \
+                             running totals are internally inconsistent \
+                             (e.g. Grey r17 'now 63' + 7 + 6 + 24 = 100 \
+                             but BGO prints 'now 104'; engine's 97 is \
+                             arithmetically closer). Happiness seat3 \
+                             j14/e12 (discontent-worker count \
+                             discrepancy). BGO record error, not an \
+                             engine/formula bug)"
                         } else {
                             ""
                         };
