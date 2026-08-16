@@ -673,6 +673,39 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              +6 is the Happiness seat0 pair (j6/e10, 5 real \
                              happy faces) plus the index-vs-own-totals gap -- \
                              BGO record error, not an engine/formula bug)"
+                        } else if meta.id == "7522473" {
+                            // 7522473 (4p, BGO record error on ONE final-award
+                            // pair): the only engine-vs-index delta is Green's
+                            // +1, and the only mismatching (card, seat) final
+                            // award is Green's "Impact of Government" (journal
+                            // line 609: "Green scores 22" vs the engine's 23).
+                            // Traced 2026-08-16: that event fires at line 609,
+                            // BEFORE line 610 ("Green elects Charles Chaplin"),
+                            // so Green's leader at the moment of the award is
+                            // still Maximilien Robespierre (+1 military action).
+                            // Green's action allowance is then Communism CA=7 /
+                            // MA=5 + Military Theory +3 + Robespierre +1 = MA 9,
+                            // so 2*CA + 1*MA = 2*7 + 1*9 = 23 -- exactly the
+                            // engine's figure. BGO's "22" is the value you get
+                            // with Chaplin (0 MA) instead of Robespierre, i.e.
+                            // it scored the award against the leader elected a
+                            // line later -- a stale-leader record error. The
+                            // engine's in-play reconstruction also matches the
+                            // journal at all 71/72 "End turn" checkpoints (the
+                            // single line-617 "now 124 vs 125" residual is the
+                            // same stale-leader magnitude, not an
+                            // accumulated-culture bug). The journal-
+                            // arithmetic-error gate cannot auto-fire because the
+                            // in-play culture drifted, so this is pinned here
+                            // so a future sweep pass does not re-derive the
+                            // Robespierre timing as a formula bug.
+                            " note=journal-stale-leader(Impact of Government \
+                             line 609 fires BEFORE line 610 'Green elects \
+                             Chaplin', so Green's leader is still Robespierre \
+                             (+1 MA): Communism CA7/MA5 + Mil Theory 3 + \
+                             Robespierre 1 = MA9 -> 2*7+1*9 = 23, the engine's \
+                             figure; BGO's 22 is the Chaplin(0 MA) value -- a \
+                             BGO record error, not an engine/formula bug)"
                         } else {
                             ""
                         };
