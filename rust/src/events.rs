@@ -356,18 +356,20 @@ fn scoring_culture(
         total += block.culture_per_completed_wonder_by_age[w.get().age as usize] as i32;
     }
 
-    // culturePerContentWorkerAbove10 -- "Impact of Population". Unused
-    // workers (the pool) are NOT yellow markers, so they are excluded even
-    // though a discontent worker is physically one of them moved onto the
-    // happiness track. Count on-card workers only, minus discontent.
+    // culturePerContentWorkerAbove10 -- "Impact of Population". A yellow
+    // token in the worker pool is a worker too (events.py's own comment: "a
+    // discontent worker is physically an unused worker moved onto the
+    // happiness track"), so this counts on-card workers PLUS
+    // `workers_free`, minus discontent.
     let on_card: i32 = p.techs.iter().map(|(_, slot)| slot.workers as i32).sum::<i32>();
+    let workers: i32 = on_card + p.workers_free as i32;
     let disc = economy::discontent(state, p);
-    let content = (on_card - disc).max(0);
+    let content = (workers - disc).max(0);
     if std::env::var("SCOREDIV_EVENT_DEBUG").is_ok() && block.culture_per_content_worker_above_10 != 0 {
         eprintln!(
-            "SCOREDIV_POPULATION player={} on_card={} workers_free={} discontent={} \
+            "SCOREDIV_POPULATION player={} on_card={} workers_free={} workers={} discontent={} \
              content={} yellow_bank={} s.happy={}",
-            p.idx, on_card, p.workers_free, disc, content, p.yellow_bank, s.happy
+            p.idx, on_card, p.workers_free, workers, disc, content, p.yellow_bank, s.happy
         );
     }
     total += block.culture_per_content_worker_above_10 as i32 * (content - 10).max(0);
