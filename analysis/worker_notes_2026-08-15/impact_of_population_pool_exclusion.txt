@@ -1,0 +1,53 @@
+Impact of Population: the unused-worker pool DOES count. Do not re-attempt.
+================================================================================
+2026-08-15. Measured, not argued.
+
+An uncommitted working-tree change to `rust/src/events.rs` `scoring_culture`
+proposed that `culturePerContentWorkerAbove10` ("Impact of Population") should
+count ONLY workers standing on cards, excluding `workers_free` (the unused
+worker pool), on the reasoning that pool tokens "are not yellow markers".
+
+That is wrong on both the rules and the corpus.
+
+THE RULES ORACLE
+----------------
+FAQ v15 (sources/faq_v15.pdf), entry "Impact of Population", verbatim:
+
+    "Count the number of yellow markers that are not in your Population Bank.
+     Subtract from this the number of Discontent Workers that you have. This is
+     your number of Content Workers. Finally, subtract ten from this number to
+     determine how much Culture you get."
+
+"Not in your Population Bank" is the whole point of the phrasing: it includes
+the unused-worker pool. In our state model `yellow_bank` IS the Population Bank
+(state.rs:492, "Unborn population"), so the FAQ's set is exactly
+`workers_free + sum(techs[].workers)` -- which is what the code already did.
+
+The same FAQ page also kills the change's supporting intuition:
+
+    "Discontent Workers are never associated with any specific yellow cubes nor
+     with any specific workers ... an abstract measure of the dissatisfaction of
+     your society as a whole."
+
+So a discontent worker is NOT "an unused worker moved onto a track". The old
+code's comment justified the right answer with the wrong mental model; the fix
+kept the model and broke the answer. Only the comment needed correcting.
+
+THE CORPUS
+----------
+Both sweeps run in one clone (/private/tmp/iop_check), difftest replaystats,
+all 1011 BGO journals, same binary path, same index:
+
+    baseline (master)      748 completed, 721/748 exact
+    with the change        748 completed, 580/748 exact
+
+    completion ID set:     IDENTICAL -- 0 regressions, 0 wins
+    exact score matches:   -141
+
+The completion set is untouched because a wrong culture total still reaches
+game over; it only fails the score compare. This is why completions alone are
+not a sufficient gate for a scoring change -- read the exact-match count too.
+
+VERDICT
+-------
+The pre-existing code is correct. Excluding the pool is a 141-game regression.
