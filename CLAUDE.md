@@ -40,8 +40,14 @@ rewrites them every few minutes.
 
 ## The only metric that counts
 
-The corpus of 1011 replayed human BGO games. Current: **749 complete / 722 exact**
+The corpus of 1011 replayed human BGO games. Current: **749 complete / 724 exact**
 (guard list `analysis/guard_ids_749.txt`).
+
+`replaystats` also prints a count of non-matching games "SET ASIDE" by
+`journal_arithmetic_error_suppression`. Those are UNRESOLVED, not proven corpus
+errors — the gate fires when BGO's journal and BGO's index agree and the engine is
+the lone dissenter, which is equally the shape of an engine bug. They are excluded
+from the exact count, so that number can never inflate the headline.
 A clean build and green tests prove nothing about the engine — verify with the sweep
 in `analysis/GUARD_METHOD.txt`, comparing ID SETS against the frozen guard list,
 never a mean.

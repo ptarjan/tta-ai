@@ -517,10 +517,7 @@ pub fn derive_index_order_from_text(
     // The "WINNER IS ..." clause starts AFTER the preceding impacts list,
     // so slice from the "WINNER IS" marker onward (the earlier "Impact of
     // <X>;" clauses have no "as <Color>" and would not parse).
-    let winner_part = match line.find("WINNER IS") {
-        Some(pos) => &line[pos..],
-        None => return None,
-    };
+    let winner_part = &line[line.find("WINNER IS")?..];
     // Parse each placement clause (split on "; "). For each clause, the
     // colour is the word immediately before the final "(N PTS)" / "(N pts)"
     // parenthesis, preceded by "as " / "AS ".

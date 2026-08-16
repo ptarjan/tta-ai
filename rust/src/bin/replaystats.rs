@@ -180,15 +180,28 @@ struct Bucket {
 /// NOT seat order, so `b` cannot be compared against `a` position-by-position
 /// on its own: `index_order` (see `corpus::GameMeta::index_order`) maps each
 /// index position to its seat, and this gate seats `b` via that mapping
-/// before comparing. `index_order` is `None` when the journal's winner
-/// could not be pinned (no usable "End turn ... scores:" line), in which
-/// case the gate cannot seat `b` and conservatively returns `None`. The
-/// caller only calls this in the sorted-compare `a != b` case.
+/// before comparing. `index_order` is `None` when the journal has no
+/// parseable `WINNER IS` placement line (see
+/// `corpus::derive_index_order_from_text`), in which case the gate cannot
+/// seat `b` and conservatively returns `None`. The caller only calls this
+/// in the sorted-compare `a != b` case.
 /// First corpus case: game 7521849's "Impact of Progress" (journal's
 /// "Purple scores 12" is a stale in-play magnitude; the true end-board
 /// scores 14 under the card's own wording -- see
 /// `events::scoring_culture`'s own doc). The `scorediv_gate` test module
 /// below pins every branch of this predicate against fixtures.
+///
+/// WHAT THIS PREDICATE DOES AND DOES NOT PROVE. It fires exactly when
+/// BGO's stated award and BGO's index total agree with EACH OTHER and the
+/// engine is the lone dissenter -- which is the shape of a real BGO record
+/// error AND equally the shape of an engine formula bug, because BGO
+/// derives that index total from its own stated award, so the two agreeing
+/// carries almost no independent information. Treat every hit as
+/// UNRESOLVED and re-derive the card's wording from `docs/RULES_SPEC.md`
+/// before calling any of them a corpus error. The one safeguard that
+/// matters is downstream, not here: hits are reported separately and are
+/// never counted as exact matches, so this can only ever shrink the
+/// unexplained pile on paper, never grow the headline number.
 fn journal_arithmetic_error_suppression(
     a: &[i32],
     b: &[i32],
@@ -223,9 +236,7 @@ fn journal_arithmetic_error_suppression(
     // position `pos`. `a` is already in seating order, so a per-seat diff
     // `a[seat] - b_seated[seat]` is now meaningful. Without a pinned
     // winner (`index_order` None) we cannot seat `b` and must not guess.
-    let Some(index_order) = index_order else {
-        return None;
-    };
+    let index_order = index_order?;
     if index_order.len() != b.len() {
         return None;
     }
@@ -269,9 +280,11 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
     // Seat the index.tsv `results` column: it is in PLACEMENT order (winner
     // first), not seat order, and the journal-arithmetic-error gate below
     // needs to know WHICH seat each index position maps to. Derive that from
-    // each game's own journal (winner's colour + stated total pin the
-    // winner's seat; the rest follow by score). Missing journal -> `None`,
-    // and the gate conservatively declines that game.
+    // each game's own journal: its final `WINNER IS ... AS <Color> (N PTS);
+    // 2nd is ... as <Color> (N pts); ...` line states the COMPLETE placement
+    // order, so every position is read off directly rather than inferred.
+    // Missing or unparseable journal -> `None`, and the gate conservatively
+    // declines that game.
     corpus::fill_index_order(&mut games, journals_dir);
 
     let mut buckets: HashMap<String, Bucket> = HashMap::new();
@@ -1343,7 +1356,7 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              (-5). BGO's Purple r18 line 358 'now 91' vs \
                              engine 94 (delta 3): BGO's r17 'now 79' + 12 \
                              (stated production) = 91, but the War over \
-                            // Culture award that the engine scores was \
+                             Culture award that the engine scores was \
                              not added to BGO's running total. All final \
                              awards match exactly -- BGO running-total \
                              bookkeeping artifact, not an engine/formula \
@@ -1456,8 +1469,12 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
          {} reached the journal's own \"End of game\" marker but hit a mismatch afterward, so \
          `game::scores` was never computed for them); {n_score_exact}/{n_score_checked} of those matched \
          index.tsv exactly (sorted per-game score-list compare); {n_gate_suppressed} of the non-matching \
-         remainder were suppressed as journal-arithmetic-error final-award divergences (the engine's \
-         own final-score cross-check proves the engine right in each -- see SCOREDIV_SUPPRESSED).",
+         remainder were SET ASIDE as single-award divergences (see SCOREDIV_SUPPRESSED). Read that \
+         number as UNRESOLVED, not as proven corpus errors: the gate fires precisely when BGO's \
+         journal text and BGO's index total agree with each other and the ENGINE is the outlier, and \
+         since BGO computes that total from its own stated award, their agreeing is near-tautological \
+         and is no evidence the engine is right. Either way they are excluded from the exact count \
+         above, so this number can never inflate it.",
         n_completed.saturating_sub(n_score_checked)
     );
     if score_deltas.is_empty() {
@@ -1842,11 +1859,11 @@ mod tests {
         let b = [240, 215, 199, 198];
         let a = [215, 199, 242, 198];
         let idx = [2u8, 0, 1, 3];
-        let r = journal_arithmetic_error_suppression(&a, &b, Some(&idx), &[d.clone()], None);
+        let r = journal_arithmetic_error_suppression(&a, &b, Some(&idx), std::slice::from_ref(&d), None);
         assert!(matches!(&r, Some((seat, _)) if seat == "Green"));
         // And the same game is NOT suppressed without a pinned winner:
         // the gate cannot seat `b` and must decline rather than guess.
-        let none_order = journal_arithmetic_error_suppression(&a, &b, None, &[d.clone()], None);
+        let none_order = journal_arithmetic_error_suppression(&a, &b, None, std::slice::from_ref(&d), None);
         assert!(none_order.is_none());
     }
 
