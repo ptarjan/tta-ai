@@ -1352,11 +1352,12 @@ fn h_play_action(state: &mut GameState, idx: u8, id: CardId) {
     // The two per-player-count action-card magnitudes (Endowment for the
     // Arts / Wave of Nationalism / Military Build-Up -- see this module's
     // top doc comment for why `gen_cards.py` could not fold these into a
-    // flat `CardEffects` field). Mirrors `engine/actions.py::_h_play_action`
-    // lines 1153-1167 exactly, including the order (culture bonus, THEN the
-    // military discount -- moot in practice since no base-game card prints
-    // both, but kept for fidelity) and the strict `>` comparisons (Python:
-    // `q.culture > p.culture` / `state_stats(q).strength > mine`).
+    // flat `CardEffects` field). The comparisons are STRICT, per the printed
+    // card text: Endowment for the Arts counts civilizations with "more
+    // culture than you", and Wave of Nationalism / Military Build-Up count
+    // those "stronger than yours" -- so an exact tie counts for nothing.
+    // Ordering here (culture bonus, THEN the military discount) is moot: no
+    // base-game card prints both.
     let count_idx = events::live_count_idx(state);
     if let Some(t) = card.special.iter().find_map(|&s| match s {
         Special::CulturePerCivilizationWithMoreCulture(t) => Some(t),

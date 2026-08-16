@@ -1269,15 +1269,15 @@ fn leader_is(p: &PlayerState, name: &str) -> bool {
 }
 
 /// James Cook may discard at most this many military cards per colonization.
-/// Mirrors `engine/interact.py::COOK_DISCARDS`. Deliberately NOT read off
-/// `Special::ColonizeDiscardUpTo2MilitaryCardsForBonus`'s payload -- that
-/// value is the +1 BONUS per discard (`colonizeDiscardUpTo2MilitaryCardsFor
-/// Bonus: 1` in the data), and the cap of two is a data wart: it is spelled
-/// inside the effect KEY's own name instead of carried beside it, so unlike
-/// the +1 it cannot be queried (`engine/interact.py`'s own comment on this,
-/// ded32dd). `costs.rs`/`effects.rs` have no test pinning this constant
-/// against the key the way `tests/test_leader_action_abilities.py` does on
-/// the Python side; there is nothing more machine-readable to pin it to here.
+/// Straight off his printed card text: "you may discard up to 2 military
+/// cards" for +1 colonization force each.
+///
+/// Deliberately NOT read off `Special::ColonizeDiscardUpTo2MilitaryCards
+/// ForBonus`'s payload -- that value is the +1 BONUS per discard
+/// (`colonizeDiscardUpTo2MilitaryCardsForBonus: 1` in the data). The cap of
+/// two is a data wart: it is spelled inside the effect KEY's own name instead
+/// of carried beside it, so unlike the +1 it cannot be queried. The card text
+/// is the only machine-readable thing left to pin it to.
 const COOK_DISCARDS: i32 = 2;
 
 /// James Cook's `colonizeDiscardUpTo2MilitaryCardsForBonus` payload: the
@@ -2241,9 +2241,13 @@ mod tests {
     /// and the aggression resolves at the defender's PRINTED strength.
     ///
     /// Note what `budget` is: `effects::state_stats(defender).military_actions`
-    /// -- the government's printed rate, NOT `p.military_actions` (what is
-    /// left this turn). That is Python's reading too, and it is easy to get
-    /// backwards, so it is pinned here.
+    /// -- the defender's military action TOTAL, NOT `p.military_actions` (what
+    /// is left of their own turn). The Code of Laws defines "military action
+    /// total" as the number computed from the cards in play, and states the
+    /// defense limit against that term, not against the turn remainder. It is
+    /// easy to get backwards -- and a defender is normally near-exhausted from
+    /// their own last turn, so the wrong reading would bite in almost every
+    /// aggression -- so it is pinned here.
     #[test]
     fn start_defense_with_an_empty_hand_resolves_immediately() {
         let mut state = blank_state(2);

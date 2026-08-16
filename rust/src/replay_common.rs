@@ -2316,9 +2316,10 @@ impl<'a> Replayer<'a> {
             }
         }
 
-        // `events::food_or_resources` just applied ITS OWN deterministic
-        // guess at the split (mirroring the Python reference bot's own
-        // fixed "resources first" policy). Correct every player whose
+        // The engine just resolved the split ITS OWN way -- these days a
+        // real per-player `ChoiceKind::FoodOrRes` decision rather than the
+        // old fixed "resources first" formula, but either way it is the
+        // BOT's choice and not the human's. Correct every player whose
         // food/resources changed against the journal's OWN resolution line
         // for that player, popped from `produces_grants` -- gated ABOVE on
         // the revealed card actually being this shape, and HERE on the
@@ -5353,20 +5354,17 @@ fn apply_journal_food_or_res_correction(
 /// clause, either order, a zero-valued clause omitted entirely -- same
 /// convention [`parse_plunder_split_line`] documents). Chasing the
 /// `IllegalMove: Pop` bucket (`docs/REPLAY.md`) found this event resolution
-/// is NOT the fixed "resources first, food for the remainder" split
-/// `events::food_or_resources` (mirroring `engine/events.py::
-/// _food_or_resources`) computes -- BGO's own line for game `7523357`
-/// (Foray, round 8) reads `"Grey produces 2 food; Grey produces 1
-/// resource"` while `blue_available` had 13 tokens free, nowhere near a cap
-/// that would force ANY of it into food; the preceding `"Green and Grey
-/// each produce 3 resources and/or food; Grey choses first"` clause on the
-/// triggering event line confirms this is a genuine per-player choice, not
-/// a deterministic rule. `events::food_or_resources`'s formula is left
-/// alone (it mirrors the Python reference bot policy, and giving the ENGINE
-/// a real choice here is a bot-decision-modeling change out of this
-/// bucket's scope -- flagged, not fixed) -- this parser instead lets the
-/// REPLAYER read the human's ACTUAL split off this line and overwrite the
-/// engine's default guess with it, the same "journal is ground truth"
+/// is a genuine per-player CHOICE, not a deterministic rule: BGO's own line
+/// for game `7523357` (Foray, round 8) reads `"Grey produces 2 food; Grey
+/// produces 1 resource"` while `blue_available` had 13 tokens free, nowhere
+/// near a cap that would force ANY of it into food, and the preceding
+/// `"Green and Grey each produce 3 resources and/or food; Grey choses
+/// first"` clause on the triggering event line says so outright. The engine
+/// has since been given that real choice (`ChoiceKind::FoodOrRes`,
+/// replacing the deleted `events::food_or_resources` fixed formula), but a
+/// choice made by the BOT is still not the choice the HUMAN made -- so this
+/// parser lets the REPLAYER read the human's ACTUAL split off this line and
+/// overwrite whatever the engine picked, the same "journal is ground truth"
 /// pattern as `TradeResourceAsFood`/`ground_auction_winner_hand`.
 ///
 /// Same clause-parsing loop as [`parse_plunder_split_line`], but the
