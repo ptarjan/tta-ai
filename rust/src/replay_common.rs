@@ -6443,6 +6443,16 @@ pub struct GameResult {
     /// when the game never reached final scoring at all, so a caller can
     /// `.is_empty()` without also checking `completed`.
     pub final_event_award_divergences: Vec<FinalEventAwardDivergence>,
+    /// §12.5.2 final-scoring audit aid: the per-card, per-seat award
+    /// `final_event_awards_posthoc` computed for this game, in application
+    /// order (a ranked card carries two entries per seat -- the
+    /// `scoring_culture` award then the `rankingCulture` bonus -- the
+    /// journal's line states their COMBINED total). Diagnostic-only, for
+    /// the score-divergence queue: it lets a diverging game's residual be
+    /// checked against the journal's OWN final lines without re-deriving
+    /// the formula by hand. Empty when the game never reached final
+    /// scoring.
+    pub final_event_awards_computed: Vec<(&'static str, Vec<(u8, i32)>)>,
     /// Counts from this game's `DiscardSolver` -- see that module's doc and
     /// `docs/REPLAY.md` for why these three are reported separately rather
     /// than folded into one "discards handled" number.
@@ -8168,6 +8178,14 @@ pub fn replay_game(
         index_scores: meta.scores.clone(),
         final_event_cards,
         final_event_award_divergences,
+        final_event_awards_computed: final_event_awards_posthoc
+            .map(|awards| {
+                awards
+                    .into_iter()
+                    .map(|(card, steps)| (card.name(), steps))
+                    .collect()
+            })
+            .unwrap_or_default(),
         discards_solved: r.discard_solver.solved,
         discards_chosen: r.discard_solver.chosen,
         discards_forced_collision: r.discard_solver.forced_collisions,

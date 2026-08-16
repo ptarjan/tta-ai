@@ -582,9 +582,29 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                     // last checkpoint the oracle above ever sees).
                     if std::env::var("SCOREDIV_DUMP_IDS").is_ok() {
                         println!("SCOREDIV_DIVERGING_ID {}", meta.id);
+                        // 7523159 was traced by hand (2026-08-16,
+                        // `analysis/worker_notes_2026-08-16/scorediv_scan_
+                        // _2026-08-16_gate_fix.txt`): its journal's own
+                        // "First Space Flight ... Purple scores 27" line is
+                        // 1-3 off from BOTH the journal's own final board
+                        // (techs summing 30) and the engine's reconstruction
+                        // (techs 27 + gov 2 = 29) -- a stale/rounded
+                        // mid-board value in BGO's own record, NOT a
+                        // formula or engine bug. The formula (techs + gov)
+                        // was tested by removing `+ government.level()` and
+                        // broke 346 games; it stands. The note is pinned
+                        // to this ID so a future sweep pass does not
+                        // re-attempt the formula from this game's line.
+                        let note = if meta.id == "7523159" {
+                            " note=journal-internally-inconsistent(First Space Flight line \
+                             scores 27 vs its own final board techs 30; formula stands -- \
+                             see worker_notes_2026-08-16/scorediv_scan_2026-08-16_gate_fix.txt)"
+                        } else {
+                            ""
+                        };
                         println!(
                             "SCOREDIV_DETAIL {} engine={:?} index={:?} culture_drifted_in_play={} \
-                             final_event_cards={:?} first_culture_divergence={:?}",
+                             final_event_cards={:?} first_culture_divergence={:?}{note}",
                             meta.id,
                             a,
                             b,
