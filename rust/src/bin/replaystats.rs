@@ -1039,6 +1039,31 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              engine's 67 is closer to the arithmetically \
                              consistent value. BGO record error, not an \
                              engine/formula bug)"
+                        } else if meta.id == "7522212" {
+                            // 7522212 (2p, BGO running-total record error):
+                            // engine=[147,205] vs index=[147,203].
+                            // Orange +2.
+                            //
+                            // BGO's own final line says "ORANGE (203 PTS)"
+                            // but the journal's own r18 running total
+                            // (166) + stated final awards (39) = 205,
+                            // not 203. BGO's "203" is a record error.
+                            // The engine's 205 is arithmetically
+                            // consistent.
+                            //
+                            // All final awards match exactly (all 4
+                            // Impact cards j==e for both seats). The
+                            // in-play drift is purely BGO's running-total
+                            // artifact.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'ORANGE (203 PTS)' but \
+                             the journal's own r18 running total (166) + \
+                             stated final awards (39) = 205, not 203; \
+                             BGO's '203' is a record error. Engine's 205 \
+                             is arithmetically consistent. All final \
+                             awards match exactly -- BGO running-total \
+                             bookkeeping artifact, not an engine/formula \
+                             bug)"
                         } else {
                             ""
                         };
