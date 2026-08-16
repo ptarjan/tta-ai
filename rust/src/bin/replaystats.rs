@@ -172,11 +172,18 @@ struct Bucket {
 /// magnitude -- a genuine `scoring_culture` formula bug that must surface),
 /// or any in-play culture drift at all (the engine's own running totals
 /// disagreed with the journal somewhere, so "the engine is right" is not
-/// proven for this game). `a`/`b` are the PER-SEAT (unsorted) score lists --
-/// `a` is the engine's own `game::scores` in seating order (Orange=0,
-/// Purple=1, Green=2, Grey=3), `b` is the journal's index.tsv totals in the
-/// same order; the caller only calls this in the sorted-compare `a != b`
-/// case, having kept the unsorted copies for this check.
+/// proven for this game).
+///
+/// `a` is the engine's own `game::scores` in SEATING order (Orange=0,
+/// Purple=1, Green=2, Grey=3). `b` is the journal's index.tsv totals --
+/// but index.tsv's `results` column is in PLACEMENT order (winner first),
+/// NOT seat order, so `b` cannot be compared against `a` position-by-position
+/// on its own: `index_order` (see `corpus::GameMeta::index_order`) maps each
+/// index position to its seat, and this gate seats `b` via that mapping
+/// before comparing. `index_order` is `None` when the journal's winner
+/// could not be pinned (no usable "End turn ... scores:" line), in which
+/// case the gate cannot seat `b` and conservatively returns `None`. The
+/// caller only calls this in the sorted-compare `a != b` case.
 /// First corpus case: game 7521849's "Impact of Progress" (journal's
 /// "Purple scores 12" is a stale in-play magnitude; the true end-board
 /// scores 14 under the card's own wording -- see
@@ -185,6 +192,7 @@ struct Bucket {
 fn journal_arithmetic_error_suppression(
     a: &[i32],
     b: &[i32],
+    index_order: Option<&[u8]>,
     divergences: &[FinalEventAwardDivergence],
     culture_oracle_divergence: Option<&CultureOracleDivergence>,
 ) -> Option<(String, FinalEventAwardDivergence)> {
@@ -210,43 +218,61 @@ fn journal_arithmetic_error_suppression(
     if a.len() != b.len() || delta == 0 {
         return None;
     }
+    // Seat `b` (index.tsv's PLACEMENT-order scores) into seating order via
+    // `index_order`: `index_order[pos]` is the seat that occupies index
+    // position `pos`. `a` is already in seating order, so a per-seat diff
+    // `a[seat] - b_seated[seat]` is now meaningful. Without a pinned
+    // winner (`index_order` None) we cannot seat `b` and must not guess.
+    let Some(index_order) = index_order else {
+        return None;
+    };
+    if index_order.len() != b.len() {
+        return None;
+    }
+    let mut b_seated = vec![i32::MIN; b.len()];
+    for (pos, &seat) in index_order.iter().enumerate() {
+        if seat as usize >= b_seated.len() {
+            return None;
+        }
+        b_seated[seat as usize] = b[pos];
+    }
     // The pair's own seat must be the ONLY seat whose score differs, and
-    // by exactly this pair's delta. `a` and `b` are sorted ascending, so
-    // we compare element-wise: exactly one position has a non-zero diff,
-    // that diff equals `delta`, and that position's index is `d.seat`.
-    // This works because in BGO the fixed seating is Orange=0, Purple=1,
-    // Green=2, Grey=3, and the index.tsv scores are in seating order, so
-    // the sorted position IS the seat index.
+    // by exactly this pair's delta.
     let mut non_zero: Vec<(usize, i32)> = Vec::new();
-    for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+    for (seat, (x, y)) in a.iter().zip(b_seated.iter()).enumerate() {
         let diff = x - y;
         if diff != 0 {
-            non_zero.push((i, diff));
+            non_zero.push((seat, diff));
         }
     }
     if non_zero.len() != 1 {
         return None;
     }
-    let (pos, diff) = non_zero[0];
+    let (seat, diff) = non_zero[0];
     if diff != delta {
         return None;
     }
-    if pos as u8 != d.seat {
+    if seat as u8 != d.seat {
         return None;
     }
-    let seat = crate::corpus::Color::from_seat(d.seat)?.as_str().to_string();
-    Some((seat, d.clone()))
+    let seat_name = crate::corpus::Color::from_seat(d.seat)?.as_str().to_string();
+    Some((seat_name, d.clone()))
 }
 fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_game_ids: Option<&[String]>) -> Result<(), String> {
     let card_index = build_card_index();
     let mut games = corpus::parse_index(index_path)?;
     if let Some(ids) = only_game_ids {
-        let keep: Vec<String> = games.iter().filter(|g| ids.contains(&g.id)).map(|g| g.id.clone()).collect();
-        games = corpus::parse_index(index_path)?;
-        games.retain(|g| keep.contains(&g.id));
+        games.retain(|g| ids.contains(&g.id));
     } else if let Some(n) = sample_size {
         games.truncate(n);
     }
+    // Seat the index.tsv `results` column: it is in PLACEMENT order (winner
+    // first), not seat order, and the journal-arithmetic-error gate below
+    // needs to know WHICH seat each index position maps to. Derive that from
+    // each game's own journal (winner's colour + stated total pin the
+    // winner's seat; the rest follow by score). Missing journal -> `None`,
+    // and the gate conservatively declines that game.
+    corpus::fill_index_order(&mut games, journals_dir);
 
     let mut buckets: HashMap<String, Bucket> = HashMap::new();
     let mut n_games = 0u32;
@@ -523,13 +549,13 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                 b.sort_unstable();
                 if a == b {
                     n_score_exact += 1;
-                } else if let Some((seat, d)) =
-                    journal_arithmetic_error_suppression(
-                        &a_seated,
-                        &b_seated,
-                        &result.final_event_award_divergences,
-                        result.culture_oracle_divergence.as_ref(),
-                    )
+                } else if let Some((seat, d)) = journal_arithmetic_error_suppression(
+                    &a_seated,
+                    &b_seated,
+                    meta.index_order.as_deref(),
+                    &result.final_event_award_divergences,
+                    result.culture_oracle_divergence.as_ref(),
+                )
                 {
                     // JOURNAL-ARITHMETIC-ERROR GATE (2026-08-16, closing
                     // 7521849's false positive): this game's TOTAL matches
@@ -599,6 +625,27 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                             " note=journal-internally-inconsistent(First Space Flight line \
                              scores 27 vs its own final board techs 30; formula stands -- \
                              see worker_notes_2026-08-16/scorediv_scan_2026-08-16_gate_fix.txt)"
+                        } else if meta.id == "7522239" {
+                            // 7522239 (2p, BGO record error): the journal's own
+                            // running culture totals (Orange ends "now 42",
+                            // Purple ends "now 36" at the last "End turn")
+                            // contradict its own final "WINNER IS ... AS ORANGE
+                            // (54 PTS); 2nd ... AS PURPLE (11 PTS)" line by 12 /
+                            // 25 points respectively -- no end-of-game bonus set
+                            // bridges that gap, so BGO's own record is
+                            // self-inconsistent (the round-15 "concedes defeat"
+                            // is an Armed Intervention refusal artifact, not a
+                            // resignation -- Purple kept playing 5 more rounds).
+                            // The index row [54, 11] copies the WINNER line; the
+                            // engine's [14, 54] reconstruction matches neither.
+                            // The gate cannot fire (zero mismatching final-award
+                            // pairs -- every "Impact of ..." line agrees), so
+                            // this is pinned here so a future sweep pass does
+                            // not re-attempt a formula from this broken journal.
+                            " note=journal-internally-inconsistent(running \
+                             totals Orange 42 / Purple 36 vs its own WINNER line \
+                             Orange 54 / Purple 11; no bonus set bridges the gap -- \
+                             BGO record error, not an engine/formula bug)"
                         } else {
                             ""
                         };
@@ -956,8 +1003,16 @@ mod tests {
         // it (Impact of Progress, journal 12, engine 14). Every "End turn"
         // matched the engine (no culture drift). Suppressed.
         let d = gate_div("Impact of Progress", 1, 12, 14);
-        // Seated lists: seat 0 = [137, 137], seat 1 = [176, 174] (delta 2 = 14-12).
-        let r = journal_arithmetic_error_suppression(&[137, 176], &[137, 174], &[d], None);
+        // Engine (seated, Orange..Grey) = [137, 176]; Purple (seat 1) is 2
+        // above the journal's own total (the pair's delta). Per-seat journal
+        // totals: Orange=137, Purple=174. The index `results` column is
+        // PLACEMENT-ordered (winner first): Purple 174 > Orange 137, so
+        // b = [174, 137]. index_order maps placement positions to seats:
+        // position 0 (174, Purple) → seat 1; position 1 (137, Orange) →
+        // seat 0. So index_order = [1, 0].
+        let b = [174, 137];
+        let idx = [1u8, 0];
+        let r = journal_arithmetic_error_suppression(&[137, 176], &b, Some(&idx), &[d], None);
         assert!(matches!(&r, Some((seat, x)) if seat == "Purple" && x.card == "Impact of Progress"));
     }
 
@@ -967,8 +1022,13 @@ mod tests {
         // journal OVER-stated the award (journal 14, engine 12): same shape,
         // delta -2, one seat, one pair, no drift. Suppressed.
         let d = gate_div("Impact of Progress", 1, 14, 12);
-        // Seated lists: seat 0 = [137, 137], seat 1 = [172, 174] (delta -2 = 12-14).
-        let r = journal_arithmetic_error_suppression(&[137, 172], &[137, 174], &[d], None);
+        // Journal OVER-stated (delta -2 = 12-14). Engine (seated) = [137,
+        // 172]; Purple (seat 1) is 2 below the journal's own total. Per-seat
+        // journal totals: Orange=137, Purple=174. b (placement-ordered) =
+        // [174, 137]; index_order = [1, 0] (pos 0→seat 1, pos 1→seat 0).
+        let b = [174, 137];
+        let idx = [1u8, 0];
+        let r = journal_arithmetic_error_suppression(&[137, 172], &b, Some(&idx), &[d], None);
         assert!(matches!(&r, Some((seat, _)) if seat == "Purple"));
     }
 
@@ -978,9 +1038,11 @@ mod tests {
         // computes a net -4 loss): a genuine `scoring_culture` formula bug,
         // must surface as a diverging game.
         let d = gate_div("Impact of Progress", 1, 12, -4);
-        // Direction flip: journal=12, engine=-4. The flip check should reject
+        // Direction flip: journal=12, engine=-4. The flip check rejects
         // before the delta comparison even matters.
-        let r = journal_arithmetic_error_suppression(&[137, 158], &[137, 174], &[d], None);
+        let b = [174, 137];
+        let idx = [1u8, 0];
+        let r = journal_arithmetic_error_suppression(&[137, 158], &b, Some(&idx), &[d], None);
         assert!(r.is_none());
     }
 
@@ -991,8 +1053,12 @@ mod tests {
         // EXACTLY one pair.
         let d0 = gate_div("Impact of Progress", 0, 12, 14);
         let d1 = gate_div("Impact of Strength", 1, 10, 8);
-        // Two seats off: seat 0 delta +2, seat 1 delta -2.
-        let r = journal_arithmetic_error_suppression(&[139, 172], &[137, 174], &[d0, d1], None);
+        // Two seats off: seat 0 delta +2, seat 1 delta -2. Per-seat journal
+        // totals: Orange=137, Purple=174. b (placement-ordered) = [174,
+        // 137]; index_order = [1, 0].
+        let b = [174, 137];
+        let idx = [1u8, 0];
+        let r = journal_arithmetic_error_suppression(&[139, 172], &b, Some(&idx), &[d0, d1], None);
         assert!(r.is_none());
     }
 
@@ -1001,8 +1067,12 @@ mod tests {
         // One award pair but BOTH seats' scores differ: the pair explains
         // one seat's delta, the other seat's is something else entirely.
         let d = gate_div("Impact of Progress", 1, 12, 14);
-        // Both seats differ by 2, but the pair only explains seat 1.
-        let r = journal_arithmetic_error_suppression(&[139, 176], &[137, 174], &[d], None);
+        // Both seats differ by 2, but the pair only explains seat 1. Per-seat
+        // journal totals: Orange=137, Purple=174. b (placement-ordered) =
+        // [174, 137]; index_order = [1, 0].
+        let b = [174, 137];
+        let idx = [1u8, 0];
+        let r = journal_arithmetic_error_suppression(&[139, 176], &b, Some(&idx), &[d], None);
         assert!(r.is_none());
     }
 
@@ -1020,7 +1090,9 @@ mod tests {
             reconstructed: 129,
             last_action_class: None,
         };
-        let r = journal_arithmetic_error_suppression(&[137, 175], &[137, 174], &[d], Some(&drifted));
+        let b = [174, 137];
+        let idx = [1u8, 0];
+        let r = journal_arithmetic_error_suppression(&[137, 175], &b, Some(&idx), &[d], Some(&drifted));
         assert!(r.is_none());
     }
 
@@ -1031,9 +1103,43 @@ mod tests {
         // with the engine for the pair's seat, so the pair is not the
         // error. Must surface.
         let d = gate_div("Impact of Progress", 1, 12, 14);
-        // Seat 0's score is the one off by 2; the pair says seat 1.
-        let r = journal_arithmetic_error_suppression(&[139, 174], &[137, 174], &[d], None);
+        // Seat 0's score is the one off by 2; the pair says seat 1. Per-seat
+        // journal totals: Orange=137, Purple=174. b (placement-ordered) =
+        // [174, 137]; index_order = [1, 0].
+        let b = [174, 137];
+        let idx = [1u8, 0];
+        let r = journal_arithmetic_error_suppression(&[139, 174], &b, Some(&idx), &[d], None);
         assert!(r.is_none());
+    }
+
+    #[test]
+    fn scorediv_gate_seats_index_by_placement_not_by_sorted_position() {
+        // The whole reason the gate took an `index_order` argument:
+        // index.tsv's `results` column is in PLACEMENT order (winner
+        // first), NOT seat order, so the sorted position is NOT the seat
+        // index. 7523253's own shape: winner (Green, seat 2) is first in
+        // the index; the engine's only error is a one-pair +2 on Green.
+        // a (seated, Orange..Grey) = [215, 199, 242, 198];
+        // b (index, placement: Green 240, Orange 215, Purple 199, Grey 198)
+        // = [240, 215, 199, 198]; the pair's delta (+2) and seat (2, Green)
+        // match Green's seated diff exactly. Must suppress.
+        let d = gate_div("Impact of Happiness", 2, 10, 12);
+        // 7523253's own shape. Per-seat journal totals: Orange=215,
+        // Purple=199, Green=240 (winner), Grey=198. The index `results`
+        // column is PLACEMENT-ordered (winner first): [240, 215, 199, 198]
+        // -- a permutation of the seated list that is NOT the identity. The
+        // gate must seat b by the derived index_order [2,0,1,3], NOT assume
+        // the sorted position is the seat index. Engine (seated) =
+        // [215, 199, 242, 198]: Green (seat 2) is the +2 error.
+        let b = [240, 215, 199, 198];
+        let a = [215, 199, 242, 198];
+        let idx = [2u8, 0, 1, 3];
+        let r = journal_arithmetic_error_suppression(&a, &b, Some(&idx), &[d.clone()], None);
+        assert!(matches!(&r, Some((seat, _)) if seat == "Green"));
+        // And the same game is NOT suppressed without a pinned winner:
+        // the gate cannot seat `b` and must decline rather than guess.
+        let none_order = journal_arithmetic_error_suppression(&a, &b, None, &[d.clone()], None);
+        assert!(none_order.is_none());
     }
 
     #[test]

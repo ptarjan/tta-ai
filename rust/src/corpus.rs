@@ -354,6 +354,33 @@ pub struct GameMeta {
     /// `replay.rs` uses this only for display; nothing here maps a name to a
     /// [`Color`] (the journal never prints player names, only colours).
     pub names: Vec<String>,
+    /// The seat index of the player occupying each position of
+    /// [`GameMeta::scores`]/[`GameMeta::names`] -- i.e. `index_order[k]` is
+    /// the seat of the player listed k-th in the index's `results` column.
+    /// `index.tsv` lists `results` in FINISHING (placement) order -- winner
+    /// first (verified: the `top_score` column is always the first
+    /// `results` entry, and the journal's own "WINNER IS <name> AS
+    /// <Color>" line names the winner's colour) -- NOT seating order, so
+    /// the raw column order is wrong for any seat-mapped consumer. Derived
+    /// by [`derive_index_order_from_text`] from the journal's final
+    /// "End of game" marker line (`WINNER IS <name> AS <Color> (N PTS);
+    /// 2nd is ... (N pts); ...`), which states the complete placement order
+    /// directly -- each clause's colour is the seat of the player listed in
+    /// that position. (This supersedes the earlier, broken approach of
+    /// reading the winner's colour off the LAST `"End turn <Color>
+    /// scores: ..."` line's actor and their total off that line's "scores N
+    /// culture" clause: the running turn-end culture total does NOT include
+    /// end-of-game bonuses such as Bill Gates or final impacts, so it never
+    /// equals the index's final score and the derivation failed.) `None`
+    /// when the journal has no parseable `WINNER IS` line.
+    /// `replaystats`'s journal-arithmetic-error gate is the first consumer:
+    /// it must know WHICH seat's index total differs, which is impossible
+    /// from the raw column order alone (that premise -- "the sorted
+    /// position IS the seat index" -- is exactly what the field's doc above
+    /// already warned was not seating order, and it is why the gate as
+    /// originally written could only ever fire when the placement order
+    /// happened to match the seat order).
+    pub index_order: Option<Vec<u8>>,
 }
 
 pub fn parse_index(path: &str) -> Result<Vec<GameMeta>, String> {
@@ -415,9 +442,136 @@ pub fn parse_index(path: &str) -> Result<Vec<GameMeta>, String> {
             reached_age_iv,
             scores,
             names,
+            index_order: None, // filled in by `derive_index_order_from_text`
         });
     }
     Ok(games)
+}
+
+/// Fill in each game's [`GameMeta::index_order`] from its own journal, when
+/// one exists next to the index. The derivation itself is
+/// [`derive_index_order_from_text`]'s; this wrapper is the only place that
+/// touches the filesystem, so a missing journal (the normal case for an
+/// index row with no replayed journal yet) is a silent `None`, not an
+/// error -- `parse_index`'s own contract is "no file, no rows", not "no
+/// file, no row".
+pub fn fill_index_order(games: &mut [GameMeta], journals_dir: &str) {
+    for game in games.iter_mut() {
+        let path = format!("{journals_dir}/{}.tsv", game.id);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        game.index_order = derive_index_order_from_text(game.players as usize, &game.scores, &text);
+    }
+}
+
+/// Derive the seat index of each placement position from a game's journal
+/// text, its player count, and its index [`GameMeta::scores`] (in the
+/// index's OWN placement order, winner first; see
+/// [`GameMeta::index_order`]'s own doc for the full rationale).
+///
+/// The authoritative source is the journal's final "End of game" marker
+/// line, which states the COMPLETE placement order directly, e.g.:
+/// `WINNER IS <name> AS <COLOR> (N PTS); 2nd is <name> as <COLOR> (N pts);
+/// 3rd is <name> as <COLOR> (N pts); 4th is <name> as <COLOR> (N pts)`.
+/// This line is independent of the engine's own final-score recompute and
+/// of the running "culture (now M)" turn-end totals (which do NOT include
+/// end-of-game bonuses such as Bill Gates or final impacts, so they never
+/// equal the index's final score -- using them was the original, broken
+/// approach). Each clause's colour is the word after `AS`/`as` (before the
+/// trailing `(N pts)` parenthesis), mapped to a seat via
+/// [`Color::seat`]; the clauses are already in placement order, so
+/// [`Color::seat`] per clause IS the index order.
+///
+/// As a self-check, the index's own score list (already placement-ordered)
+/// must equal the clause totals position-by-position; any mismatch returns
+/// `None` rather than paper over a record error. `None` when the journal
+/// has no `WINNER IS` line, a clause cannot be parsed, a colour maps to a
+/// seat beyond the player count, the clause count does not match the
+/// player count, or the totals do not line up with [`GameMeta::scores`].
+pub fn derive_index_order_from_text(
+    players: usize,
+    scores: &[i32],
+    journal_text: &str,
+) -> Option<Vec<u8>> {
+    if scores.len() != players || players < 2 {
+        return None;
+    }
+    // The journal's final "End of game" line states the complete placement
+    // order directly:
+    //   WINNER IS <name> AS <COLOR> (N PTS); 2nd is <name> as <COLOR>
+    //   (N pts); 3rd is <name> as <COLOR> (N pts); 4th is <name> as
+    //   <COLOR> (N pts)
+    // This is the authoritative source for the index.tsv `results` column's
+    // ordering (winner first), and it is independent of the engine's own
+    // final-score recompute -- the journal's own stated placement. Find the
+    // LAST "WINNER IS" line (there should be exactly one per game -- the
+    // final "End of game" marker -- but take the last to be safe).
+    let mut winner_line: Option<&str> = None;
+    for line in journal_text.lines() {
+        if line.contains("WINNER IS") {
+            winner_line = Some(line);
+        }
+    }
+    let line = winner_line?;
+    // The "WINNER IS ..." clause starts AFTER the preceding impacts list,
+    // so slice from the "WINNER IS" marker onward (the earlier "Impact of
+    // <X>;" clauses have no "as <Color>" and would not parse).
+    let winner_part = match line.find("WINNER IS") {
+        Some(pos) => &line[pos..],
+        None => return None,
+    };
+    // Parse each placement clause (split on "; "). For each clause, the
+    // colour is the word immediately before the final "(N PTS)" / "(N pts)"
+    // parenthesis, preceded by "as " / "AS ".
+    let mut index_order: Vec<u8> = Vec::new();
+    let mut stated_totals: Vec<i32> = Vec::new();
+    for clause in winner_part.split("; ") {
+        let lower = clause.to_lowercase();
+        let as_pos = lower.rfind("as ")
+            .or_else(|| lower.rfind(" as"))
+            .or_else(|| lower.rfind("as"))?;
+        let after_as = &clause[as_pos + 3..];
+        let color_str: &str = after_as
+            .split_whitespace()
+            .next()?
+            .trim_end_matches(|c: char| c.is_ascii_digit() || c == '(' || c == ')');
+        let color = match color_str.to_lowercase().as_str() {
+            "orange" => Color::Orange,
+            "purple" => Color::Purple,
+            "green" => Color::Green,
+            "grey" | "gray" => Color::Grey,
+            _ => return None,
+        };
+        let seat = color.seat();
+        if seat as usize >= players {
+            return None;
+        }
+        index_order.push(seat);
+        let paren_pos = lower.rfind('(')?;
+        let end = clause[paren_pos..].find(')')? + paren_pos;
+        // The parenthesised total is "<N> PTS" / "<N> pts" -- take only the
+        // leading run of digits (and an optional leading minus sign) so the
+        // "PTS" suffix does not make the integer parse fail.
+        let inner = clause[paren_pos + 1..end].trim();
+        let digits: String = inner
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        let total: i32 = digits.parse().ok()?;
+        stated_totals.push(total);
+    }
+    if index_order.len() != players || stated_totals.len() != players {
+        return None;
+    }
+    // Verify the index's own score list (placement order) matches the
+    // journal's stated totals position-by-position.
+    for (pos, &stated) in stated_totals.iter().enumerate() {
+        if scores[pos] != stated {
+            return None;
+        }
+    }
+    Some(index_order)
 }
 
 // ---------------------------------------------------------------------
