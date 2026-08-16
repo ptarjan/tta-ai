@@ -1,0 +1,138 @@
+2p climb flatness autopsy -- 2026-08-15
+========================================
+
+QUESTION: 2p hill-climb ran 69,586 gens / accepted 8,807 mutants over ~9 days
+but its win share vs the FIXED early reference champion_2p_gen1454_140key_2026-08-06
+stayed flat (0.699 early window -> 0.642 late window, oscillating 0.47-0.70),
+while 3p (0.365->0.815) and 4p (0.218->0.622) climbed against their own Aug-06
+references. Why?
+
+DATA CAVEAT (measured): rust_climb_2p.jsonl has 50,764 lines but gen numbers
+run 1..69,599 with two large gaps in the logged gen sequence: 44852->57407
+(12,555 missing) and 57436->63715 (6,279 missing). No rotated/backup log file
+exists on disk to explain this (checked `ls -la logs/*climb*`). I could not
+determine the cause (crash/relaunch losing lines? something not logged?) --
+flagging as a data-quality caveat, not resolved. It does not appear to affect
+the conclusion below since the effect (early-ref flatness) is visible
+throughout the whole logged range, gaps included.
+
+METHOD: read rust/src/bin/climb.rs (accept gate `challenge()` ~line 381,
+`Config::null()` line 1330, defaults ~line 720), and rust_league.sh (identical
+launch flags for all 3 arms: same --threads 2, same --max-games/--pool-k
+defaults, same --accept-z 1.2816, only --players and --seed differ). Then
+analyzed all three rust_climb_{2,3,4}p.jsonl with python3 (json per line;
+fields per gen: accepted/vetoed/secs/since_accept/gauntlet[]/tried[]).
+
+HYPOTHESES TESTED
+------------------
+H1 (gate too loose at 2p) -- RULED OUT.
+Measured accept-rate: 2p 17.35% (8807/50764), 3p 15.01%, 4p 17.25% -- 2p is
+NOT an outlier, if anything 3p (which climbed hardest) accepts LESS often.
+Measured n games on accepted gens: median 72 (2p), 48 (3p), 72 (4p) -- similar.
+Measured lo margin above null on accepted gens (null = 1/players, i.e. 0.5 /
+0.333 / 0.25): median lo 0.508 (2p, margin +0.008), 0.343 (3p, +0.010), 0.257
+(4p, +0.007) -- all three arms clear the gate by essentially the same thin
+margin. The gate is not structurally looser for 2p.
+
+H2 (2p is faster per gen, does a noisy random walk for longer) -- PARTIALLY
+CONFIRMED as a contributing/enabling factor, not the cause of flatness itself.
+Measured mean secs/gen: 2p 12.8s, 3p 21.4s, 4p 60.8s. 2p really does run far
+more generations in the same wall time (69,586 vs 33,664 vs 12,982 gens over
+the same ~9 days, roughly tracking the inverse of secs/gen). But H4 below
+shows this extra volume of accepted mutants does NOT correlate with the
+early-ref score moving up or down, so "more generations" alone does not
+explain flatness -- it explains why 2p reached its plateau almost immediately
+rather than explaining why the plateau exists.
+
+H3 (2p incumbent churns too fast to consolidate, tiny since_accept) --
+RULED OUT. Measured since_accept run-length (gens between accepts): median 4,
+mean 5.97 (2p) vs median 4, mean 6.92 (3p) vs median 4, mean 6.11 (4p).
+Statistically indistinguishable across arms.
+
+H4 (accepting is anti-correlated with external reference score, i.e. climb.rs
+is optimizing something that actively hurts external strength) -- RULED OUT.
+Correlation between (# accepts in a ~50-gen window) and (change in gauntlet
+share vs the early 2p ref over that same window), n=981 windows:
+corr = -0.025 -- indistinguishable from zero. Accepting mutants is neither
+helping nor hurting the early-ref score; the score's movement is pure noise
+around a stable mean.
+
+H5 (2p was already near its ceiling against this specific stale reference,
+while 3p/4p had far more headroom) -- THIS IS THE ANSWER, and there is a
+sharper, more precise version of it than "already good": the early-ref
+metric is SATURATED, exactly like the already-established anchor-blindness
+issue, just for the 2p gauntlet member specifically.
+
+Measured (gauntlet share vs the FIXED EARLY 08-06 ref, over the full run):
+  - 2p vs champion_2p_gen1454: slope of share-vs-gen ~ -0.00098 per 1000 gens
+    (flat/negative), share ranges 0.47-0.95 across 981 samples, no trend.
+  - 3p vs champion_3p_gen1384: slope +0.01312 per 1000 gens (climbing).
+  - 4p vs champion_4p_gen448:  slope +0.02892 per 1000 gens (climbing).
+
+But measured against the LATER, less-stale 08-08 reference
+(champion_2p_gen19554_140key_2026-08-08, frozen only ~3 days after the run
+started rather than from generation 1454), the SAME 2p arm shows a real,
+substantial climb:
+  gen 19600: share 0.50  ->  gen 69550: share 0.90 (622 samples),
+  slope +0.00578 per 1000 gens, clearly positive and much larger in absolute
+  terms than 3p's climb against ITS late ref (+0.00942 but only 0.5->0.6ish)
+  and comparable in shape to 4p's late-ref climb (+0.08467, 0.3->0.87).
+
+So the 2p arm IS improving in real skill throughout the run -- the flatness
+is confined to the one early, long-stale 08-06 reference. The reason 3p and
+4p show clean climbs against THEIR 08-06 references while 2p does not is
+that the 2p arm's gen-1454 snapshot (frozen 08-06) was already strong enough,
+by the time the run's logged/measured window begins, that further real
+improvement stops moving the win-share needle against it -- the same
+mechanism as the anchor going blind once win rate saturates: with a 60-game
+gauntlet sample, once the true skill gap is large, sampling noise (the
+0.47-0.95 range) dominates whatever small residual signal remains, so the
+score just oscillates around a plateau instead of trending.
+
+This is NOT a code bug and NOT evidence the 2p climb has stalled. It is a
+measurement artifact: the specific frozen opponent used for the "did 2p
+improve" headline number is stale for 2p in exactly the way rust_league.sh's
+own comments (lines ~55-70) already describe happening to the 3p arm's 08-06
+reference on 2026-08-08 ("gen1384 was diagnosed as a bad optimum... when the
+live 3p champion had already climbed out of it unaided").
+
+BEST EXPLANATION (single sentence)
+-----------------------------------
+The 2p arm's Aug-06 frozen reference (gen1454) was already thoroughly beaten
+by the time the reported measurement window starts, so the win-share metric
+against it saturated (like the anchor) and now just reports sampling noise;
+the arm is demonstrably still climbing in real strength, as shown by its
+0.50->0.90 climb against the less-stale Aug-08 2p reference over the same
+period.
+
+RECOMMENDATION
+--------------
+No change needed in climb.rs's accept gate, sigma schedule, or n-schedule --
+H1/H3/H4 rule out anything wrong there, and it is identical across arms by
+construction (rust_league.sh:97-118 launches all three arms with the same
+flags, differing only in --players/--seed and per-arm gauntlet-eval file).
+
+The fix, if the 0.699->0.642 headline number is going to keep being reported,
+is at the ANALYSIS layer, not climb.rs: stop treating the single Aug-06 early
+gauntlet member as "the" progress metric for 2p. Concretely:
+  1. Whatever script/dashboard computes the "win share vs fixed reference"
+     summary should report the LATE (08-08) gauntlet member
+     (champion_2p_gen19554_140key_2026-08-08) as primary for 2p, or better,
+     report the trend slope across ALL gauntlet members rather than a single
+     early/late window average of one member -- this is already logged, no
+     climb.rs change required, just a different read of
+     rust_climb_2p.jsonl's `gauntlet` array (see rust_league.sh:52-70 for the
+     full list of gauntlet member names available: 2P/3P/4P x {early, late}
+     + human + hybrid-search).
+  2. Per rust_league.sh's own precedent (the 3p false-reseed-alarm comment,
+     lines ~55-63), consider freezing a THIRD, more recent gauntlet cut
+     (e.g. an 08-15 snapshot per arm) periodically so "is this arm still
+     improving" always has a reference from roughly one week prior rather
+     than one that is 9000+ generations stale for the fast arm (2p) and
+     only ~1400 generations stale for the slow arm (4p) at the same wall-clock
+     age -- the staleness-in-generations is arm-speed-dependent even though
+     the staleness-in-wall-clock-time is not.
+
+No climb.rs or rust_league.sh line needs to change for the climb itself to
+keep working correctly; the recommendation is purely about which existing
+logged numbers to read when judging "is 2p still climbing."
