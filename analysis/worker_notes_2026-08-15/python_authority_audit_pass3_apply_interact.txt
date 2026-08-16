@@ -1,0 +1,166 @@
+PASS 3 AUDIT: src/apply.rs and src/interact.rs
+Python-authority comment audit -- "Python is not an authority" pass, worker 3.
+Files: rust/src/apply.rs (3566 lines), rust/src/interact.rs (2842 lines).
+Method: enumerated every line matching /python|\.py/i via grep (apply.rs: ~110
+hits, interact.rs: ~45 hits), then read BOTH FILES IN FULL (not just the
+matched lines) to classify every comment in context.
+
+======================================================================
+SUMMARY
+======================================================================
+
+These two files are already heavily audited. The overwhelming majority of
+Python citations are bucket 1 (PROVENANCE: "Mirrors engine/actions.py::X" /
+"Ports engine/interact.py::Y" as a bare pointer to where the port came from)
+or bucket 2 (PARITY NOTE: a deliberate divergence, or a bug found in the BGO
+human corpus and fixed, usually with its own RB/CoL/FAQ/RULES_SPEC citation
+and a specific game ID -- these files are full of "ENGINE BUG (game
+NNNNNNN, round N)" writeups that are NOT Python-authority findings, they are
+independently-sourced fixes that happen to also mention what Python did).
+
+Only THREE comments assert a game rule (a number, a strict-vs-non-strict
+comparison, a data source) with Python cited as the comment's ONLY visible
+support. I checked all three against the oracle chain (card text under
+sources/, which is the closest available proxy for RULES_SPEC/FAQ/CoL on
+these specific numbers). All three are CONFIRMED -- the code is correct, but
+the comment is miscited: it should point at the card text / Code of Laws
+instead of (or in addition to) Python. None are CONTRADICTED. No dead
+functions with Python-sourced rules were found in either file.
+
+This is a genuine negative result: unlike pass 1 (one wrong+dead function
+cited by four other comments) and pass 2 (live wrong army-slot math), pass 3
+found no wrong code in apply.rs/interact.rs. The three items below are still
+worth fixing as COMMENTS (re-cite to the real oracle) so a future reader
+does not treat "Python agrees" as if it settled the question.
+
+Bucket counts (approximate, by comment/doc-block, not by grep line -- many
+grep lines are inside one doc block):
+  Bucket 1 PROVENANCE : ~85 (bare "mirrors/ports engine/X.py::Y" pointers)
+  Bucket 2 PARITY NOTE: ~15 (see list below)
+  Bucket 3 LOAD-BEARING: 3 (all CONFIRMED, see below)
+
+======================================================================
+BUCKET 3 -- LOAD-BEARING (the finding)
+======================================================================
+
+--- Item 1 ---
+LOCATION: src/apply.rs, fn h_play_action, ~lines 1356-1398 (the
+CulturePerCivilizationWithMoreCulture and
+ResourcesForMilitaryUnitsPerStrongerCivilization arms).
+RULE ASSERTED: the per-civilization count uses a STRICT `>` comparison
+("q.culture as i32 > mine" / "state_stats(q).strength > mine"), not `>=`.
+COMMENT'S OWN SUPPORT: "Mirrors `engine/actions.py::_h_play_action` lines
+1153-1167 exactly, including ... the strict `>` comparisons (Python:
+`q.culture > p.culture` / `state_stats(q).strength > mine`)." No RB/CoL/FAQ/
+RULES_SPEC citation anywhere in this doc block for the strictness of the
+comparison.
+ORACLE CHECK: sources/bga_throughtheages_material.inc.php (2015 BGA card
+text, closest available proxy for the printed cards):
+  - Endowment for the Arts (id 3512ish): "You score culture points for each
+    civilization WITH MORE CULTURE THAN YOU: 2/3/6 points."
+  - Wave of Nationalism (id ~1882) and Military Build-Up (id ~4052): "For
+    each civilization STRONGER THAN YOURS, you have extra resources..."
+"More than" / "stronger than" are both strict-inequality wording in plain
+English -- a tied player does not count. VERDICT: CONFIRMED. The code's `>`
+is right; the comment should cite the card text, not Python.
+LIVE/DEAD: LIVE. h_play_action is called directly from apply()'s
+Move::PlayAction arm (src/apply.rs:266) -- the main move-dispatch path.
+OBSERVABLE: YES. Ties in culture or strength between players are common in
+real games (2p/3p/4p), so a `>=` vs `>` bug here would be reachable and
+would silently over-pay real games whenever a tie exists.
+
+--- Item 2 ---
+LOCATION: src/interact.rs, fn start_defense (~lines 1702-1721; the
+explanatory comment itself is only in the test at ~lines 2241-2246,
+`start_defense_with_an_empty_hand_resolves_immediately`'s doc comment).
+RULE ASSERTED: the aggression-defense budget (§5.4.4 -- how many bonus
+cards/discards a defender may spend matching an attacker's strength) is
+`effects::state_stats(defender).military_actions` -- the government's
+PRINTED/computed military-action TOTAL -- not `p.military_actions`, the
+player's own decrementing per-turn remainder.
+COMMENT'S OWN SUPPORT: "Note what `budget` is: ... the government's printed
+rate, NOT `p.military_actions` (what is left this turn). That is Python's
+reading too, and it is easy to get backwards, so it is pinned here." No
+CoL/FAQ/RB citation at this site at all -- the ONLY stated authority is
+Python.
+ORACLE CHECK: Code of Laws (col.txt):
+  - line ~316 (Aggression section): "Limitation: The total number of cards
+    your rival plays or discards for bonuses cannot exceed his or her
+    MILITARY ACTION TOTAL."
+  - line ~955 ("Action Totals"): "Your military action total is the number
+    of these symbols you have on your cards in play. Include the symbols on
+    your government card, plus all those at the bottoms of other cards."
+    This is explicitly the computed TOTAL from cards in play (what
+    `effects::state_stats` computes), not a decrementing per-turn pool.
+  - rb.txt ~2118-2122 (2015-edition changelist) confirms the same phrase:
+    "cannot exceed the defender's military action total."
+VERDICT: CONFIRMED. The code is right, and in fact this matters a lot: the
+defender is mid-ATTACKER's-turn when this resolves, so the defender's own
+`p.military_actions` at that instant is whatever was left over, usually
+near-exhausted, from the DEFENDER'S OWN last completed turn -- using that
+field instead of the recomputed total would systematically starve almost
+every real defense. The comment should cite CoL's "Action Totals"/
+Aggression sections, not Python.
+LIVE/DEAD: LIVE. start_defense is called from h_aggression (src/apply.rs:
+1257), which is the live Move::Aggression handler (src/apply.rs:308).
+OBSERVABLE: YES, and essentially always -- every aggression against a
+defender who has already spent (or not yet refreshed) military actions this
+"round" exercises this exact distinction.
+
+--- Item 3 ---
+LOCATION: src/interact.rs, `const COOK_DISCARDS: i32 = 2;` (~line 1281) and
+its doc comment (~lines 1271-1280).
+RULE ASSERTED: James Cook may discard AT MOST 2 military cards per
+colonization (each for +1 colonization force).
+COMMENT'S OWN SUPPORT: "Mirrors `engine/interact.py::COOK_DISCARDS`.
+Deliberately NOT read off `Special::ColonizeDiscardUpTo2MilitaryCardsFor
+Bonus`'s payload -- that value is the +1 BONUS per discard ... and the cap
+of two is a data wart: it is spelled inside the effect KEY's own name
+instead of carried beside it ... there is nothing more machine-readable to
+pin it to here." Cites Python plus the (informal) special-key name as its
+only support -- no card text.
+ORACLE CHECK: sources/bga_throughtheages_material.inc.php, James Cook (id
+2478-2494): "When colonizing, you may discard up to 2 military cards to get
++1 colonization bonus for each." VERDICT: CONFIRMED directly by the printed
+card text; `COOK_DISCARDS = 2` is correct and is in fact independently
+confirmed by the very `Special` variant's own name
+(`ColonizeDiscardUpTo2MilitaryCardsForBonus`), which the comment already
+half-acknowledges. Minor miscite only -- worth a one-line addition citing
+the card text instead of leaning on Python + the enum name.
+LIVE/DEAD: LIVE (also duplicated at src/bots/book.rs:1546, same value, same
+citation pattern -- out of scope for this pass but worth noting for
+whoever's file that is).
+OBSERVABLE: YES. James Cook + colonizing with more than 2 spare military
+cards is an ordinary reachable position.
+
+======================================================================
+BUCKET 2 -- PARITY NOTES (interesting, harmless, one line each)
+======================================================================
+- apply.rs end_politics (Julius Caesar double-politics): explicitly says
+  "Python has the same bug; the printed card is the oracle, not Python" --
+  already self-correcting, exactly the discipline this audit wants to see
+  everywhere.
+- apply.rs h_pop/do_build/h_develop "Civil Life" one-time-discount mutual
+  exclusion: Python-cited mechanism description, but the actual rule is
+  independently pinned by BGO game 7523355 and regression tests.
+  interact.rs sorted_unique_by_name for Pending::Defense's move list: cites
+  Python for a NAME-sorted presentation order distinct from (and explicitly
+  contrasted with) discard_options' defense-value order. Presentation-only
+  (does not change legality or state), same shape as the off-limits
+  discard_options ordering -- flagged but not recommended for change.
+- interact.rs settle_war_spoils: Python cited only for what the OLD
+  (deliberately-changed) behaviour was ("science unconditionally"); the new
+  behaviour's justification is FAQ p.8 ("some or all"), not Python.
+- apply.rs h_revolution / h_play_leader / set_government carry-over-pool
+  arithmetic: heavily Python-referenced in spots but every actual rule
+  (§8.2, §8.3.4, RB p.15) is independently cited and BGO-game-confirmed
+  alongside the Python pointer.
+- interact.rs Raid loot rounding (ceil of combined printed cost, not
+  per-casualty): cites a real BGO journal line, not Python, for the rule
+  itself; Python is not the support here at all despite being a
+  Python-heavy neighborhood of comments.
+
+======================================================================
+NO CONTRADICTED ITEMS FOUND. NO DEAD FUNCTIONS WITH PYTHON-SOURCED RULES
+FOUND in apply.rs or interact.rs.
+======================================================================

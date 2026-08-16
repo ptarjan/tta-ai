@@ -1,0 +1,159 @@
+PYTHON-AUTHORITY COMMENT TRIAGE -- REMAINING FILES -- rust/src
+2026-08-15. Scope: every file under rust/src EXCEPT events.rs, economy.rs, effects.rs,
+costs.rs, game.rs, combat.rs, apply.rs, legal.rs, interact.rs, cards.rs, state.rs
+(covered by python_authority_audit.txt + python_authority_audit_pass2.txt) and
+apply.rs, interact.rs, src/bots/**, src/advisor/** (live workers as of this run).
+
+This is a cheap mechanical pass: classify INERT (provenance/resolved-quirk, count
+only) vs RULE-ASSERTING (asserts a game rule -- number/order/inclusion/rounding/
+clamp/timing/legality -- citing Python as support). No verdicts against the
+rulebook are attempted here; that is the next pass's job.
+
+=====================================================================
+0. SOMETHING THAT LOOKED WRONG ON SIGHT -- read this first
+=====================================================================
+NOT a live bug, but a STALE/MISLEADING comment worth a cleanup pass:
+replay_common.rs:2319-2321 and :5350-5370 (in `parse_produces_grant_line`'s doc
+comment and its caller) describe `events::food_or_resources` as CURRENTLY LIVE,
+still applying "its own deterministic guess" (fixed "resources first" split),
+and say the wrong-fixed-formula issue was "flagged, not fixed" and is "out of
+this bucket's scope."
+
+That is no longer true. `events.rs:1855-1867` and `interact.rs:2693-2702` (both
+tagged "FOODFIX", both OUTSIDE this audit's scope but readable for context) show
+`events::food_or_resources` was DELETED and replaced with a real per-player
+choice (`QueueItem::FoodOrResSplit`/`ChoiceKind::FoodOrResSplit`), specifically
+BECAUSE of the same BGO corpus evidence replay_common.rs's own comment cites
+(game 7523357 / 7522886: "Grey choses first", unequal splits on equal totals).
+So the underlying rule bug this comment describes was real, was fixed elsewhere
+in the engine, but replay_common.rs's documentation (and its 2319-2321 remark
+in the mid-function comment) was never updated and still tells a future reader
+the function exists and the bug is live/unfixed/out-of-scope. Recommend a
+comment fix in replay_common.rs pointing at the FOODFIX resolution instead of
+describing dead code as current. Not re-verified whether `parse_produces_grant_
+line`'s actual PARSING logic (as opposed to its doc comment) is still doing
+useful/correct work post-FOODFIX -- that's a code-behavior question out of this
+mechanical pass's budget, flagging the comment staleness only.
+
+This is the same root citation as this pass's #1 shortlist item below (both are
+about the same historical bug); the shortlist entry ranks it as a citation-only
+comment because the CODE it originally described is gone, this note is about
+the STALE DOCUMENTATION that's left behind pointing at it.
+
+=====================================================================
+1. TOTAL HITS IN SCOPE: 110  (grep -c -i "python\|engine/.*\.py\|advisor/.*\.py")
+   Per-file histogram, descending:
+=====================================================================
+  31  rng.rs                (see SPECIAL NOTE below -- different kind of citation)
+  10  card_table.rs          (generated data table -- counted, NOT read line-by-line
+                               per instructions; header/scheme hits only, see below)
+   9  moves.rs
+   8  bin/advisor.rs
+   7  harness/play.rs
+   7  harness/fields.rs
+   6  bin/climb.rs
+   5  harness/mirror.rs
+   4  lib.rs
+   4  harness/record.rs
+   4  fixtures.rs
+   3  replay_common.rs
+   3  harness/mod.rs
+   3  bin/neuraltrain.rs
+   2  bin/harness.rs
+   1  stats.rs
+   1  bin/selfplay.rs
+   1  bin/corpuscensus.rs
+   1  arena.rs
+  ---
+ 110  TOTAL
+
+  Files in scope with ZERO hits (checked, not skipped): corpus.rs, debugflags.rs,
+  discard_solver.rs, event_plan.rs, human_policy.rs, opening_force.rs, tie_context.rs.
+
+  SPECIAL NOTE on rng.rs (31 hits, the single largest count in this pass): every
+  hit refers to CPYTHON'S OWN `random` STDLIB MODULE (MT19937 algorithm, exact bit
+  sequence), not to the deleted TTA game-engine Python (`engine/*.py`). CPython
+  itself was never deleted and is not a stale reference -- it is a real, permanently
+  available, versioned external spec (the file cites "CPython 3.13.7... read
+  directly," plus a cross-check test `matches_cpython_exactly`). These 31 hits
+  are the ONE place in this codebase where "Python" is a legitimate, still-checkable
+  authority, structurally different from every other file's citations. All 31
+  classified INERT; none reads as an unverifiable rule assertion.
+
+  card_table.rs: all 10 hits are in the file's header/derivation doc comments
+  (codegen scheme: how effect keys map to enum variants, which JSON shapes are
+  string- vs magnitude- vs unit-valued) plus a handful of scattered comments using
+  the same "Python's own dispatch reads..." phrasing to justify a codegen choice
+  (lines 4861, 4895, 5053, 5257, 5550, 5977). None asserts a game-rule number/
+  order/legality; they describe how card JSON is parsed into Rust types. One item
+  worth a name-check, not a shortlist entry: line ~5053 (`scoring_stat_variant`)
+  documents that Python's dispatch "silently falls back to 'strength' for an
+  unrecognized statistic value" and the comment itself discloses "no base-game
+  card exercises the fallback" -- self-disclosed moot, same pattern as pass 1's
+  "downgraded to bucket 2" items. Did not open the generated table body itself.
+
+=====================================================================
+2. INERT COUNT: 107 of 110
+=====================================================================
+Breakdown matches the histogram above minus the 3 replay_common.rs hits promoted
+below. All of moves.rs (move-tuple naming provenance), bin/advisor.rs (CLI/UI
+mirroring), harness/*.rs and fixtures.rs (test-harness/replay-tooling provenance,
+including several EXPLICIT "unlike Python" deliberate-divergence notes -- e.g.
+harness/record.rs:716-717, harness/play.rs:867-872 -- which are resolved quirks,
+the cleanest INERT case), bin/climb.rs and bin/neuraltrain.rs (bot-training/
+tuning constants and ML-loop mechanics, not game rules), lib.rs (test-provenance
+and a self-verifying whole-table assertion, not a bare Python appeal), arena.rs,
+bin/selfplay.rs, bin/corpuscensus.rs, stats.rs (single provenance lines) were all
+read in context and contain no game-rule assertion whose ONLY support is Python.
+
+=====================================================================
+3. RANKED RULE-ASSERTING SHORTLIST (1 entry, 3 comment sites, all one topic)
+=====================================================================
+
+--- #1 [HIGHEST RISK BY PHRASING, BUT ALREADY CONFIRMED-FIXED ELSEWHERE] ---
+FILE: replay_common.rs:2319-2321 (inline comment in the political-decision apply
+path) and replay_common.rs:5350-5370 (`parse_produces_grant_line`'s doc comment).
+FUNCTION: the inline comment sits in `TryApply`'s move-application loop (no named
+fn at 2319); the doc comment is on `parse_produces_grant_line`.
+
+RULE ASSERTED: Foray/Raiders' "gain/lose a total of N resources and/or food,
+their choice" (§5.3 foodAndOrResources) is resolved by a FIXED formula --
+"resources first, food for the remainder" -- described as `events::
+food_or_resources`'s behavior, "mirroring the Python reference bot's own fixed
+policy" / "mirroring `engine/events.py::_food_or_resources`". Risk signals: (a)
+HIGHEST -- the 5350-5370 comment explicitly says "Python reference bot policy"
+IS the justification for leaving the (admittedly wrong, per its own BGO-corpus
+citation) formula "alone," i.e. it names Python as authority for NOT re-deriving
+from the rules -- exactly the phrasing pattern that hid the prior live Genghis
+Khan / Impact-of-Population bugs; (b) the comment cites an exact split algorithm
+(deterministic ordering of two resource pools); (c) touches the resource/food
+gain path, adjacent to scoring.
+
+STATUS ON RE-CHECK (not asked for by the mechanical brief, but the risk signals
+were loud enough to verify liveness per this pass's own judgment call): NOT a
+live bug. `events.rs:1855-1867` and `interact.rs:2693-2702` (both out of this
+audit's file scope, both tagged "FOODFIX") show the exact issue this comment's
+own BGO-evidence paragraph raises (game 7523357/7522886) was independently
+found and fixed: `events::food_or_resources` was deleted and replaced with a
+real per-player choice (`QueueItem::FoodOrResSplit`/`ChoiceKind::FoodOrResSplit`).
+So the CODE this comment cites Python for no longer exists; what's left in
+replay_common.rs is a stale description of pre-fix behavior (see section 0
+above). Ranked #1 by phrasing-risk (this is exactly the dangerous pattern the
+brief asked to prioritize) but the actual hazard is a documentation staleness,
+not an unverified live rule -- downgrade appropriately in the next pass.
+
+No other RULE-ASSERTING candidates found in the 107 remaining hits across the
+other 18 files.
+
+=====================================================================
+4. TRUNCATION / METHOD NOTE
+=====================================================================
+All 110 hits in scope were read in context (grep -n + surrounding lines), not
+sampled -- this pass is exhaustive for the file set listed at the top, unlike
+pass 1's budget-limited triage of the other 11 files. card_table.rs's generated
+table BODY (thousands of lines) was not opened per instructions; only its ~10
+Python-citing comment sites were read. Did not re-verify whether replay_common
+.rs's `parse_produces_grant_line` parsing logic itself is dead, redundant, or
+still load-bearing post-FOODFIX -- flagged as an open question in section 0,
+not resolved here (would require reading replay_common.rs's callers, which is
+a code-behavior question out of a comment-triage pass's scope).
