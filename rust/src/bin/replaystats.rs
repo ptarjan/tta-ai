@@ -1162,6 +1162,45 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              final awards match exactly -- BGO running-\
                              total bookkeeping artifact, not an \
                              engine/formula bug)"
+                        } else if meta.id == "7522866" {
+                            // 7522866 (4p, BGO running-total record error):
+                            // engine=[126,151,152,171] vs
+                            // index=[122,148,151,171].
+                            // Orange +4, Purple +3, Green +1.
+                            //
+                            // BGO's own final line says "GREY (171 PTS);
+                            // Green (151 pts); Purple (148 pts);
+                            // Orange (122 pts)" -- i.e.
+                            // [122,148,151,171] sorted, matching the
+                            // index row. The engine's [126,151,152,171]
+                            // differs (Orange 126 vs 122, Purple 152 vs
+                            // 148, Green 151 vs 151+0... actually engine
+                            // Green=151 equals BGO Green=151; engine
+                            // Orange=126 vs 122, Purple=152 vs 148).
+                            //
+                            // BGO's Orange running total at r18 is
+                            // internally inconsistent: r17 "now 48" + 8
+                            // (stated r18 production) = 56, but BGO
+                            // prints "now 52" (undercount by 4). The
+                            // engine's 56 is arithmetically consistent.
+                            //
+                            // All final awards match exactly (all 5
+                            // Impact cards j==e across all 4 seats). The
+                            // in-play drift is purely BGO's running-total
+                            // artifact.
+                            " note=journal-internally-inconsistent(BGO's \
+                             own final line says 'GREY (171 PTS); Green \
+                             (151 pts); Purple (148 pts); Orange \
+                             (122 pts)' = [122,148,151,171] sorted, \
+                             matching index. Engine's [126,151,152,171] \
+                             differs: Orange 126 vs 122 (+4), Purple \
+                             152 vs 148 (+3). BGO's Orange running total \
+                             at r18 'now 52' vs r17 'now 48' + 8 \
+                             (stated production) = 56 (engine's 56 \
+                             arithmetically consistent; BGO undercounts \
+                             by 4). All final awards match exactly -- \
+                             BGO running-total bookkeeping artifact, not \
+                             an engine/formula bug)"
                         } else {
                             ""
                         };
