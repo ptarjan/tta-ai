@@ -86,9 +86,11 @@ pub struct Stats {
     /// stay separate fields here because `compute` never combines them.
     pub civil_hand_limit: i32,
     pub military_hand_limit: i32,
-    /// Stages paid per "build a wonder step" action. Python takes the MAX
-    /// across every `wonderStagesPerAction` source, not a sum -- see
-    /// `add_flat_except_actions` below.
+    /// Stages paid per "build a wonder step" action. MAX across every
+    /// `wonderStagesPerAction` source, not a sum -- see
+    /// `add_flat_except_actions` below. §7.6 keeps two sources from ever being
+    /// in play together in the base game, so max-vs-sum is unobservable here
+    /// too (see `BuildDiscount`, which the same three cards print).
     pub wonder_stages: i32,
     pub pop_food_discount: i32,
     /// Resources off an URBAN building's build cost, per AGE -- indexed by
@@ -240,13 +242,16 @@ fn happy_from(techs: &Tableau, pred: impl Fn(CardType) -> bool) -> i32 {
 }
 
 /// Highest-AGE staffed card of the matching type(s), `None` if there is none.
-/// Ties keep the first one found in tableau (insertion) order, matching
-/// Python's `best_card`, which keeps the first name it sees at a given level
-/// because it only replaces `best` on a STRICT `>` comparison, and Python
-/// dict iteration order is insertion order.
+/// FAQ v1.5 p.9: an unstaffed technology produces nothing, so "best" here means
+/// best STAFFED.
 ///
-/// FAQ v1.5 p.9 (quoted in `engine/effects.py::_building_modifier`): an
-/// unstaffed technology produces nothing, so "best" here means best STAFFED.
+/// Ties keep the first card in tableau order, and that choice is unobservable
+/// rather than a rule: the only tie possible is Leonardo/Newton/Einstein's
+/// lab-or-library pair, and their award is the card's LEVEL, which is what tied
+/// in the first place. Theater (Drama/Opera/Movies) and Mine
+/// (Bronze/Iron/Coal/Oil) hold one card per age, so Chaplin and the
+/// Transcontinental Railroad -- which do read printed production -- can never
+/// see a tie at all. Do not spend time picking a "correct" tie-break here.
 fn best_staffed(techs: &Tableau, pred: impl Fn(CardType) -> bool) -> Option<CardId> {
     let mut best: Option<(CardId, u8)> = None;
     for (id, slot) in techs.iter() {
@@ -599,12 +604,20 @@ fn count_armies(avail: &[i32; 4], need: &[i32; 4]) -> i32 {
 }
 
 /// Genghis Khan (`Special::InfantryCountsAsCavalryForTactics`): infantry may
-/// fill a cavalry slot. Mirrors the nested `count_armies` inside Python's
-/// `_army_strength_counts` Genghis branch literally, loop included --
-/// `k*(need_inf+need_cav) <= total` and `k*need_cav <= total` are
-/// independent bounds in Python's own formula, not re-derived here (if this
-/// ever needs re-justifying against the rulebook, start from
-/// `engine/effects.py::_army_strength_counts`, not from first principles).
+/// fill a cavalry slot. CoL p.12: "When forming armies, each infantry unit can
+/// be either cavalry or infantry (but not both) to maximize the civilization's
+/// total strength rating." The substitution is ONE-WAY -- an infantry may stand
+/// in for a cavalry, never the reverse -- so `k` armies need `k*need_inf` real
+/// infantry for the infantry slots, and the cavalry slots are then filled from
+/// whatever cavalry and leftover infantry remain. Those two bounds are exactly
+/// sufficient: pay the infantry slots first, and any assignment of the rest
+/// that fits the total fits.
+///
+/// The port carried Python's pair of bounds here instead
+/// (`k*(need_inf+need_cav) <= total` and the redundant `k*need_cav <= total`),
+/// with a comment forbidding re-derivation from the rulebook. That let CAVALRY
+/// fill INFANTRY slots: Genghis with two Knights and no infantry formed a
+/// Medieval Army, which the card does not allow.
 fn count_armies_genghis(avail: &[i32; 4], need: &[i32; 4]) -> i32 {
     let need_inf = need[INFANTRY];
     let need_cav = need[CAVALRY];
@@ -616,7 +629,7 @@ fn count_armies_genghis(avail: &[i32; 4], need: &[i32; 4]) -> i32 {
     for k in 0..=total {
         let others_ok = (ARTILLERY..=AIR)
             .all(|i| need[i] == 0 || k * need[i] <= avail[i]);
-        if k * (need_inf + need_cav) <= total && k * need_cav <= total && others_ok {
+        if k * need_inf <= avail[INFANTRY] && k * (need_inf + need_cav) <= total && others_ok {
             best = k;
         }
     }
@@ -1202,8 +1215,10 @@ fn apply_special(stats: &mut Stats, p: &PlayerState, special: Special) {
         // maxed, which is what the `wonderStagesPerAction` printed on the
         // very same three cards does (`add_flat_except_actions`). Holding
         // two of the three at once is unreachable in the base game (§7.6
-        // allows one construction special-tech in play), so nothing today
-        // tells the two rules apart at runtime; Python sums, so this sums.
+        // allows one construction special-tech in play), so nothing tells the
+        // two rules apart at runtime and neither books nor corpus can settle
+        // it. Left as a sum because that is what the port did; if the
+        // expansion ever makes it reachable, read the rulebook then.
         BuildDiscount(by_age) => {
             for (slot, add) in stats.build_discount.iter_mut().zip(by_age.iter()) {
                 *slot += *add as i32;
@@ -2268,6 +2283,34 @@ mod tests {
         // 2 Warriors: 1 strength/worker * 2 = 2, PLUS one Genghis-formed army
         // (1 infantry-as-infantry + 1 infantry-as-cavalry) at strength 2.
         assert_eq!(s2.strength, 4);
+    }
+
+    #[test]
+    fn genghis_khan_does_not_let_cavalry_fill_an_infantry_slot() {
+        // CoL p.12 makes the swap one-way: "each infantry unit can be either
+        // cavalry or infantry". Nothing lets a cavalry unit be infantry, so
+        // Medieval Army (1 infantry + 1 cavalry) cannot be formed by a
+        // civilization holding only Knights -- with or without Genghis Khan.
+        // The ported formula only bounded the COMBINED infantry+cavalry pool,
+        // so it happily formed the army from two Knights.
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Genghis Khan");
+        p.tactic = card("Medieval Army");
+        p.techs.insert(card("Knights"), TechSlot { workers: 2, stored: 0 });
+        let state = one_player_state(2, p);
+        let with_genghis = compute(&state, &state.players[0]).strength;
+
+        let mut q = blank_player(0, card("Despotism"));
+        q.tactic = card("Medieval Army");
+        q.techs.insert(card("Knights"), TechSlot { workers: 2, stored: 0 });
+        let state_q = one_player_state(2, q);
+        let without_genghis = compute(&state_q, &state_q.players[0]).strength;
+
+        assert_eq!(
+            with_genghis, without_genghis,
+            "Genghis Khan cannot help a cavalry-only civilization form an army \
+             that needs an infantry unit",
+        );
     }
 
     // ---------------------------------------------------------- colonies

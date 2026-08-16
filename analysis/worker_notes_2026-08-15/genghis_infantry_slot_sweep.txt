@@ -1,0 +1,65 @@
+Genghis Khan infantry-slot rule sweep
+======================================
+Date: 2026-08-15
+
+RULE UNDER TEST (Code of Laws p.12, Genghis Khan / Special::InfantryCountsAsCavalryForTactics):
+"When forming armies, each infantry unit can be either cavalry or infantry
+(but not both) to maximize the civilization's total strength rating."
+The substitution is ONE-WAY: an infantry unit may stand in for a cavalry
+unit, but a cavalry unit may never fill an infantry slot.
+
+CODE CHANGE (src/effects.rs, count_armies_genghis, live working tree at
+/Users/pt/tta-ai/rust):
+
+BEFORE:
+    if k * (need_inf + need_cav) <= total && k * need_cav <= total && others_ok {
+
+AFTER:
+    if k * need_inf <= avail[INFANTRY] && k * (need_inf + need_cav) <= total && others_ok {
+
+(total = avail[INFANTRY] + avail[CAVALRY])
+
+The old bound pair (ported from Python) checked only that total troop count
+covered infantry+cavalry slots combined, and separately that cavalry alone
+covered the cavalry slots -- but never that infantry alone covered the
+infantry slots. That let CAVALRY fill INFANTRY slots (e.g. Genghis with two
+Knights and zero infantry could form a Medieval Army), which CoL p.12 does
+not allow. The new first clause (k*need_inf <= avail[INFANTRY]) pays the
+infantry slots from real infantry only; the second clause then allows the
+remaining troops (leftover infantry + all cavalry) to fill the rest up to
+`total`, which is correct because the substitution is one-way (infantry may
+cover cavalary slots, not vice versa).
+
+METHOD:
+- Cloned live tree (APFS clone) to /private/tmp/genghis_sweep, which carried
+  the uncommitted AFTER change.
+- Built difftest profile, ran full replaystats sweep against
+  /Users/pt/tta-ai/sources/bgo/index.tsv + /private/tmp/bgo-journals/journals
+  (SCOREDIV_DUMP_COMPLETED=1) -> AFTER numbers.
+- git checkout -- src/effects.rs inside the clone (BEFORE version restored),
+  rebuilt, re-ran identical sweep -> BEFORE numbers.
+- Compared completed-game ID sets against the frozen guard list
+  (/private/tmp/guard_ids.txt, 748 lines).
+
+RESULTS:
+
+BEFORE (guard baseline, confirmed exact match against guard_ids.txt --
+comm -23/-13 both empty, confirming clone+guard sanity):
+  1011 games sampled, 748 completed to state.game_over
+  721/748 completed games matched index.tsv exactly
+
+AFTER:
+  1011 games sampled, 749 completed to state.game_over
+  722/749 completed games matched index.tsv exactly
+
+REGRESSIONS (in guard/BEFORE completed set but NOT in AFTER completed set):
+  (none -- comm -23 guard_ids.txt genghis_after_ids.txt is empty)
+
+WINS (in AFTER completed set but NOT in guard/BEFORE completed set):
+  7523017
+
+Net: completions 748 -> 749 (+1, no losses), exact matches 721 -> 722 (+1).
+Since this is a scoring/strength correctness fix, the relevant number is the
+exact-match count: 721 -> 722, a strict improvement with zero regressions.
+
+VERDICT: BETTER
