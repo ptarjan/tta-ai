@@ -303,41 +303,15 @@ pub fn increase_population(p: &mut PlayerState, cost: u16, consume_one_time: boo
     true
 }
 
-/// "Lose 1 population": an unused worker first, else one off a card (§6.x).
-///
-/// Which card gets weakened is decided by tableau order: Python iterates
-/// `p.techs`, a `dict`, so it walks build order and takes the worker off the
-/// first worker-holding card it finds. That is arbitrary as a rule but not as
-/// a position -- losing a farm worker is not losing a mine worker.
-///
-/// This was flagged during the port as a divergence risk, because `Tableau`
-/// used a swap-remove and so lost build order the first time any card left
-/// play. `Tableau::remove` is now order-preserving (see the note on it in
-/// state.rs), which makes `Tableau::iter()` the right order here. Do not
-/// reintroduce a swap-remove without dealing with this function and with
-/// `legal_moves`.
-pub fn lose_population(p: &mut PlayerState) -> bool {
-    if p.workers_free > 0 {
-        p.workers_free -= 1;
-        p.yellow_bank += 1;
-        return true;
-    }
-    let mut target: Option<CardId> = None;
-    for (id, slot) in p.techs.iter() {
-        if slot.workers > 0 && id.kind().takes_workers() {
-            target = Some(id);
-            break;
-        }
-    }
-    match target {
-        Some(id) => {
-            p.techs.get_mut(id).expect("id came from this tableau").workers -= 1;
-            p.yellow_bank += 1;
-            true
-        }
-        None => false,
-    }
-}
+// `lose_population` used to live here: an unused worker first, else a worker
+// off the FIRST worker-holding card in build order, because Python iterated
+// `p.techs` as a dict and took the first one it walked. It was dead -- nothing
+// but its own tests ever called it -- and it was WRONG: FAQ p.15 makes losing
+// population the loser's CHOICE of which workers, not a positional accident.
+// The live path is `interact.rs`'s `QueueItem::LosePop`, which offers the
+// choice and cites the FAQ. Deleted 2026-08-15 rather than left lying around,
+// because four comments elsewhere had already started citing this function as
+// the reason build order is play-relevant. It is not; `legal_moves` is.
 
 // ------------------------------------------------------- blue token math
 //
@@ -1502,35 +1476,6 @@ mod tests {
         assert_eq!(pop_cost(&state, &state.players[0]), Some(3));
         state.players[0].one_time_discount.pop_food = 1;
         assert_eq!(pop_cost(&state, &state.players[0]), Some(2));
-    }
-
-    // -------------------------------------------------------- lose_population
-
-    #[test]
-    fn lose_population_prefers_an_unused_worker() {
-        let mut p = blank_player(0);
-        p.workers_free = 2;
-        p.yellow_bank = 0;
-        assert!(lose_population(&mut p));
-        assert_eq!(p.workers_free, 1);
-        assert_eq!(p.yellow_bank, 1);
-    }
-
-    #[test]
-    fn lose_population_falls_back_to_a_card() {
-        let mut p = blank_player(0);
-        p.workers_free = 0;
-        p.yellow_bank = 0;
-        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
-        assert!(lose_population(&mut p));
-        assert_eq!(p.techs.workers(card("Agriculture")), 0);
-        assert_eq!(p.yellow_bank, 1);
-    }
-
-    #[test]
-    fn lose_population_fails_with_nothing_to_take() {
-        let mut p = blank_player(0);
-        assert!(!lose_population(&mut p));
     }
 
     // ------------------------------------------------------ increase_population

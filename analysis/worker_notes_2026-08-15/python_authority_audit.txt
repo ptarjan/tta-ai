@@ -1,0 +1,203 @@
+PYTHON-AUTHORITY COMMENT AUDIT -- rust/src rules files
+2026-08-15. Scope: events.rs, economy.rs, effects.rs, costs.rs, game.rs, combat.rs,
+apply.rs, legal.rs, interact.rs, cards.rs, state.rs. Excludes bots/advisor/bin/rng/
+arena/fixtures/stats/corpus/replay_common (per instructions).
+
+METHOD: grepped ~521 raw Python/*.py references in scope files, then filtered for
+"authority" phrasing (Python does/says/treats/rounds/excludes/..., "Python's own
+comment", "matches/mirrors Python", "unlike Python", etc). This is NOT exhaustive --
+budget-limited triage, see TRUNCATION NOTE at bottom.
+
+BUCKET COUNTS (bucket 1/2 not itemized per instructions):
+  1. PROVENANCE: majority of the ~521 raw hits (naming ported functions/files).
+  2. PARITY NOTE: ~15 of the ~30 "authority-shaped" comments reviewed in detail
+     (see "downgraded to bucket 2" list at bottom).
+  3. LOAD-BEARING (game-rule assertion, Python-only support): 6 confirmed hits below,
+     ranked by risk. Roughly 30 candidate comments were read in full to sort them;
+     more likely exist in the ~490 unread raw hits.
+
+=====================================================================
+RANKED FINDINGS (bucket 3 only)
+=====================================================================
+
+--- #1 CONTRADICTED (dead code, but exactly the hazard pattern -- read this first) ---
+
+FILE: rust/src/economy.rs:306-334 (fn lose_population), and its rationale at
+rust/src/state.rs:124-143 (Tableau::remove doc comment).
+
+RULE ASSERTED: "Lose 1 population" beyond unused workers takes the worker off "the
+FIRST worker-holding card" in tableau/build order -- no player choice. Comment: "Which
+card gets weakened is decided by tableau order: Python iterates p.techs, a dict, so it
+walks build order and takes the worker off the first worker-holding card it finds.
+That is arbitrary as a rule but not as a position." ONLY cited support is Python's dict
+iteration order.
+
+ORACLE: faq_v15.pdf p.15 (/private/tmp/faq.txt line 647-649): "When your 'population is
+decreased', move unused Workers to the yellow bank. (If none are available, move
+Workers from technology cards -- LOSER'S CHOICE OF WHICH WORKERS.)" RULES_SPEC.md:185
+already states this correctly: "'Lose 1 population': unused worker -> yellow bank; if
+none, a worker off a card (owner's choice) [FAQ p.15]."
+
+VERDICT: CONTRADICTED. `economy::lose_population`'s no-choice, fixed-tableau-order
+behavior directly contradicts FAQ p.15's "loser's choice."
+
+MITIGATION -- WHY THIS ISN'T A LIVE BUG RIGHT NOW: `economy::lose_population` has NO
+CALLERS anywhere in rust/src outside its own three unit tests (verified: `grep -rn
+"lose_population(" rust/src/` returns only economy.rs itself). The REAL population-loss
+path is `interact.rs` `QueueItem::LosePop` / `ChoiceKind::LosePop` (interact.rs:1035-
+1053, 418-429), which correctly offers the player a choice via `push_choice(...,
+ChoiceKind::LosePop, worker_holding_options(...), ...)` and even cites the right
+oracle in its own comment: "'Lose 1 population' when there is no unused worker (FAQ
+p.15): the token goes back to the BANK, not to workers_free." So the live game is
+already correct.
+
+WHY IT STILL MATTERS: this is a loaded gun. `economy::lose_population` is dead,
+untested-by-any-real-path, and its doc comment confidently asserts the WRONG rule with
+Python as its only citation -- structurally identical to the Impact of Population
+incident (a comment an agent could read and "fix" the live LosePop queue to match,
+believing the dead function is the reference implementation). Recommend either
+deleting `economy::lose_population` (it appears to be a pre-interact.rs leftover) or
+rewriting its doc comment to point at the correct interact.rs behavior and FAQ p.15,
+and removing the "arbitrary, Python dict order" justification entirely. Also touches
+state.rs:124-143's `Tableau::remove` rationale, which cites this same dead function as
+one of the two reasons order-preserving removal matters -- that citation is now stale
+too (the second reason, `legal_moves` enumeration order affecting bot tie-breaks, is a
+bots concern and out of this audit's scope).
+
+--- #2 UNSUPPORTED, event resolution (same pattern as the reverted bug) ---
+
+FILE: rust/src/events.rs:1039-1043 (`apply_tied_targets`, Immigration's "all
+civilizations with most happy faces").
+
+RULE ASSERTED: "Targets are collected BEFORE `block` is applied to any of them (mirrors
+Python's own comment: the block can move population, which moves discontent, so
+re-ranking mid-loop would be wrong)."
+
+ORACLE CHECK: CoL p.11 (/private/tmp/col.txt:660-661) and FAQ p.15 confirm Immigration
+is one of two events with no tie-break (ties unbroken, "all civilizations" affected) --
+but neither says anything about WHEN the tied-player list is computed relative to
+applying the per-player block in a loop. RULES_SPEC.md has no entry on this either.
+
+VERDICT: UNSUPPORTED. The timing claim ("snapshot targets first, don't re-rank
+mid-loop") is plausible and arguably the only sane reading regardless of what Python
+did -- re-ranking after each player's block would make the event's effect
+order-dependent on player index, which is clearly wrong for a simultaneous "all tied
+civs" grant. But no oracle says so explicitly, and the comment's only citation is
+"Python's own comment" (a file that no longer exists). Low-to-medium risk: the
+surrounding function was corpus-debugged as recently as game 7523355 (see the comment
+immediately above it, which IS well-supported -- CoL/FAQ-cited, corpus-confirmed), so
+confidence is higher than a cold read would suggest. Still, cite CoL/FAQ or drop the
+Python appeal.
+
+--- #3 UNSUPPORTED, economy/food-cost arithmetic ---
+
+FILE: rust/src/economy.rs:176-188 (`pop_food_cost`).
+
+RULE ASSERTED: when both a persistent (`pop_food_discount`) and a one-time discount
+stack and together exceed the base population cost, the intermediate subtraction is
+signed (can go negative) and ONLY the FINAL result is floored at zero -- not floored
+after each subtraction. Comment: "exactly what the Python does by subtracting one_time
+first and max(0, ...)-ing once at the end, not after each subtraction."
+
+ORACLE CHECK: RULES_SPEC.md §6.1/6.4 and CoL/rulebook describe the population-increase
+cost table and blue-token payment mechanics but say nothing about how multiple
+population-cost DISCOUNTS combine arithmetically when they overlap or exceed the base
+cost. No FAQ hit either.
+
+VERDICT: UNSUPPORTED. This is the correct standard interpretation (floor once, at the
+end, so a large discount can "bank" negative headroom that a smaller stacked discount
+then consumes) -- flooring after each subtraction would silently waste discount value.
+But it's asserted as fact with only Python as backing. Medium priority: this feeds
+directly into food cost, which is exact-score-sensitive the same way Impact of
+Population was, though the failure mode here (over/under-flooring) is narrower and
+only triggers when discounts are large relative to base cost.
+
+--- #4 UNSUPPORTED, action-card resolution order ---
+
+FILE: rust/src/apply.rs:1330-1342 (`h_play_action`, Patriotism-style
+`militaryActions`/`resourcesForMilitaryUnits` grants).
+
+RULE ASSERTED: `military_actions` and `mil_discount` from a card's `militaryActions`/
+`resourcesForMilitaryUnits` effect keys apply unconditionally BEFORE the card's ordered
+action resolves -- "unlike the GAIN_KEYS below" (science/culture/food/resources/
+population), which land AFTER (per RULES_SPEC item 20, resolved by the user, CoL/FAQ-
+adjacent). Comment's only support for the military-grant-goes-first claim: "Python
+applies them ahead of the `if ordered:` branch too."
+
+ORACLE CHECK: RULES_SPEC.md item 19/20 resolve an ADJACENT question (ordered action
+resolves first at full price; the named "gains" -- science/food -- land after) but do
+not address the `militaryActions`/`resourcesForMilitaryUnits` keys specifically. CoL
+p.12 and FAQ p.12 confirm Patriotism grants a separate "virtual" military action but
+don't state timing relative to an ordered action on the SAME card.
+
+VERDICT: UNSUPPORTED. Lower risk than #2/#3: `military_actions`/`mil_discount` are the
+only base-game keys captured this way (comment notes `extraCivilActions`/
+`extraMilitaryActions` are dead in the card data), and I did not find a base-game
+action card that both grants `militaryActions` AND carries its own ordered action, so
+this ordering may currently be unreachable/moot in practice -- flagging for
+completeness, not verified as live-reachable given remaining budget.
+
+--- #5 UNSUPPORTED, tie-break among staffed cards ---
+
+FILE: rust/src/effects.rs:242-249 (`best_staffed`).
+
+RULE ASSERTED: when multiple staffed cards of the same type tie for highest level,
+"best" keeps the FIRST one found in tableau/insertion (build) order. Comment: "matching
+Python's `best_card`, which keeps the first name it sees at a given level because it
+only replaces `best` on a STRICT `>` comparison, and Python dict iteration order is
+insertion order."
+
+ORACLE CHECK: the comment DOES independently cite FAQ v1.5 p.9 for the adjacent
+"unstaffed = doesn't count" rule, but the tie-break-by-build-order claim itself has no
+FAQ/CoL/RULES_SPEC support -- I found nothing addressing which card wins a same-level
+tie for effects like "double your best mine."
+
+VERDICT: UNSUPPORTED. Narrow blast radius (requires two same-type, same-level staffed
+cards in play simultaneously, which is legal per §7.3 "multiple levels" but the tie
+case specifically needs equal levels), so lower priority than #2/#3, but it's a genuine
+game-rule gap with Python as the only witness.
+
+=====================================================================
+DOWNGRADED TO BUCKET 2 (reviewed in detail, found CONFIRMED or not actually
+rule-bearing -- listed briefly, not full hits)
+=====================================================================
+- game.rs:1162-1165 (`scores()` reads `p.culture` post-`finish_game`): explained by the
+  module's own KNOWN GAPS §1, and the actual bonus formula is independently documented
+  at §12.5.3 elsewhere in the same file. Not a bare Python appeal.
+- interact.rs:926-929 (International Agreement row compaction order): CONFIRMED --
+  CoL p.12 ("replenish afterwards WITHOUT discarding the first slots") covers the
+  substantive behavior; needs a better citation, not a rule risk.
+- economy.rs:864-872 (military discard-pile reshuffle, draw off list end): the general
+  reshuffle-on-empty rule is CONFIRMED (CoL, /private/tmp/col.txt:730-734: "If the
+  current military deck runs out, the discard pile of the current age is shuffled to
+  create a new current military deck"). The Python-cited detail (discard order before
+  shuffle, `pop()` off which end) is moot post-shuffle and is really an RNG/fixture-
+  determinism concern -- out of scope per instructions.
+- costs.rs:617-627 (`wonder_stage_cost` slice clamp): comment self-discloses "every
+  real caller already bounds k... so this is a safety net, not a rule." Bucket 2 by its
+  own admission.
+- combat.rs:290-308 (`resolve_war_outcome` tie handling, discard+clear order):
+  CONFIRMED -- RULES_SPEC.md §5.7.2 independently states "Equal strength = no effect
+  ... Then discard the war card," matching the code regardless of the Python citation.
+- state.rs:1284-1285 (`CardGains` field order "Exactly Python's _GAIN_KEYS, in that
+  order"): struct field declaration order in Rust has no execution-order semantics by
+  itself; did not find code that iterates these fields in declared order in a way that
+  would make ordering rule-relevant. Likely harmless, flagged only for completeness.
+
+=====================================================================
+REFUSALS / OUT-OF-BAND MESSAGES
+=====================================================================
+None received during this run.
+
+=====================================================================
+TRUNCATION NOTE
+=====================================================================
+Budget-limited: read ~30 of the ~89 "strong-signal" grep hits in full, plus a second
+narrower pass (367 lines) over effects.rs/legal.rs/cards.rs/state.rs/combat.rs/
+interact.rs that was filtered down to ~15 rule-signal candidates, of which 5 were read
+in full context (yielding finding #5) and the rest not yet triaged: legal.rs:388,
+combat.rs:1490-ish (effects.rs actually) army-strength phase-3 ordering, cards.rs:212-
+213 duplicate-spelling exclusion, legal.rs:1037, interact.rs:133/192/528. None of these
+remaining candidates were read closely enough to classify -- they are NOT cleared, just
+unreviewed. legal.rs (41 raw hits) and effects.rs (82 raw hits) in particular are
+under-sampled relative to their size. A follow-up pass should start there.

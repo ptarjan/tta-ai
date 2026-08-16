@@ -124,19 +124,18 @@ impl Tableau {
     /// Remove a card, closing the hole and PRESERVING insertion order.
     ///
     /// This was a swap-remove until the economy port found what that costs.
-    /// Python's tableau is a dict, so it iterates in build order, and two
-    /// things depend on that order in ways that change play:
+    /// `legal_moves` enumerates in tableau order and the bots break ties by
+    /// index, so a reordered tableau silently changes the chosen move -- the
+    /// order is part of the bot's behaviour, not a presentation detail.
     ///
-    ///   * `economy.lose_population` takes the worker off the FIRST
-    ///     worker-holding card it walks (`engine/economy.py:290`). Which card
-    ///     shrinks is arbitrary as a rule, but it is not arbitrary as a
-    ///     position -- losing a farm worker is not losing a mine worker.
-    ///   * `legal_moves` enumerates in the same order, and the bots break ties
-    ///     by index, so a reordered list silently changes the chosen move.
+    /// (A second reason used to be listed here, `economy::lose_population`
+    /// taking the worker off the first card it walked. That function was dead
+    /// and its rule was wrong -- FAQ p.15 makes it the loser's choice -- so it
+    /// was deleted on 2026-08-15. `legal_moves` alone still settles this.)
     ///
-    /// A swap-remove would diverge from the Python the first time any card
-    /// left a tableau (a destroyed wonder, an antiquated tech, a Ravages of
-    /// Time flip) and every fixture replayed after that point would drift.
+    /// A swap-remove would reorder a tableau the first time any card left it
+    /// (a destroyed wonder, an antiquated tech, a Ravages of Time flip) and
+    /// every fixture replayed after that point would drift.
     /// Order-preserving removal costs a memmove bounded by `MAX_TABLEAU` (48)
     /// on an operation that happens a handful of times per game, against a
     /// correctness property every later module leans on. That trade is not
@@ -1671,9 +1670,8 @@ mod tests {
         assert_eq!(t.len(), 1);
     }
 
-    /// Build order is play-relevant: `economy.lose_population` takes a worker
-    /// off the first worker-holding card in tableau order, and `legal_moves`
-    /// enumerates in that order while the bots break ties by index. A
+    /// Build order is play-relevant: `legal_moves` enumerates in tableau
+    /// order and the bots break ties by index, so the order picks moves. A
     /// swap-remove passes the round-trip test above and still fails this one,
     /// which is exactly why this test exists separately.
     #[test]

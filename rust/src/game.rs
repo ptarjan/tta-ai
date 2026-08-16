@@ -114,9 +114,8 @@ use crate::state::{
 
 /// §1.4: the five technologies every civilization starts with, and the
 /// workers printed on them. Order is load-bearing -- it is the tableau's
-/// build order, and `economy::lose_population` takes a worker off the FIRST
-/// worker-holding card it walks (see `Tableau::remove`'s doc comment). Python
-/// spells it as a dict literal, which iterates in exactly this order.
+/// build order, which `legal_moves` enumerates in and the bots tie-break by
+/// index (see `Tableau::remove`'s doc comment).
 const START_TECHS: [(&str, u8); 5] = [
     ("Warriors", 1),
     ("Agriculture", 2),
@@ -1341,8 +1340,8 @@ mod tests {
     }
 
     /// Build order in the tableau is play-relevant (`Tableau::remove`'s doc
-    /// comment: `economy::lose_population` walks it and takes the first
-    /// worker it finds), so §1.4's order is asserted, not assumed.
+    /// comment: `legal_moves` enumerates in it and the bots tie-break by
+    /// index), so §1.4's order is asserted, not assumed.
     #[test]
     fn starting_techs_are_in_printed_order() {
         let s = new_game(3, 1);
