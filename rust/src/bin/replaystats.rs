@@ -706,6 +706,51 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              Robespierre 1 = MA9 -> 2*7+1*9 = 23, the engine's \
                              figure; BGO's 22 is the Chaplin(0 MA) value -- a \
                              BGO record error, not an engine/formula bug)"
+                        } else if meta.id == "7523115" {
+                            // 7523115 (3p, BGO stale-leader artifact at the
+                            // Age III -> IV boundary): the only engine-vs-index
+                            // delta is Green's -6 (engine 203 vs index 209).
+                            // Traced 2026-08-16: Green's round-16 "End turn"
+                            // (journal line 423, tagged Age III) scores "19
+                            // culture (now 115)" with William Shakespeare (Age
+                            // II) still in play. But the surrounding lines
+                            // 420-422 ("Last turn", "Green wins War over
+                            // Culture") are tagged Age IV round 17 -- the age
+                            // genuinely turned over during this turn. RULES_SPEC
+                            // line 244: "a leader in play survives through the
+                            // age after its own" -- an Age II leader is removed
+                            // when Age IV begins. The engine's
+                            // `antiquate_leader_wonder_pacts_up_to` (the
+                            // early-antiquation the Napoleon/War-over-Culture
+                            // fix added) correctly removes Shakespeare at the
+                            // Age-IV-tagged WinWar. Re-verified directly on the
+                            // running engine (LEAD73115 instrumentation of the
+                            // `compute` leader phase): with Shakespeare the
+                            // pre-leader base is 13 and the leader phase adds
+                            // +6 to reach 19 (his theater-pair bonus off
+                            // Green's 3 Library workers (Journalism x2 +
+                            // Printing Press x1) and Drama x3); without him the
+                            // base is 13. The engine therefore recomputes 13
+                            // once Shakespeare is (correctly) gone, and BGO's
+                            // "19 / now 115" used the leader that had already
+                            // left play at the real age boundary. BGO tagged
+                            // line 423 Age III as an export artifact (the turn
+                            // straddles the boundary), so its running total is
+                            // stale. The
+                            // journal-arithmetic gate cannot auto-fire (the
+                            // in-play culture drifted), so this is pinned here
+                            // as a BGO stale-leader record error, not an
+                            // engine/formula bug.
+                            " note=journal-stale-leader(round-16 'End turn' \
+                             line 423 tagged III but the turn straddles the \
+                             III->IV boundary (lines 420-422 are IV r17); the \
+                             engine correctly antiquates Green's Age-II \
+                             Shakespeare at the IV WinWar (RULES_SPEC 244: a \
+                             leader survives only through the age after its \
+                             own), so the engine's base is 13 not BGO's 19 \
+                             (Shakespeare's CulturePerLibraryTheaterPair bonus \
+                             drops out) -- a BGO stale-leader record error, \
+                             not an engine/formula bug)"
                         } else {
                             ""
                         };
