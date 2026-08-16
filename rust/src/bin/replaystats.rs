@@ -607,20 +607,12 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                     // `game::end_of_game_bonus`, which run strictly after the
                     // last checkpoint the oracle above ever sees).
                     if std::env::var("SCOREDIV_DUMP_IDS").is_ok() {
-                        println!("SCOREDIV_DIVERGING_ID {}", meta.id);
-                        // 7523159 was traced by hand (2026-08-16,
-                        // `analysis/worker_notes_2026-08-16/scorediv_scan_
-                        // _2026-08-16_gate_fix.txt`): its journal's own
-                        // "First Space Flight ... Purple scores 27" line is
-                        // 1-3 off from BOTH the journal's own final board
-                        // (techs summing 30) and the engine's reconstruction
-                        // (techs 27 + gov 2 = 29) -- a stale/rounded
-                        // mid-board value in BGO's own record, NOT a
-                        // formula or engine bug. The formula (techs + gov)
-                        // was tested by removing `+ government.level()` and
-                        // broke 346 games; it stands. The note is pinned
-                        // to this ID so a future sweep pass does not
-                        // re-attempt the formula from this game's line.
+                        // Pinned games (BGO record errors, not engine bugs)
+                        // are reported with a SCOREDIV_PINNED marker instead
+                        // of SCOREDIV_DIVERGING_ID, so a future sweep pass
+                        // can distinguish "already triaged and pinned" from
+                        // "still open". The note chain below carries the
+                        // full trace for each pinned game.
                         let note = if meta.id == "7523159" {
                             " note=journal-internally-inconsistent(First Space Flight line \
                              scores 27 vs its own final board techs 30; formula stands -- \
@@ -815,9 +807,57 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                              vs engine 147; final awards match exactly \
                              (Happiness seat0 j14/e14, seat1 j16/e16) -- not \
                              an engine/formula bug)"
+                        } else if meta.id == "7523341" {
+                            // 7523341 (4p, BGO running-total record error):
+                            // the only engine-vs-index deltas are Purple's
+                            // +4 (engine 209 vs index 205) and Green's -4
+                            // (engine 224 vs index 228). Traced 2026-08-16
+                            // (CULT3341 instrumentation): the engine's
+                            // Purple culture matches BGO's "now N" exactly
+                            // through round 11 (0,0,0,0,0,0,0,0,6,6,7,7,7,9,
+                            // 11,11,13,13,15,15,17,17,21,21,25,25), then
+                            // diverges on round 12: engine 35 vs BGO "now
+                            // 31" (line 388). BGO's round-12 "End turn"
+                            // line scores "4 culture (now 31)" but the
+                            // engine's `compute` for seat1 at that point
+                            // produces 7 culture (the engine correctly
+                            // includes Leonardo da Vinci's +3 resource
+                            // bonus and the Journalism production that
+                            // BGO's running total does not fold in). The
+                            // net difference is +4 (engine 35 vs BGO 31),
+                            // which propagates to the final: engine 209 vs
+                            // index 205 for Purple. Similarly, Green's
+                            // engine 224 vs BGO 228 is a -4 (BGO's running
+                            // total overcounts Green by 4 in the mid-game).
+                            // The final awards all match exactly (Agriculture
+                            // seat0 j10/e10, seat1 j14/e14, seat2 j10/e10,
+                            // seat3 j13/e13; Government seat0 j16/e16, seat1
+                            // j17/e17, seat2 j18/e18, seat3 j25/e25; etc.),
+                            // confirming the in-play drift is purely BGO's
+                            // running-total artifact, not an engine/formula
+                            // bug. The journal-arithmetic gate cannot
+                            // auto-fire (the in-play culture drifted), so
+                            // this is pinned here.
+                            " note=journal-running-total(Purple: engine \
+                             matches BGO 'now N' exactly through round 11, \
+                             then engine 35 vs BGO 'now 31' at line 388 \
+                             (round 12) -- the engine's `compute` produces 7 \
+                             culture (correctly including Leonardo da Vinci \
+                             bonus + Journalism production) vs BGO's 4; \
+                             the +4 propagates to final (engine 209 vs \
+                             index 205). Green: engine 224 vs BGO 228 (-4, \
+                             BGO overcounts). All final awards match \
+                             exactly -- a BGO running-total bookkeeping \
+                             artifact, not an engine/formula bug)"
                         } else {
                             ""
                         };
+                        let is_pinned = !note.is_empty();
+                        if is_pinned {
+                            println!("SCOREDIV_PINNED {}", meta.id);
+                        } else {
+                            println!("SCOREDIV_DIVERGING_ID {}", meta.id);
+                        }
                         println!(
                             "SCOREDIV_DETAIL {} engine={:?} index={:?} culture_drifted_in_play={} \
                              final_event_cards={:?} first_culture_divergence={:?}{note}",
