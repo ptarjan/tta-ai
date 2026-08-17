@@ -4075,6 +4075,28 @@ fn stated_build_payment(text: &str) -> Option<i32> {
     }
 }
 
+/// Whether a `build cost mismatch` between the journal's stated total
+/// (`want`) and this binary's computed cost (`got`) is explained by a held
+/// Masonry / Architecture / Engineering build discount.
+///
+/// BGO prints the PRE-discount price in a discounted build's "spends"
+/// clause: a Drama (Age I urban, printed 4) built with Masonry in play is
+/// charged 3 by the engine but printed "spends 4". `costs::build_cost_for`
+/// already folds the `build_discount[age]` term into `got`, so when the ONLY
+/// difference is that modeled term, `want - got` equals the discount the
+/// player holds. The one-time and Shakespeare discounts are NOT in
+/// `build_discount`, so they would never reconcile here and still surface as
+/// genuine mismatches. Gated on the card being urban, the discount being
+/// positive, and the gap matching the held discount EXACTLY -- any other gap
+/// is a genuine unmodeled discount source the caller still rejects. Real
+/// shape: game `7522941` line 183 (Drama, 4 stated / 3 computed with
+/// Masonry) and game `7522309` line 316.
+fn build_discount_reconciles(state: &GameState, p: &PlayerState, card: CardId, want: i32, got: i32) -> bool {
+    let card_ref = card.get();
+    let held_discount = crate::effects::state_stats(state, p).build_discount[card_ref.age as usize];
+    card_ref.kind.is_urban() && held_discount > 0 && want - got == held_discount
+}
+
 /// Converts whatever shortfall Trade Routes Agreement's side-A "1 food as 1
 /// resource" grant (`Move::TradeFoodAsResource`, §5.9) explains between `p`'s
 /// CURRENT resources and `true_cost`, as that many `Move::TradeFoodAsResource`
@@ -8558,7 +8580,9 @@ fn apply_one(
                 stated_build_payment(raw_text),
                 costs::build_cost_for(&r.state, &r.state.players[actor as usize], card),
             ) {
-                if want != got {
+                if want != got
+                    && !build_discount_reconciles(&r.state, &r.state.players[actor as usize], card, want, got)
+                {
                     return Err(MismatchKind::UnrecoverableHiddenInfo(format!(
                         "build cost mismatch for {}: journal says {want} resources, this binary's \
                          reconstructed state computes {got} -- an unmodeled discount source (not a \
@@ -11695,6 +11719,36 @@ mod tests {
             None,
             "no clause at all is a genuinely free build, still None"
         );
+    }
+
+    #[test]
+    fn build_discount_reconciles_exactly_the_masonry_gap_and_nothing_else() {
+        use crate::state::TechSlot;
+
+        let drama = CardId::by_name("Drama").unwrap(); // Age I urban, printed cost 4
+        let masonry = CardId::by_name("Masonry").unwrap();
+
+        // With Masonry developed, `build_discount[Age I]` is 1, so a journal that
+        // prints the PRE-discount 4 against the engine's 3 reconciles: 4 - 3 == 1.
+        // `compute` dereferences `p.government.get()` without a NONE guard, so
+        // the test player needs a real government (as every live game has).
+        let mut state = blank_state();
+        state.players[0].government = CardId::by_name("Despotism").unwrap();
+        state.players[0].techs.insert(masonry, TechSlot { workers: 0, stored: 0 });
+        assert!(
+            build_discount_reconciles(&state, &state.players[0], drama, 4, 3),
+            "held Masonry explains the 4-vs-3 Drama gap"
+        );
+
+        // A gap that does NOT match the held discount is still a genuine
+        // unmodeled source and must not reconcile.
+        assert!(!build_discount_reconciles(&state, &state.players[0], drama, 5, 3));
+        assert!(!build_discount_reconciles(&state, &state.players[0], drama, 4, 4), "no gap at all");
+
+        // Without Masonry in play there is no discount to reconcile against.
+        let mut bare = blank_state();
+        bare.players[0].government = CardId::by_name("Despotism").unwrap();
+        assert!(!build_discount_reconciles(&bare, &bare.players[0], drama, 4, 3));
     }
 
     #[test]

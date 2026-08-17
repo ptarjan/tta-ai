@@ -7892,3 +7892,26 @@ New tests (`replay_common.rs`'s `tests` module): `flush_pending_culture_check_us
 **Why the final score is unchanged, exactly as the previous discard-deferred fix's own writeup predicted for this same shape**: `state.players[_].culture` was ALWAYS correct by `finish_game` time -- both 64 (pre-war) and 49 (post-war) are real, correct values at their respective real moments; only this INSTRUMENT's OWN checkpoint was reading the wrong one of the two. Past strength measurements, self-play, and completed-game final scores are unaffected -- `game::play_game` never goes through `replay_common.rs`'s journal-parsing machinery, and the one behavioral engine change (`resume_end_turn` writing an inert field nothing reads) cannot change any decision.
 
 **What remains for whoever picks this up next**: 337/1011 games still show a first culture-oracle divergence, ranked `TakeCard` (137) / `Discard` (33) / `UpgradeProduction` (26) / `BuildWonderStage` (22) / `BuildUnit` (21) / `PlayTactic` (19) / `ElectLeader` (16) / `BuildBuilding` (16) / `IncreasePopulation` (16) / `DevelopTechnology` (11) / `PlayActionCard` (8) / `UpgradeUnit` (5) / `WinWar` (4) / `Destroy` (2) / `EndTurn` (1). `WinWar`'s collapse from 35 to 4 (not zero) confirms the mechanism traced above was real and dominant but not the ONLY culture-timing gap; the 4 remaining `WinWar`-bucket games are a natural next trace target, followed by whatever is left in the now much-smaller `TakeCard`/`Discard` buckets -- per this doc's own standing rule, do not assume either bucket's name is the cause without tracing first.
+
+## Re-derived fix (reverted-batch claim, measured individually on the reverted master): the `build cost mismatch` gate was misreading a HELD Masonry / Architecture / Engineering discount as an "unmodelled discount source"
+
+One of the claims in the reverted "wonder-stage + ordered-TakeACard batch" was that BGO prints the PRE-discount price in a discounted urban build's "spends" clause, and the replayer's build-cost cross-check was treating that legitimate, modelled gap as an "unmodelled discount source" (`UnrecoverableHiddenInfo`) and giving up. Re-derived from scratch on the reverted master and measured on its own, per the revert commit's standing instruction.
+
+**Root cause, confirmed by trace, not assumed**: `costs::build_cost_for` already folds the per-age `build_discount` term (Masonry / Architecture / Engineering) into the computed cost -- a Drama (Age I urban, printed 4) built with Masonry in play is charged 3 by the engine. But the journal's `"spends N resources"` clause prints the PRE-discount 4. The old gate (`replay_common.rs`, `ActionClass::Build`) errored on ANY `want != got` between the journal's stated total and the computed cost, so a legitimate modelled discount looked exactly like the unmodelled source the gate was meant to catch.
+
+**Fix**: a `build_discount_reconciles(state, p, card, want, got)` helper that returns true only when the gap is EXACTLY the discount the player holds for that card's age -- `card.kind.is_urban() && held > 0 && want - got == held_discount[card.age]`. The gate now rejects only when `want != got` AND the gap is NOT explained by a held discount. Crucially, the one-time (Civil Life) and Shakespeare discounts are NOT in `build_discount`, so they can never reconcile here and still surface as genuine mismatches -- the helper reconciles ONLY the modelled Masonry/Architecture/Engineering term, nothing broader.
+
+**Real shape, traced**: game `7522309` line 316 and game `7522941` line 183 (Drama, 4 stated / 3 computed with Masonry held).
+
+**Tests** (`replay_common.rs`'s `tests` module): `build_discount_reconciles_exactly_the_masonry_gap_and_nothing_else` asserts the positive case (Drama 4-vs-3 with Masonry held), the wrong-gap case (5-vs-3 does NOT reconcile), the no-gap case (4-vs-4 does NOT), and the no-Masonry case (4-vs-3 with no discount held does NOT). The test player needs a real government (`Despotism`), because `effects::compute` dereferences `p.government.get()` without a NONE guard -- every live game has a government, so a NONE-government player is not a real board shape.
+
+**Census, before -> after (same corpus, both runs on this tree, `replaystats`, `SCOREDIV_DUMP_COMPLETED=1`)**:
+
+| metric | before | after |
+|---|---|---|
+| completed games | 749 | **750** |
+| newly completing | -- | `7522309` |
+| guard regressions | -- | 0 (every ID in `analysis/guard_ids_749.txt` still completes) |
+| `7522941` | stopped at line 183 (Drama) | advances past to line 187 (a separate, unrelated University-of-Carolina wonder-stage bucket) |
+
+This is an honest win, not a suppression gate: the engine still charges the discounted 3, the model is unchanged, and the replayer simply stops mislabelling a modelled discount as a bug.
