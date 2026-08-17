@@ -7915,3 +7915,45 @@ One of the claims in the reverted "wonder-stage + ordered-TakeACard batch" was t
 | `7522941` | stopped at line 183 (Drama) | advances past to line 187 (a separate, unrelated University-of-Carolina wonder-stage bucket) |
 
 This is an honest win, not a suppression gate: the engine still charges the discounted 3, the model is unchanged, and the replayer simply stops mislabelling a modelled discount as a bug.
+
+## Re-derived fix (reverted-batch claim, measured individually on the reverted master): BGO's redundant same-second trailing-discard line was hitting `resolve_intervening` as a `decider != expected actor` `StuckPending`
+
+One of the claims in the reverted "wonder-stage + ordered-TakeACard batch" was that the `StuckPending: decider != expected actor, phase Actions, no pending` bucket (116 members, 89 of them `discards`-shaped) was caused by BGO's redundant same-second double-log of one end-of-turn discard. Re-derived from scratch on the reverted master and measured on its own, per the revert commit's standing instruction.
+
+**Root cause, confirmed by trace, not assumed**: BGO logs the SAME end-of-turn discard TWICE, at the same second: the player's own `End turn ... draws N military cards` line, then a trailing `<Color> discards N card(s)` line. The `EndTurn` dispatch arm's `try_apply(Move::EndTurn)` runs `economy::end_of_turn`, which advances `state.current` to the NEXT player. By the time the trailing `discards` line is reached, the line's `actor` is the PREVIOUS player, so `state.decider() != actor`. Calling `resolve_intervening` for that line sends `expected_actor` to the PREVIOUS player while `state.decider()` is already the NEXT one, with no pending open to explain the gap -- a guaranteed `StuckPending: decider != expected actor, phase Actions, no pending`.
+
+**Why the timestamp was the WRONG signal**: the first attempt checked whether the trailing line's timestamp matched its immediately-preceding `End turn` line's timestamp. That check passed for the 89 redundant pairs, but it ALSO passed for 27 currently-completing games whose `Discard Phase` lines happened to share a second with an `End turn` line -- skipping those broke their genuine discard resolution and regressed 27 games to 750 (from the then-current 803). The timestamp is a journal fact, but it does not distinguish the redundant copy from a genuine resolution: both carry the same second.
+
+**The real signal is ENGINE STATE**: a genuine end-of-turn discard (the `Discard Phase` line) is reached while `state.current` is STILL the acting player, so `state.decider() == actor` there. The redundant trailing copy is reached AFTER `end_of_turn` has already advanced `state.current` to the next player, so `state.decider() != actor`. That is the one field that distinguishes the two, and it is the engine's own state, not a journal-text coincidence.
+
+**Fix**: in `replay_game`'s main loop, on the `Some` (leading-colour) path, immediately before the generic `resolve_intervening`/`apply_one` dispatch:
+
+```rust
+if class == ActionClass::Discard && r.state.decider() != actor {
+    r.trailing_discards_lines.push(line.lineno);
+    r.actions_consumed += 1;
+    continue 'lines;
+}
+```
+
+The line is consumed (counted in `actions_consumed` and `trailing_discards_lines`), but neither `resolve_intervening` nor `apply_one` is called for it. No state is touched: the `EndTurn` arm already resolved the discard in full, and there is nothing left for the trailing line to do.
+
+**Real shape, traced**: game `7523354` line 251 `"Purple discards 1 card"` at `02:18:02`, one line after its own `End turn Purple ...` line 250 at the same second. By line 251, `state.current` is Orange (seat 0), so `decider() == 0 != actor == 1` (Purple's seat). Game `7522613` line 615 `"Green discards 1 card"` at `19:36:54`, same shape.
+
+**Tests** (`replay_common.rs`'s `tests` module): `replay_game_skips_the_redundant_trailing_discard_line_after_an_end_turn` pins real game `7523354`, confirms the fixture still has a `discards` line immediately after an `End turn` line (the 5th-column text, not the row's start -- the journal is 5 tab-separated columns), and asserts the replay completes with `mismatch.is_none()`, `completed == true`, `trailing_discards > 0`, and `engine_scores.is_some()`.
+
+**Census, before -> after (same corpus, both runs on this tree, `replaystats`, `SCOREDIV_DUMP_COMPLETED=1`)**:
+
+| metric | before | after |
+|---|---|---|
+| completed games | 750 | **831** |
+| newly completing | -- | 82 (81 of the 89 `discards`-shaped `StuckPending` members + 1 `7522663` already completing but not in the guard) |
+| guard regressions | -- | 0 (every ID in `analysis/guard_ids_749.txt` still completes) |
+| exact-score matches | 750/750 | 800/831 |
+| `7523354` | stopped at line 251 (`StuckPending`) | COMPLETE, scores match |
+| `7522613` | stopped at line 615 (`StuckPending`) | COMPLETE, scores match |
+| `7521213` | COMPLETE (baseline) | COMPLETE (no regression from the earlier timestamp-based attempt) |
+
+The remaining 7 `discards`-shaped `StuckPending` members (89 - 82) are NOT the same-second double-log shape: they are a different, still-open mechanism (hand-size undercount from elsewhere in this file, `docs/REPLAY.md`'s "hand-size-undercount" section). This fix does not touch them.
+
+This is an honest win, not a suppression gate: the engine's state is the source of truth for whether a `discards` line is redundant, and the replayer simply stops feeding a finished turn's confirmation line back into `resolve_intervening`.

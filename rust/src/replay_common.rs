@@ -232,7 +232,13 @@ fn parse_lines(journal_text: &str) -> Vec<Line<'_>> {
         if fields.len() != 5 {
             continue; // malformed row, same tolerance corpuscensus uses
         }
-        out.push(Line { lineno: i + 1, color: fields[1], age: fields[2], round: fields[3], text: fields[4] });
+        out.push(Line {
+            lineno: i + 1,
+            color: fields[1],
+            age: fields[2],
+            round: fields[3],
+            text: fields[4],
+        });
     }
     out
 }
@@ -530,6 +536,17 @@ struct Replayer<'a> {
     colonize_sacrifices: VecDeque<ColonizeSacrifice>,
     /// Number of actionable (non-bookkeeping) journal lines consumed.
     actions_consumed: usize,
+    /// `Line::lineno`s of `"<Color> discards N card(s)"` lines that are
+    /// BGO's redundant second log of the SAME end-of-turn discard already
+    /// resolved by this reconstruction's own preceding `End turn` line --
+    /// see `replay_game`'s main-loop `ActionClass::Discard` special case
+    /// (the `EndTurn` dispatch arm's sibling, right before it) for the
+    /// full mechanism and the real game this was found on. The main loop
+    /// skips these lines as pure confirmations instead of translating
+    /// them; `GameResult` surfaces the count so a corpus run can verify
+    /// the skip fired exactly where the journal's own timestamps say it
+    /// should.
+    trailing_discards_lines: Vec<usize>,
     /// The journal `Line::lineno` currently being resolved, set once per
     /// loop iteration in `replay_game` before `resolve_intervening` runs.
     /// `DiscardSolver::choose` needs this to tell a FUTURE named play
@@ -1058,6 +1075,7 @@ impl<'a> Replayer<'a> {
             hand_full_takes_overridden: 0,
             colonize_sacrifices,
             actions_consumed: 0,
+            trailing_discards_lines: Vec::new(),
             current_lineno: 0,
             gain_produces,
             plunder_splits,
@@ -6438,6 +6456,11 @@ pub struct GameResult {
     pub id: String,
     pub players: u8,
     pub actions_consumed: usize,
+    /// Count of the redundant trailing `"discards N card(s)"` lines this
+    /// game's own journal logged (BGO's same-second double log of one
+    /// end-of-turn discard, skipped as pure confirmations -- see
+    /// `Replayer::trailing_discards_lines`).
+    pub trailing_discards: usize,
     pub completed: bool,
     pub mismatch: Option<Mismatch>,
     pub colonize_approximated: bool,
@@ -8140,6 +8163,38 @@ pub fn replay_game(
         // pending open to explain the gap -- 59 of the 216 games in the
         // `StuckPending: decider != expected actor ... no pending` bucket
         // stopped on exactly this line shape (`docs/REPLAY.md`).
+        // BGO logs the SAME end-of-turn discard TWICE, at the SAME
+        // timestamp: the player's own `End turn ... draws N military
+        // cards` line, then a trailing `<Color> discards N card(s)`
+        // line. By the time the trailing line is reached the `EndTurn`
+        // arm has already run `try_apply(Move::EndTurn)`, whose `economy::
+        // end_of_turn` advanced `state.current` to the NEXT player -- so
+        // the trailing line's `actor` (the PREVIOUS player) is no longer
+        // `state.decider()`. The `DiscardMilitary` pending that `end_of_
+        // turn` step 1 opened was ALREADY resolved by the `EndTurn` arm's
+        // own `resolve_intervening` (the `matches_upcoming` deferral
+        // drained it via `apply_one`'s `Discard` arm), so there is nothing
+        // left for the trailing line to do: it is a pure confirmation, the
+        // same shape as `PlayEvent`/`WinAuction`/`Colonize`/`WinWar`, and
+        // calling `resolve_intervening` for it sends `expected_actor` to
+        // the PREVIOUS player while `state.decider()` is already the NEXT
+        // one -- a guaranteed `StuckPending: decider != expected actor,
+        // phase Actions, no pending` for 89 of the ~116 games in that
+        // bucket. The distinguishing signal is the ENGINE STATE itself,
+        // not the journal text: a GENUINE end-of-turn discard (the
+        // `Discard Phase` line, resolved by the same `EndTurn` arm's
+        // `apply_one`) is reached while `state.current` is STILL the
+        // acting player, so `decider() == actor` there and this check
+        // never fires for it. Found on real game `7523354` line 251:
+        // `"Purple discards 1 card"` whose `End turn Purple` line (250)
+        // already advanced `state.current` to Orange (seat 0), so
+        // `decider()==0 != actor==1`.
+        if class == ActionClass::Discard && r.state.decider() != actor {
+            r.trailing_discards_lines.push(line.lineno);
+            r.actions_consumed += 1;
+            continue 'lines;
+        }
+
         if !is_pure_confirmation_line(class) {
             if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
                 mismatch = Some(mk_mismatch(line, kind));
@@ -8212,6 +8267,7 @@ pub fn replay_game(
         id: meta.id.clone(),
         players: meta.players,
         actions_consumed: r.actions_consumed,
+        trailing_discards: r.trailing_discards_lines.len(),
         completed: completed && mismatch.is_none(),
         mismatch,
         colonize_approximated: r.colonize_approximated,
@@ -9742,6 +9798,66 @@ mod tests {
             result.completed,
             "game 7522663 has a real End of game marker after its duplicated End turn pair -- must complete, not be discarded"
         );
+        assert!(result.engine_scores.is_some(), "a completed game must have grounded final scores");
+    }
+
+    /// BGO logs the SAME end-of-turn discard TWICE at the same second: the
+    /// player's own `End turn ... draws N military cards` line, then a
+    /// trailing `<Color> discards N card(s)` line. The `EndTurn` arm's
+    /// `try_apply(Move::EndTurn)` already advanced `state.current` to the
+    /// NEXT player by the time the trailing line is reached, so
+    /// `state.decider() != actor` for it -- the one field that distinguishes
+    /// the redundant copy from a genuine resolution (a `Discard Phase` line
+    /// is reached while `state.current` is STILL the acting player, so
+    /// `decider() == actor` there and is never skipped). Skipping the
+    /// trailing line's `resolve_intervening` is what lets the replay
+    /// continue instead of reporting `StuckPending: decider != expected
+    /// actor, phase Actions, no pending` for 89 of the ~116 games in that
+    /// bucket. Pinned to real game `7523354` (2p), whose line 251
+    /// `"Purple discards 1 card"` at `02:18:02` follows its own `End turn
+    /// Purple` line 250 at the same second.
+    #[test]
+    fn replay_game_skips_the_redundant_trailing_discard_line_after_an_end_turn() {
+        let index_path = format!("{}/../sources/bgo/index.tsv", env!("CARGO_MANIFEST_DIR"));
+        let games = match crate::corpus::parse_index(&index_path) {
+            Ok(g) => g,
+            Err(e) => panic!("{index_path}: {e}"),
+        };
+        let Some(meta) = games.iter().find(|g| g.id == "7523354") else {
+            return; // index.tsv changed on this machine -- nothing to pin
+        };
+        let path = "/tmp/bgo-journals/journals/7523354.tsv";
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return; // journals dir not extracted on this machine
+        };
+        // Confirm the fixture still has the exact shape this regression
+        // depends on: a `discards` line whose immediately-preceding line is
+        // an `End turn` for the SAME player (the redundant same-second copy).
+        // The journal rows are 5 tab-separated columns (date, colour, age,
+        // round, text), so the `End turn` text lives in the 5th column, not
+        // at the row's start.
+        let lines: Vec<&str> = text.lines().collect();
+        let has_trailing_pair = lines.iter().enumerate().any(|(k, l)| {
+            l.contains("discards")
+                && k > 0
+                && lines[k - 1].split('\t').nth(4).is_some_and(|t| t.starts_with("End turn"))
+        });
+        assert!(
+            has_trailing_pair,
+            "game 7523354 no longer exhibits the redundant trailing-discard pair -- picked the wrong fixture"
+        );
+
+        let card_index = build_card_index();
+        let result = replay_game(meta, &text, &card_index, false);
+
+        assert!(
+            result.mismatch.is_none(),
+            "expected a clean replay, got a mismatch at line {}: {:?}",
+            result.mismatch.as_ref().map_or(0, |m| m.lineno),
+            result.mismatch.as_ref().map(|m| &m.raw_text)
+        );
+        assert!(result.completed, "game 7523354 must complete, not stop on the trailing discard");
+        assert!(result.trailing_discards > 0, "at least one redundant trailing discard line must be skipped");
         assert!(result.engine_scores.is_some(), "a completed game must have grounded final scores");
     }
 
