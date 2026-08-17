@@ -7934,11 +7934,18 @@ The model is now POSITION-based:
 - `apply::do_wonder_step(state, idx, k, cost, free, pos)`: marks `k` stages
   starting at `pos` (the resolved position) — or the leftmost-unbuilt
   default when `pos` is `None` (self-play) or the run can't be satisfied
-  from it. Pays `k` CA (unless free) and `cost * k` resources. Completes the
-  wonder when all positions are built.
+  from it. Pays `k` CA (unless free). For `k == 1` the resource cost is the
+  caller's `cost` parameter (which carries any Engineering Genius discount);
+  for `k > 1` the cost is the SUM of the actual per-stage costs of the
+  stages just marked — not `cost * k` (the old code overcharged whenever the
+  stages had different printed costs, e.g. Ocean Liners `[4,2,2,4]` built
+  3-then-1 charged 8+8 instead of 8+4). Completes the wonder when all
+  positions are built.
 - `costs::wonder_stages_cost(state, idx, k)`: prices the leftmost-UNBUILT
-  stages (the self-play / affordability-gate reading). `wonder_stage_cost`
-  keeps the fixed-offset slice for `legal.rs`'s gate.
+  stages (the self-play / affordability-gate reading). Also used by
+  `legal.rs`'s WonderStep gate (replacing the old `wonder_stage_cost`
+  count-based reading, which could under- or over-price a batch when the
+  wonder was partially built in a non-left-to-right order).
 - `legal.rs`: a batch of `k` stages costs `k` CA, so the affordability gate
   now requires `ca >= k` (the old `ca >= 1` check pushed a `WonderStep{k}`
   wider than the remaining CA pool and `pay_ca` panicked — surfaced by the
@@ -7955,3 +7962,24 @@ dominated by UPSTREAM resource/state drift (a WonderStep is rejected
 because the player's resources are below the resolved stage's cost), not by
 the wonder-pricing model itself — those drift sources are the remaining
 work (the `Take`/`Build`/`PlayAction` buckets feed into it).
+
+## Multi-stage wonder cost: `do_wonder_step` now sums per-stage costs
+
+**Bug:** `do_wonder_step` charged `cost * k` resources for a `k`-stage
+build, where `cost` was the per-stage price of the LEFTMOST stage in the
+run. When the stages had different printed costs (e.g. Ocean Liners
+`[4,2,2,4]`), a 3-stage build charged 3×4=12 instead of the correct
+4+2+2=8. This overcharged resources by 4, drifting the player's pool for
+the rest of the game and surfacing as `IllegalMove: WonderStep` (or
+`Take`/`Build`/`Pop`) several lines later.
+
+**Fix:** For `k == 1`, use the caller's `cost` parameter (which carries any
+Engineering Genius discount). For `k > 1`, sum the actual per-stage costs
+of the stages just marked. The `legal.rs` WonderStep gate now uses
+`wonder_stages_cost` (position-aware) instead of `wonder_stage_cost`
+(count-based), matching the apply-side formula.
+
+**Census impact:** The WonderStep bucket barely moved (254→250) because
+the dominant failures are upstream resource drift, not the wonder-pricing
+model. The fix is still correct: a 3-stage Ocean Liners build now charges
+the right amount, preventing a 4-resource overcharge per occurrence.
