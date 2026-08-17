@@ -36,10 +36,13 @@ if [ ! -x "$CLIMB" ]; then
     exit 1
 fi
 
-# Six physical cores, three arms.  Two threads each leaves the box responsive
-# and keeps all three arms progressing at the same rate, which matters because
-# a champion is only comparable against its own player count.
-THREADS=2
+# Six physical cores, three arms.  ONE thread each: at two, the three arms put
+# six hungry threads on six cores and `nice -n 15` was not enough to yield --
+# a foreground `rustc` measured 62% of a single core instead of ~100%.  Darwin's
+# nice deprioritises but does not step aside, so the fix is to ask for fewer
+# cores, not for lower priority.  All three arms keep the same thread count
+# because a champion is only comparable against its own player count.
+THREADS=1
 
 # The frozen gauntlet (docs/RUST_LEAGUE.md "The anchor number is not a
 # strength ladder", analysis/frozen/gauntlet/README.md): dated past champions
