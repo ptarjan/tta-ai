@@ -7892,3 +7892,47 @@ New tests (`replay_common.rs`'s `tests` module): `flush_pending_culture_check_us
 **Why the final score is unchanged, exactly as the previous discard-deferred fix's own writeup predicted for this same shape**: `state.players[_].culture` was ALWAYS correct by `finish_game` time -- both 64 (pre-war) and 49 (post-war) are real, correct values at their respective real moments; only this INSTRUMENT's OWN checkpoint was reading the wrong one of the two. Past strength measurements, self-play, and completed-game final scores are unaffected -- `game::play_game` never goes through `replay_common.rs`'s journal-parsing machinery, and the one behavioral engine change (`resume_end_turn` writing an inert field nothing reads) cannot change any decision.
 
 **What remains for whoever picks this up next**: 337/1011 games still show a first culture-oracle divergence, ranked `TakeCard` (137) / `Discard` (33) / `UpgradeProduction` (26) / `BuildWonderStage` (22) / `BuildUnit` (21) / `PlayTactic` (19) / `ElectLeader` (16) / `BuildBuilding` (16) / `IncreasePopulation` (16) / `DevelopTechnology` (11) / `PlayActionCard` (8) / `UpgradeUnit` (5) / `WinWar` (4) / `Destroy` (2) / `EndTurn` (1). `WinWar`'s collapse from 35 to 4 (not zero) confirms the mechanism traced above was real and dominant but not the ONLY culture-timing gap; the 4 remaining `WinWar`-bucket games are a natural next trace target, followed by whatever is left in the now much-smaller `TakeCard`/`Discard` buckets -- per this doc's own standing rule, do not assume either bucket's name is the cause without tracing first.
+
+## Wonder-stage model: position-based (2026-08-16)
+
+The engine previously priced a wonder stage by a FIXED OFFSET into
+`Card::stages` (`wonder_stage_cost`: `stages[done..done+k]`, `done =
+wonder_steps`), i.e. "always the next left-to-right stage". Corpus-wide
+census (this pass, Python over `/tmp/bgo-journals/journals/*.tsv`)
+confirmed the left-to-right reading holds for ALL plain "builds N stages"
+lines (every multi-stage payment is the sum of N CONSECUTIVE stage costs),
+but the 49 apparent single-stage violations are fully explained by (a) Trade
+Routes Agreement food conversion (44) and (b) Engineering Genius discount /
+no-clause lines (~5). The true bugs were the EG-discount and Trade-Routes-
+food cases, plus a genuine non-left-to-right build (Colossus `[3,3]`
+3-then-1, Pyramids `[3,2,1]` 3-then-2).
+
+The model is now POSITION-based:
+
+- `PlayerState::wonder_stages_built`: a bitmask over `Card::stages` (pos 0 =
+  leftmost). `wonder_steps` is derived as its `count_ones()`, so the count
+  and the positions can never disagree.
+- `apply::do_wonder_step(state, idx, k, cost, free, pos)`: marks `k` stages
+  starting at `pos` (the resolved position) — or the leftmost-unbuilt
+  default when `pos` is `None` (self-play) or the run can't be satisfied
+  from it. Pays `k` CA (unless free) and `cost * k` resources. Completes the
+  wonder when all positions are built.
+- `costs::wonder_stages_cost(state, idx, k)`: prices the leftmost-UNBUILT
+  stages (the self-play / affordability-gate reading). `wonder_stage_cost`
+  keeps the fixed-offset slice for `legal.rs`'s gate.
+- `legal.rs`: a batch of `k` stages costs `k` CA, so the affordability gate
+  now requires `ca >= k` (the old `ca >= 1` check pushed a `WonderStep{k}`
+  wider than the remaining CA pool and `pay_ca` panicked — surfaced by the
+  WonderBot 2p self-play test, seed 707).
+- The replayer's `BuildWonderStage` arm resolves the stage position from the
+  journal's own stated payment (the single UNBUILT stage whose printed cost,
+  after the line's own EG discount, equals the payment) and forwards it
+  through `try_apply_pos`/`apply_move_pos` — no pre-marking (the old
+  pre-mark double-counted against the move's own marking, completing a
+  3-stage wonder in one single-stage line).
+
+Result: 1460 lib tests pass. The `IllegalMove: WonderStep` bucket is now
+dominated by UPSTREAM resource/state drift (a WonderStep is rejected
+because the player's resources are below the resolved stage's cost), not by
+the wonder-pricing model itself — those drift sources are the remaining
+work (the `Take`/`Build`/`PlayAction` buckets feed into it).
