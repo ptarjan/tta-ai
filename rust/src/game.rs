@@ -705,7 +705,22 @@ fn antiquate_leader_wonder_and_pacts(state: &mut GameState, ended: Age) {
         }
 
         // §12.2.2: antiquated PACTS leave play. Technologies, wonders,
-        // colonies, tactics and declared wars all stay.
+        // colonies, tactics and declared wars all stay. Give back each
+        // antiquating pact's MA top-up (symmetric to `on_pact_accepted`)
+        // BEFORE removing it, so the live pool drops by the pact's grant
+        // -- mirroring how the leader case above uses
+        // `carry_over_action_pool` to adjust the live pools when a leader
+        // leaves play.
+        let antiquating: Vec<crate::state::Pact> = state.players[idx]
+            .pacts
+            .as_slice()
+            .iter()
+            .filter(|pact| (pact.card.get().age as u8) < cutoff)
+            .cloned()
+            .collect();
+        for pact in &antiquating {
+            crate::apply::on_pact_canceled(state, pact);
+        }
         state.players[idx]
             .pacts
             .retain(|pact| pact.card.get().age as u8 >= cutoff);
@@ -1340,6 +1355,41 @@ mod tests {
         antiquate(&mut state, Age::II); // Age II just ended -> Age I leaders die
         assert!(state.players[0].leader.is_none(), "Joan of Arc is Age I and must antiquate when Age II ends");
         assert_eq!(state.players[0].military_actions, 2, "her +1 MA must be given back, not left as a ghost");
+    }
+
+    /// ENGINE BUG FIX regression (game `7521491`, round 13): an antiquated
+    /// PACT must give back its MA top-up the same way an antiquated leader
+    /// does (see `on_leave_play_gives_back_a_military_action_when_a_leader_
+    /// antiquates` just above). Before this fix, `antiquate_leader_wonder_and_
+    /// pacts` removed antiquating pacts with a bare `retain` without calling
+    /// `on_pact_canceled`, so the +1 MA top-up from `on_pact_accepted` (when
+    /// the OBA entered play at round 7) survived as a permanent ghost in the
+    /// live pool. By round 13 Green's live MA was 5 but `compute` gave 4
+    /// (Despotism 2 + Kremlin 1 + Robespierre 1), so `revolt_pool_ok`'s
+    /// Robespierre branch (`live == total`) failed and the Republic
+    /// revolution was rejected.
+    #[test]
+    fn on_pact_cancels_give_back_ma_when_a_pact_antiquates() {
+        let mut state = new_game(4, 1);
+        // Green (idx 2) has an Age I OBA with Orange (idx 0).
+        let oba = named("Open Borders Agreement");
+        state.players[2].pacts.push(crate::state::Pact {
+            card: oba,
+            owner: 2,
+            partner: 0,
+            a: 2,
+            b: 0,
+        });
+        // Simulate the top-up that `on_pact_accepted` would have applied.
+        state.players[2].military_actions = 3; // Despotism 2 + OBA 1
+        // Age II ends -> OBA (Age I) must antiquate and give back its +1 MA.
+        // (The real game: OBA entered play in Age I, was removed when Age I
+        // ended -- i.e. at the transition into Age II, which is what
+        // `antiquate(state, Age::II)` models: cutoff = II = 2, OBA age = I = 1
+        // < 2, so it is removed.)
+        antiquate(&mut state, Age::II);
+        assert!(state.players[2].pacts.is_empty(), "OBA is Age I and must antiquate when Age I ends");
+        assert_eq!(state.players[2].military_actions, 2, "the OBA's +1 MA must be given back, not left as a ghost");
     }
 
     /// The overflow that killed a live `climb` run for real: `climb.rs`
