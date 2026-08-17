@@ -40,8 +40,8 @@ rewrites them every few minutes.
 
 ## The only metric that counts
 
-The corpus of 1011 replayed human BGO games. Current: **749 complete / 724 exact**
-(guard list `analysis/guard_ids_749.txt`).
+The corpus of 1011 replayed human BGO games. Current: **838 complete / 807 exact**
+(guard list `analysis/guard_ids_838.txt`).
 
 `replaystats` also prints a count of non-matching games "SET ASIDE" by
 `journal_arithmetic_error_suppression`. Those are UNRESOLVED, not proven corpus
