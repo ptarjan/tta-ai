@@ -171,21 +171,34 @@ pub fn build_civil_life_free(p: &PlayerState, id: CardId) -> bool {
 /// once per turn if the civil-action pool alone is not enough. Mutates `p`.
 /// `state` is dropped for the same reason as [`spare_ca`].
 ///
-/// Panics (debug builds only, matching Python's bare `assert`, which is
-/// itself only checked under normal non`-O` interpretation) if `n` civil
-/// actions were not actually available -- this is an internal invariant a
-/// caller must have checked via [`can_take`]/[`spare_ca`] first, not a
-/// legality gate of its own.
+/// Silently under-charges (release no-op on the shortfall) when the pool is
+/// not enough: `legal::legal_moves` is the LEGALITY GATE that calls
+/// [`spare_ca`] first, and `pay_ca` is the mechanical charge -- the same
+/// division of labor Python's `assert`-only check had. The silent path is a
+/// REAL, MEASURED state, not an unreachable invariant: BGO games with
+/// unmodeled bonus civil actions (the BGO client counts them into the live
+/// pool that its server-side validation uses) legitimately drive a
+/// reconstructed pool to 0 while the human still spends -- e.g. the base
+/// game's own 2p corpus, game `7523355` round 17 (Constitutional Monarchy +
+/// J. S. Bach, 8 CA, a turn of 9 CA-charged actions that BGO validated
+/// server-side; the free action's source is an unmodeled mechanism, docs/
+/// REPLAY.md's build bucket). `legal_moves` already refuses to emit the
+/// over-charged move in a self-play engine, so the shortfall can only ever
+/// surface as a replay stop (labeled `IllegalMove`, the correct verdict for
+/// "this move is illegal under the MODEL") rather than a panic. The old
+/// `debug_assert_eq!(remaining, 0)` here made the REPLAY BINARY itself
+/// unusable for diagnosis on exactly those games: `cargo build` (debug)
+/// aborts at the under-charge and the real stop reason never prints, while
+/// the release census sees the silent no-op and reports the move as
+/// illegal-without-explanation.
 pub fn pay_ca(p: &mut PlayerState, n: i32) {
     let used = (p.civil_actions as i32).min(n);
     p.civil_actions -= used as i8;
-    let mut remaining = n - used;
+    let remaining = n - used;
     if remaining > 0 && hammurabi_conversion_available(p) {
         p.military_actions -= 1;
         p.hammurabi_used = true;
-        remaining -= 1;
     }
-    debug_assert_eq!(remaining, 0, "paid more civil actions than available");
 }
 
 /// Civil actions to take the card currently sitting in row slot `idx`
@@ -1080,21 +1093,23 @@ mod tests {
         assert!(p.hammurabi_used);
     }
 
-    /// The guard this asserts is a `debug_assert!`, which `--release` strips,
-    /// so in release the call simply does not panic and `should_panic` fails
-    /// the test rather than the code. Gated rather than promoted to a real
-    /// `assert!`: underfunding is an engine bug, not a game state, and the
-    /// release build is the one the league runs -- paying for that check on
-    /// every action spent, forever, to catch a bug the debug build already
-    /// catches, is the wrong trade. Found 2026-08-05 by the card-coverage
-    /// pass, which ran `cargo test --release` and hit this.
-    #[cfg(debug_assertions)]
+    /// A shortfall is a silent under-charge, not a panic -- see `pay_ca`'s
+    /// own doc comment for why (BGO games with unmodeled bonus civil
+    /// actions legitimately drive a reconstructed pool to 0 while the human
+    /// still spends; the move's illegality is reported by `legal_moves` as
+    /// an `IllegalMove` stop, and the replay binary must stay alive to show
+    /// the reason). The old `#[should_panic]` version of this test (the
+    /// 2026-08-05 card-coverage pass found it in `cargo test --release`) is
+    /// replaced by this one, which pins the no-panic, no-corruption
+    /// behavior instead.
     #[test]
-    #[should_panic(expected = "paid more civil actions than available")]
-    fn pay_ca_panics_if_underfunded() {
+    fn pay_ca_underfunded_is_a_silent_under_charge_not_a_panic() {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 1;
+        p.military_actions = 0; // no Hammurabi fallback either
         pay_ca(&mut p, 2);
+        assert_eq!(p.civil_actions, 0, "spends what is available");
+        assert_eq!(p.military_actions, 0);
     }
 
     // ----------------------------------------------------------- take_cost

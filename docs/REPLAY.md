@@ -7983,3 +7983,55 @@ of the stages just marked. The `legal.rs` WonderStep gate now uses
 the dominant failures are upstream resource drift, not the wonder-pricing
 model. The fix is still correct: a 3-stage Ocean Liners build now charges
 the right amount, preventing a 4-resource overcharge per occurrence.
+
+## `pay_ca` no longer panics on a CA shortfall (2026-08-17)
+
+**Bug:** `costs::pay_ca` carried a `debug_assert_eq!(remaining, 0, "paid
+more civil actions than available")` (and a matching
+`#[should_panic]`-gated test, found 2026-08-05 by the card-coverage pass
+running `cargo test --release`). The premise was that a shortfall is an
+engine bug the gate upstream must have missed. That premise is false: a
+shortfall is a REAL, MEASURED state whenever a reconstructed player's
+pool is legitimately smaller than the human's true pool. BGO's server-side
+validation counts any bonus civil actions the client model gives into the
+live pool it validates against, so a human can spend what OUR model does
+not grant — and the move is legal on BGO and illegal under our model.
+The build-bucket exemplar, `7523355` round 17 (Constitutional Monarchy +
+J. S. Bach, 8 CA by `ca_total`, confirmed by the `CA_TOTAL_CHECK` audit
+and by the pool starting the turn at exactly 8): the turn charges 9 CA
+(take 1 + 4-stage wonder 4 + elect 1 + develop 1 + pop 1 + build 1), the
+human legally spent all nine, and exactly one of the six was free of a
+source this model does not have (not Civil Life — no such event in the
+game, `one_time_discount` all zero at the stop; not J. S. Bach — his
+effects are `CulturePerTheater(1)`, `TheaterTechScienceDiscount(2)`,
+`CivilActionUpgradeUrbanBuildingToTheater`, all verified in the card
+data, none of them a CA grant; no action card in hand orders a take).
+That free action's mechanism remains UNIDENTIFIED — documented here
+rather than guessed.
+
+**Why the panic mattered more than the gate:** the debug build of the
+replay binary ABORTED at the under-charge in exactly these games, so the
+real `IllegalMove` stop reason never printed; the release build's silent
+no-op then left the census with an unexplained `IllegalMove`. Either way
+the diagnosis was blocked by the guard. The guard's real job (catching an
+engine that pays without checking) is already done by
+`legal::legal_moves`'s `spare_ca`-based gates, which refuse to EMIT an
+over-charged move in the self-play engine — the same division of labor
+Python's `assert`-only check had.
+
+**Fix:** `pay_ca` (rust/src/costs.rs) silently under-charges on a
+shortfall: spend what the pool (plus Hammurabi's once-per-turn MA
+conversion) has, spend no more, never panic. The over-charged move is
+still refused as `IllegalMove` by the legality gate, which is the correct
+verdict for "illegal under the MODEL". The `#[should_panic]` test is
+replaced by `pay_ca_underfunded_is_a_silent_under_charge_not_a_panic`,
+which pins the no-panic, no-corruption behavior.
+
+**Consequence:** debug and release replays now agree on every game, and a
+game whose pool is short by an unmodeled CA source stops at the first
+over-charged action with a full, readable `IllegalMove` dump instead of a
+debug-build abort. This unblocks per-game triage of the
+`IllegalMove: Build`/`Take`/`WonderStep` buckets: each stop now shows
+exactly which action the model over-charged, so the missing CA source can
+be found (and fixed at the model) game by game, instead of the abort
+hiding it.
