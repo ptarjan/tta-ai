@@ -47,7 +47,7 @@ use crate::state::{ChoiceOption, GameState, Pending};
 /// mattered (`develop`).
 pub fn cost_note(state: &GameState, p: &crate::state::PlayerState, mv: Move) -> String {
     match mv {
-        Move::Take { slot, .. } => {
+        Move::Take { slot } => {
             format!("{} civil action(s)", costs::take_cost(state, p, slot as usize))
         }
         Move::Pop => {
@@ -167,7 +167,7 @@ pub fn describe_move(state: &GameState, mv: Move, board: Option<&Board>) -> Stri
     let p = state.actor();
     let t = tail(&cost_note(state, p, mv));
     match mv {
-        Move::Take { slot, .. } => {
+        Move::Take { slot } => {
             let id = state.card_row[slot as usize];
             let card = id.get();
             format!(
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn take_prices_in_civil_actions() {
         let st = game::new_game(3, 2);
-        let note = cost_note(&st, st.actor(), Move::Take { slot: 0, cost: i32::MAX });
+        let note = cost_note(&st, st.actor(), Move::Take { slot: 0 });
         assert!(note.ends_with("civil action(s)"), "{note}");
     }
 
@@ -480,7 +480,7 @@ mod tests {
     fn a_take_move_names_the_card_the_type_and_the_row_slot() {
         let st = game::new_game(3, 2);
         let name = st.card_row[0].name();
-        let text = describe_move(&st, Move::Take { slot: 0, cost: i32::MAX }, None);
+        let text = describe_move(&st, Move::Take { slot: 0 }, None);
         assert!(text.starts_with(&format!("TAKE '{name}'")), "{text}");
         assert!(text.contains("row slot 0"), "{text}");
     }
@@ -515,7 +515,7 @@ mod tests {
         let ctx = rivals::rival_context(&st, idx, None, None);
         let before = features::features(&st, idx, Some(&ctx), None, false);
         let mut trial = st.clone();
-        apply::apply(&mut trial, Move::Take { slot: 0, cost: i32::MAX });
+        apply::apply(&mut trial, Move::Take { slot: 0 });
         let after = features::features(&trial, idx, Some(&ctx), None, false);
         let w = Weights::defaults();
 

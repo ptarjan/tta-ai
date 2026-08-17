@@ -2,7 +2,7 @@
  "scope": "base-2015",
  "category": "military-deck-and-civil-actions",
  "complete": true,
- "progress": "COMPLETE: 142 cards \u2014 109 military-deck cards (tactics, aggressions, wars, pacts, military bonus cards, territories, all 55 events) + 33 yellow civil action-card variants (14 distinct names). Every card carries 2p/3p/4p copy counts. Validated by data/validate_cards.py: military decks 10/45/50/45 (=150, box count) with the 2-player pact removals (43/46/41), civil decks 20/53/53/53 at 4 players (=179 civil cards with the technologies in data/cards_civil.json and the wonders/leaders in data/cards_wonders_leaders.json).",
+ "progress": "COMPLETE: 142 cards — 109 military-deck cards (tactics, aggressions, wars, pacts, military bonus cards, territories, all 55 events) + 33 yellow civil action-card variants (14 distinct names). Every card carries 2p/3p/4p copy counts. Validated by data/validate_cards.py: military decks 10/45/50/45 (=150, box count) with the 2-player pact removals (43/46/41), civil decks 20/53/53/53 at 4 players (=179 civil cards with the technologies in data/cards_civil.json and the wonders/leaders in data/cards_wonders_leaders.json).",
  "metadata": {
   "militaryDeckTotalsPerAge": {
    "A": 10,
@@ -2651,11 +2651,11 @@
     "4p": 2
    },
    "effects": {
-    "freeCivilAction": "take_a_card",
+    "freeCivilAction": "build_or_upgrade_farm_or_mine",
     "resourceDiscount": 1
    },
-   "text": "Take a card in hand. (SYNTHETIC TEST FIXTURE -- no base-game card prints this value; see src/card_table.rs free_civil_action_value.)",
-   "source": "synthetic test fixture; see src/card_table.rs",
+   "text": "Build or upgrade a farm or mine; pay 1 less resource.",
+   "source": "digital-edition localization strings (CivilCards_card_names / CivilCards_card_texts, yashcherU/Through-the-Ages_ru, which mirrors the shipped English strings 1:1); roster cross-checked vs fandom 'Card List: Digital Edition' and faq_v15.pdf p.12",
    "countSource": "BGA Studio implementation of the 2015 edition (github.com/srussking/throughtheages, material.inc.php qt2/qt3/qt4 fields -> sources/bga_card_counts.tsv), independently confirmed by the Tabletop Simulator workshop mod 2120085710, whose Civil_I/II/III decks are pre-split into base / '(3+)' / '(4)' piles (sources/tts_tta_workshop_2120085710.json). Both reproduce the rulebook's 3 cards marked '4' + 6 cards marked '3+' per civil deck and deck sizes 44/50/53."
   },
   {

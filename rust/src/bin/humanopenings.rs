@@ -98,7 +98,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                 continue;
             }
             match d.human_move {
-                Move::Take { slot, .. } => {
+                Move::Take { slot } => {
                     if first_take[seat].is_none() {
                         let card = d.state.card_row[slot as usize];
                         if !card.is_none() {

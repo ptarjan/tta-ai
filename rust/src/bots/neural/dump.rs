@@ -196,7 +196,7 @@ fn read_move(r: &mut Reader) -> Result<Move, String> {
     let side = || pact_side_from_slot(aux2);
     let churchill = || churchill_from_slot(aux2);
     match tag {
-        0 => Ok(Move::Take { slot: aux1, cost: i32::MAX }),
+        0 => Ok(Move::Take { slot: aux1 }),
         1 => Ok(Move::Build { card: card_a }),
         2 => Ok(Move::Develop { card: card_a }),
         3 => Ok(Move::Upgrade { from: card_b, to: card_a }),
@@ -403,7 +403,7 @@ mod tests {
             game_id: seed as u32,
             state: (0..ENCODING_DIM).map(|i| (i as f32 + f32::from(seed)) * 0.5).collect(),
             legal: vec![
-                Move::Take { slot: seed % 4, cost: i32::MAX },
+                Move::Take { slot: seed % 4 },
                 Move::Build { card: CardId(seed as u16) },
                 Move::EndTurn,
                 Move::Choose { n: 2 },
@@ -496,7 +496,7 @@ mod tests {
         let card = CardId::by_name("Warriors").unwrap();
         let card2 = CardId::by_name("Irrigation").unwrap();
         let samples = [
-            Move::Take { slot: 3, cost: i32::MAX },
+            Move::Take { slot: 3 },
             Move::Build { card },
             Move::Develop { card },
             Move::Upgrade { from: card2, to: card },

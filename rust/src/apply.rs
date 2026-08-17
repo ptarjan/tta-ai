@@ -254,15 +254,11 @@ pub fn apply(state: &mut GameState, mv: Move) {
     let idx = state.current;
     match mv {
         // ---- civil actions ----
-        // `cost` is `i32::MAX` for every move `legal::legal_moves` generates
-        // (self-play); a lower value exists only on a replayer-observed
-        // ordered `TakeACard` take, and `h_take_ca` bills the journal price
-        // in that case instead of the row's.
-        Move::Take { slot, cost } => h_take_ca(state, idx, slot, cost.min(costs::take_cost(state, &state.players[idx as usize], slot as usize))),
+        Move::Take { slot } => h_take(state, idx, slot),
         Move::Build { card } => do_build(state, idx, card, 0, false),
         Move::Develop { card } => h_develop(state, idx, card, false),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, 0, false),
-        Move::WonderStep { steps } => do_wonder_step(state, idx, steps, costs::wonder_stages_cost(state, idx, 1), false, None),
+        Move::WonderStep { steps } => do_wonder_step(state, idx, steps, 0, false),
         Move::Pop => h_pop(state, idx, false),
         Move::PopFree => h_pop_free(state, idx),
         Move::Revolution { card } => h_revolution(state, idx, card, false),
@@ -573,26 +569,13 @@ fn drop_pacts_of(state: &mut GameState, idx: u8) {
 // and non-overlapping (DESIGN.md rule 4: "arena-and-index is the native
 // idiom for this shape of code").
 
-/// Bill a row take at `ca` civil actions. `ca` is the ROW's own price for
-/// every ordinary take -- the `Move::Take` arm of [`apply`] computes it as
-/// `cost.min(row_price)`, and a generated move always carries the
-/// `i32::MAX` sentinel, which reduces to exactly the row price. The ONLY
-/// source of a different value is [`apply_free_civil_move`]'s `Move::Take`
-/// arm (`§3.11`'s `TakeACard` order): there the ORDERED action is the take
-/// and the civil action is the free part -- the price that pays is the one
-/// the JOURNAL actually printed, which
-/// `replay_common.rs::resolve_take_with_free_civil` has already grounded
-/// against `costs::take_cost`'s own row slots (the journal price is never
-/// above the row price for a take the engine itself permits, so
-/// `cost.min(row_price)` can only lower it -- the Hammurabi-converted or
-/// leader-replacement shapes). The row and the `ca_spent_taking` ledger
-/// never drift apart: both record exactly `ca`.
-fn h_take_ca(state: &mut GameState, idx: u8, slot: u8, ca: i32) {
-    costs::pay_ca(&mut state.players[idx as usize], ca);
+fn h_take(state: &mut GameState, idx: u8, slot: u8) {
+    let cost = costs::take_cost(state, &state.players[idx as usize], slot as usize);
+    costs::pay_ca(&mut state.players[idx as usize], cost);
     // The ONLY place civil actions are spent reaching into the row; recorded
     // so the evaluator can price it apart from civil actions spent elsewhere
     // (`engine/actions.py`'s own comment: INFORMATION_AUDIT GAP 1).
-    state.players[idx as usize].ca_spent_taking += ca as u8;
+    state.players[idx as usize].ca_spent_taking += cost as u8;
     take_card(state, idx, slot as usize);
 }
 
@@ -620,13 +603,6 @@ fn take_card_impl(state: &mut GameState, idx: u8, slot: usize, record_taken_this
     let card = id.get();
     if card.kind == CardType::Wonder {
         state.players[idx as usize].wonder = id;
-        // `wonder_stages_built` -- the set of stage POSITIONS this wonder
-        // has been paid for -- is keyed by position, so it resets with the
-        // wonder identity the way `wonder_steps` (the COUNT of positions
-        // paid) does. Taking a SECOND wonder after the first completed
-        // (the same player, the same turn, or the next) must not inherit
-        // the first's positions -- see `PlayerState::wonder_stages_built`.
-        state.players[idx as usize].wonder_stages_built = 0;
         state.players[idx as usize].wonder_steps = 0;
     } else {
         let p = &mut state.players[idx as usize];
@@ -818,148 +794,38 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
     p.techs.get_mut(hi).expect("do_upgrade: hi not in tableau").workers += 1;
 }
 
-/// Pays for `k` stages of the wonder currently under construction, at
-/// `cost` resources each (already discounted by the caller -- see the two
-/// `Move::WonderStep` arms in this file and `apply_free_civil_move`'s own
-/// `discount` argument; for `k > 1` the SUM of the stages' actual per-stage
-/// costs is charged instead of `cost * k` -- see the `total_cost` block
-/// below), spending the summed resources out of the player's pool, ONE
-/// civil action (unless `free` -- a construction special tech's
-/// `wonderStagesPerAction` batch pays the whole batch for a single action,
-/// §3.8), and marking the first `k` UNBUILT stage positions as built.
-///
-/// Why a position, not a count: BGO lets a player build ANY uncovered stage
-/// of the wonder, paying that stage's own printed cost -- the printed line
-/// says so (game `7520718`: Colossus `[3, 3]` built 3-then-1 via Engineering
-/// Genius, paying `1` for the second stage; `7521361`: Pyramids `[3, 2, 1]`
-/// built 3-then-2, paying `2` for the second). The old model -- "always the
-/// next left-to-right stage, price `stages[done]`" -- charged the WRONG
-/// price whenever the journal's order diverged from left-to-right, drifting
-/// the player's resources for the rest of the game (the
-/// `IllegalMove: WonderStep` bucket's "resources short by N" signature,
-/// `docs/REPLAY.md`). `costs::wonder_stage_cost` is kept for its
-/// left-to-right reading -- that is the price a fresh `k`-stage build pays
-/// when nothing is built yet (the self-play default), and the affordability
-/// gate in `legal.rs` still uses it -- but PAYMENT now goes through
-/// [`costs::wonder_stages_cost`] against the specific positions the caller
-/// chose, and `wonder_steps` (the count) is DERIVED from
-/// `wonder_stages_built` (the positions) rather than stored separately, so
-/// the two can never disagree.
-///
-/// Panics on `k == 0` (no caller does; the legal-move generators only ever
-/// produce `k >= 1`) and on a `wonder_steps`/`wonder_stages_built` pair that
-/// cannot both be true (a count greater than the population -- unreachable
-/// today because every writer of the pair updates both together, but the
-/// panic is the honest failure for a future writer that forgets).
-/// `pos` names the stage position this move builds (the leftmost-UNBUILT
-/// one when the caller did not resolve it -- the self-play default, and what
-/// `Move::WonderStep` carries when the replay grounding had no unique
-/// answer). The replay grounding in `replay_common.rs` resolves the exact
-/// position from the journal's own stated payment and passes it here, so a
-/// non-left-to-right build (Colossus `[3,3]` 3-then-1, Pyramids `[3,2,1]`
-/// 3-then-2) marks the RIGHT stage rather than the next sequential one.
-///
-/// A "builds N stages" line (N > 1) always prices a contiguous
-/// left-to-right run (confirmed corpus-wide), so `pos` is always the
-/// leftmost stage of that run and the remaining N-1 are the next unbuilt
-/// ones to its right.
-pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, _cost: i32, free: bool, pos: Option<usize>) {
-    debug_assert!(k >= 1, "do_wonder_step: k == 0 is a no-op, not a move");
-    let p = &mut state.players[idx as usize];
-    let stages = p.wonder.get().stages;
-    let built = p.wonder_stages_built;
-    // The first stage to mark: the caller's resolved position, else the
-    // leftmost unbuilt (self-play / ungrounded default).
-    let default_start = (0..stages.len()).find(|&i| built & (1 << i) == 0).expect("no unbuilt stage");
-    let start = match pos {
-        // A resolved position is the LEFTMOST of the run this line builds.
-        // If the run (k consecutive-from-start unbuilt stages) can't be
-        // satisfied from it (e.g. a multi-stage line whose grounding pinned
-        // a single mid-run stage, or a completed-wonder quirk), fall back to
-        // the leftmost-unbuilt default rather than over-marking.
-        Some(t) if t < stages.len() && (built & (1 << t)) == 0 => {
-            let mut c = 0u32;
-            for i in t..stages.len() {
-                if c == k as u32 { break; }
-                if built & (1 << i) == 0 { c += 1; }
-            }
-            if c >= k as u32 { t } else { default_start }
-        }
-        _ => default_start,
-    };
-    // Mark `start` plus the next (k-1) UNBUILT positions to its right (a
-    // multi-stage build is a contiguous run, `start` being its leftmost).
-    let mut next = built;
-    let mut marked = 0u32;
-    for i in start..stages.len() {
-        if marked == k as u32 {
-            break;
-        }
-        if next & (1 << i) != 0 {
-            continue;
-        }
-        next |= 1 << i;
-        marked += 1;
-    }
-    debug_assert!(marked == k as u32, "do_wonder_step: fewer unbuilt stages than k");
-    p.wonder_stages_built = next;
+/// Ports `engine/actions.py::do_wonder_step`. Panics unconditionally today
+/// via [`costs::wonder_stage_cost`] -- see this module's top doc comment.
+pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, discount: i32, free: bool) {
+    let base = costs::wonder_stage_cost(state, &state.players[idx as usize], k);
+    let cost = (base - discount).max(0);
     if !free {
-        // ONE civil action for the WHOLE batch, whatever `k`: a construction
-        // special tech (`wonderStagesPerAction`, Masonry 2 / Architecture 3 /
-        // Engineering 4) pays the summed resource cost of all `k` stages for
-        // the single action, and `k == 1` (no tech in play, the common case)
-        // is the same single action -- §3.8's "multiple stages same turn =
-        // repeat the action" is what costs `k` CA, not one batched move.
-        // Mirrors `legal.rs`'s WonderStep gate, which requires exactly 1 CA
-        // for every `k <= max_k`.
-        costs::pay_ca(p, 1);
+        costs::pay_ca(&mut state.players[idx as usize], 1);
     }
-    // Sum the ACTUAL per-stage costs of the stages just marked, rather than
-    // charging `cost * k` (a single per-stage price multiplied).  A multi-
-    // stage build (BGO's "builds N stages" line) touches stages whose
-    // printed costs differ -- Ocean Liners `[4,2,2,4]` built 3-then-1
-    // charges 8+4, not 8+8.  For `k == 1` the caller's `_cost` carries any
-    // discount (Engineering Genius) that the base stage cost does not, so
-    // it is used directly; for `k > 1` the base per-stage costs are summed
-    // (no discount source applies to a multi-stage batch in the base game).
-    let total_cost: i32 = if k == 1 {
-        _cost.max(0)
-    } else {
-        (start..stages.len())
-            .filter(|&i| next & (1 << i) != 0 && built & (1 << i) == 0)
-            .take(k as usize)
-            .map(|i| stages[i] as i32)
-            .sum()
+    let wonder = {
+        let p = &mut state.players[idx as usize];
+        economy::pay_resources(p, cost.max(0) as u16);
+        p.wonder_steps += k;
+        p.wonder
     };
-    economy::pay_resources(p, total_cost as u16);
-    let wonder = p.wonder;
-    let built = p.wonder_stages_built;
-    let steps = built.count_ones() as u8;
-    let n_stages = stages.len() as u8;
-    debug_assert!(steps <= n_stages);
-    if steps == n_stages {
-        let gained = wonder_completion_culture(p, wonder);
+    if wonder_is_complete(wonder, state.players[idx as usize].wonder_steps) {
+        let gained = wonder_completion_culture(&state.players[idx as usize], wonder);
+        let p = &mut state.players[idx as usize];
         p.wonder = CardId::NONE;
-        p.wonder_stages_built = 0;
         p.wonder_steps = 0;
         p.completed_wonders.push(wonder);
         on_enter_play(p, wonder);
         p.culture = (p.culture as i32 + gained).max(0) as u16;
-    } else {
-        p.wonder_steps = steps;
     }
 }
 
-/// The leftmost-UNBUILT stage position of `idx`'s wonder -- the position a
-/// self-play `WonderStep` (or an ungrounded replay) builds. Exposed so the
-/// replay grounding can resolve the same default it would fall back to.
-pub fn wonder_leftmost_unbuilt(state: &GameState, idx: u8) -> usize {
-    let p = &state.players[idx as usize];
-    (0..p.wonder.get().stages.len())
-        .find(|&i| p.wonder_stages_built & (1 << i) == 0)
-        .expect("wonder_leftmost_unbuilt: no unbuilt stage")
+/// §9: a wonder is complete once every printed stage is paid for. Real as of
+/// `Card::stages` landing mid-port (see this module's top doc comment);
+/// [`do_wonder_step`] never reaches this today only because the cost lookup
+/// ahead of it (`costs::wonder_stage_cost`) still panics on the sibling gap.
+fn wonder_is_complete(wonder: CardId, steps_built: u8) -> bool {
+    steps_built as usize >= wonder.get().stages.len()
 }
-
 
 fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
     costs::pay_ca(&mut state.players[idx as usize], 1);
@@ -1622,26 +1488,10 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
 pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
     match mv {
         Move::Pop => h_pop(state, idx, true),
-        Move::WonderStep { steps } => {
-            let base = costs::wonder_stages_cost(state, idx, 1);
-            do_wonder_step(state, idx, steps, (base - discount).max(0), true, None)
-        }
+        Move::WonderStep { steps } => do_wonder_step(state, idx, steps, discount, true),
         Move::Build { card } => do_build(state, idx, card, discount, true),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, discount, true),
         Move::Develop { card } => h_develop(state, idx, card, true),
-    // §3.11's `TakeACard` order: the take's civil action is the FREE part --
-    // what pays is the price the JOURNAL actually printed (the replayer
-    // grounded it against the row's own `costs::take_cost`), carried in
-    // `cost`. `i32::MAX` (the sentinel every ordinary take carries) bills
-    // the slot's own price, so this one expression covers both sources.
-    // The cap is `spare_ca` (not `take_cost`) because the take's affordability
-    // was already verified when the move was generated (via
-    // `free_action_moves`'s `TakeACard` arm, which checks against
-    // `spare_ca` at offer time); between offer and apply, the pool can only
-    // shrink (Hammurabi's conversion is once-per-turn), so billing
-    // `min(cost, take_cost, spare_ca)` is the safe cap that never
-    // over-pays.
-    Move::Take { slot, cost } => h_take_ca(state, idx, slot, cost.min(costs::take_cost(state, &state.players[idx as usize], slot as usize)).min(costs::spare_ca(&state.players[idx as usize]))),
         // §8.3.4: a revolution never spends a civil action of its OWN to
         // begin with (it empties/carries-over a whole action pool instead),
         // so this is still the exact same `_h_revolution` Python's
@@ -1658,7 +1508,7 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
         // shape can come from now; see its own doc comment for the
         // citation.
         Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to, discount, true),
-        other @ Move::PopFree | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => unreachable!(
+        other @ Move::Take { .. } | other @ Move::PopFree | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => unreachable!(
             "free_action_moves produced a move apply_free_civil_move does not \
              expect: {other:?}"
         ),
@@ -1871,7 +1721,6 @@ mod tests {
             government,
             leader: CardId::NONE,
             wonder: CardId::NONE,
-            wonder_stages_built: 0,
             wonder_steps: 0,
             completed_wonders: CardList::new(),
             destroyed_wonders: 0,
@@ -2046,29 +1895,11 @@ mod tests {
         p.civil_actions = 4;
         let mut state = one_player_state(p);
         state.card_row[6] = card("Bronze"); // slot cost 2
-        h_take_ca(&mut state, 0, 6, 2);
+        h_take(&mut state, 0, 6);
         assert_eq!(state.players[0].civil_actions, 2);
         assert_eq!(state.players[0].ca_spent_taking, 2);
         assert!(state.players[0].hand_civil.contains(card("Bronze")));
         assert!(state.card_row[6].is_none());
-    }
-
-    /// §3.11's `TakeACard` order (replayer-observed): the take's civil
-    /// action is the FREE part, and the price that pays is the one the
-    /// JOURNAL printed -- which can sit BELOW the slot's own row price once
-    /// the replayer has grounded the card to a specific slot. `h_take_ca`
-    /// must bill exactly the observed `ca` and record it in the ledger;
-    /// recomputing the slot's price would double-charge the same take.
-    #[test]
-    fn h_take_ca_bills_the_observed_price_not_the_rows() {
-        let mut p = blank_player(0, card("Despotism"));
-        p.civil_actions = 3;
-        let mut state = one_player_state(p);
-        state.card_row[12] = card("Bronze"); // slot cost 3
-        h_take_ca(&mut state, 0, 12, 1);
-        assert_eq!(state.players[0].civil_actions, 2, "only the observed price is billed");
-        assert_eq!(state.players[0].ca_spent_taking, 1, "the ledger records the observed price");
-        assert!(state.players[0].hand_civil.contains(card("Bronze")));
     }
 
     #[test]
@@ -2077,7 +1908,7 @@ mod tests {
         p.civil_actions = 4;
         let mut state = one_player_state(p);
         state.card_row[0] = card("Colossus");
-        h_take_ca(&mut state, 0, 0, 1);
+        h_take(&mut state, 0, 0);
         assert_eq!(state.players[0].wonder, card("Colossus"));
         assert_eq!(state.players[0].wonder_steps, 0);
         assert!(state.players[0].hand_civil.is_empty());
@@ -2090,7 +1921,7 @@ mod tests {
         p.leader = card("Aristotle");
         let mut state = one_player_state(p);
         state.card_row[0] = card("Bronze"); // a technology (mine)
-        h_take_ca(&mut state, 0, 0, 1);
+        h_take(&mut state, 0, 0);
         assert_eq!(state.players[0].science, 1);
     }
 
@@ -2957,36 +2788,32 @@ mod tests {
 
     #[test]
     fn h_play_action_rich_land_with_no_legal_ordered_move_is_a_silent_no_op() {
-        // Rich Land (I) (Rich Land (A) mints the `take_a_card` fixture
-        // now -- see `data/cards_military_actions.json`). Empty row and
-        // empty tableau: its ordered build/upgrade has nothing to
-        // target, so this must resolve like Python's `push_choice` with
-        // an empty option list -- silently, no panic -- exactly as
-        // playing a card with no ordered action at all does.
+        // No workers_free and an empty tableau: `free_action_moves` returns
+        // no options, so this must resolve like Python's `push_choice` with
+        // an empty option list -- silently, no panic -- exactly as playing a
+        // card with no ordered action at all does.
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
-        p.hand_civil.push(card("Rich Land (I)"));
+        p.hand_civil.push(card("Rich Land (A)"));
         let mut state = one_player_state(p);
-        play_action_and_drain(&mut state, card("Rich Land (I)"));
+        play_action_and_drain(&mut state, card("Rich Land (A)"));
         assert_eq!(state.players[0].civil_actions, 3, "only the card's own CA is spent");
-        assert!(!state.players[0].hand_civil.contains(card("Rich Land (I)")));
+        assert!(!state.players[0].hand_civil.contains(card("Rich Land (A)")));
     }
 
     #[test]
     fn h_play_action_rich_land_builds_a_mine_at_a_discount_and_no_action_cost() {
-        // "Rich Land (I)" (Rich Land (A) mints the `take_a_card` fixture
-        // now -- see `data/cards_military_actions.json`):
-        // build_or_upgrade_farm_or_mine, resourceDiscount 2. Bronze costs 2
-        // resources; the free build pays only 2 - 2 = 0 and no separate
-        // civil action (only the 1 CA to play the card itself).
+        // "Rich Land (A)": build_or_upgrade_farm_or_mine, resourceDiscount 1.
+        // Bronze costs 2 resources; the free build pays only 2 - 1 = 1 and no
+        // separate civil action (only the 1 CA to play the card itself).
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
         p.workers_free = 1;
-        p.resources = 0;
+        p.resources = 1;
         p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
-        p.hand_civil.push(card("Rich Land (I)"));
+        p.hand_civil.push(card("Rich Land (A)"));
         let mut state = one_player_state(p);
-        play_action_and_drain(&mut state, card("Rich Land (I)"));
+        play_action_and_drain(&mut state, card("Rich Land (A)"));
         assert_eq!(state.players[0].techs.workers(card("Bronze")), 1);
         assert_eq!(state.players[0].resources, 0);
         assert_eq!(state.players[0].workers_free, 0);
@@ -3461,68 +3288,11 @@ mod tests {
         p.resources = 10;
         p.wonder = card("Pyramids");
         let mut state = one_player_state(p);
-        do_wonder_step(&mut state, 0, 1, 3, false, None);
+        do_wonder_step(&mut state, 0, 1, 0, false);
         assert_eq!(state.players[0].civil_actions, 3);
         assert_eq!(state.players[0].resources, 10 - 3);
         assert_eq!(state.players[0].wonder_steps, 1);
-        assert_eq!(state.players[0].wonder_stages_built, 1 << 0, "leftmost unbuilt stage, position 0");
         assert_eq!(state.players[0].wonder, card("Pyramids"), "not complete yet: 1 of 3 stages paid");
-    }
-
-    /// Regression for the "resources short by N" `IllegalMove: WonderStep`
-    /// bucket (`docs/REPLAY.md`): BGO lets a player build ANY uncovered
-    /// stage, paying that stage's own printed cost, not always the next
-    /// left-to-right one. Game `7520718`'s own Colossus `[3, 3]` was built
-    /// 3-then-1 (Engineering Genius's own discount landing the second stage
-    /// at 1, not 3) -- the journal's second line pays `1`, and this is the
-    /// exact shape `do_wonder_step` must reproduce: a cost-1 payment that
-    /// still counts as building a real stage (position 1, not position 0
-    /// again), not a silent no-op that would leave the wonder perpetually
-    /// one stage short of completing.
-    #[test]
-    fn do_wonder_step_charges_the_specific_stage_cost_not_always_the_leftmost() {
-        let mut p = blank_player(0, card("Despotism"));
-        p.civil_actions = 4;
-        p.resources = 10;
-        p.wonder = card("Colossus"); // stages [3, 3]
-        let mut state = one_player_state(p);
-        // First stage built at full price (position 0).
-        do_wonder_step(&mut state, 0, 1, 3, false, None);
-        // Second stage -- the one this test is actually about -- built at
-        // cost 1 (the Engineering Genius discount the journal's own second
-        // line states), NOT the leftmost-unbuilt stage's price (3). The
-        // replay grounding resolves this to position 1 and passes it
-        // explicitly; a left-to-right default would also land here (only
-        // position 1 remains) but the explicit pos is the honest path.
-        do_wonder_step(&mut state, 0, 1, 1, false, Some(1));
-        assert_eq!(state.players[0].resources, 10 - 3 - 1, "second stage must charge its OWN cost (1), not the leftmost unbuilt stage's (3)");
-        assert!(state.players[0].wonder.is_none(), "both positions now built, wonder complete");
-        assert!(state.players[0].completed_wonders.contains(card("Colossus")));
-    }
-
-    /// `wonder_stages_cost` (not `wonder_stage_cost`) is the price a
-    /// SPECIFIC, already-partially-built wonder charges for its next
-    /// unbuilt stage: game `7521361`'s own Pyramids `[3, 2, 1]` was built
-    /// 3-then-2 (the journal's second line pays `2` for the SECOND stage,
-    /// not `1`), so after the first stage is built the leftmost-UNBUILT
-    /// stage must price at `2`, not `1` (the value `wonder_stage_cost`'s
-    /// old, count-based reading would give at `wonder_steps == 1`).
-    #[test]
-    fn wonder_stages_cost_prices_the_leftmost_unbuilt_stage_not_a_fixed_offset() {
-        let mut p = blank_player(0, card("Despotism"));
-        p.civil_actions = 4;
-        p.resources = 10;
-        p.wonder = card("Pyramids"); // stages [3, 2, 1]
-        let mut state = one_player_state(p);
-        do_wonder_step(&mut state, 0, 1, 3, false, None);
-        let p = &state.players[0];
-        assert_eq!(p.wonder_steps, 1);
-        assert_eq!(p.wonder_stages_built, 1 << 0);
-        assert_eq!(
-            costs::wonder_stages_cost(&state, 0, 1),
-            2,
-            "leftmost UNBUILT stage is position 1 (cost 2), not position 2 (cost 1, what a count-based offset would read)"
-        );
     }
 
     #[test]
@@ -3533,11 +3303,11 @@ mod tests {
         p.civil_actions = 4;
         p.resources = 10;
         p.wonder = card("Fast Food Chains");
-        p.wonder_stages_built = 0b0111; // stages 0, 1, 2 built; only the last remains
+        p.wonder_steps = 3; // only the last stage remains
         p.techs.insert(card("Agriculture"), TechSlot { workers: 2, stored: 0 }); // production
         p.techs.insert(card("Warriors"), TechSlot { workers: 1, stored: 0 }); // unit
         let mut state = one_player_state(p);
-        do_wonder_step(&mut state, 0, 1, 4, false, None); // final stage costs 4 (stages [4,4,4,4])
+        do_wonder_step(&mut state, 0, 1, 0, false);
         assert_eq!(state.players[0].resources, 10 - 4);
         assert!(state.players[0].wonder.is_none(), "wonder completed");
         assert_eq!(state.players[0].wonder_steps, 0);
@@ -3563,9 +3333,9 @@ mod tests {
         p.civil_actions = 1; // this turn's last civil action, about to pay for the final stage
         p.resources = 10;
         p.wonder = card("Pyramids"); // stages [3, 2, 1], printed civil_actions: 1
-        p.wonder_stages_built = 0b0011; // stages 0, 1 built; only the last (cost-1) stage remains
+        p.wonder_steps = 2; // only the last (cost-1) stage remains
         let mut state = one_player_state(p);
-        do_wonder_step(&mut state, 0, 1, 0, false, None); // final (cost-1) stage
+        do_wonder_step(&mut state, 0, 1, 0, false);
         assert!(state.players[0].completed_wonders.contains(card("Pyramids")), "wonder completed");
         assert_eq!(
             state.players[0].civil_actions, 1,
@@ -3653,55 +3423,6 @@ mod tests {
     }
 
     // -------------------------------------------- wonder-completion culture
-
-    /// A `WonderStep` batch of `k` stages costs ONE civil action, whatever
-    /// `k` (a construction special tech's `wonderStagesPerAction` pays the
-    /// whole batch's summed resources for the single action; `k == 1` is the
-    /// same single action). Game `7523791` line 435 (`docs/REPLAY.md`):
-    /// Ocean Liners `[4,2,2,4]`, stages [4,2,2] already built, 1 CA and 4
-    /// resources left -- the last stage must spend exactly 1 CA and 4
-    /// resources. The old `pay_ca(k)`/`ca >= k` model billed `k` CA here and
-    // rejected the journal's wonder-completing stage. Revert `pay_ca(p, 1)`
-    // to `pay_ca(p, k as i32)` to see this go RED (0 CA left after the batch,
-    // and the legal gate would have refused the move at `ca == 0`).
-    #[test]
-    fn wonder_step_batch_charges_one_ca_and_the_summed_stage_costs() {
-        let mut p = blank_player(0, card("Despotism"));
-        p.civil_actions = 1;
-        p.resources = 4;
-        p.techs.insert(card("Architecture"), TechSlot { workers: 0, stored: 0 });
-        p.wonder = card("Ocean Liners"); // stages [4,2,2,4]
-        p.wonder_stages_built = 0b0111; // [4,2,2] built; leftmost-unbuilt is the 4-cost stage
-        p.wonder_steps = 3;
-        let mut state = one_player_state(p);
-        let cost = costs::wonder_stages_cost(&state, 0, 1);
-        do_wonder_step(&mut state, 0, 1, cost, false, None);
-        let p = &state.players[0];
-        assert_eq!(p.civil_actions, 0, "a 1-stage batch costs 1 CA");
-        assert_eq!(p.resources, 0, "the 4-cost stage was paid from resources");
-        assert!(p.completed_wonders.contains(card("Ocean Liners")), "wonder completed");
-        assert_eq!(p.wonder, CardId::NONE);
-    }
-
-    /// The multi-stage twin: a 3-stage batch (Architecture's 3/action) marks
-    /// three stages, pays their SUMMED costs (8 for Ocean Liners' [4,2,2]),
-    // and STILL costs a single CA.
-    #[test]
-    fn wonder_step_multi_stage_batch_pays_summed_resources_for_one_ca() {
-        let mut p = blank_player(0, card("Despotism"));
-        p.civil_actions = 2;
-        p.resources = 10;
-        p.techs.insert(card("Architecture"), TechSlot { workers: 0, stored: 0 });
-        p.wonder = card("Ocean Liners"); // stages [4,2,2,4]
-        let mut state = one_player_state(p);
-        let cost = costs::wonder_stages_cost(&state, 0, 3);
-        do_wonder_step(&mut state, 0, 3, cost, false, None);
-        let p = &state.players[0];
-        assert_eq!(p.civil_actions, 1, "the 3-stage batch costs 1 CA, not 3");
-        assert_eq!(p.resources, 2, "summed cost 4+2+2 = 8 paid");
-        assert_eq!(p.wonder_stages_built, 0b0111, "stages [4,2,2] marked");
-        assert!(!p.completed_wonders.contains(card("Ocean Liners")));
-    }
 
     #[test]
     fn wonder_completion_culture_fast_food_chains() {

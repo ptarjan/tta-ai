@@ -579,7 +579,7 @@ enum ArgToken {
 fn move_tokens(state: &GameState, m: Move) -> Vec<ArgToken> {
     use Move::*;
     match m {
-        Take { slot, .. } => {
+        Take { slot } => {
             let mut v = vec![ArgToken::Num(slot as u32)];
             let id = state.card_row[slot as usize];
             if !id.is_none() {
@@ -1124,7 +1124,7 @@ mod tests {
     fn take_by_row_slot_number_resolves_uniquely() {
         let st = game::new_game(3, 2);
         let mv = parse_move(&st, "t 0", None).unwrap();
-        assert_eq!(mv, Move::Take { slot: 0, cost: i32::MAX });
+        assert_eq!(mv, Move::Take { slot: 0 });
     }
 
     #[test]
@@ -1135,7 +1135,7 @@ mod tests {
         // and, since row cards are distinct, nothing else in the row.
         let prefix = &name[..2.min(name.len())];
         let mv = parse_move(&st, &format!("take {prefix}"), None);
-        if let Ok(Move::Take { slot, .. }) = mv {
+        if let Ok(Move::Take { slot }) = mv {
             assert_eq!(st.card_row[slot as usize].name(), name);
         } else {
             // A short 2-letter prefix can legitimately be ambiguous against
@@ -1217,7 +1217,7 @@ mod tests {
         let bot = WeightedBot::new(Weights::defaults());
         let mut adv = Advisor::new(board, bot, "test".to_string());
         let before = state_io::dumps(&adv.board);
-        let (ok, msg) = adv.play(Move::Take { slot: 99, cost: i32::MAX });
+        let (ok, msg) = adv.play(Move::Take { slot: 99 });
         assert!(!ok);
         assert!(msg.contains("not legal"), "{msg}");
         assert_eq!(state_io::dumps(&adv.board), before);
@@ -1228,7 +1228,7 @@ mod tests {
         let board = state_io::new_board(2, 0, 1);
         let bot = WeightedBot::new(Weights::defaults());
         let mut adv = Advisor::new(board, bot, "test".to_string());
-        let (ok, msg) = adv.play(Move::Take { slot: 0, cost: i32::MAX });
+        let (ok, msg) = adv.play(Move::Take { slot: 0 });
         assert!(ok, "{msg}");
         assert_eq!(adv.log.last().unwrap(), &msg);
     }

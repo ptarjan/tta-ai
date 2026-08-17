@@ -26,18 +26,6 @@ pub enum FreeCivilActionValue {
     BuildOneWonderStage,
     DevelopTechnology,
     UpgradeFarmMineOrUrbanBuilding,
-    /// §3.11's ordered "take a card": the take's civil action is the FREE
-    /// part, and the price paid is the one the journal printed. No
-    /// base-game card's DATA carries this value (the 18 `freeCivilAction`
-    /// cards span the other six), but the replayer synthesizes exactly
-    /// this shape when a journal-observed take is budget-illegal (game
-    /// `7523353`, `replay_common.rs`'s
-    /// `resolve_take_with_free_civil`) -- and `replay_common.rs`'s
-    /// `take_a_card_card` fixture mints one through the synthetic
-    /// `data/cards_military_actions.json` Rich Land (Age A) entry, whose
-    /// `baked_table_matches_source_data` twin is the `TakeACard` `special`
-    /// on the Rich Land (A) entry of the table above.
-    TakeACard,
 }
 
 /// Every value `effects.onBuildCulture` prints in the base game -- see
@@ -4063,15 +4051,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        // SYNTHETIC TEST FIXTURE: no base-game card prints
-        // `FreeCivilAction(TakeACard)` -- the replayer synthesizes the shape
-        // from the journal (game `7523353`, `replay_common.rs`'s
-        // `resolve_take_with_free_civil`), and this entry mints one for
-        // `replay_common.rs`'s `take_a_card_card` fixture. `data/
-        // cards_military_actions.json`'s Rich Land (Age A) carries
-        // `"freeCivilAction": "take_a_card"` in lockstep, and the test
-        // below re-derives this exact line from it.
-        special: &[Special::FreeCivilAction(FreeCivilActionValue::TakeACard)],
+        special: &[Special::FreeCivilAction(FreeCivilActionValue::BuildOrUpgradeFarmOrMine)],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -5297,17 +5277,6 @@ mod baked_table_matches_source_data {
             "upgrade_farm_mine_or_urban_building" => {
                 FreeCivilActionValue::UpgradeFarmMineOrUrbanBuilding
             }
-            // No base-game card prints this value (the 18 `freeCivilAction`
-            // cards in `data/cards_military_actions.json` span the other six
-            // values) -- but `gen_cards.py`'s `STRING_EFFECT_VALUES`
-            // names it ahead of the first card that will, and the replayer
-            // (`replay_common.rs`'s `resolve_take_with_free_civil`, game
-            // `7523353`) already synthesizes exactly this shape from the
-            // journal, so the test fixture that mints a synthetic
-            // ordered-take card (see `baked_table_matches_source_data`
-            // below and `replay_common.rs`'s `take_a_card_card`) can
-            // exercise the whole path end to end.
-            "take_a_card" => FreeCivilActionValue::TakeACard,
             other => panic!("{name}: effects.freeCivilAction = {other:?} is not recognized"),
         }
     }

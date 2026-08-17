@@ -492,8 +492,8 @@ mod tests {
         let gain = Move::EndTurn; // any move `culture` scores identically for both orderings
         let mut stats = Stats::default();
         let cfg = QuiescenceConfig::default();
-        let a = pick(&cfg, &mut stats, &state, &[gain, Move::Take { slot: 0, cost: i32::MAX }], &culture);
-        let b = pick(&cfg, &mut stats, &state, &[Move::Take { slot: 0, cost: i32::MAX }, gain], &culture);
+        let a = pick(&cfg, &mut stats, &state, &[gain, Move::Take { slot: 0 }], &culture);
+        let b = pick(&cfg, &mut stats, &state, &[Move::Take { slot: 0 }, gain], &culture);
         // `culture` cannot distinguish `end_turn` from `take` here (neither
         // changes `players[0].culture`), so the real assertion is symmetry:
         // candidate order must not change which move an equal-valued search
@@ -501,8 +501,8 @@ mod tests {
         // must be a stable argmax, not "first larger-or-equal wins" flipped
         // by ordering. `end_bias` breaks the tie deterministically.
         let cfg_biased = QuiescenceConfig { end_bias: 1000.0, ..QuiescenceConfig::default() };
-        let a2 = pick(&cfg_biased, &mut stats, &state, &[gain, Move::Take { slot: 0, cost: i32::MAX }], &culture);
-        let b2 = pick(&cfg_biased, &mut stats, &state, &[Move::Take { slot: 0, cost: i32::MAX }, gain], &culture);
+        let a2 = pick(&cfg_biased, &mut stats, &state, &[gain, Move::Take { slot: 0 }], &culture);
+        let b2 = pick(&cfg_biased, &mut stats, &state, &[Move::Take { slot: 0 }, gain], &culture);
         assert_eq!(a2, Move::EndTurn, "a large positive end_bias must win regardless of position");
         assert_eq!(b2, Move::EndTurn, "a large positive end_bias must win regardless of position");
         let _ = (a, b);

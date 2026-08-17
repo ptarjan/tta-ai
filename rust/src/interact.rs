@@ -525,9 +525,7 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     economy::discard_civil(state, wonder);
                     state.players[victim as usize].wonder = CardId::NONE;
                     // Python's `victim.wonder = None` drops the whole
-                    // `WonderInProgress`, steps (and the positions behind
-                    // them) included.
-                    state.players[victim as usize].wonder_stages_built = 0;
+                    // `WonderInProgress`, steps included.
                     state.players[victim as usize].wonder_steps = 0;
                 }
                 other @ Keyword::Stop | other @ Keyword::Skip | other @ Keyword::Science | other @ Keyword::Food | other @ Keyword::Resources | other @ Keyword::Accept | other @ Keyword::Refuse => panic!("infiltrate offered {other:?}"),
@@ -1766,7 +1764,6 @@ mod tests {
             government: card("Despotism"),
             leader: CardId::NONE,
             wonder: CardId::NONE,
-            wonder_stages_built: 0,
             wonder_steps: 0,
             completed_wonders: CardList::new(),
             destroyed_wonders: 0,

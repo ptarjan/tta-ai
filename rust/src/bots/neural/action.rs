@@ -168,7 +168,7 @@ impl Aux {
 #[inline]
 pub(crate) fn decode_aux(mv: Move) -> Aux {
     match mv {
-        Move::Take { slot, .. } => Aux { slot: Some(slot), ..Aux::EMPTY },
+        Move::Take { slot } => Aux { slot: Some(slot), ..Aux::EMPTY },
         Move::Upgrade { from, .. } => Aux { secondary: from, ..Aux::EMPTY },
         Move::WonderStep { steps } => Aux { steps: Some(steps), ..Aux::EMPTY },
         Move::Aggression { target, .. } => Aux { target: Some(target), ..Aux::EMPTY },
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn encode_action_into_matches_encode_action_for_a_spread_of_moves() {
         let samples = [
-            Move::Take { slot: 2, cost: i32::MAX },
+            Move::Take { slot: 2 },
             Move::Build { card: CardId::NONE },
             Move::WonderStep { steps: 3 },
             Move::Aggression { card: CardId::NONE, target: 1 },
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn move_kind_slot_is_injective_and_in_range() {
         let samples = [
-            Move::Take { slot: 0, cost: i32::MAX },
+            Move::Take { slot: 0 },
             Move::Build { card: CardId::NONE },
             Move::Develop { card: CardId::NONE },
             Move::Upgrade { from: CardId::NONE, to: CardId::NONE },
@@ -479,8 +479,8 @@ mod tests {
         let warriors = CardId::by_name("Warriors").unwrap();
         let irrigation = CardId::by_name("Irrigation").unwrap();
         let variants = [
-            encode_action(0, Move::Take { slot: 0, cost: i32::MAX }),
-            encode_action(0, Move::Take { slot: 1, cost: i32::MAX }),
+            encode_action(0, Move::Take { slot: 0 }),
+            encode_action(0, Move::Take { slot: 1 }),
             encode_action(0, Move::Build { card: warriors }),
             encode_action(0, Move::Build { card: irrigation }),
             encode_action(0, Move::Develop { card: warriors }),

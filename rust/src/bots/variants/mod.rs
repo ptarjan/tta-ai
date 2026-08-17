@@ -524,7 +524,7 @@ pub(crate) fn best_take(
     let mut best: Option<Move> = None;
     let mut best_v = 0.0;
     for &m in moves {
-        if let Move::Take { slot, .. } = m {
+        if let Move::Take { slot } = m {
             let name = state.card_row[slot as usize];
             if name.is_none() {
                 continue;

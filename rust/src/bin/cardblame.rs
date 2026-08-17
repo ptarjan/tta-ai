@@ -844,7 +844,7 @@ mod tests {
         // own doc: this is a tripwire, not a compiler guarantee).
         use tta::moves::{ChurchillChoice, PactSide};
         let samples = [
-            Move::Take { slot: 0, cost: i32::MAX },
+            Move::Take { slot: 0 },
             Move::Build { card: CardId::NONE },
             Move::Develop { card: CardId::NONE },
             Move::Upgrade { from: CardId::NONE, to: CardId::NONE },

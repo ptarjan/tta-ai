@@ -171,34 +171,21 @@ pub fn build_civil_life_free(p: &PlayerState, id: CardId) -> bool {
 /// once per turn if the civil-action pool alone is not enough. Mutates `p`.
 /// `state` is dropped for the same reason as [`spare_ca`].
 ///
-/// Silently under-charges (release no-op on the shortfall) when the pool is
-/// not enough: `legal::legal_moves` is the LEGALITY GATE that calls
-/// [`spare_ca`] first, and `pay_ca` is the mechanical charge -- the same
-/// division of labor Python's `assert`-only check had. The silent path is a
-/// REAL, MEASURED state, not an unreachable invariant: BGO games with
-/// unmodeled bonus civil actions (the BGO client counts them into the live
-/// pool that its server-side validation uses) legitimately drive a
-/// reconstructed pool to 0 while the human still spends -- e.g. the base
-/// game's own 2p corpus, game `7523355` round 17 (Constitutional Monarchy +
-/// J. S. Bach, 8 CA, a turn of 9 CA-charged actions that BGO validated
-/// server-side; the free action's source is an unmodeled mechanism, docs/
-/// REPLAY.md's build bucket). `legal_moves` already refuses to emit the
-/// over-charged move in a self-play engine, so the shortfall can only ever
-/// surface as a replay stop (labeled `IllegalMove`, the correct verdict for
-/// "this move is illegal under the MODEL") rather than a panic. The old
-/// `debug_assert_eq!(remaining, 0)` here made the REPLAY BINARY itself
-/// unusable for diagnosis on exactly those games: `cargo build` (debug)
-/// aborts at the under-charge and the real stop reason never prints, while
-/// the release census sees the silent no-op and reports the move as
-/// illegal-without-explanation.
+/// Panics (debug builds only, matching Python's bare `assert`, which is
+/// itself only checked under normal non`-O` interpretation) if `n` civil
+/// actions were not actually available -- this is an internal invariant a
+/// caller must have checked via [`can_take`]/[`spare_ca`] first, not a
+/// legality gate of its own.
 pub fn pay_ca(p: &mut PlayerState, n: i32) {
     let used = (p.civil_actions as i32).min(n);
     p.civil_actions -= used as i8;
-    let remaining = n - used;
+    let mut remaining = n - used;
     if remaining > 0 && hammurabi_conversion_available(p) {
         p.military_actions -= 1;
         p.hammurabi_used = true;
+        remaining -= 1;
     }
+    debug_assert_eq!(remaining, 0, "paid more civil actions than available");
 }
 
 /// Civil actions to take the card currently sitting in row slot `idx`
@@ -355,28 +342,6 @@ pub fn can_take_gated(
     gate: &TakeGate,
     name: Option<CardId>,
 ) -> bool {
-    can_take_gated_cost(state, p, idx, gate, name, None)
-}
-
-/// [`can_take_gated`] with a cost override. `cost` replaces the ROW's own
-/// price as the affordability test's left-hand side (the `row_cost`/surcharge
-////leader-discount recomputation below is skipped, the other gates run
-/// unchanged), for the ONE probe shape that cannot price the take from the
-/// row: the replayer's ordered-`TakeACard` reading (game `7523353`,
-/// `replay_common.rs::resolve_take_with_free_civil`), where the take the
-/// journal recorded pays the JOURNAL's observed price -- grounded cheaper
-/// than the slot's full price by a Hammurabi conversion or a leader-
-/// replacement discount the engine's own gate arithmetic does not see,
-/// because it is not a player or card it holds. `None` (every self-play
-/// caller, every other probe) is exactly `can_take_gated`'s own price.
-pub fn can_take_gated_cost(
-    state: &GameState,
-    p: &PlayerState,
-    idx: usize,
-    gate: &TakeGate,
-    name: Option<CardId>,
-    cost: Option<i32>,
-) -> bool {
     let id = match name {
         Some(id) => id,
         None => {
@@ -394,10 +359,7 @@ pub fn can_take_gated_cost(
     // `row_cost` is >= 1 for every slot and `leader_discount` is at most 1,
     // so the only place `cost` can be reduced (the leader branch below)
     // bottoms out at exactly 0, never negative.
-    let mut cost = match cost {
-        Some(c) => c,
-        None => row_cost(idx),
-    };
+    let mut cost = row_cost(idx);
     if card.kind == CardType::Wonder {
         cost += gate.surcharge;
         // Taj Mahal's printed take discount (see `leader_replacement_take_
@@ -671,51 +633,6 @@ pub fn wonder_stage_cost(_state: &GameState, p: &PlayerState, k: u8) -> i32 {
     stages[done..end].iter().map(|&s| s as i32).sum()
 }
 
-/// [`wonder_stage_cost`]'s POSITION-aware sibling: the per-stage resource
-/// cost of building `k` MORE stages of `p`'s wonder, read off the specific
-/// positions `wonder_stage_cost` would price them at -- i.e. the
-/// leftmost-UNBUILT stages in `p.wonder_stages_built`, not the
-/// leftmost stages after a fixed `wonder_steps` offset.
-///
-/// Why this exists (and why `wonder_stage_cost` stays): BGO lets a player
-/// build ANY uncovered stage of the wonder, paying that stage's own printed
-/// cost (game `7520718`: Colossus `[3, 3]` built 3-then-1 via Engineering
-/// Genius, the journal's second line paying `1` for the SECOND stage;
-/// `7521361`: Pyramids `[3, 2, 1]` built 3-then-2, paying `2` for the
-/// SECOND stage). The old model -- "always the next left-to-right stage,
-/// price `stages[done]`" -- charged the WRONG price whenever the journal's
-/// order diverged from left-to-right, drifting the player's resources for
-/// the rest of the game (the `IllegalMove: WonderStep` bucket's "resources
-/// short by N" signature, `docs/REPLAY.md`). `wonder_stage_cost` keeps the
-/// left-to-right reading for the FRESH case (nothing built yet, the
-/// self-play default -- every stage is unbuilt, so the two agree) and for
-/// `legal.rs`'s own affordability gate, which is a heuristic estimate of
-/// "can this player afford at least one more stage right now", not a
-/// statement about which specific stage a later, grounded replay will
-/// actually pick. This function is what `apply::do_wonder_step` (via its
-/// two `Move::WonderStep` call sites) and the replay grounding step in
-/// `replay_common.rs` actually PAY against, so a mismatch between the two
-/// can no longer silently corrupt a player's resource pool.
-pub fn wonder_stages_cost(state: &GameState, idx: u8, k: u8) -> i32 {
-    let p = &state.players[idx as usize];
-    debug_assert!(!p.wonder.is_none(), "wonder_stages_cost: no wonder in progress");
-    let stages = p.wonder.get().stages;
-    let built = p.wonder_stages_built;
-    let mut cost = 0i32;
-    let mut remaining = k as usize;
-    for pos in 0..stages.len() {
-        if built & (1 << pos) != 0 {
-            continue;
-        }
-        cost += stages[pos] as i32;
-        remaining -= 1;
-        if remaining == 0 {
-            break;
-        }
-    }
-    cost
-}
-
 /// Whether `id` is a military unit technology (infantry/cavalry/artillery/
 /// air). Mirrors `engine/actions.py::is_unit`; reuses `CardType::is_unit`
 /// rather than re-deriving `C.UNIT_TYPES`'s membership by hand.
@@ -886,7 +803,6 @@ mod tests {
             government,
             leader: CardId::NONE,
             wonder: CardId::NONE,
-            wonder_stages_built: 0,
             wonder_steps: 0,
             completed_wonders: CardList::new(),
             destroyed_wonders: 0,
@@ -1093,23 +1009,21 @@ mod tests {
         assert!(p.hammurabi_used);
     }
 
-    /// A shortfall is a silent under-charge, not a panic -- see `pay_ca`'s
-    /// own doc comment for why (BGO games with unmodeled bonus civil
-    /// actions legitimately drive a reconstructed pool to 0 while the human
-    /// still spends; the move's illegality is reported by `legal_moves` as
-    /// an `IllegalMove` stop, and the replay binary must stay alive to show
-    /// the reason). The old `#[should_panic]` version of this test (the
-    /// 2026-08-05 card-coverage pass found it in `cargo test --release`) is
-    /// replaced by this one, which pins the no-panic, no-corruption
-    /// behavior instead.
+    /// The guard this asserts is a `debug_assert!`, which `--release` strips,
+    /// so in release the call simply does not panic and `should_panic` fails
+    /// the test rather than the code. Gated rather than promoted to a real
+    /// `assert!`: underfunding is an engine bug, not a game state, and the
+    /// release build is the one the league runs -- paying for that check on
+    /// every action spent, forever, to catch a bug the debug build already
+    /// catches, is the wrong trade. Found 2026-08-05 by the card-coverage
+    /// pass, which ran `cargo test --release` and hit this.
+    #[cfg(debug_assertions)]
     #[test]
-    fn pay_ca_underfunded_is_a_silent_under_charge_not_a_panic() {
+    #[should_panic(expected = "paid more civil actions than available")]
+    fn pay_ca_panics_if_underfunded() {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 1;
-        p.military_actions = 0; // no Hammurabi fallback either
         pay_ca(&mut p, 2);
-        assert_eq!(p.civil_actions, 0, "spends what is available");
-        assert_eq!(p.military_actions, 0);
     }
 
     // ----------------------------------------------------------- take_cost
@@ -1380,13 +1294,12 @@ mod tests {
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
         state.card_row[0] = card("Irrigation");
-        // "Rich Land (I)" prints 2 physical copies in the Age I deck under
+        // "Rich Land (A)" prints 2 physical copies in the Age A deck under
         // ONE `CardId` (`_disambiguate` suffixes by AGE, not by copy) -- an
         // action card, not a tech, so holding one must not block taking the
-        // other. (Rich Land (A) mints the `take_a_card` fixture; the
-        // duplicate-exemption fact is age-independent.)
-        state.card_row[1] = card("Rich Land (I)");
-        state.players[0].hand_civil.push(card("Rich Land (I)"));
+        // other.
+        state.card_row[1] = card("Rich Land (A)");
+        state.players[0].hand_civil.push(card("Rich Land (A)"));
         let p = &state.players[0];
         assert!(!can_take(&state, p, 0, None), "already holding an Irrigation");
         assert!(can_take(&state, p, 1, None), "action cards are exempt from one-per-name");
@@ -1459,8 +1372,8 @@ mod tests {
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
         state.card_row[0] = card("Irrigation");
-        state.card_row[1] = card("Rich Land (I)");
-        state.players[0].hand_civil.push(card("Rich Land (I)"));
+        state.card_row[1] = card("Rich Land (A)");
+        state.players[0].hand_civil.push(card("Rich Land (A)"));
         check(&state, &state.players[0], 0);
         check(&state, &state.players[0], 1);
 
