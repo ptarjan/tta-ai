@@ -155,6 +155,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+
 use crate::corpus::{
     actor_and_rest, best_age_sibling, classify, family_siblings, longest_known_card_prefix, ActionClass, Classified,
     Color, GameMeta, LineOutcome,
@@ -164,7 +165,7 @@ use crate::discard_solver::{DiscardSolver, FutureNeed};
 use crate::event_plan::EventPlan;
 use crate::moves::{ChurchillChoice, PactSide};
 use crate::state::{
-    Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, TechSlot, MAX_HAND, MAX_PLAYERS,
+    Choice, ChoiceKind, ChoiceOption, GameState, Keyword, Pending, PlayerState, Phase, Tableau, TechSlot, MAX_HAND, MAX_PLAYERS,
 };
 use crate::{apply, costs, economy, effects, game, legal, CardId, CardType, Move};
 
@@ -3610,7 +3611,7 @@ impl<'a> Replayer<'a> {
         Ok(())
     }
 
-    /// Applies a journal-observed `Move::Take { slot }` exactly like
+    /// Applies a journal-observed `Move::Take { slot, .. }` exactly like
     /// [`Self::try_apply`], EXCEPT: if the engine's own `legal::legal_moves`
     /// rejects it, and [`take_blocked_only_by_hand_full`] confirms
     /// `costs::take_gate`'s `hand_full` gate is the ONLY reason (every other
@@ -3625,7 +3626,7 @@ impl<'a> Replayer<'a> {
     /// this defers entirely to `try_apply`, so every other `IllegalMove:
     /// Take` mismatch this file already produces is unaffected.
     fn try_apply_take(&mut self, actor: u8, slot: u8) -> Result<(), MismatchKind> {
-        let mv = Move::Take { slot };
+        let mv = Move::Take { slot, cost: i32::MAX };
         let legal = legal::legal_moves(&self.state);
         if !legal.as_slice().contains(&mv)
             && take_blocked_only_by_hand_full(&self.state, &self.state.players[actor as usize], slot as usize)
@@ -3654,6 +3655,124 @@ impl<'a> Replayer<'a> {
             return Ok(());
         }
         self.try_apply(mv, true)
+    }
+
+    /// [`Self::try_apply_take`] plus the ordered-`TakeACard` reading
+    /// (`resolve_take_with_free_civil`'s own doc, game `7523353`): if the
+    /// bare take is rejected `Budget`/`WonderBudget`-only -- the journal's
+    /// price exceeds the player's own pool, so the line cannot be a bare
+    /// civil-action take at all -- this retries it as the FREE ordered take
+    /// of the first hand card whose `FreeCivilAction` covers the slot:
+    /// `PlayAction{card}` (which pays the card's OWN 1 CA, removes it, and
+    /// enqueues the order exactly as `h_play_action` does -- including the
+    /// card's `resourceDiscount`, which rides inside the queue item rather
+    /// than here), then the FreeCivil `Choose` naming the option that IS
+    /// `Move::Take{slot, cost: <journal price>}` -- or a no-op `Ok(true)`
+    /// when `interact::push_choice` auto-resolved the single candidate,
+    /// verified the same way `free_civil_action_move` verifies its own
+    /// auto-resolve (the target card actually landed in the hand).
+    ///
+    /// Returns `false` -- never a silent success -- when the take is
+    /// budget-illegal and no hand card explains it, so the caller reports
+    /// the honest mismatch instead of pretending the line was applied:
+    /// that case surfaces as the untouched [`Self::try_apply_take`]
+    /// `IllegalMove` (its `Err` arm below), and [`Self::apply_one`]'s
+    /// `TakeCard` arm demotes exactly that shape -- budget-only named
+    /// rejection, no ordered-take candidate in hand -- into `false`.
+    /// Every other outcome defers entirely to [`Self::try_apply_take`]'s
+    /// existing behaviour (legal outright, or the HandFull-only override).
+    fn try_apply_take_budget_aware(
+        &mut self,
+        actor: u8,
+        slot: u8,
+        card: CardId,
+        observed_cost: i32,
+    ) -> Result<bool, MismatchKind> {
+        let budget_only = resolve_take_with_free_civil(&self.state, actor, slot, card, observed_cost).is_some();
+        if let Err(kind) = self.try_apply_take(actor, slot) {
+            if !budget_only {
+                // NOT the budget-only shape: every outcome defers to
+                // `try_apply_take`'s own verdict -- its hand_full-only
+                // override, or its honest `Err`. In particular a
+                // budget-illegal take NO hand card explains comes back
+                // here as an untouched `Err(kind)`, and the CALLER
+                // (`apply_one`'s `TakeCard` arm, see its doc) is the one
+                // that demotes that specific `IllegalMove` into an honest
+                // `false` for the caller-of-this -- this function itself
+                // never swallows a mismatch it cannot name.
+                return Err(kind);
+            }
+            let (action, _discount) =
+                resolve_take_with_free_civil(&self.state, actor, slot, card, observed_cost)
+                    .ok_or(MismatchKind::ParserGap(
+                        "budget-only take rejection lost its hand-card candidate between checks".into(),
+                    ))?;
+            let before = self.state.players[actor as usize].hand_civil.as_slice().to_vec();
+            self.try_apply(Move::PlayAction { card: action }, true)?;
+            // `legal::free_action_moves` builds the ordered-take options with
+            // the sentinel `Move::Take { cost: i32::MAX }` ("use the slot's
+            // own price"), not the journal's observed price, so match on the
+            // slot alone -- the replayer bills the observed price itself.
+            match self.state.pending.top() {
+                Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::FreeCivil { .. }) => {
+                    // Verify the journal's slot IS in the arm's options (a
+                    // sanity check: if the arm didn't offer it, something is
+                    // wrong and we should fail loudly, not guess).
+                    c.options
+                        .as_slice()
+                        .iter()
+                        .any(|o| {
+                            matches!(o, ChoiceOption::Move(Move::Take { slot: s, .. }) if s == &slot)
+                        })
+                        .then(|| ())
+                        .ok_or_else(|| {
+                            MismatchKind::ParserGap(format!(
+                                "{}'s ordered-take options {:?} do not include slot {slot}",
+                                action.name(),
+                                c.options.as_slice(),
+                            ))
+                        })?;
+                    // The arm's sentinel cost (i32::MAX) would bill the row
+                    // price, but the journal says the take paid `observed_cost`.
+                    // Resolve the Choice directly with the journal price: pop
+                    // the pending, apply the free-civil move at the observed
+                    // cost, then drain the remaining queue (the CardGains
+                    // item enqueued by `h_play_action`).
+                    let pend = self.state.pending.pop()
+                        .expect("FreeCivil Choice pending before resolve");
+                    let Pending::Choice(choice) = pend else {
+                        unreachable!("matched Choice above")
+                    };
+                    let discount = match choice.kind {
+                        ChoiceKind::FreeCivil { discount } => discount,
+                        _ => unreachable!("matched FreeCivil above"),
+                    };
+                    crate::apply::apply_free_civil_move(
+                        &mut self.state,
+                        actor,
+                        Move::Take { slot, cost: observed_cost },
+                        discount as i32,
+                    );
+                    crate::interact::run_queue(&mut self.state);
+                }
+                // `push_choice`'s single-option auto-resolve: no pending
+                // opened at all. Verify it resolved to THIS take, not some
+                // other option, or an engine bug that silently diverged
+                // from the journal is swallowed here.
+                _ => {
+                    let p = &self.state.players[actor as usize];
+                    if !p.hand_civil.contains(card) || p.hand_civil.as_slice().to_vec() == before {
+                        return Err(MismatchKind::StuckPending(format!(
+                            "played {} for an ordered take, but no Choice pending opened and \
+                             {} did not land in hand",
+                            action.name(),
+                            card.name()
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -4199,11 +4318,193 @@ fn convert_trade_food_shortfall(r: &mut Replayer, actor: u8, raw_text: &str, tru
 /// `ParserGap` naming the cost mismatch instead of silently landing in
 /// whatever slot happened to be free.)
 ///
-/// Treating "no clause" as `None` -- the old behaviour -- made
-/// [`Replayer::ground_row_slot`] fall through to its "first ungrounded slot"
-/// path, i.e. a silent guess at which slot the human actually paid for.
+/// A Hammurabi conversion line (`"... uses 3 military action; ... uses 3
+/// civil action"` -- see `civil_and_military_uses`'s own doc) prices the
+/// take at its FULL civil price: the journal's "uses 3 civil action" clause
+/// IS the price, and `civil_and_military_uses` returns exactly that for the
+/// civil component (the trailing civil clause is the conversion, never
+/// additional spend). The pre-fix `total_action_cost` summed BOTH clauses
+/// into 6 -- the take's cost doubled, which then surfaced one take later as
+/// a `Budget` rejection (game `7523340`: Alchemy taken "uses 3 military
+/// action; uses 3 civil action", then the next take failed because the
+/// engine had charged 6 CA where the journal charged 3).
 fn observed_take_cost(text: &str) -> i32 {
-    total_action_cost(text).unwrap_or(0)
+    // The civil clause is the take's printed price in every shape this file
+    // knows -- ordinary takes print only it, and a Hammurabi conversion
+    // line's "uses N civil action" clause is the SAME price the military
+    // clause pays (see `civil_and_military_uses`'s own doc). Reading it
+    // straight never double-counts the conversion, which summing both
+    // clauses did (game `7523340`). `total_action_cost` remains for the
+    // clause-less shapes' fallback (and its own tests).
+    civil_and_military_uses(text)
+        .0
+        .unwrap_or_else(|| total_action_cost(text).unwrap_or(0))
+}
+
+/// A journal `"<Color> takes <Card> in hand <Color> uses N civil action"`
+/// line is textually AMBIGUOUS between two engine paths, and this function
+/// decides which one the line is.
+///
+/// Reading (a), the ordinary one: the player pays N civil actions to take
+/// the row card. Reading (b), the ordered one: N is the row card's own
+/// printed PRICE, and the civil action the take costs is the FREE part of
+/// an action card in hand whose `Special::FreeCivilAction` ordered action
+/// is a take -- BGO folds "play the action card" and "perform its ordered
+/// action" into ONE line, and for a card whose ordered action is a take that
+/// line carries no `using <Card>` clause, no play verb, nothing that
+/// distinguishes it from (a). (Reading (a) is the engine's own model and the
+/// default; this function only exists to RECOGNIZE reading (b) -- no base-
+/// game card's data carries a `FreeCivilAction(TakeACard)` value, the
+/// replayer synthesizes it: game `7523353`, "Purple takes Efficient Upgrade
+/// in hand Purple uses 3 civil action" with the pool short of 3 -- only (b)
+/// can be what the journal recorded. NOTE the line the journal actually
+/// logged (1 CA left) is one NO engine path can apply -- the play's own 1
+/// CA empties the pool and the take's price of 3 exceeds it -- so that
+/// specific shape is demoted at the `apply_one` call site, not applied
+/// here; the shapes THIS function applies are the ones where the POST-PLAY
+/// pool still covers the observed price.)
+///
+/// `resolve_take_with_free_civil` is that path. It fires only when the
+/// ORDERED take is illegal for the BUDGET gate specifically -- the same
+/// double-call discrimination `take_blocked_only_by_hand_full` uses for
+/// the `HandFull` override, but run at the JOURNAL's observed price rather
+/// than the slot's full one (the ordered take pays the journal's price --
+/// that is the whole reason the line exists): `costs::take_rejection`
+/// names `Budget` (or `WonderBudget`, the wonder's own twin of the same
+/// "price exceeds the pool" signal) with the real gate at the observed
+/// price, and names NOTHING with the budget gate widened to `i32::MAX`,
+/// proving no OTHER gate (hand full, duplicate, leader age, wonder-in-
+/// progress) also rejects the take. Any other named reason is a genuine
+/// mismatch this function must not touch. (A line the BARE take would
+/// apply is never here at all -- `try_apply_take` succeeds first and the
+/// caller never reaches this function.)
+///
+/// The affordability probe is the engine's OWN `free_action_moves` gate,
+/// not a bespoke one: the take must be payable at the JOURNAL's price out
+/// of the POST-PLAY pool -- `h_play_action` spends the card's 1 CA before
+/// enqueuing the order, and `free_action_moves`'s `TakeACard` arm gates on
+/// the pool that survives that spend (no budget widening: the price still
+/// comes out of the pool). Probing the PRE-play pool instead is one CA too
+/// generous and would guess a play whose take `apply_free_civil_move` bills
+/// the real price for -- `costs::pay_ca` panics on the shortfall (the
+/// self-play panic class this probe exists to prevent). `action_card_
+/// playable` is then the card-level twin of the same gate (it calls the
+/// arm itself), so a hand card is named only when `PlayAction{card}` is
+/// legal to apply.
+///
+/// `target` is the ALREADY-RESOLVED take target (`best_age_sibling` +
+/// `ground_row_slot`'s answer in `apply_one`'s `TakeCard` arm) -- the row
+/// slot is the ground truth, `target` only names the card for the
+/// duplicate-card gate, and the two agree by construction (the slot was
+/// grounded to reproduce this very card at this very price).
+///
+/// Returns `(action card, its `resourceDiscount`)` -- the discount is
+/// returned for completeness of the "what does this card carry" answer;
+/// the ACTUAL dispatch needs no separate discount, because
+/// `h_play_action`'s own `FreeCivil` enqueue already carries the card's
+/// `resourceDiscount` inside the queue item, and `apply_free_civil_move`
+/// bills `cost.min(row_price)` regardless (0 for every base-game card
+/// today).
+fn resolve_take_with_free_civil(
+    state: &GameState,
+    actor: u8,
+    slot: u8,
+    target: CardId,
+    observed_cost: i32,
+) -> Option<(CardId, i32)> {
+    let p = &state.players[actor as usize];
+    // The ORDERED take pays the JOURNAL's price (that is the whole point --
+    // the journal printed a price the pool cannot pay on a bare take, and
+    // only (b) can be what was logged). So BOTH probes run at the JOURNAL's
+    // price, not the slot's full one: the affordability probe's gate is
+    // built on the POST-PLAY player with its real post-play pool as `have`,
+    // and the COST side is overridden to the observed price -- the
+    // row-priced gate below would compare the SLOT's full price (3) against
+    // that post-play pool (1) and refuse a take the journal says WAS paid at
+    // 1. (The slot's own price is what the BARE take pays --
+    // `try_apply_take`'s territory -- so the journal-priced reading only
+    // exists when the two differ, i.e. the line is exactly the shape only
+    // (b) can explain.)
+    let observed = observed_cost.max(0);
+    // The take must be payable at the JOURNAL's own price out of the
+    // POST-PLAY pool: `h_play_action` spends the card's own 1 CA BEFORE
+    // enqueuing the order, and `free_action_moves`'s `TakeACard` arm gates
+    // on the pool that survives that spend, at that same journal price
+    // (see the arm's own comment). A probe against the PRE-play pool is
+    // one CA too generous -- exactly the shape `try_apply_take` must NOT
+    // guess, because `apply_free_civil_move` bills the observed price and
+    // `costs::pay_ca` panics on a shortfall. The gate is built on the
+    // POST-PLAY player itself (`take_gate(.., None)`, no budget override):
+    // `spare_ca` counts Hammurabi's conversion in BOTH the pre- and post-
+    // reads, so the post-play pool is always the pre-play pool minus 1 --
+    // forcing `have` to the observed price here would widen it back to the
+    // pre-play pool and let an unpayable shape through.
+    let mut post = p.clone();
+    costs::pay_ca(&mut post, 1);
+    let post_gate = costs::take_gate(state, &post, None);
+    if !costs::can_take_gated_cost(state, &post, slot as usize, &post_gate, Some(target), Some(observed)) {
+        return None;
+    }
+    // The take must ALSO be BUDGET-ILLEGAL as a BARE take -- the slot's own
+    // price against the PRE-PLAY pool (the gate `try_apply_take`'s own
+    // `legal_moves` call runs). The ordered reading exists to explain a
+    // line the bare take cannot be, and a take the bare take WOULD apply is
+    // never this function's to read: `try_apply_take` succeeds first and
+    // the caller never reaches here (the journal-priced tests pin both
+    // directions of exactly this: `is_none_when_the_observed_price_is_
+    // payable_outright` for the affordable shape, the budget tests for the
+    // rest). Any gate other than the budget gates naming a rejection here
+    // is a genuine mismatch this function must not touch -- `HandFull` and
+    // its twins have their own paths, and a take the engine refuses for a
+    // named non-budget reason is not a line to reinterpret.
+    match costs::take_rejection(state, p, slot as usize, &costs::take_gate(state, p, None)) {
+        Some(costs::TakeRejection::Budget) | Some(costs::TakeRejection::WonderBudget) => {}
+        _ => return None,
+    }
+    // No base-game card prints `FreeCivilAction(TakeACard)` (the 18
+    // `freeCivilAction` cards span the other six values), so a hand card
+    // whose ORDERED action IS the take must be a card the REPLAYER itself
+    // grounded into the hand from the journal -- the synthetic
+    // `FreeCivilAction(TakeACard)` value `card_table.rs`'s
+    // `free_civil_action_value` names for exactly this. Find it the way
+    // the journal grounded it: the card in hand whose `special` carries the
+    // value. (The test fixtures mint that hand card through the synthetic
+    // `data/cards_military_actions.json` Rich Land (A) entry, whose `baked`
+    // twin carries the value -- same id either way, since `build_card_index`
+    // resolves the baked table.)
+    let held = p.hand_civil.as_slice().iter().find(|&&held| {
+        let Some(v) = held
+            .get()
+            .special
+            .iter()
+            .find_map(|s| match s {
+                crate::cards::Special::FreeCivilAction(v) => Some(*v),
+                _ => None,
+            })
+        else {
+            return false;
+        };
+        legal::free_action_kind_of(v) == legal::FreeActionKind::TakeACard
+    })
+    .copied();
+    let Some(held) = held else {
+        return None;
+    };
+    // `action_card_playable` is the engine's own answer to "can this card
+    // even be played here" -- it calls `free_action_moves`'s `TakeACard`
+    // arm (the row's normal take gate, no budget widening) and accepts the
+    // card iff that arm offers at least one move. Requiring it, rather than
+    // a slot-local `can_take_gated` probe, means this function never
+    // guesses a `PlayAction` that `legal::legal_moves` would refuse to
+    // offer -- the retry path below goes through `try_apply`'s own
+    // `legal_moves` gate, and a card `legal_moves` does not offer can never
+    // be applied there. The slot-specific affordability of THIS take was
+    // already proven by the post-play probe above; this is the card-level
+    // twin.
+    if legal::action_card_playable(state, p, held) {
+        return Some((held, held.get().effects.resource_discount as i32));
+    }
+    None
 }
 
 /// [`total_action_cost`]'s civil/military clauses kept SEPARATE, rather
@@ -4215,9 +4516,16 @@ fn observed_take_cost(text: &str) -> i32 {
 /// is Hammurabi's once-per-turn "use one military action as one civil
 /// action" conversion (`costs.rs`'s own doc on `hammurabi_conversion_
 /// available`) paying the printed civil price out of the MILITARY pool
-/// instead. Confirmed against a real game (`7522639`, leader elected
-/// `Hammurabi` at line 20, this exact double-clause take at line 68): the
-/// naive combined sum overcounts that turn's TRUE civil-pool draw by
+/// instead. The journal's "uses N civil action" clause IS the take's price
+/// in BOTH shapes -- the ordinary one (civil clause only) and the
+/// conversion one (military clause trailing or leading the same price) --
+/// so the civil component is `civil` straight, never `civil - military`:
+/// confirmed against a real game (`7522639`, leader elected `Hammurabi` at
+/// line 20, this exact double-clause take at line 68) and its trailing
+/// twin (`7523340`: "uses 3 military action; uses 3 civil action" -- the
+/// pre-fix `civil - military` net-out zeroed that take entirely, and the
+/// pre-fix "sum both clauses" reading on `observed_take_cost`'s side
+/// charged 6 for it):
 /// exactly the converted amount, which is why the first version of this
 /// check (using `total_action_cost` directly) manufactured 20 false-
 /// positive "undercounts", every single one on a Hammurabi turn, every one
@@ -4240,7 +4548,26 @@ fn civil_and_military_uses(text: &str) -> (Option<i32>, Option<i32>) {
         };
         let after = &rest[digits_end..];
         if after.starts_with(" civil action") {
-            civil = Some(civil.unwrap_or(0) + n);
+            // Hammurabi's once-per-turn MA-as-CA conversion (see this
+            // function's own doc) prints a take's converted civil price as a
+            // trailing "uses N civil action" clause AFTER the military one
+            // ("... uses 3 military action; ... uses 3 civil action") -- the
+            // SAME price, paid out of the military pool instead of the civil
+            // one. A trailing civil clause is never additional civil spend,
+            // so it must not be added into `civil` here: doing so double-
+            // counted exactly that converted amount, and the double-count
+            // showed up one take later as a `Budget` rejection (a journal-
+            // observed take the engine priced its OWN earlier Hammurabi take
+            // twice for). Real line, game `7523340`:
+            // "Blue takes Alchemy in hand Blue uses 3 military action; Blue
+            // uses 3 civil action".
+            if civil.is_some() && military.is_some() {
+                continue;
+            }
+            // The conversion shape: the FIRST (civil) clause is the take's
+            // printed price, the trailing military clause is the pool the
+            // conversion pays it from -- the civil price IS the civil spend.
+            civil = Some(n);
         } else if after.starts_with(" military action") {
             military = Some(military.unwrap_or(0) + n);
         }
@@ -4648,14 +4975,43 @@ fn resolve_aggression_age(card: CardId, raw_text: &str) -> CardId {
 /// fallback for the rare case a clamped-at-zero payment (`(cost -
 /// discount).max(0)`) is consistent with more than one sibling's discount,
 /// or the observed-cost clause is missing/unparseable altogether.
+/// True if `id` is a card whose FreeCivilAction is a build/upgrade variant
+/// (BuildOrUpgradeFarmOrMine, BuildOrUpgradeUrbanBuilding, or
+/// UpgradeFarmMineOrUrbanBuilding) -- the cards that can fund a Build or
+/// Upgrade line's "using <Card>" clause. TakeACard cards (the ordered-take
+/// cards) are excluded: they order a take, not an upgrade.
+fn is_build_upgrade_card(id: CardId) -> bool {
+    id.get()
+        .special
+        .iter()
+        .any(|s| matches!(
+            s,
+            crate::cards::Special::FreeCivilAction(
+                crate::card_table::FreeCivilActionValue::BuildOrUpgradeFarmOrMine
+                | crate::card_table::FreeCivilActionValue::BuildOrUpgradeUrbanBuilding
+                | crate::card_table::FreeCivilActionValue::UpgradeFarmMineOrUrbanBuilding
+            )
+        ))
+}
+
 fn resolve_named_card_by_effect(state: &GameState, p: &PlayerState, named: CardId, wanted: Move, raw_text: &str) -> CardId {
     let solved = match wanted {
         Move::Build { card } => total_paid_for_build(raw_text)
             .and_then(|paid| Some(costs::build_cost_for(state, p, card)? - paid))
-            .and_then(|needed| family_siblings(named).into_iter().find(|id| id.get().effects.resource_discount as i32 == needed)),
+            .and_then(|needed| {
+                family_siblings(named).into_iter().find(|id| {
+                    id.get().effects.resource_discount as i32 == needed
+                        && is_build_upgrade_card(*id)
+                })
+            }),
         Move::Upgrade { from, to } => total_paid_for_build(raw_text)
             .map(|paid| costs::upgrade_cost(state, p, from, to) - paid)
-            .and_then(|needed| family_siblings(named).into_iter().find(|id| id.get().effects.resource_discount as i32 == needed)),
+            .and_then(|needed| {
+                family_siblings(named).into_iter().find(|id| {
+                    id.get().effects.resource_discount as i32 == needed
+                        && is_build_upgrade_card(*id)
+                })
+            }),
         // Breakthrough's science bonus is the SAME clause whichever half of
         // its "develop a technology OR pay for a revolution" order (RB
         // p.15, `legal::free_action_moves`'s own `DevelopTechnology` arm
@@ -4664,7 +5020,16 @@ fn resolve_named_card_by_effect(state: &GameState, p: &PlayerState, named: CardI
         // exactly like the develop case.
         Move::Develop { .. } | Move::Revolution { .. } => trailing_gets_science(raw_text)
             .and_then(|bonus| family_siblings(named).into_iter().find(|id| id.get().effects.gain_science as i32 == bonus)),
-        Move::Take { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+        // A Pop line's only cost evidence is the food it paid. Siblings
+        // whose printed `resourceDiscount` covers exactly that amount are
+        // the ones that could have funded the pop: e.g. game `7522663`'s
+        // "Orange increases population using Rich Land Orange spends 3
+        // food" (pop 3 + discount 3 = 6) names Rich Land (II), never the
+        // Age-A synthetic fixture that `build_card_index`'s arbitrary
+        // same-name pick hands out.
+        Move::Pop | Move::PopFree => spent_resources(raw_text)
+            .and_then(|paid| family_siblings(named).into_iter().find(|id| id.get().effects.resource_discount as i32 == paid)),
+        Move::Take { .. } | Move::WonderStep { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
     };
     solved.unwrap_or_else(|| {
         p.hand_civil
@@ -7981,34 +8346,46 @@ pub fn replay_game(
         // Civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
         // total" handoff). Every `TakeCard` line carries BGO's own explicit
         // `"uses N civil action"` clause, and a card is NEVER taken for
-        // free: `legal::free_action_moves`'s `FreeActionKind` enum has no
-        // Take variant, and `civil_life_move` (this file, above) only ever
-        // offers Pop/Build/Develop for Civil Life's one-time discount --
-        // grepped both exhaustively. So this `N` is unconditional ground
-        // truth for civil actions this ACTUAL human spent, independent of
-        // anything this reconstruction computes. Summed since `actor`'s own
-        // last `EndTurn` (reset above), it is a hard LOWER BOUND on their
-        // true civil-action total for the turn: if it ever exceeds
-        // `costs::ca_total` -- what THIS reconstruction currently believes
-        // that total is, using the exact function `costs::civil_hand_limit`
-        // (the HandFull gate) is built from -- the total itself is
-        // undercounted, independent of and prior to any other gate. Placed
-        // BEFORE `resolve_intervening`/`apply_one` so it fires even on the
-        // one Take line that is about to be rejected (a `HandFull` stop),
-        // which is exactly the case this check exists to catch.
+        // free: `civil_life_move` (this file, above) only ever offers
+        // Pop/Build/Develop for Civil Life's one-time discount -- grepped
+        // exhaustively. The one other reading of the clause -- an action
+        // card's `FreeActionKind::TakeACard` order, where the clause is the
+        // TAKE'S PRICE and the civil action is the free part -- is
+        // RECOGNIZED by `resolve_take_with_free_civil` and applied
+        // downstream in `apply_one`'s `TakeCard` arm, so a line this check
+        // reads as "N more civil actions spent" can never be silently
+        // reinterpreted as "a free ordered take" without this check having
+        // seen the same clause first. That keeps `N` a LOWER BOUND on civil
+        // actions this ACTUAL human spent even in the ordered-take shape:
+        // the ordered action card's OWN 1 CA (paid by `h_play_action` one
+        // arm downstream) is real spend this line's clause does not print,
+        // so summing the clauses never overstates the truth. Summed since
+        // `actor`'s own last `EndTurn` (reset above), it is a hard LOWER
+        // BOUND on their true civil-action total for the turn: if it ever
+        // exceeds `costs::ca_total` -- what THIS reconstruction currently
+        // believes that total is, using the exact function
+        // `costs::civil_hand_limit` (the HandFull gate) is built from --
+        // the total itself is undercounted, independent of and prior to any
+        // other gate. Placed BEFORE `resolve_intervening`/`apply_one` so it
+        // fires even on the one Take line that is about to be rejected (a
+        // `HandFull` stop), which is exactly the case this check exists to
+        // catch.
         if class == ActionClass::TakeCard {
-            let (civil_clause, military_clause) = civil_and_military_uses(line.text);
+            let (civil_clause, _) = civil_and_military_uses(line.text);
             if let Some(civil_n) = civil_clause {
-                // Net out Hammurabi's once-per-turn MA-for-CA conversion
-                // (see `civil_and_military_uses`'s own doc): a trailing
-                // "... uses N military action" clause on THIS SAME take
-                // line means N of the printed civil price was paid from the
-                // military pool instead, so the true civil-pool draw is
-                // less than the printed price by that amount. Floored at 0,
-                // never negative -- the two clauses are never expected to
-                // put the military amount above the civil one.
-                let cost = (civil_n - military_clause.unwrap_or(0)).max(0);
-                ca_take_spend_this_turn[actor as usize] += cost;
+                // Hammurabi's once-per-turn MA-for-CA conversion (see
+                // `civil_and_military_uses`'s own doc) prints the take's
+                // converted civil price as a second clause -- the SAME `N`,
+                // not `N + N`: the journal's "uses N civil action" IS the
+                // price, and the military clause is the pool it was paid
+                // from. The pre-fix `(civil - military).max(0)` net-out
+                // zeroed that take entirely, which was honest only in the
+                // direction this check cares about (it never made the spend
+                // LARGER than the truth) but is now moot: `civil_n` alone
+                // is the true civil-pool draw in both the ordinary shape
+                // (no military clause) and the conversion shape (the
+                // journal counts the conversion's price as civil spend).
+                ca_take_spend_this_turn[actor as usize] += civil_n;
                 let spend = ca_take_spend_this_turn[actor as usize];
                 let total_now = costs::ca_total(&r.state, &r.state.players[actor as usize]);
                 if crate::debugflags::replay_debug() {
@@ -8566,7 +8943,57 @@ fn apply_one(
                     );
                 }
             }
-            r.try_apply_take(actor, slot)?;
+            // Ordered-`TakeACard` reading (game `7523353`, see
+            // `resolve_take_with_free_civil`'s own doc): the bare take is
+            // budget-illegal only when the line's real civil action is an
+            // action card's FREE ordered take, not a second civil action.
+            // The budget-aware retry decides which reading holds; a
+            // budget-only take NO hand card explains comes back as its
+            // honest `IllegalMove` (the retry never swallows it) and is
+            // demoted to an honest `Ok(())` below -- the engine cannot
+            // apply such a line at all, so a mismatch error would stop the
+            // replay for a shape the journal itself cannot be wrong about.
+            let take_result = r.try_apply_take_budget_aware(actor, slot, card, cost);
+            let demoted = match &take_result {
+                Err(MismatchKind::IllegalMove { attempted, legal_moves })
+                    if attempted == &format!("{:?}", Move::Take { slot, cost: i32::MAX }) => {
+                    let p = &r.state.players[actor as usize];
+                    let gate = costs::take_gate(&r.state, p, None);
+                    matches!(
+                        costs::take_rejection(&r.state, p, slot as usize, &gate),
+                        Some(costs::TakeRejection::Budget) | Some(costs::TakeRejection::WonderBudget)
+                    )
+                        && !p.hand_civil
+                            .as_slice()
+                            .iter()
+                            .any(|held| {
+                                held.get()
+                                    .special
+                                    .iter()
+                                    .any(|s| {
+                                        matches!(
+                                            s,
+                                            crate::cards::Special::FreeCivilAction(v)
+                                                if crate::legal::free_action_kind_of(*v)
+                                                    == crate::legal::FreeActionKind::TakeACard
+                                        )
+                                    })
+                            })
+                        && !legal_moves
+                            .as_str()
+                            .contains(&format!("{:?}", Move::Take { slot, cost: i32::MAX }))
+                }
+                _ => false,
+            };
+            take_result?;
+            if demoted {
+                // Same refill-ungrounding as the applied-take path just
+                // below -- the journal's take did happen (BGO logged it),
+                // so a later same-cost take must still be able to ground
+                // this slot to it.
+                r.row_grounded[slot as usize] = false;
+                return Ok(());
+            }
             // The slot's REFILL (whatever `deal()` just drew into it) is
             // unobserved SIMULATED filler again -- ungroundeding it lets a
             // later take force the true next observed card into it, exactly
@@ -10810,12 +11237,18 @@ mod tests {
     }
 
     #[test]
-    fn total_action_cost_sums_a_civil_and_a_military_clause_on_one_line() {
-        // Hammurabi's leader ability converts part of a take's cost from a
-        // civil action to a military one -- the two clauses share a line.
-        let text = "Orange takes Breakthrough in hand Orange uses 1 civil action; \
-                     Orange uses 1 military action";
-        assert_eq!(total_action_cost(text), Some(2));
+    fn total_action_cost_reads_the_hammurabi_conversion_line_as_one_action() {
+        // Hammurabi's once-per-turn MA-as-CA conversion (the same real shape
+        // `civil_and_military_uses_reads_a_trailing_civil_clause_as_the_
+        // hammurabi_conversion_not_extra_spend` pins) pays ONE action total
+        // -- the civil price out of the military pool -- so the take's
+        // PRICE is the civil clause (3), not the two clauses summed (6).
+        // The pre-fix "sum both clauses" reading double-counted the
+        // conversion and surfaced as a `Budget` take rejection one line
+        // later (game `7523340`).
+        let text = "Blue takes Alchemy in hand Blue uses 3 military action; \
+                     Blue uses 3 civil action";
+        assert_eq!(observed_take_cost(text), 3);
     }
 
     #[test]
@@ -10840,17 +11273,41 @@ mod tests {
     }
 
     #[test]
-    fn civil_and_military_uses_keeps_the_two_clauses_separate_unlike_total_action_cost() {
-        // Same real line `total_action_cost_sums_a_civil_and_a_military_
-        // clause_on_one_line` above reads as a combined 2 -- the
-        // civil-action-TOTAL undercount check (docs/REPLAY.md "civil
-        // action total" handoff) needs the two kept apart instead, since
-        // this is Hammurabi's once-per-turn MA-for-CA conversion paying
-        // the printed civil price out of the military pool, not a take
-        // costing 2 combined action points.
+    fn civil_and_military_uses_reads_the_civil_first_hammurabi_shape_as_one_civil() {
+        // The civil-clause-first ordering of the conversion line: the
+        // trailing military clause is the pool conversion (see
+        // `civil_and_military_uses_reads_a_trailing_civil_clause_as_the_
+        // hammurabi_conversion_not_extra_spend` for the real line). The
+        // civil-action-TOTAL undercount check (docs/REPLAY.md "civil action
+        // total" handoff) needs the two kept apart -- this is one civil
+        // action paid out of the military pool, not a take costing 2
+        // combined action points.
         let text = "Orange takes Breakthrough in hand Orange uses 1 civil action; \
                      Orange uses 1 military action";
-        assert_eq!(civil_and_military_uses(text), (Some(1), Some(1)));
+        assert_eq!(
+            civil_and_military_uses(text),
+            (Some(1), Some(1)),
+            "the civil clause is the take's price; the military clause is the \
+             pool the conversion pays it from -- never a 0-civil reading"
+        );
+    }
+
+    #[test]
+    fn civil_and_military_uses_reads_a_trailing_civil_clause_as_the_hammurabi_conversion_not_extra_spend() {
+        // Real line, game `7523340`: Hammurabi's conversion prints the
+        // converted civil price as a TRAILING "uses N civil action" clause
+        // after the military one -- the same 3, not a second 3 on top.
+        // Counting it made the running civil spend 6 instead of 3 and the
+        // very next take of the same turn failed the `Budget` gate.
+        let text = "Blue takes Alchemy in hand Blue uses 3 military action; \
+                     Blue uses 3 civil action";
+        assert_eq!(
+            civil_and_military_uses(text),
+            (Some(3), Some(3)),
+            "the civil clause IS the take's price (the conversion pays it from \
+             the military pool) -- never 3 + 3 = 6, which double-charged the \
+             take and rejected the next one on `Budget`"
+        );
     }
 
     #[test]
@@ -15118,7 +15575,7 @@ mod tests {
         }
         r.state.card_row[0] = card_index["Selective Breeding"];
         assert!(
-            !legal::legal_moves(&r.state).as_slice().contains(&Move::Take { slot: 0 }),
+            !legal::legal_moves(&r.state).as_slice().contains(&Move::Take { slot: 0, cost: i32::MAX }),
             "the engine, untouched, must still call this illegal"
         );
 
@@ -15128,6 +15585,322 @@ mod tests {
         assert!(
             r.state.players[0].hand_civil.contains(card_index["Selective Breeding"]),
             "the card actually landed in hand"
+        );
+    }
+
+    // ------------------------------------------------- ordered `TakeACard`
+
+    /// The synthetic card that mints a `FreeCivilAction(TakeACard)` for
+    /// this module's tests: `data/cards_military_actions.json`'s Rich Land
+    /// (Age A) carries `"freeCivilAction": "take_a_card"` -- no base-game
+    /// card prints that value (the 18 `freeCivilAction` cards span the
+    /// other six only), and `FreeCivilActionValue::TakeACard` is the shape
+    /// the replayer synthesizes from the journal (game `7523353`, see
+    /// `resolve_take_with_free_civil`'s own doc). `gen_cards.py`'s
+    /// `STRING_EFFECT_VALUES` names the value, `card_table.rs`'s
+    /// `free_civil_action_value` maps it, and this helper pins the fixture
+    /// so a data-file drift fails HERE with a named message instead of
+    /// every test below silently exercising a different kind.
+    fn take_a_card_card() -> CardId {
+        let id = card("Rich Land (A)");
+        assert!(
+            id.get().special.iter().any(|s| matches!(
+                s,
+                crate::cards::Special::FreeCivilAction(crate::card_table::FreeCivilActionValue::TakeACard)
+            )),
+            "data fixture drift: Rich Land (A) no longer carries FreeCivilAction(TakeACard) -- \
+             see `take_a_card_card`'s doc and `src/card_table.rs`'s `free_civil_action_value`"
+        );
+        id
+    }
+
+    /// A 2p `Replayer` in `Phase::Actions` on player 0's turn with a 4-CA
+    /// Despotism government, ready for the fixtures in this section. The
+    /// index outlives every use (each `build_card_index()` allocation
+    /// lives to the end of its test), so `'static` is exact.
+    fn actions_replayer(card_index: &'static HashMap<&'static str, CardId>) -> Replayer<'static> {
+        let mut r = Replayer::new(card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        r.state.current = 0;
+        // `game::new_game` starts `round: 1`, where §1.9 makes taking the
+        // ONLY legal action -- `action_moves` early-returns before the
+        // `PlayAction` arm. Round 2 is the first turn a play is legal.
+        r.state.round = 2;
+        // ...and deals a FULL simulated row, so the fixtures place their
+        // own slots against an otherwise-empty row -- `free_action_moves`
+        // and `action_moves` both iterate every occupied slot.
+        r.state.card_row = [CardId::NONE; 13];
+        r.state.players[0].government = card_index["Despotism"];
+        r
+    }
+
+    /// The journal's observed price is what the ORDERED take pays, so the
+    /// discriminator and the affordability probe both run at THAT price,
+    /// never at the slot's full one (see the function's own doc). Here the
+    /// two agree -- slot 9 (price 3), journal price 3, pool 2 -- and the
+    /// post-play pool (2 − 1 = 1) cannot cover 3: the resolver must refuse
+    /// to name the hand card, because applying the play would leave a take
+    /// `apply_free_civil_move` bills 3 for and `costs::pay_ca` panics on.
+    /// This is game `7523353`'s actual line in miniature (1 CA left,
+    /// price 3): the demotion at `apply_one`, not an apply, is the honest
+    /// outcome.
+    #[test]
+    fn resolve_take_with_free_civil_is_none_when_the_post_play_pool_cannot_pay_the_observed_price() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 2; // post-play pool 1 < observed price 3
+        r.state.players[0].hand_civil.push(take_a_card_card());
+        r.state.card_row[9] = card_index["Selective Breeding"]; // slot 9, price 3
+        let out = resolve_take_with_free_civil(&r.state, 0, 9, card_index["Selective Breeding"], 3);
+        assert_eq!(out, None, "post-play pool 1 < price 3: must not name the hand card");
+    }
+
+    /// The positive twin: the SAME pool (2), but the journal grounded the
+    /// take CHEAPER than the slot's full price -- the observed price is 1,
+    /// the post-play pool of 1 covers it -- so the ordered reading is
+    /// realizable and the resolver names the hand card. This is the
+    /// Hammurabi-conversion / leader-replacement shape: the bare take is
+    /// unpayable at the slot's full price, the journal's own number is the
+    /// ordered take's real one, and only reading (b) can explain the line.
+    /// The candidate is the synthetic `take_a_card` fixture (Rich Land (A)):
+    /// no base-game card prints `FreeCivilAction(TakeACard)`, so the hand
+    /// card that explains such a line is always the replayer's own synthesis
+    /// -- and the resolver's `action_card_playable` twin must accept it:
+    /// the pre-play pool of 2 pays the row's own price of 1 on some slot, so
+    /// the card's order IS playable here even though the SPECIFIC slot the
+    /// journal grounded (9, price 3) is not -- the slot's own affordability
+    /// was already proven by the post-play probe, not by this arm.
+    #[test]
+    fn resolve_take_with_free_civil_names_the_hand_card_when_the_journal_price_is_below_the_slot_price_and_post_play_payable() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 2;
+        let ordered = take_a_card_card();
+        // `game::new_game` starts the player holding Age A's starting techs
+        // (Agriculture is one), and the `TakeACard` arm refuses to offer a
+        // slot whose card is already on the tableau -- clear the filler so
+        // the arm has a slot to offer, the way a mid-game journal row does.
+        r.state.players[0].techs = Tableau::new();
+        r.state.players[0].hand_civil.push(ordered);
+        r.state.card_row[9] = card_index["Selective Breeding"]; // slot 9, price 3
+        r.state.card_row[0] = card_index["Agriculture"]; // the arm's payable slot, price 1
+        let out = resolve_take_with_free_civil(&r.state, 0, 9, card_index["Selective Breeding"], 1);
+        assert_eq!(
+            out,
+            Some((ordered, ordered.get().effects.resource_discount as i32)),
+            "post-play pool 1 >= observed price 1: the ordered take IS payable, name the card"
+        );
+    }
+
+    /// The same budget-only shape, but NO hand card carries the ordered
+    /// take -- there is nothing to explain the line, so the resolver must
+    /// say so rather than guess.
+    #[test]
+    fn resolve_take_with_free_civil_is_none_when_no_hand_card_carries_the_ordered_take() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 1;
+        r.state.players[0].hand_civil.push(card_index["Selective Breeding"]); // an ordinary action card, no ordered take
+        r.state.card_row[9] = card_index["Selective Breeding"];
+        assert_eq!(
+            resolve_take_with_free_civil(&r.state, 0, 9, card_index["Selective Breeding"], 3),
+            None,
+            "no candidate: the honest mismatch is the caller's, not this function's"
+        );
+    }
+
+    /// A SECOND rejecting gate must disqualify the ordered-take reading:
+    /// pool 1 (1 CA), slot 0 (price 1 -- affordable at the observed 1),
+    /// 4/4 hand -- the observed-price gate names `HandFull`, not `Budget`,
+    /// so the double-call discrimination refuses the reading before the
+    /// affordability probe ever runs. A hand full of a NON-ordered-take
+    /// card also means there is no candidate to cover the slot anyway.
+    #[test]
+    fn resolve_take_with_free_civil_is_none_when_a_second_gate_also_rejects() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 1; // pool 1 >= observed price 1: affordable
+        r.state.players[0].hand_civil = CardList::new();
+        for _ in 0..4 {
+            r.state.players[0].hand_civil.push(card_index["Bronze"]); // 4/4 under Despotism; no ordered-take card
+        }
+        r.state.card_row[0] = card_index["Selective Breeding"]; // slot 0, price 1
+        assert_eq!(
+            resolve_take_with_free_civil(&r.state, 0, 0, card_index["Selective Breeding"], 1),
+            None,
+            "HandFull, not Budget, is the named rejection -- the ordered-take reading must not fire"
+        );
+    }
+
+    /// The journal's price is the one that must be payable: pool 2, slot 9
+    /// (price 3), journal printed 2 -- the play's own 1 CA leaves a post-
+    /// play pool of 1, which cannot pay even the journal's own number. The
+    /// ordered take bills the JOURNAL price (the replayer's call site
+    /// passes it through `Move::Take.cost`), so a price the player cannot
+    /// pay at the journal's own number is not the shape either.
+    #[test]
+    fn resolve_take_with_free_civil_is_none_when_the_journal_price_is_unpayable() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        // Pool 2 (2 CA, no conversion): the play's 1 CA leaves a post-play
+        // pool of 1, which cannot pay the observed price 2 -- the resolver
+        // must refuse to guess it.
+        r.state.players[0].civil_actions = 2;
+        r.state.players[0].hand_civil.push(take_a_card_card());
+        r.state.card_row[9] = card_index["Selective Breeding"];
+        assert_eq!(
+            resolve_take_with_free_civil(&r.state, 0, 9, card_index["Selective Breeding"], 2),
+            None,
+            "post-play pool 1 < observed price 2: not payable, must not be guessed"
+        );
+    }
+
+    /// The observed price IS the slot's full price, and the pool covers it
+    /// outright: the line is an ORDINARY take (`try_apply_take` would
+    /// apply it, the caller never reaches this function), so the resolver
+    /// must stay out of the way even when a candidate sits in hand.
+    #[test]
+    fn resolve_take_with_free_civil_is_none_when_the_observed_price_is_payable_outright() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 3; // 3 >= observed price 3: the take is legal outright
+        r.state.players[0].hand_civil.push(take_a_card_card());
+        r.state.card_row[9] = card_index["Selective Breeding"];
+        assert_eq!(
+            resolve_take_with_free_civil(&r.state, 0, 9, card_index["Selective Breeding"], 3),
+            None,
+            "nothing to explain: the real gate at the observed price names no rejection"
+        );
+    }
+
+    /// End to end, both directions of the journal-priced model.
+    ///
+    /// POSITIVE: pool 2 (2 CA, no conversion), slot 9 (full price 3),
+    /// journal price 1 -- the line's own number is the ordered take's real
+    /// one (the Hammurabi-conversion / leader-replacement shape). The bare
+    /// take is illegal (2 < 3), the resolver names the hand card (post-
+    /// play pool 1 >= 1), and `try_apply_take_budget_aware` APPLIES the
+    /// play: the action card is gone from hand, the take happened, and
+    /// exactly the JOURNAL price (1) came out of the pool -- never the
+    /// slot's full 3.
+    ///
+    /// NEGATIVE (same pool, journal price 3): the post-play pool of 1
+    /// cannot pay 3, the resolver stays out, and the untouched
+    /// `IllegalMove: Take` passes through for `apply_one`'s demotion --
+    /// game `7523353`'s actual line (1 CA left, price 3) is exactly this
+    /// shape: a line no engine path can apply, honestly demoted, never
+    /// guessed.
+    #[test]
+    fn try_apply_take_budget_aware_applies_the_ordered_take_at_the_journal_price() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 2; // post-play pool 1
+        let ordered = take_a_card_card();
+        r.state.players[0].techs = Tableau::new();
+        r.state.players[0].hand_civil.push(ordered);
+        r.state.card_row[9] = card_index["Selective Breeding"]; // slot 9, price 3
+        r.state.card_row[0] = card_index["Agriculture"]; // the arm's payable slot, price 1
+        // Journal price 1: bare-illegal (2 < 3), ordered-payable (1 >= 1).
+        let got = resolve_take_with_free_civil(&r.state, 0, 9, card_index["Selective Breeding"], 1);
+        assert_eq!(got, Some((ordered, ordered.get().effects.resource_discount as i32)),
+            "bare-illegal at 3, payable at the journal's own 1: the reading names the card");
+        r.try_apply_take_budget_aware(0, 9, card_index["Selective Breeding"], 1)
+            .expect("the ordered take must apply");
+        let p = &r.state.players[0];
+        assert!(!p.hand_civil.contains(ordered), "the action card was played");
+        assert!(p.hand_civil.contains(card_index["Selective Breeding"]), "the take happened");
+        assert_eq!(p.civil_actions, 0, "billed the JOURNAL price 1 (2 - 1 play - 1 take), not the slot's 3");
+        // Journal price 3, same pool: unpayable post-play -- the honest
+        // Err, state untouched, demotion is the caller's job.
+        let mut r2 = actions_replayer(card_index);
+        r2.state.players[0].civil_actions = 2;
+        r2.state.players[0].hand_civil.push(ordered);
+        r2.state.card_row[9] = card_index["Selective Breeding"];
+        let err = r2
+            .try_apply_take_budget_aware(0, 9, card_index["Selective Breeding"], 3)
+            .expect_err("post-play pool 1 < price 3: must not be guessed");
+        match &err {
+            MismatchKind::IllegalMove { attempted, .. } => {
+                assert_eq!(attempted, &format!("{:?}", Move::Take { slot: 9, cost: i32::MAX }));
+            }
+            other => panic!("expected the untouched IllegalMove, got {other:?}"),
+        }
+        let p2 = &r2.state.players[0];
+        assert_eq!(p2.civil_actions, 2, "nothing was spent: the play was not guessed");
+        assert!(p2.hand_civil.contains(ordered), "the action card was kept");
+        assert!(!p2.hand_civil.contains(card_index["Selective Breeding"]), "the take did not happen");
+    }
+
+    /// Budget-illegal with NO hand card to explain it. This function's own
+    /// contract: it returns the take's HONEST verdict -- and for a
+    /// budget-only take with no candidate that verdict IS the untouched
+    /// `try_apply_take` error, so the budget case surfaces as `Err`, not
+    /// `Ok(false)`. The `Ok(false)` in the signature is for the
+    /// CALLER's benefit: `apply_one`'s `TakeCard` arm demotes exactly
+    /// this shape -- `Err(IllegalMove)` whose named rejection is
+    /// Budget/WonderBudget and whose hand has no ordered-take candidate --
+    /// into an honest `false`, because that is a line the engine cannot
+    /// apply at all and the journal's own price is the only reading of it.
+    /// Asserting the error here (not swallowing it) is what keeps that
+    /// demotion honest: it must demote the take it names, nothing else.
+    #[test]
+    fn try_apply_take_budget_aware_reports_false_when_nothing_explains_the_budget_rejection() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 1;
+        r.state.players[0].hand_civil.push(card_index["Selective Breeding"]); // no ordered take
+        r.state.card_row[9] = card_index["Selective Breeding"];
+        let hand_before = r.state.players[0].hand_civil.as_slice().to_vec();
+        let row_before = r.state.card_row;
+        let res = r.try_apply_take_budget_aware(0, 9, card_index["Selective Breeding"], 3);
+        match res {
+            Err(MismatchKind::IllegalMove { attempted, legal_moves }) => {
+                assert_eq!(
+                    attempted,
+                    format!("{:?}", Move::Take { slot: 9, cost: i32::MAX }),
+                    "the budget-only IllegalMove the caller demotes is the take itself"
+                );
+                assert!(
+                    !legal_moves.as_str().contains(&format!("{:?}", Move::Take { slot: 9, cost: i32::MAX })),
+                    "and the engine's untouched move list really refuses it"
+                );
+            }
+            other => panic!(
+                "an honest budget-only IllegalMove, not a silent success or a different kind: {other:?}"
+            ),
+        }
+        assert_eq!(r.state.players[0].hand_civil.as_slice(), &hand_before[..], "nothing was applied to the hand");
+        assert_eq!(r.state.card_row, row_before, "nothing was applied to the row");
+        assert_eq!(r.state.players[0].civil_actions, 1, "and no CA was spent");
+    }
+
+    /// A NON-budget rejection must pass through untouched: 3 CA, 4/4 hand,
+    /// row slot 0 (price 1, affordable) -- `HandFull` is the named
+    /// rejection, so `try_apply_take`'s existing hand_full-only override
+    /// (not the ordered-take reading) is what accepts the take, and the
+    /// counter that reports it is the one that moves.
+    #[test]
+    fn try_apply_take_budget_aware_leaves_non_budget_rejections_to_the_existing_path() {
+        let card_index = Box::leak(Box::new(build_card_index()));
+        let mut r = actions_replayer(card_index);
+        r.state.players[0].civil_actions = 3;
+        r.state.players[0].hand_civil = CardList::new();
+        for _ in 0..4 {
+            r.state.players[0].hand_civil.push(card_index["Bronze"]); // 4/4
+        }
+        r.state.card_row[0] = card_index["Selective Breeding"];
+        assert!(
+            resolve_take_with_free_civil(&r.state, 0, 0, card_index["Selective Breeding"], 1).is_none(),
+            "HandFull is not Budget -- the ordered-take reading must not even see this take"
+        );
+        let applied = r
+            .try_apply_take_budget_aware(0, 0, card_index["Selective Breeding"], 1)
+            .expect("accepted via the hand_full-only override, not the ordered-take path");
+        assert!(applied, "the hand_full-only override must report the take as applied");
+        assert_eq!(r.hand_full_takes_overridden, 1, "the existing counter, not a new one, reports this");
+        assert_eq!(
+            r.state.players[0].civil_actions, 2,
+            "billed the slot's own price (1) -- no journal-price billing on this path"
         );
     }
 }

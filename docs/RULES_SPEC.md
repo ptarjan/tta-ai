@@ -87,6 +87,8 @@ Action Phase: spend civil and military actions in any order, any mix; may stop w
 10. **Declare a revolution** — ALL civil actions (must all be available) + the LOWER science cost of a government in hand (§8) [RB p.13, CoL p.5].
 11. **Play an action card** — 1 CA; not in the same Action Phase in which it was taken from the row [RB p.14, CoL p.6]. Resolve text; if it orders an action, perform it under normal rules but paying no civil/military action for it; "pay X less" discounts stack cumulatively, floor 0; if you cannot perform the specified action, the card cannot be played; discard after resolving (leaves the game) [RB p.14-15, CoL p.6]. An extra military action granted (Patriotism) is virtual: use it first, usable for drawing at end of turn, not carried over [RB p.15].
 
+    **Ordered TakeACard model (engine-specific).** The base game has no printed "take a card" action card; the engine synthesises one (Rich Land (A), `FreeCivilAction(TakeACard)`) so the replayer can journal-ground an ordered take whose observed price is below the row's printed price. The arm (`legal::free_action_moves`, TakeACard branch) offers every non-empty slot that passes the non-budget take gates (hand not full, no duplicate, no wonder conflict, leader age not already taken); the budget check is deferred to resolution time. The replayer's retry path (`try_apply_take_budget_aware`) resolves the pending FreeCivil Choice directly with the journal's observed price (not the sentinel's row price), then drains the remaining queue.
+
 Notes: workers can only be placed by build/upgrade actions; taking a technology into hand has no effect until developed; there is no action to discard civil cards (they stay in hand) [RB p.9].
 <!-- SECTION COMPLETE -->
 

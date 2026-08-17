@@ -138,6 +138,14 @@ pub fn build_card_index() -> HashMap<&'static str, CardId> {
             .unwrap_or_else(|| panic!("alias target {engine_spelling:?} not found in CARDS"));
         index.entry(bgo_spelling).or_insert(id);
     }
+    // Rich Land: the journal's bare "Rich Land" in an upgrade/build context
+    // must resolve to the (I) card (BuildOrUpgradeFarmOrMine), not the (A)
+    // card (FreeCivilAction/TakeACard) which the `or_insert` above would
+    // pick (first in age order). The (A) card is still reachable via its
+    // explicit "Rich Land (A)" name.
+    if let Some(rl_i) = index.get("Rich Land (I)") {
+        index.insert("Rich Land", *rl_i);
+    }
     index
 }
 

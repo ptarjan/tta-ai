@@ -345,6 +345,25 @@ against real data" trap.
    section) but it measurably deepened every game that reaches this event,
    and is the correct, permanent fix regardless.
 
+N. **Ordered TakeACard: the arm's budget gate blocked the journal's slot (ENGINE).**
+   The replayer's ordered-take path (`try_apply_take_budget_aware`) plays a
+   FreeCivilAction(TakeACard) card and resolves the resulting FreeCivil
+   Choice at the journal's observed price. The arm
+   (`legal::free_action_moves`, TakeACard branch) originally gated each slot
+   on the ROW's printed price, so a take whose journal price is below the
+   row price (the common case — that is what makes the ordered reading
+   exist) was never offered, and the retry's slot match fell into the
+   `_` arm with a `StuckPending`. **Fixed** by suppressing only the budget
+   check in the arm (infinite-`have` `TakeGate`, non-budget gates still
+   enforced) and having the replayer resolve the Choice directly with the
+   journal price (`apply_free_civil_move` + `run_queue`), bypassing the
+   sentinel's row-price billing. The card index's bare "Rich Land" key now
+   resolves to the (I) card (BuildOrUpgradeFarmOrMine) rather than the (A)
+   card (TakeACard), so journal "using Rich Land" in an upgrade context
+   grounds the right sibling; `resolve_named_card_by_effect` filters
+   Build/Upgrade siblings to build/upgrade variants only (never
+   TakeACard).
+
 ### Bugs found and fixed in the FIRST pass (kept for continuity)
 
 1. Row-slot grounding never expired after a take (fixed).

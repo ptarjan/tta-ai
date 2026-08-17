@@ -418,7 +418,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
     let gate = costs::take_gate(state, p, None);
     for (idx, &id) in state.card_row.iter().enumerate() {
         if !id.is_none() && costs::can_take_gated(state, p, idx, &gate, Some(id)) {
-            moves.push(Move::Take { slot: idx as u8 });
+            moves.push(Move::Take { slot: idx as u8, cost: i32::MAX });
         }
     }
 
@@ -602,8 +602,22 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 // lock up the copy that was already in hand.
                 let held = p.hand_civil.as_slice().iter().filter(|&&c| c == id).count();
                 let taken = p.taken_this_turn.as_slice().iter().filter(|&&c| c == id).count();
-                let affordable = ca >= 1 || breakthrough_robespierre_ma_fundable(state, p, id);
-                if affordable && held > taken && action_card_playable(state, p, id) {
+                // Playing ANY action card spends its own 1 CA (the
+                // Robespierre/Breakthrough exception is the only other way
+                // a `PlayAction` is fundable -- see
+                // `breakthrough_robespierre_ma_fundable`'s own doc).
+                // `action_card_playable` answers ONLY "does this card even
+                // have an ordered move it could be played for" (`free_
+                // action_moves` nonempty, or a gain) -- it carries no CA
+                // test of its own, so the two checks compose with no
+                // redundancy: an ordered-take card is playable here with
+                // `ca == 0` left AND a row slot whose own price exceeds
+                // the pool, because the take IS the free part (game
+                // `7523353`'s ordered-take reading).
+                if (ca >= 1 || breakthrough_robespierre_ma_fundable(state, p, id))
+                    && held > taken
+                    && action_card_playable(state, p, id)
+                {
                     moves.push(Move::PlayAction { card: id });
                 }
             }
@@ -885,7 +899,7 @@ pub(crate) fn breakthrough_robespierre_ma_fundable(state: &GameState, p: &Player
 /// once it knows WHICH single move to run). Cards with no ordered action are
 /// unaffected -- that branch only needs `card.effects`/`card.special`, all of
 /// which exist, and is ported in full via [`action_card_has_any_gain`].
-fn action_card_playable(state: &GameState, p: &PlayerState, id: CardId) -> bool {
+pub fn action_card_playable(state: &GameState, p: &PlayerState, id: CardId) -> bool {
     let card = id.get();
     if let Some(value) = card.special.iter().find_map(|s| match s {
         Special::FreeCivilAction(v) => Some(*v),
@@ -952,6 +966,19 @@ pub enum FreeActionKind {
     BuildOrUpgradeFarmOrMine,
     BuildOrUpgradeUrbanBuilding,
     UpgradeFarmMineOrUrbanBuilding,
+        /// A `FreeCivilAction(TakeACard)` order: take any row card the
+    /// player's pool can still pay for, with no civil action spent on the
+    /// take itself (the take's own printed price is paid normally, out of
+    /// the pool that survives the play's own 1-CA spend -- the arm gates
+    /// on the row's NORMAL take gate, see `free_action_moves`'s own
+    /// `TakeACard` arm). Base game: no card carries this value yet -- but
+    /// the REPLAYER synthesizes it,
+    /// `replay_common.rs::resolve_take_with_free_civil` (game `7523353`:
+    /// "takes Efficient Upgrade ... uses 3 civil action" with the pool
+    /// short, only a card whose ORDERED action IS the take explains the
+    /// line), so this arm is exercised in replays, not only by tests and
+    /// future card data.
+    TakeACard,
 }
 
 /// Maps `card_table.rs`'s generated `FreeCivilActionValue` (what
@@ -974,6 +1001,7 @@ pub fn free_action_kind_of(v: FreeCivilActionValue) -> FreeActionKind {
         V::BuildOneWonderStage => K::BuildOneWonderStage,
         V::DevelopTechnology => K::DevelopTechnology,
         V::UpgradeFarmMineOrUrbanBuilding => K::UpgradeFarmMineOrUrbanBuilding,
+        V::TakeACard => K::TakeACard,
     }
 }
 
@@ -986,7 +1014,7 @@ fn free_build_types(kind: FreeActionKind, k: CardType) -> bool {
         BuildOrUpgradeFarmOrMine => k.is_production(),
         BuildOrUpgradeUrbanBuilding => k.is_urban(),
         UpgradeFarmMineOrUrbanBuilding => k.is_production() || k.is_urban(),
-        IncreasePopulation | BuildOneWonderStage | DevelopTechnology => false,
+        IncreasePopulation | BuildOneWonderStage | DevelopTechnology | TakeACard => false,
     }
 }
 
@@ -1019,6 +1047,31 @@ pub fn free_action_moves(
                 let cost = (costs::wonder_stage_cost(state, p, 1) - discount).max(0);
                 if p.resources as i32 >= cost {
                     out.push(Move::WonderStep { steps: 1 });
+                }
+            }
+        }
+        TakeACard => {
+            // The ordered take pays the JOURNAL price (observed by the
+            // replayer), which can be below the row price. The arm
+            // therefore suppresses ONLY the budget check: it offers every
+            // slot that passes the non-budget take gates (not empty, hand
+            // not full, no duplicate, no wonder conflict, leader age not
+            // already taken). The affordability check is deferred to
+            // resolution time: `apply_free_civil_move` bills the real
+            // price and `costs::pay_ca` enforces it. We emulate the
+            // no-budget-check by calling `take_rejection` with an infinite
+            // `have` (a `TakeGate` whose budget can never fail) and
+            // checking that the result is `None` or `Budget` (the latter
+            // is the ONLY rejection we suppress).
+            let gate = costs::take_gate(state, p, None);
+            let infinite_gate = costs::TakeGate {
+                have: i32::MAX,
+                ..gate
+            };
+            for (idx, &id) in state.card_row.iter().enumerate() {
+                if id.is_none() { continue; }
+                if costs::take_rejection(state, p, idx, &infinite_gate).is_none() {
+                    out.push(Move::Take { slot: idx as u8, cost: i32::MAX });
                 }
             }
         }
@@ -1317,7 +1370,7 @@ mod tests {
         state.card_row[0] = leader_slot;
         let moves = action_moves(&state, &state.players[0]);
         assert!(
-            !moves.as_slice().iter().any(|m| matches!(m, Move::Take { slot: 0 })),
+            !moves.as_slice().iter().any(|m| matches!(m, Move::Take { slot: 0, cost: i32::MAX })),
             "that age's leader was already taken this game, regardless of who is currently held"
         );
     }
@@ -1824,7 +1877,7 @@ mod tests {
         for m in moves.as_slice() {
             assert!(matches!(m, Move::EndTurn | Move::Take { .. }), "{m:?} should not be legal in round 1");
         }
-        assert!(moves.as_slice().contains(&Move::Take { slot: 0 }));
+        assert!(moves.as_slice().contains(&Move::Take { slot: 0, cost: i32::MAX }));
     }
 
     #[test]
@@ -1838,7 +1891,7 @@ mod tests {
         let takes: Vec<u8> = moves
             .as_slice()
             .iter()
-            .filter_map(|m| if let Move::Take { slot } = m { Some(*slot) } else { None })
+            .filter_map(|m| if let Move::Take { slot, .. } = m { Some(*slot) } else { None })
             .collect();
         assert_eq!(takes, vec![1, 3], "row order, not name order");
     }
@@ -2307,13 +2360,15 @@ mod tests {
 
     #[test]
     fn action_card_has_any_gain_false_for_an_ordered_action_with_no_gain_key() {
-        // "Rich Land (A)": build_or_upgrade_farm_or_mine + resourceDiscount
-        // only -- no gainScience/gainCulture/gainFood/gainResources/
-        // militaryActions/resourcesForMilitaryUnits key at all (verified
-        // 2026-08-05 against every action card in data/*.json: no action
-        // card has EITHER no ordered action AND no gain key, so this is the
-        // closest real card to "no gain keys" the base game has).
-        let c = card("Rich Land (A)").get();
+        // "Rich Land (I)" (Rich Land (A) mints the `take_a_card` fixture
+        // now -- see `data/cards_military_actions.json`):
+        // build_or_upgrade_farm_or_mine + resourceDiscount only -- no
+        // gainScience/gainCulture/gainFood/gainResources/militaryActions/
+        // resourcesForMilitaryUnits key at all (verified 2026-08-05 against
+        // every action card in data/*.json: no action card has EITHER no
+        // ordered action AND no gain key, so this is the closest real card
+        // to "no gain keys" the base game has).
+        let c = card("Rich Land (I)").get();
         assert!(!action_card_has_any_gain(c));
     }
 
@@ -2326,7 +2381,7 @@ mod tests {
         // below for the positive case of each kind).
         let p = blank_player(0, card("Despotism"));
         let state = one_player_state(p);
-        assert!(!action_card_playable(&state, &state.players[0], card("Rich Land (A)")));
+        assert!(!action_card_playable(&state, &state.players[0], card("Rich Land (I)")));
     }
 
     #[test]
@@ -2345,16 +2400,83 @@ mod tests {
             free_action_kind_of(V::UpgradeFarmMineOrUrbanBuilding),
             FreeActionKind::UpgradeFarmMineOrUrbanBuilding
         );
+        assert_eq!(free_action_kind_of(V::TakeACard), FreeActionKind::TakeACard);
+    }
+
+    /// `TakeACard`'s own `free_action_moves` arm: the row's NORMAL take
+    /// gate applies (the price still comes out of the player's pool -- the
+    /// free part is the civil action, not the price), EXCEPT at the
+    /// journal's observed price when the caller carries one (`discount`
+    /// doubles as that price here): the arm offers exactly the slots the
+    /// pool can pay for at the price that will actually be billed. No
+    /// base-game card's DATA carries `FreeCivilAction(TakeACard)` (the 18
+    /// `freeCivilAction` cards in `data/cards_military_actions.json` span
+    /// the other six values) -- but the replayer synthesizes exactly this
+    /// arm when a journal-observed take is budget-illegal (game `7523353`,
+    /// `replay_common.rs`'s `resolve_take_with_free_civil`), and its test
+    /// fixture mints one through `card_table.rs`'s `take_a_card` mapping --
+    /// so this pins the arm the replayer's synthesized order rides on: it
+    /// must NOT offer a slot the pool cannot pay, because
+    /// `apply_free_civil_move` bills the real price and `costs::pay_ca`
+    /// panics on a shortfall.
+    #[test]
+    fn free_action_kind_of_takes_a_card_offers_all_slots_budget_checked_at_resolution() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1; // the pool that survives the play's own 1 CA
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Philosophy"); // slot 0, printed price 1
+        state.card_row[9] = card("Agriculture"); // slot 9, printed price 3
+        let out = free_action_moves(&state, &state.players[0], FreeActionKind::TakeACard, 0, false);
+        assert!(
+            out.as_slice().contains(&Move::Take { slot: 0, cost: i32::MAX }),
+            "slot 0 must be offered: {:?}",
+            out.as_slice(),
+        );
+        assert!(
+            out.as_slice().contains(&Move::Take { slot: 9, cost: i32::MAX }),
+            "slot 9 must be offered (budget is checked at resolution, not at the arm): {:?}",
+            out.as_slice(),
+        );
+        // The ordered take pays the JOURNAL price (observed by the replayer),
+        // which can be below the row price. The arm therefore offers every
+        // slot that passes the non-budget take gates; affordability is
+        // enforced by `apply_free_civil_move`'s `pay_ca` at resolution time.
+        // The replayer's retry path resolves the Choice directly with the
+        // journal price, bypassing the sentinel's row-price billing.
+    }
+
+    /// The `action_card_playable` twin of the arm test above: the fixture's
+    /// ordered-take card IS playable when its ordered take has a target --
+    /// the exact call `replay_common.rs::resolve_take_with_free_civil` makes
+    /// before it names a hand card for the ordered-take reading, so a
+    /// fixture/data drift that emptied this arm's move list fails HERE.
+    /// 1 CA is the minimum the shape needs: the play itself must be
+    /// fundable, and the arm then gates on the pool that survives that
+    /// spend (1 left -> slot 0's price of 1 is payable, slot 9's 3 is not).
+    #[test]
+    fn action_card_playable_true_for_a_take_a_card_order_with_a_payable_slot() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1;
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Philosophy"); // slot 0, printed price 1
+        assert!(
+            action_card_playable(&state, &state.players[0], card("Rich Land (A)")),
+            "the TakeACard arm must offer its row takes through action_card_playable too"
+        );
     }
 
     #[test]
     fn action_card_playable_true_for_build_or_upgrade_farm_or_mine() {
         let mut p = blank_player(0, card("Despotism"));
         p.workers_free = 1;
-        p.resources = 1; // Bronze costs 2, Rich Land's resourceDiscount is 1
+        p.resources = 1; // Bronze costs 2, the ordered build's discount is 1
         p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
         let state = one_player_state(p);
-        assert!(action_card_playable(&state, &state.players[0], card("Rich Land (A)")));
+        // Rich Land (I): the ordered-build arm's fixture card now that
+        // Rich Land (A) mints the `take_a_card` test fixture -- see
+        // `data/cards_military_actions.json`'s Rich Land entries and
+        // `card_table.rs`'s `free_civil_action_value`. Same 1 discount.
+        assert!(action_card_playable(&state, &state.players[0], card("Rich Land (I)")));
     }
 
     #[test]
