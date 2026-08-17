@@ -521,7 +521,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
 
         // pre-move info needed for classification
         let taken_card = match mv {
-            Move::Take { slot } => Some(state.card_row[slot as usize]),
+            Move::Take { slot, .. } => Some(state.card_row[slot as usize]),
             Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
         };
         // Cost must be read PRE-move (`tta::costs::take_cost` reads the
@@ -529,7 +529,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // reason `bin/humanopenings.rs` reads it off `d.state` before
         // applying the human's move, not after.
         let taken_card_cost = match mv {
-            Move::Take { slot } => Some(tta::costs::take_cost(&state, &state.players[actor as usize], slot as usize)),
+            Move::Take { slot, .. } => Some(tta::costs::take_cost(&state, &state.players[actor as usize], slot as usize)),
             Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
         };
         let ca_before_move = state.players[actor as usize].civil_actions;

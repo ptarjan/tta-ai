@@ -421,6 +421,14 @@ STRING_EFFECT_VALUES = {
         "build_one_wonder_stage": "BuildOneWonderStage",
         "develop_technology": "DevelopTechnology",
         "upgrade_farm_mine_or_urban_building": "UpgradeFarmMineOrUrbanBuilding",
+        # No base-game card prints this value yet; named ahead of the first
+        # one (the `IllegalMove: Take` 7523353 line "Purple takes Efficient
+        # Upgrade ... uses 3 civil action" with 1 CA left -- a `TakeACard`
+        # order spent on a take, whose journal line is indistinguishable
+        # from an ordinary take). `legal::free_action_kind_of` +
+        # `free_action_moves`'s `TakeACard` arm + `apply::
+        # apply_free_civil_move`'s `Move::Take` arm already handle it.
+        "take_a_card": "TakeACard",
     },
     "onBuildCulture": {
         "2*workers(farm,mine)+1*workers(urban,military)": "FastFoodChains",

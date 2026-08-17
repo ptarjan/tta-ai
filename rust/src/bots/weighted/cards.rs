@@ -3614,7 +3614,7 @@ mod tests {
         state.players[0].civil_actions = 5; // headroom over row_cost(0), same for both wonders
         let idx = state.current;
         let mut trial = state.clone();
-        crate::apply::apply(&mut trial, crate::moves::Move::Take { slot: 0 });
+        crate::apply::apply(&mut trial, crate::moves::Move::Take { slot: 0, cost: i32::MAX });
         assert_eq!(trial.players[0].wonder, card, "take must have landed the wonder in play");
         let ctx = rivals::rival_context(&trial, idx, None, None);
         super::super::eval::evaluate(&trial, idx, w, Some(&ctx), None)

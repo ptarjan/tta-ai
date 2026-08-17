@@ -342,6 +342,28 @@ pub fn can_take_gated(
     gate: &TakeGate,
     name: Option<CardId>,
 ) -> bool {
+    can_take_gated_cost(state, p, idx, gate, name, None)
+}
+
+/// [`can_take_gated`] with a cost override. `cost` replaces the ROW's own
+/// price as the affordability test's left-hand side (the `row_cost`/surcharge
+////leader-discount recomputation below is skipped, the other gates run
+/// unchanged), for the ONE probe shape that cannot price the take from the
+/// row: the replayer's ordered-`TakeACard` reading (game `7523353`,
+/// `replay_common.rs::resolve_take_with_free_civil`), where the take the
+/// journal recorded pays the JOURNAL's observed price -- grounded cheaper
+/// than the slot's full price by a Hammurabi conversion or a leader-
+/// replacement discount the engine's own gate arithmetic does not see,
+/// because it is not a player or card it holds. `None` (every self-play
+/// caller, every other probe) is exactly `can_take_gated`'s own price.
+pub fn can_take_gated_cost(
+    state: &GameState,
+    p: &PlayerState,
+    idx: usize,
+    gate: &TakeGate,
+    name: Option<CardId>,
+    cost: Option<i32>,
+) -> bool {
     let id = match name {
         Some(id) => id,
         None => {
@@ -359,7 +381,10 @@ pub fn can_take_gated(
     // `row_cost` is >= 1 for every slot and `leader_discount` is at most 1,
     // so the only place `cost` can be reduced (the leader branch below)
     // bottoms out at exactly 0, never negative.
-    let mut cost = row_cost(idx);
+    let mut cost = match cost {
+        Some(c) => c,
+        None => row_cost(idx),
+    };
     if card.kind == CardType::Wonder {
         cost += gate.surcharge;
         // Taj Mahal's printed take discount (see `leader_replacement_take_
@@ -1340,12 +1365,13 @@ mod tests {
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
         state.card_row[0] = card("Irrigation");
-        // "Rich Land (A)" prints 2 physical copies in the Age A deck under
+        // "Rich Land (I)" prints 2 physical copies in the Age I deck under
         // ONE `CardId` (`_disambiguate` suffixes by AGE, not by copy) -- an
         // action card, not a tech, so holding one must not block taking the
-        // other.
-        state.card_row[1] = card("Rich Land (A)");
-        state.players[0].hand_civil.push(card("Rich Land (A)"));
+        // other. (Rich Land (A) mints the `take_a_card` fixture; the
+        // duplicate-exemption fact is age-independent.)
+        state.card_row[1] = card("Rich Land (I)");
+        state.players[0].hand_civil.push(card("Rich Land (I)"));
         let p = &state.players[0];
         assert!(!can_take(&state, p, 0, None), "already holding an Irrigation");
         assert!(can_take(&state, p, 1, None), "action cards are exempt from one-per-name");
@@ -1418,8 +1444,8 @@ mod tests {
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
         state.card_row[0] = card("Irrigation");
-        state.card_row[1] = card("Rich Land (A)");
-        state.players[0].hand_civil.push(card("Rich Land (A)"));
+        state.card_row[1] = card("Rich Land (I)");
+        state.players[0].hand_civil.push(card("Rich Land (I)"));
         check(&state, &state.players[0], 0);
         check(&state, &state.players[0], 1);
 

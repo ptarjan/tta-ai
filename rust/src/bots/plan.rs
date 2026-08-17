@@ -1260,11 +1260,11 @@ mod tests {
             moves.as_slice(),
             [
                 Move::EndTurn,
-                Move::Take { slot: 0 },
-                Move::Take { slot: 1 },
-                Move::Take { slot: 2 },
-                Move::Take { slot: 3 },
-                Move::Take { slot: 4 },
+                Move::Take { slot: 0, cost: i32::MAX },
+                Move::Take { slot: 1, cost: i32::MAX },
+                Move::Take { slot: 2, cost: i32::MAX },
+                Move::Take { slot: 3, cost: i32::MAX },
+                Move::Take { slot: 4, cost: i32::MAX },
             ],
             "test is pinned to this exact raw root order; update the pin (and re-check the reasoning \
              in this test's own doc comment) if move generation legitimately changed it"
@@ -1373,10 +1373,10 @@ mod tests {
     #[test]
     fn pick_output_on_fixed_positions_matches_the_pre_policy_order_baseline() {
         let cases: [(u8, u64, usize, u32, i64, Move, u64); 4] = [
-            (2, 1, 4, 4, 400, Move::Take { slot: 1 }, 10),
-            (3, 7, 3, 3, 300, Move::Take { slot: 0 }, 9),
-            (4, 42, 5, 4, 500, Move::Take { slot: 2 }, 11),
-            (3, 99, 8, 6, 2000, Move::Take { slot: 2 }, 11),
+            (2, 1, 4, 4, 400, Move::Take { slot: 1, cost: i32::MAX }, 10),
+            (3, 7, 3, 3, 300, Move::Take { slot: 0, cost: i32::MAX }, 9),
+            (4, 42, 5, 4, 500, Move::Take { slot: 2, cost: i32::MAX }, 11),
+            (3, 99, 8, 6, 2000, Move::Take { slot: 2, cost: i32::MAX }, 11),
         ];
         for (players, seed, width, max_plies, max_nodes, expected_mv, expected_nodes) in cases {
             let state = G::new_game(players, seed);

@@ -1623,7 +1623,14 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
     // grounded it against the row's own `costs::take_cost`), carried in
     // `cost`. `i32::MAX` (the sentinel every ordinary take carries) bills
     // the slot's own price, so this one expression covers both sources.
-    Move::Take { slot, cost } => h_take_ca(state, idx, slot, cost.min(costs::take_cost(state, &state.players[idx as usize], slot as usize))),
+    // The cap is `spare_ca` (not `take_cost`) because the take's affordability
+    // was already verified when the move was generated (via
+    // `free_action_moves`'s `TakeACard` arm, which checks against
+    // `spare_ca` at offer time); between offer and apply, the pool can only
+    // shrink (Hammurabi's conversion is once-per-turn), so billing
+    // `min(cost, take_cost, spare_ca)` is the safe cap that never
+    // over-pays.
+    Move::Take { slot, cost } => h_take_ca(state, idx, slot, cost.min(costs::take_cost(state, &state.players[idx as usize], slot as usize)).min(costs::spare_ca(&state.players[idx as usize]))),
         // §8.3.4: a revolution never spends a civil action of its OWN to
         // begin with (it empties/carries-over a whole action pool instead),
         // so this is still the exact same `_h_revolution` Python's

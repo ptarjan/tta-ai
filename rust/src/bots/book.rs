@@ -562,7 +562,7 @@ pub(crate) fn action_card_value(p: &PlayerState, ctx: &Ctx, id: CardId) -> f64 {
             V::IncreasePopulation => v += 4.0,
             V::BuildOrUpgradeFarmOrMine => v += 5.0,
             V::BuildOrUpgradeUrbanBuilding => v += 5.0,
-            V::DevelopTechnology | V::UpgradeFarmMineOrUrbanBuilding => {}
+            V::DevelopTechnology | V::UpgradeFarmMineOrUrbanBuilding | V::TakeACard => {}
         }
     }
     if eff.military_actions != 0 {
@@ -1107,7 +1107,7 @@ fn best_take(state: &GameState, p: &PlayerState, ctx: &Ctx, moves: &[Move], firs
     let mut best: Option<Move> = None;
     let mut best_v = 0.0;
     for &m in moves {
-        if let Move::Take { slot } = m {
+        if let Move::Take { slot, .. } = m {
             let name = state.card_row[slot as usize];
             if name.is_none() {
                 continue;
@@ -1810,7 +1810,7 @@ mod tests {
         assert!(is_override_kind(Move::Revolution { card }));
         assert!(!is_override_kind(Move::EndTurn));
         assert!(!is_override_kind(Move::Build { card }));
-        assert!(!is_override_kind(Move::Take { slot: 0 }));
+        assert!(!is_override_kind(Move::Take { slot: 0, cost: i32::MAX }));
     }
 
     #[test]

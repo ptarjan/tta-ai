@@ -235,7 +235,7 @@ impl OpeningTracker {
         let mut leader_takes = Vec::new();
         let mut any_take = false;
         for &mv in legal {
-            if let Move::Take { slot } = mv {
+            if let Move::Take { slot, .. } = mv {
                 any_take = true;
                 let card = state.card_row[slot as usize];
                 if !card.is_none() && bucket_of(card.get().kind) == Bucket::Leader {
@@ -592,7 +592,7 @@ mod tests {
 
         let legal = crate::legal::legal_moves(&state);
         assert!(
-            legal.as_slice().contains(&Move::Take { slot: 0 }),
+            legal.as_slice().contains(&Move::Take { slot: 0, cost: i32::MAX }),
             "fixture assumption broke: Take{{slot:0}} must be legal for this to test anything"
         );
 
@@ -603,9 +603,9 @@ mod tests {
         // that is legitimately also a leader-advancing move -- the contract
         // under test is "every survivor is a leader take, and slot 0 is one
         // of them", not "slot 0 is the only one".
-        assert!(narrowed.contains(&Move::Take { slot: 0 }));
+        assert!(narrowed.contains(&Move::Take { slot: 0, cost: i32::MAX }));
         for mv in &narrowed {
-            let Move::Take { slot } = mv else { panic!("non-Take leaked into a leader-take narrowing: {mv:?}") };
+            let Move::Take { slot, .. } = mv else { panic!("non-Take leaked into a leader-take narrowing: {mv:?}") };
             assert_eq!(bucket_of(state.card_row[*slot as usize].get().kind), Bucket::Leader);
         }
         assert_eq!(tracker.leader.forced, 1);
@@ -654,13 +654,13 @@ mod tests {
         let legal = crate::legal::legal_moves(&state);
         let bronze = crate::cards::CardId::by_name("Bronze").expect("Bronze must exist");
         let has_bronze_build = legal.as_slice().contains(&Move::Build { card: bronze });
-        let has_leader_take = legal.as_slice().contains(&Move::Take { slot: 0 });
+        let has_leader_take = legal.as_slice().contains(&Move::Take { slot: 0, cost: i32::MAX });
         assert!(has_bronze_build && has_leader_take, "fixture assumption broke: need both legal at once");
 
         let mut tracker = OpeningTracker::new(OpeningPolicy::MineFirstAndLeader);
         let narrowed = tracker.restrict(&state, legal.as_slice());
         assert!(narrowed.contains(&Move::Build { card: bronze }), "the Mine half must survive the union");
-        assert!(narrowed.contains(&Move::Take { slot: 0 }), "the Leader half must survive the union");
+        assert!(narrowed.contains(&Move::Take { slot: 0, cost: i32::MAX }), "the Leader half must survive the union");
         assert_eq!(tracker.mine.forced, 1);
         assert_eq!(tracker.leader.forced, 1);
     }

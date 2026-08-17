@@ -44,7 +44,16 @@ pub type PlayerIdx = u8;
 pub enum Move {
     // ---- civil actions ----
     /// Take the card in row slot `slot` (0-based). Cost is by slot (§2.3).
-    Take { slot: u8 },
+    /// `cost` is the civil-action price to PAY for this take: `i32::MAX`
+    /// (= "use the slot's own price") for every ordinary take, and the
+    /// JOURNAL's printed price for a replayer-observed `§3.11`
+    /// `FreeCivilAction(TakeACard)` order, whose civil action is the free
+    /// part and whose price may differ from the row's (the replayer grounded
+    /// it against the row's own `costs::take_cost`). `apply::apply` and
+    /// `apply::apply_free_civil_move` are the only consumers; `legal`
+    /// generation and every comparison site treat a Take as slot-keyed
+    /// (the sentinel never appears in a generated move).
+    Take { slot: u8, cost: i32 },
     /// Build a wonder step, a unit, or an urban building.
     Build { card: CardId },
     /// Develop a technology.

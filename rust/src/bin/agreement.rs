@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn categorize_maps_take_build_pop_leader_wonder_step_and_end_turn() {
-        assert_eq!(categorize(None, Move::Take { slot: 0 }), Category::TakeCard);
+        assert_eq!(categorize(None, Move::Take { slot: 0, cost: i32::MAX }), Category::TakeCard);
         assert_eq!(categorize(None, Move::Build { card: card("Bronze") }), Category::Build);
         assert_eq!(categorize(None, Move::Pop), Category::IncreasePopulation);
         assert_eq!(categorize(None, Move::PopFree), Category::IncreasePopulation);
