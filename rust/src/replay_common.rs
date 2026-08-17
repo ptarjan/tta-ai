@@ -2055,8 +2055,48 @@ impl<'a> Replayer<'a> {
                     ChoiceKind::FreeCivil { .. }
                     | ChoiceKind::FoodOrRes { .. }
                     | ChoiceKind::DestroyOwn
-                    | ChoiceKind::Annex { .. }
                     | ChoiceKind::PactOffer { .. } => {}
+                    // A `Pending::Choice(Annex)` (Aggression: Annex's "take a
+                    // rival's colony: gain its permanent effects", RULES_SPEC
+                    // §5.5) is opened for the ATTACKER only (`interact.rs`'s
+                    // `QueueItem::Annex`), but -- exactly like `TakeRow` above
+                    // and `FreeBuild` before it -- BGO logs the colony the
+                    // attacker actually takes as an ORDINARY `"takes <Card> in
+                    // hand"` line (`ActionClass::TakeCard`), the SAME text
+                    // shape as a bare `Move::Take`, with no distinct annex
+                    // verb. If that take is the ATTACKER'S OWN upcoming line
+                    // and the taken card is one of this choice's own options,
+                    // stop here and let `apply_one`'s `TakeCard` arm resolve
+                    // it as a `Choose` (a bare `Take` is illegal while this
+                    // pending sits open). This closes the
+                    // `IllegalMove: Take` / `StuckPending: pending choice
+                    // Annex` sub-bucket first hit on real game `7522200`
+                    // (Purple's `"plays Annex against Orange"` at round 10
+                    // left the choice open, and Orange's next ordinary take
+                    // was then rejected because the pending had never been
+                    // drained). Unlike `TakeRow`/`FreeBuild`, Annex offers NO
+                    // silent-decline `Stop`/`Skip` option (its options are
+                    // the victim's colonies, `interact.rs`'s
+                    // `QueueItem::Annex` arm), so an unmatched upcoming line
+                    // is a genuine, unexplainable gap: fail loudly rather
+                    // than steal a colony for a human.
+                    ChoiceKind::Annex { .. } => {
+                        let matches_upcoming = c.player == expected_actor
+                            && upcoming.0 == ActionClass::TakeCard
+                            && upcoming.1.is_some_and(|want| {
+                                c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Card(id) if *id == want))
+                            });
+                        if matches_upcoming {
+                            return Ok(());
+                        }
+                        return Err(MismatchKind::StuckPending(format!(
+                            "Annex choice open for player {decider} (victim {}) but the upcoming line \
+                             ({:?}) is not the attacker's own take of one of its offered colonies -- \
+                             no silent-decline option exists, so this cannot be resolved by guess",
+                            match &c.kind { ChoiceKind::Annex { victim } => *victim, _ => 0 },
+                            upcoming.0
+                        )));
+                    }
                 }
             }
             // A live `Pending::Colonize` has no real `Move` anywhere in the
