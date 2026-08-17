@@ -782,6 +782,21 @@ struct Replayer<'a> {
     /// line 240 (`"Green Bronze: 4 -> 9"`, a +5 the reconstruction never
     /// saw) against its own WonderStep failure five lines later.
     pending_resource_corrections: Vec<(Color, i32, i32)>,
+    /// The science twin of [`Replayer::pending_culture_corrections`] -- same
+    /// BGO admin-correction line shape, same self-deferring retry, but for
+    /// `"GAME DATA UPDATED <Color> science: <old> -> <new>"` clauses
+    /// (`parse_game_data_updated_science`'s own doc for why this one exists:
+    /// `classify` filed the WHOLE line as `Bookkeeping` and nothing ever
+    /// applied a `science` clause until now -- confirmed the direct cause of
+    /// the `IllegalMove: Develop` bucket (`docs/REPLAY.md`): game `7522617`
+    /// line 105 reads `"GAME DATA UPDATED Green science: 7 -> 8; Green
+    /// Bronze: 4 -> 5"` one line before Green's own `"discovers Monarchy ...
+    /// loses 8 science"` (line 107), which this binary rejected as illegal
+    /// with `science=7` -- exactly the un-applied correction's own `old`
+    /// value, one short of Monarchy's science cost of 8). Science is a plain
+    /// scalar like culture (no token-bank involvement), so the flush
+    /// mirrors the culture one, not the resources one.
+    pending_science_corrections: Vec<(Color, i32, i32)>,
     /// A structural "false skip" instrument -- see [`GameResult::
     /// politics_false_skips`]'s own doc for the full mechanism this counts.
     /// Incremented at most once per `plan.preparations` entry (tracked via
@@ -1112,6 +1127,7 @@ impl<'a> Replayer<'a> {
             pending_resource_check: None,
             pending_culture_corrections: Vec::new(),
             pending_resource_corrections: Vec::new(),
+            pending_science_corrections: Vec::new(),
             politics_false_skips: 0,
             false_skip_flagged_prep: None,
             politics_false_skips_unrecovered: 0,
@@ -3318,6 +3334,32 @@ impl<'a> Replayer<'a> {
             })
             .collect();
         self.pending_resource_corrections = still_pending;
+    }
+
+    /// The science twin of [`Replayer::flush_pending_culture_corrections`]
+    /// -- same self-deferring retry, `p.science` in place of `p.culture`.
+    /// See [`Replayer::pending_science_corrections`]'s own doc for why this
+    /// exists at all. Science, like culture, is a plain scalar with no
+    /// token-bank involvement, so this mirrors the culture flush exactly
+    /// (a bare `p.science = new.max(0) as u16`), NOT the resources one.
+    fn flush_pending_science_corrections(&mut self) {
+        if self.pending_science_corrections.is_empty() {
+            return;
+        }
+        let still_pending: Vec<(Color, i32, i32)> = self
+            .pending_science_corrections
+            .drain(..)
+            .filter(|&(color, old, new)| {
+                let p = &mut self.state.players[color.seat() as usize];
+                if p.science as i32 == old {
+                    p.science = new.max(0) as u16;
+                    false // applied -- drop from the pending list
+                } else {
+                    true // still doesn't match -- keep trying
+                }
+            })
+            .collect();
+        self.pending_science_corrections = still_pending;
     }
 
     /// Resolve exactly the CURRENTLY open `Pending::Choice(DiscardMilitary)`
@@ -5673,8 +5715,10 @@ fn find_after<'a>(text: &'a str, needle: &str) -> Option<&'a str> {
 /// clause, always parallel to the `science`/`culture` clauses on the same
 /// line, never near-plausible as a literal card-name reading) now has its
 /// own twin parser, [`parse_game_data_updated_resources`], for exactly the
-/// same reason this one exists. `science` remains out of scope: no oracle
-/// or `IllegalMove` bucket traced to it yet.
+/// same reason this one exists. The former "out of scope" `science` clause
+/// now has its own twin too, [`parse_game_data_updated_science`] -- the
+/// `IllegalMove: Develop` bucket (`docs/REPLAY.md`, game `7522617`) was
+/// traced to exactly that dropped clause.
 ///
 /// Returns one `(Color, old, new)` triple per `"<Color> culture: X -> Y"`
 /// clause found, empty when the line is not this shape at all or carries no
@@ -5727,6 +5771,33 @@ fn parse_game_data_updated_resources(text: &str) -> Vec<(Color, i32, i32)> {
     for clause in after.split("; ") {
         let Some((color, rest)) = actor_and_rest(clause) else { continue };
         let Some(nums) = rest.strip_prefix("Bronze: ") else { continue };
+        let Some((old_str, new_str)) = nums.split_once(" -> ") else { continue };
+        let (Ok(old), Ok(new)) = (old_str.trim().parse::<i32>(), new_str.trim().parse::<i32>()) else { continue };
+        out.push((color, old, new));
+    }
+    out
+}
+
+/// The science twin of [`parse_game_data_updated_culture`] -- identical
+/// shape and identical conservative "return `old` too" contract, reading
+/// `"<Color> science: <old> -> <new>"` clauses instead of `"culture: ..."`
+/// ones. This closes the gap the culture twin's own doc named explicitly:
+/// the `science` clause of a `"GAME DATA UPDATED"` line was previously
+/// dropped as plain `Bookkeeping` because no bucket had been traced to it
+/// yet. It now has -- `IllegalMove: Develop` (`docs/REPLAY.md`), game
+/// `7522617` line 105 reads `"GAME DATA UPDATED Green science: 7 -> 8;
+/// Green Bronze: 4 -> 5"` one line before Green's own `"discovers Monarchy
+/// ... loses 8 science"` (line 107), which this binary rejected as illegal
+/// with `science=7` -- exactly the un-applied correction's own `old` value,
+/// one short of Monarchy's science cost of 8.
+fn parse_game_data_updated_science(text: &str) -> Vec<(Color, i32, i32)> {
+    let Some(after) = text.strip_prefix("GAME DATA UPDATED ") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for clause in after.split("; ") {
+        let Some((color, rest)) = actor_and_rest(clause) else { continue };
+        let Some(nums) = rest.strip_prefix("science: ") else { continue };
         let Some((old_str, new_str)) = nums.split_once(" -> ") else { continue };
         let (Ok(old), Ok(new)) = (old_str.trim().parse::<i32>(), new_str.trim().parse::<i32>()) else { continue };
         out.push((color, old, new));
@@ -7435,6 +7506,9 @@ pub fn replay_game(
         // Same self-deferring flush, `Bronze`/resources side -- see
         // `Replayer::pending_resource_corrections`'s own doc.
         r.flush_pending_resource_corrections();
+        // Same self-deferring flush, `science` side -- see
+        // `Replayer::pending_science_corrections`'s own doc.
+        r.flush_pending_science_corrections();
         // BGO's own admin correction (`parse_game_data_updated_culture`'s
         // own doc: rare, real, and previously silently dropped as
         // `Bookkeeping`) -- apply every culture clause it carries directly
@@ -7456,11 +7530,17 @@ pub fn replay_game(
         // game_data_updated_resources`'s own doc) -- checked on the SAME
         // line, not an `else if`, because a real sampled line carries BOTH
         // a `science`/`Bronze` clause together (`science: 2 -> 5; Bronze: 0
-        // -> 2`); either kind alone is enough to skip `classify` below,
-        // since this line is BGO bookkeeping either way, never a `Move`.
+        // -> 2`); `science_corrections` is the third, identical treatment
+        // (`parse_game_data_updated_science`'s own doc) -- checked on the
+        // SAME line too, since a real sampled line (game `7522617` line
+        // 105) carries `science` AND `Bronze` clauses together (`science: 7
+        // -> 8; Bronze: 4 -> 5`). Any clause kind alone is enough to skip
+        // `classify` below, since this line is BGO bookkeeping either way,
+        // never a `Move`.
         let culture_corrections = parse_game_data_updated_culture(line.text);
         let resource_corrections = parse_game_data_updated_resources(line.text);
-        if !culture_corrections.is_empty() || !resource_corrections.is_empty() {
+        let science_corrections = parse_game_data_updated_science(line.text);
+        if !culture_corrections.is_empty() || !resource_corrections.is_empty() || !science_corrections.is_empty() {
             for (color, old, new) in culture_corrections {
                 let p = &mut r.state.players[color.seat() as usize];
                 if p.culture as i32 == old {
@@ -7475,6 +7555,14 @@ pub fn replay_game(
                     p.resources = new.max(0) as u16;
                 } else {
                     r.pending_resource_corrections.push((color, old, new));
+                }
+            }
+            for (color, old, new) in science_corrections {
+                let p = &mut r.state.players[color.seat() as usize];
+                if p.science as i32 == old {
+                    p.science = new.max(0) as u16;
+                } else {
+                    r.pending_science_corrections.push((color, old, new));
                 }
             }
             continue;
@@ -10605,8 +10693,8 @@ mod tests {
         assert_eq!(
             parse_game_data_updated_culture("GAME DATA UPDATED Green science: 2 -> 5; Green Bronze: 0 -> 2"),
             Vec::new(),
-            "science/Bronze corrections are this function's own business (Bronze has its own parser twin below; \
-             science stays out of scope) -- neither is a culture clause, so this must stay empty"
+            "science/Bronze corrections are other functions' business (Bronze and science each have their own \
+             parser twins below) -- neither is a culture clause, so this must stay empty"
         );
         assert_eq!(parse_game_data_updated_culture("Orange builds Swordsmen Orange spends 3 resources"), Vec::new());
     }
@@ -10632,7 +10720,31 @@ mod tests {
         assert_eq!(parse_game_data_updated_resources("Orange builds Swordsmen Orange spends 3 resources"), Vec::new());
     }
 
-    /// The actual bug this fixes (`IllegalMove: WonderStep` bucket, real
+    /// The science twin of the two tests above -- `parse_game_data_updated_
+    /// science` must read every `science` clause and ignore `culture`/
+    /// `Bronze`, the mirror-image gap. The `7522617` line 105 fixture is
+    /// the exact real line this parser exists for (`IllegalMove: Develop`
+    /// bucket, `docs/REPLAY.md`).
+    #[test]
+    fn parse_game_data_updated_science_reads_every_science_clause_and_ignores_other_stats() {
+        assert_eq!(
+            parse_game_data_updated_science("GAME DATA UPDATED Green science: 7 -> 8; Green Bronze: 4 -> 5"),
+            vec![(Color::Green, 7, 8)],
+            "the real 7522617 line 105: only the science clause is this parser's business"
+        );
+        assert_eq!(
+            parse_game_data_updated_science("GAME DATA UPDATED Green science: 2 -> 5; Green Bronze: 0 -> 2"),
+            vec![(Color::Green, 2, 5)],
+        );
+        assert_eq!(
+            parse_game_data_updated_science("GAME DATA UPDATED Orange culture: 86 -> 80; Purple culture: 65 -> 71"),
+            Vec::new(),
+            "culture-only corrections are a different, out-of-scope oracle -- must not be misread as science"
+        );
+        assert_eq!(parse_game_data_updated_science("Orange builds Swordsmen Orange spends 3 resources"), Vec::new());
+    }
+
+    /// The actual bug this fixes (`IllegalMove: Develop` bucket, real
     /// game `7521364` line 22-23): BGO's own admin correction ("Orange
     /// Bronze: 2 -> 6") landed one line before Orange's own "builds 1 stage
     /// of Colossus ... spends 3 resources" -- this reconstruction's live
@@ -10703,6 +10815,45 @@ mod tests {
         assert_eq!(
             r.pending_resource_corrections,
             vec![(Color::Orange, 4, 9)],
+            "the correction must be put back, not dropped, while still unmatched"
+        );
+    }
+
+    /// The actual bug this fixes (`IllegalMove: Develop` bucket, real game
+    /// `7522617` line 105-107): BGO's own admin correction ("Green science:
+    /// 7 -> 8") landed one line before Green's own "discovers Monarchy ...
+    /// loses 8 science" -- this reconstruction's live science (7) exactly
+    /// matches the correction's stated `old`, so it must apply immediately,
+    /// not sit pending, turning the following Develop from illegal
+    /// (science=7, cost=8) into legal (science=8).
+    #[test]
+    fn flush_pending_science_corrections_applies_the_science_clause_that_unblocks_a_develop() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.players[Color::Green.seat() as usize].science = 7;
+        r.pending_science_corrections.push((Color::Green, 7, 8));
+
+        r.flush_pending_science_corrections();
+        assert_eq!(r.state.players[Color::Green.seat() as usize].science, 8, "old (7) matches live (7): the correction must apply at once");
+        assert!(r.pending_science_corrections.is_empty(), "consumed, not left pending forever");
+    }
+
+    /// Same self-deferring shape as `flush_pending_culture_corrections_
+    /// defers_until_the_live_value_matches_bgos_own_old_baseline` -- a
+    /// `science` correction whose stated `old` does not (yet) match this
+    /// reconstruction's live science must be queued, not guessed at.
+    #[test]
+    fn flush_pending_science_corrections_defers_until_the_live_value_matches_bgos_own_old_baseline() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.players[Color::Green.seat() as usize].science = 5; // live science not yet at BGO's stated baseline of 7
+        r.pending_science_corrections.push((Color::Green, 7, 8));
+
+        r.flush_pending_science_corrections();
+        assert_eq!(r.state.players[Color::Green.seat() as usize].science, 5, "old (7) does not match live (5) -- must NOT guess and apply anyway");
+        assert_eq!(
+            r.pending_science_corrections,
+            vec![(Color::Green, 7, 8)],
             "the correction must be put back, not dropped, while still unmatched"
         );
     }
