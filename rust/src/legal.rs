@@ -550,15 +550,22 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
         }
     }
 
-    // wonder stages
+    // wonder stages. A batch of `k` stages costs `k` civil actions (the
+    // apply side, `do_wonder_step`, pays exactly `k` CA), so the affordability
+    // gate must require `ca >= k`, not just `ca >= 1` -- the old check pushed
+    // a `WonderStep { steps: k }` move for every `k <= max_k` as long as ONE
+    // CA was left, and the apply side then panicked in `pay_ca` when the bot
+    // picked a batch wider than its remaining pool (game 707, WonderBot,
+    // Great Wall `[2,2,3,2]`: `WonderStep { steps: 2 }` chosen with 1 CA left).
     if !p.wonder.is_none() {
         let stages_left = p.wonder.get().stages.len() as i32 - p.wonder_steps as i32;
-        if ca >= 1 {
-            let max_k = stages_left.min(s.wonder_stages);
-            for k in 1..=max_k {
-                if p.resources as i32 >= costs::wonder_stage_cost(state, p, k as u8) {
-                    moves.push(Move::WonderStep { steps: k as u8 });
-                }
+        let max_k = stages_left.min(s.wonder_stages);
+        for k in 1..=max_k {
+            if (ca as i32) < k {
+                break; // CA pool shrinks monotonically in k
+            }
+            if p.resources as i32 >= costs::wonder_stage_cost(state, p, k as u8) {
+                moves.push(Move::WonderStep { steps: k as u8 });
             }
         }
     }
@@ -1133,6 +1140,7 @@ mod tests {
             government,
             leader: CardId::NONE,
             wonder: CardId::NONE,
+            wonder_stages_built: 0,
             wonder_steps: 0,
             completed_wonders: CardList::new(),
             destroyed_wonders: 0,

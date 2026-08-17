@@ -633,6 +633,51 @@ pub fn wonder_stage_cost(_state: &GameState, p: &PlayerState, k: u8) -> i32 {
     stages[done..end].iter().map(|&s| s as i32).sum()
 }
 
+/// [`wonder_stage_cost`]'s POSITION-aware sibling: the per-stage resource
+/// cost of building `k` MORE stages of `p`'s wonder, read off the specific
+/// positions `wonder_stage_cost` would price them at -- i.e. the
+/// leftmost-UNBUILT stages in `p.wonder_stages_built`, not the
+/// leftmost stages after a fixed `wonder_steps` offset.
+///
+/// Why this exists (and why `wonder_stage_cost` stays): BGO lets a player
+/// build ANY uncovered stage of the wonder, paying that stage's own printed
+/// cost (game `7520718`: Colossus `[3, 3]` built 3-then-1 via Engineering
+/// Genius, the journal's second line paying `1` for the SECOND stage;
+/// `7521361`: Pyramids `[3, 2, 1]` built 3-then-2, paying `2` for the
+/// SECOND stage). The old model -- "always the next left-to-right stage,
+/// price `stages[done]`" -- charged the WRONG price whenever the journal's
+/// order diverged from left-to-right, drifting the player's resources for
+/// the rest of the game (the `IllegalMove: WonderStep` bucket's "resources
+/// short by N" signature, `docs/REPLAY.md`). `wonder_stage_cost` keeps the
+/// left-to-right reading for the FRESH case (nothing built yet, the
+/// self-play default -- every stage is unbuilt, so the two agree) and for
+/// `legal.rs`'s own affordability gate, which is a heuristic estimate of
+/// "can this player afford at least one more stage right now", not a
+/// statement about which specific stage a later, grounded replay will
+/// actually pick. This function is what `apply::do_wonder_step` (via its
+/// two `Move::WonderStep` call sites) and the replay grounding step in
+/// `replay_common.rs` actually PAY against, so a mismatch between the two
+/// can no longer silently corrupt a player's resource pool.
+pub fn wonder_stages_cost(state: &GameState, idx: u8, k: u8) -> i32 {
+    let p = &state.players[idx as usize];
+    debug_assert!(!p.wonder.is_none(), "wonder_stages_cost: no wonder in progress");
+    let stages = p.wonder.get().stages;
+    let built = p.wonder_stages_built;
+    let mut cost = 0i32;
+    let mut remaining = k as usize;
+    for pos in 0..stages.len() {
+        if built & (1 << pos) != 0 {
+            continue;
+        }
+        cost += stages[pos] as i32;
+        remaining -= 1;
+        if remaining == 0 {
+            break;
+        }
+    }
+    cost
+}
+
 /// Whether `id` is a military unit technology (infantry/cavalry/artillery/
 /// air). Mirrors `engine/actions.py::is_unit`; reuses `CardType::is_unit`
 /// rather than re-deriving `C.UNIT_TYPES`'s membership by hand.
@@ -803,6 +848,7 @@ mod tests {
             government,
             leader: CardId::NONE,
             wonder: CardId::NONE,
+            wonder_stages_built: 0,
             wonder_steps: 0,
             completed_wonders: CardList::new(),
             destroyed_wonders: 0,

@@ -874,6 +874,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         government,
         leader: CardId::NONE,
         wonder: CardId::NONE,
+        wonder_stages_built: 0,
         wonder_steps: 0,
         completed_wonders: CardList::new(),
         destroyed_wonders: 0,

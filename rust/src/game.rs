@@ -249,6 +249,7 @@ fn blank_player(idx: u8, government: CardId) -> PlayerState {
         government,
         leader: CardId::NONE,
         wonder: CardId::NONE,
+        wonder_stages_built: 0,
         wonder_steps: 0,
         completed_wonders: CardList::new(),
         destroyed_wonders: 0,
@@ -701,6 +702,7 @@ fn antiquate_leader_wonder_and_pacts(state: &mut GameState, ended: Age) {
             // and `economy::blue_used` re-derives occupancy from what is in
             // play (see `economy::blue_available`).
             state.players[idx].wonder = CardId::NONE;
+            state.players[idx].wonder_stages_built = 0;
             state.players[idx].wonder_steps = 0;
         }
 

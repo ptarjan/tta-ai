@@ -497,6 +497,13 @@ struct Replayer<'a> {
     /// is applied first and its journal line arrives later as a pure
     /// confirmation. Reset when the player's turn ends.
     auto_passed: [u32; 4],
+    /// The WONDER-STAGE POSITION the `BuildWonderStage` arm just resolved
+    /// from the journal's own stated payment (the one unbuilt stage whose
+    /// printed cost, after the line's own discount, equals the payment).
+    /// Carried into the immediately-following `try_apply_pos` call and
+    /// cleared there; `None` when the arm had no unique answer and the
+    /// engine's leftmost-unbuilt default applies.
+    grounded_wonder_pos: Option<usize>,
     /// Per-seat count of `resolve_political_decision`'s own "no disposable
     /// filler exists" wash, still owed a real hand_military decrement --
     /// see that function's own doc and [`Self::repay_military_hand_
@@ -1052,6 +1059,7 @@ impl<'a> Replayer<'a> {
             plan,
             next_prep: 0,
             auto_passed: [0; 4],
+            grounded_wonder_pos: None,
             military_hand_deficit: [0; 4],
             colonize_approximated: false,
             bid_ceilings_grounded: 0,
@@ -1129,6 +1137,14 @@ impl<'a> Replayer<'a> {
     /// own reveal order AFTER the move returns; this window sees only what
     /// `apply::apply` itself consumed.
     fn apply_move(&mut self, mv: Move) {
+        self.apply_move_pos(mv, None);
+    }
+
+    /// [`Self::apply_move`] with an optional WONDER-STAGE POSITION for a
+    /// `Move::WonderStep` (the replay grounding's resolved stage, `None` =
+    /// the leftmost-unbuilt default the engine would otherwise pick). Only
+    /// the `WonderStep` arm reads it; every other move ignores it.
+    fn apply_move_pos(&mut self, mv: Move, wonder_pos: Option<usize>) {
         self.moves_applied.push(mv);
         let before: Vec<CardId> = self.state.current_events.as_slice().to_vec();
         // A `Bid`/`BidPass` is the ONLY move that can settle an auction
@@ -1155,7 +1171,19 @@ impl<'a> Replayer<'a> {
         // front entry.
         let colonies_before = matches!(mv, Move::Bid { .. } | Move::BidPass)
             .then(|| self.state.players.iter().map(|p| p.colonies.len()).sum::<usize>());
-        apply::apply(&mut self.state, mv);
+        if let Move::WonderStep { steps } = mv {
+            // Route the grounded stage position through `do_wonder_step`
+            // directly (same actor, same free=false as `apply::apply`'s own
+            // `Move::WonderStep` arm) so a non-left-to-right build marks the
+            // exact position the journal's payment pinned down. Resolve the
+            // actor and the per-stage price BEFORE taking the mutable borrow
+            // (`do_wonder_step` needs `&mut self.state`).
+            let actor = self.state.current;
+            let cost = costs::wonder_stages_cost(&self.state, actor, 1);
+            apply::do_wonder_step(&mut self.state, actor, steps, cost, false, wonder_pos);
+        } else {
+            apply::apply(&mut self.state, mv);
+        }
         if let Some(before_count) = colonies_before {
             let after_count: usize = self.state.players.iter().map(|p| p.colonies.len()).sum();
             if after_count > before_count {
@@ -3548,6 +3576,37 @@ impl<'a> Replayer<'a> {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// [`Self::try_apply`] with an optional WONDER-STAGE POSITION forwarded to
+    /// the underlying apply for a `Move::WonderStep`. The grounding in the
+    /// `BuildWonderStage` arm resolves the exact stage from the journal's own
+    /// stated payment and passes it here so the engine marks THAT position
+    /// rather than the leftmost-unbuilt default. `wonder_pos` is ignored for
+    /// any non-`WonderStep` move (and this is only ever called for one).
+    fn try_apply_pos(&mut self, mv: Move, record: bool, wonder_pos: Option<usize>) -> Result<(), MismatchKind> {
+        // Legality is checked exactly as `try_apply` does (the position does
+        // not affect whether the move is legal -- only WHICH stage it marks).
+        let legal = legal::legal_moves(&self.state);
+        if !legal.as_slice().contains(&mv) {
+            return Err(MismatchKind::IllegalMove {
+                attempted: format!("{mv:?}"),
+                legal_moves: format!("{:?}", legal.as_slice()),
+            });
+        }
+        if record && self.record_decisions {
+            let after_arbitrary_discard =
+                self.discard_solver.chosen > 0 || self.discard_solver.forced_collisions > 0;
+            self.decisions.push(Decision {
+                lineno: self.current_lineno,
+                state: self.state.clone(),
+                legal_moves: legal.as_slice().to_vec(),
+                human_move: mv,
+                after_arbitrary_discard,
+            });
+        }
+        self.apply_move_pos(mv, wonder_pos);
         Ok(())
     }
 
@@ -8599,10 +8658,91 @@ fn apply_one(
             // through to the ordinary `try_apply` reproduces its previous,
             // honest failure instead of a hard abort.
             if !r.state.players[actor as usize].wonder.is_none() {
-                let true_cost = costs::wonder_stage_cost(&r.state, &r.state.players[actor as usize], steps);
+                let true_cost = costs::wonder_stages_cost(&r.state, actor, 1);
                 convert_trade_food_shortfall(r, actor, raw_text, true_cost)?;
             }
-            r.try_apply(Move::WonderStep { steps }, true)
+            // ENGINE BUG this grounding fixes (`docs/REPLAY.md`'s
+            // `IllegalMove: WonderStep` "resources short by N" signature):
+            // BGO lets a player build ANY uncovered stage of the wonder,
+            // paying that stage's OWN printed cost -- not always the next
+            // left-to-right one. Game `7520718`'s own Colossus `[3, 3]` was
+            // built 3-then-1 (Engineering Genius's own 2-resource discount
+            // landing the second stage at `1`, not `3`); `7521361`'s own
+            // Pyramids `[3, 2, 1]` was built 3-then-2 (the journal's second
+            // line paying `2` for the SECOND stage, not `1`). The old model
+            // -- "always the next left-to-right stage, price `stages[done]`"
+            // -- charged the WRONG price whenever the journal's order
+            // diverged, drifting the player's resources for the rest of the
+            // game and surfacing as `IllegalMove: WonderStep` several lines
+            // later, far from the true cause.
+            //
+            // This grounding reads the journal's OWN stated payment (the
+            // same `spent_resources`+`spent_food_after_resource` total
+            // `stated_build_payment` already composes for the Build/Upgrade
+            // arms' own cost cross-checks, extended here to the
+            // `loses N military resource` clause `total_paid_for_build`
+            // handles) and picks the one UNBUILT stage whose own printed
+            // cost -- after the line's own discount, if any (Engineering
+            // Genius's `(A)`/`(I)` 2/3-resource discount, the only
+            // discount source that applies to a wonder stage in the base
+            // game) -- exactly equals that payment. A match is a fact the
+            // journal itself states, not a guess this binary is making: it
+            // is the same "grounded cost-sibling resolution" pattern as
+            // `resolve_named_card_by_effect`/`resolve_aggression_age`,
+            // never a loosened check (no match, or an ambiguous match with
+            // two or more candidates, falls through to the OLD behaviour
+            // -- `try_apply(Move::WonderStep{steps})` with no pre-adjustment
+            // -- so a genuinely unexplainable line still fails loudly,
+            // exactly as it always has).
+            let p_idx = actor as usize;
+            if !r.state.players[p_idx].wonder.is_none() {
+                let stated = total_paid_for_build(raw_text)
+                    .map(|base| base + spent_food_after_resource(raw_text));
+                if let Some(stated) = stated {
+                    let wonder_id = r.state.players[p_idx].wonder;
+                    let stages = wonder_id.get().stages;
+                    let built = r.state.players[p_idx].wonder_stages_built;
+                    let eg_discount: [i32; 2] = if raw_text.contains("Engineering Genius") {
+                        // `(A)`: resource_discount 2; `(I)`: 3. The line
+                        // names the base card, not the age, so try both --
+                        // the two are never in play together in a single
+                        // line, and only one will match a real stage cost.
+                        [2, 3]
+                    } else {
+                        [0, 0]
+                    };
+                    let mut candidates: Vec<usize> = Vec::new();
+                    for pos in 0..stages.len() {
+                        if built & (1 << pos) != 0 {
+                            continue;
+                        }
+                        for &d in &eg_discount {
+                            if (stages[pos] as i32 - d).max(0) == stated {
+                                candidates.push(pos);
+                                break;
+                            }
+                        }
+                    }
+                    if candidates.len() == 1 {
+                        // A unique match: the journal's own payment pins down
+                        // EXACTLY which stage was built. Pass it to
+                        // `do_wonder_step` (via the position argument) so it
+                        // marks THAT stage rather than the leftmost-unbuilt
+                        // default -- this is what makes a non-left-to-right
+                        // build (Colossus `[3,3]` 3-then-1, Pyramids `[3,2,1]`
+                        // 3-then-2, or a mid-wonder EG stage) mark the right
+                        // position. The move's own `steps` (1 for a single-
+                        // stage line, N for a "builds N stages" run) tells it
+                        // how many consecutive stages starting at `target` to
+                        // mark; we do NOT pre-mark here (the old pre-mark
+                        // double-counted against the move's own marking).
+                        r.grounded_wonder_pos = Some(candidates[0]);
+                    }
+                }
+            }
+            let steps_arg = r.grounded_wonder_pos;
+            r.grounded_wonder_pos = None;
+            r.try_apply_pos(Move::WonderStep { steps }, true, steps_arg)
         }
         ActionClass::IncreasePopulation => {
             let legal = legal::legal_moves(&r.state);
@@ -9544,6 +9684,7 @@ mod tests {
             government: CardId::NONE,
             leader: CardId::NONE,
             wonder: CardId::NONE,
+            wonder_stages_built: 0,
             wonder_steps: 0,
             completed_wonders: CardList::new(),
             destroyed_wonders: 0,

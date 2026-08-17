@@ -396,8 +396,33 @@ pub struct PlayerState {
     pub techs: Tableau,
     pub government: CardId,
     pub leader: CardId,
-    /// The wonder under construction and how many steps are paid for.
+    /// The wonder under construction, how many of its stages are paid for,
+    /// and WHICH positions those stages are. `wonder_stages_built` is a
+    /// bitmask over the wonder's `Card::stages` array (position 0 = the
+    /// leftmost printed stage), the source of truth; `wonder_steps` is its
+    /// POPULATION COUNT (`count_ones()`), kept as a plain `u8` because it is
+    /// read from a dozen places (the blue-token `economy::blue_used`
+    /// accounting, the `bots::`/`advisor::`/`harness::` feature readers, the
+    /// legal-move generators' `stages_left` bound) and re-deriving it on
+    /// every read is wasteful for a value that is never written anywhere but
+    /// the single place that owns it, `apply::do_wonder_step` (plus the
+    /// reset-to-0 sites on take/antiquation/loss).
+    ///
+    /// Why positions, not just a count: BGO lets a player build ANY
+    /// uncovered stage of the wonder, paying that stage's own printed cost,
+    /// not always the next left-to-right one (game `7520718`: Colossus
+    /// `[3, 3]` built 3-then-1 via Engineering Genius; `7521361`: Pyramids
+    /// `[3, 2, 1]` built 3-then-2). A count alone cannot tell which stage
+    /// the NEXT payment is for -- the price of stage 0 vs stage 1 vs stage
+    /// 2 differ for most of the 16 base-game wonders, so a count-only model
+    /// (the old `wonder_stage_cost` reading of `stages[done..done+k]`)
+    /// charged the wrong price whenever the journal's order diverged from
+    /// left-to-right, drifting the player's resources for the rest of the
+    /// game. See `apply::do_wonder_step`'s own doc and `costs::
+    /// wonder_stages_cost` for the two readers that actually PAY against
+    /// the positions rather than a fixed offset.
     pub wonder: CardId,
+    pub wonder_stages_built: u32,
     pub wonder_steps: u8,
     /// Append-only (see the doc on [`Self::destroyed_wonders`]) and unique per
     /// card -- `card_table.rs` prints exactly one copy of each of the 16 base-

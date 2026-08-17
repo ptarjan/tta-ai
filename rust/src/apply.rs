@@ -258,7 +258,7 @@ pub fn apply(state: &mut GameState, mv: Move) {
         Move::Build { card } => do_build(state, idx, card, 0, false),
         Move::Develop { card } => h_develop(state, idx, card, false),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, 0, false),
-        Move::WonderStep { steps } => do_wonder_step(state, idx, steps, 0, false),
+        Move::WonderStep { steps } => do_wonder_step(state, idx, steps, costs::wonder_stages_cost(state, idx, 1), false, None),
         Move::Pop => h_pop(state, idx, false),
         Move::PopFree => h_pop_free(state, idx),
         Move::Revolution { card } => h_revolution(state, idx, card, false),
@@ -603,6 +603,13 @@ fn take_card_impl(state: &mut GameState, idx: u8, slot: usize, record_taken_this
     let card = id.get();
     if card.kind == CardType::Wonder {
         state.players[idx as usize].wonder = id;
+        // `wonder_stages_built` -- the set of stage POSITIONS this wonder
+        // has been paid for -- is keyed by position, so it resets with the
+        // wonder identity the way `wonder_steps` (the COUNT of positions
+        // paid) does. Taking a SECOND wonder after the first completed
+        // (the same player, the same turn, or the next) must not inherit
+        // the first's positions -- see `PlayerState::wonder_stages_built`.
+        state.players[idx as usize].wonder_stages_built = 0;
         state.players[idx as usize].wonder_steps = 0;
     } else {
         let p = &mut state.players[idx as usize];
@@ -794,38 +801,120 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
     p.techs.get_mut(hi).expect("do_upgrade: hi not in tableau").workers += 1;
 }
 
-/// Ports `engine/actions.py::do_wonder_step`. Panics unconditionally today
-/// via [`costs::wonder_stage_cost`] -- see this module's top doc comment.
-pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, discount: i32, free: bool) {
-    let base = costs::wonder_stage_cost(state, &state.players[idx as usize], k);
-    let cost = (base - discount).max(0);
-    if !free {
-        costs::pay_ca(&mut state.players[idx as usize], 1);
-    }
-    let wonder = {
-        let p = &mut state.players[idx as usize];
-        economy::pay_resources(p, cost.max(0) as u16);
-        p.wonder_steps += k;
-        p.wonder
+/// Pays for `k` stages of the wonder currently under construction, at
+/// `cost` resources each (already discounted by the caller -- see the two
+/// `Move::WonderStep` arms in this file and `apply_free_civil_move`'s own
+/// `discount` argument), spending `cost * k` out of the player's resource
+/// pool, `pay_ca(k)` civil actions (unless `free`), and marking the first
+/// `k` UNBUILT stage positions as built.
+///
+/// Why a position, not a count: BGO lets a player build ANY uncovered stage
+/// of the wonder, paying that stage's own printed cost -- the printed line
+/// says so (game `7520718`: Colossus `[3, 3]` built 3-then-1 via Engineering
+/// Genius, paying `1` for the second stage; `7521361`: Pyramids `[3, 2, 1]`
+/// built 3-then-2, paying `2` for the second). The old model -- "always the
+/// next left-to-right stage, price `stages[done]`" -- charged the WRONG
+/// price whenever the journal's order diverged from left-to-right, drifting
+/// the player's resources for the rest of the game (the
+/// `IllegalMove: WonderStep` bucket's "resources short by N" signature,
+/// `docs/REPLAY.md`). `costs::wonder_stage_cost` is kept for its
+/// left-to-right reading -- that is the price a fresh `k`-stage build pays
+/// when nothing is built yet (the self-play default), and the affordability
+/// gate in `legal.rs` still uses it -- but PAYMENT now goes through
+/// [`costs::wonder_stages_cost`] against the specific positions the caller
+/// chose, and `wonder_steps` (the count) is DERIVED from
+/// `wonder_stages_built` (the positions) rather than stored separately, so
+/// the two can never disagree.
+///
+/// Panics on `k == 0` (no caller does; the legal-move generators only ever
+/// produce `k >= 1`) and on a `wonder_steps`/`wonder_stages_built` pair that
+/// cannot both be true (a count greater than the population -- unreachable
+/// today because every writer of the pair updates both together, but the
+/// panic is the honest failure for a future writer that forgets).
+/// `pos` names the stage position this move builds (the leftmost-UNBUILT
+/// one when the caller did not resolve it -- the self-play default, and what
+/// `Move::WonderStep` carries when the replay grounding had no unique
+/// answer). The replay grounding in `replay_common.rs` resolves the exact
+/// position from the journal's own stated payment and passes it here, so a
+/// non-left-to-right build (Colossus `[3,3]` 3-then-1, Pyramids `[3,2,1]`
+/// 3-then-2) marks the RIGHT stage rather than the next sequential one.
+///
+/// A "builds N stages" line (N > 1) always prices a contiguous
+/// left-to-right run (confirmed corpus-wide), so `pos` is always the
+/// leftmost stage of that run and the remaining N-1 are the next unbuilt
+/// ones to its right.
+pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, cost: i32, free: bool, pos: Option<usize>) {
+    debug_assert!(k >= 1, "do_wonder_step: k == 0 is a no-op, not a move");
+    let p = &mut state.players[idx as usize];
+    let stages = p.wonder.get().stages;
+    let built = p.wonder_stages_built;
+    // The first stage to mark: the caller's resolved position, else the
+    // leftmost unbuilt (self-play / ungrounded default).
+    let default_start = (0..stages.len()).find(|&i| built & (1 << i) == 0).expect("no unbuilt stage");
+    let start = match pos {
+        // A resolved position is the LEFTMOST of the run this line builds.
+        // If the run (k consecutive-from-start unbuilt stages) can't be
+        // satisfied from it (e.g. a multi-stage line whose grounding pinned
+        // a single mid-run stage, or a completed-wonder quirk), fall back to
+        // the leftmost-unbuilt default rather than over-marking.
+        Some(t) if t < stages.len() && (built & (1 << t)) == 0 => {
+            let mut c = 0u32;
+            for i in t..stages.len() {
+                if c == k as u32 { break; }
+                if built & (1 << i) == 0 { c += 1; }
+            }
+            if c >= k as u32 { t } else { default_start }
+        }
+        _ => default_start,
     };
-    if wonder_is_complete(wonder, state.players[idx as usize].wonder_steps) {
-        let gained = wonder_completion_culture(&state.players[idx as usize], wonder);
-        let p = &mut state.players[idx as usize];
+    // Mark `start` plus the next (k-1) UNBUILT positions to its right (a
+    // multi-stage build is a contiguous run, `start` being its leftmost).
+    let mut next = built;
+    let mut marked = 0u32;
+    for i in start..stages.len() {
+        if marked == k as u32 {
+            break;
+        }
+        if next & (1 << i) != 0 {
+            continue;
+        }
+        next |= 1 << i;
+        marked += 1;
+    }
+    debug_assert!(marked == k as u32, "do_wonder_step: fewer unbuilt stages than k");
+    p.wonder_stages_built = next;
+    if !free {
+        costs::pay_ca(p, k as i32);
+    }
+    economy::pay_resources(p, (cost * k as i32).max(0) as u16);
+    let wonder = p.wonder;
+    let built = p.wonder_stages_built;
+    let steps = built.count_ones() as u8;
+    let n_stages = stages.len() as u8;
+    debug_assert!(steps <= n_stages);
+    if steps == n_stages {
+        let gained = wonder_completion_culture(p, wonder);
         p.wonder = CardId::NONE;
+        p.wonder_stages_built = 0;
         p.wonder_steps = 0;
         p.completed_wonders.push(wonder);
         on_enter_play(p, wonder);
         p.culture = (p.culture as i32 + gained).max(0) as u16;
+    } else {
+        p.wonder_steps = steps;
     }
 }
 
-/// §9: a wonder is complete once every printed stage is paid for. Real as of
-/// `Card::stages` landing mid-port (see this module's top doc comment);
-/// [`do_wonder_step`] never reaches this today only because the cost lookup
-/// ahead of it (`costs::wonder_stage_cost`) still panics on the sibling gap.
-fn wonder_is_complete(wonder: CardId, steps_built: u8) -> bool {
-    steps_built as usize >= wonder.get().stages.len()
+/// The leftmost-UNBUILT stage position of `idx`'s wonder -- the position a
+/// self-play `WonderStep` (or an ungrounded replay) builds. Exposed so the
+/// replay grounding can resolve the same default it would fall back to.
+pub fn wonder_leftmost_unbuilt(state: &GameState, idx: u8) -> usize {
+    let p = &state.players[idx as usize];
+    (0..p.wonder.get().stages.len())
+        .find(|&i| p.wonder_stages_built & (1 << i) == 0)
+        .expect("wonder_leftmost_unbuilt: no unbuilt stage")
 }
+
 
 fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
     costs::pay_ca(&mut state.players[idx as usize], 1);
@@ -1488,7 +1577,10 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
 pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
     match mv {
         Move::Pop => h_pop(state, idx, true),
-        Move::WonderStep { steps } => do_wonder_step(state, idx, steps, discount, true),
+        Move::WonderStep { steps } => {
+            let base = costs::wonder_stages_cost(state, idx, 1);
+            do_wonder_step(state, idx, steps, (base - discount).max(0), true, None)
+        }
         Move::Build { card } => do_build(state, idx, card, discount, true),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, discount, true),
         Move::Develop { card } => h_develop(state, idx, card, true),
@@ -1721,6 +1813,7 @@ mod tests {
             government,
             leader: CardId::NONE,
             wonder: CardId::NONE,
+            wonder_stages_built: 0,
             wonder_steps: 0,
             completed_wonders: CardList::new(),
             destroyed_wonders: 0,
@@ -3288,11 +3381,68 @@ mod tests {
         p.resources = 10;
         p.wonder = card("Pyramids");
         let mut state = one_player_state(p);
-        do_wonder_step(&mut state, 0, 1, 0, false);
+        do_wonder_step(&mut state, 0, 1, 3, false, None);
         assert_eq!(state.players[0].civil_actions, 3);
         assert_eq!(state.players[0].resources, 10 - 3);
         assert_eq!(state.players[0].wonder_steps, 1);
+        assert_eq!(state.players[0].wonder_stages_built, 1 << 0, "leftmost unbuilt stage, position 0");
         assert_eq!(state.players[0].wonder, card("Pyramids"), "not complete yet: 1 of 3 stages paid");
+    }
+
+    /// Regression for the "resources short by N" `IllegalMove: WonderStep`
+    /// bucket (`docs/REPLAY.md`): BGO lets a player build ANY uncovered
+    /// stage, paying that stage's own printed cost, not always the next
+    /// left-to-right one. Game `7520718`'s own Colossus `[3, 3]` was built
+    /// 3-then-1 (Engineering Genius's own discount landing the second stage
+    /// at 1, not 3) -- the journal's second line pays `1`, and this is the
+    /// exact shape `do_wonder_step` must reproduce: a cost-1 payment that
+    /// still counts as building a real stage (position 1, not position 0
+    /// again), not a silent no-op that would leave the wonder perpetually
+    /// one stage short of completing.
+    #[test]
+    fn do_wonder_step_charges_the_specific_stage_cost_not_always_the_leftmost() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.resources = 10;
+        p.wonder = card("Colossus"); // stages [3, 3]
+        let mut state = one_player_state(p);
+        // First stage built at full price (position 0).
+        do_wonder_step(&mut state, 0, 1, 3, false, None);
+        // Second stage -- the one this test is actually about -- built at
+        // cost 1 (the Engineering Genius discount the journal's own second
+        // line states), NOT the leftmost-unbuilt stage's price (3). The
+        // replay grounding resolves this to position 1 and passes it
+        // explicitly; a left-to-right default would also land here (only
+        // position 1 remains) but the explicit pos is the honest path.
+        do_wonder_step(&mut state, 0, 1, 1, false, Some(1));
+        assert_eq!(state.players[0].resources, 10 - 3 - 1, "second stage must charge its OWN cost (1), not the leftmost unbuilt stage's (3)");
+        assert!(state.players[0].wonder.is_none(), "both positions now built, wonder complete");
+        assert!(state.players[0].completed_wonders.contains(card("Colossus")));
+    }
+
+    /// `wonder_stages_cost` (not `wonder_stage_cost`) is the price a
+    /// SPECIFIC, already-partially-built wonder charges for its next
+    /// unbuilt stage: game `7521361`'s own Pyramids `[3, 2, 1]` was built
+    /// 3-then-2 (the journal's second line pays `2` for the SECOND stage,
+    /// not `1`), so after the first stage is built the leftmost-UNBUILT
+    /// stage must price at `2`, not `1` (the value `wonder_stage_cost`'s
+    /// old, count-based reading would give at `wonder_steps == 1`).
+    #[test]
+    fn wonder_stages_cost_prices_the_leftmost_unbuilt_stage_not_a_fixed_offset() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.resources = 10;
+        p.wonder = card("Pyramids"); // stages [3, 2, 1]
+        let mut state = one_player_state(p);
+        do_wonder_step(&mut state, 0, 1, 3, false, None);
+        let p = &state.players[0];
+        assert_eq!(p.wonder_steps, 1);
+        assert_eq!(p.wonder_stages_built, 1 << 0);
+        assert_eq!(
+            costs::wonder_stages_cost(&state, 0, 1),
+            2,
+            "leftmost UNBUILT stage is position 1 (cost 2), not position 2 (cost 1, what a count-based offset would read)"
+        );
     }
 
     #[test]
@@ -3303,11 +3453,11 @@ mod tests {
         p.civil_actions = 4;
         p.resources = 10;
         p.wonder = card("Fast Food Chains");
-        p.wonder_steps = 3; // only the last stage remains
+        p.wonder_stages_built = 0b0111; // stages 0, 1, 2 built; only the last remains
         p.techs.insert(card("Agriculture"), TechSlot { workers: 2, stored: 0 }); // production
         p.techs.insert(card("Warriors"), TechSlot { workers: 1, stored: 0 }); // unit
         let mut state = one_player_state(p);
-        do_wonder_step(&mut state, 0, 1, 0, false);
+        do_wonder_step(&mut state, 0, 1, 4, false, None); // final stage costs 4 (stages [4,4,4,4])
         assert_eq!(state.players[0].resources, 10 - 4);
         assert!(state.players[0].wonder.is_none(), "wonder completed");
         assert_eq!(state.players[0].wonder_steps, 0);
@@ -3333,9 +3483,9 @@ mod tests {
         p.civil_actions = 1; // this turn's last civil action, about to pay for the final stage
         p.resources = 10;
         p.wonder = card("Pyramids"); // stages [3, 2, 1], printed civil_actions: 1
-        p.wonder_steps = 2; // only the last (cost-1) stage remains
+        p.wonder_stages_built = 0b0011; // stages 0, 1 built; only the last (cost-1) stage remains
         let mut state = one_player_state(p);
-        do_wonder_step(&mut state, 0, 1, 0, false);
+        do_wonder_step(&mut state, 0, 1, 0, false, None); // final (cost-1) stage
         assert!(state.players[0].completed_wonders.contains(card("Pyramids")), "wonder completed");
         assert_eq!(
             state.players[0].civil_actions, 1,
