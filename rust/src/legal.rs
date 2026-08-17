@@ -550,19 +550,21 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
         }
     }
 
-    // wonder stages. A batch of `k` stages costs `k` civil actions (the
-    // apply side, `do_wonder_step`, pays exactly `k` CA), so the affordability
-    // gate must require `ca >= k`, not just `ca >= 1` -- the old check pushed
-    // a `WonderStep { steps: k }` move for every `k <= max_k` as long as ONE
-    // CA was left, and the apply side then panicked in `pay_ca` when the bot
-    // picked a batch wider than its remaining pool (game 707, WonderBot,
-    // Great Wall `[2,2,3,2]`: `WonderStep { steps: 2 }` chosen with 1 CA left).
+    // wonder stages. A batch of `k` stages costs ONE civil action, not `k`:
+    // a construction special tech (`wonderStagesPerAction`, e.g. Masonry 2 /
+    // Architecture 3 / Engineering 4) pays the WHOLE batch's summed resource
+    // cost for that single action, and a player with no such tech is
+    // `wonder_stages == 1` (Stats::default) -- exactly the single-stage
+    // repeat action (§3.8: "Multiple stages same turn = repeat the action").
+    // So the affordability gate requires `ca >= 1` for every `k <= max_k`;
+    // `max_k` (the `wonder_stages` stat) already bounds the batch, and
+    // `do_wonder_step` pays exactly 1 CA at apply time for any `k`.
     if !p.wonder.is_none() {
         let stages_left = p.wonder.get().stages.len() as i32 - p.wonder_steps as i32;
         let max_k = stages_left.min(s.wonder_stages);
         for k in 1..=max_k {
-            if (ca as i32) < k {
-                break; // CA pool shrinks monotonically in k
+            if (ca as i32) < 1 {
+                break; // a wonder stage always costs its 1 CA
             }
             // `wonder_stages_cost` (position-aware) sums the actual per-stage
             // costs of the next k unbuilt stages -- the SAME formula
@@ -2190,6 +2192,46 @@ mod tests {
         let moves = action_moves(&state, &state.players[0]);
         assert!(moves.as_slice().contains(&Move::WonderStep { steps: 1 }));
         assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::WonderStep { steps } if *steps != 1)));
+    }
+
+    /// Game `7523791` line 435 (`docs/REPLAY.md`): Architecture in play
+    /// (`wonder_stages == 3`), Ocean Liners `[4,2,2,4]` with stages 0..3
+    /// already marked, 1 CA and 4 resources left. The last stage is a batch
+    // of `k = 1` for ONE civil action (a construction tech pays the whole
+    // batch for the single action), so `WonderStep { steps: 1 }` must be
+    // offered -- the old `ca >= k`-per-stage gate required 3 CA here and
+    // rejected the journal's final, wonder-completing stage.
+    #[test]
+    fn wonder_step_batch_costs_one_ca_not_k_when_a_construction_tech_is_in_play() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1;
+        p.resources = 4;
+        p.techs.insert(card("Architecture"), TechSlot { workers: 0, stored: 0 });
+        p.wonder = card("Ocean Liners");
+        p.wonder_stages_built = 0b0111; // stages [4,2,2] built; leftmost-unbuilt costs 4
+        p.wonder_steps = 3;
+        let state = one_player_state(p);
+        let moves = action_moves(&state, &state.players[0]);
+        assert!(
+            moves.as_slice().contains(&Move::WonderStep { steps: 1 }),
+            "1 CA must cover the last stage when Architecture (3 stages/action) is in play"
+        );
+    }
+
+    /// The batch discount is bounded by the tech's own `wonderStagesPerAction`
+    /// even when more stages remain: with Architecture (`wonder_stages == 3`)
+    // and 1 CA, a 4-stage wonder offers up to `steps: 3` but NOT `steps: 4`.
+    #[test]
+    fn wonder_step_batch_never_exceeds_the_wonder_stages_stat() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1;
+        p.resources = 100;
+        p.techs.insert(card("Architecture"), TechSlot { workers: 0, stored: 0 });
+        p.wonder = card("Ocean Liners"); // [4,2,2,4] -- four stages
+        let state = one_player_state(p);
+        let moves = action_moves(&state, &state.players[0]);
+        assert!(moves.as_slice().contains(&Move::WonderStep { steps: 3 }));
+        assert!(!moves.as_slice().iter().any(|m| matches!(m, Move::WonderStep { steps: 4 })));
     }
 
     #[test]

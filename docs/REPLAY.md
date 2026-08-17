@@ -8035,3 +8035,48 @@ debug-build abort. This unblocks per-game triage of the
 exactly which action the model over-charged, so the missing CA source can
 be found (and fixed at the model) game by game, instead of the abort
 hiding it.
+
+## Wonder stages: a batch of `k` costs ONE civil action, not `k` (2026-08-17)
+
+The `IllegalMove: WonderStep` bucket's (250 games, the LARGEST at triage
+time) exemplar, game `7523791` (4p), round 14, line 435:
+
+```
+line 432  Orange takes Architecture in hand Orange uses 1 civil action
+line 433  Orange discovers Architecture Orange loses 6 science
+line 434  Orange builds 3 stages of Ocean Liner Orange spends 8 resources
+line 435  Orange builds 1 stage of Ocean Liner Orange spends 4 resources; ; Wonder completed   <-- STOP
+```
+
+`IllegalMove { attempted: "WonderStep { steps: 1 }" }` with NO `WonderStep`
+at all in the engine's legal list. The CA math (from the `CA_TOTAL_CHECK`
+audit, `ca_total=5` for Monarchy + 1 leader CA): take 1 + develop 1 +
+**3-stage batch 3** + **single stage 1** = 6 against a 5-CA budget — one
+CA over, and the engine refused the final, wonder-completing stage.
+
+Root cause: the engine billed a wonder-stage batch of `k` at `k` civil
+actions — `apply::do_wonder_step` called `pay_ca(p, k)` and the
+`legal.rs` gate required `ca >= k` — while a construction special tech
+(Masonry `wonderStagesPerAction: 2`, Architecture 3, Engineering 4)
+pays the WHOLE batch's summed resource cost for a SINGLE action
+(RULES_SPEC §3.8, now made explicit with the per-card values). The base
+game's construction techs cap the batch at 4, so "a batch is 1 CA" is the
+correct model for EVERY base-game state: without a tech,
+`Stats.wonder_stages` is 1 and the only move is `k == 1` (the "repeat the
+action" shape §3.8 describes); with one, any `k <= wonder_stages` is one
+action.
+
+Fix (lockstep, two files): `apply::do_wonder_step` now charges
+`pay_ca(p, 1)` for any `k`, and the `legal.rs` WonderStep gate requires
+`ca >= 1` (not `ca >= k`) for every `k <= max_k`, with the resources gate
+unchanged (`wonder_stages_cost`, the summed per-stage price). New tests:
+`legal.rs` — `wonder_step_batch_costs_one_ca_not_k_when_a_construction_tech_is_in_play`
+(the 7523791 line-435 shape: Architecture, Ocean Liners 3/4 built, 1 CA,
+4 resources) and `wonder_step_batch_never_exceeds_the_wonder_stages_stat`;
+`apply.rs` — `wonder_step_batch_charges_one_ca_and_the_summed_stage_costs`
+and `wonder_step_multi_stage_batch_pays_summed_resources_for_one_ca`.
+
+Effect on `7523791`: the round-14 batch is now take 1 + develop 1 +
+3-stage batch 1 + 1-stage batch 1 = 4 CA against 5 — legal. The game
+replays to completion, scores `[147, 120, 94, 182]` matching the index.
+Full corpus census follows the commit below.

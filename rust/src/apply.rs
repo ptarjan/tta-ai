@@ -821,9 +821,12 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
 /// Pays for `k` stages of the wonder currently under construction, at
 /// `cost` resources each (already discounted by the caller -- see the two
 /// `Move::WonderStep` arms in this file and `apply_free_civil_move`'s own
-/// `discount` argument), spending `cost * k` out of the player's resource
-/// pool, `pay_ca(k)` civil actions (unless `free`), and marking the first
-/// `k` UNBUILT stage positions as built.
+/// `discount` argument; for `k > 1` the SUM of the stages' actual per-stage
+/// costs is charged instead of `cost * k` -- see the `total_cost` block
+/// below), spending the summed resources out of the player's pool, ONE
+/// civil action (unless `free` -- a construction special tech's
+/// `wonderStagesPerAction` batch pays the whole batch for a single action,
+/// §3.8), and marking the first `k` UNBUILT stage positions as built.
 ///
 /// Why a position, not a count: BGO lets a player build ANY uncovered stage
 /// of the wonder, paying that stage's own printed cost -- the printed line
@@ -901,7 +904,15 @@ pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, _cost: i32, free: b
     debug_assert!(marked == k as u32, "do_wonder_step: fewer unbuilt stages than k");
     p.wonder_stages_built = next;
     if !free {
-        costs::pay_ca(p, k as i32);
+        // ONE civil action for the WHOLE batch, whatever `k`: a construction
+        // special tech (`wonderStagesPerAction`, Masonry 2 / Architecture 3 /
+        // Engineering 4) pays the summed resource cost of all `k` stages for
+        // the single action, and `k == 1` (no tech in play, the common case)
+        // is the same single action -- §3.8's "multiple stages same turn =
+        // repeat the action" is what costs `k` CA, not one batched move.
+        // Mirrors `legal.rs`'s WonderStep gate, which requires exactly 1 CA
+        // for every `k <= max_k`.
+        costs::pay_ca(p, 1);
     }
     // Sum the ACTUAL per-stage costs of the stages just marked, rather than
     // charging `cost * k` (a single per-stage price multiplied).  A multi-
@@ -3642,6 +3653,55 @@ mod tests {
     }
 
     // -------------------------------------------- wonder-completion culture
+
+    /// A `WonderStep` batch of `k` stages costs ONE civil action, whatever
+    /// `k` (a construction special tech's `wonderStagesPerAction` pays the
+    /// whole batch's summed resources for the single action; `k == 1` is the
+    /// same single action). Game `7523791` line 435 (`docs/REPLAY.md`):
+    /// Ocean Liners `[4,2,2,4]`, stages [4,2,2] already built, 1 CA and 4
+    /// resources left -- the last stage must spend exactly 1 CA and 4
+    /// resources. The old `pay_ca(k)`/`ca >= k` model billed `k` CA here and
+    // rejected the journal's wonder-completing stage. Revert `pay_ca(p, 1)`
+    // to `pay_ca(p, k as i32)` to see this go RED (0 CA left after the batch,
+    // and the legal gate would have refused the move at `ca == 0`).
+    #[test]
+    fn wonder_step_batch_charges_one_ca_and_the_summed_stage_costs() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1;
+        p.resources = 4;
+        p.techs.insert(card("Architecture"), TechSlot { workers: 0, stored: 0 });
+        p.wonder = card("Ocean Liners"); // stages [4,2,2,4]
+        p.wonder_stages_built = 0b0111; // [4,2,2] built; leftmost-unbuilt is the 4-cost stage
+        p.wonder_steps = 3;
+        let mut state = one_player_state(p);
+        let cost = costs::wonder_stages_cost(&state, 0, 1);
+        do_wonder_step(&mut state, 0, 1, cost, false, None);
+        let p = &state.players[0];
+        assert_eq!(p.civil_actions, 0, "a 1-stage batch costs 1 CA");
+        assert_eq!(p.resources, 0, "the 4-cost stage was paid from resources");
+        assert!(p.completed_wonders.contains(card("Ocean Liners")), "wonder completed");
+        assert_eq!(p.wonder, CardId::NONE);
+    }
+
+    /// The multi-stage twin: a 3-stage batch (Architecture's 3/action) marks
+    /// three stages, pays their SUMMED costs (8 for Ocean Liners' [4,2,2]),
+    // and STILL costs a single CA.
+    #[test]
+    fn wonder_step_multi_stage_batch_pays_summed_resources_for_one_ca() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 2;
+        p.resources = 10;
+        p.techs.insert(card("Architecture"), TechSlot { workers: 0, stored: 0 });
+        p.wonder = card("Ocean Liners"); // stages [4,2,2,4]
+        let mut state = one_player_state(p);
+        let cost = costs::wonder_stages_cost(&state, 0, 3);
+        do_wonder_step(&mut state, 0, 3, cost, false, None);
+        let p = &state.players[0];
+        assert_eq!(p.civil_actions, 1, "the 3-stage batch costs 1 CA, not 3");
+        assert_eq!(p.resources, 2, "summed cost 4+2+2 = 8 paid");
+        assert_eq!(p.wonder_stages_built, 0b0111, "stages [4,2,2] marked");
+        assert!(!p.completed_wonders.contains(card("Ocean Liners")));
+    }
 
     #[test]
     fn wonder_completion_culture_fast_food_chains() {
