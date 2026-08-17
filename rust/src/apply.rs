@@ -254,7 +254,11 @@ pub fn apply(state: &mut GameState, mv: Move) {
     let idx = state.current;
     match mv {
         // ---- civil actions ----
-        Move::Take { slot } => h_take(state, idx, slot),
+        // `cost` is `i32::MAX` for every move `legal::legal_moves` generates
+        // (self-play); a lower value exists only on a replayer-observed
+        // ordered `TakeACard` take, and `h_take_ca` bills the journal price
+        // in that case instead of the row's.
+        Move::Take { slot, cost } => h_take_ca(state, idx, slot, cost.min(costs::take_cost(state, &state.players[idx as usize], slot as usize))),
         Move::Build { card } => do_build(state, idx, card, 0, false),
         Move::Develop { card } => h_develop(state, idx, card, false),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, 0, false),
@@ -569,13 +573,26 @@ fn drop_pacts_of(state: &mut GameState, idx: u8) {
 // and non-overlapping (DESIGN.md rule 4: "arena-and-index is the native
 // idiom for this shape of code").
 
-fn h_take(state: &mut GameState, idx: u8, slot: u8) {
-    let cost = costs::take_cost(state, &state.players[idx as usize], slot as usize);
-    costs::pay_ca(&mut state.players[idx as usize], cost);
+/// Bill a row take at `ca` civil actions. `ca` is the ROW's own price for
+/// every ordinary take -- the `Move::Take` arm of [`apply`] computes it as
+/// `cost.min(row_price)`, and a generated move always carries the
+/// `i32::MAX` sentinel, which reduces to exactly the row price. The ONLY
+/// source of a different value is [`apply_free_civil_move`]'s `Move::Take`
+/// arm (`§3.11`'s `TakeACard` order): there the ORDERED action is the take
+/// and the civil action is the free part -- the price that pays is the one
+/// the JOURNAL actually printed, which
+/// `replay_common.rs::resolve_take_with_free_civil` has already grounded
+/// against `costs::take_cost`'s own row slots (the journal price is never
+/// above the row price for a take the engine itself permits, so
+/// `cost.min(row_price)` can only lower it -- the Hammurabi-converted or
+/// leader-replacement shapes). The row and the `ca_spent_taking` ledger
+/// never drift apart: both record exactly `ca`.
+fn h_take_ca(state: &mut GameState, idx: u8, slot: u8, ca: i32) {
+    costs::pay_ca(&mut state.players[idx as usize], ca);
     // The ONLY place civil actions are spent reaching into the row; recorded
     // so the evaluator can price it apart from civil actions spent elsewhere
     // (`engine/actions.py`'s own comment: INFORMATION_AUDIT GAP 1).
-    state.players[idx as usize].ca_spent_taking += cost as u8;
+    state.players[idx as usize].ca_spent_taking += ca as u8;
     take_card(state, idx, slot as usize);
 }
 
@@ -843,7 +860,7 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
 /// left-to-right run (confirmed corpus-wide), so `pos` is always the
 /// leftmost stage of that run and the remaining N-1 are the next unbuilt
 /// ones to its right.
-pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, cost: i32, free: bool, pos: Option<usize>) {
+pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, _cost: i32, free: bool, pos: Option<usize>) {
     debug_assert!(k >= 1, "do_wonder_step: k == 0 is a no-op, not a move");
     let p = &mut state.players[idx as usize];
     let stages = p.wonder.get().stages;
@@ -886,7 +903,24 @@ pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, cost: i32, free: bo
     if !free {
         costs::pay_ca(p, k as i32);
     }
-    economy::pay_resources(p, (cost * k as i32).max(0) as u16);
+    // Sum the ACTUAL per-stage costs of the stages just marked, rather than
+    // charging `cost * k` (a single per-stage price multiplied).  A multi-
+    // stage build (BGO's "builds N stages" line) touches stages whose
+    // printed costs differ -- Ocean Liners `[4,2,2,4]` built 3-then-1
+    // charges 8+4, not 8+8.  For `k == 1` the caller's `_cost` carries any
+    // discount (Engineering Genius) that the base stage cost does not, so
+    // it is used directly; for `k > 1` the base per-stage costs are summed
+    // (no discount source applies to a multi-stage batch in the base game).
+    let total_cost: i32 = if k == 1 {
+        _cost.max(0)
+    } else {
+        (start..stages.len())
+            .filter(|&i| next & (1 << i) != 0 && built & (1 << i) == 0)
+            .take(k as usize)
+            .map(|i| stages[i] as i32)
+            .sum()
+    };
+    economy::pay_resources(p, total_cost as u16);
     let wonder = p.wonder;
     let built = p.wonder_stages_built;
     let steps = built.count_ones() as u8;
@@ -1584,6 +1618,12 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
         Move::Build { card } => do_build(state, idx, card, discount, true),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, discount, true),
         Move::Develop { card } => h_develop(state, idx, card, true),
+    // §3.11's `TakeACard` order: the take's civil action is the FREE part --
+    // what pays is the price the JOURNAL actually printed (the replayer
+    // grounded it against the row's own `costs::take_cost`), carried in
+    // `cost`. `i32::MAX` (the sentinel every ordinary take carries) bills
+    // the slot's own price, so this one expression covers both sources.
+    Move::Take { slot, cost } => h_take_ca(state, idx, slot, cost.min(costs::take_cost(state, &state.players[idx as usize], slot as usize))),
         // §8.3.4: a revolution never spends a civil action of its OWN to
         // begin with (it empties/carries-over a whole action pool instead),
         // so this is still the exact same `_h_revolution` Python's
@@ -1600,7 +1640,7 @@ pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount:
         // shape can come from now; see its own doc comment for the
         // citation.
         Move::BachTheater { from, to } => h_bach_theater(state, idx, from, to, discount, true),
-        other @ Move::Take { .. } | other @ Move::PopFree | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => unreachable!(
+        other @ Move::PopFree | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => unreachable!(
             "free_action_moves produced a move apply_free_civil_move does not \
              expect: {other:?}"
         ),
@@ -1988,11 +2028,29 @@ mod tests {
         p.civil_actions = 4;
         let mut state = one_player_state(p);
         state.card_row[6] = card("Bronze"); // slot cost 2
-        h_take(&mut state, 0, 6);
+        h_take_ca(&mut state, 0, 6, 2);
         assert_eq!(state.players[0].civil_actions, 2);
         assert_eq!(state.players[0].ca_spent_taking, 2);
         assert!(state.players[0].hand_civil.contains(card("Bronze")));
         assert!(state.card_row[6].is_none());
+    }
+
+    /// §3.11's `TakeACard` order (replayer-observed): the take's civil
+    /// action is the FREE part, and the price that pays is the one the
+    /// JOURNAL printed -- which can sit BELOW the slot's own row price once
+    /// the replayer has grounded the card to a specific slot. `h_take_ca`
+    /// must bill exactly the observed `ca` and record it in the ledger;
+    /// recomputing the slot's price would double-charge the same take.
+    #[test]
+    fn h_take_ca_bills_the_observed_price_not_the_rows() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 3;
+        let mut state = one_player_state(p);
+        state.card_row[12] = card("Bronze"); // slot cost 3
+        h_take_ca(&mut state, 0, 12, 1);
+        assert_eq!(state.players[0].civil_actions, 2, "only the observed price is billed");
+        assert_eq!(state.players[0].ca_spent_taking, 1, "the ledger records the observed price");
+        assert!(state.players[0].hand_civil.contains(card("Bronze")));
     }
 
     #[test]
@@ -2001,7 +2059,7 @@ mod tests {
         p.civil_actions = 4;
         let mut state = one_player_state(p);
         state.card_row[0] = card("Colossus");
-        h_take(&mut state, 0, 0);
+        h_take_ca(&mut state, 0, 0, 1);
         assert_eq!(state.players[0].wonder, card("Colossus"));
         assert_eq!(state.players[0].wonder_steps, 0);
         assert!(state.players[0].hand_civil.is_empty());
@@ -2014,7 +2072,7 @@ mod tests {
         p.leader = card("Aristotle");
         let mut state = one_player_state(p);
         state.card_row[0] = card("Bronze"); // a technology (mine)
-        h_take(&mut state, 0, 0);
+        h_take_ca(&mut state, 0, 0, 1);
         assert_eq!(state.players[0].science, 1);
     }
 
@@ -2881,32 +2939,36 @@ mod tests {
 
     #[test]
     fn h_play_action_rich_land_with_no_legal_ordered_move_is_a_silent_no_op() {
-        // No workers_free and an empty tableau: `free_action_moves` returns
-        // no options, so this must resolve like Python's `push_choice` with
-        // an empty option list -- silently, no panic -- exactly as playing a
-        // card with no ordered action at all does.
+        // Rich Land (I) (Rich Land (A) mints the `take_a_card` fixture
+        // now -- see `data/cards_military_actions.json`). Empty row and
+        // empty tableau: its ordered build/upgrade has nothing to
+        // target, so this must resolve like Python's `push_choice` with
+        // an empty option list -- silently, no panic -- exactly as
+        // playing a card with no ordered action at all does.
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
-        p.hand_civil.push(card("Rich Land (A)"));
+        p.hand_civil.push(card("Rich Land (I)"));
         let mut state = one_player_state(p);
-        play_action_and_drain(&mut state, card("Rich Land (A)"));
+        play_action_and_drain(&mut state, card("Rich Land (I)"));
         assert_eq!(state.players[0].civil_actions, 3, "only the card's own CA is spent");
-        assert!(!state.players[0].hand_civil.contains(card("Rich Land (A)")));
+        assert!(!state.players[0].hand_civil.contains(card("Rich Land (I)")));
     }
 
     #[test]
     fn h_play_action_rich_land_builds_a_mine_at_a_discount_and_no_action_cost() {
-        // "Rich Land (A)": build_or_upgrade_farm_or_mine, resourceDiscount 1.
-        // Bronze costs 2 resources; the free build pays only 2 - 1 = 1 and no
-        // separate civil action (only the 1 CA to play the card itself).
+        // "Rich Land (I)" (Rich Land (A) mints the `take_a_card` fixture
+        // now -- see `data/cards_military_actions.json`):
+        // build_or_upgrade_farm_or_mine, resourceDiscount 2. Bronze costs 2
+        // resources; the free build pays only 2 - 2 = 0 and no separate
+        // civil action (only the 1 CA to play the card itself).
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
         p.workers_free = 1;
-        p.resources = 1;
+        p.resources = 0;
         p.techs.insert(card("Bronze"), TechSlot { workers: 0, stored: 0 });
-        p.hand_civil.push(card("Rich Land (A)"));
+        p.hand_civil.push(card("Rich Land (I)"));
         let mut state = one_player_state(p);
-        play_action_and_drain(&mut state, card("Rich Land (A)"));
+        play_action_and_drain(&mut state, card("Rich Land (I)"));
         assert_eq!(state.players[0].techs.workers(card("Bronze")), 1);
         assert_eq!(state.players[0].resources, 0);
         assert_eq!(state.players[0].workers_free, 0);

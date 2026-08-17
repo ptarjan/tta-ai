@@ -564,7 +564,13 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
             if (ca as i32) < k {
                 break; // CA pool shrinks monotonically in k
             }
-            if p.resources as i32 >= costs::wonder_stage_cost(state, p, k as u8) {
+            // `wonder_stages_cost` (position-aware) sums the actual per-stage
+            // costs of the next k unbuilt stages -- the SAME formula
+            // `do_wonder_step` now charges at apply time.  The old
+            // `wonder_stage_cost` (count-based) could under- or over-price
+            // a multi-stage batch when the wonder was partially built in a
+            // non-left-to-right order.
+            if p.resources as i32 >= costs::wonder_stages_cost(state, p.idx, k as u8) {
                 moves.push(Move::WonderStep { steps: k as u8 });
             }
         }
