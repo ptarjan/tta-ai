@@ -569,7 +569,14 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
     for &id in &hand_buf[..hand_n] {
         match id.kind() {
             CardType::Leader => {
-                if ca >= 1 {
+                // Replacing a leader is a spend-and-refund: the 1 CA cost is
+                // immediately refunded (§9.1 / RULES_SPEC §7), so the net
+                // cost is 0.  A player with 0 CA left may still replace their
+                // leader (confirmed against game 7523043 round 9, where
+                // Purple had spent all 5 CA on Develop+Take+Take and still
+                // elected Napoleon, the journal recording only "+1 CA").
+                // A *new* leader (no leader in play) costs a flat 1 CA.
+                if ca >= 1 || !p.leader.is_none() {
                     moves.push(Move::PlayLeader { card: id });
                 }
             }

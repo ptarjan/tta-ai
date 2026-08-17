@@ -828,10 +828,15 @@ fn wonder_is_complete(wonder: CardId, steps_built: u8) -> bool {
 }
 
 fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
-    costs::pay_ca(&mut state.players[idx as usize], 1);
     state.players[idx as usize].hand_civil.remove_first(id);
     let old = state.players[idx as usize].leader;
     if !old.is_none() {
+        // Replacing a leader is a spend-and-refund (§9.1): the 1 CA cost is
+        // immediately refunded, so the net cost is 0.  Do NOT call
+        // `pay_ca(1)` here -- doing so would require the player to have 1 CA
+        // available at the moment of the play, which contradicts the rules
+        // (a player who has spent all their CA may still replace their
+        // leader; confirmed against game 7523043 round 9).
         // "You are allowed to use the benefit of a leader and then replace
         // him or her on the same turn" (RB, "Replacing a Leader"). For every
         // other leader that is automatic -- their benefit was already applied
@@ -889,13 +894,20 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
         let new_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
         let new_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
         let carried_c = carry_over_action_pool(old_total_c, new_total_c, spent_c, old_remaining_c);
-        // Replacing a leader ALSO refunds one civil action on top of the
-        // carry-over (§9.1's own, separate clause) -- clamped to the new
-        // total, same as before this fix.
-        state.players[idx as usize].civil_actions = new_total_c.min(carried_c as i32 + 1) as i8;
+        // The 1-CA replacement refund (§9.1) is no longer applied as a
+        // separate `+ 1` here: the spend-and-refund is now modelled by
+        // simply NOT calling `pay_ca(1)` for a replacement (see the comment
+        // at the top of this branch), so the carry-over alone preserves the
+        // player's remaining CA.  Adding a further `+ 1` would grant a
+        // spurious extra action (confirmed by the regression in
+        // `h_play_leader_replacing_one_refunds_a_civil_action_and_discards_
+        // the_old`).
+        state.players[idx as usize].civil_actions = new_total_c.min(carried_c as i32) as i8;
         state.players[idx as usize].military_actions = carry_over_action_pool(old_total_m, new_total_m, spent_m, old_remaining_m);
         return;
     }
+    // New leader (no leader in play): flat 1 CA cost.
+    costs::pay_ca(&mut state.players[idx as usize], 1);
     state.players[idx as usize].leader = id;
     on_enter_play(&mut state.players[idx as usize], id);
 }
