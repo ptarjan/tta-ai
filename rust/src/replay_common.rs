@@ -5032,12 +5032,24 @@ fn resolve_named_card_by_effect(state: &GameState, p: &PlayerState, named: CardI
         Move::Take { .. } | Move::WonderStep { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
     };
     solved.unwrap_or_else(|| {
-        p.hand_civil
+        let hand_match = p.hand_civil
             .as_slice()
             .iter()
             .copied()
-            .find(|id| id.get().base_name == named.get().base_name)
-            .unwrap_or(named)
+            .find(|id| id.get().base_name == named.get().base_name);
+        match (wanted, hand_match) {
+            // For a Build/Upgrade move, only accept a hand card that is
+            // actually a build/upgrade card (not TakeACard). If the hand
+            // holds a different sibling (e.g. the (A) card from an earlier
+            // age-blind TakeCard line), fall back to `named` (the card
+            // index's pick, which is a build/upgrade card thanks to the
+            // "Rich Land" → (I) override); `correct_hand_family` will
+            // swap the hand card to match.
+            (Move::Build { .. } | Move::Upgrade { .. }, Some(id))
+                if is_build_upgrade_card(id) => id,
+            (Move::Build { .. } | Move::Upgrade { .. }, _) => named,
+            _ => hand_match.unwrap_or(named),
+        }
     })
 }
 
