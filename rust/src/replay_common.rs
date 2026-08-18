@@ -9036,11 +9036,65 @@ fn apply_one(
             // other named-source journal clause -- and only fall back to
             // the "whichever is legal" guess when the text does not say.
             let free_source_named = raw_text.contains("Ocean Liner Service used");
-            if free_source_named && legal.as_slice().contains(&Move::PopFree) {
+            // Trade Routes Agreement, side B ("Civilization B can use 1
+            // resource as 1 food during its turn", §5.9): a player holding
+            // the live grant may pay PART of a Pop cost in converted
+            // resources -- BGO logs that as a SECOND clause on the SAME
+            // line, not folded into the food number (`"<Color> increases
+            // population <Color> spends N food; <Color> spends M resource"`).
+            //
+            // ENGINE BUG (the `IllegalMove: Pop` bucket, 6 games, e.g.
+            // `7522432` round 7): this arm previously applied a plain
+            // `Move::Pop` whenever one was legal, and only tried the
+            // `Move::TradeResourceAsFood` conversion in the FALLBACK below
+            // (i.e. only when Pop was already NOT legal). A player whose
+            // plain food ALREADY covered the pop cost took the fast path,
+            // the "spends M resource" clause was dropped, and this binary
+            // overcharged food by M -- the conversion this player actually
+            // used in the true game never happened. The drift surfaced a
+            // few actions later as an unaffordable Pop/Build/Develop, far
+            // from its cause (the same class of "the conversion is in the
+            // wrong branch" bug the Build arm's `convert_trade_food_shortfall`
+            // closes on the other direction). Apply the conversion on the
+            // fast path too, gated EXACTLY as the fallback: only when the
+            // journal's OWN stated total (food clause + the resource
+            // clause) matches this binary's `pop_cost`, the Trade-Resources-
+            // as-Food grant covers it, and the player has the resources.
+            // Without the gate an unrelated food/resource drift still
+            // surfaces as the ordinary `IllegalMove` it always has -- we
+            // never loosen a check to hide a mismatch (docs/REPLAY.md's
+            // Civil Life warning).
+            if free_source_named {
                 r.try_apply(Move::PopFree, true)
-            } else if legal.as_slice().contains(&Move::Pop) {
-                r.try_apply(Move::Pop, true)
-            } else if legal.as_slice().contains(&Move::PopFree) {
+            } else {
+                let p = &r.state.players[actor as usize];
+                let stated = spent_food(raw_text).map(|f| f + spent_resource_after_food(raw_text));
+                let cost = crate::economy::pop_cost(&r.state, p);
+                let resource_clause = spent_resource_after_food(raw_text);
+                let can_convert = matches!(
+                    (stated, cost),
+                    (Some(s), Some(c)) if s == c
+                ) && resource_clause > 0
+                    && resource_clause <= crate::economy::trade_resource_as_food_remaining(&r.state, p)
+                    && resource_clause <= p.resources as i32;
+                if can_convert {
+                    for _ in 0..resource_clause {
+                        r.try_apply(Move::TradeResourceAsFood, true)?;
+                    }
+                    let legal = legal::legal_moves(&r.state);
+                    if legal.as_slice().contains(&Move::Pop) {
+                        r.try_apply(Move::Pop, true)
+                    } else if legal.as_slice().contains(&Move::PopFree) {
+                        r.try_apply(Move::PopFree, true)
+                    } else {
+                        Err(MismatchKind::IllegalMove {
+                            attempted: "Pop after TradeResourceAsFood".into(),
+                            legal_moves: format!("{:?}", legal.as_slice()),
+                        })
+                    }
+                } else if legal.as_slice().contains(&Move::Pop) {
+                    r.try_apply(Move::Pop, true)
+                } else if legal.as_slice().contains(&Move::PopFree) {
                 r.try_apply(Move::PopFree, true)
             } else { let res = {
                 // Trade Routes Agreement, side B ("Civilization B can use 1
@@ -9117,6 +9171,7 @@ fn apply_one(
                     legal_moves: format!("{:?}", legal.as_slice()),
                 })
             } }
+            }
         }
         ActionClass::UpgradeUnit | ActionClass::UpgradeProduction => {
             let to = card.ok_or_else(|| MismatchKind::ParserGap("upgrade with no resolved target card".into()))?;
