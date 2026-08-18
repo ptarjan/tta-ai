@@ -2,84 +2,89 @@
 
 Corpus: `sources/bgo/index.tsv` (1011 games) replayed against `/tmp/bgo-journals/journals/`.
 Census: `rust/target/release/replaystats sources/bgo/index.tsv /tmp/bgo-journals/journals/`.
-Baseline at time of this analysis: **863 / 1011 completed** to `state.game_over`.
+Baseline: **863 / 1011 completed** to `state.game_over` (148 not completing).
 
 ## Method
 
-Every one of the 148 non-completing games was traced inline with
-`REPLAY_DEBUG=1 replaystats ... --game <ID>` to obtain the per-checkpoint
-`end-turn ... drift` lines and the `try_apply fail` line, plus the raw journal
-line at the stop. Each game is classified by the root cause of its failure.
+Every non-completing game is classified by its **authoritative stop reason** —
+the `MismatchKind`/`GameResult` reason the census prints in its
+"Stop-reason histogram", NOT the `REPLAY_DEBUG` per-checkpoint drift lines.
 
-## Result (corrected after re-verification)
+## Correction to an earlier (wrong) framing
 
-The 13 games previously bucketed as "parser-gap" were re-traced against the
-*current* binary. All 13 show **persistent upstream science drift from the very
-first end-turn checkpoint** (4–32 drift lines each, first delta −1 to −6). None
-has a clean ledger followed by a parse failure. The "TakeRow no slot" /
-"IntlAgreement no TakeRow" / "Reserves produces" failures were downstream
-symptoms: the science ledger is already short, so the final card's cost (or the
-worker/population slot it needs) cannot be met.
+An earlier pass in this session classified 138/148 games as "upstream science
+ledger drift" based on `REPLAY_DEBUG`'s `end-turn science drift` lines. That was
+a **false positive**: the `REPLAY_DEBUG` science check
+(`replay_common.rs`, the `REPLAY_DEBUG`-gated block right after
+`try_apply(Move::EndTurn)`) reads `players[actor].science` *before* a
+discard-blocked turn's deferred `resume_end_turn` has actually run, so a turn
+that ends with a pending military discard reads as a phantom "drift" that
+resolves a few lines later. The **always-on culture oracle** (which compares the
+same "(now M)" running total, and is the project's authoritative per-turn
+check) matched **100%** in the traced games — the engine's per-turn
+reconstruction is correct. The "drift" was a measurement artifact, not an
+engine bug. This doc now uses the authoritative stop reasons only.
 
-**Conclusion: there is no distinct parser bug to fix.** All 148 non-completing
-games are the same class — upstream ledger drift, dominated by science.
+## Authoritative stop-reason histogram (the real 148)
 
-| category | count |
-|---|---|
-| upstream ledger drift (science-dominant) | 138 |
-| hidden-hand (unverifiable from journal) | 10 |
-| clean parse / card-model bug | 0 |
+| count | reason | class |
+|---|---|---|
+| 39 | IllegalMove: Build | engine legality |
+| 15 | IllegalMove: Develop | engine legality |
+| 15 | IllegalMove: Upgrade | engine legality |
+| 10 | IllegalMove: Revolution | engine legality |
+| 8  | StuckPending: decider # != expected actor | engine |
+| 8  | IllegalMove: Take | engine legality |
+| **6** | **ParserGap: International Agreement pick with no open TakeRow** | **parser** |
+| 5  | UnrecoverableHiddenInfo: unpaired client-side undo | hidden-hand |
+| 5  | IllegalMove: Pop | engine legality |
+| 4  | IllegalMove: PlayTactic | engine legality |
+| 4  | IllegalMove: WonderStep | engine legality |
+| 4  | IllegalMove: PlayAction | engine legality |
+| 4  | IllegalMove: CopyTactic | engine legality |
+| 4  | UnrecoverableHiddenInfo: colonization bid contradiction | hidden-hand |
+| 3  | IllegalMove: Barbarossa | engine legality |
+| **3** | **ParserGap: TakeRow choice does not offer slot (Multimedia)** | **parser** |
+| 1  | IllegalMove: Bid | engine legality |
+| 1  | UnrecoverableHiddenInfo: Movies build-cost discount | hidden-hand |
+| 1  | StuckPending: Breakthrough free-CA not auto-resolved | engine |
+| 1  | IllegalMove: PolPass | engine legality |
+| 1  | StuckPending: auction decider owes bid/pass | engine |
+| 1  | IllegalMove: OfferPact | engine legality |
+| **1** | **ParserGap: TakeRow choice does not offer slot (Bill Gates)** | **parser** |
+| **1** | **ParserGap: TakeRow choice does not offer slot (Satellites)** | **parser** |
+| 1  | IllegalMove: War | engine legality |
+| **1** | **ParserGap: Reserves (I) FoodOrRes choice, no "produces" clause** | **parser** |
+| **1** | **ParserGap: TakeRow choice does not offer slot (Reserves III)** | **parser** |
 
-(The 10 hidden-hand: 4 colonization-bid contradictions, 5 unpaired client-side
-undos, 1 Movies build-cost discount — none reproducible from journal text alone.)
+Totals: **13 parser-gap**, **10 hidden-hand** (unverifiable from journal text),
+**125 engine-legality / StuckPending** (real move the engine rejects — cost,
+worker, or state mismatch to chase).
 
-## The 138 upstream-drift games (full list)
+## The 13 parser gaps (the fixable class)
 
-Each row: `<id> | stop reason (as bucketed at first pass) | stop line`. The
-"parser-gap" rows are included here — they are upstream-drift, not parse bugs.
+**International Agreement, no open TakeRow (6):** the strongest player's
+event takes are logged, but a further pick lands on a separate line (or the
+TakeRow was already consumed), so the engine has no open `TakeRow` choice to
+offer it.
 
-### Previously "upstream-drift" (125)
-See `/tmp/bgo-drift-complete.md` section "upstream-drift" for the 125 rows with
-raw journal text.
+**TakeRow choice does not offer slot (6):** Multimedia ×3, Bill Gates,
+Satellites, Reserves (III). The engine's open `TakeRow` choice was built from
+a card-row state that does not include the slot the journal says was taken —
+the "Replenish the card row" clause of International Agreement (or a
+replenish timing) is the likely cause.
 
-### Re-bucketed from "parser-gap" (13) — all upstream science drift
+**Reserves (I) no "produces" clause (1):** `PlayAction {Reserves (I)}` opens a
+`FoodOrRes` choice but the journal line "Purple plays Reserves Purple spends 2
+resource" carries no trailing "produces" clause, so the choice can't be
+resolved.
 
-| id | first-pass label | stop line | first drift delta |
-|---|---|---|---|
-| 7521799 | Reserves(I) no produces clause | 107 | −1 |
-| 7521929 | TakeRow no slot (Satellites) | 323 | −4 |
-| 7521931 | TakeRow no slot (Reserves III) | 265 | −2 |
-| 7522005 | IntlAgreement no TakeRow | 428 | −1 |
-| 7522268 | IntlAgreement | 333 | −3 |
-| 7522322 | TakeRow no slot (Multimedia) | 310 | −6 |
-| 7522391 | IntlAgreement (Genghis) | 332 | −2 |
-| 7522619 | IntlAgreement | 405 | −2 |
-| 7522649 | TakeRow no slot (Multimedia) | 268 | −2 |
-| 7522713 | IntlAgreement | 448 | −2 |
-| 7523092 | TakeRow no slot (BillGates) | 290 | −1 |
-| 7523218 | IntlAgreement | 423 | −1 |
-| 7523278 | TakeRow no slot (Multimedia) | 391 | −2 |
+## Provenance
 
-## Drift signature
-
-In every traced game the journal's running "now N" science total is HIGHER than
-what the engine computes, and the gap appears at the first end-turn and grows
-(or persists). The engine is *under-counting* science by 1–6 points per actor.
-The desync seeds from an earlier step that the journal does not make
-reproducible (a hidden draw, a wonder/event scored slightly differently, or
-corruption timing). No single shared card or cost constant explains it.
-
-## Next step
-
-Chase the *first* desync line of a small sample of the drift games to name the
-exact earlier step that seeds the science under-count (hidden draw, wonder,
-event, or corruption timing). That is the honest path to closing the gap —
-not parser surgery.
-
-## Provenance notes
-
-- Debug env vars used: `REPLAY_DEBUG=1` (drift + try_apply + cost lines),
-  `REPLAY_NONCOMPLETED_TSV=1` (one clean row per non-completing game). The TSV
-  dump var is a local working-tree helper and is deliberately NOT committed.
-- The git stash (`stash@{0}` … `stash@{3}`) is unrelated WIP and must NOT be
-  committed.
+- The `REPLAY_DEBUG` science/resource drift lines are investigation-only and,
+  for discard-blocked turns, emit a false "drift"; the authoritative per-turn
+  oracle is the always-on **culture oracle** and the census **stop-reason
+  histogram**.
+- A local `REPLAY_NONCOMPLETED_TSV` helper in `replaystats.rs` is in the
+  working tree and is deliberately NOT committed (debug code stays out of
+  commits). The git stash is unrelated WIP and must NOT be committed.
