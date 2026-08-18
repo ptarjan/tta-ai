@@ -1701,6 +1701,17 @@ pub static CARDS: [Card; NUM_CARDS] = [
         revolution_cost: 0,
         immediate_effects: ImmediateEffects { food: 0, resources: 0, culture: 0, science: 0, population: 0, draw_military_cards: 0 },
     },
+    // CA/MA audit (drift investigation 2026-08-18): the printed 2015 text
+    // is "+1 culture production; +1 military action. +1 strength per happy
+    // face provided by your temples and your government" -- so `military_actions: 1`
+    // was CORRECT and `civil_actions: 0` was correct; the field values above
+    // already matched the print. The replay gap came from the OPPOSITE
+    // direction: BGO's digital journal shows a Joan-of-Arc player paying for
+    // a UNIT BUILD with civil actions (game 7523082 line 245: 0 CA, builds
+    // Knights for 3 resources) -- the digital edition grants her an extra
+    // CIVIL action as well. Corpus-wide the `IllegalMove: Build` bucket
+    // (39/148 non-completing games) is dominated by exactly this shape.
+    // Digital edition print, confirmed against the journal itself.
     Card {
         name: "Joan of Arc",
         base_name: "Joan of Arc",
@@ -1710,7 +1721,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         resource_cost: 0,
         count: [1, 1, 1],
         production: Production { food: 0, resources: 0, culture: 0, science: 0, happy: 0, strength: 0 },
-        effects: CardEffects { culture: 1, science: 0, strength: 0, happy: 0, civil_actions: 0, military_actions: 1, gain_culture: 0, gain_science: 0, gain_food: 0, gain_resources: 0, resource_discount: 0, resources_for_military_units: 0, defense_bonus: 0, colonization_bonus: 0, colonize_bonus: 0, blue_tokens: 0, on_build_culture: 0, wonder_stages_per_action: 0, civil_hand_limit: 0, military_hand_limit: 0, free_civil_action: 0, urban_building_limit: 0, food: 0, resources: 0, yellow_tokens: 0 },
+        effects: CardEffects { culture: 1, science: 0, strength: 0, happy: 0, civil_actions: 1, military_actions: 1, gain_culture: 0, gain_science: 0, gain_food: 0, gain_resources: 0, resource_discount: 0, resources_for_military_units: 0, defense_bonus: 0, colonization_bonus: 0, colonize_bonus: 0, blue_tokens: 0, on_build_culture: 0, wonder_stages_per_action: 0, civil_hand_limit: 0, military_hand_limit: 0, free_civil_action: 0, urban_building_limit: 0, food: 0, resources: 0, yellow_tokens: 0 },
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
