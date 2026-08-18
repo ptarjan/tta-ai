@@ -1034,26 +1034,6 @@ fn apply_single_target(
             "DEBUG apply_single_target: order={order:?} stat={stat:?} best={best} favor_current={favor_current} ranked={ranked:?} values={:?}",
             order.iter().map(|&q| rank_stat_value(state, q, stat)).collect::<Vec<_>>()
         );
-        if matches!(stat, RankStat::Strength) {
-            for &q in order {
-                let p = &state.players[q as usize];
-                let tech_sum: i32 =
-                    p.techs.iter().map(|(t, s)| t.get().effects.strength as i32 * s.workers as i32).sum();
-                eprintln!(
-                    "TMPDEBUG_STRENGTH idx={q} strength_extra={} army_strength={} tech_sum={} sum_of_parts={} state_stats.strength={} leader={} government={} completed_wonders={:?} colonies={:?} pacts_len={}",
-                    p.strength_extra,
-                    effects::army_strength(p),
-                    tech_sum,
-                    tech_sum + p.strength_extra as i32 + effects::army_strength(p),
-                    effects::state_stats(state, p).strength,
-                    if p.leader.is_none() { "none" } else { p.leader.get().name },
-                    p.government.get().name,
-                    p.completed_wonders.as_slice().iter().map(|w| w.get().name).collect::<Vec<_>>(),
-                    p.colonies.as_slice().iter().map(|c| c.get().name).collect::<Vec<_>>(),
-                    p.pacts.len(),
-                );
-            }
-        }
     }
     if let Some(&q) = ranked.first() {
         apply_player_block(state, q, &block);

@@ -8968,21 +8968,62 @@ fn apply_one(
             // same slot instead.
             if let Some(Pending::Choice(c)) = r.state.pending.top() {
                 if matches!(c.kind, ChoiceKind::TakeRow { .. }) {
-                    let n = c
-                        .options
-                        .as_slice()
-                        .iter()
-                        .position(|o| matches!(o, ChoiceOption::Slot(s) if *s == slot))
-                        .ok_or_else(|| {
-                            MismatchKind::ParserGap(format!(
-                                "open TakeRow choice does not offer slot {slot} ({})",
-                                card.get().name
-                            ))
-                        })?;
-                    r.try_apply(Move::Choose { n: n as u8 }, true)?;
+                    // The generic `ground_row_slot` (above) may have named a
+                    // slot the STILL-OPEN choice never offered: an
+                    // International Agreement leaves its `TakeRow` choice open
+                    // across the event's own log line AND the following
+                    // individual `"takes ... in hand ... uses N civil action"`
+                    // lines (each an ordinary `TakeCard`), and `offer_take_row`
+                    // filtered its options down to the affordable+legal subset
+                    // of row slots -- a strict subset of all 13. Grounding
+                    // against the choice's OWN offered `Slot` options (not the
+                    // generic slot) mirrors the International-Agreement arm's
+                    // own grounding (its "Ground `pick` against one of THIS
+                    // CHOICE'S OWN offered `Slot` options" loop): prefer a slot
+                    // already grounded to `card` by identity, else the first
+                    // offered ungrounded slot.
+                    let options = c.options.as_slice();
+                    let mut chosen: Option<usize> = None;
+                    for (oi, o) in options.iter().enumerate() {
+                        if let ChoiceOption::Slot(s) = o {
+                            if r.row_grounded[*s as usize] && r.state.card_row[*s as usize] == card {
+                                chosen = Some(oi);
+                                break;
+                            }
+                        }
+                    }
+                    if chosen.is_none() {
+                        if let Some(oi) = options.iter().position(|o| {
+                            matches!(o, ChoiceOption::Slot(s) if *s == slot)
+                        }) {
+                            chosen = Some(oi);
+                        }
+                    }
+                    if chosen.is_none() {
+                        for (oi, o) in options.iter().enumerate() {
+                            if let ChoiceOption::Slot(s) = o {
+                                if !r.row_grounded[*s as usize] {
+                                    chosen = Some(oi);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let Some(oi) = chosen else {
+                        return Err(MismatchKind::ParserGap(format!(
+                            "open TakeRow choice does not offer slot {slot} ({})",
+                            card.get().name
+                        )));
+                    };
+                    let n = oi as u8;
+                    let chosen_slot = match &options[oi] {
+                        ChoiceOption::Slot(s) => *s,
+                        _ => slot,
+                    };
+                    r.try_apply(Move::Choose { n }, true)?;
                     // Same refill-ungrounding as the ordinary `Move::Take`
                     // path just below -- see that comment for why.
-                    r.row_grounded[slot as usize] = false;
+                    r.row_grounded[chosen_slot as usize] = false;
                     return Ok(());
                 }
             }
