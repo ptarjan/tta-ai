@@ -614,10 +614,14 @@ struct Replayer<'a> {
     /// as an ordinary `Move::Destroy` once the main loop's own pointer
     /// reaches it.
     claimed_destroy_lines: std::collections::HashSet<usize>,
-    /// Journal line INDICES already applied early by `resolve_intervening`'s
-    /// civil-life fast path (the `None` arm's re-check after a political
-    /// action banked a fresh `one_time_discount`). Same skip-before-translate
-    /// pattern as `claimed_destroy_lines`.
+    /// Journal LINE NOS already handled by `resolve_intervening`'s `None`
+    /// arm before the main loop's own `apply_one` runs: either a civil-life
+    /// out-of-turn action applied via `apply_free_civil_move` (a political
+    /// action banked a fresh `one_time_discount` after the main loop's own
+    /// `civil_life_move` check ran), or an auto-resolved event destroy
+    /// (single-option `DestroyOwn` choice resolved by `interact::push_choice`'s
+    /// `auto` flag during the political phase's `run_queue`). The main loop
+    /// skips `apply_one` for these lines to avoid double-applying.
     claimed_civil_life_lines: std::collections::HashSet<usize>,
     /// GLOBAL (not per-player -- Terrorism's own destruction line never
     /// names an attacker) FIFO of `CardId`s pulled off both journal shapes
@@ -2241,10 +2245,10 @@ impl<'a> Replayer<'a> {
                 }
                 // `matches_upcoming` is true: the choice's player IS
                 // `expected_actor` and the upcoming line IS a Destroy/Disband.
-                // Fall through -- the inner `match c.kind` no-op arm
-                // (`ChoiceKind::DestroyOwn => {}`) passes control to
-                // `apply_one`, whose Destroy/Disband arm resolves the choice
-                // by matching the upcoming line's card against the options.
+                // Return `Ok(())` immediately -- `apply_one`'s Destroy/Disband
+                // arm resolves the choice by matching the upcoming line's
+                // card against the options.
+                return Ok(());
             }
             // A live `Pending::Colonize` has no real `Move` anywhere in the
             // journal vocabulary -- `docs/REPLAY.md`'s "gives up on"
@@ -2364,20 +2368,43 @@ impl<'a> Replayer<'a> {
                         self.resolve_political_decision(decider)?;
                         continue;
                     }
-                    // The decider's political action (e.g. a hidden
-                    // `PrepareEvent` for Development of Civil Life) may have
-                    // just granted `expected_actor` a `one_time_discount`.
-                    // The main loop's `civil_life_move` check ran BEFORE
-                    // this political action was applied, so it missed the
-                    // discount. Re-check here: if the upcoming line is
-                    // explainable by the freshly-granted discount, apply it
-                    // now via `apply_free_civil_move` and record the line so
-                    // the main loop does not translate it a second time.
                     if decider != expected_actor && self.state.pending.is_empty() {
+                        // The decider's political action (e.g. a hidden
+                        // `PrepareEvent` for Development of Civil Life) may
+                        // have just granted `expected_actor` a
+                        // `one_time_discount`. The main loop's
+                        // `civil_life_move` check ran BEFORE this political
+                        // action was applied, so it missed the discount.
+                        // Re-check here: if the upcoming line is explainable
+                        // by the freshly-granted discount, apply it now via
+                        // `apply_free_civil_move` and record the line so
+                        // the main loop does not translate it a second time.
                         if let Some(mv) = civil_life_move(self, expected_actor, upcoming.0, upcoming.1) {
                             apply::apply_free_civil_move(&mut self.state, expected_actor, mv, 0);
                             self.claimed_civil_life_lines.insert(self.current_lineno);
                             return Ok(());
+                        }
+                        // An event's `destroy_own_building` with a SINGLE
+                        // destroyable option is auto-resolved by
+                        // `interact::push_choice` (its `auto` flag) during
+                        // the political phase's `run_queue` -- the destroy
+                        // is already applied, the choice never appears on
+                        // the pending stack, and the journal's
+                        // `"<Color> destroys <Card>"` line is a pure
+                        // confirmation. Detect: the card is no longer in
+                        // the player's buildings (or the line is a
+                        // Disband of a unit that's already gone).
+                        if matches!(upcoming.0, ActionClass::Destroy | ActionClass::Disband) {
+                            let card = upcoming.1;
+                            let p = &self.state.players[expected_actor as usize];
+                            let already_gone = match card {
+                                Some(cid) => !p.techs.has(cid),
+                                None => false,
+                            };
+                            if already_gone {
+                                self.claimed_civil_life_lines.insert(self.current_lineno);
+                                return Ok(());
+                            }
                         }
                     }
                     return Err(MismatchKind::StuckPending(format!(
