@@ -49,6 +49,12 @@ that picks "the first option" completes the game with fabricated state and delet
 that report. If you add one, it needs a game ID showing what it buys — an unproven
 guess is pure blindness.
 
+**A correct fix that regresses the corpus is still a good fix.** The goal is a
+perfectly correct engine, not a high completion count. "0 regressions" is an
+acceptance convenience, not the standard: if the rulebook says one thing and the
+corpus rewards another, the rulebook wins and the count goes down. Measure the
+regression, name the games, and land it anyway.
+
 A citation must say what the comment claims it says. `costs::can_take_bypass_hand_limit`
 landed asserting International Agreement ignores the §2.5 hand limit, quoting CoL's
 "may use this option even in the last round" — which is about the final round, not
