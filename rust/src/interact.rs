@@ -586,7 +586,11 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     // handler). Idempotent: setting it again on a second or
                     // third card taken this same session is a no-op.
                     state.players[p as usize].skip_next_politics = true;
-                    offer_take_row(state, p, budget - cost as i16);
+                    // International Agreement keeps taking past the civil-hand
+                    // limit (see `costs::can_take_bypass_hand_limit`), so the
+                    // re-offer must NOT re-apply the §2.5 hand-full gate or a
+                    // full hand would close the choice mid-agreement.
+                    offer_take_row_inner(state, p, budget - cost as i16, true);
                 }
                 other @ ChoiceOption::Card(_) | other @ ChoiceOption::Move(_) | other @ ChoiceOption::Gain(_) | other @ ChoiceOption::Word(_) => wrong_option(&choice.kind, other),
             }
@@ -901,7 +905,7 @@ fn food_or_res_gain_options(total: i16) -> OptionList {
 
 // -------------------------------------------------- International Agreement
 
-fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
+fn offer_take_row_inner(state: &mut GameState, p: u8, budget: i16, bypass_hand_limit: bool) {
     let mut opts = OptionList::new();
     for slot in 0..ROW_SIZE {
         if state.card_row[slot].is_none() {
@@ -911,7 +915,12 @@ fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
         if costs::take_cost(state, player, slot) > budget as i32 {
             continue;
         }
-        if costs::can_take(state, player, slot, Some(budget as i32)) {
+        let legal = if bypass_hand_limit {
+            costs::can_take_bypass_hand_limit(state, player, slot, Some(budget as i32))
+        } else {
+            costs::can_take(state, player, slot, Some(budget as i32))
+        };
+        if legal {
             opts.push(ChoiceOption::Slot(slot as u8));
         }
     }
@@ -1169,7 +1178,11 @@ fn run_item(state: &mut GameState, item: QueueItem) {
             }
             push_choice(state, player, ChoiceKind::Infiltrate { victim, per }, opts, true);
         }
-        QueueItem::TakeRow { player, budget } => offer_take_row(state, player, budget),
+        // The TakeRow queue item is International Agreement's ONLY entry
+        // point, so it always bypasses the §2.5 hand-full gate (see
+        // `offer_take_row_inner`'s `bypass_hand_limit` param and
+        // `costs::can_take_bypass_hand_limit`).
+        QueueItem::TakeRow { player, budget } => offer_take_row_inner(state, player, budget, true),
     }
 }
 

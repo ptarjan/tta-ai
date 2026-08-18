@@ -4708,6 +4708,35 @@ fn trailing_produces(text: &str) -> Option<(bool, i32)> {
     }
 }
 
+/// [`trailing_produces`] with a fallback for the ONE corpus anomaly (game
+/// `7521799` line 107: `"Purple plays Reserves Purple spends 2 resource"`)
+/// where BGO logged Reserves' GAIN as a `spends` clause instead of `produces`.
+/// Reserves (`Special::GainFoodOrResources`) has no card cost and only ever
+/// GAINS food/resources, so a trailing `"spends N resource/food"` on its own
+/// line cannot be a real cost -- it must be the gain. The `produces` form is
+/// tried first (4,157 of 4,158 "plays Reserves" lines use it), and only when
+/// that misses does the `spends` fallback fire, so the 9,090 ordinary
+/// `"spends N resource"` cost lines elsewhere are never touched.
+fn trailing_reserves_gain(text: &str) -> Option<(bool, i32)> {
+    if let Some(v) = trailing_produces(text) {
+        return Some(v);
+    }
+    let p = text.rfind(" spends ")?;
+    let rest = &text[p + " spends ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let n: i32 = rest[..digits_end].parse().ok()?;
+    if rest[digits_end..].starts_with(" resource") {
+        Some((true, n))
+    } else if rest[digits_end..].starts_with(" food") {
+        Some((false, n))
+    } else {
+        None
+    }
+}
+
 /// The LAST `"gets N science"` clause anywhere in `text` -- Breakthrough's
 /// own bonus, glued onto the SAME line as the `"using Breakthrough"` develop
 /// it orders (`"<Color> discovers <Tech> using Breakthrough <Color> loses N
@@ -9517,10 +9546,10 @@ fn apply_one(
             // shape check justifying this fix).
             if let Some(Pending::Choice(c)) = r.state.pending.top().cloned() {
                 if matches!(c.kind, ChoiceKind::FoodOrRes { .. }) {
-                    let (is_resources, _n) = trailing_produces(raw_text).ok_or_else(|| {
+                    let (is_resources, _n) = trailing_reserves_gain(raw_text).ok_or_else(|| {
                         MismatchKind::ParserGap(format!(
-                            "PlayAction {{{}}} opened a FoodOrRes choice but no trailing \"produces\" \
-                             clause found in {raw_text:?}",
+                            "PlayAction {{{}}} opened a FoodOrRes choice but no trailing \
+                             \"produces\"/\"spends\" clause found in {raw_text:?}",
                             card.get().name
                         ))
                     })?;
