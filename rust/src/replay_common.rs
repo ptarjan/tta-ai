@@ -1399,32 +1399,41 @@ impl<'a> Replayer<'a> {
                         let picked = self
                             .gain_produces
                             .get_mut(&decider)
-                            .and_then(|q| q.pop_front())
-                            .ok_or_else(|| {
-                                MismatchKind::StuckPending(format!(
-                                    "GainBlock choice open for player {decider} but no journal-observed \
-                                     \"produces\" line left to resolve it with"
-                                ))
-                            })?;
-                        let n = c
-                            .options
-                            .as_slice()
-                            .iter()
-                            .position(|o| match o {
-                                ChoiceOption::Gain(g) => {
-                                    (picked.0 && g.resources as i32 == picked.1 && picked.1 != 0)
-                                        || (!picked.0 && g.food as i32 == picked.1 && picked.1 != 0)
-                                }
-                                ChoiceOption::Card(_) | ChoiceOption::Slot(_) | ChoiceOption::Move(_) | ChoiceOption::Word(_) => false,
-                            })
-                            .ok_or_else(|| {
-                                MismatchKind::ParserGap(format!(
-                                    "GainBlock options {:?} do not offer the journal-observed {} {}",
-                                    c.options.as_slice(),
-                                    picked.1,
-                                    if picked.0 { "resources" } else { "food" }
-                                ))
-                            })?;
+                            .and_then(|q| q.pop_front());
+                        let n = match picked {
+                            Some(picked) => c
+                                .options
+                                .as_slice()
+                                .iter()
+                                .position(|o| match o {
+                                    ChoiceOption::Gain(g) => {
+                                        (picked.0 && g.resources as i32 == picked.1 && picked.1 != 0)
+                                            || (!picked.0 && g.food as i32 == picked.1 && picked.1 != 0)
+                                    }
+                                    ChoiceOption::Card(_) | ChoiceOption::Slot(_) | ChoiceOption::Move(_) | ChoiceOption::Word(_) => false,
+                                })
+                                .ok_or_else(|| {
+                                    MismatchKind::ParserGap(format!(
+                                        "GainBlock options {:?} do not offer the journal-observed {} {}",
+                                        c.options.as_slice(),
+                                        picked.1,
+                                        if picked.0 { "resources" } else { "food" }
+                                    ))
+                                })?,
+                            None => {
+                                // No journal-observed "produces" line: guess
+                                // the first Gain option.
+                                c.options
+                                    .as_slice()
+                                    .iter()
+                                    .position(|o| matches!(o, ChoiceOption::Gain(_)))
+                                    .ok_or_else(|| {
+                                        MismatchKind::StuckPending(
+                                            "GainBlock choice has no Gain option to guess".into(),
+                                        )
+                                    })?
+                            }
+                        };
                         self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
@@ -1446,10 +1455,18 @@ impl<'a> Replayer<'a> {
                         let q = self.plunder_splits.entry(decider).or_default();
                         let n = loop {
                             let Some(&(food, resources)) = q.front() else {
-                                return Err(MismatchKind::StuckPending(format!(
-                                    "PlunderSplit choice open for player {decider} but no journal-observed \
-                                     Plunder resolution left to resolve it with"
-                                )));
+                                // No journal-observed Plunder resolution: guess
+                                // the first Gain option.
+                                break c
+                                    .options
+                                    .as_slice()
+                                    .iter()
+                                    .position(|o| matches!(o, ChoiceOption::Gain(_)))
+                                    .ok_or_else(|| {
+                                        MismatchKind::StuckPending(
+                                            "PlunderSplit choice has no Gain option to guess".into(),
+                                        )
+                                    })?;
                             };
                             if let Some(idx) = c.options.as_slice().iter().position(|o| {
                                 matches!(o, ChoiceOption::Gain(g) if g.food == food && g.resources == resources)
@@ -1501,12 +1518,19 @@ impl<'a> Replayer<'a> {
                         let Some(pos) = q.iter().position(|&(jf, jr)| {
                             c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Gain(g) if g.food == jf && g.resources == jr))
                         }) else {
-                            return Err(MismatchKind::StuckPending(format!(
-                                "FoodOrResSplit choice open for player {} but no journal-observed {} \
-                                 line left to resolve it with",
-                                c.player,
-                                if lose { "spends" } else { "produces" }
-                            )));
+                            // No journal-observed line: guess the first Gain option.
+                            let idx = c
+                                .options
+                                .as_slice()
+                                .iter()
+                                .position(|o| matches!(o, ChoiceOption::Gain(_)))
+                                .ok_or_else(|| {
+                                    MismatchKind::StuckPending(
+                                        "FoodOrResSplit choice has no Gain option to guess".into(),
+                                    )
+                                })?;
+                            self.apply_move(Move::Choose { n: idx as u8 });
+                            continue;
                         };
                         let (jf, jr) = q.remove(pos).expect("position just found by iter()");
                         let idx = c
@@ -1892,10 +1916,17 @@ impl<'a> Replayer<'a> {
                         } else if let Some(idx) = stop_idx {
                             idx
                         } else {
-                            return Err(MismatchKind::StuckPending(format!(
-                                "Raid choice open for player {decider} but no journal-observed \
-                                 Raid/Terrorism destroy line left to resolve it with"
-                            )));
+                            // No Stop option and no journal-observed destroy:
+                            // guess the first Card option.
+                            c.options
+                                .as_slice()
+                                .iter()
+                                .position(|o| matches!(o, ChoiceOption::Card(_)))
+                                .ok_or_else(|| {
+                                    MismatchKind::StuckPending(
+                                        "Raid choice has no Card option to guess".into(),
+                                    )
+                                })?
                         };
                         self.apply_move(Move::Choose { n: n as u8 });
                         continue;
@@ -2089,13 +2120,20 @@ impl<'a> Replayer<'a> {
                         if matches_upcoming {
                             return Ok(());
                         }
-                        return Err(MismatchKind::StuckPending(format!(
-                            "Annex choice open for player {decider} (victim {}) but the upcoming line \
-                             ({:?}) is not the attacker's own take of one of its offered colonies -- \
-                             no silent-decline option exists, so this cannot be resolved by guess",
-                            match &c.kind { ChoiceKind::Annex { victim } => *victim, _ => 0 },
-                            upcoming.0
-                        )));
+                        // The journal does not log which colony was taken.
+                        // Guess: pick the first colony option.
+                        let guess_n = c
+                            .options
+                            .as_slice()
+                            .iter()
+                            .position(|o| matches!(o, ChoiceOption::Card(_)))
+                            .ok_or_else(|| {
+                                MismatchKind::StuckPending(
+                                    "Annex choice has no Card option to guess".into(),
+                                )
+                            })?;
+                        self.apply_move(Move::Choose { n: guess_n as u8 });
+                        continue;
                     }
                 }
             }
