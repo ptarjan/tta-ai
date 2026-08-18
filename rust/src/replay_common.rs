@@ -547,6 +547,20 @@ struct Replayer<'a> {
     /// the skip fired exactly where the journal's own timestamps say it
     /// should.
     trailing_discards_lines: Vec<usize>,
+    /// Journal `Line::lineno`s of `"<Color> builds <Card>"` lines that are
+    /// BGO's redundant SECOND log of the SAME build already applied by this
+    /// reconstruction's own preceding, identical build line for the same
+    /// actor in the same turn -- see `replay_game`'s main-loop
+    /// `BuildBuilding`/`BuildUnit` special case (the `EndTurn` dispatch arm's
+    /// sibling, right before `apply_one` runs) for the full mechanism and the
+    /// real games this was found on (e.g. `7522652`'s 4x "builds Movies"
+    /// where BGO's own end-of-turn resource math proves only 3 happened). The
+    /// main loop skips these lines as pure confirmations instead of charging
+    /// the build's resources twice (the over-spend that starved a later,
+    /// genuinely-unaffordable wonder stage into `IllegalMove: WonderStep`);
+    /// `GameResult` surfaces the count so a corpus run can verify the skip
+    /// fired exactly where the journal's own timestamps say it should.
+    duplicate_build_lines: Vec<usize>,
     /// The journal `Line::lineno` currently being resolved, set once per
     /// loop iteration in `replay_game` before `resolve_intervening` runs.
     /// `DiscardSolver::choose` needs this to tell a FUTURE named play
@@ -1103,6 +1117,7 @@ impl<'a> Replayer<'a> {
             colonize_sacrifices,
             actions_consumed: 0,
             trailing_discards_lines: Vec::new(),
+            duplicate_build_lines: Vec::new(),
             current_lineno: 0,
             gain_produces,
             plunder_splits,
@@ -6768,6 +6783,10 @@ pub struct GameResult {
     /// end-of-turn discard, skipped as pure confirmations -- see
     /// `Replayer::trailing_discards_lines`).
     pub trailing_discards: usize,
+    /// Count of the redundant duplicate `"<Color> builds <Card>"` lines this
+    /// game's own journal logged (BGO's same-turn double log of one build,
+    /// skipped as pure confirmations -- see `Replayer::duplicate_build_lines`).
+    pub duplicate_builds: usize,
     pub completed: bool,
     pub mismatch: Option<Mismatch>,
     pub colonize_approximated: bool,
@@ -8519,6 +8538,57 @@ pub fn replay_game(
             continue 'lines;
         }
 
+        // BGO's client logs a single real build as TWO identical
+        // `"<Color> builds <Card>"` lines seconds apart (e.g. real game
+        // `7522652` has FOUR "Orange builds Movies" lines -- r15, r16 twice,
+        // r17 -- but BGO's own end-of-turn resource math proves only 3
+        // happened, because the second r16 line, 38s after the first, is the
+        // redundant confirmation; and `7522632` logs "Purple builds 1 stage
+        // of Library of Alexandria" THREE times for a 1-stage wonder built
+        // once). This file used to apply EVERY line, over-spending the build's
+        // resources each time the journal duplicated it -- which then starved
+        // a later, genuinely-unaffordable build into `IllegalMove:
+        // WonderStep`/`Build` (the shared root cause of those two buckets).
+        //
+        // The skip mirrors `trailing_discards_lines` two lines up: a build
+        // line is a pure confirmation -- skip it -- when BOTH
+        //   (a) an IDENTICAL `"<Color> builds <Card>"` line for the SAME
+        //       actor earlier in the journal was already applied (its
+        //       `Move::Build{card}` is in `moves_applied`), AND
+        //   (b) re-applying it is now ILLEGAL in the reconstructed state
+        //       (`Move::Build{card}` absent from `legal::legal_moves`).
+        // Condition (b) is the load-bearing one: two GENUINE, distinct builds
+        // of the same card (a real 2x "builds Knights") both apply legally in
+        // sequence, so neither ever satisfies (b) and neither is skipped --
+        // only a re-application the engine itself now refuses is, which is
+        // exactly the redundant double-log shape. A `FreeBuild` confirmation
+        // (which this file already routes through `Move::Choose`, not
+        // `Move::Build`) never reaches here: `moves_applied` holds no
+        // `Move::Build{card}` for it. Gated on the journal's own age/round
+        // columns (same turn) so it can only fire on a same-turn duplicate.
+        if matches!(class, ActionClass::BuildBuilding | ActionClass::BuildUnit)
+            && card.is_some_and(|c| {
+                let prior_identical_build_line = journal.iter().take(i).any(|l| {
+                    let same_line = l.round == line.round && l.age == line.age && l.text == line.text;
+                    let same_build = matches!(
+                        classify(card_index, l.text),
+                        LineOutcome::Action(ref x)
+                            if x.class == class && x.card == Some(c)
+                    );
+                    same_line && same_build
+                });
+                let already_applied =
+                    r.moves_applied.iter().any(|mv| matches!(mv, Move::Build { card: d } if *d == c));
+                let now_illegal =
+                    !legal::legal_moves(&r.state).as_slice().contains(&Move::Build { card: c });
+                prior_identical_build_line && already_applied && now_illegal
+            })
+        {
+            r.duplicate_build_lines.push(line.lineno);
+            r.actions_consumed += 1;
+            continue 'lines;
+        }
+
         if !is_pure_confirmation_line(class) {
             if let Err(kind) = r.resolve_intervening(actor, (class, card), explains_own_politics) {
                 mismatch = Some(mk_mismatch(line, kind));
@@ -8601,6 +8671,7 @@ pub fn replay_game(
         players: meta.players,
         actions_consumed: r.actions_consumed,
         trailing_discards: r.trailing_discards_lines.len(),
+        duplicate_builds: r.duplicate_build_lines.len(),
         completed: completed && mismatch.is_none(),
         mismatch,
         colonize_approximated: r.colonize_approximated,
