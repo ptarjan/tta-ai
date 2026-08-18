@@ -547,17 +547,20 @@ struct Replayer<'a> {
     /// the skip fired exactly where the journal's own timestamps say it
     /// should.
     trailing_discards_lines: Vec<usize>,
-    /// Journal `Line::lineno`s of `"<Color> builds <Card>"` lines that are
-    /// BGO's redundant SECOND log of the SAME build already applied by this
+    /// Journal `Line::lineno`s of `"<Color> builds <Card>"` /
+    /// `"<Color> builds <N> stage(s) of <Wonder>"` lines that are BGO's
+    /// redundant SECOND log of the SAME build already applied by this
     /// reconstruction's own preceding, identical build line for the same
     /// actor in the same turn -- see `replay_game`'s main-loop
     /// `BuildBuilding`/`BuildUnit` special case (the `EndTurn` dispatch arm's
-    /// sibling, right before `apply_one` runs) for the full mechanism and the
-    /// real games this was found on (e.g. `7522652`'s 4x "builds Movies"
-    /// where BGO's own end-of-turn resource math proves only 3 happened). The
-    /// main loop skips these lines as pure confirmations instead of charging
-    /// the build's resources twice (the over-spend that starved a later,
-    /// genuinely-unaffordable wonder stage into `IllegalMove: WonderStep`);
+    /// sibling, right before `apply_one` runs) and `apply_one`'s
+    /// `BuildWonderStage` arm for the full mechanism and the real games this
+    /// was found on (e.g. `7522652`'s 4x "builds Movies" where BGO's own
+    /// end-of-turn resource math proves only 3 happened, and `7522432`'s
+    /// 2x "builds 1 stage of Fast Food Chains"). The replayer skips these
+    /// lines as pure confirmations instead of charging the build's resources
+    /// twice (the over-spend that starved a later, genuinely-unaffordable
+    /// build/wonder stage into `IllegalMove: Build`/`WonderStep`);
     /// `GameResult` surfaces the count so a corpus run can verify the skip
     /// fired exactly where the journal's own timestamps say it should.
     duplicate_build_lines: Vec<usize>,
@@ -9085,6 +9088,39 @@ fn apply_one(
             if !r.state.players[actor as usize].wonder.is_none() {
                 let true_cost = costs::wonder_stage_cost(&r.state, &r.state.players[actor as usize], steps);
                 convert_trade_food_shortfall(r, actor, raw_text, true_cost)?;
+            }
+            // Same BGO redundant double-log the ordinary Build arm skips,
+            // but for a wonder stage: BGO logs a single `"<Color> builds
+            // <N> stage(s) of <Wonder>"` action as two identical lines
+            // seconds apart (e.g. `7522432`'s two "builds 1 stage of Fast
+            // Food Chains" lines; `7522632`'s two "builds 1 stage of Fast
+            // Food Chains" before the "Wonder completed" trailer). Re-applying
+            // the second `Move::WonderStep{steps}` over-spends the stage's
+            // resources, starving a later genuinely-unaffordable build into
+            // `IllegalMove`. Skip the redundant line when a `Move::WonderStep
+            // {steps}` for THIS actor was ALREADY applied this turn AND
+            // re-applying it is now ILLEGAL in the reconstructed state
+            // (`Move::WonderStep{steps}` absent from `legal_moves`) -- the
+            // same two-condition guard the Build arm uses. A GENUINE second
+            // stage of the same wonder (e.g. building a 4-stage wonder's
+            // stages across two separate actions, or a `steps` value still
+            // legal because the wonder is far from complete) applies legally
+            // and never satisfies the illegality condition, so it is never
+            // skipped. A `FreeBuild`/action-card wonder build resolves
+            // through `Move::Choose`, never a bare `Move::WonderStep`, so it
+            // never reaches this branch either.
+            {
+                let mv = Move::WonderStep { steps };
+                let actor_applied_wonder = r.state.decider() == actor;
+                let already_applied = r
+                    .moves_applied
+                    .iter()
+                    .any(|m| matches!(m, Move::WonderStep { steps: s } if *s == steps));
+                let now_illegal = !legal::legal_moves(&r.state).as_slice().contains(&mv);
+                if actor_applied_wonder && already_applied && now_illegal {
+                    r.duplicate_build_lines.push(r.current_lineno);
+                    return Ok(());
+                }
             }
             r.try_apply(Move::WonderStep { steps }, true)
         }
