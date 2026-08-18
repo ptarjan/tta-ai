@@ -55,6 +55,13 @@ acceptance convenience, not the standard: if the rulebook says one thing and the
 corpus rewards another, the rulebook wins and the count goes down. Measure the
 regression, name the games, and land it anyway.
 
+The usual reason a rules-right change regresses is **two bugs that were cancelling
+each other out**. Fixing one exposes the other, and the corpus — which only ever saw
+their sum — reports the honest engine as worse. Keep the rules-right change. The
+games it "lost" are not a cost, they are the bug report for the second defect, and
+they are the only reason you can now see it. Record those IDs and hunt the partner
+bug; do not revert the fix to put the mask back on.
+
 A citation must say what the comment claims it says. `costs::can_take_bypass_hand_limit`
 landed asserting International Agreement ignores the §2.5 hand limit, quoting CoL's
 "may use this option even in the last round" — which is about the final round, not
