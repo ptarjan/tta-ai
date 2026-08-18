@@ -40,8 +40,14 @@ rewrites them every few minutes.
 
 ## The only metric that counts
 
-The corpus of 1011 replayed human BGO games. Current: **838 complete / 807 exact**
-(guard list `analysis/guard_ids_838.txt`).
+The corpus of 1011 replayed human BGO games. Current: **841 complete / 809 exact**
+(guard list `analysis/guard_ids_841.txt`).
+
+A completion bought by *guessing* an unlogged choice is worth less than the error it
+replaced. A `StuckPending` is the report that a mechanic is unmodelled; a fallback
+that picks "the first option" completes the game with fabricated state and deletes
+that report. If you add one, it needs a game ID showing what it buys — an unproven
+guess is pure blindness.
 
 `replaystats` also prints a count of non-matching games "SET ASIDE" by
 `journal_arithmetic_error_suppression`. Those are UNRESOLVED, not proven corpus
