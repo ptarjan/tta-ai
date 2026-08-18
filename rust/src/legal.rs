@@ -509,7 +509,14 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
             if !have_ma {
                 continue;
             }
-        } else if !have_ca {
+        } else if !(have_ca || costs::civil_life_ca_free(p.one_time_discount.build_resources)) {
+            // Civil Life's CA-free exemption covers upgrades too: the
+            // discount is "build a technology for 1 resource less", and an
+            // in-place upgrade IS building the higher technology (the
+            // worker moves, not the card). The build gate above has the
+            // same exemption; without it here, a player who used all
+            // their CAs on builds but still has a live Civil Life grant
+            // cannot upgrade, contradicting the journal (game 7522648).
             continue;
         }
         let higher = names

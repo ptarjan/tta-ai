@@ -785,7 +785,16 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
         if costs::is_unit(lo) {
             state.players[idx as usize].military_actions -= 1;
         } else {
-            costs::pay_ca(&mut state.players[idx as usize], 1);
+            // Civil Life's CA-free exemption: the discount is "build a
+            // technology for 1 resource less", and an in-place upgrade IS
+            // building the higher technology. Skip `pay_ca` when the
+            // `build_resources` discount is still banked (the upgrade
+            // spent it, same as `do_build` does for a fresh build).
+            if costs::civil_life_ca_free(state.players[idx as usize].one_time_discount.build_resources) {
+                state.players[idx as usize].one_time_discount.exhaust();
+            } else {
+                costs::pay_ca(&mut state.players[idx as usize], 1);
+            }
         }
     }
     let p = &mut state.players[idx as usize];
