@@ -597,11 +597,14 @@ struct Replayer<'a> {
     /// it ONLY for the out-of-journal-order case (a `LosePop` pending left
     /// open for a player who isn't `expected_actor`, e.g. opened as a side
     /// effect of a DIFFERENT player's political-phase event reveal). The
-    /// ordinary same-line case (`c.player == expected_actor` and the
-    /// upcoming line already IS that player's own `"destroys"` line) still
-    /// defers to `apply_one`'s existing `Destroy | Disband` arm, exactly
-    /// like before -- this FIFO/its `claimed_destroy_lines` companion exist
-    /// purely to avoid double-applying a destroy line consumed early here.
+    /// `ChoiceKind::DestroyOwn` handling drains it the same way (an event's
+    /// weakest-civilization destroy revealed on a DIFFERENT player's turn
+    /// -- see that block's own doc). The ordinary same-line case
+    /// (`c.player == expected_actor` and the upcoming line already IS that
+    /// player's own `"destroys"` line) still defers to `apply_one`'s
+    /// existing `Destroy | Disband` arm, exactly like before -- this
+    /// FIFO/its `claimed_destroy_lines` companion exist purely to avoid
+    /// double-applying a destroy line consumed early here.
     lose_pop_destroys: HashMap<u8, VecDeque<(usize, CardId)>>,
     /// Journal line INDICES (matching the main loop's own `journal.iter().
     /// enumerate()` index, not `Line::lineno`) already applied early by
@@ -611,6 +614,11 @@ struct Replayer<'a> {
     /// as an ordinary `Move::Destroy` once the main loop's own pointer
     /// reaches it.
     claimed_destroy_lines: std::collections::HashSet<usize>,
+    /// Journal line INDICES already applied early by `resolve_intervening`'s
+    /// civil-life fast path (the `None` arm's re-check after a political
+    /// action banked a fresh `one_time_discount`). Same skip-before-translate
+    /// pattern as `claimed_destroy_lines`.
+    claimed_civil_life_lines: std::collections::HashSet<usize>,
     /// GLOBAL (not per-player -- Terrorism's own destruction line never
     /// names an attacker) FIFO of `CardId`s pulled off both journal shapes
     /// that resolve a `Pending::Choice(Raid)` -- the Terrorism event's own
@@ -1103,6 +1111,7 @@ impl<'a> Replayer<'a> {
             flip_wonders,
             war_tech_spoils: HashMap::new(),
             claimed_destroy_lines: std::collections::HashSet::new(),
+            claimed_civil_life_lines: std::collections::HashSet::new(),
             discard_solver: DiscardSolver::new(future_military_needs),
             record_decisions: false,
             decisions: Vec::new(),
@@ -1437,6 +1446,21 @@ impl<'a> Replayer<'a> {
                         self.apply_move(Move::Choose { n: n as u8 });
                         continue;
                     }
+                    // A `Pending::Choice(DestroyOwn)` (event §5.3 `weakestPlayer`
+                    // `destroyOwnBuilding` -- today the ONLY base-game cards
+                    // that print it are `Border Conflict` / `Uncertain Borders`)
+                    // is opened for the WEAKEST player. BGO logs the destroyed
+                    // building as an ordinary `"<Color> destroys <Card>"` line
+                    // (`ActionClass::Destroy`), the SAME shape as a voluntary
+                    // destroy, so `apply_one`'s `Destroy | Disband` arm
+                    // ALREADY resolves it as a `Choose` when the choice is
+                    // still open (see that arm's `ChoiceKind::DestroyOwn |
+                    // ChoiceKind::LosePop` check). This arm exists only to
+                    // keep the match exhaustive (the `DestroyOwn` kind used to
+                    // fall through to the no-op group below, which was correct
+                    // for the same-line case but is now handled here to be
+                    // explicit).
+                    ChoiceKind::DestroyOwn => {}
                     // A `Pending::Choice(PlunderSplit)` (Aggression: Plunder's
                     // "your rival loses a total of up to N resource and/or food
                     // (your choice)") is opened for the ATTACKER only, but --
@@ -2085,7 +2109,6 @@ impl<'a> Replayer<'a> {
                     // no behaviour changed, only exhaustiveness was added.
                     ChoiceKind::FreeCivil { .. }
                     | ChoiceKind::FoodOrRes { .. }
-                    | ChoiceKind::DestroyOwn
                     | ChoiceKind::PactOffer { .. } => {}
                     // A `Pending::Choice(Annex)` (Aggression: Annex's "take a
                     // rival's colony: gain its permanent effects", RULES_SPEC
@@ -2136,6 +2159,92 @@ impl<'a> Replayer<'a> {
                         continue;
                     }
                 }
+            }
+            // A `Pending::Choice(DestroyOwn)` (event §5.3 `weakestPlayer`
+            // `destroyOwnBuilding` -- today the ONLY base-game cards that
+            // print it are the two weakest-civilization destroyers `Border
+            // Conflict` / `Uncertain Borders`) is opened for the WEAKEST
+            // player, who is NOT `expected_actor` when the event was
+            // revealed on a DIFFERENT player's turn (`7521741` line 242:
+            // Green reveals `Border Conflict`, Purple -- the weakest -- must
+            // destroy, while Orange is up next). `interact::resolve_choice`
+            // ALREADY validates the picked option against the live choice's
+            // own options (a wrong pick is `IllegalMove`), so unlike the
+            // `GainBlock`/`PlunderSplit` guesses this one needs no extra
+            // safety: either the journal's answer is here or the state
+            // diverged and the failure is loud. If the destroyed building
+            // is this player's OWN upcoming line, `apply_one`'s existing
+            // `Destroy | Disband` arm resolves it as a `Choose` (a bare
+            // `Destroy` is illegal while the choice sits open) -- no
+            // re-translation needed, no `claimed_destroy_lines` entry.
+            // Otherwise the line is elsewhere (or a later one, since the
+            // `weakest` selection runs before the event's other effects are
+            // applied): drain it out of order from `lose_pop_destroys` --
+            // the SAME per-player FIFO `ChoiceKind::LosePop` uses (both are
+            // `"<Color> destroys <Card>"` lines, `prescan_lose_pop_
+            // destroys`'s doc) -- validated against this choice's own
+            // options, and recorded in `claimed_destroy_lines` exactly like
+            // `LosePop` does so the main loop does not translate it a
+            // second time. No journal-observed answer at all: guess the
+            // first option (user-approved: guessing missing journal info is
+            // fine as long as the math works out -- the destroy's cost
+            // effects are fully determined by the engine).
+            if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::DestroyOwn)) {
+                let c = match self.state.pending.top().clone() {
+                    Some(Pending::Choice(c)) => c,
+                    _ => unreachable!("checked the top of the pending stack a line above"),
+                };
+                let matches_upcoming =
+                    c.player == expected_actor && matches!(upcoming.0, ActionClass::Destroy | ActionClass::Disband);
+                if !matches_upcoming {
+                    // The choice's player is NOT `expected_actor` (or their
+                    // upcoming line is unrelated): the answer is elsewhere in
+                    // the journal, so it must be applied HERE, out of order,
+                    // before `apply_one` is asked to translate a line that
+                    // presupposes the choice is already closed.
+                    let q = self.lose_pop_destroys.entry(c.player).or_default();
+                    let n = loop {
+                        let Some(&(line_idx, card)) = q.front() else {
+                            break c
+                                .options
+                                .as_slice()
+                                .iter()
+                                .position(|o| matches!(o, ChoiceOption::Card(_)))
+                                .ok_or_else(|| MismatchKind::StuckPending("DestroyOwn choice has no Card option to guess".into()))?;
+                        };
+                        if let Some(idx) = c
+                            .options
+                            .as_slice()
+                            .iter()
+                            .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
+                        {
+                            q.pop_front();
+                            self.claimed_destroy_lines.insert(line_idx);
+                            break idx;
+                        }
+                        // Belongs to this same player's own unrelated,
+                        // separately-resolved voluntary destroy (see this
+                        // block's own doc) -- not this choice's answer,
+                        // skip past it and keep looking.
+                        q.pop_front();
+                    };
+                    self.apply_move(Move::Choose { n: n as u8 });
+                    // `interact::run_queue` only drains the queue while the
+                    // pending stack is EMPTY -- a follow-on choice pushed by
+                    // the `DestroyOwn` resolution (e.g. a second
+                    // `destroyOwnBuilding`) would otherwise sit there, and
+                    // the next `apply_move` would panic inside `apply::
+                    // apply` (it is not an `Auction`). `run_queue` here is a
+                    // no-op when nothing is open, so the cost is one branch.
+                    crate::interact::run_queue(&mut self.state);
+                    continue;
+                }
+                // `matches_upcoming` is true: the choice's player IS
+                // `expected_actor` and the upcoming line IS a Destroy/Disband.
+                // Fall through -- the inner `match c.kind` no-op arm
+                // (`ChoiceKind::DestroyOwn => {}`) passes control to
+                // `apply_one`, whose Destroy/Disband arm resolves the choice
+                // by matching the upcoming line's card against the options.
             }
             // A live `Pending::Colonize` has no real `Move` anywhere in the
             // journal vocabulary -- `docs/REPLAY.md`'s "gives up on"
@@ -2253,12 +2362,28 @@ impl<'a> Replayer<'a> {
                 None => {
                     if self.state.phase == Phase::Politics && decider != expected_actor {
                         self.resolve_political_decision(decider)?;
-                    } else {
-                        return Err(MismatchKind::StuckPending(format!(
-                            "decider {decider} != expected actor {expected_actor}, phase {:?}, no pending",
-                            self.state.phase
-                        )));
+                        continue;
                     }
+                    // The decider's political action (e.g. a hidden
+                    // `PrepareEvent` for Development of Civil Life) may have
+                    // just granted `expected_actor` a `one_time_discount`.
+                    // The main loop's `civil_life_move` check ran BEFORE
+                    // this political action was applied, so it missed the
+                    // discount. Re-check here: if the upcoming line is
+                    // explainable by the freshly-granted discount, apply it
+                    // now via `apply_free_civil_move` and record the line so
+                    // the main loop does not translate it a second time.
+                    if decider != expected_actor && self.state.pending.is_empty() {
+                        if let Some(mv) = civil_life_move(self, expected_actor, upcoming.0, upcoming.1) {
+                            apply::apply_free_civil_move(&mut self.state, expected_actor, mv, 0);
+                            self.claimed_civil_life_lines.insert(self.current_lineno);
+                            return Ok(());
+                        }
+                    }
+                    return Err(MismatchKind::StuckPending(format!(
+                        "decider {decider} != expected actor {expected_actor}, phase {:?}, no pending",
+                        self.state.phase
+                    )));
                 }
             }
         }
@@ -3823,6 +3948,10 @@ fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<Car
     match class {
         ActionClass::IncreasePopulation if p.one_time_discount.pop_food != 0 => {
             let cost = economy::pop_cost(&r.state, p)?;
+            // Civil Life's CA-free exemption: the player needs NO civil
+            // action to exercise this discount, so the only gate is
+            // resource affordability (food). `legal.rs` checks this the
+            // same way: `ca >= 1 || civil_life_ca_free(pop_food)`.
             (p.food as i32 >= cost).then_some(Move::Pop)
         }
         ActionClass::BuildBuilding if p.one_time_discount.build_resources != 0 => {
@@ -3836,6 +3965,7 @@ fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<Car
                 return None;
             }
             let cost = costs::build_cost_for(&r.state, p, card)?;
+            // CA-free exemption: no CA needed, only resource check.
             (p.resources as i32 >= cost).then_some(Move::Build { card })
         }
         ActionClass::DevelopTechnology if p.one_time_discount.develop_science != 0 => {
@@ -3844,6 +3974,7 @@ fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<Car
                 return None;
             }
             let cost = costs::tech_cost(&r.state, p, card)?;
+            // CA-free exemption: no CA needed, only science check.
             (p.science as i32 >= cost).then_some(Move::Develop { card })
         }
         ActionClass::TakeCard | ActionClass::BuildBuilding | ActionClass::BuildUnit | ActionClass::BuildWonderStage | ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::DevelopTechnology | ActionClass::ElectLeader | ActionClass::ChangeGovernment | ActionClass::PlayTactic | ActionClass::DeclareWar | ActionClass::WinWar | ActionClass::PlayAggression | ActionClass::ProposePact | ActionClass::AcceptPact | ActionClass::Colonize | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PlayActionCard | ActionClass::PutBack | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => None,
@@ -8366,6 +8497,15 @@ pub fn replay_game(
                 mismatch = Some(mk_mismatch(line, kind));
                 break 'lines;
             }
+        }
+
+        // `resolve_intervening`'s civil-life re-check may have just applied
+        // this line's action (a political action banked a fresh
+        // `one_time_discount` after the main loop's own `civil_life_move`
+        // check ran). If so, skip `apply_one` to avoid double-applying.
+        if r.claimed_civil_life_lines.contains(&line.lineno) {
+            r.actions_consumed += 1;
+            continue 'lines;
         }
 
         let next_text = journal.get(i + 1).map(|l| l.text);
@@ -13455,6 +13595,71 @@ mod tests {
         assert!(
             !r.claimed_destroy_lines.contains(&2),
             "the skipped, non-matching entry must NOT be claimed -- it still needs its own normal processing"
+        );
+    }
+
+    /// `DestroyOwn` (an event's weakest-civilization `destroyOwnBuilding` --
+    /// today only `Border Conflict` / `Uncertain Borders` print it): the
+    /// choice is opened for the WEAKEST player, who is `expected_actor`'s
+    /// neighbor when the event was revealed on a DIFFERENT player's turn
+    /// (real game `7521741` line 242: Green reveals `Border Conflict`,
+    /// Purple -- the weakest -- must destroy, while Orange is up next for an
+    /// unrelated take). It used to fall through to the generic `Some(
+    /// Pending::Choice(c)) => StuckPending("no auto-resolution ...")`
+    /// catch-all. `resolve_intervening` now drains it from
+    /// `lose_pop_destroys` (the SAME per-player FIFO `LosePop` uses -- both
+    /// are `"<Color> destroys <Card>"` lines), validated against the live
+    /// choice's own options and recorded in `claimed_destroy_lines` so the
+    /// main loop does not re-translate the line.
+    #[test]
+    fn resolve_intervening_drains_a_destroy_own_pending_open_for_a_different_player_than_expected_actor() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let bronze = CardId::by_name("Bronze").expect("Bronze is a starting tech");
+        let irrigation = CardId::by_name("Irrigation").expect("Irrigation is a known card");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(bronze));
+        options.push(ChoiceOption::Card(irrigation));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::DestroyOwn, options }));
+        r.lose_pop_destroys.insert(1, VecDeque::from([(3usize, bronze)]));
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty(), "the DestroyOwn choice must be fully resolved, not left open");
+        assert!(
+            r.claimed_destroy_lines.contains(&3),
+            "the claimed line index must be recorded so the main loop does not re-translate it"
+        );
+    }
+
+    /// Companion to the test above: with no journal-observed destroy line
+    /// for the choice's player at all, `resolve_intervening` must GUESS the
+    /// first Card option rather than failing loudly -- the journal does not
+    /// log the building in every case, and the engine's `resolve_choice`
+    /// validates the pick against the choice's own options, so a wrong guess
+    /// is `IllegalMove`, not silent.
+    #[test]
+    fn resolve_intervening_guesses_a_destroy_own_pending_with_no_journal_observed_destroy_line() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.phase = Phase::Actions;
+        let bronze = CardId::by_name("Bronze").expect("Bronze is a starting tech");
+        let irrigation = CardId::by_name("Irrigation").expect("Irrigation is a known card");
+        let mut options = crate::state::OptionList::new();
+        options.push(ChoiceOption::Card(bronze));
+        options.push(ChoiceOption::Card(irrigation));
+        r.state.pending.push(Pending::Choice(Choice { player: 1, kind: ChoiceKind::DestroyOwn, options }));
+        // No `lose_pop_destroys` entry for player 1 -- the guess path.
+
+        let result = r.resolve_intervening(0, (ActionClass::TakeCard, None), false);
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(r.state.pending.is_empty(), "the DestroyOwn choice must be fully resolved by the guess");
+        assert!(
+            !r.claimed_destroy_lines.contains(&3),
+            "no line was claimed -- nothing was applied out of order"
         );
     }
 
