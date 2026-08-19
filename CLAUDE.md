@@ -40,8 +40,8 @@ rewrites them every few minutes.
 
 ## The only metric that counts
 
-The corpus of 1011 replayed human BGO games. Current: **863 complete / 817 exact**
-(guard list `analysis/guard_ids_863.txt`).
+The corpus of 1011 replayed human BGO games. Current: **864 complete / 818 exact**
+(guard list `analysis/guard_ids_863.txt`, one short: it predates 7522322).
 
 A completion bought by *guessing* an unlogged choice is worth less than the error it
 replaced. A `StuckPending` is the report that a mechanic is unmodelled; a fallback
