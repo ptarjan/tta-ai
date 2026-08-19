@@ -27,15 +27,24 @@
 # the launcher cmd.exe exits before climb.exe is enumerable, and a child
 # inherits its priority at creation.
 #
-# PAUSE is written by D:\llm\game-guard.ps1 -- the same guard that stops
-# llama-swap -- within ~10s of a game starting, and removed 30s after it exits.
-# The guard does the stopping (it kills the arms outright, so the owner gets the
-# machine back immediately); this script only declines to bring them back.
-# Touch PAUSE by hand to pin the arms off, but expect the guard to clear it.
+# Two pause files, because they have two owners and only one of them is a
+# person.  PAUSE belongs to D:\llm\game-guard.ps1 -- the same guard that stops
+# llama-swap -- which writes it within ~10s of a game starting and deletes it on
+# every poll once the game has been gone for 30s.  The guard does the stopping
+# (it kills the arms outright, so whoever sat down gets the machine back at
+# once); this script only declines to bring them back.
+#
+# That makes PAUSE useless as a hand-operated switch: touch it with no game
+# running and the guard eats it within ten seconds, measured.  PAUSE_MANUAL is
+# never written or deleted by anything automatic, so it stays until someone
+# removes it.  Do not merge these into one file -- a single flag cannot be both
+# "cleared as soon as the machine is free" and "stays until a human says so".
 param([Parameter(Mandatory = $true)][int]$K)
 
 $root = "C:\Users\micro\tta-desk"
-if (Test-Path (Join-Path $root "PAUSE")) { exit }
+foreach ($p in "PAUSE", "PAUSE_MANUAL") {
+    if (Test-Path (Join-Path $root $p)) { exit }
+}
 
 $flag = Join-Path $root "run_${K}p.flag"
 if (Test-Path $flag) {
