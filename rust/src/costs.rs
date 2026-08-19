@@ -833,7 +833,6 @@ mod tests {
             military_actions: 0,
             politics_done: false,
             tactic_action_used: false,
-            tactic_copy_used: false,
             taken_this_turn: CardList::new(),
             ca_spent_taking: 0,
             hammurabi_used: false,

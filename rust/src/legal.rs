@@ -509,14 +509,14 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
             if !have_ma {
                 continue;
             }
-        } else if !(have_ca || costs::civil_life_ca_free(p.one_time_discount.build_resources)) {
-            // Civil Life's CA-free exemption covers upgrades too: the
-            // discount is "build a technology for 1 resource less", and an
-            // in-place upgrade IS building the higher technology (the
-            // worker moves, not the card). The build gate above has the
-            // same exemption; without it here, a player who used all
-            // their CAs on builds but still has a live Civil Life grant
-            // cannot upgrade, contradicting the journal (game 7522648).
+        } else if !have_ca {
+            // No Civil Life exemption here. The event enumerates its three
+            // actions -- "increase its population; or build a farm, mine or
+            // urban building; or develop a technology" -- and upgrade is not
+            // among them; RULES_SPEC §3 lists build (#4) and upgrade (#5) as
+            // separate civil actions. Game 7522648 shows BGO allowing it,
+            // which is BGO being wider than the rulebook: tolerate it in the
+            // replayer, not here, where the BOT's moves are generated.
             continue;
         }
         let higher = names
@@ -627,6 +627,13 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
     }
 
     // tactics -- `state.has_military` always true, see `politics_moves`.
+    // Play and copy share ONE gate: FAQ v1.5 says "You may only play a Tactics
+    // card--or copy a Tactics card--once per turn, (e.g., you may only change
+    // your Tactics once per turn.)", and RULES_SPEC §10.1 caps play-OR-copy at
+    // one per Action Phase. BGO logs 6 games with a same-turn set-up+adopt
+    // (e.g. 7522230 round 17); that is BGO permitting what the rulebook does
+    // not, so it belongs in the replayer's tolerance, never here -- this
+    // function generates the BOT's moves.
     if !p.tactic_action_used {
         if p.military_actions >= 1 {
             let mut tbuf = [CardId::NONE; MAX_HAND];
@@ -1971,6 +1978,31 @@ mod tests {
         assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Build { card: card("Bronze") }));
     }
 
+    /// Development of Civil Life enumerates its three actions -- "increase
+    /// its population; or build a farm, mine or urban building; or develop a
+    /// technology" -- and UPGRADE is not one of them; RULES_SPEC §3 lists
+    /// build (#4) and upgrade (#5) as separate civil actions. BGO permits it
+    /// (game 7522648), which belongs in the replayer's tolerance, not here:
+    /// this function generates the BOT's moves, and `apply.rs` has no
+    /// matching exemption on the upgrade path either, so offering it here
+    /// produced a move the payment path would not have charged for free.
+    #[test]
+    fn civil_life_does_not_buy_an_upgrade_without_a_civil_action() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 0;
+        p.resources = 10;
+        p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 });
+        p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
+        p.one_time_discount.build_resources = 1;
+        let state = one_player_state(p);
+        assert!(
+            !action_moves(&state, &state.players[0])
+                .as_slice()
+                .contains(&Move::Upgrade { from: card("Agriculture"), to: card("Irrigation") }),
+            "a banked Civil Life discount must not stand in for the upgrade's civil action",
+        );
+    }
+
     #[test]
     fn upgrade_move_from_agriculture_to_irrigation() {
         let mut p = blank_player(0, card("Despotism"));
@@ -2289,6 +2321,35 @@ mod tests {
         assert!(moves.as_slice().contains(&Move::PlayTactic { card: tactic }));
         // CopyTactic excludes the player's OWN current tactic.
         assert!(moves.as_slice().contains(&Move::CopyTactic { card: tactic }));
+    }
+
+    /// FAQ v1.5: "You may only play a Tactics card--or copy a Tactics
+    /// card--once per turn, (e.g., you may only change your Tactics once per
+    /// turn.)" -- play and copy share ONE gate, so setting up tactics blocks
+    /// adopting them for the rest of the turn, and vice versa. RULES_SPEC
+    /// §10.1 says the same ("Max one play-or-copy per Action Phase"). Six
+    /// BGO games log a same-turn set-up+adopt; splitting the flag to accept
+    /// them would let the BOT burn 3 MA changing tactics twice.
+    #[test]
+    fn setting_up_tactics_also_blocks_adopting_them_the_same_turn() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.military_actions = 3; // enough for a play (1) AND a copy (2)
+        p.tactic_action_used = true;
+        let tactic = crate::cards::CARDS
+            .iter()
+            .position(|c| c.kind == CardType::Tactic)
+            .map(|i| CardId(i as u16))
+            .expect("at least one tactic exists");
+        p.hand_military.push(tactic);
+        let mut state = one_player_state(p);
+        state.available_tactics.push(tactic);
+        let moves = action_moves(&state, &state.players[0]);
+        assert!(
+            !moves.as_slice().iter().any(|m| matches!(m, Move::PlayTactic { .. } | Move::CopyTactic { .. })),
+            "one tactic action per turn covers play AND copy, got {:?}",
+            moves.as_slice(),
+        );
     }
 
     #[test]

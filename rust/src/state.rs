@@ -519,7 +519,10 @@ pub struct PlayerState {
     pub civil_actions: i8,
     pub military_actions: i8,
     pub politics_done: bool,
-    /// At most one tactic play/copy per phase.
+    /// At most one tactic play/copy per phase. ONE flag, not two: FAQ v1.5
+    /// ("You may only play a Tactics card--or copy a Tactics card--once per
+    /// turn, e.g., you may only change your Tactics once per turn") and
+    /// RULES_SPEC §10.1 both cap play-OR-copy at one per Action Phase.
     pub tactic_action_used: bool,
     /// Reset at the start of MY next turn (`game.rs`/`economy.rs`), so unlike
     /// [`Self::colonies`]/[`Self::completed_wonders`] this does NOT need a
