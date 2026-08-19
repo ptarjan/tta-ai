@@ -2208,11 +2208,13 @@ impl<'a> Replayer<'a> {
             // options, and recorded in `claimed_destroy_lines` exactly like
             // `LosePop` does so the main loop does not translate it a
             // second time. No journal-observed answer at all: guess the
-            // first option (user-approved: guessing missing journal info is
-            // fine as long as the math works out -- the destroy's cost
-            // effects are fully determined by the engine).
+            // first option. THIS GUESS IS UNPROVEN -- it fabricates state and
+            // deletes the report that the mechanic is unmodelled (CLAUDE.md,
+            // "The only metric that counts"). Replace it with a back-solve
+            // against BGO's next stated food/resource total, and fail loudly
+            // if more than one option is consistent.
             if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::DestroyOwn)) {
-                let c = match self.state.pending.top().clone() {
+                let c = match self.state.pending.top() {
                     Some(Pending::Choice(c)) => c,
                     _ => unreachable!("checked the top of the pending stack a line above"),
                 };
@@ -9018,7 +9020,7 @@ fn apply_one(
                     let n = oi as u8;
                     let chosen_slot = match &options[oi] {
                         ChoiceOption::Slot(s) => *s,
-                        _ => slot,
+                        ChoiceOption::Card(_) | ChoiceOption::Move(_) | ChoiceOption::Gain(_) | ChoiceOption::Word(_) => slot,
                     };
                     r.try_apply(Move::Choose { n }, true)?;
                     // Same refill-ungrounding as the ordinary `Move::Take`

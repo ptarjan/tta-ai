@@ -1035,10 +1035,15 @@ pub(crate) fn settle_action_pools(state: &mut GameState, idx: u8, before: Action
     let after = effects::state_stats(state, &state.players[idx as usize]);
     let spent_c = before.total_c - before.remaining_c;
     let spent_m = before.total_m - before.remaining_m;
-    let c = carry_over_action_pool(before.total_c, after.civil_actions, spent_c, before.remaining_c);
-    let m = carry_over_action_pool(before.total_m, after.military_actions, spent_m, before.remaining_m);
-    state.players[idx as usize].civil_actions = (c as i32).min(after.civil_actions) as i8;
-    state.players[idx as usize].military_actions = (m as i32).min(after.military_actions) as i8;
+    // No clamp to the recomputed total. A live pool may legitimately EXCEED
+    // what the tableau alone accounts for -- Patriotism and friends hand out
+    // an action "this turn" that `state_stats` never sees -- which makes
+    // `spent` negative, and clamping there silently confiscates the granted
+    // action. `carry_over_action_pool` already carries that surplus through.
+    state.players[idx as usize].civil_actions =
+        carry_over_action_pool(before.total_c, after.civil_actions, spent_c, before.remaining_c);
+    state.players[idx as usize].military_actions =
+        carry_over_action_pool(before.total_m, after.military_actions, spent_m, before.remaining_m);
 }
 
 pub(crate) fn carry_over_action_pool(old_total: i32, new_total: i32, spent: i32, old_remaining: i32) -> i8 {

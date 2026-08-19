@@ -102,7 +102,6 @@
 use crate::cards::{Age, CardId, CardType, Special, CARDS};
 use crate::combat;
 use crate::economy;
-use crate::effects;
 use crate::events;
 use crate::legal;
 use crate::moves::{Move, MoveList};
