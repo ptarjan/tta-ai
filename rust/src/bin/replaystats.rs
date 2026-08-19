@@ -562,6 +562,19 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
                 b.sort_unstable();
                 if a == b {
                     n_score_exact += 1;
+                    // The scoring counterpart of SCOREDIV_COMPLETED_ID, on the
+                    // same gate so one sweep yields both sets. A scoring change
+                    // is NOT gated by completions -- a wrong culture total still
+                    // reaches game over, so the completed set can be byte-
+                    // identical while scores rot (the Impact of Population
+                    // regression moved completions 748 -> 748 and exact matches
+                    // 721 -> 580). Without this line the only scoring signal is
+                    // a COUNT, which cannot tell "10 lost, 10 gained" from "no
+                    // change"; with it, exact matches diff as ID SETS and the
+                    // games a change actually broke can be named.
+                    if std::env::var("SCOREDIV_DUMP_COMPLETED").is_ok() {
+                        println!("SCOREDIV_EXACT_ID {}", meta.id);
+                    }
                 } else if let Some((seat, d)) = journal_arithmetic_error_suppression(
                     &a_seated,
                     &b_seated,
