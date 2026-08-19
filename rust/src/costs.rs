@@ -407,19 +407,6 @@ pub fn can_take(state: &GameState, p: &PlayerState, idx: usize, budget: Option<i
     can_take_gated(state, p, idx, &take_gate(state, p, budget), None)
 }
 
-/// [`can_take`] with the §2.5 hand-full gate suppressed. International
-/// Agreement is the one mechanic that may take cards BEYOND the civil-hand
-/// limit: the event text ("take up to 5 civil actions in cards") and CoL
-/// p.12 ("The strongest player may use this option even in the last round")
-/// both cap the privilege in civil ACTIONS, not in hand size, and BGO's own
-/// logs show players taking 4-5 cards here on turns whose civil hand is
-/// already full. Every other take path keeps the gate (see [`can_take`]).
-pub fn can_take_bypass_hand_limit(state: &GameState, p: &PlayerState, idx: usize, budget: Option<i32>) -> bool {
-    let mut gate = take_gate(state, p, budget);
-    gate.hand_full = false;
-    can_take_gated(state, p, idx, &gate, None)
-}
-
 /// Diagnostic classification of WHICH check inside [`can_take_gated`]
 /// rejected a take, for the `IllegalMove: Take` corpus bucket
 /// (`docs/REPLAY.md`'s Take/Bid handoff). Not consumed by any legality
@@ -846,6 +833,7 @@ mod tests {
             military_actions: 0,
             politics_done: false,
             tactic_action_used: false,
+            tactic_copy_used: false,
             taken_this_turn: CardList::new(),
             ca_spent_taking: 0,
             hammurabi_used: false,

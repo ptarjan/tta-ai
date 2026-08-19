@@ -586,11 +586,7 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     // handler). Idempotent: setting it again on a second or
                     // third card taken this same session is a no-op.
                     state.players[p as usize].skip_next_politics = true;
-                    // International Agreement keeps taking past the civil-hand
-                    // limit (see `costs::can_take_bypass_hand_limit`), so the
-                    // re-offer must NOT re-apply the §2.5 hand-full gate or a
-                    // full hand would close the choice mid-agreement.
-                    offer_take_row_inner(state, p, budget - cost as i16, true);
+                    offer_take_row(state, p, budget - cost as i16);
                 }
                 other @ ChoiceOption::Card(_) | other @ ChoiceOption::Move(_) | other @ ChoiceOption::Gain(_) | other @ ChoiceOption::Word(_) => wrong_option(&choice.kind, other),
             }
@@ -905,7 +901,11 @@ fn food_or_res_gain_options(total: i16) -> OptionList {
 
 // -------------------------------------------------- International Agreement
 
-fn offer_take_row_inner(state: &mut GameState, p: u8, budget: i16, bypass_hand_limit: bool) {
+/// FAQ v1.5, International Agreement: "The usual rules for drafting cards
+/// apply." The §2.5 hand limit is one of those rules, so it gates this take
+/// like any other; RB's only stated exception is wonders, which never enter
+/// the hand.
+fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
     let mut opts = OptionList::new();
     for slot in 0..ROW_SIZE {
         if state.card_row[slot].is_none() {
@@ -915,12 +915,7 @@ fn offer_take_row_inner(state: &mut GameState, p: u8, budget: i16, bypass_hand_l
         if costs::take_cost(state, player, slot) > budget as i32 {
             continue;
         }
-        let legal = if bypass_hand_limit {
-            costs::can_take_bypass_hand_limit(state, player, slot, Some(budget as i32))
-        } else {
-            costs::can_take(state, player, slot, Some(budget as i32))
-        };
-        if legal {
+        if costs::can_take(state, player, slot, Some(budget as i32)) {
             opts.push(ChoiceOption::Slot(slot as u8));
         }
     }
@@ -1178,11 +1173,7 @@ fn run_item(state: &mut GameState, item: QueueItem) {
             }
             push_choice(state, player, ChoiceKind::Infiltrate { victim, per }, opts, true);
         }
-        // The TakeRow queue item is International Agreement's ONLY entry
-        // point, so it always bypasses the §2.5 hand-full gate (see
-        // `offer_take_row_inner`'s `bypass_hand_limit` param and
-        // `costs::can_take_bypass_hand_limit`).
-        QueueItem::TakeRow { player, budget } => offer_take_row_inner(state, player, budget, true),
+        QueueItem::TakeRow { player, budget } => offer_take_row(state, player, budget),
     }
 }
 
@@ -2855,5 +2846,31 @@ mod tests {
         let choice = Choice { player: 0, kind: ChoiceKind::TakeRow { budget: 5 }, options };
         resolve_choice(&mut state, &choice, 0);
         assert!(state.players[0].skip_next_politics, "taking a card must forfeit the next Politics Phase");
+    }
+
+    /// International Agreement does NOT lift the §2.5 civil-hand limit.
+    /// FAQ v1.5's own International Agreement entry opens "The usual rules
+    /// for drafting cards apply", and RB's hand-limit section names wonders
+    /// as its only exception ("This does not prevent you from taking a
+    /// wonder"), because wonders never enter the hand. `052ee88` suppressed
+    /// the gate here on the strength of a CoL sentence about the FINAL ROUND
+    /// ("may use this option even in the last round"), which says nothing
+    /// about hand size; `legal.rs`/`costs.rs` are shared with bot move
+    /// generation, so that widened what the BOT believes it may do.
+    #[test]
+    fn international_agreement_offers_no_card_once_the_civil_hand_is_full() {
+        let mut state = blank_state(2);
+        state.card_row[0] = card("Iron");
+        // Despotism's 4 civil actions ARE the hand limit (§2.5).
+        let limit = state.players[0].civil_actions as usize;
+        for name in ["Bronze", "Alchemy", "Philosophy", "Religion", "Irrigation"].iter().take(limit) {
+            state.players[0].hand_civil.push(card(name));
+        }
+        offer_take_row(&mut state, 0, 10);
+        assert!(
+            state.pending.is_empty(),
+            "a full civil hand must leave International Agreement with nothing to offer, got {:?}",
+            state.pending,
+        );
     }
 }
