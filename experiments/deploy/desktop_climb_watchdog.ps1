@@ -4,10 +4,22 @@
 # looping Start-Process calls for 2p/3p/4p from a single parent PowerShell
 # process reliably hung the 1st and 3rd launch while the 2nd succeeded.
 #
-# Aliveness is the arm's LOG MTIME, not process enumeration.  Get-CimInstance
-# Win32_Process from a Scheduled Task context has returned zero matches for
-# processes confirmed alive seconds earlier by a direct check, so a watchdog
-# that enumerates would relaunch an arm that is running perfectly well.
+# Aliveness is a RUN FLAG, with log mtime only as a backstop.  Process
+# enumeration is not an option: Get-CimInstance Win32_Process from a Scheduled
+# Task context has returned zero matches for processes confirmed alive seconds
+# earlier by a direct check, so a watchdog that enumerates would relaunch an arm
+# that is running perfectly well.
+#
+# climb_Kp.bat creates run_Kp.flag before exec'ing climb.exe and deletes it
+# afterwards, so the flag is gone the moment the arm exits for any reason the
+# launcher survives -- a crash, or the guard's taskkill.  That is the common
+# case and it heals within one watchdog tick.
+#
+# Log mtime cannot carry that job alone.  It answers "has this arm written
+# recently", and a threshold long enough not to relaunch a live arm mid-gauntlet
+# is necessarily long enough that a freshly-killed arm still looks alive.  It
+# stays as the backstop for the one case the flag cannot see: the whole cmd tree
+# dying at once (logoff, reboot, hard power loss) leaves a stale flag on disk.
 #
 # The climb is launched through `start /low` so climb.exe inherits Idle
 # priority: this runs as SYSTEM and must always lose the CPU to whoever is
@@ -25,18 +37,21 @@ param([Parameter(Mandatory = $true)][int]$K)
 $root = "C:\Users\micro\tta-desk"
 if (Test-Path (Join-Path $root "PAUSE")) { exit }
 
-# 20 minutes: the slowest arm writes a line every generation, and the slowest
-# generation measured is under two minutes.  The task itself fires every 5, so
-# an arm killed for a gaming session is back within five minutes of the game
-# closing rather than sitting idle for a third of an hour.
-$log = Join-Path $root "experiments\logs\rust_climb_${K}p.jsonl"
-if (Test-Path $log) {
-    $idle = ((Get-Date) - (Get-Item $log).LastWriteTime).TotalMinutes
-    if ($idle -lt 20) { exit }
+$flag = Join-Path $root "run_${K}p.flag"
+if (Test-Path $flag) {
+    # 20 minutes, and it has to be generous: an arm is silent for a whole
+    # gauntlet block, and relaunching a live arm would put two climbers on one
+    # champion file and one log.  Erring long only costs a slower recovery from
+    # the rare stale-flag case; erring short corrupts the run.
+    $log = Join-Path $root "experiments\logs\rust_climb_${K}p.jsonl"
+    if (Test-Path $log) {
+        $idle = ((Get-Date) - (Get-Item $log).LastWriteTime).TotalMinutes
+        if ($idle -lt 20) { exit }
+    } else { exit }
 }
 
-$bat = Join-Path $root "climb_${K}p.bat"
+$runner = Join-Path $root "experiments\deploy\run_climb_arm.cmd"
 Start-Process -FilePath "cmd.exe" -WindowStyle Hidden `
-    -ArgumentList "/c start `"climb${K}p`" /low /wait `"$bat`""
+    -ArgumentList "/c start `"climb${K}p`" /low /wait `"$runner`" $K"
 Add-Content -Path "C:\Users\micro\tta_watchdog.log" `
     -Value "$(Get-Date -Format s) relaunched ${K}p"

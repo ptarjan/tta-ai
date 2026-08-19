@@ -10,12 +10,17 @@
 # wrap these in a vbs hide-launcher.
 $root = "C:\Users\micro\tta-desk"
 $watchdog = Join-Path $root "experiments\deploy\desktop_climb_watchdog.ps1"
+$runner = Join-Path $root "experiments\deploy\run_climb_arm.cmd"
 
 foreach ($k in 2, 3, 4) {
     # The arm itself: /sc once at a time that never arrives, so it only ever
     # runs when something asks for it -- `schtasks /run` or the watchdog.
+    #
+    # `start /low` is how climb.exe ends up at Idle priority.  A child inherits
+    # its priority at creation and the launcher cmd.exe has already exited by
+    # the time climb.exe is enumerable, so there is no after-the-fact fix.
     schtasks /create /f /tn "TTAClimb_${k}p" /ru SYSTEM /sc once /st 23:59 `
-        /tr "cmd /c start `"climb${k}p`" /low /wait `"$root\climb_${k}p.bat`""
+        /tr "cmd /c start `"climb${k}p`" /low /wait `"$runner`" $k"
 
     schtasks /create /f /tn "TTAWatch_${k}p" /ru SYSTEM /sc minute /mo 5 `
         /tr "powershell -NoProfile -ExecutionPolicy Bypass -File `"$watchdog`" -K $k"
