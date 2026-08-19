@@ -1408,9 +1408,11 @@ fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
     if block.discard_leader_unless_current_age {
         let leader = state.players[idx as usize].leader;
         if !leader.is_none() && leader.get().age != state.age_civil {
+            let before = apply::snapshot_action_pools(state, idx);
             apply::on_leave_play(&mut state.players[idx as usize], leader);
             economy::discard_civil(state, leader);
             state.players[idx as usize].leader = CardId::NONE;
+            apply::settle_action_pools(state, idx, before);
         }
     }
     if block.take_yellow_tokens_from_weakest != 0 {

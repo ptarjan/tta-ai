@@ -409,19 +409,11 @@ pub(crate) fn on_leave_play(p: &mut PlayerState, id: CardId) {
     if eff.yellow_tokens != 0 {
         p.yellow_bank = (p.yellow_bank as i32 - eff.yellow_tokens as i32).max(0) as u8;
     }
-    // Symmetric twin of the bump `on_enter_play` now applies (see its doc
-    // comment) -- a leader carrying a `civil_actions`/`military_actions`
-    // bonus (Julius Caesar, Napoleon, ...) leaving play mid-turn (replaced
-    // by a new leader, `h_play_leader`) must give back the headroom it
-    // added, clamped at 0 so an already-spent turn can't go negative.
-    let ca = eff.civil_actions as i32;
-    if ca != 0 {
-        p.civil_actions = (p.civil_actions as i32 - ca).max(0) as i8;
-    }
-    let ma = eff.military_actions as i32;
-    if ma != 0 {
-        p.military_actions = (p.military_actions as i32 - ma).max(0) as i8;
-    }
+    // No `civil_actions`/`military_actions` arithmetic here, deliberately.
+    // A card leaving play is a DECREASE, and FAQ v1.5 p.13 lets the player
+    // take a decrease out of SPENT actions first -- which needs the pool
+    // TOTALS, not just this card's printed bonus. Callers bracket the
+    // removal with `snapshot_action_pools`/`settle_action_pools` instead.
 }
 
 /// A pact whose card grants `military_actions` (e.g. Open Borders
@@ -882,12 +874,7 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
         // once the swap (and the new leader's own bonus) has fully applied,
         // so `on_leave_play`/`on_enter_play`'s own CA/MA arithmetic in
         // between is harmless dead work, not double-counted.
-        let old_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
-        let old_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
-        let spent_c = old_total_c - state.players[idx as usize].civil_actions as i32;
-        let spent_m = old_total_m - state.players[idx as usize].military_actions as i32;
-        let old_remaining_c = state.players[idx as usize].civil_actions as i32;
-        let old_remaining_m = state.players[idx as usize].military_actions as i32;
+        let before = snapshot_action_pools(state, idx);
         on_leave_play(&mut state.players[idx as usize], old);
         let is_homer = old.get().name == "Homer";
         let has_completed = !state.players[idx as usize].completed_wonders.is_empty();
@@ -900,19 +887,14 @@ fn h_play_leader(state: &mut GameState, idx: u8, id: CardId) {
         }
         state.players[idx as usize].leader = id;
         on_enter_play(&mut state.players[idx as usize], id);
-        let new_total_c = effects::state_stats(state, &state.players[idx as usize]).civil_actions;
-        let new_total_m = effects::state_stats(state, &state.players[idx as usize]).military_actions;
-        let carried_c = carry_over_action_pool(old_total_c, new_total_c, spent_c, old_remaining_c);
-        // The 1-CA replacement refund (§9.1) is no longer applied as a
-        // separate `+ 1` here: the spend-and-refund is now modelled by
-        // simply NOT calling `pay_ca(1)` for a replacement (see the comment
-        // at the top of this branch), so the carry-over alone preserves the
-        // player's remaining CA.  Adding a further `+ 1` would grant a
-        // spurious extra action (confirmed by the regression in
-        // `h_play_leader_replacing_one_refunds_a_civil_action_and_discards_
-        // the_old`).
-        state.players[idx as usize].civil_actions = new_total_c.min(carried_c as i32) as i8;
-        state.players[idx as usize].military_actions = carry_over_action_pool(old_total_m, new_total_m, spent_m, old_remaining_m);
+        // The 1-CA replacement refund (§9.1) is not applied as a separate
+        // `+ 1` here: the spend-and-refund is modelled by simply NOT calling
+        // `pay_ca(1)` for a replacement (see the comment at the top of this
+        // branch), so the carry-over alone preserves the player's remaining
+        // CA. Adding a further `+ 1` would grant a spurious extra action
+        // (confirmed by the regression in `h_play_leader_replacing_one_
+        // refunds_a_civil_action_and_discards_the_old`).
+        settle_action_pools(state, idx, before);
         return;
     }
     // New leader (no leader in play): flat 1 CA cost.
@@ -1011,6 +993,54 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
 /// leader's own bonus was less than what was left of it, the identical
 /// failure mode `h_play_leader`'s own doc comment already traces for
 /// leader replacement, game `7522520`).
+/// A player's action pools as they stood BEFORE a play-area change, captured
+/// by [`snapshot_action_pools`] for [`settle_action_pools`].
+#[derive(Clone, Copy)]
+pub(crate) struct ActionPools {
+    total_c: i32,
+    total_m: i32,
+    remaining_c: i32,
+    remaining_m: i32,
+}
+
+/// Capture `idx`'s pools while the card that is about to leave (or arrive) is
+/// still in its old place, so [`settle_action_pools`] can work out how much of
+/// each pool was already spent.
+pub(crate) fn snapshot_action_pools(state: &GameState, idx: u8) -> ActionPools {
+    let p = &state.players[idx as usize];
+    let s = effects::state_stats(state, p);
+    ActionPools {
+        total_c: s.civil_actions,
+        total_m: s.military_actions,
+        remaining_c: p.civil_actions as i32,
+        remaining_m: p.military_actions as i32,
+    }
+}
+
+/// Recompute `idx`'s live pools after a play-area change, taking any DECREASE
+/// out of SPENT actions first.
+///
+/// FAQ v1.5 p.13, "Replacing Leaders or Governments": *"Whenever you replace
+/// (or lose) a Leader that has been granting you Actions (whether Military or
+/// Civil), or change a Government, and your number of Military or Civil
+/// Actions decrease, you may elect to lose spent Actions--you need not lose
+/// unspent Actions. (This is a general rule, but it arises primarily in these
+/// two cases.)"* — a general rule, so every path that removes an
+/// action-granting card settles through here, not just leader replacement.
+///
+/// The alternative, a flat `-=` on the live pool, claws back actions the
+/// player already spent from OTHER sources this turn whenever what is left of
+/// the pool is smaller than the departing card's own bonus.
+pub(crate) fn settle_action_pools(state: &mut GameState, idx: u8, before: ActionPools) {
+    let after = effects::state_stats(state, &state.players[idx as usize]);
+    let spent_c = before.total_c - before.remaining_c;
+    let spent_m = before.total_m - before.remaining_m;
+    let c = carry_over_action_pool(before.total_c, after.civil_actions, spent_c, before.remaining_c);
+    let m = carry_over_action_pool(before.total_m, after.military_actions, spent_m, before.remaining_m);
+    state.players[idx as usize].civil_actions = (c as i32).min(after.civil_actions) as i8;
+    state.players[idx as usize].military_actions = (m as i32).min(after.military_actions) as i8;
+}
+
 pub(crate) fn carry_over_action_pool(old_total: i32, new_total: i32, spent: i32, old_remaining: i32) -> i8 {
     if new_total >= old_total {
         (new_total - spent).max(0) as i8
@@ -1069,12 +1099,19 @@ fn develop_special(state: &mut GameState, idx: u8, id: CardId) {
             return; // the new (lower) card is discarded -- nothing changes
         }
     }
+    // Code of Laws / Justice System / Civil Service (+CA) and Warfare /
+    // Strategy / Military Theory (+MA) all replace a same-icon predecessor
+    // here, so the pools move; the replacement is always to a HIGHER level,
+    // hence never a decrease, but it settles through the same helper as every
+    // other play-area change rather than adding a second way to do it.
+    let before = snapshot_action_pools(state, idx);
     for &old in &existing[..n] {
         on_leave_play(&mut state.players[idx as usize], old);
         state.players[idx as usize].techs.remove(old);
     }
     state.players[idx as usize].techs.insert(id, TechSlot { workers: 0, stored: 0 });
     on_enter_play(&mut state.players[idx as usize], id);
+    settle_action_pools(state, idx, before);
 }
 
 /// §7.6's one placement implementation, exposed for `War over Technology`'s
@@ -1596,9 +1633,11 @@ fn h_cancel_pact(state: &mut GameState, idx: u8, owner: u8) {
 fn h_remove_leader_yellow(state: &mut GameState, idx: u8) {
     let leader = state.players[idx as usize].leader;
     if !leader.is_none() {
+        let before = snapshot_action_pools(state, idx);
         on_leave_play(&mut state.players[idx as usize], leader);
         economy::discard_civil(state, leader);
         state.players[idx as usize].leader = CardId::NONE;
+        settle_action_pools(state, idx, before);
     }
     grant_yellow(&mut state.players[idx as usize], 1);
     end_politics(state, idx, PoliticalAction::Played);
@@ -1644,9 +1683,11 @@ fn h_trade_resource_as_food(state: &mut GameState, idx: u8) {
 fn h_columbus_colonize(state: &mut GameState, idx: u8, card: CardId) {
     let leader = state.players[idx as usize].leader;
     if !leader.is_none() {
+        let before = snapshot_action_pools(state, idx);
         on_leave_play(&mut state.players[idx as usize], leader);
         economy::discard_civil(state, leader);
         state.players[idx as usize].leader = CardId::NONE;
+        settle_action_pools(state, idx, before);
     }
     state.players[idx as usize].hand_military.remove_first(card);
     crate::interact::gain_colony(state, idx, card);

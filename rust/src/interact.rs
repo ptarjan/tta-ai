@@ -511,10 +511,12 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     if leader.is_none() {
                         return;
                     }
+                    let before = crate::apply::snapshot_action_pools(state, victim);
                     crate::apply::on_leave_play(&mut state.players[victim as usize], leader);
                     state.players[p as usize].culture += per as u16 * leader.level() as u16;
                     economy::discard_civil(state, leader);
                     state.players[victim as usize].leader = CardId::NONE;
+                    crate::apply::settle_action_pools(state, victim, before);
                 }
                 Keyword::Wonder => {
                     let wonder = state.players[victim as usize].wonder;
@@ -771,8 +773,16 @@ pub fn take_war_science(state: &mut GameState, victor: u8, loser: u8, budget: i3
 /// `on_enter_play` / `on_leave_play` DO fire on both sides, because the card
 /// really does leave one play area and enter the other.
 fn steal_special_tech(state: &mut GameState, victor: u8, loser: u8, id: CardId) {
+    // Warfare / Strategy / Military Theory (+1/+2/+3 MA) and Code of Laws /
+    // Justice System / Civil Service (+1/+1/+2 CA) are all stealable, so the
+    // loser's pools shrink -- and FAQ v1.5 p.13 lets that shrink come out of
+    // actions already spent. The victor's side is a GAIN, which `on_enter_
+    // play`'s `+=` inside `put_special_in_play` gets right on its own
+    // (FAQ p.12: added actions arrive unspent).
+    let before = crate::apply::snapshot_action_pools(state, loser);
     crate::apply::on_leave_play(&mut state.players[loser as usize], id);
     state.players[loser as usize].techs.remove(id);
+    crate::apply::settle_action_pools(state, loser, before);
     crate::apply::put_special_in_play(state, victor, id);
 }
 
