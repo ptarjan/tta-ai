@@ -1463,6 +1463,11 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
         if std::env::var("REPLAY_DUMP_BUCKET").is_ok_and(|want| key.contains(&want)) {
             eprintln!("DUMP {} line {}: {}", meta.id, m.lineno, m.raw_text);
         }
+        if std::env::var("REPLAY_NONCOMPLETED_TSV").is_ok() {
+            // one clean row per non-completing game: id<TAB>reason<TAB>line<TAB>round<TAB>raw
+            let raw = m.raw_text.replace(['\t', '\n'], " ");
+            eprintln!("NONCOMPLETED\t{}\t{}\t{}\t{}\t{}", meta.id, key, m.lineno, round_reached, raw);
+        }
         let b = buckets.entry(key).or_insert_with(|| Bucket {
             count: 0,
             round_sum: 0,

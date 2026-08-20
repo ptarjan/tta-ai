@@ -977,21 +977,6 @@ pub fn end_of_turn(state: &mut GameState, idx: u8) -> bool {
         // `pay_resources` never pays more than it was asked for, so the
         // shortfall cannot go negative.
         let corr = corruption(blue_available(p));
-        if crate::debugflags::replay_debug_all() {
-            eprintln!(
-                "DEBUG end_of_turn pre-corruption: idx={idx} resources={} food={} blue_total={} blue_used={} corr={} s.resources={} s.food={}",
-                p.resources, p.food, p.blue_total, blue_used(p), corr, s.resources, s.food
-            );
-            if crate::debugflags::replay_debug_techs() {
-                for (id, slot) in p.techs.iter() {
-                    let card = id.get();
-                    eprintln!(
-                        "  TECH idx={idx} name={} kind={:?} workers={} production.food={}",
-                        card.name, card.kind, slot.workers, card.production.food
-                    );
-                }
-            }
-        }
         let paid = pay_resources(p, corr);
         let short = corr - paid;
         if short > 0 {

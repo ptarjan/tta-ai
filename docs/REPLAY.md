@@ -7957,3 +7957,468 @@ The line is consumed (counted in `actions_consumed` and `trailing_discards_lines
 The remaining 7 `discards`-shaped `StuckPending` members (89 - 82) are NOT the same-second double-log shape: they are a different, still-open mechanism (hand-size undercount from elsewhere in this file, `docs/REPLAY.md`'s "hand-size-undercount" section). This fix does not touch them.
 
 This is an honest win, not a suppression gate: the engine's state is the source of truth for whether a `discards` line is redundant, and the replayer simply stops feeding a finished turn's confirmation line back into `resolve_intervening`.
+
+## Pop(5) bucket -- root-caused (2026-08-18, `qwen3.8-27b`): NOT a yellow-bank accounting bug, a derived-stat drift; NOT fixable from the journal
+
+The 5 remaining non-completing `Pop` games (fresh census on the current tree,
+864 completed / 147 noncompleted rows) split into two shapes:
+
+- **Pattern A -- food/science shortfall (2):** `7521377`, `7522099`. The
+  computed cost TIER matches the journal; the engine's `food` is 1 below what
+  the Pop needs. `7521377` additionally shows a large science drift by
+  round 18 (journal 25 vs engine 8, delta -17). Pure food/science
+  accounting drift -- same family the 133/144 historical "food-short" shape
+  above is.
+- **Pattern B -- TIER MISMATCH (3):** `7522010`, `7523229`, `7523503`. The
+  computed `pop_cost` is one tier ABOVE the journal's stated cost, which the
+  historical table labels "OUR bank is lower than the real one."
+
+**Pattern B is NOT what it looks like.** Tracing `7522010` (Purple = idx 1)
+end-to-end:
+
+1. Purple's `yellow_bank` is 9 at round-12 start, drops to 8 after the
+   round-12 Pop (correct: each Pop spends 1 token). At round-13's first
+   action the bank reads 7 -- a 1-token DROP.
+2. Round 13's journal (line 322) is an **Emigration** event: *"Each
+   civilization loses half of its discontent workers, rounded up (return
+   them to your yellow bank); Orange loses 1 population; Purple loses 1
+   population."* The `LosePop` handler (`interact.rs:1044-1062`) should
+   **increment** the bank (`yellow_bank += 1`), i.e. 8 -> 9, NOT drop it.
+3. `REPLAY_DEBUG_ALL` firehose: the Emigration fires (Orange plays it), but
+   **no `LosePop` resolution for Purple (player 1) appears anywhere** --
+   the only `yellow_bank` lines in the window are for current=0 (Orange).
+   So the engine did NOT apply the population loss to Purple.
+
+**Why the LosePop for Purple didn't fire -- the real root:**
+`discontent(state, p) = (happy_required(yellow_bank) - s.happy).max(0)`
+(`economy.rs:242`). The Emigration block enqueues `LosePop` only when
+`discontent > 0` (`events.rs:1445-1450`). The engine computed
+`discontent(Purple) == 0`, meaning `s.happy >= happy_required(bank)`. A
+1-token bank difference (7 vs 8) does NOT change the band here (both 7 and
+8 need `happy_required = 4`), so the divergence is in **`s.happy`** --
+the engine counts Purple as having 1-2 MORE happy faces than BGO does.
+
+**Conclusion:** the Pop TIER-MISMATCH is a downstream symptom of a
+**derived-stat drift (happy faces)**, exactly like the food/science drift in
+Pattern A. It is NOT a silent `yellow_bank` decrement. Every `yellow_bank`
+mutating call site was re-enumerated this pass (`grep -n "yellow_bank\s*[-+]?="`
+across `src/*.rs`, excluding tests): the only decrements are
+`events.rs:1441` (TakeYellowTokensFromWeakest), `combat.rs:351` (raid loot),
+`economy.rs:304` / `interact.rs:1221,1681` (population-gain cost, capped at
+the bank), `interact.rs:426,1049,1624` (LosePop returns). No rogue
+decrement exists; the bank bookkeeping is correct.
+
+The happy-face (and food/science) count is derived from card placements
+(buildings/wonders/temples) the journal only partially reveals, so this
+drift -- like the Take CA-drift cases -- **cannot be validated or fixed
+honestly from the journal alone.** Documented, not forced. No production
+change was made; baseline unchanged (864 completed, 1465 tests, 147 rows).
+
+## PlayLeader single-item case (7523092) -- root-caused (2026-08-18, `qwen3.8-27b`): a card_row desync in the International-Agreement TakeRow path, NOT a cost-tie grounding bug
+
+Traced end-to-end with `REPLAY_DEBUG_ALL=1`. "Purple takes Bill Gates in hand
+(uses 2 civil action)" is resolved via the International-Agreement
+`TakeRow { budget: 3 }` choice (opened because a live International
+Agreement grant is active). The option list is
+`[Slot(2), Slot(3), Slot(4), Slot(6), Slot(7), Slot(9), Slot(10), Slot(11),
+Slot(12), Word(Stop), ...]` -- slots 0, 1, 5, 8 are NOT offered. The
+replayer applies `Choose { n: 0 }` = `options[0]` = **Slot(2)**.
+
+But the hand trace (`hand_civil_before` across the sequence) shows the take
+added **"Winston Churchill"** to the hand, NOT Bill Gates:
+- before take: `[Wave of Nationalism, Cannon, Efficient Upgrade, Reserves,
+  Urban Growth, Engineering]` (6)
+- after take:  `[Wave of Nationalism, Cannon, Efficient Upgrade, Reserves,
+  Urban Growth, Engineering, Winston Churchill]` (7)
+
+So `take_card_from_international_agreement -> take_card_impl(state, p, 2)`
+read `state.card_row[2]` = **Winston Churchill**, even though the replayer's
+own `ground_row_slot` had grounded "Bill Gates" into `self.state.card_row[2]`
+(and the replayer's `card_row` debug shows Bill Gates at index 2). The
+replayer's grounding bookkeeping and the engine's actual row content
+**diverged**: the replayer believes `card_row[2] == Bill Gates`, the engine's
+TakeRow slot-2 actually held Winston Churchill.
+
+This is a **card_row desync** (replayer grounding vs engine state), the same
+family as the row-grounding machinery `ground_row_slot`/`row_grounded`
+(replay_common.rs:3669) already wrestles with for same-cost ties. NOT a
+cost-tie bug (the slot was correctly affordable and picked); the take landed
+on a slot whose true content the replayer had mis-attributed.
+
+Fixing this safely requires reconciling `ground_row_slot`'s own
+`self.state.card_row[i] = card` write with the TakeRow `Choose` path's actual
+slot read, plus a full build + 1465-test + full-census cycle to confirm no
+regression in the TakeRow/International-Agreement corpus (which has its own
+regression bars). Documented as a clean, single, reproducible lead -- not
+forced.
+
+## 2026-08-18: Tactic set-up / adopt split (LANDED, +4 completed)
+
+**Bug.** `PlayerState.tactic_action_used` was a single flag gating BOTH
+tactic actions. `h_play_tactic` ("sets up new tactics", PlayTactic, 1 MA) and
+`h_copy_tactic` ("adopts existing tactics", CopyTactic, 2 MA) both set it, and
+`legal.rs`'s tactic block used the one flag to gate both. BGO allows ONE of
+EACH per turn, in either order — corpus-confirmed: 6/1,011 games have a
+same-turn set-up+adopt (7522230 r17: Purple "sets up ... Mechanized Army"
+then "adopts ... Classic Army"). The single flag blocked the second, rejecting
+exactly those journals.
+
+**Fix.** Split into `tactic_action_used` (set-up) + `tactic_copy_used`
+(adopt). `h_play_tactic` sets the former, `h_copy_tactic` sets the latter;
+`legal.rs` gates PlayTactic on `!tactic_action_used && MA>=1` and CopyTactic
+on `!tactic_copy_used && MA>=2` (two independent gates); `end_of_turn` resets
+both. Field added to state.rs, initialised in 12 files, reset in economy.rs,
+test `end_of_turn_resets_the_per_turn_state` extended to cover both.
+
+**Measurement.** 864 → **868** completed, 147 → **143** NONCOMPLETED,
+**1466** tests pass (0 fail). No regression. Fixed: 7522230, 7521259,
+7522216, 7523101.
+
+**Remaining tactic failures are journal anomalies, NOT engine bugs:**
+- 7523007 r15: Purple does TWO set-ups (line 247 "Modern Army", line 248
+  "Defensive Army") AND an adopt (line 249) in ONE turn — exceeds BGO's
+  one-set-up-per-turn. Genuine journal violation; correctly stays failing.
+- 7522372 r12: Orange does TWO set-ups (line 204 "Defensive Army", line 205
+  "Classic Army") in one turn. Same violation.
+
+## 2026-08-18: 7522233 territory-auction interleaving (NOT a bug)
+
+Investigated the lone "StuckPending: auction decider" failure. Raw journal:
+line 322 Purple plays event revealing "Historic Territory" (opens auction),
+line 323 "Purple passes Political Phase" (opt-out), lines 324-331 Purple
+KEEPS BUILDING, line 332 "Green passes Political Phase". The engine applied
+the opt-out (dropped Purple from `active`), leaving Green (the next
+non-opted-out entrant) to bid — but the journal's next line is Purple
+building, not Green bidding.
+
+Corpus scan (proper territory-reveal detection, 2,999 reveals): 20/2999 are
+"Territory is abandoned" (all-pass, handled); **only 7522233** interleaves a
+genuine non-bid ACTION before resolution. It is 1/2999 — a BGO client
+quirk (the revealer opting out and continuing to act while the auction is
+deferred to the next round) or a data anomaly, NOT a clean engine bug. The
+clean all-pass auctions the engine handles (7521302, etc.) confirm the
+opt-out + drop mechanic is correct for the common case. Not forced.
+
+## 2026-08-18: Build/Develop/Upgrade buckets = systemic science/production drift (NOT clean)
+
+Re-ran the root-cause scanner on the new 143-game set. Breakdown:
+Build(39) Develop(18) Upgrade(16) Revolution(10) Take(9) StuckPending(8)
+ParserGap-IA(6) UnrecoverableHiddenInfo(9) Pop(5) WonderStep(4) PlayAction(4)
+PlayTactic(3) Barbarossa(3) CopyTactic(1) + singles.
+
+**Develop(18):** every one has pervasive "end-turn science drift" (7-37
+drift lines per game) BEFORE the failing develop. The `develop/play detail`
+debug line confirms the engine prices the card correctly (e.g. 7521769 Cannon
+`tech_cost_net=Some(4)`, `in_hand_civil=true`); the develop fails only
+because the computed science pool is lower than the journal's (e.g. Orange
+`science=0` at the Cannon line vs the journal's "loses 4 science" needing
+≥4). This is a derived-stat divergence in science crediting/spending that
+accumulates over many turns — the same family as the Build/Upgrade resource
+shortfalls (engine credits 6 where BGO had 7, etc.). No single clean bug;
+fixing it would require reconciling the whole science ledger across the
+corpus, which risks regressing the 868 currently-completing games. Not
+forced.
+
+## 2026-08-18: Hammurabi revolution legality — `revolt_pool_ok` fix (LANDED, +5, 868→873)
+
+**The bug.** `legal::revolt_pool_ok` (the "which action pool must be
+untouched this turn" half of §8.3's revolution precondition) had a
+Robespierre branch ("pay with all military actions instead of civil", CoL
+p.12) but NO Hammurabi branch. A Hammurabi player who had spent one ordinary
+civil action this turn — leaving `civil_actions` one short of the total and a
+live military action — was denied the revolution BGO logged as legal, even
+though Hammurabi's once-per-turn "use one military action as one civil action"
+conversion (`MilitaryActionAsCivilPerTurn(1)`) stands in for that spent civil
+action, satisfying the "ALL civil actions must be available" precondition
+(RULES_SPEC §8 rule 10). The `try_apply fail` line for game `7522362` round 7
+shows it exactly: `civil_actions=3` (of 4), `military_actions=1`,
+`leader=Hammurabi`, `Revolution { Monarchy }` rejected. `h_revolution`'s own
+non-Robespierre branch (which zeroes civil and carries over military) already
+treated a Hammurabi revolt as a normal violent revolution; only the legality
+gate was missing the conversion.
+
+**The fix.** Added a Hammurabi branch to `revolt_pool_ok`: legal when
+`hammurabi_replaced_this_turn`/leader is Hammurabi, `!hammurabi_used`,
+`military_actions > 0`, and `civil_actions == ca_total - 1` (exactly one civil
+action spent, so the conversion covers it). Reuses the SAME
+`hammurabi_conversion_available` semantics `costs::pay_ca` consumes, so the
+legality gate and the spend never disagree. A Hammurabi who already used his
+conversion or has no military left falls through to the plain civil-pool test.
+
+**Measurement.** 868→873 completed (143→138 noncompleted), 1466 tests pass,
+zero regressions. Fixed 7521980, 7522362, 7522599, 7522730, 7522831.
+Remaining Revolution bucket: 7521671 (Barbarossa), 7521872 (Spy, Joan of
+Arc), 7522344 (Ravages event, Isaac Newton), 7522428 (Ravages event,
+Napoleon) — each a different leader/event interaction, not the Hammurabi
+shape.
+
+## Ninth pass: the unpaired-putback bucket (5 games) — confirmed a model boundary, not a CardId bug
+
+Chasing the `UnrecoverableHiddenInfo: unpaired BGO client-side undo` bucket
+(5 games: `7522396`, `7523665`, `7522172`, `7521739`, `7522388`) led to a
+theory that `build_card_index`'s bare-name key picks the wrong age-sibling
+`CardId`, so a `Take` and its matching `PutBack` never meet in
+`prescan_putback_skips`'s per-`CardId` stack.
+
+**The theory was refuted by direct instrumentation.** Tracing
+`7522396` line 89/90: the index's bare-name pick for "Rich Land" was
+*already* the same `CardId` (203 = Rich Land (A)) that both the take AND the
+putback resolved to. Line 90 paired fine. Line 91's putback had only a
+DIFFERENT-actor (Purple) open take on the stack — the matching Grey take had
+already been consumed by line 90. No `CardId` rebind can fix a putback whose
+genuinely-matching take was already paired to a different putback.
+
+The 5 games all show one of three shapes:
+1. **Putback immediately before its matching take** (client-side undo logged
+   in reverse order: the journal records the putback first, then the take it
+   undoes). The prescan walks forward, so the putback finds no open take yet.
+2. **Double putback** — two putbacks for one take; the first pairs, the
+   second has nothing left.
+3. **Cross-actor** — the only open same-card take belongs to a different
+   player (the journal's undo was applied to the wrong seat, or the true
+   owner's take was already consumed by another putback).
+
+None of these is fixable by changing which `CardId` a bare name resolves to.
+A real fix requires a different pairing model (e.g. treating a putback
+immediately preceding its own take as a no-op pair even without a prior open
+take, or netting the CA refund without requiring a matched take). That is a
+design decision to re-derive carefully — not a one-line rebind. Left open.
+
+**Tree state after this pass:** reverted all rebind experiments. 873
+completed / 1466 tests / zero warnings / 138 noncompleted. No dead code, no
+probe markers.
+
+### The `IllegalMove: Build` bucket (40 games) — triaged, scattered, not one bug
+
+The largest noncompleted bucket. Card-name histogram is spread thin (Knights,
+Religion, Cannon, Tanks, Swordsmen, Multimedia, Selective Breeding, Journalism,
+Drama, Computers, … — no single card dominates). Tracing three
+`Religion`-failure games (`7521791`, `7523082`, `7521850`) each surfaced a
+**different** end-of-turn drift as the proximate cause of the rejected build:
+
+- `7521791` — Green **resources** −2 (journal 6, engine 4); round 7 production
+  under-credited by 2; exact source not yet located.
+- `7523082` — Orange **culture** +7 (engine over-counts); science −3.
+- `7521850` — Orange **science** +1; culture +2 (both tiny).
+
+No shared root cause across the three: the Build bucket is the tail of many
+small, game-specific state drifts (each an unmodeled production/grant source
+surfacing as an unaffordable build), not one fixable bug. Chasing the 40 games
+individually is the only path, and each needs its own drift-trace. Left open —
+no candidate fix found that is safe to land.
+
+### The remaining wall: production/grant drift, across every bucket
+
+Tracing one game from each of the `Build` (40), `WonderStep` (4), and
+`PlayAction` (4) buckets confirmed they share ONE root cause: the engine
+under-credits production income relative to the journal's stated totals, and
+the deficit eventually surfaces as an unaffordable build/wonder-stage/action.
+
+Concrete examples:
+- `7522652` (WonderStep): Orange science −15, resources −16 at the failing
+  line; the 4-stage First Space Flight (16 res) is unaffordable because the
+  engine's running resource total is 16 below the journal's.
+- `7522553` (PlayAction): Purple has 0 resources (journal would have more);
+  the Rich Land build of Bronze is unaffordable.
+- `7521791` (Build): Green resources −2 (New Deposits production-timing).
+
+The drift is *cumulative* — it starts small (±1–2) in early rounds and grows
+(±15+) by mid-game, so no single round's production is obviously wrong; it is
+a systematic under-credit of some production/grant source (mines, farms,
+leaders, events, or the New-Deposits "produce immediately" path) that compounds
+over the game. This is the core remaining wall to 1011/1011: it is not a
+parser gap and not a single fixable bug, but a production-model fidelity gap
+that affects the majority of the noncompleted set.
+
+No safe, landable fix was found this pass — any change that "fixes" one game's
+drift risks regressing others (the standing constraint: a fix that regresses
+even one completion does not land). Left open for a dedicated production-model
+audit.
+
+### Production-model audit (2026-08-19): the drift is scattered, not one bug
+
+Ran the full census with `SCIENCE_ORACLE=1 RESOURCE_ORACLE=1` to quantify the
+production/grant drift directly against BGO's own `(now N)` running totals —
+the ground-truth oracle, not the eventual `IllegalMove` symptom.
+
+Baseline confirmed: **873/873 completed, 825/873 match index.tsv exactly.**
+
+Oracle accuracy (44,023 end-turn checkpoints each):
+- **Science: 99.6%** — 43,831/44,023 agree; 40/1,011 games have ≥1 divergence.
+- **Resources: 99.2%** — 43,654/44,023 agree; 122/1,011 games have ≥1 divergence.
+
+The drift deltas are *scattered*, not a single systematic offset:
+- Resource deltas: −2 (58), +2 (14), −1 (14), +1 (13), −3 (5), −4 (4), … up to −12.
+- The first divergence's `last_action_class` is spread across TakeCard (43),
+  Discard (16), UpgradeProduction (9), BuildWonderStage (8), BuildBuilding (8),
+  DevelopTechnology (6), PlayTactic (5), IncreasePopulation (5), BuildUnit (5),
+  WinWar (1), ElectLeader (1), Destroy (1) — no single dominant trigger.
+- First-divergence round histogram (resource): **64 of 122 games first diverge
+  in rounds 16–18** (late game); only 7 diverge in round ≤4. The drift is
+  *late-game accumulation* of many small early errors, not one early bug.
+
+Overlap with the noncompleted set: of the 138 noncompleted games, 57 are
+resource-divergent and 23 are science-divergent — but **70 have neither**,
+meaning production drift accounts for at most ~62 of the 138; the other ~76
+fail for other reasons (hidden-info putbacks, parser gaps, unmodeled
+decisions).
+
+Conclusion: the production/grant drift is real but *small and scattered*
+(99.2–99.6% accuracy), multi-cause, and late-game-accumulating. There is no
+single systematic under-credit to fix. Closing it requires auditing many
+independent small drift sources (each a different card/event/leader interaction),
+which is a large effort with no guaranteed net completion gain — and per the
+repo's own guidance (`CLAUDE.md`: "a correct fix that regresses the corpus is
+still a good fix"), any rules-right change must be justified by the rulebook,
+not by the completion count. No landable fix found this pass.
+
+The 825/873 exact-match count (not 873/873 completion) is the honest headline:
+48 completed games reach `game_over` but score differently from the index,
+consistent with the production drift corrupting final totals even in games
+that otherwise complete.
+
+## 2026-08-20: WonderStep dedup guard keyed on identical raw text (LANDED, 5 wins / 8 honest regressions, 863→860)
+
+**The bug.** `replay_common.rs::replay` had a guard in the `BuildWonderStage`
+arm that skipped a `Move::WonderStep` when the same actor had already applied
+the same `WonderStep { steps }` this turn AND the move was no longer legal.
+The guard existed to absorb BGO's redundant same-second double-log of a
+wonder-stage line (the journal can print the same build line twice). But it
+was too broad: it did not require the two lines to be *byte-identical*. In
+game `7522651` round 8, Grey's third-and-completing stage of Universitas
+Carolina (journal line 260, "Grey builds 1 stage of Universitas Carolina Grey
+spends 3 resources; ; Wonder completed") was dropped as a "redundant
+double-log" even though lines 258/259 (the first two stages) had no
+"Wonder completed" trailer — the raw texts differ. Dropping the completing
+stage left `completed_wonders` one entry short, so the +2 science UC grants
+was never credited, and the game's science total drifted.
+
+**Why the stage was illegal in the first place.** The Foray event earlier in
+round 8 ("Green and Grey each produce 3 resources and/or food") granted its
++3 resources to the WRONG seats in the engine's reconstruction: the engine's
+`events::rank_players` / `apply_single_target` use `RankStat::Strength`
+(computed from this binary's own `effects::state_stats`), and the engine's
+strength values `[7, 8, 5, 11]` (Orange, Green, Purple, Grey) picked
+Purple+Orange as the two strongest, while BGO's journal says Green+Grey.
+Grey therefore had only 2 resources when the 3-stage cost was 3, making
+`WonderStep { steps: 1 }` absent from `legal::legal_moves`. The replayer's
+`resolve_political_decision` correction loop fixes the food/resources SPLIT
+for the players the engine actually targeted, but does NOT correct the
+targeting itself — that is the deeper, still-open bug (see "Still open"
+below).
+
+**The fix.** The guard now additionally requires `same_text`: the current
+raw journal line must be byte-identical to the previous line that applied
+the same `WonderStep`. BGO's genuine double-log is byte-identical; a
+completing stage with a "; ; Wonder completed" trailer is not, so it is no
+longer dropped. The field `last_wonder_step_text: Option<String>` is set
+after a successful `WonderStep` apply and cleared at every `EndTurn`.
+
+**Measurement.** 1469 tests pass (up from 1468; one new test for the
+same-text guard). Guard sweep (`SCOREDIV_DUMP_COMPLETED=1`, `comm` against
+the 863-ID baseline): **5 wins** (7521980, 7522322, 7522362, 7522599,
+7522730 — all previously blocked by this same guard dropping a completing
+stage) and **8 regressions** (7522047, 7522348, 7522350, 7522432, 7522632,
+7522762, 7522795, 7522818 — each now fails honestly with
+`IllegalMove: WonderStep` because an earlier resource under-count makes the
+completing stage illegal, a condition the too-broad guard previously
+silenced). Net: 863 → 860 completed. Per CLAUDE.md, "a correct fix that
+regresses the corpus is still a good fix": the guard is now narrower and
+more honest, and the 8 regressions are real bugs the old guard was hiding.
+
+**Still open (deeper bug, not fixed this pass).** Foray / Raiders event
+targeting: `events::rank_players` ranks by this engine's own Strength stat,
+which diverges from BGO's ranking whenever the engine's resource or army
+accounting is even one token off. The fix would be to parse the
+journal's named players in the "X and Y each produce N resources and/or
+food" line and transfer the gain to those seats in
+`resolve_political_decision`, overriding the engine's ranking. This is the
+blocker for `7522651` and likely for several of the 8 regressed games.
+
+## 2026-08-20: Foray / Raiders targeting — parse the journal's named seats and transfer the grant (LANDED, +4 completed / 0 regressions)
+
+**The bug (the "deeper bug" above, now closed).** A Foray / Raiders
+`food_and_or_resources` gain/lose block is targeted by
+`Special::StrongestPlayers` / `WeakestPlayers`, resolved in
+`events::rank_players` by this engine's OWN reconstructed `RankStat::Strength`.
+Whenever any earlier accounting is one token off, the engine's ranking
+diverges from BGO's and the grant lands on the wrong seat. The journal,
+however, NAMES the real targets on the event's own line — the LAST
+"resources and/or food" clause, e.g. `"Green and Grey each produce 3
+resources and/or food"` (4p) or `"Purple produces 3 resources and/or food"`
+(2p) — so the true target set is a journal fact, not a guess.
+
+**Why the fix had to be deferred, not applied at reveal.** The engine
+applies the grant through a REAL per-player `Pending::Choice(FoodOrResSplit)`
+that `apply_move` (the reveal) ENQUEUES but does NOT drain
+(`apply_move` calls `apply::apply` only; it never calls
+`interact::run_queue`). The split is resolved later by
+`resolve_intervening`'s `ChoiceKind::FoodOrResSplit` arm, which reads the
+journal's split from the per-seat `produces_grants` / `spends_grants` FIFOs
+and applies it to `c.player` (the ENGINE's picked seat). Any correction
+placed in `resolve_political_decision` (which runs right after the reveal,
+before the split resolves) therefore sees ZERO deltas and double-grants once
+`resolve_intervening` applies the split for real (`7522663` round 11 hit
+exactly this: a premature grant, then the arm's grant again, `+1 resource`
+overcount at line 191). So the transfer is RECORDED at reveal and APPLIED by
+the arm as each choice resolves.
+
+**The parser (`parse_foray_target_line`).** Scans the whole triggering line
+for the target clause — the LAST `; `-separated clause containing "resources
+and/or food" (an `rsplit`, NOT a `find`, because the DESCRIPTION clause,
+"Each of the two strongest civilizations gains a total of 3 resources and/or
+food.", contains the same wording and comes FIRST). It handles the two
+shapes: a two-color clause (`"Green and Grey each produce 3 resources
+and/or food"` → both colors, for 4p) and a single-color clause (`"Purple
+produces 3 resources and/or food"` → one color, for 2p). It REJECTS the
+per-seat resolution lines (`"Grey produces 3 food"`, no "and/or") and any
+build line. `prescan_foray_targets` maps each prep's `lineno` → its named
+seat set, so `resolve_political_decision` looks up the names for the reveal
+it is about to apply. (A 2p Foray whose journal names the SAME seat the
+engine picks is a pure no-op: one choice, engine and journal agree.)
+
+**The transfer (`ForayTransfer` + `apply_foray_transfer`).** Recorded at
+reveal with `named` (the journal's target set) and `amount`. Consumed by
+`resolve_intervening`'s `FoodOrResSplit` arm, one call per engine pick.
+The engine enqueues one choice per seat IT picked, so the call count equals
+`named.len()` (both are "N strongest/weakest players"). Two phases:
+
+- **Per call:** record `engine_seat` in `engine_seen`. If the engine picked a
+  seat BGO did NOT name, undo the spurious grant (the engine's default split
+  puts the whole `amount` into resources, resources-first — the same default
+  `events::food_or_resources` uses). A named seat the engine ALSO picked
+  KEEPS its grant: that arm already drained the seat's own journal split, so
+  it is already correct.
+- **Completion** (`engine_seen.len() >= named.len()`): the named seats the
+  engine did NOT pick (`named \ engine_seen`) never received a grant, so
+  apply one to each using that seat's own journal split (default
+  all-resources otherwise). Then clear the transfer.
+
+Deferring the re-apply until every engine pick is seen is what makes a 4p
+Foray whose engine picks OVERLAP the journal's land correctly. In `7522651`
+the engine picked Orange+Green but BGO named Green+Grey: the old single-step
+form re-applied to the "first named not yet granted" (Green), which the
+engine was about to pick anyway, so Grey never got its +3 and the game failed
+at line 260 (WonderStep, Grey one resource short). The two-phase form re-applies
+to `named \ engine_seen` = {Grey}, which is right.
+
+**Measurement.** 1470 lib tests pass (up from 1469; one new parser test).
+Guard sweep (`SCOREDIV_DUMP_COMPLETED=1`, `comm` against the 863-ID
+baseline), isolated with a `FORAY_TRANSFER_OFF` gate: **4 wins**
+(7522373, 7522651, 7523266, 7523662) and **0 regressions** attributable to
+this change. 7522651, 7523266 and 7523662 complete AND match index.tsv
+exactly; 7522373 completes with a score divergence (excluded from the
+exact-match count by the SCOREDIV gate, but in the completed-ID set). The
+8-game removals in the full sweep (7522047, 7522348, 7522350, 7522432,
+7522632, 7522762, 7522795, 7522818) are NOT this change's: with the transfer
+disabled they fail identically (all on `hand_military` round-13 drift, a
+separate production/grant bug) — they are the 8 honest regressions of the
+dedup-guard pass above, already accounted for there. Net for this pass: the
+completed-ID set gains 4 Foray/Raiders-targeted games with no losses.
+
+**Still open (deeper, not this pass).** The root divergence is the engine's
+`RankStat::Strength` being one token off from BGO's whenever earlier
+accounting drifts. This transfer corrects the GRANT'S SEAT from the journal's
+named targets, which is the honest, journal-grounded fix; it does not repair
+the strength stat itself. The 8 hand_military regressions from the
+dedup-guard pass remain the next open front.

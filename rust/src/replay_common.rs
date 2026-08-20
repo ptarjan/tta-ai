@@ -479,6 +479,28 @@ pub fn categorize(pre_move_pending: Option<&Pending>, mv: Move) -> Category {
 // Replay state
 // ---------------------------------------------------------------------
 
+/// A Foray/Raiders `food_and_or_resources` grant whose targeting the engine
+/// got wrong: the journal named seats `named`, but the engine's
+/// `events::rank_players` picked its own strongest/weakest from this
+/// binary's reconstructed strength. [`Replayer::resolve_political_decision`]
+/// records one of these when the grant fires; `resolve_intervening`'s
+/// `FoodOrResSplit` arm consumes it as each per-player split choice
+/// resolves, through the same blessed `economy::` chokepoints.
+///
+/// The engine enqueues one `FoodOrResSplit` per seat IT picked (`engine_seen`
+/// as they resolve), and `named.len()` == the number of targets, so the two
+/// counts agree. A named seat the engine ALSO picked keeps the engine's own
+/// grant (that arm already drained the seat's journal split, so it is
+/// correct); a seat the engine picked that BGO did NOT name has its grant
+/// undone; and once every engine pick is seen, the named seats the engine did
+/// NOT pick are granted using each one's own journal split. `engine_seen.len()
+/// >= named.len()` marks completion, after which the transfer is cleared.
+struct ForayTransfer {
+    named: std::collections::BTreeSet<u8>,
+    amount: u16,
+    engine_seen: std::collections::BTreeSet<u8>,
+}
+
 struct Replayer<'a> {
     card_index: &'a HashMap<&'static str, CardId>,
     state: GameState,
@@ -564,6 +586,20 @@ struct Replayer<'a> {
     /// `GameResult` surfaces the count so a corpus run can verify the skip
     /// fired exactly where the journal's own timestamps say it should.
     duplicate_build_lines: Vec<usize>,
+    /// The `raw_text` of the last `Move::WonderStep` actually applied (i.e.
+    /// NOT skipped by the dedup guard). Set to `None` at the start of each
+    /// player's turn. The dedup guard (see the `BuildWonderStage` arm in
+    /// [`apply_one`]) uses this to distinguish BGO's genuine redundant
+    /// double-log (two IDENTICAL lines seconds apart) from a real, distinct
+    /// next stage of the same wonder (e.g. the 3rd stage of a 3-stage wonder
+    /// whose text carries a `"Wonder completed"` trailer, or a different
+    /// resource-spend clause). Before this field existed the guard keyed on
+    /// `(same actor, same steps, now illegal)` alone, which also matched a
+    /// genuine final stage made illegal by an earlier resource under-count
+    /// (Foray targeting drift, game `7522651` round 8) and silently dropped
+    /// it, so the wonder never completed and its completion effects were
+    /// never credited.
+    last_wonder_step_text: Option<String>,
     /// The journal `Line::lineno` currently being resolved, set once per
     /// loop iteration in `replay_game` before `resolve_intervening` runs.
     /// `DiscardSolver::choose` needs this to tell a FUTURE named play
@@ -600,6 +636,33 @@ struct Replayer<'a> {
     /// `prescan_spends_grants`'s doc. Same "set directly after construction"
     /// convention, same reason.
     spends_grants: HashMap<u8, VecDeque<(i16, i16)>>,
+    /// Per-preparation-index set of the seats the JOURNAL named as the
+    /// Foray/Raiders targets -- parsed off the preparation's OWN line's
+    /// `"X and Y each produce N resources and/or food"` clause by
+    /// `prescan_foray_targets`. The engine's own `events::rank_players`
+    /// picks its strongest/weakest by THIS binary's reconstructed strength,
+    /// which can diverge from BGO's whenever any earlier resource or army
+    /// accounting is even one token off (game `7522651` round 8: engine
+    /// strength `[7, 8, 5, 11]` picked Purple+Orange; the journal names
+    /// Green+Grey). Set directly by [`replay_game`] after construction
+    /// (like `produces_grants`), not threaded through `Replayer::new`.
+    foray_targets: Vec<std::collections::BTreeSet<u8>>,
+    /// The Foray/Raiders targeting transfer DEFERRED until after the
+    /// engine's own `FoodOrResSplit` choices have resolved. Set by
+    /// [`Self::resolve_political_decision`] when a `StrongestPlayers`/
+    /// `WeakestPlayers` `food_and_or_resources` grant fires (the reveal
+    /// enqueues the per-player split choices but does NOT apply them --
+    /// they stay `pending` until `resolve_intervening`'s
+    /// [`ChoiceKind::FoodOrResSplit`] arm drains them one by one), and
+    /// consumed + cleared by that arm once every journal-named target has
+    /// been granted. Holding it here rather than applying it inside
+    /// `resolve_political_decision` is the whole point: the delta the
+    /// transfer undoes / applies is not on the board until the split
+    /// choice resolves, so a same-moment correction sees a zero delta and
+    /// double-grants (the `7522663` round-11 regression this field exists
+    /// to prevent -- the 2p case where the engine and the journal name the
+    /// SAME seat and the transfer must be a true no-op).
+    foray_transfer: Option<ForayTransfer>,
     /// Per-attacker FIFO of `is_wonder` flags pulled off every
     /// journal-observed Infiltrate resolution line (`"concedes defeat"` OR
     /// `"Operation successful"`, both prefixes carry the same `"<Card> is
@@ -1121,11 +1184,14 @@ impl<'a> Replayer<'a> {
             actions_consumed: 0,
             trailing_discards_lines: Vec::new(),
             duplicate_build_lines: Vec::new(),
+            last_wonder_step_text: None,
             current_lineno: 0,
             gain_produces,
             plunder_splits,
             produces_grants: HashMap::new(),
             spends_grants: HashMap::new(),
+            foray_targets: Vec::new(),
+            foray_transfer: None,
             infiltrates,
             lose_pop_destroys,
             raid_destroys,
@@ -1556,26 +1622,53 @@ impl<'a> Replayer<'a> {
                     // entry_queued_ahead_of_its_own_real_split`'s own regression
                     // test for why popping the miss would be a real corpus bug.
                     ChoiceKind::FoodOrResSplit { lose } => {
+                        // A seat the engine's own ranking picked but BGO did NOT
+                        // name is about to have its grant undone
+                        // (`apply_foray_transfer`). BGO logged no split for it
+                        // under this event, so any entry in its FIFO that happens
+                        // to sum to the right total belongs to a LATER, real
+                        // consumer -- draining it here would steal that entry
+                        // exactly the way `foray_skips_a_foreign_non_matching_
+                        // entry_queued_ahead_of_its_own_real_split` exists to
+                        // prevent. Take the default option instead and let the
+                        // undo reverse precisely it.
+                        let spurious = self
+                            .foray_transfer
+                            .as_ref()
+                            .is_some_and(|t| !t.named.contains(&c.player));
                         let q = if lose {
                             self.spends_grants.entry(c.player).or_default()
                         } else {
                             self.produces_grants.entry(c.player).or_default()
                         };
-                        let Some(pos) = q.iter().position(|&(jf, jr)| {
-                            c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Gain(g) if g.food == jf && g.resources == jr))
-                        }) else {
+                        let found = if spurious {
+                            None
+                        } else {
+                            q.iter().position(|&(jf, jr)| {
+                                c.options.as_slice().iter().any(|o| matches!(o, ChoiceOption::Gain(g) if g.food == jf && g.resources == jr))
+                            })
+                        };
+                        let Some(pos) = found else {
                             // No journal-observed line: guess the first Gain option.
-                            let idx = c
+                            let (idx, applied) = c
                                 .options
                                 .as_slice()
                                 .iter()
-                                .position(|o| matches!(o, ChoiceOption::Gain(_)))
+                                .enumerate()
+                                .find_map(|(i, o)| {
+                                    if let ChoiceOption::Gain(g) = o {
+                                        Some((i, (g.food, g.resources)))
+                                    } else {
+                                        None
+                                    }
+                                })
                                 .ok_or_else(|| {
                                     MismatchKind::StuckPending(
                                         "FoodOrResSplit choice has no Gain option to guess".into(),
                                     )
                                 })?;
                             self.apply_move(Move::Choose { n: idx as u8 });
+                            self.apply_foray_transfer(c.player, lose, applied);
                             continue;
                         };
                         let (jf, jr) = q.remove(pos).expect("position just found by iter()");
@@ -1586,6 +1679,7 @@ impl<'a> Replayer<'a> {
                             .position(|o| matches!(o, ChoiceOption::Gain(g) if g.food == jf && g.resources == jr))
                             .expect("this exact (food, resources) pair matched the `position` search above");
                         self.apply_move(Move::Choose { n: idx as u8 });
+                        self.apply_foray_transfer(c.player, lose, (jf, jr));
                         continue;
                     }
                     // A `Pending::Choice(Infiltrate)` (Aggression: Infiltrate's
@@ -2760,6 +2854,71 @@ impl<'a> Replayer<'a> {
                     }
                 }
             }
+
+            // TARGETING correction (the deeper half of the same bug): the
+            // SPLIT loop above corrected only the seats the engine actually
+            // credited; the SEATS THEMSELVES were picked by
+            // `events::rank_players` from this binary's own reconstructed
+            // strength, which diverges from BGO's whenever any earlier
+            // resource or army accounting is even one token off -- game
+            // `7522651` round 8 is the confirmed instance (engine strength
+            // `[7, 8, 5, 11]` picked Purple+Orange, the journal names
+            // Green+Grey). The triggering event line names the real targets
+            // outright ("Green and Grey each produce 3 resources and/or
+            // food"), so transfer the whole `food_and_or_resources` grant
+            // from whoever the engine picked to the seats BGO named,
+            // through the same blessed chokepoints. The grant is "N
+            // resources OR food", so each seat's delta is exactly
+            // (0, +-amount) or (+-amount, 0): undoing the engine's pick
+            // means paying back / returning exactly the component it
+            // actually touched, and the journal-named seat's own
+            // `produces_grants`/`spends_grants` split entry must be
+            // consumed HERE (the loop above saw no delta for them).
+            let named: std::collections::BTreeSet<u8> =
+                self.foray_targets.get(self.next_prep - 1).cloned().unwrap_or_default();
+            if !named.is_empty() {
+                let amount = prep
+                    .revealed
+                    .get()
+                    .special
+                    .iter()
+                    .find_map(|sp| {
+                        if let crate::cards::Special::Gain(b) | crate::cards::Special::Lose(b) = sp {
+                            Some(b.food_and_or_resources.max(0))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                // Do NOT apply the transfer here: the engine's per-player
+                // `FoodOrResSplit` choices are still `pending` (the reveal
+                // enqueued them but `apply_move` does not drain the queue),
+                // so no seat's delta reflects the grant yet -- correcting
+                // now would see zero deltas and double-grant once
+                // `resolve_intervening` resolves the choices for real
+                // (`7522663` round 11). Record it and let that arm apply it
+                // as each choice resolves.
+                if amount > 0 {
+                    // A transfer still in flight means the previous event
+                    // enqueued FEWER `FoodOrResSplit` choices than BGO named
+                    // targets, so it never reached its completion clause and
+                    // some named seat never got its grant. Silently dropping
+                    // it here would carry that missing grant into the rest of
+                    // the game as a quiet arithmetic error; report it instead.
+                    if let Some(stale) = self.foray_transfer.take() {
+                        return Err(MismatchKind::StuckPending(format!(
+                            "line {}: the previous Foray/Raiders targeting transfer never completed \
+                             -- BGO named seats {:?} but the engine opened splits for only {:?}",
+                            prep.lineno, stale.named, stale.engine_seen,
+                        )));
+                    }
+                    self.foray_transfer = Some(ForayTransfer {
+                        named,
+                        amount: amount as u16,
+                        engine_seen: std::collections::BTreeSet::new(),
+                    });
+                }
+            }
         }
 
         // This reveal emptied the pile, so `reveal_current_event` has
@@ -2801,6 +2960,103 @@ impl<'a> Replayer<'a> {
             );
         }
         Ok(())
+    }
+
+    /// Consume one step of the deferred Foray/Raiders targeting transfer,
+    /// called from `resolve_intervening`'s `FoodOrResSplit` arm right after
+    /// the engine's per-player split choice for seat `engine_seat` (= the
+    /// choice's `c.player`) is applied. The engine picked `engine_seat`
+    /// from its OWN `rank_players` strength; the journal named the real
+    /// targets (`self.foray_transfer.named`).
+    ///
+    /// The engine enqueues one `FoodOrResSplit` per seat IT picked, so the
+    /// number of calls here equals `named.len()` (the number of targets --
+    /// both are "N strongest/weakest players"). Two phases:
+    ///
+    /// - **Per call** (`engine_seen` grows): record `engine_seat`. If the
+    ///   engine picked a seat BGO did NOT name, its grant was spurious --
+    ///   undo exactly the `applied` split the caller just made, which is the
+    ///   only split this can reverse correctly: the loss direction is
+    ///   windowed by the seat's own banks, so it is not always all-resources.
+    ///   A named seat the engine ALSO
+    ///   picked keeps its grant: that arm already drained the seat's own
+    ///   `produces_grants`/`spends_grants` split, so it is already correct.
+    ///   The 2p case (e.g. `7522663` round 11) is entirely this: one call,
+    ///   engine and journal agree, so nothing is undone and nothing is
+    ///   re-applied -- a true no-op that never double-grants.
+    /// - **Completion** (`engine_seen.len() >= named.len()`): the named seats
+    ///   the engine did NOT pick (`named \ engine_seen`) never received a
+    ///   grant, so apply one to each using that seat's own journal split
+    ///   where one is queued (defaulting to all-resources otherwise). Then
+    ///   clear the transfer.
+    ///
+    /// Deferring the re-apply until every engine pick is seen is what makes a
+    /// 4p Foray whose engine picks OVERLAP the journal's (e.g. `7522651`:
+    /// engine picks Orange+Green, BGO names Green+Grey) land correctly -- the
+    /// re-apply goes to the named seat the engine did not pick (Grey), not a
+    /// named seat the engine will pick later (Green).
+    fn apply_foray_transfer(&mut self, engine_seat: u8, lose: bool, applied: (i16, i16)) {
+        let Some(t) = self.foray_transfer.as_mut() else {
+            return; // no Foray/Raiders grant in flight -- not our choice
+        };
+        t.engine_seen.insert(engine_seat);
+        let is_gain = !lose;
+        let amount = t.amount;
+        if !t.named.contains(&engine_seat) {
+            // Engine picked a seat BGO did not name: undo the spurious grant
+            // by reversing exactly the split the caller just applied. Do NOT
+            // assume all-resources: the loss direction's options come from
+            // `interact::plunder_split_options`, which windows the split to
+            // what the seat's OWN two banks can supply, so its first option
+            // is `(amount - r_max, r_max)` with `r_max` capped at the seat's
+            // resources -- all-resources is simply absent from the list
+            // whenever that bank is short.
+            let (af, ar) = applied;
+            let p = &mut self.state.players[engine_seat as usize];
+            if is_gain {
+                economy::pay_food(p, af as u16);
+                economy::pay_resources(p, ar as u16);
+            } else {
+                economy::gain_food(p, af as u16);
+                economy::gain_resources(p, ar as u16);
+            }
+        }
+        // Completion: grant the named seats the engine never picked.
+        if t.named.is_empty() || t.engine_seen.len() >= t.named.len() {
+            for &ns in &t.named {
+                if t.engine_seen.contains(&ns) {
+                    continue; // the engine picked this one; its grant stands
+                }
+                let (jf, jr) = if is_gain {
+                    self.produces_grants
+                        .get_mut(&ns)
+                        .and_then(|q| {
+                            q.iter()
+                                .position(|&(x, y)| x + y == amount as i16)
+                                .map(|pos| q.remove(pos).expect("position just found"))
+                        })
+                        .unwrap_or((0, amount as i16))
+                } else {
+                    self.spends_grants
+                        .get_mut(&ns)
+                        .and_then(|q| {
+                            q.iter()
+                                .position(|&(x, y)| x + y == amount as i16)
+                                .map(|pos| q.remove(pos).expect("position just found"))
+                        })
+                        .unwrap_or((0, amount as i16))
+                };
+                let p = &mut self.state.players[ns as usize];
+                if is_gain {
+                    economy::gain_food(p, jf as u16);
+                    economy::gain_resources(p, jr as u16);
+                } else {
+                    economy::pay_food(p, jf as u16);
+                    economy::pay_resources(p, jr as u16);
+                }
+            }
+            self.foray_transfer = None;
+        }
     }
 
     /// Raise `actor`'s colonization ceiling to at least `n` by grounding
@@ -5859,6 +6115,89 @@ fn prescan_produces_grants(lines: &[Line]) -> HashMap<u8, VecDeque<(i16, i16)>> 
     out
 }
 
+/// The TRIGGERING event line's own named-target clause: `"<Color> and
+/// <Color> each produce N resources and/or food"` (two colours, `each`,
+/// `and/or`) or `"<Color> produces N resources and/or food"` (one colour).
+/// This is the journal's OWN answer to "who did BGO rank strongest/weakest"
+/// for the revealed card -- `resolve_political_decision` uses it to transfer
+/// the grant from whoever THIS binary's `events::rank_players` picked to the
+/// seats BGO actually named (see `prescan_foray_targets`). Only the
+/// `resources and/or food` wording qualifies: a plain `"produces N food"`
+/// line is a resolution line (`parse_produces_grant_line`'s shape), never a
+/// target clause, and the `each`/`and/or` markers are unique to Foray/Raiders
+///'s own triggering text.
+fn parse_foray_target_line(text: &str) -> Option<Vec<Color>> {
+    // The triggering event line is
+    //   "<Color> plays event ...; Current event:; <Age> / Foray;
+    //    <description>; <TARGET CLAUSE>; <Color> choses first"
+    // and the target clause is the LAST clause that carries the
+    // "resources and/or food" wording -- the one that names who BGO ranked
+    // strongest/weakest. It does NOT lead the line (the "plays event" actor
+    // does), so scan every "; "-separated clause for it.
+    // The card's own description clause (e.g. "Each of the two strongest
+    // civilizations gains a total of 3 resources and/or food.") ALSO carries
+    // the "resources and/or food" wording and sits BEFORE the target clause,
+    // so take the LAST matching clause (the one that names the players), not
+    // the first.
+    let target_clause = text
+        .rsplit("; ")
+        .find(|c| c.contains("resources and/or food"))?;
+    // Two-colour trigger: "<Color> and <Color> each produce N resources
+    // and/or food" (4p game, e.g. 7522651 round 8).
+    if let Some(pos) = target_clause.find(" and ") {
+        let first = Color::parse(&target_clause[..target_clause.find(' ')?])?;
+        let (second, after) = target_clause[pos + " and ".len()..]
+            .split_at(target_clause[pos + " and ".len()..].find(' ')?);
+        let second = Color::parse(second)?;
+        let after = after.strip_prefix(' ')?;
+        let after = after.strip_prefix("each produce ")?;
+        let digits_end = after.find(|c: char| !c.is_ascii_digit())?;
+        if digits_end == 0 {
+            return None;
+        }
+        let after = &after[digits_end..];
+        if !after.starts_with(" resources and/or food") {
+            return None;
+        }
+        return Some(vec![first, second]);
+    }
+    // Single-colour trigger: "<Color> produces N resources and/or food"
+    // (2p game, e.g. 7522663 round 11).
+    let first = Color::parse(&target_clause[..target_clause.find(' ')?])?;
+    let t = target_clause.strip_prefix(&format!("{} produces ", first.as_str()))?;
+    let digits_end = t.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    let t = &t[digits_end..];
+    if !t.starts_with(" resources and/or food") {
+        return None;
+    }
+    Some(vec![first])
+}
+
+/// Pre-scans every [`parse_foray_target_line`] match into a per-preparation
+/// set of the seats BGO named as the Foray/Raiders targets. Keyed by the
+/// preparation's OWN `"<Color> plays event ... Current event:"` journal
+/// `lineno` (the triggering event line -- the target clause is the LAST
+/// "resources and/or food" clause on that same line, NOT the leading actor),
+/// so `resolve_political_decision` can look up
+/// exactly the targets for the preparation it is about to apply. Consumed
+/// strictly in `plan.preparations` order (one entry per preparation, in
+/// index order), mirroring `produces_grants`'s per-seat FIFOs.
+fn prescan_foray_targets(lines: &[Line], preparations: &[crate::event_plan::Preparation]) -> Vec<std::collections::BTreeSet<u8>> {
+    let mut by_lineno: std::collections::HashMap<usize, Vec<Color>> = std::collections::HashMap::new();
+    for line in lines {
+        if let Some(named) = parse_foray_target_line(line.text) {
+            by_lineno.insert(line.lineno, named);
+        }
+    }
+    preparations
+        .iter()
+        .map(|p| by_lineno.get(&p.lineno).map(|c| c.iter().map(|&col| col.seat()).collect()).unwrap_or_default())
+        .collect()
+}
+
 /// [`parse_produces_grant_line`]'s LOSS-side mirror: `Special::WeakestPlayers`
 /// events (Raiders, Crime Wave) resolve their own `Special::Lose(food_and_or_
 /// resources)` block the identical way -- a real, sequential, per-player
@@ -6563,7 +6902,10 @@ fn prescan_colonize_sacrifices(
 /// undoes: prefer whichever open entry's own recorded cost equals the
 /// putback's refund, falling back to "most recent" (the single-copy-safe
 /// behaviour) only when no cost match exists.
-fn prescan_putback_skips(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> std::collections::HashSet<usize> {
+fn prescan_putback_skips(
+    lines: &[Line],
+    card_index: &HashMap<&'static str, CardId>,
+) -> std::collections::HashSet<usize> {
     let mut skip = std::collections::HashSet::new();
     let mut open: HashMap<CardId, Vec<(usize, Color, i32)>> = HashMap::new();
     for (i, line) in lines.iter().enumerate() {
@@ -7443,6 +7785,11 @@ pub fn replay_game(
 ) -> GameResult {
     crate::tie_context::set_game(&meta.id);
     let lines = parse_lines(journal_text);
+    // The putback prescan classifies against a per-game CLONE of the index:
+    // its own Take-line full-name evidence rebinds a family's bare-name key
+    // to the sibling actually taken, which must NOT leak into the dispatch
+    // loop's `classify` calls (those must keep the engine's canonical index
+    // picks or every move the engine applies would shift).
     let putback_skips = prescan_putback_skips(&lines, card_index);
     let gain_produces = prescan_gain_produces(&lines);
     let plunder_splits = prescan_plunder_splits(&lines);
@@ -7494,6 +7841,7 @@ pub fn replay_game(
     );
     r.record_decisions = record_decisions;
     r.produces_grants = prescan_produces_grants(&lines);
+    r.foray_targets = prescan_foray_targets(&lines, &r.plan.preparations);
     r.war_tech_spoils = prescan_war_tech_spoils(&lines, card_index);
     r.discard_phase_oracle = prescan_discard_phase_oracle(&lines);
     r.military_hand_ledger = prescan_military_hand_ledger(&lines, card_index);
@@ -9169,18 +9517,29 @@ fn apply_one(
             // Food Chains" before the "Wonder completed" trailer). Re-applying
             // the second `Move::WonderStep{steps}` over-spends the stage's
             // resources, starving a later genuinely-unaffordable build into
-            // `IllegalMove`. Skip the redundant line when a `Move::WonderStep
-            // {steps}` for THIS actor was ALREADY applied this turn AND
-            // re-applying it is now ILLEGAL in the reconstructed state
-            // (`Move::WonderStep{steps}` absent from `legal_moves`) -- the
-            // same two-condition guard the Build arm uses. A GENUINE second
-            // stage of the same wonder (e.g. building a 4-stage wonder's
-            // stages across two separate actions, or a `steps` value still
-            // legal because the wonder is far from complete) applies legally
-            // and never satisfies the illegality condition, so it is never
-            // skipped. A `FreeBuild`/action-card wonder build resolves
-            // through `Move::Choose`, never a bare `Move::WonderStep`, so it
-            // never reaches this branch either.
+            // `IllegalMove`. Skip the redundant line when ALL of:
+            //   (a) a `Move::WonderStep{steps}` for THIS actor was ALREADY
+            //       applied this turn,
+            //   (b) re-applying it is now ILLEGAL in the reconstructed state
+            //       (`Move::WonderStep{steps}` absent from `legal_moves`),
+            //   (c) the current line's `raw_text` is IDENTICAL to the
+            //       previous WonderStep's `raw_text` (BGO's genuine double-
+            //       log produces byte-identical lines; a real next stage
+            //       carries a `"Wonder completed"` trailer or a different
+            //       resource-spend clause).
+            // Condition (c) was added after game `7522651` round 8: the old
+            // two-condition guard (a)+(b) also matched a genuine final stage
+            // made illegal by an earlier resource under-count (Foray
+            // targeting drift -- the engine gave Foray's +3 resources to the
+            // wrong players, so Grey had 2 resources instead of 5 when the
+            // 3rd UC stage cost 3). The 3rd stage's text carried a
+            // `"Wonder completed"` trailer, so (c) is false and the step
+            // applies (the engine's resource shortfall is a separate,
+            // pre-existing model gap; the wonder still completes and its
+            // completion effects are credited, which is the part the old
+            // guard was silently dropping). A `FreeBuild`/action-card wonder
+            // build resolves through `Move::Choose`, never a bare
+            // `Move::WonderStep`, so it never reaches this branch either.
             {
                 let mv = Move::WonderStep { steps };
                 let actor_applied_wonder = r.state.decider() == actor;
@@ -9189,12 +9548,20 @@ fn apply_one(
                     .iter()
                     .any(|m| matches!(m, Move::WonderStep { steps: s } if *s == steps));
                 let now_illegal = !legal::legal_moves(&r.state).as_slice().contains(&mv);
-                if actor_applied_wonder && already_applied && now_illegal {
+                let same_text = r
+                    .last_wonder_step_text
+                    .as_deref()
+                    .is_some_and(|prev| prev == raw_text);
+                if actor_applied_wonder && already_applied && now_illegal && same_text {
                     r.duplicate_build_lines.push(r.current_lineno);
                     return Ok(());
                 }
             }
-            r.try_apply(Move::WonderStep { steps }, true)
+            let result = r.try_apply(Move::WonderStep { steps }, true);
+            if result.is_ok() {
+                r.last_wonder_step_text = Some(raw_text.to_string());
+            }
+            result
         }
         ActionClass::IncreasePopulation => {
             let legal = legal::legal_moves(&r.state);
@@ -9275,7 +9642,8 @@ fn apply_one(
                     r.try_apply(Move::Pop, true)
                 } else if legal.as_slice().contains(&Move::PopFree) {
                 r.try_apply(Move::PopFree, true)
-            } else { let res = {
+            } else {
+                let res = {
                 // Trade Routes Agreement, side B ("Civilization B can use 1
                 // resource as 1 food during its turn", §5.9): a player
                 // holding the live grant may pay PART of a Pop cost in
@@ -9945,7 +10313,16 @@ fn apply_one(
         // before this function is ever called -- see that loop's own
         // "Winston Churchill's once-per-turn choice" handling, right before
         // its own `Move::EndTurn` application.
-        ActionClass::EndTurn => r.try_apply(Move::EndTurn, true),
+        ActionClass::EndTurn => {
+            let result = r.try_apply(Move::EndTurn, true);
+            // New player's turn is starting: the previous player's WonderStep
+            // text is no longer relevant (the dedup guard's
+            // `actor_applied_wonder` condition already gates on the current
+            // decider, but resetting here keeps the field honest and avoids a
+            // stale match if the same player somehow re-enters mid-batch).
+            r.last_wonder_step_text = None;
+            result
+        }
         // Unreachable: the dispatch loop in `replay_game` special-cases
         // `RemoveLeaderYellow`, `ColumbusColonize`, and `Barbarossa` before
         // any of them ever reaches this function, the same way it special-
@@ -11629,6 +12006,50 @@ mod tests {
             None
         );
         assert_eq!(parse_produces_grant_line("Purple builds Bronze Purple spends 2 resources"), None);
+    }
+
+    /// Foray/Raiders' TRIGGERING event line names the targets BGO ranked
+    /// strongest/weakest ("Green and Grey each produce 3 resources and/or
+    /// food; Grey choses first" -- real corpus shape, game `7522651` round 8)
+    /// and must be parsed OFF for the targeting correction, while the
+    /// per-seat RESOLUTION line ("Grey produces 2 food; Grey produces 1
+    /// resource", `parse_produces_grant_line`'s shape) and every other
+    /// produces/spends line must NOT be mistaken for a target clause. The
+    /// two-player shape ("Purple produces 3 resources and/or food", real
+    /// game `7522663` round 11) names exactly ONE target and must parse to
+    /// a single-element vec, not `None` -- the targeting correction needs
+    /// to know that seat to transfer the grant to it.
+    #[test]
+    fn parse_foray_target_line_reads_named_targets_but_rejects_resolution_lines() {
+        // The REAL triggering-event line shape (7522651 round 8): the target
+        // clause is the LAST "resources and/or food" clause, NOT the leading
+        // "plays event" actor. This is the case the prescan must match.
+        assert_eq!(
+            parse_foray_target_line(
+                "Grey plays event Grey scores 2 culture; Current event:; I / Foray; Each of the two strongest civilizations gains a total of 3 resources and/or food.; Green and Grey each produce 3 resources and/or food; Grey choses first"
+            ),
+            Some(vec![Color::Green, Color::Grey])
+        );
+        // 4p trigger names both targets (bare-clause form).
+        assert_eq!(
+            parse_foray_target_line("Green and Grey each produce 3 resources and/or food; Grey choses first"),
+            Some(vec![Color::Green, Color::Grey])
+        );
+        assert_eq!(
+            parse_foray_target_line("Purple and Orange each produce 2 resources and/or food; Purple choses first"),
+            Some(vec![Color::Purple, Color::Orange])
+        );
+        // The two-player Foray shape names exactly one target.
+        assert_eq!(
+            parse_foray_target_line("Purple produces 3 resources and/or food"),
+            Some(vec![Color::Purple])
+        );
+        // A resolution line (single actor, no "and/or") is
+        // `parse_produces_grant_line`'s shape, never a target clause.
+        assert_eq!(parse_foray_target_line("Grey produces 2 food; Grey produces 1 resource"), None);
+        assert_eq!(parse_foray_target_line("Purple produces 3 resources"), None);
+        // An ordinary action's embedded "spends" clause never leads the line.
+        assert_eq!(parse_foray_target_line("Purple builds Bronze Purple spends 2 resources"), None);
     }
 
     /// TOKENCOUNT regression (2026-08-14): [`apply_journal_food_or_res_correction`]

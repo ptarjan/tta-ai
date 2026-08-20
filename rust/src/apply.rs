@@ -809,7 +809,8 @@ pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, discount: i32, free
         p.wonder_steps += k;
         p.wonder
     };
-    if wonder_is_complete(wonder, state.players[idx as usize].wonder_steps) {
+    let steps_after = state.players[idx as usize].wonder_steps;
+    if wonder_is_complete(wonder, steps_after) {
         let gained = wonder_completion_culture(&state.players[idx as usize], wonder);
         let p = &mut state.players[idx as usize];
         p.wonder = CardId::NONE;
