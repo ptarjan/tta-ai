@@ -3765,6 +3765,13 @@ impl<'a> Replayer<'a> {
             self.pending_resource_check = Some(pending); // still blocked -- try again next line
             return;
         }
+        if self.state.last_end_of_turn_resources[pending.actor_seat as usize].is_none() {
+            // The actor's production pass has not run yet (their own
+            // EndTurn has not completed). A stale slot would compare this
+            // turn's journal total against the PREVIOUS turn's snapshot and
+            // record a phantom divergence -- skip the checkpoint entirely.
+            return;
+        }
         self.record_resource_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
     }
 
@@ -4903,6 +4910,23 @@ fn prescan_plays_event_lines<'t>(lines: &[Line<'t>]) -> Vec<(usize, u8, &'t str)
         .filter_map(|line| {
             let (color, rest) = actor_and_rest(line.text)?;
             rest.starts_with("plays event").then(|| (line.lineno, color.seat(), line.text))
+        })
+        .collect()
+}
+
+/// Every `"<Color> wins <Territory> Winning bid is N"` journal line:
+/// `(lineno, actor_seat, text)`, in journal order -- the auction's own
+/// confirmation of which card it settled. `event_plan::solve` uses these
+/// only for the `PreparedCardMismatch` cross-check: a win line that names
+/// a card the batch/FIFO solve attributed to a different preparation is a
+/// contradiction of the pile model, reported as infeasible.
+fn prescan_win_auction_texts<'t>(lines: &[Line<'t>]) -> Vec<(usize, u8, &'t str)> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let (color, rest) = actor_and_rest(line.text)?;
+            (rest.starts_with("wins ") && line.text.contains("Winning bid is"))
+                .then(|| (line.lineno, color.seat(), line.text))
         })
         .collect()
 }
@@ -7808,13 +7832,20 @@ pub fn replay_game(
     // constraint problem, not a per-decision one -- see `event_plan`'s
     // module doc. An infeasible journal stops the game at the line that
     // contradicts the pile model rather than being softened into a guess.
-    let plan = match crate::event_plan::solve(&prescan_plays_event_lines(&lines), card_index, meta.players) {
+    let win_auction_texts = prescan_win_auction_texts(&lines);
+    let plan = match crate::event_plan::solve(
+        &prescan_plays_event_lines(&lines),
+        &win_auction_texts,
+        card_index,
+        meta.players,
+    ) {
         Ok(plan) => plan,
         Err(err) => {
             let lineno = match err {
                 crate::event_plan::EventPlanError::NoCultureClause { lineno }
                 | crate::event_plan::EventPlanError::UnknownRevealedCard { lineno, .. }
-                | crate::event_plan::EventPlanError::BatchAgeMismatch { lineno, .. } => lineno,
+                | crate::event_plan::EventPlanError::BatchAgeMismatch { lineno, .. }
+                | crate::event_plan::EventPlanError::PreparedCardMismatch { lineno, .. } => lineno,
             };
             let at = lines.iter().find(|l| l.lineno == lineno);
             mismatch = at.map(|l| mk_mismatch(l, MismatchKind::EventPlanInfeasible(err.to_string())));
@@ -13503,6 +13534,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 1, "Purple plays event Purple scores 1 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -13534,6 +13566,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -13566,6 +13599,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -13614,6 +13648,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -13683,6 +13718,7 @@ mod tests {
                 "Orange plays event Orange scores 1 culture; Current event:; A / Development of Politics; \
                  Each player draws 3 military cards.; Orange draws 3 military cards; Purple draws 3 military cards",
             )],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -13761,6 +13797,7 @@ mod tests {
                 "Orange plays event Orange scores 1 culture; Current event:; A / Development of Politics; \
                  Each player draws 3 military cards.; Orange draws 3 military cards; Purple draws 3 military cards",
             )],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -13810,7 +13847,7 @@ mod tests {
     #[test]
     fn repaying_a_military_hand_deficit_prefers_a_non_harp_symbol_victim_over_an_event_or_territory_card() {
         let card_index = build_card_index();
-        let plan = crate::event_plan::solve(&[], &card_index, 2).expect("an empty journal is trivially consistent");
+        let plan = crate::event_plan::solve(&[] as &[(usize, u8, &str)], &[] as &[(usize, u8, &str)], &card_index, 2).expect("an empty journal is trivially consistent");
         let mut r = Replayer::new(&card_index, 2, plan, HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.military_hand_deficit[0] = 1;
         // A hand with exactly one card of each kind, neither played by name
@@ -13866,6 +13903,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -13895,6 +13933,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 0, "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -14046,6 +14085,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -14081,6 +14121,7 @@ mod tests {
         let card_index = build_card_index();
         let plan = crate::event_plan::solve(
             &[(5, 0, "Orange plays event Orange scores 1 culture; Current event:; A / Development of Settlement; x")],
+            &[] as &[(usize, u8, &str)],
             &card_index,
             2,
         )
@@ -16417,4 +16458,5 @@ mod tests {
             "the card actually landed in hand"
         );
     }
+
 }

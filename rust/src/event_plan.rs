@@ -123,6 +123,16 @@ pub enum EventPlanError {
         prepared: usize,
         revealed: usize,
     },
+    /// A territory's own `WinAuction` line names a card the batch solve
+    /// attributed to a DIFFERENT preparation than this one -- the
+    /// journal's own record contradicts the pile model's FIFO assignment.
+    /// Same "worth chasing, never worth relaxing" shape as
+    /// `BatchAgeMismatch`.
+    PreparedCardMismatch {
+        lineno: usize,
+        prepared: &'static str,
+        revealed: &'static str,
+    },
 }
 
 impl std::fmt::Display for EventPlanError {
@@ -138,6 +148,11 @@ impl std::fmt::Display for EventPlanError {
                 f,
                 "line {lineno}: the current-events pile turned up {revealed} Age-{level} card(s) but only \
                  {prepared} were prepared into it"
+            ),
+            EventPlanError::PreparedCardMismatch { lineno, prepared, revealed } => write!(
+                f,
+                "line {lineno}: the journal's own win line names {revealed:?} as the settled card, \
+                 but the pile model prepared {prepared:?} for it"
             ),
         }
     }
@@ -229,11 +244,15 @@ fn revealed_card(
 /// BGO's own marker for `events::recycle_future_events`.
 const RECYCLE_MARKER: &str = "Future events are now current events.";
 
-/// Solve one game's event record. `lines` is `(lineno, actor_seat, text)`
-/// for every `"<Color> plays event ..."` journal line, in journal order --
-/// `replay_common.rs` owns the parse that identifies them.
+/// Solve one game's event record. `plays_event_lines` is `(lineno,
+/// actor_seat, text)` for every `"<Color> plays event ..."` journal line
+/// and `win_auction_texts` the same for every `"<Color> wins <Name>
+/// Winning bid is N"` line, both in journal order -- `replay_common.rs`
+/// owns the parse that identifies them. The win lines are only consulted
+/// for TERRITORY reveals, by the `PreparedCardMismatch` check below.
 pub fn solve(
     plays_event_lines: &[(usize, u8, &str)],
+    win_auction_texts: &[(usize, u8, &str)],
     card_index: &HashMap<&'static str, CardId>,
     num_players: u8,
 ) -> Result<EventPlan, EventPlanError> {
@@ -296,7 +315,7 @@ pub fn solve(
         setup_pile.push(filler);
     }
 
-    let preparations = raw
+    let preparations: Vec<Preparation> = raw
         .iter()
         .zip(solved)
         .map(|(p, card)| {
@@ -315,7 +334,41 @@ pub fn solve(
             }
         })
         .collect();
-
+    // A territory's own `WinAuction` line (`"<Color> wins <Territory>
+    // Winning bid is N"`) names the card it settled -- that is the
+    // journal's own identity for the card, and it outranks the batch/FIFO
+    // solve above, which is underdetermined for territory families that
+    // recur across ages under one printed name (the same gap
+    // `revealed_card` already documents for the REVEAL side: "Vast
+    // Territory" exists at Age I AND Age II under one printed name). The
+    // prepared card IS the revealed card in this case -- BGO's journal
+    // says so outright -- so a journal line that names a card the batch
+    // solve produced a DIFFERENT card for is a contradiction of the pile
+    // model: report it as infeasible rather than silently overriding it,
+    // exactly like `BatchAgeMismatch`.
+    for &(win_lineno, _win_actor, win_text) in win_auction_texts {
+        // The win line carries the same `"Current event:; <Age> / <Name>"`
+        // clause the reveal line does, so the reveal's own parse reads it.
+        let Some((name, age)) = current_event_age_and_name(win_text) else {
+            continue;
+        };
+        let Some(id) = revealed_card(card_index, age, name) else {
+            continue;
+        };
+        let Some(prep) = preparations
+            .iter()
+            .find(|p| p.revealed == id && p.lineno <= win_lineno)
+        else {
+            continue;
+        };
+        if prep.card != id {
+            return Err(EventPlanError::PreparedCardMismatch {
+                lineno: win_lineno,
+                prepared: prep.card.get().name,
+                revealed: id.get().name,
+            });
+        }
+    }
     Ok(EventPlan { setup_pile, preparations })
 }
 
@@ -371,7 +424,7 @@ mod tests {
             (40, 1, "Purple plays event Purple scores 1 culture; Current event:; II / Prosperity; x"),
         ];
         let index = idx();
-        let plan = solve(&lines, &index, 2).expect("this journal satisfies the batch constraint");
+        let plan = solve(&lines, &[], &index, 2).expect("this journal satisfies the batch constraint");
         assert_eq!(plan.preparations.len(), 4);
         // The Age I preparation (Orange, line 10) became the Age I reveal.
         assert_eq!(plan.preparations[0].card, index["Foray"]);
@@ -396,7 +449,7 @@ mod tests {
             (30, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Foray; x"),
             (40, 1, "Purple plays event Purple scores 1 culture; Current event:; II / Prosperity; x"),
         ];
-        let err = solve(&lines, &idx(), 2).expect_err("the batch constraint must fail here");
+        let err = solve(&lines, &[], &idx(), 2).expect_err("the batch constraint must fail here");
         assert_eq!(
             err,
             EventPlanError::BatchAgeMismatch { lineno: 40, level: 2, prepared: 0, revealed: 1 }
@@ -420,7 +473,7 @@ mod tests {
             0u8,
             "Orange plays event Orange scores 2 culture; Current event:; A / Development of Settlement; x",
         )];
-        let plan = solve(&lines, &idx(), 2).expect("a one-preparation journal is consistent");
+        let plan = solve(&lines, &[], &idx(), 2).expect("a one-preparation journal is consistent");
         assert_eq!(plan.preparations[0].level, 2);
         assert_eq!(plan.preparations[0].card.level(), 2);
         assert!(matches!(plan.preparations[0].card.kind(), CardType::Event | CardType::Territory));
@@ -437,7 +490,7 @@ mod tests {
             (50, 0, "Orange plays event Orange scores 1 culture; Current event:; I / Good Harvest; x"),
         ];
         let index = idx();
-        let plan = solve(&lines, &index, 2).expect("consistent");
+        let plan = solve(&lines, &[], &index, 2).expect("consistent");
         assert_eq!(plan.next_batch_reveals(1), vec![index["Foray"], index["Raiders"]]);
         assert_eq!(plan.next_batch_reveals(3), vec![index["Good Harvest"]]);
     }
