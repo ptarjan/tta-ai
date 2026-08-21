@@ -9177,6 +9177,54 @@ fn free_civil_action_move(
     if !r.state.players[actor as usize].hand_civil.contains(discount_card) {
         return Ok(false);
     }
+    // A Trade Routes Agreement side-A "1 food as 1 resource" grant (§5.9)
+    // folded into THIS line: the journal's "spends N food" clause is a real
+    // second payment on top of the build's own (discounted or fully-free)
+    // resource cost, and BGO glues it onto the SAME printed "builds X using
+    // Y" line the way it does an ordered Build's (e.g. game `7521783`
+    // round 3, `"Purple builds Bronze using Rich Land Purple spends 1
+    // food"` -- Rich Land's `BuildOrUpgradeFarmOrMine` build is free
+    // (discount 2 >= Bronze's cost 2), so the WHOLE line's payment is the
+    // converted food, and without this the engine charges the build 0 and
+    // credits no resource, leaving the reconstructed total short by the
+    // food amount for the rest of the game). The ordinary Build/Upgrade/
+    // WonderStep arms already fold this via `convert_trade_food_shortfall`
+    // BEFORE their own `try_apply`, but this free-civil path (`PlayAction`
+    // then `Choose`) never reached it -- the `Choose` charged the build's
+    // resource cost (0 when fully free) and the food was silently dropped.
+    //
+    // The `Choose` that follows charges the build at `build_cost - discount`
+    // (clamped at 0 -- a fully-free build when the discount covers the cost),
+    // so THAT is the resource cost the journal's "spends M resources" clause
+    // refers to; the food on top of it is the converted resource. Gated on
+    // the journal's OWN stated total (`stated_build_payment`,
+    // `total_paid_for_build` + the food clause) matching that charged cost
+    // EXACTLY -- the same self-consistency gate `convert_trade_food_shortfall`
+    // applies internally, surfaced here so a line whose stated total
+    // disagrees (a mispriced cost, a drift) never converts and still
+    // surfaces as the ordinary `IllegalMove` it always has. For a fully-free
+    // build the charged cost is 0, so the gate is `stated == food` -- true
+    // exactly when the WHOLE line's payment is the converted food (game
+    // `7521783` round 3, Bronze + Rich Land discount 2).
+    if let (Move::Build { card }, Some(stated)) = (
+        wanted,
+        stated_build_payment(rest),
+    ) {
+        let charged = costs::build_cost_for(&r.state, &r.state.players[actor as usize], card)
+            .map(|c| (c - discount_card.get().effects.resource_discount as i32).max(0))
+            .unwrap_or(0);
+        // `stated` is the resource cost PLUS the food; `charged` is the
+        // resource cost alone (0 for a fully-free build). The food is the
+        // gap between them. Pass the journal's OWN `stated` total as the
+        // `true_cost` `convert_trade_food_shortfall` gates on (it re-checks
+        // `stated == true_cost` internally and then converts exactly the
+        // journal's food clause); gate here on the food being a non-negative
+        // gap so a mispriced cost (drift) never converts and still surfaces
+        // as the ordinary `IllegalMove`.
+        if stated >= charged {
+            convert_trade_food_shortfall(r, actor, rest, stated)?;
+        }
+    }
     r.try_apply(Move::PlayAction { card: discount_card }, true)?;
     match r.state.pending.top() {
         Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::FreeCivil { .. }) => {
@@ -9300,13 +9348,107 @@ fn apply_one(
             // an age. A no-op for every other card (only one age exists).
             let card = best_age_sibling(card, r.state.age_civil);
             let cost = observed_take_cost(raw_text);
-            let slot = r.ground_row_slot(actor, card, Some(cost)).ok_or_else(|| {
-                MismatchKind::ParserGap(format!(
-                    "{}'s take cost per the journal is {cost} civil action(s), but no available \
-                     row slot reproduces that under this binary's own cost formula",
-                    card.get().name
-                ))
-            })?;
+            // A `TakeRow` choice (International Agreement) left open for
+            // `actor` constrains WHICH slot this take may land in: the
+            // choice's own offered `Slot` options are the engine's
+            // affordability+legality view of the row at the moment the
+            // choice was opened, and `ground_row_slot`'s cost-verification
+            // (below) has no way to know that view -- it probes every
+            // ungrounded slot with the journal's own cost and, when the
+            // hand is full at the moment of a mid-session take, the probe
+            // sees `hand_full == false` (the take is what makes the hand
+            // full) and happily names a slot the choice never offered,
+            // corrupting the whole rest of the session (confirmed against
+            // game `7522649` round 15: hand at 5/5, the International
+            // Agreement's re-offer after its first take still listed the
+            // Multimedia slot at the UNDEBITED budget, `ground_row_slot`
+            // cost-verified Multimedia into a cost-1 slot the choice never
+            // offered, and the later "discovers Multimedia" failed with
+            // the card missing from hand). Ground against the choice's OWN
+            // offered slots first; only fall back to the generic
+            // `ground_row_slot` when no such choice is open (the ordinary
+            // `Move::Take` path, where the row is the whole row).
+            let slot = if let Some(Pending::Choice(c)) = r.state.pending.top() {
+                if matches!(c.kind, ChoiceKind::TakeRow { .. }) {
+                    let options = c.options.as_slice();
+                    // Prefer a slot ALREADY grounded to `card` by identity
+                    // (the same trust `ground_row_slot`'s own first branch
+                    // uses), then a slot whose TRUE cost reproduces the
+                    // journal's observed cost under the choice's own
+                    // affordability view (the choice's `can_take` filter is
+                    // already reflected in its option list -- if the slot
+                    // is offered, it is affordable+legal under the choice's
+                    // budget at the moment it was opened), then any offered
+                    // ungrounded slot (the "believe the journal, force the
+                    // slot" fallback `ground_row_slot` itself documents).
+                    let mut chosen: Option<usize> = None;
+                    for (oi, o) in options.iter().enumerate() {
+                        if let ChoiceOption::Slot(s) = o {
+                            if r.row_grounded[*s as usize] && r.state.card_row[*s as usize] == card {
+                                chosen = Some(oi);
+                                break;
+                            }
+                        }
+                    }
+                    if chosen.is_none() {
+                        for (oi, o) in options.iter().enumerate() {
+                            if let ChoiceOption::Slot(s) = o {
+                                let true_cost = costs::take_cost(&r.state, &r.state.players[actor as usize], *s as usize);
+                                if true_cost == cost && !r.row_grounded[*s as usize] {
+                                    r.state.card_row[*s as usize] = card;
+                                    r.row_grounded[*s as usize] = true;
+                                    chosen = Some(oi);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if chosen.is_none() {
+                        for (oi, o) in options.iter().enumerate() {
+                            if let ChoiceOption::Slot(s) = o {
+                                if !r.row_grounded[*s as usize] {
+                                    r.state.card_row[*s as usize] = card;
+                                    r.row_grounded[*s as usize] = true;
+                                    chosen = Some(oi);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    match chosen {
+                        Some(oi) => {
+                            let ChoiceOption::Slot(s) = &options[oi] else {
+                                return Err(MismatchKind::ParserGap(
+                                    "TakeRow choice offered no Slot option for a take".into(),
+                                ));
+                            };
+                            *s
+                        }
+                        None => {
+                            return Err(MismatchKind::ParserGap(format!(
+                                "no open TakeRow choice offers a slot for {} (journal cost {cost})",
+                                card.get().name
+                            )));
+                        }
+                    }
+                } else {
+                    r.ground_row_slot(actor, card, Some(cost)).ok_or_else(|| {
+                        MismatchKind::ParserGap(format!(
+                            "{}'s take cost per the journal is {cost} civil action(s), but no available \
+                             row slot reproduces that under this binary's own cost formula",
+                            card.get().name
+                        ))
+                    })?
+                }
+            } else {
+                r.ground_row_slot(actor, card, Some(cost)).ok_or_else(|| {
+                    MismatchKind::ParserGap(format!(
+                        "{}'s take cost per the journal is {cost} civil action(s), but no available \
+                         row slot reproduces that under this binary's own cost formula",
+                        card.get().name
+                    ))
+                })?
+            };
             // International Agreement's `Pending::Choice(TakeRow)` left open
             // for `actor` (`resolve_intervening`'s `ChoiceKind::TakeRow`
             // handling stopped here on purpose, deferring to this arm, which

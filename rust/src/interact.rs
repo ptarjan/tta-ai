@@ -588,7 +588,31 @@ fn resolve_choice(state: &mut GameState, choice: &Choice, idx: usize) {
                     // handler). Idempotent: setting it again on a second or
                     // third card taken this same session is a no-op.
                     state.players[p as usize].skip_next_politics = true;
-                    offer_take_row(state, p, budget - cost as i16);
+                    // Re-offer with the debited budget: `offer_take_row`
+                    // filters its Slot options through `can_take(..,
+                    // budget)`, and the §2.5 hand limit is one of those
+                    // gates. A hand that is FULL at the moment of a take
+                    // (e.g. 5/5 before the take that just made it 6/7 with
+                    // a leader bonus) still sees the row's remaining cards
+                    // as affordable if their row cost <= the UNDEBITED
+                    // budget -- so without the debit, the re-offer keeps
+                    // offering those slots at a budget the player can no
+                    // longer spend, and the replayer's `ground_row_slot`
+                    // cost-verification silently lands the NEXT taken card
+                    // in the wrong slot (its own journal cost no longer
+                    // matches the slot's true price), corrupting the whole
+                    // rest of the session. Confirmed against game
+                    // `7522649` round 15: hand at 5/5, International
+                    // Agreement took Air Forces (5 -> 6), the re-offer at
+                    // the UNDEBITED budget 5 still listed the Multimedia
+                    // slot (row cost 1), the journal's own "takes
+                    // Multimedia ... 1 civil action" grounded Multimedia
+                    // into a DIFFERENT cost-1 slot, and the later
+                    // "discovers Multimedia" failed with the card missing
+                    // from hand. The debit makes the re-offer's affordability
+                    // reflect reality, so the next take grounds into the
+                    // slot it actually came from.
+                    offer_take_row(state, p, (budget - cost as i16).max(0));
                 }
                 other @ ChoiceOption::Card(_) | other @ ChoiceOption::Move(_) | other @ ChoiceOption::Gain(_) | other @ ChoiceOption::Word(_) => wrong_option(&choice.kind, other),
             }
@@ -915,6 +939,11 @@ fn food_or_res_gain_options(total: i16) -> OptionList {
 /// apply." The §2.5 hand limit is one of those rules, so it gates this take
 /// like any other; RB's only stated exception is wonders, which never enter
 /// the hand.
+///
+/// `budget` is the budget REMAINING when this choice is opened. The caller
+/// MUST have already debited each card taken this session (the Choose
+/// handler below does `budget - cost`); this function only ever re-offers
+/// the choice, it never consumes budget itself.
 fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
     let mut opts = OptionList::new();
     for slot in 0..ROW_SIZE {
@@ -930,6 +959,13 @@ fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
         }
     }
     if opts.is_empty() {
+        // No slot the player may still take (budget exhausted, hand full,
+        // or nothing affordable): close the session and replenish the row
+        // (`finish_take_row`'s own doc). This is the ONLY place a
+        // re-offer with a debited budget can land -- the initial
+        // `budget = N` (International Agreement's card text) always has at
+        // least one affordable slot, or the event itself would have been a
+        // no-op.
         finish_take_row(state);
         return;
     }

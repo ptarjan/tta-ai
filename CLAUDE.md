@@ -40,12 +40,16 @@ rewrites them every few minutes.
 
 ## The only metric that counts
 
-The corpus of 1011 replayed human BGO games. Current: **864 of 1011 complete**, and
-**823 of those 864 also score exactly**. (Exact is a subset of complete, so it is
-always the smaller number; never write the pair as "864/823", which reads as a
-ratio.) Guard list `analysis/guard_ids_863.txt`, one short: it predates 7522322.
-`analysis/guard_exact_818.txt` is five short for the same reason — a `comm -13`
-against it reports those five as wins, not regressions.
+The corpus of 1011 replayed human BGO games. Current: **866 of 1011 complete**, and
+**826 of those 866 also score exactly**. (Exact is a subset of complete, so it is
+always the smaller number; never write the pair as "866/826", which reads as a
+ratio.) Guard lists `analysis/guard_ids_866.txt` and `analysis/guard_exact_826.txt`,
+both frozen from the same sweep as this line — refreeze them together, from one
+sweep, or a later `comm` compares two different engines.
+
+Do not read `replaystats`' own printed total as the corpus figure without checking
+what it counts. An agent reported 871 from a run that measured 866; the five extra
+were the SET-ASIDE games, which are unresolved, not completions won.
 
 A completion bought by *guessing* an unlogged choice is worth less than the error it
 replaced. A `StuckPending` is the report that a mechanic is unmodelled; a fallback
