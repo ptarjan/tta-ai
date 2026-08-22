@@ -88,6 +88,15 @@ A clean build and green tests prove nothing about the engine — verify with the
 in `analysis/GUARD_METHOD.txt`, comparing ID SETS against the frozen guard list,
 never a mean.
 
+**A failing test is evidence, not an obstacle.** If a test asserts the opposite of the
+change you are making, it is the record of a fix someone already measured. Read its
+doc comment and the doc comment of the state it touches before touching it; editing
+the test to match your change deletes the only guard the repo had. `OneTimeDiscount`
+is the standing example and is SETTLED: spending any one of its three candidate
+discounts exhausts ALL THREE (`OneTimeDiscount::exhaust`). The three-independent-grants
+reading of the JSON schema is wrong, was tried, and was disproven on real BGO games —
+see the struct's doc comment in `state.rs`. Do not re-derive it.
+
 **A scoring change is not gated by completions.** A wrong culture total still reaches
 game over, so the completion set can be byte-identical while scores rot — the Impact
 of Population regression moved completions 748 → 748 and exact matches 721 → 580.
