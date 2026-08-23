@@ -108,7 +108,7 @@ async function ocrScanSeam(_imageBlobOrDataUrl) {
   throw new Error('OCR not implemented: this is a stub seam. Fill in to return ' +
     '{ row: [13 card ids or null], rivalStr: N, rivalCulture: N, militaryDraws: [ids] }');
 }
-window.ocrScanSeam = ocrScanSeam;
+if (typeof window !== 'undefined') window.ocrScanSeam = ocrScanSeam;
 
 /* ---------------------------------------------------------------------
  * Card database + fuzzy search
@@ -166,26 +166,119 @@ function searchCards(query, pool) {
 }
 
 /* ---------------------------------------------------------------------
- * State + persistence
+ * Row validation (Task 1). Pure functions, no DOM — run under node too.
+ *
+ * (a) AGE SPAN is a hard block: the civil deck is dealt one age at a
+ *     time, so the row can only ever hold one age, or two adjacent ages
+ *     during a changeover. distinct ages mapped to A=0,I=1,II=2,III=3;
+ *     max-min > 1 is impossible and must not be advised on.
+ * (b) DUPLICATES > 2 copies of the same card id is a WARNING only — two
+ *     copies can legitimately coexist, so this cannot be a hard block,
+ *     and there is no per-card copy limit in cards.json to check against.
  * ------------------------------------------------------------------- */
-const STORAGE_KEY = 'ttaapp_state_v1';
+const AGE_ORDER = ['A', 'I', 'II', 'III'];
+
+function validateRow(row, cardsById) {
+  const present = [];
+  row.forEach((id, i) => {
+    if (!id) return;
+    const card = cardsById.get(id);
+    if (!card) return; // unknown id: nothing to validate against, ignore
+    present.push({ i, id, card });
+  });
+
+  const result = { ageIssue: null, dupIssue: null };
+
+  // --- (a) age span ---
+  if (present.length) {
+    const values = [...new Set(present.map((p) => AGE_ORDER.indexOf(p.card.age)))].filter((v) => v >= 0);
+    if (values.length) {
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      if (max - min > 1) {
+        const counts = new Map();
+        present.forEach((p) => {
+          const v = AGE_ORDER.indexOf(p.card.age);
+          counts.set(v, (counts.get(v) || 0) + 1);
+        });
+        // Majority age = the age holding the most cards in the row (ties -> lowest age wins).
+        // Everything more than one age-step away from it is the outlier group.
+        let majority = min;
+        let majorityCount = -1;
+        [...counts.keys()].sort((a, b) => a - b).forEach((v) => {
+          const c = counts.get(v);
+          if (c > majorityCount) { majorityCount = c; majority = v; }
+        });
+        const outliers = present.filter((p) => Math.abs(AGE_ORDER.indexOf(p.card.age) - majority) > 1);
+        const outlierNames = [...new Set(outliers.map((p) => p.card.display))];
+        const outlierAges = [...new Set(outliers.map((p) => p.card.age))];
+        const majorityAge = AGE_ORDER[majority];
+        result.ageIssue = {
+          message: `${outlierNames.join(', ')} ${outlierNames.length > 1 ? 'are' : 'is'} age ${outlierAges.join('/')} ` +
+            `but the rest of the row is age ${majorityAge} — the row can only hold one age or two adjacent ages.`,
+          outliers: outliers.map((p) => p.i),
+        };
+      }
+    }
+  }
+
+  // --- (b) duplicates ---
+  const idCounts = new Map();
+  present.forEach((p) => idCounts.set(p.id, (idCounts.get(p.id) || 0) + 1));
+  const dups = [...idCounts.entries()]
+    .filter(([, n]) => n > 2)
+    .map(([id, n]) => ({ id, n, display: cardsById.get(id).display }));
+  if (dups.length) {
+    result.dupIssue = {
+      message: dups.map((d) => `${d.display} ×${d.n}`).join(', ') +
+        (dups.length > 1 ? ' appear more than twice in the row.' : ' appears more than twice in the row.'),
+      dups,
+    };
+  }
+
+  return result;
+}
+
+/* ---------------------------------------------------------------------
+ * State + persistence
+ *
+ * v2: row removal is now expressed as "which slots are gone" instead of
+ * "how many fell off the left" (dropCount could not express the rival
+ * taking a card out of the middle, which happens constantly). Key is
+ * bumped so a stale v1 save is never misread as the new shape.
+ * ------------------------------------------------------------------- */
+const STORAGE_KEY = 'ttaapp_state_v2';
+
+function freshFlow() {
+  return {
+    step: 'gone', // gone | new | rival | military | blocked | dupConfirm | thinking | advice | fullrow
+    goneSlots: [],
+    newCards: [],
+    newIndex: 0,
+    rivalStr: 0,
+    rivalCulture: 0,
+    militaryDrafted: false,
+    militaryCards: [],
+    dupConfirmed: false,
+    candidateRow: null,
+    blockMessage: '',
+    dupMessage: '',
+    fullRowDraft: null,
+    fullRowCursor: 0,
+  };
+}
 
 function freshState() {
   return {
-    v: 1,
+    v: 2,
     row: new Array(13).fill(null),
-    dropCount: 0,
-    pendingNew: [],
-    pendingMilitary: [],
-    hand: { civil: [], military: [] },
-    playedTotal: 0,
-    takenTotal: 0,
     rival: { str: 0, culture: 0 },
     seed: Math.floor(Math.random() * 1e9),
     wasmState: null,
     moves: [],
     positionText: '',
     history: [],
+    flow: freshFlow(),
   };
 }
 
@@ -198,9 +291,11 @@ function save() {
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) { /* ignore corrupt state */ }
-  return null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.v !== 2 || !parsed.flow) return null; // reject anything not shaped like v2
+    return parsed;
+  } catch (e) { return null; }
 }
 
 function snapshotForUndo() {
@@ -220,163 +315,456 @@ function undo() {
 }
 
 /* ---------------------------------------------------------------------
- * DOM refs
+ * DOM refs — resolved lazily in cacheDom() (called from boot), never at
+ * module load time, so this file can be `require()`d under node for the
+ * pure functions above without touching `document`.
  * ------------------------------------------------------------------- */
 const $ = (id) => document.getElementById(id);
-const el = {
-  banner: $('fakeBanner'),
-  stats: $('stats'),
-  takenPlayed: $('takenPlayed'),
-  undoBtn: $('undoBtn'),
-  newGameBtn: $('newGameBtn'),
-  rowStrip: $('rowStrip'),
-  dropMinus: $('dropMinus'),
-  dropPlus: $('dropPlus'),
-  dropCount: $('dropCount'),
-  dropPreview: $('dropPreview'),
-  fullRowBtn: $('fullRowBtn'),
-  newCardInput: $('newCardInput'),
-  newCardSuggest: $('newCardSuggest'),
-  newCardChips: $('newCardChips'),
-  milCardInput: $('milCardInput'),
-  milCardSuggest: $('milCardSuggest'),
-  milCardChips: $('milCardChips'),
-  strMinus: $('strMinus'), strPlus: $('strPlus'), strVal: $('strVal'),
-  cultMinus: $('cultMinus'), cultPlus: $('cultPlus'), cultVal: $('cultVal'),
-  applyBtn: $('applyBtn'),
-  adviceTop: $('adviceTop'),
-  adviceRest: $('adviceRest'),
-  handChips: $('handChips'),
-  fullRowModal: $('fullRowModal'),
-  fullRowSlots: $('fullRowSlots'),
-  fullRowInput: $('fullRowInput'),
-  fullRowSuggest: $('fullRowSuggest'),
-  fullRowEmpty: $('fullRowEmpty'),
-  fullRowCancel: $('fullRowCancel'),
-  fullRowDone: $('fullRowDone'),
-};
+const el = {};
 
-let dropMode = false; // when true, tapping a row chip sets dropCount instead of taking
+function cacheDom() {
+  el.banner = $('fakeBanner');
+  el.stats = $('stats');
+  el.handToggleBtn = $('handToggleBtn');
+  el.undoBtn = $('undoBtn');
+  el.newGameBtn = $('newGameBtn');
+  el.stepArea = $('stepArea');
+  el.handPanel = $('handPanel');
+  el.handChips = $('handChips');
+  el.handCloseBtn = $('handCloseBtn');
+}
 
 /* ---------------------------------------------------------------------
- * Rendering
+ * Small DOM builder helpers
+ * ------------------------------------------------------------------- */
+function makeBtn(label, cls, onClick) {
+  const b = document.createElement('button');
+  b.className = 'btn ' + cls;
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function makeStepper(label, value, onChange) {
+  const wrap = document.createElement('label');
+  wrap.className = 'stepperLabel';
+  wrap.textContent = label;
+  const stepper = document.createElement('div');
+  stepper.className = 'stepper';
+  stepper.appendChild(makeBtn('−', 'stepbtn', () => onChange(Math.max(0, value - 1))));
+  const span = document.createElement('span');
+  span.textContent = value;
+  stepper.appendChild(span);
+  stepper.appendChild(makeBtn('+', 'stepbtn', () => onChange(value + 1)));
+  wrap.appendChild(stepper);
+  return wrap;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function slotCostLabel(i) {
+  return i < 5 ? '1 CA' : i < 9 ? '2 CA' : '3 CA';
+}
+
+/* ---------------------------------------------------------------------
+ * Top chrome (always visible) + hand panel (toggle)
  * ------------------------------------------------------------------- */
 function renderAll() {
   el.banner.classList.toggle('hidden', !Engine.usingStub);
   el.stats.textContent = state.positionText || 'round – · age – · CA – MA – food – res – sci –';
-
-  const gap = state.takenTotal - state.playedTotal;
-  el.takenPlayed.textContent = `taken ${state.takenTotal} / played ${state.playedTotal}`;
-  el.takenPlayed.classList.toggle('warn', gap >= 3);
-
-  renderRow();
-  renderChipList(el.newCardChips, state.pendingNew, 'new', removePendingNew);
-  renderChipList(el.milCardChips, state.pendingMilitary, 'mil', removePendingMilitary);
-
-  el.dropCount.textContent = state.dropCount;
-  el.strVal.textContent = state.rival.str;
-  el.cultVal.textContent = state.rival.culture;
-
-  renderAdvice();
-  renderHand();
+  renderHandPanel();
+  el.stepArea.innerHTML = '';
+  renderStep(el.stepArea);
   save();
 }
 
-function renderRow() {
-  el.rowStrip.innerHTML = '';
-  state.row.forEach((id, i) => {
-    const div = document.createElement('div');
-    div.className = 'slotChip' + (id ? '' : ' empty') + (dropMode && i < state.dropCount ? ' dropping' : '');
-    div.innerHTML = `<span class="slotNum">slot ${i + 1}</span><span>${cardDisplay(id)}</span>`;
-    div.addEventListener('click', () => onRowChipTap(i));
-    el.rowStrip.appendChild(div);
-  });
-  const dropped = state.row.slice(0, state.dropCount).map(cardDisplay).filter((n) => n !== '.');
-  el.dropPreview.textContent = state.dropCount
-    ? `removing from left: ${dropped.length ? dropped.join(', ') : '(all empty slots)'}`
-    : '';
+/* The engine already tracks the hand: it auto-plays the whole turn, and the
+   board dump it hands back in `state` carries the surviving cards. So the hand
+   is READ from that dump rather than mirrored in app state -- a second copy
+   here could only ever drift out of step with the one the advisor reasons
+   over, and there is nothing the user would have to remember to tap. */
+function handFromEngine() {
+  const line = (state.wasmState || '').split('\n').find((l) => l.startsWith('p0 hand '));
+  if (!line) return { civil: [], military: [] };
+  const [civilTxt, milTxt] = line.slice('p0 hand '.length).split('|');
+  const names = (t) => (t || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return { civil: names(civilTxt), military: names(milTxt) };
 }
 
-function onRowChipTap(i) {
-  if (dropMode) {
-    state.dropCount = i;
-    renderAll();
-    return;
-  }
-  const id = state.row[i];
-  if (!id) return;
-  snapshotForUndo();
-  state.row.splice(i, 1);
-  state.row.push(null);
-  state.hand.civil.push(id);
-  state.takenTotal += 1;
-  renderAll();
-}
-
-function renderChipList(container, ids, kind, onRemove) {
-  container.innerHTML = '';
-  ids.forEach((id, i) => {
-    const chip = document.createElement('div');
-    chip.className = 'chip' + (kind === 'mil' ? ' mil' : '');
-    chip.innerHTML = `${cardDisplay(id)}<span class="x">×</span>`;
-    chip.addEventListener('click', () => onRemove(i));
-    container.appendChild(chip);
-  });
-}
-
-function removePendingNew(i) { state.pendingNew.splice(i, 1); renderAll(); }
-function removePendingMilitary(i) { state.pendingMilitary.splice(i, 1); renderAll(); }
-
-function renderAdvice() {
-  const moves = state.moves || [];
-  if (!moves.length) {
-    el.adviceTop.textContent = 'no advice yet — apply a turn';
-    el.adviceRest.innerHTML = '';
-    return;
-  }
-  // The engine auto-plays the whole turn and reports the moves it PLAYED, in
-  // order -- these are consecutive steps, not alternatives to choose between.
-  // Rendering move 2 as a runner-up would read as "or do this instead" and
-  // lose the rest of the turn, so every step is shown, numbered, all of them.
-  // Scores are 0.0 by construction (each move was the top candidate at its own
-  // decision point), so there is nothing informative to display.
-  const top = moves[0];
-  el.adviceTop.innerHTML = `<span class="step">1</span>${top.text}` +
-    (top.detail ? `<span class="detail">${top.detail}</span>` : '');
-  el.adviceRest.innerHTML = '';
-  moves.slice(1).forEach((m, i) => {
-    const div = document.createElement('div');
-    div.className = 'move';
-    div.innerHTML = `<span class="step">${i + 2}</span>${m.text}` +
-      (m.detail ? `<span class="detail">${m.detail}</span>` : '');
-    el.adviceRest.appendChild(div);
-  });
-}
-
-function renderHand() {
+function renderHandPanel() {
   el.handChips.innerHTML = '';
-  const addGroup = (ids, kind) => {
-    ids.forEach((id, i) => {
+  const hand = handFromEngine();
+  const addGroup = (names, kind) => {
+    names.forEach((name) => {
       const chip = document.createElement('div');
       chip.className = 'chip' + (kind === 'military' ? ' mil' : '');
-      chip.textContent = cardDisplay(id);
-      chip.addEventListener('click', () => markPlayed(kind, i));
+      chip.textContent = name;
       el.handChips.appendChild(chip);
     });
   };
-  addGroup(state.hand.civil, 'civil');
-  addGroup(state.hand.military, 'military');
-}
-
-function markPlayed(kind, i) {
-  snapshotForUndo();
-  const [id] = state.hand[kind].splice(i, 1);
-  if (kind === 'civil') state.playedTotal += 1;
-  renderAll();
+  addGroup(hand.civil, 'civil');
+  addGroup(hand.military, 'military');
+  if (!hand.civil.length && !hand.military.length) {
+    const empty = document.createElement('div');
+    empty.className = 'stepSub';
+    empty.textContent = 'nothing in hand';
+    el.handChips.appendChild(empty);
+  }
 }
 
 /* ---------------------------------------------------------------------
- * Autocomplete wiring
+ * Step router (Task 2): exactly one question on screen at a time.
+ * ------------------------------------------------------------------- */
+function renderStep(container) {
+  switch (state.flow.step) {
+    case 'gone': return renderGoneStep(container);
+    case 'new': return renderNewStep(container);
+    case 'rival': return renderRivalStep(container);
+    case 'military': return renderMilitaryStep(container);
+    case 'blocked': return renderBlockedStep(container);
+    case 'dupConfirm': return renderDupConfirmStep(container);
+    case 'thinking': return renderThinkingStep(container);
+    case 'advice': return renderAdviceStep(container);
+    case 'fullrow': return renderFullRowStep(container);
+    default: return renderGoneStep(container);
+  }
+}
+
+// STEP 1 — mark which of the 13 slots are gone (taken by anyone, or swept
+// off at an age change). Replaces the old "N fell off the left" stepper,
+// which could not express a card leaving from the middle of the row.
+function renderGoneStep(container) {
+  container.appendChild(makeTitle('Tap the cards that are gone.'));
+  container.appendChild(makeSub('Rival took one, you took one, or the age changed and it aged off — doesn\'t matter which.'));
+
+  const grid = document.createElement('div');
+  grid.className = 'slotGrid';
+  state.row.forEach((id, i) => {
+    const div = document.createElement('div');
+    const isGone = state.flow.goneSlots.includes(i);
+    div.className = 'slotChip' + (id ? '' : ' empty') + (isGone ? ' gone' : '');
+    div.innerHTML = `<span class="slotNum">slot ${i + 1} · ${slotCostLabel(i)}</span><span>${cardDisplay(id)}</span>`;
+    div.addEventListener('click', () => {
+      const idx = state.flow.goneSlots.indexOf(i);
+      if (idx === -1) state.flow.goneSlots.push(i); else state.flow.goneSlots.splice(idx, 1);
+      renderAll();
+    });
+    grid.appendChild(div);
+  });
+  container.appendChild(grid);
+
+  const goneCount = state.flow.goneSlots.length;
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btnRow';
+  btnRow.appendChild(makeBtn(goneCount === 0 ? 'Nothing left the row →' : `Continue (${goneCount} gone) →`, 'primary big', () => {
+    if (goneCount === 0) {
+      goToRival();
+    } else {
+      state.flow.newCards = new Array(goneCount).fill(null);
+      state.flow.newIndex = 0;
+      state.flow.step = 'new';
+      renderAll();
+    }
+  }));
+  container.appendChild(btnRow);
+
+  const escRow = document.createElement('div');
+  escRow.className = 'btnRow';
+  escRow.appendChild(makeBtn('Re-enter whole row', 'small', () => openFullRow()));
+  container.appendChild(escRow);
+}
+
+// STEP 2 — name the N new cards, one at a time. Skipped entirely if N is 0
+// (handled by the "Nothing left the row" branch above never routing here).
+function renderNewStep(container) {
+  const N = state.flow.newCards.length;
+  const i = state.flow.newIndex;
+
+  container.appendChild(makeTitle(`New card ${i + 1} of ${N}`));
+  container.appendChild(makeSub('The row always refills to 13 from the right.'));
+
+  const { input, suggest } = makeAutocompleteRow('type card name');
+  container.appendChild(input.wrap);
+  setupAutocomplete(input.el, suggest, () => ROW_POOL, (c) => {
+    state.flow.newCards[i] = c.id;
+    advanceNew();
+  });
+  input.el.focus();
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btnRow';
+  btnRow.appendChild(makeBtn('Slot stayed empty (deck ran dry)', 'small', () => { state.flow.newCards[i] = null; advanceNew(); }));
+  container.appendChild(btnRow);
+
+  const navRow = document.createElement('div');
+  navRow.className = 'btnRow';
+  navRow.appendChild(makeBtn('← Back', 'small', () => {
+    if (i > 0) { state.flow.newIndex--; } else { state.flow.step = 'gone'; }
+    renderAll();
+  }));
+  container.appendChild(navRow);
+}
+
+function advanceNew() {
+  const N = state.flow.newCards.length;
+  if (state.flow.newIndex + 1 < N) {
+    state.flow.newIndex++;
+    renderAll();
+  } else {
+    goToRival();
+  }
+}
+
+// STEP 3 — rival strength + culture, prefilled, one tap through if unchanged.
+function renderRivalStep(container) {
+  container.appendChild(makeTitle('Rival strength and culture.'));
+
+  const unchanged = state.flow.rivalStr === state.rival.str && state.flow.rivalCulture === state.rival.culture;
+
+  const row = document.createElement('div');
+  row.className = 'rivalRow';
+  row.appendChild(makeStepper('Rival strength', state.flow.rivalStr, (v) => { state.flow.rivalStr = v; renderAll(); }));
+  row.appendChild(makeStepper('Rival culture', state.flow.rivalCulture, (v) => { state.flow.rivalCulture = v; renderAll(); }));
+  container.appendChild(row);
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btnRow';
+  btnRow.appendChild(makeBtn(unchanged ? 'Unchanged →' : 'Continue →', 'primary big', () => {
+    state.rival.str = state.flow.rivalStr;
+    state.rival.culture = state.flow.rivalCulture;
+    goToMilitary();
+  }));
+  container.appendChild(btnRow);
+
+  const navRow = document.createElement('div');
+  navRow.className = 'btnRow';
+  navRow.appendChild(makeBtn('← Back', 'small', () => {
+    if (state.flow.newCards.length) { state.flow.newIndex = state.flow.newCards.length - 1; state.flow.step = 'new'; }
+    else { state.flow.step = 'gone'; }
+    renderAll();
+  }));
+  container.appendChild(navRow);
+}
+
+// STEP 4 — military draw, default No, type-ahead hidden until Yes.
+function renderMilitaryStep(container) {
+  container.appendChild(makeTitle('Did you draw a military card?'));
+
+  if (!state.flow.militaryDrafted) {
+    const btnRow = document.createElement('div');
+    btnRow.className = 'btnRow';
+    btnRow.appendChild(makeBtn('No', 'primary big', () => proceedToValidation()));
+    btnRow.appendChild(makeBtn('Yes', 'big', () => { state.flow.militaryDrafted = true; renderAll(); }));
+    container.appendChild(btnRow);
+  } else {
+    const { input, suggest } = makeAutocompleteRow('military card drawn this turn');
+    container.appendChild(input.wrap);
+    setupAutocomplete(input.el, suggest, () => MIL_POOL, (c) => { state.flow.militaryCards.push(c.id); renderAll(); });
+    input.el.focus();
+
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    state.flow.militaryCards.forEach((id, idx) => {
+      const chip = document.createElement('div');
+      chip.className = 'chip mil';
+      chip.innerHTML = `${cardDisplay(id)}<span class="x">×</span>`;
+      chip.addEventListener('click', () => { state.flow.militaryCards.splice(idx, 1); renderAll(); });
+      chips.appendChild(chip);
+    });
+    container.appendChild(chips);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'btnRow';
+    btnRow.appendChild(makeBtn('Continue →', 'primary big', () => proceedToValidation()));
+    btnRow.appendChild(makeBtn('Actually, no card', 'small', () => { state.flow.militaryDrafted = false; state.flow.militaryCards = []; renderAll(); }));
+    container.appendChild(btnRow);
+  }
+
+  const navRow = document.createElement('div');
+  navRow.className = 'btnRow';
+  navRow.appendChild(makeBtn('← Back', 'small', () => { state.flow.step = 'rival'; renderAll(); }));
+  container.appendChild(navRow);
+}
+
+// Hard block (Task 1a) — cannot proceed until the row is fixed.
+function renderBlockedStep(container) {
+  container.appendChild(makeTitle('That row is not legal.', 'bad'));
+  const msg = document.createElement('div');
+  msg.className = 'msgBox bad';
+  msg.textContent = state.flow.blockMessage;
+  container.appendChild(msg);
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btnRow';
+  btnRow.appendChild(makeBtn('Back to step 1 →', 'primary big', () => { state.flow.step = 'gone'; renderAll(); }));
+  container.appendChild(btnRow);
+}
+
+// Soft warning (Task 1b) — one confirming tap and it proceeds.
+function renderDupConfirmStep(container) {
+  container.appendChild(makeTitle('Double check the row.', 'warn'));
+  const msg = document.createElement('div');
+  msg.className = 'msgBox warn';
+  msg.textContent = state.flow.dupMessage;
+  container.appendChild(msg);
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btnRow';
+  btnRow.appendChild(makeBtn("Yes, that's right → Advise", 'primary big', () => {
+    state.flow.dupConfirmed = true;
+    finalizeTurn(state.flow.candidateRow);
+  }));
+  container.appendChild(btnRow);
+  const navRow = document.createElement('div');
+  navRow.className = 'btnRow';
+  navRow.appendChild(makeBtn('← Back', 'small', () => { state.flow.step = 'military'; renderAll(); }));
+  container.appendChild(navRow);
+}
+
+function renderThinkingStep(container) {
+  container.appendChild(makeTitle('Thinking…'));
+}
+
+// Advice, full-screen, nothing else competing for space.
+function renderAdviceStep(container) {
+  container.appendChild(makeTitle('Advice'));
+
+  const moves = state.moves || [];
+  if (!moves.length) {
+    container.appendChild(makeSub('no advice yet'));
+  } else {
+    const top = moves[0];
+    const topDiv = document.createElement('div');
+    topDiv.className = 'adviceTop';
+    topDiv.innerHTML = `<span class="step">1</span>${escapeHtml(top.text)}` +
+      (top.detail ? `<span class="detail">${escapeHtml(top.detail)}</span>` : '');
+    container.appendChild(topDiv);
+
+    const rest = document.createElement('div');
+    rest.className = 'adviceRest';
+    moves.slice(1).forEach((m, i) => {
+      const div = document.createElement('div');
+      div.className = 'move';
+      div.innerHTML = `<span class="step">${i + 2}</span>${escapeHtml(m.text)}` +
+        (m.detail ? `<span class="detail">${escapeHtml(m.detail)}</span>` : '');
+      rest.appendChild(div);
+    });
+    container.appendChild(rest);
+  }
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btnRow';
+  btnRow.appendChild(makeBtn('Start next turn →', 'primary big', () => { resetFlowForNewTurn(); renderAll(); }));
+  container.appendChild(btnRow);
+}
+
+// Full 13-slot entry — turn 1, or a resync after losing track. Reuses the
+// same "card N of 13" one-at-a-time heading as step 2.
+function renderFullRowStep(container) {
+  const draft = state.flow.fullRowDraft;
+  const cursor = state.flow.fullRowCursor;
+
+  container.appendChild(makeTitle(`Card ${cursor + 1} of 13`));
+  container.appendChild(makeSub('Enter the row left to right — slot 1 is the cheapest to take.'));
+
+  const grid = document.createElement('div');
+  grid.className = 'slotGrid mini';
+  draft.forEach((id, i) => {
+    const div = document.createElement('div');
+    div.className = 'slotChip' + (id ? '' : ' empty') + (i === cursor ? ' current' : '');
+    div.innerHTML = `<span class="slotNum">${i + 1}</span><span>${cardDisplay(id)}</span>`;
+    div.addEventListener('click', () => { state.flow.fullRowCursor = i; renderAll(); });
+    grid.appendChild(div);
+  });
+  container.appendChild(grid);
+
+  const { input, suggest } = makeAutocompleteRow('type card, Enter to place');
+  container.appendChild(input.wrap);
+  setupAutocomplete(input.el, suggest, () => ROW_POOL, (c) => { draft[cursor] = c.id; fullRowAdvance(); });
+  input.el.focus();
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'btnRow';
+  btnRow.appendChild(makeBtn('Slot is empty', 'small', () => { draft[cursor] = null; fullRowAdvance(); }));
+  btnRow.appendChild(makeBtn('← Back', 'small', () => { state.flow.fullRowCursor = Math.max(0, cursor - 1); renderAll(); }));
+  container.appendChild(btnRow);
+
+  const navRow = document.createElement('div');
+  navRow.className = 'btnRow';
+  navRow.appendChild(makeBtn('Cancel', 'small', () => { state.flow.step = 'gone'; renderAll(); }));
+  navRow.appendChild(makeBtn('Done →', 'primary', () => finishFullRow()));
+  container.appendChild(navRow);
+}
+
+function fullRowAdvance() {
+  const draft = state.flow.fullRowDraft;
+  const cursor = state.flow.fullRowCursor;
+  if (cursor >= 12) { finishFullRow(); return; }
+  const next = draft.findIndex((x, i) => i > cursor && x === null);
+  state.flow.fullRowCursor = next !== -1 ? next : cursor + 1;
+  renderAll();
+}
+
+function finishFullRow() {
+  state.row = state.flow.fullRowDraft.slice(0, 13);
+  while (state.row.length < 13) state.row.push(null);
+  goToRival();
+}
+
+function makeTitle(text, cls) {
+  const div = document.createElement('div');
+  div.className = 'stepTitle' + (cls ? ' ' + cls : '');
+  div.textContent = text;
+  return div;
+}
+
+function makeSub(text) {
+  const div = document.createElement('div');
+  div.className = 'stepSub';
+  div.textContent = text;
+  return div;
+}
+
+function makeAutocompleteRow(placeholder) {
+  const wrap = document.createElement('div');
+  wrap.className = 'addRow';
+  const inputEl = document.createElement('input');
+  inputEl.type = 'text';
+  inputEl.placeholder = placeholder;
+  inputEl.autocomplete = 'off';
+  inputEl.autocapitalize = 'off';
+  inputEl.autocorrect = 'off';
+  inputEl.spellcheck = false;
+  const suggest = document.createElement('div');
+  suggest.className = 'suggest hidden';
+  wrap.appendChild(inputEl);
+  wrap.appendChild(suggest);
+  return { input: { el: inputEl, wrap }, suggest };
+}
+
+/* ---------------------------------------------------------------------
+ * Step transitions between the four questions
+ * ------------------------------------------------------------------- */
+function goToRival() {
+  state.flow.rivalStr = state.rival.str;
+  state.flow.rivalCulture = state.rival.culture;
+  state.flow.step = 'rival';
+  renderAll();
+}
+
+function goToMilitary() {
+  state.flow.step = 'military';
+  renderAll();
+}
+
+function resetFlowForNewTurn() {
+  const step = freshFlow();
+  Object.assign(state.flow, step);
+}
+
+/* ---------------------------------------------------------------------
+ * Autocomplete wiring (unchanged contract; called fresh per render since
+ * step screens rebuild their DOM each time)
  * ------------------------------------------------------------------- */
 function setupAutocomplete(input, suggestEl, poolGetter, onCommit) {
   let current = [];
@@ -410,7 +798,7 @@ function setupAutocomplete(input, suggestEl, poolGetter, onCommit) {
 }
 
 /* ---------------------------------------------------------------------
- * Turn commit + advisor call
+ * Row assembly + validation gate + advisor call
  * ------------------------------------------------------------------- */
 function buildRowLine(row) {
   const slots = row.slice(0, 13);
@@ -418,22 +806,53 @@ function buildRowLine(row) {
   return 'row ' + slots.map(cardDisplay).join(', ');
 }
 
-async function applyTurn(newRow) {
-  snapshotForUndo();
+// Cards leave from anywhere (gone slots), the rest slide left, and exactly
+// as many new cards arrive on the right to refill to 13.
+function computeNewRowFromFlow() {
+  const kept = state.row.filter((_, i) => !state.flow.goneSlots.includes(i));
+  const combined = kept.concat(state.flow.newCards);
+  while (combined.length < 13) combined.push(null);
+  return combined.slice(0, 13);
+}
 
+function proceedToValidation() {
+  const newRow = computeNewRowFromFlow();
+  state.flow.candidateRow = newRow;
+  const result = validateRow(newRow, CARDS_BY_ID);
+
+  if (result.ageIssue) {
+    state.flow.step = 'blocked';
+    state.flow.blockMessage = result.ageIssue.message;
+    renderAll();
+    return;
+  }
+  if (result.dupIssue && !state.flow.dupConfirmed) {
+    state.flow.step = 'dupConfirm';
+    state.flow.dupMessage = result.dupIssue.message;
+    renderAll();
+    return;
+  }
+  finalizeTurn(newRow);
+}
+
+async function finalizeTurn(newRow) {
+  state.flow.step = 'thinking';
+  renderAll();
+
+  snapshotForUndo();
   state.row = newRow.slice(0, 13);
   while (state.row.length < 13) state.row.push(null);
 
-  if (state.pendingMilitary.length) {
-    state.hand.military.push(...state.pendingMilitary);
-  }
-
   const lines = [buildRowLine(state.row)];
   lines.push(`p1 str=${state.rival.str} c=${state.rival.culture}`);
-  if (state.pendingMilitary.length) {
-    const civilNames = state.hand.civil.map(cardDisplay).join(', ');
-    const milNames = state.hand.military.map(cardDisplay).join(', ');
-    lines.push(`p0 hand ${civilNames} | ${milNames}`);
+  // A military draw is the one thing the engine cannot deduce -- the card comes
+  // off a face-down deck. `p0 hand` REPLACES both halves of the hand, so the
+  // civil side has to be re-stated verbatim from the engine's own dump or the
+  // line silently empties a hand the advisor was counting on.
+  if (state.flow.militaryCards.length) {
+    const hand = handFromEngine();
+    const military = hand.military.concat(state.flow.militaryCards.map(cardDisplay));
+    lines.push(`p0 hand ${hand.civil.join(', ')} | ${military.join(', ')}`);
   }
 
   const request = {
@@ -444,8 +863,6 @@ async function applyTurn(newRow) {
     lines,
   };
 
-  el.applyBtn.disabled = true;
-  el.applyBtn.textContent = 'thinking…';
   try {
     const resp = await Engine.advise(request);
     if (resp && resp.ok) {
@@ -458,13 +875,8 @@ async function applyTurn(newRow) {
   } catch (e) {
     state.moves = [{ text: 'advisor call failed: ' + e.message, score: 0, detail: '' }];
   }
-  el.applyBtn.disabled = false;
-  el.applyBtn.textContent = 'Apply turn & advise';
 
-  state.pendingNew = [];
-  state.pendingMilitary = [];
-  state.dropCount = 0;
-  dropMode = false;
+  state.flow.step = 'advice';
   renderAll();
 }
 
@@ -478,40 +890,21 @@ function formatPosition(p) {
 }
 
 /* ---------------------------------------------------------------------
- * Full-row modal (turn 1 / full resync escape hatch)
+ * Full-row entry (turn 1 / resync escape hatch)
  * ------------------------------------------------------------------- */
-let fullRowDraft = [];
-let fullRowCursor = 0;
-
-function openFullRowModal() {
-  fullRowDraft = state.row.slice(0, 13);
-  while (fullRowDraft.length < 13) fullRowDraft.push(null);
-  fullRowCursor = fullRowDraft.findIndex((x) => x === null);
-  if (fullRowCursor === -1) fullRowCursor = 0;
-  renderFullRowSlots();
-  el.fullRowModal.classList.remove('hidden');
-  el.fullRowInput.value = '';
-  el.fullRowInput.focus();
-}
-
-function renderFullRowSlots() {
-  el.fullRowSlots.innerHTML = '';
-  fullRowDraft.forEach((id, i) => {
-    const div = document.createElement('div');
-    div.className = 'slotChip' + (id ? '' : ' empty') + (i === fullRowCursor ? ' taken' : '');
-    div.innerHTML = `<span class="slotNum">${i + 1}</span><span>${cardDisplay(id)}</span>`;
-    div.addEventListener('click', () => { fullRowCursor = i; renderFullRowSlots(); });
-    el.fullRowSlots.appendChild(div);
-  });
-}
-
-function fullRowAdvanceCursor() {
-  const next = fullRowDraft.findIndex((x, i) => i > fullRowCursor && x === null);
-  fullRowCursor = next !== -1 ? next : Math.min(fullRowCursor + 1, 12);
+function openFullRow() {
+  state.flow.step = 'fullrow';
+  state.flow.fullRowDraft = state.row.slice(0, 13);
+  while (state.flow.fullRowDraft.length < 13) state.flow.fullRowDraft.push(null);
+  const cursor = state.flow.fullRowDraft.findIndex((x) => x === null);
+  state.flow.fullRowCursor = cursor === -1 ? 0 : cursor;
+  renderAll();
 }
 
 /* ---------------------------------------------------------------------
- * Wire everything up
+ * Wire everything up — only the always-present chrome buttons; every
+ * per-step control is wired inline when that step's DOM is built, since
+ * the step screens are rebuilt from scratch on every render.
  * ------------------------------------------------------------------- */
 function wireUI() {
   el.undoBtn.addEventListener('click', undo);
@@ -520,55 +913,18 @@ function wireUI() {
     if (!confirm('Start a new game? This clears the current session.')) return;
     state = freshState();
     save();
-    renderAll();
-    openFullRowModal();
+    openFullRow();
   });
 
-  el.dropMinus.addEventListener('click', () => { state.dropCount = Math.max(0, state.dropCount - 1); dropMode = true; renderAll(); });
-  el.dropPlus.addEventListener('click', () => { state.dropCount = Math.min(13, state.dropCount + 1); dropMode = true; renderAll(); });
-
-  el.fullRowBtn.addEventListener('click', openFullRowModal);
-
-  setupAutocomplete(el.newCardInput, el.newCardSuggest, () => ROW_POOL, (c) => {
-    state.pendingNew.push(c.id);
-    renderAll();
-  });
-  setupAutocomplete(el.milCardInput, el.milCardSuggest, () => MIL_POOL, (c) => {
-    state.pendingMilitary.push(c.id);
-    renderAll();
-  });
-  setupAutocomplete(el.fullRowInput, el.fullRowSuggest, () => ROW_POOL, (c) => {
-    fullRowDraft[fullRowCursor] = c.id;
-    fullRowAdvanceCursor();
-    renderFullRowSlots();
-  });
-
-  el.strMinus.addEventListener('click', () => { state.rival.str = Math.max(0, state.rival.str - 1); renderAll(); });
-  el.strPlus.addEventListener('click', () => { state.rival.str += 1; renderAll(); });
-  el.cultMinus.addEventListener('click', () => { state.rival.culture = Math.max(0, state.rival.culture - 1); renderAll(); });
-  el.cultPlus.addEventListener('click', () => { state.rival.culture += 1; renderAll(); });
-
-  el.applyBtn.addEventListener('click', () => {
-    const newRow = state.row.slice(state.dropCount).concat(state.pendingNew);
-    applyTurn(newRow);
-  });
-
-  el.fullRowEmpty.addEventListener('click', () => {
-    fullRowDraft[fullRowCursor] = null;
-    fullRowAdvanceCursor();
-    renderFullRowSlots();
-  });
-  el.fullRowCancel.addEventListener('click', () => el.fullRowModal.classList.add('hidden'));
-  el.fullRowDone.addEventListener('click', () => {
-    el.fullRowModal.classList.add('hidden');
-    applyTurn(fullRowDraft);
-  });
+  el.handToggleBtn.addEventListener('click', () => el.handPanel.classList.toggle('hidden'));
+  el.handCloseBtn.addEventListener('click', () => el.handPanel.classList.add('hidden'));
 }
 
 /* ---------------------------------------------------------------------
  * Boot
  * ------------------------------------------------------------------- */
 async function boot() {
+  cacheDom();
   await loadCards();
   await Engine.init();
   const restored = load();
@@ -576,7 +932,17 @@ async function boot() {
   wireUI();
   renderAll();
   const hasAnyCard = state.row.some((x) => x);
-  if (!hasAnyCard && !state.moves.length) openFullRowModal();
+  const freshBoot = !hasAnyCard && !state.moves.length && state.flow.step === 'gone' && !state.flow.goneSlots.length;
+  if (freshBoot) openFullRow();
 }
 
-boot();
+/* ---------------------------------------------------------------------
+ * Under node (verification / fixtures), export the pure functions and
+ * skip boot() entirely — there is no document to attach to. In a real
+ * browser `module` is undefined and this just calls boot() as before.
+ * ------------------------------------------------------------------- */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { validateRow, AGE_ORDER, matchScore, searchCards };
+} else {
+  boot();
+}
