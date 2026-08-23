@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>TTA Advisor</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="fakeBanner" class="banner hidden">ADVICE IS FAKE — wasm engine not loaded, showing stub moves only</div>
+
+<header id="topbar">
+  <div class="brand">TTA Advisor</div>
+  <div class="stats" id="stats">round – · age – · CA – MA – food – res – sci –</div>
+  <div class="counter" id="takenPlayed" title="cards taken vs cards played this game">taken 0 / played 0</div>
+  <div class="topbtns">
+    <button id="undoBtn" class="btn small">Undo</button>
+    <button id="newGameBtn" class="btn small danger">New game</button>
+  </div>
+</header>
+
+<main>
+  <section id="rowSection">
+    <div class="sectionTitle">Card row (slot = civil-action cost)</div>
+    <div id="rowStrip" class="rowStrip"></div>
+  </section>
+
+  <section id="deltaSection">
+    <div class="sectionTitle">This turn's delta</div>
+    <div class="deltaControls">
+      <label class="stepperLabel">Fell off left
+        <div class="stepper">
+          <button id="dropMinus" class="btn stepbtn">−</button>
+          <span id="dropCount">0</span>
+          <button id="dropPlus" class="btn stepbtn">+</button>
+        </div>
+      </label>
+      <button id="fullRowBtn" class="btn small">Re-enter whole row</button>
+    </div>
+    <div class="preview" id="dropPreview"></div>
+
+    <div class="addRow">
+      <input id="newCardInput" type="text" placeholder="type new card name, tap or Enter" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div id="newCardSuggest" class="suggest"></div>
+    </div>
+    <div id="newCardChips" class="chips"></div>
+
+    <div class="addRow">
+      <input id="milCardInput" type="text" placeholder="military card drawn this turn" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div id="milCardSuggest" class="suggest"></div>
+    </div>
+    <div id="milCardChips" class="chips"></div>
+
+    <div class="rivalRow">
+      <label>Rival str
+        <div class="stepper">
+          <button id="strMinus" class="btn stepbtn">−</button>
+          <span id="strVal">0</span>
+          <button id="strPlus" class="btn stepbtn">+</button>
+        </div>
+      </label>
+      <label>Rival culture
+        <div class="stepper">
+          <button id="cultMinus" class="btn stepbtn">−</button>
+          <span id="cultVal">0</span>
+          <button id="cultPlus" class="btn stepbtn">+</button>
+        </div>
+      </label>
+      <button id="applyBtn" class="btn primary">Apply turn &amp; advise</button>
+    </div>
+  </section>
+
+  <section id="adviceSection">
+    <div class="sectionTitle">Advice</div>
+    <div id="adviceTop" class="adviceTop">no advice yet</div>
+    <div id="adviceRest" class="adviceRest"></div>
+  </section>
+
+  <section id="handSection">
+    <div class="sectionTitle">Your hand (tap = mark played)</div>
+    <div id="handChips" class="chips"></div>
+  </section>
+</main>
+
+<div id="fullRowModal" class="modal hidden">
+  <div class="modalBox">
+    <div class="sectionTitle">Enter full 13-slot row, left to right</div>
+    <div id="fullRowSlots" class="fullRowSlots"></div>
+    <div class="addRow">
+      <input id="fullRowInput" type="text" placeholder="type card, Enter to place next slot" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div id="fullRowSuggest" class="suggest"></div>
+    </div>
+    <div class="modalBtns">
+      <button id="fullRowEmpty" class="btn small">Slot is empty (.)</button>
+      <button id="fullRowCancel" class="btn small">Cancel</button>
+      <button id="fullRowDone" class="btn primary">Done</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,2362 @@
+[
+ {
+  "name": "Acceptance of Supremacy",
+  "age": "II",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Acceptance of Supremacy",
+  "id": "acceptance-of-supremacy"
+ },
+ {
+  "name": "Aggression: Annex",
+  "age": "II",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Aggression: Annex",
+  "id": "aggression-annex"
+ },
+ {
+  "name": "Aggression: Armed Intervention",
+  "age": "III",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Aggression: Armed Intervention",
+  "id": "aggression-armed-intervention"
+ },
+ {
+  "name": "Aggression: Enslave",
+  "age": "I",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Aggression: Enslave",
+  "id": "aggression-enslave"
+ },
+ {
+  "name": "Aggression: Infiltrate",
+  "age": "II",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Aggression: Infiltrate",
+  "id": "aggression-infiltrate"
+ },
+ {
+  "name": "Aggression: Plunder",
+  "age": "I",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Aggression: Plunder (I)",
+  "id": "aggression-plunder-i"
+ },
+ {
+  "name": "Aggression: Plunder",
+  "age": "II",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Aggression: Plunder (II)",
+  "id": "aggression-plunder-ii"
+ },
+ {
+  "name": "Aggression: Plunder",
+  "age": "III",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Aggression: Plunder (III)",
+  "id": "aggression-plunder-iii"
+ },
+ {
+  "name": "Aggression: Raid",
+  "age": "I",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Aggression: Raid (I)",
+  "id": "aggression-raid-i"
+ },
+ {
+  "name": "Aggression: Raid",
+  "age": "II",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Aggression: Raid (II)",
+  "id": "aggression-raid-ii"
+ },
+ {
+  "name": "Aggression: Raid",
+  "age": "III",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Aggression: Raid (III)",
+  "id": "aggression-raid-iii"
+ },
+ {
+  "name": "Aggression: Spy",
+  "age": "II",
+  "deck": "military",
+  "type": "aggression",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Aggression: Spy",
+  "id": "aggression-spy"
+ },
+ {
+  "name": "Agriculture",
+  "age": "A",
+  "deck": "civil",
+  "type": "farm",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Agriculture",
+  "id": "agriculture"
+ },
+ {
+  "name": "Air Forces",
+  "age": "III",
+  "deck": "civil",
+  "type": "air",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Air Forces",
+  "id": "air-forces"
+ },
+ {
+  "name": "Albert Einstein",
+  "age": "III",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Albert Einstein",
+  "id": "albert-einstein"
+ },
+ {
+  "name": "Alchemy",
+  "age": "I",
+  "deck": "civil",
+  "type": "lab",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Alchemy",
+  "id": "alchemy"
+ },
+ {
+  "name": "Alexander the Great",
+  "age": "A",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Alexander the Great",
+  "id": "alexander-the-great"
+ },
+ {
+  "name": "Architecture",
+  "age": "II",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Architecture",
+  "id": "architecture"
+ },
+ {
+  "name": "Aristotle",
+  "age": "A",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Aristotle",
+  "id": "aristotle"
+ },
+ {
+  "name": "Barbarians",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Barbarians",
+  "id": "barbarians"
+ },
+ {
+  "name": "Bill Gates",
+  "age": "III",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Bill Gates",
+  "id": "bill-gates"
+ },
+ {
+  "name": "Border Conflict",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Border Conflict",
+  "id": "border-conflict"
+ },
+ {
+  "name": "Bread and Circuses",
+  "age": "I",
+  "deck": "civil",
+  "type": "arena",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Bread and Circuses",
+  "id": "bread-and-circuses"
+ },
+ {
+  "name": "Breakthrough",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Breakthrough (I)",
+  "id": "breakthrough-i"
+ },
+ {
+  "name": "Breakthrough",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Breakthrough (II)",
+  "id": "breakthrough-ii"
+ },
+ {
+  "name": "Bronze",
+  "age": "A",
+  "deck": "civil",
+  "type": "mine",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Bronze",
+  "id": "bronze"
+ },
+ {
+  "name": "Cannon",
+  "age": "II",
+  "deck": "civil",
+  "type": "artillery",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Cannon",
+  "id": "cannon"
+ },
+ {
+  "name": "Cartography",
+  "age": "I",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Cartography",
+  "id": "cartography"
+ },
+ {
+  "name": "Cavalrymen",
+  "age": "II",
+  "deck": "civil",
+  "type": "cavalry",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Cavalrymen",
+  "id": "cavalrymen"
+ },
+ {
+  "name": "Charlie Chaplin",
+  "age": "III",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Charlie Chaplin",
+  "id": "charlie-chaplin"
+ },
+ {
+  "name": "Christopher Columbus",
+  "age": "I",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Christopher Columbus",
+  "id": "christopher-columbus"
+ },
+ {
+  "name": "Civil Service",
+  "age": "III",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Civil Service",
+  "id": "civil-service"
+ },
+ {
+  "name": "Civil Unrest",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Civil Unrest",
+  "id": "civil-unrest"
+ },
+ {
+  "name": "Classic Army",
+  "age": "II",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Classic Army",
+  "id": "classic-army"
+ },
+ {
+  "name": "Coal",
+  "age": "II",
+  "deck": "civil",
+  "type": "mine",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Coal",
+  "id": "coal"
+ },
+ {
+  "name": "Code of Laws",
+  "age": "I",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Code of Laws",
+  "id": "code-of-laws"
+ },
+ {
+  "name": "Cold War",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Cold War",
+  "id": "cold-war"
+ },
+ {
+  "name": "Colossus",
+  "age": "A",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Colossus",
+  "id": "colossus"
+ },
+ {
+  "name": "Communism",
+  "age": "III",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Communism",
+  "id": "communism"
+ },
+ {
+  "name": "Computers",
+  "age": "III",
+  "deck": "civil",
+  "type": "lab",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Computers",
+  "id": "computers"
+ },
+ {
+  "name": "Conquistadors",
+  "age": "II",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Conquistadors",
+  "id": "conquistadors"
+ },
+ {
+  "name": "Constitutional Monarchy",
+  "age": "II",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Constitutional Monarchy",
+  "id": "constitutional-monarchy"
+ },
+ {
+  "name": "Crime Wave",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Crime Wave",
+  "id": "crime-wave"
+ },
+ {
+  "name": "Crusades",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Crusades",
+  "id": "crusades"
+ },
+ {
+  "name": "Cultural Heritage",
+  "age": "A",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Cultural Heritage (A)",
+  "id": "cultural-heritage-a"
+ },
+ {
+  "name": "Cultural Heritage",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Cultural Heritage (I)",
+  "id": "cultural-heritage-i"
+ },
+ {
+  "name": "Cultural Influence",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Cultural Influence",
+  "id": "cultural-influence"
+ },
+ {
+  "name": "Defensive Army",
+  "age": "II",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Defensive Army",
+  "id": "defensive-army"
+ },
+ {
+  "name": "Democracy",
+  "age": "III",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Democracy",
+  "id": "democracy"
+ },
+ {
+  "name": "Despotism",
+  "age": "A",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Despotism",
+  "id": "despotism"
+ },
+ {
+  "name": "Developed Territory",
+  "age": "I",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Developed Territory (I)",
+  "id": "developed-territory-i"
+ },
+ {
+  "name": "Developed Territory",
+  "age": "II",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Developed Territory (II)",
+  "id": "developed-territory-ii"
+ },
+ {
+  "name": "Development of Agriculture",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Agriculture",
+  "id": "development-of-agriculture"
+ },
+ {
+  "name": "Development of Civil Life",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Civil Life",
+  "id": "development-of-civil-life"
+ },
+ {
+  "name": "Development of Crafts",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Crafts",
+  "id": "development-of-crafts"
+ },
+ {
+  "name": "Development of Markets",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Markets",
+  "id": "development-of-markets"
+ },
+ {
+  "name": "Development of Politics",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Politics",
+  "id": "development-of-politics"
+ },
+ {
+  "name": "Development of Religion",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Religion",
+  "id": "development-of-religion"
+ },
+ {
+  "name": "Development of Science",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Science",
+  "id": "development-of-science"
+ },
+ {
+  "name": "Development of Settlement",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Settlement",
+  "id": "development-of-settlement"
+ },
+ {
+  "name": "Development of Trade Routes",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Trade Routes",
+  "id": "development-of-trade-routes"
+ },
+ {
+  "name": "Development of Warfare",
+  "age": "A",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Development of Warfare",
+  "id": "development-of-warfare"
+ },
+ {
+  "name": "Drama",
+  "age": "I",
+  "deck": "civil",
+  "type": "theater",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Drama",
+  "id": "drama"
+ },
+ {
+  "name": "Economic Progress",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Economic Progress",
+  "id": "economic-progress"
+ },
+ {
+  "name": "Efficient Upgrade",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Efficient Upgrade (II)",
+  "id": "efficient-upgrade-ii"
+ },
+ {
+  "name": "Efficient Upgrade",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Efficient Upgrade (III)",
+  "id": "efficient-upgrade-iii"
+ },
+ {
+  "name": "Eiffel Tower",
+  "age": "II",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Eiffel Tower",
+  "id": "eiffel-tower"
+ },
+ {
+  "name": "Emigration",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Emigration",
+  "id": "emigration"
+ },
+ {
+  "name": "Endowment for the Arts",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Endowment for the Arts",
+  "id": "endowment-for-the-arts"
+ },
+ {
+  "name": "Engineering",
+  "age": "III",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Engineering",
+  "id": "engineering"
+ },
+ {
+  "name": "Engineering Genius",
+  "age": "A",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Engineering Genius (A)",
+  "id": "engineering-genius-a"
+ },
+ {
+  "name": "Engineering Genius",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Engineering Genius (I)",
+  "id": "engineering-genius-i"
+ },
+ {
+  "name": "Engineering Genius",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Engineering Genius (II)",
+  "id": "engineering-genius-ii"
+ },
+ {
+  "name": "Engineering Genius",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Engineering Genius (III)",
+  "id": "engineering-genius-iii"
+ },
+ {
+  "name": "Entrenchments",
+  "age": "III",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Entrenchments",
+  "id": "entrenchments"
+ },
+ {
+  "name": "Fast Food Chains",
+  "age": "III",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Fast Food Chains",
+  "id": "fast-food-chains"
+ },
+ {
+  "name": "Fighting Band",
+  "age": "I",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Fighting Band",
+  "id": "fighting-band"
+ },
+ {
+  "name": "First Space Flight",
+  "age": "III",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "First Space Flight",
+  "id": "first-space-flight"
+ },
+ {
+  "name": "Foray",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Foray",
+  "id": "foray"
+ },
+ {
+  "name": "Fortifications",
+  "age": "II",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Fortifications",
+  "id": "fortifications"
+ },
+ {
+  "name": "Frederick Barbarossa",
+  "age": "I",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Frederick Barbarossa",
+  "id": "frederick-barbarossa"
+ },
+ {
+  "name": "Frugality",
+  "age": "A",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Frugality (A)",
+  "id": "frugality-a"
+ },
+ {
+  "name": "Frugality",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Frugality (I)",
+  "id": "frugality-i"
+ },
+ {
+  "name": "Frugality",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Frugality (II)",
+  "id": "frugality-ii"
+ },
+ {
+  "name": "Fundamentalism",
+  "age": "III",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Fundamentalism",
+  "id": "fundamentalism"
+ },
+ {
+  "name": "Genghis Khan",
+  "age": "I",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Genghis Khan",
+  "id": "genghis-khan"
+ },
+ {
+  "name": "Good Harvest",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Good Harvest",
+  "id": "good-harvest"
+ },
+ {
+  "name": "Great Wall",
+  "age": "I",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Great Wall",
+  "id": "great-wall"
+ },
+ {
+  "name": "Hammurabi",
+  "age": "A",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Hammurabi",
+  "id": "hammurabi"
+ },
+ {
+  "name": "Hanging Gardens",
+  "age": "A",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Hanging Gardens",
+  "id": "hanging-gardens"
+ },
+ {
+  "name": "Heavy Cavalry",
+  "age": "I",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Heavy Cavalry",
+  "id": "heavy-cavalry"
+ },
+ {
+  "name": "Historic Territory",
+  "age": "I",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Historic Territory (I)",
+  "id": "historic-territory-i"
+ },
+ {
+  "name": "Historic Territory",
+  "age": "II",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Historic Territory (II)",
+  "id": "historic-territory-ii"
+ },
+ {
+  "name": "Hollywood",
+  "age": "III",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Hollywood",
+  "id": "hollywood"
+ },
+ {
+  "name": "Homer",
+  "age": "A",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Homer",
+  "id": "homer"
+ },
+ {
+  "name": "Iconoclasm",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Iconoclasm",
+  "id": "iconoclasm"
+ },
+ {
+  "name": "Immigration",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Immigration",
+  "id": "immigration"
+ },
+ {
+  "name": "Impact of Agriculture",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Agriculture",
+  "id": "impact-of-agriculture"
+ },
+ {
+  "name": "Impact of Architecture",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Architecture",
+  "id": "impact-of-architecture"
+ },
+ {
+  "name": "Impact of Balance",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Balance",
+  "id": "impact-of-balance"
+ },
+ {
+  "name": "Impact of Colonies",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Colonies",
+  "id": "impact-of-colonies"
+ },
+ {
+  "name": "Impact of Competition",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Competition",
+  "id": "impact-of-competition"
+ },
+ {
+  "name": "Impact of Government",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Government",
+  "id": "impact-of-government"
+ },
+ {
+  "name": "Impact of Happiness",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Happiness",
+  "id": "impact-of-happiness"
+ },
+ {
+  "name": "Impact of Industry",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Industry",
+  "id": "impact-of-industry"
+ },
+ {
+  "name": "Impact of Population",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Population",
+  "id": "impact-of-population"
+ },
+ {
+  "name": "Impact of Progress",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Progress",
+  "id": "impact-of-progress"
+ },
+ {
+  "name": "Impact of Science",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Science",
+  "id": "impact-of-science"
+ },
+ {
+  "name": "Impact of Strength",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Strength",
+  "id": "impact-of-strength"
+ },
+ {
+  "name": "Impact of Technology",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Technology",
+  "id": "impact-of-technology"
+ },
+ {
+  "name": "Impact of Variety",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Variety",
+  "id": "impact-of-variety"
+ },
+ {
+  "name": "Impact of Wonders",
+  "age": "III",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Impact of Wonders",
+  "id": "impact-of-wonders"
+ },
+ {
+  "name": "Independence Declaration",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Independence Declaration",
+  "id": "independence-declaration"
+ },
+ {
+  "name": "Inhabited Territory",
+  "age": "I",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Inhabited Territory (I)",
+  "id": "inhabited-territory-i"
+ },
+ {
+  "name": "Inhabited Territory",
+  "age": "II",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Inhabited Territory (II)",
+  "id": "inhabited-territory-ii"
+ },
+ {
+  "name": "International Agreement",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "International Agreement",
+  "id": "international-agreement"
+ },
+ {
+  "name": "International Tourism",
+  "age": "III",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "International Tourism",
+  "id": "international-tourism"
+ },
+ {
+  "name": "International Trade Agreement",
+  "age": "II",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "International Trade Agreement",
+  "id": "international-trade-agreement"
+ },
+ {
+  "name": "Internet",
+  "age": "III",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Internet",
+  "id": "internet"
+ },
+ {
+  "name": "Iron",
+  "age": "I",
+  "deck": "civil",
+  "type": "mine",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Iron",
+  "id": "iron"
+ },
+ {
+  "name": "Irrigation",
+  "age": "I",
+  "deck": "civil",
+  "type": "farm",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Irrigation",
+  "id": "irrigation"
+ },
+ {
+  "name": "Isaac Newton",
+  "age": "II",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Isaac Newton",
+  "id": "isaac-newton"
+ },
+ {
+  "name": "J. S. Bach",
+  "age": "II",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "J. S. Bach",
+  "id": "j-s-bach"
+ },
+ {
+  "name": "James Cook",
+  "age": "II",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "James Cook",
+  "id": "james-cook"
+ },
+ {
+  "name": "Joan of Arc",
+  "age": "I",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Joan of Arc",
+  "id": "joan-of-arc"
+ },
+ {
+  "name": "Journalism",
+  "age": "II",
+  "deck": "civil",
+  "type": "library",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Journalism",
+  "id": "journalism"
+ },
+ {
+  "name": "Julius Caesar",
+  "age": "A",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Julius Caesar",
+  "id": "julius-caesar"
+ },
+ {
+  "name": "Justice System",
+  "age": "II",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Justice System",
+  "id": "justice-system"
+ },
+ {
+  "name": "Knights",
+  "age": "I",
+  "deck": "civil",
+  "type": "cavalry",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Knights",
+  "id": "knights"
+ },
+ {
+  "name": "Kremlin",
+  "age": "II",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Kremlin",
+  "id": "kremlin"
+ },
+ {
+  "name": "Legion",
+  "age": "I",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Legion",
+  "id": "legion"
+ },
+ {
+  "name": "Leonardo da Vinci",
+  "age": "I",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Leonardo da Vinci",
+  "id": "leonardo-da-vinci"
+ },
+ {
+  "name": "Library of Alexandria",
+  "age": "A",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Library of Alexandria",
+  "id": "library-of-alexandria"
+ },
+ {
+  "name": "Loss of Sovereignty",
+  "age": "III",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Loss of Sovereignty",
+  "id": "loss-of-sovereignty"
+ },
+ {
+  "name": "Mahatma Gandhi",
+  "age": "III",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Mahatma Gandhi",
+  "id": "mahatma-gandhi"
+ },
+ {
+  "name": "Masonry",
+  "age": "I",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Masonry",
+  "id": "masonry"
+ },
+ {
+  "name": "Maximilien Robespierre",
+  "age": "II",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Maximilien Robespierre",
+  "id": "maximilien-robespierre"
+ },
+ {
+  "name": "Mechanized Agriculture",
+  "age": "III",
+  "deck": "civil",
+  "type": "farm",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Mechanized Agriculture",
+  "id": "mechanized-agriculture"
+ },
+ {
+  "name": "Mechanized Army",
+  "age": "III",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Mechanized Army",
+  "id": "mechanized-army"
+ },
+ {
+  "name": "Medieval Army",
+  "age": "I",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Medieval Army",
+  "id": "medieval-army"
+ },
+ {
+  "name": "Michelangelo",
+  "age": "I",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Michelangelo",
+  "id": "michelangelo"
+ },
+ {
+  "name": "Military Alliance",
+  "age": "III",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Military Alliance",
+  "id": "military-alliance"
+ },
+ {
+  "name": "Military Bonus (defense 2 / colonization 1)",
+  "age": "I",
+  "deck": "military",
+  "type": "bonus",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Military Bonus (defense 2 / colonization 1)",
+  "id": "military-bonus-defense-2-colonization-1"
+ },
+ {
+  "name": "Military Bonus (defense 4 / colonization 2)",
+  "age": "II",
+  "deck": "military",
+  "type": "bonus",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Military Bonus (defense 4 / colonization 2)",
+  "id": "military-bonus-defense-4-colonization-2"
+ },
+ {
+  "name": "Military Bonus (defense 6 / colonization 3)",
+  "age": "III",
+  "deck": "military",
+  "type": "bonus",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Military Bonus (defense 6 / colonization 3)",
+  "id": "military-bonus-defense-6-colonization-3"
+ },
+ {
+  "name": "Military Build-Up",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Military Build-Up",
+  "id": "military-build-up"
+ },
+ {
+  "name": "Military Theory",
+  "age": "III",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Military Theory",
+  "id": "military-theory"
+ },
+ {
+  "name": "Mobile Artillery",
+  "age": "II",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Mobile Artillery",
+  "id": "mobile-artillery"
+ },
+ {
+  "name": "Modern Army",
+  "age": "III",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Modern Army",
+  "id": "modern-army"
+ },
+ {
+  "name": "Modern Infantry",
+  "age": "III",
+  "deck": "civil",
+  "type": "infantry",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Modern Infantry",
+  "id": "modern-infantry"
+ },
+ {
+  "name": "Monarchy",
+  "age": "I",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Monarchy",
+  "id": "monarchy"
+ },
+ {
+  "name": "Moses",
+  "age": "A",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Moses",
+  "id": "moses"
+ },
+ {
+  "name": "Movies",
+  "age": "III",
+  "deck": "civil",
+  "type": "theater",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Movies",
+  "id": "movies"
+ },
+ {
+  "name": "Multimedia",
+  "age": "III",
+  "deck": "civil",
+  "type": "library",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Multimedia",
+  "id": "multimedia"
+ },
+ {
+  "name": "Napoleon Bonaparte",
+  "age": "II",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Napoleon Bonaparte",
+  "id": "napoleon-bonaparte"
+ },
+ {
+  "name": "Napoleonic Army",
+  "age": "II",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Napoleonic Army",
+  "id": "napoleonic-army"
+ },
+ {
+  "name": "National Pride",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "National Pride",
+  "id": "national-pride"
+ },
+ {
+  "name": "Navigation",
+  "age": "II",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Navigation",
+  "id": "navigation"
+ },
+ {
+  "name": "New Deposits",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "New Deposits",
+  "id": "new-deposits"
+ },
+ {
+  "name": "Ocean Liners",
+  "age": "II",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Ocean Liners",
+  "id": "ocean-liners"
+ },
+ {
+  "name": "Oil",
+  "age": "III",
+  "deck": "civil",
+  "type": "mine",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Oil",
+  "id": "oil"
+ },
+ {
+  "name": "Open Borders Agreement",
+  "age": "I",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Open Borders Agreement",
+  "id": "open-borders-agreement"
+ },
+ {
+  "name": "Opera",
+  "age": "II",
+  "deck": "civil",
+  "type": "theater",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Opera",
+  "id": "opera"
+ },
+ {
+  "name": "Organized Religion",
+  "age": "II",
+  "deck": "civil",
+  "type": "temple",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Organized Religion",
+  "id": "organized-religion"
+ },
+ {
+  "name": "Patriotism",
+  "age": "A",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Patriotism (A)",
+  "id": "patriotism-a"
+ },
+ {
+  "name": "Patriotism",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Patriotism (I)",
+  "id": "patriotism-i"
+ },
+ {
+  "name": "Patriotism",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Patriotism (II)",
+  "id": "patriotism-ii"
+ },
+ {
+  "name": "Patriotism",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Patriotism (III)",
+  "id": "patriotism-iii"
+ },
+ {
+  "name": "Peace Treaty",
+  "age": "III",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Peace Treaty",
+  "id": "peace-treaty"
+ },
+ {
+  "name": "Pestilence",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Pestilence",
+  "id": "pestilence"
+ },
+ {
+  "name": "Phalanx",
+  "age": "I",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Phalanx",
+  "id": "phalanx"
+ },
+ {
+  "name": "Philosophy",
+  "age": "A",
+  "deck": "civil",
+  "type": "lab",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Philosophy",
+  "id": "philosophy"
+ },
+ {
+  "name": "Politics of Strength",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Politics of Strength",
+  "id": "politics-of-strength"
+ },
+ {
+  "name": "Popularization of Science",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Popularization of Science",
+  "id": "popularization-of-science"
+ },
+ {
+  "name": "Printing Press",
+  "age": "I",
+  "deck": "civil",
+  "type": "library",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Printing Press",
+  "id": "printing-press"
+ },
+ {
+  "name": "Professional Sports",
+  "age": "III",
+  "deck": "civil",
+  "type": "arena",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Professional Sports",
+  "id": "professional-sports"
+ },
+ {
+  "name": "Promise of Military Protection",
+  "age": "II",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Promise of Military Protection",
+  "id": "promise-of-military-protection"
+ },
+ {
+  "name": "Prosperity",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Prosperity",
+  "id": "prosperity"
+ },
+ {
+  "name": "Pyramids",
+  "age": "A",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Pyramids",
+  "id": "pyramids"
+ },
+ {
+  "name": "Raiders",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Raiders",
+  "id": "raiders"
+ },
+ {
+  "name": "Rats",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Rats",
+  "id": "rats"
+ },
+ {
+  "name": "Ravages of Time",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Ravages of Time",
+  "id": "ravages-of-time"
+ },
+ {
+  "name": "Rebellion",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Rebellion",
+  "id": "rebellion"
+ },
+ {
+  "name": "Refugees",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Refugees",
+  "id": "refugees"
+ },
+ {
+  "name": "Reign of Terror",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Reign of Terror",
+  "id": "reign-of-terror"
+ },
+ {
+  "name": "Religion",
+  "age": "A",
+  "deck": "civil",
+  "type": "temple",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Religion",
+  "id": "religion"
+ },
+ {
+  "name": "Republic",
+  "age": "II",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Republic",
+  "id": "republic"
+ },
+ {
+  "name": "Reserves",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Reserves (I)",
+  "id": "reserves-i"
+ },
+ {
+  "name": "Reserves",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Reserves (II)",
+  "id": "reserves-ii"
+ },
+ {
+  "name": "Reserves",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Reserves (III)",
+  "id": "reserves-iii"
+ },
+ {
+  "name": "Revolutionary Idea",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Revolutionary Idea (II)",
+  "id": "revolutionary-idea-ii"
+ },
+ {
+  "name": "Revolutionary Idea",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Revolutionary Idea (III)",
+  "id": "revolutionary-idea-iii"
+ },
+ {
+  "name": "Rich Land",
+  "age": "A",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Rich Land (A)",
+  "id": "rich-land-a"
+ },
+ {
+  "name": "Rich Land",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Rich Land (I)",
+  "id": "rich-land-i"
+ },
+ {
+  "name": "Rich Land",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Rich Land (II)",
+  "id": "rich-land-ii"
+ },
+ {
+  "name": "Riflemen",
+  "age": "II",
+  "deck": "civil",
+  "type": "infantry",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Riflemen",
+  "id": "riflemen"
+ },
+ {
+  "name": "Rockets",
+  "age": "III",
+  "deck": "civil",
+  "type": "artillery",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Rockets",
+  "id": "rockets"
+ },
+ {
+  "name": "Satellites",
+  "age": "III",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Satellites",
+  "id": "satellites"
+ },
+ {
+  "name": "Scientific Breakthrough",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Scientific Breakthrough",
+  "id": "scientific-breakthrough"
+ },
+ {
+  "name": "Scientific Cooperation",
+  "age": "II",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Scientific Cooperation",
+  "id": "scientific-cooperation"
+ },
+ {
+  "name": "Scientific Method",
+  "age": "II",
+  "deck": "civil",
+  "type": "lab",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Scientific Method",
+  "id": "scientific-method"
+ },
+ {
+  "name": "Selective Breeding",
+  "age": "II",
+  "deck": "civil",
+  "type": "farm",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Selective Breeding",
+  "id": "selective-breeding"
+ },
+ {
+  "name": "Shock Troops",
+  "age": "III",
+  "deck": "military",
+  "type": "tactic",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Shock Troops",
+  "id": "shock-troops"
+ },
+ {
+  "name": "Sid Meier",
+  "age": "III",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Sid Meier",
+  "id": "sid-meier"
+ },
+ {
+  "name": "St. Peter's Basilica",
+  "age": "I",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "St. Peter's Basilica",
+  "id": "st-peter-s-basilica"
+ },
+ {
+  "name": "Stock Pile",
+  "age": "A",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Stock Pile",
+  "id": "stock-pile"
+ },
+ {
+  "name": "Strategic Territory",
+  "age": "I",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Strategic Territory (I)",
+  "id": "strategic-territory-i"
+ },
+ {
+  "name": "Strategic Territory",
+  "age": "II",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Strategic Territory (II)",
+  "id": "strategic-territory-ii"
+ },
+ {
+  "name": "Strategy",
+  "age": "II",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Strategy",
+  "id": "strategy"
+ },
+ {
+  "name": "Swordsmen",
+  "age": "I",
+  "deck": "civil",
+  "type": "infantry",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Swordsmen",
+  "id": "swordsmen"
+ },
+ {
+  "name": "Taj Mahal",
+  "age": "I",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Taj Mahal",
+  "id": "taj-mahal"
+ },
+ {
+  "name": "Tanks",
+  "age": "III",
+  "deck": "civil",
+  "type": "cavalry",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Tanks",
+  "id": "tanks"
+ },
+ {
+  "name": "Team Sports",
+  "age": "II",
+  "deck": "civil",
+  "type": "arena",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Team Sports",
+  "id": "team-sports"
+ },
+ {
+  "name": "Terrorism",
+  "age": "II",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Terrorism",
+  "id": "terrorism"
+ },
+ {
+  "name": "Theocracy",
+  "age": "I",
+  "deck": "civil",
+  "type": "government",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Theocracy",
+  "id": "theocracy"
+ },
+ {
+  "name": "Theology",
+  "age": "I",
+  "deck": "civil",
+  "type": "temple",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Theology",
+  "id": "theology"
+ },
+ {
+  "name": "Trade Routes Agreement",
+  "age": "I",
+  "deck": "military",
+  "type": "pact",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Trade Routes Agreement",
+  "id": "trade-routes-agreement"
+ },
+ {
+  "name": "Transcontinental Railroad",
+  "age": "II",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Transcontinental Railroad",
+  "id": "transcontinental-railroad"
+ },
+ {
+  "name": "Uncertain Borders",
+  "age": "I",
+  "deck": "military",
+  "type": "event",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "Uncertain Borders",
+  "id": "uncertain-borders"
+ },
+ {
+  "name": "Universitas Carolina",
+  "age": "I",
+  "deck": "wonder",
+  "type": "wonder",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Universitas Carolina",
+  "id": "universitas-carolina"
+ },
+ {
+  "name": "Urban Growth",
+  "age": "A",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Urban Growth (A)",
+  "id": "urban-growth-a"
+ },
+ {
+  "name": "Urban Growth",
+  "age": "I",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Urban Growth (I)",
+  "id": "urban-growth-i"
+ },
+ {
+  "name": "Urban Growth",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Urban Growth (II)",
+  "id": "urban-growth-ii"
+ },
+ {
+  "name": "Urban Growth",
+  "age": "III",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": true,
+  "display": "Urban Growth (III)",
+  "id": "urban-growth-iii"
+ },
+ {
+  "name": "Vast Territory",
+  "age": "I",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Vast Territory (I)",
+  "id": "vast-territory-i"
+ },
+ {
+  "name": "Vast Territory",
+  "age": "II",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Vast Territory (II)",
+  "id": "vast-territory-ii"
+ },
+ {
+  "name": "War over Culture",
+  "age": "III",
+  "deck": "military",
+  "type": "war",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "War over Culture",
+  "id": "war-over-culture"
+ },
+ {
+  "name": "War over Technology",
+  "age": "II",
+  "deck": "military",
+  "type": "war",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "War over Technology",
+  "id": "war-over-technology"
+ },
+ {
+  "name": "War over Territory",
+  "age": "II",
+  "deck": "military",
+  "type": "war",
+  "rowEligible": false,
+  "ambiguous": false,
+  "display": "War over Territory",
+  "id": "war-over-territory"
+ },
+ {
+  "name": "Warfare",
+  "age": "I",
+  "deck": "civil",
+  "type": "special-tech",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Warfare",
+  "id": "warfare"
+ },
+ {
+  "name": "Warriors",
+  "age": "A",
+  "deck": "civil",
+  "type": "infantry",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Warriors",
+  "id": "warriors"
+ },
+ {
+  "name": "Wave of Nationalism",
+  "age": "II",
+  "deck": "civil",
+  "type": "action",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Wave of Nationalism",
+  "id": "wave-of-nationalism"
+ },
+ {
+  "name": "Wealthy Territory",
+  "age": "I",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Wealthy Territory (I)",
+  "id": "wealthy-territory-i"
+ },
+ {
+  "name": "Wealthy Territory",
+  "age": "II",
+  "deck": "military",
+  "type": "territory",
+  "rowEligible": false,
+  "ambiguous": true,
+  "display": "Wealthy Territory (II)",
+  "id": "wealthy-territory-ii"
+ },
+ {
+  "name": "William Shakespeare",
+  "age": "II",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "William Shakespeare",
+  "id": "william-shakespeare"
+ },
+ {
+  "name": "Winston Churchill",
+  "age": "III",
+  "deck": "leader",
+  "type": "leader",
+  "rowEligible": true,
+  "ambiguous": false,
+  "display": "Winston Churchill",
+  "id": "winston-churchill"
+ }
+]
