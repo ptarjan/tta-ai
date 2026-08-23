@@ -918,12 +918,11 @@ fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, di
 /// print a `revolutionCost` prints a nonzero one, 1 through 9; only
 /// Despotism prints `null`).
 ///
-/// The action-pool half is `revolt_pool_ok` alone. §8.3/§8.4 are SETTLED:
-/// a revolution requires that no civil action was spent this turn, and
-/// Hammurabi's conversion does not qualify as an exemption. A blanket
-/// `|| leader_is(p, "Hammurabi")` was tried on 2026-08-22 -- it does not
-/// even encode the claimed rule, since it lets Hammurabi revolt after
-/// spending every civil action in the pool. Do not re-add it.
+/// The action-pool half is `revolt_pool_ok` alone. A blanket
+/// `|| leader_is(p, "Hammurabi")` does NOT express that rule and must not be
+/// re-added: it lets Hammurabi revolt after spending every civil action in
+/// the pool, which no reading of §8 allows. The conversion covers exactly one
+/// spent civil action, and `revolt_pool_ok` counts it.
 pub(crate) fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
     // `costs::revolution_cost` folds in the standing pact discount (`Stats::
     // tech_discount`) -- a bare `card.revolution_cost` comparison here used
@@ -970,7 +969,25 @@ pub(crate) fn revolt_pool_ok(state: &GameState, p: &PlayerState) -> bool {
         let s = effects::state_stats(state, p);
         return p.military_actions as i32 == s.military_actions && s.military_actions > 0;
     }
-    p.civil_actions as i32 == costs::ca_total(state, p) && p.civil_actions > 0
+    let total = costs::ca_total(state, p);
+    if total <= 0 {
+        return false;
+    }
+    // The ordinary way to have ALL civil actions available (§8 rule 10) is to
+    // have spent none of them.
+    //
+    // Hammurabi is the other way. His "use one military action as a civil
+    // action" yields a REAL civil action -- FAQ v1.5 is explicit that
+    // replacing him with a converted action gives a CIVIL action back, not a
+    // military one -- so it can be one of the actions the revolution consumes,
+    // covering a single civil action already spent this turn. `spare_ca` is
+    // the same primitive `costs::pay_ca` spends and `apply::h_revolution`
+    // consumes, so the gate and the spend cannot drift apart.
+    //
+    // `==`, never `>=`: a civil pool inflated ABOVE `ca_total` (free civil
+    // actions are granted without raising the total) must not buy a second
+    // spent action.
+    p.civil_actions as i32 == total || costs::spare_ca(p) == total
 }
 
 /// RB p.15 attributes Breakthrough's own "1 CA" specifically to FUNDING THE
@@ -2906,5 +2923,61 @@ mod tests {
         assert!(revolt_ok, "no military action spent yet -- Robespierre's own precondition");
         let moves = free_action_moves(&state, &state.players[0], FreeActionKind::DevelopTechnology, 0, revolt_ok);
         assert!(moves.as_slice().contains(&Move::Revolution { card: card("Monarchy") }));
+    }
+
+    /// Builds a Hammurabi on Despotism (4 CA, 2 MA) with `civil` civil
+    /// actions left, sharing one setup across the four cases below so the
+    /// only thing that varies between them is the thing each one names.
+    fn hammurabi_on_despotism(civil: i8, military: i8) -> GameState {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Hammurabi");
+        p.civil_actions = civil;
+        p.military_actions = military;
+        p.science = 2; // Monarchy's revolutionCost
+        p.hand_civil.push(card("Monarchy"));
+        one_player_state(p)
+    }
+
+    #[test]
+    fn a_hammurabi_player_may_revolt_after_spending_exactly_one_civil_action() {
+        // §8 rule 10 asks for ALL civil actions available. Hammurabi's
+        // once-per-turn "use one military action as a civil action" supplies
+        // a real civil action -- FAQ v1.5 confirms it counts as CIVIL, since
+        // replacing him with a converted action refunds a civil action rather
+        // than a military one -- so it can be one of the actions the
+        // revolution consumes and cover a single already-spent civil action.
+        // BGO agrees: games 7521980, 7522362 and 7522730 all log exactly this
+        // revolution as legal.
+        let state = hammurabi_on_despotism(3, 2);
+        assert!(revolt_pool_ok(&state, &state.players[0]));
+    }
+
+    #[test]
+    fn a_hammurabi_player_may_not_revolt_after_spending_two_civil_actions() {
+        // The conversion is worth ONE action, so it covers one spent civil
+        // action and no more. This is the case the blanket
+        // `|| leader_is(p, "Hammurabi")` got wrong, and the reason that shape
+        // must never come back.
+        let state = hammurabi_on_despotism(2, 2);
+        assert!(!revolt_pool_ok(&state, &state.players[0]));
+    }
+
+    #[test]
+    fn a_hammurabi_player_who_already_spent_the_conversion_may_not_revolt_one_action_short() {
+        // Once per TURN. `hammurabi_used` is the same flag `costs::pay_ca`
+        // sets when it falls back to the conversion, so a player who already
+        // converted for something else has nothing left to cover the gap.
+        let mut state = hammurabi_on_despotism(3, 2);
+        state.players[0].hammurabi_used = true;
+        assert!(!revolt_pool_ok(&state, &state.players[0]));
+    }
+
+    #[test]
+    fn a_hammurabi_player_with_no_military_action_left_may_not_revolt_one_action_short() {
+        // There has to be a military action to convert. Without one the
+        // player falls through to the plain "spent nothing" test and fails
+        // it, exactly like any other leader.
+        let state = hammurabi_on_despotism(3, 0);
+        assert!(!revolt_pool_ok(&state, &state.players[0]));
     }
 }

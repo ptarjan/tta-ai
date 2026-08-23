@@ -8152,6 +8152,48 @@ Arc), 7522344 (Ravages event, Isaac Newton), 7522428 (Ravages event,
 Napoleon) — each a different leader/event interaction, not the Hammurabi
 shape.
 
+### 2026-08-23 follow-up: this was reverted, then re-landed narrower
+
+The entry above went stale for five days. `568ae46` removed a blanket
+`|| leader_is(p, "Hammurabi")` from `can_revolt` — a genuinely broken shape,
+since it let Hammurabi revolt after spending EVERY civil action — and the
+whole idea went with it, including this `revolt_pool_ok` branch. Its commit
+message recorded §8.3/§8.4 as settling that the conversion cannot fund a
+revolution. That reading is wrong, and a doc entry claiming LANDED sat on top
+of code that no longer existed.
+
+FAQ v1.5 settles it the other way: "If you use a Military Action as a Civil
+Action to replace Hammurabi as a Leader, you will gain a Civil Action back,
+not a Military Action." The converted action is a real CIVIL action, so it can
+be one of the actions the revolution consumes. **A broken implementation of an
+idea is not a refutation of the idea** — the blanket version and the narrow
+version are different things, and only the blanket one is forbidden.
+
+Re-landed as `p.civil_actions == total || costs::spare_ca(p) == total`, behind
+a `total <= 0` guard, with no leader-name test at all: for everyone else
+`spare_ca` collapses to `civil_actions`. `==`, never `>=`, so a civil pool
+inflated ABOVE its total cannot buy a second spent action.
+
+Two things this pass added that the original did not have:
+
+1. **`h_revolution` now consumes the military action.** If the conversion is
+   what funded the revolution, that military action is genuinely spent.
+   Without this the carry-over hands the new government a military action the
+   player already used.
+2. **Not on the Breakthrough path.** Reading "civil pool is short" as proof a
+   conversion happened is wrong when `via_ordered_action` is set: there
+   Breakthrough's own 1 CA paid to declare the revolution (RB p.15). Charging
+   one there cost 12 games — 7521740, 7522037, 7522434, 7522512, 7522899,
+   7523030, 7523079, 7523154, 7523442, 7523459, 7523476, 7523612 — every one a
+   Hammurabi player who revolts "using Breakthrough" and is then one military
+   action short for the rest of the game, surfacing much later as an illegal
+   military take. The guard is now `!via_ordered_action && civil_actions <
+   total && spare_ca(p) == total`.
+
+**Measurement.** 872→**877** completed, 831→**835** exact, zero regressions of
+either kind against `analysis/guard_ids_872.txt`/`guard_exact_831.txt`. Won
+7521980, 7522362, 7522599, 7522730, 7523662. 1482 tests pass.
+
 ## Ninth pass: the unpaired-putback bucket (5 games) — confirmed a model boundary, not a CardId bug
 
 Chasing the `UnrecoverableHiddenInfo: unpaired BGO client-side undo` bucket

@@ -114,7 +114,7 @@ pub fn civil_hand_limit(state: &GameState, p: &PlayerState) -> i32 {
 /// is a continuous in-play effect and not a once-per-turn use -- still keys
 /// off the live leader.
 #[inline]
-fn hammurabi_conversion_available(p: &PlayerState) -> bool {
+pub(crate) fn hammurabi_conversion_available(p: &PlayerState) -> bool {
     (leader_is(p, "Hammurabi") || p.hammurabi_replaced_this_turn)
         && !p.hammurabi_used
         && p.military_actions > 0

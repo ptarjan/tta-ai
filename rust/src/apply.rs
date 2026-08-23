@@ -1264,6 +1264,35 @@ fn h_revolution(state: &mut GameState, idx: u8, id: CardId, via_ordered_action: 
     // for the new government (`docs/REPLAY.md`'s Take/Bid handoff, "gate-by-
     // gate breakdown" pass).
     let old = effects::state_stats(state, &state.players[idx as usize]);
+    // Hammurabi funding. On an ORDINARY revolution the whole civil pool is the
+    // price, so a pool one short of its total can only have been made legal by
+    // his once-per-turn "use one military action as a civil action" standing in
+    // for the missing action (`legal::revolt_pool_ok`'s `spare_ca` branch).
+    // That converted action is one of the actions the revolution consumes, so
+    // the military action is genuinely spent -- consume it HERE, before `spent`
+    // is measured, or the carry-over below hands the new government a military
+    // action the player already used.
+    //
+    // NOT on the Breakthrough path (`via_ordered_action`). There the card's own
+    // 1 CA is what pays for declaring the revolution (RB p.15), so the pool is
+    // short for a reason that has nothing to do with Hammurabi and no
+    // conversion was spent. Charging one there costs 12 corpus games, all of
+    // them Hammurabi players who revolt "using Breakthrough" and then run a
+    // military action short for the rest of the game.
+    //
+    // `spare_ca == total`, not merely "conversion available": it pins the
+    // shortfall to exactly the one action the conversion covers, so a pool
+    // short by two (illegal, but the replayer forces journal moves through
+    // regardless) does not silently buy a second one.
+    if !robespierre
+        && !via_ordered_action
+        && (state.players[idx as usize].civil_actions as i32) < old.civil_actions
+        && costs::spare_ca(&state.players[idx as usize]) == old.civil_actions
+    {
+        let p = &mut state.players[idx as usize];
+        p.military_actions -= 1;
+        p.hammurabi_used = true;
+    }
     let old_remaining_c = state.players[idx as usize].civil_actions as i32;
     let old_remaining_m = state.players[idx as usize].military_actions as i32;
     let mut spent = if robespierre { old.civil_actions - old_remaining_c } else { old.military_actions - old_remaining_m };
@@ -3340,6 +3369,52 @@ mod tests {
         // the unspent-military-action count forward against Monarchy's total.
         assert_eq!(state.players[0].civil_actions, 0);
         assert_eq!(state.players[0].military_actions, 3); // Monarchy MA total, none spent yet
+    }
+
+    #[test]
+    fn a_hammurabi_revolution_funded_by_the_conversion_really_spends_the_military_action() {
+        // `legal::revolt_pool_ok` lets Hammurabi revolt one civil action
+        // short because his once-per-turn "use one military action as a civil
+        // action" supplies the missing action. That action is one of the ones
+        // the revolution consumes, so the military action has to be spent
+        // too. If it is not, the carry-over below measures a military pool
+        // that was never touched and hands the whole of Monarchy's larger
+        // pool to a player who already used one of them.
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Hammurabi");
+        p.science = 10;
+        p.civil_actions = 3; // one of Despotism's 4 already spent this turn
+        p.military_actions = 2; // Despotism's full MA pool, none spent yet
+        p.hand_civil.push(card("Monarchy"));
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Monarchy"), false);
+        assert!(state.players[0].hammurabi_used, "the conversion is spent, so it cannot fund a second action this turn");
+        // Monarchy's MA total is 3 and exactly one military action has now
+        // been spent, so 2 carry over -- not 3.
+        assert_eq!(state.players[0].military_actions, 2);
+        assert_eq!(state.players[0].civil_actions, 0);
+    }
+
+    #[test]
+    fn a_hammurabi_revolution_ordered_by_breakthrough_does_not_spend_the_military_action() {
+        // Identical state to the test above, and the civil pool is short by
+        // exactly the same one action -- but here Breakthrough ordered the
+        // revolution, and its own 1 CA is why the pool is short (RB p.15).
+        // Nothing was converted, so nothing military may be charged. Reading
+        // the shortfall alone as proof of a conversion cost 12 corpus games,
+        // every one of them a Hammurabi player who revolts "using
+        // Breakthrough" -- 7521740, 7522434, 7523030 among them -- and is then
+        // one military action short for the rest of the game.
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Hammurabi");
+        p.science = 10;
+        p.civil_actions = 3; // the 1 CA Breakthrough itself cost
+        p.military_actions = 2;
+        p.hand_civil.push(card("Monarchy"));
+        let mut state = one_player_state(p);
+        h_revolution(&mut state, 0, card("Monarchy"), true);
+        assert!(!state.players[0].hammurabi_used, "the conversion is untouched and still available this turn");
+        assert_eq!(state.players[0].military_actions, 3); // Monarchy's full MA total carries over
     }
 
     /// ENGINE BUG regression: `h_revolution` used to read `Card::
