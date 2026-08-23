@@ -242,8 +242,8 @@ fn read_cache(path: &Path) -> Result<(usize, Vec<CachedDecision>), String> {
         let mut raw = vec![0u8; n * nfeat * 4];
         r.read_exact(&mut raw).map_err(|e| e.to_string())?;
         let mut candidates = Vec::with_capacity(n * nfeat);
-        for chunk in raw.chunks_exact(4) {
-            candidates.push(f32::from_le_bytes(chunk.try_into().unwrap()));
+        for chunk in raw.as_chunks::<4>().0 {
+            candidates.push(f32::from_le_bytes(*chunk));
         }
         out.push(CachedDecision { game_id, lineno, category, age, human_index, n, candidates });
     }
