@@ -2046,6 +2046,27 @@ mod tests {
         assert_eq!(s.science, 0, "1 (Philosophy) - 1 (Sid Meier) clamped at 0 floor if it undershoots");
     }
 
+    /// The FAQ's own Sid Meier example, pinned: two Age-III Computers
+    /// workers yield 8 science AND 6 culture. The culture half is the one
+    /// that would silently rot if `CulturePerLabEqualToLevel` ever switched
+    /// its key from the lab's AGE (3 here) to its printed science production
+    /// (5): 5 x 2 workers would be 10, not 6. Computers is the only Age-III
+    /// lab in the set, so it is the exact fixture the FAQ describes.
+    #[test]
+    fn sid_meier_age3_lab_workers_yield_6_culture() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.leader = card("Sid Meier");
+        p.techs.insert(card("Computers"), TechSlot { workers: 2, stored: 0 });
+        let state = one_player_state(2, p);
+        let s = compute(&state, &state.players[0]);
+        // Culture: Sid Meier's `CulturePerLabEqualToLevel` keys off the lab's
+        // AGE (Age III = level 3) x workers: 3 x 2 = 6.
+        assert_eq!(s.culture, 6, "Sid Meier: age-3 lab, 2 workers -> 6 culture");
+        // Science: Computers' printed 5/worker x 2 = 10, then Sid Meier's
+        // `SciencePerLab(-1)` x 2 labs' worth of workers = -2 -> 8.
+        assert_eq!(s.science, 8, "Computers 5x2=10 minus Sid Meier -1x2 -> 8 science");
+    }
+
     /// Napoleon's `strengthPerUnitType` is 2, not the 1 a payload-less
     /// variant would have silently assumed.
     #[test]

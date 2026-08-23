@@ -8464,3 +8464,52 @@ accounting drifts. This transfer corrects the GRANT'S SEAT from the journal's
 named targets, which is the honest, journal-grounded fix; it does not repair
 the strength stat itself. The 8 hand_military regressions from the
 dedup-guard pass remain the next open front.
+
+## 2026-08-22: War over Technology spoils — per-war grouping (LANDED, science 34→16, 0 regressions)
+
+The `ChoiceKind::WarTech` drain in `resolve_intervening` used to read the
+journal's `"takes spoils of war"` lines as a flat per-actor FIFO
+(`TaggedWarSpoil`). That is wrong for a war that resolves with **nothing
+stealable**: `interact::offer_war_tech` auto-takes its remainder as science
+WITHOUT ever opening a `Pending::Choice`, so that war's lone `"gets N
+science"` line sits in the FIFO but is never consumed. It then shifts the
+picks of the NEXT war that does open a choice, which takes the FULL
+advantage as science instead of the remainder after its own steal.
+
+The concrete counterexample the coordinator flagged: **7521829** — the
+line-213 war auto-resolved, its stale `Science` pick was popped for the
+line-257 war (which should steal Code of Laws, cost 6, first). The engine
+then charged the stolen card's whole 6-point cost to the victim's science
+stock (the two-ledger error: a stolen special tech moves ZERO science stock;
+only the ADVANTAGE-BUDGET remainder is charged to the victim).
+
+**Fix** (`replay_common.rs`): replace the flat FIFO with a per-actor, per-WAR
+grouping. `prescan_war_tech_spoils` now returns `HashMap<u8, VecDeque
+<WarSpoilGroup>>`; a `WarSpoilGroup` is one war's picks, keyed by its own
+`"<Color> wins War over Technology"` confirmation line (`parse_war_tech_win_
+line`), accumulating the `Steal`/`Science` picks that follow until the next
+such confirmation for that actor. The drain resolves one group's picks IN
+ORDER (one pick per re-offered `Pending::Choice(WarTech)`), and skips a
+group only when its front pick is `Science` AND its picks are not an exact
+prefix of the live choice's options — so an auto-resolved (never-opened)
+war's group is skipped, while a genuine single-`Science` war that BGO DID
+open a choice for is never skipped.
+
+Verified: 7521829 is now 100% science-matched (30/30); 7522633 (a single
+Technology war with a steal→science→steal split) and 7521515 both complete.
+Full 1,011-game sweep: **878 completed / 836 exact = EXACTLY the frozen
+guards (zero lost, zero gained)**; science-divergent games **34 → 16**.
+
+**The 16 remaining science-divergent games are a DIFFERENT mechanism**
+(first divergence action class / delta): `7521757` Discard +2, `7521917`
+UpgradeUnit +1, `7522092` WinWar −1, `7522141` TakeCard +1, `7522214`
+TakeCard +1, `7522411` PlayTactic +1, `7522446` EndTurn −12, `7522478`
+UpgradeProduction +1, `7522590` BuildBuilding −2, `7522698`
+IncreasePopulation +1, `7522717` WinWar −1, `7522923` UpgradeProduction +1,
+`7523025` BuildWonderStage −3, `7523277` DevelopTechnology +1, `7523429`
+IncreasePopulation +1, `7523456` PlayActionCard +1. Most are ±1 single-
+checkpoint drift (a one-science gain/loss the engine is missing or over-
+crediting at that action), a few larger (7522446 −12 at round 18, 7523025
+−3). These are NOT the war-spoils bug; each needs its own root-cause. Note
+7522092/7522717 are War over Territory/Culture (NOT Technology) — a separate
+war-spoils path.

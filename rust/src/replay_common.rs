@@ -183,6 +183,33 @@ enum WarSpoil {
     Science,
 }
 
+/// The journal-observed picks of ONE War over Technology, in journal order.
+///
+/// Grouping by war (rather than a flat per-actor FIFO of individual picks) is
+/// what keeps the drain honest when a war resolves with nothing stealable:
+/// such a war auto-takes its remainder as science WITHOUT ever opening a
+/// `Pending::Choice`, so its picks are never consumed by the drain. A flat
+/// FIFO would leave that stale `Science` pick at the front and hand it to the
+/// NEXT war that does open a choice, making that war take the FULL advantage
+/// as science instead of the remainder after its own steal (7521829: the
+/// line-213 war auto-resolved, its stale `Science` pick was popped for the
+/// line-257 war, which should have stolen Code of Laws first -- the engine
+/// then charged the stolen card's whole 6-point cost to the victim's science
+/// stock). A war-group carries the line of its own `"wins War over
+/// Technology"` confirmation, so the drain can tell which war a pending
+/// belongs to and skip the auto-resolved groups that never opened one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WarSpoilGroup {
+    /// The journal line of this war's `"<Color> wins War over Technology"`
+    /// confirmation -- the boundary that starts this war's picks.
+    wins_lineno: usize,
+    /// This war's picks in journal order (`Steal` then possibly a terminal
+    /// `Science` remainder; a war the victor settles for science only has a
+    /// single `Science`). Drained front-to-back, one pick per re-offered
+    /// `Pending::Choice(WarTech)`.
+    picks: VecDeque<WarSpoil>,
+}
+
 // ---------------------------------------------------------------------
 // Journal line
 // ---------------------------------------------------------------------
@@ -793,7 +820,7 @@ struct Replayer<'a> {
     /// same reason that field gives -- see `prescan_war_tech_spoils`'s doc
     /// and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
     /// drains it.
-    war_tech_spoils: HashMap<u8, VecDeque<WarSpoil>>,
+    war_tech_spoils: HashMap<u8, VecDeque<WarSpoilGroup>>,
     /// Resolves `Pending::Choice(DiscardMilitary)` by constraint propagation
     /// over the rest of the journal -- see `discard_solver`'s module doc and
     /// `docs/REPLAY.md`'s "Military discard: solved, not given up on"
@@ -2267,19 +2294,94 @@ impl<'a> Replayer<'a> {
                     // ..."`) rather than one line per war, because `offer_
                     // war_tech` re-offers with the advantage reduced after
                     // every steal -- see `Replayer::war_tech_spoils`'s doc.
-                    // Drained here in journal order, no validate-and-skip
-                    // loop needed (unlike `Raid`/`LoseColony`/`FlipWonder`
-                    // above): `prescan_war_tech_spoils`'s own doc explains
-                    // why an orphaned earlier entry can't happen for this
-                    // particular choice.
+                    //
+                    // The picks are grouped by WAR, not held in a flat FIFO:
+                    // a war that resolves with nothing stealable auto-takes
+                    // its remainder as science WITHOUT opening a choice, so
+                    // its group is never drained here and must not shift the
+                    // picks of the next war that does open one (7521829: the
+                    // line-213 war auto-resolved; its lone `Science` pick
+                    // must NOT be handed to the line-257 war, which should
+                    // steal Code of Laws first -- the engine would otherwise
+                    // charge the stolen card's whole 6-point cost to the
+                    // victim's science stock). A group is "already handled"
+                    // precisely when the journal logged NO choice-worthy pick
+                    // for it: an unstealable war's only pick is a `Science`
+                    // (auto-take), so any group whose front pick is `Science`
+                    // is skipped -- a real war's first pick is always a
+                    // `Steal`, and the terminal remainder `Science` is
+                    // consumed WITHIN the same group's re-offer, never left
+                    // as a group front. (A line-number key does NOT work: the
+                    // engine resolves wars at the START of the winner's own
+                    // turn, `game::start_turn`, while BGO logs the spoils
+                    // lines at whatever journal position it chose -- in
+                    // 7521515 the spoils are logged ~5 lines after the
+                    // "wins War over" line, so `current_lineno` is already
+                    // past them by the time the choice opens.)
                     ChoiceKind::WarTech { .. } => {
-                        let picked = self.war_tech_spoils.entry(decider).or_default().pop_front().ok_or_else(|| {
-                            MismatchKind::StuckPending(format!(
-                                "WarTech choice open for player {decider} but no journal-observed \
-                                 \"takes spoils of war\" line left to resolve it with"
-                            ))
-                        })?;
-                        let n = match picked {
+                        // Resolve this war's next pick, IN GROUP ORDER, from the
+                        // front war-group. A group is the journal-observed picks
+                        // of ONE War over Technology (see `WarSpoilGroup`). A
+                        // war that resolves with nothing stealable auto-takes
+                        // its remainder as science WITHOUT opening a choice, so
+                        // its group -- a single `Science` pick -- is never
+                        // drained here and must not shift the picks of the next
+                        // war that does open one (7521829: the line-213 war
+                        // auto-resolved; its lone `Science` must NOT be handed
+                        // to the line-257 war, which should steal Code of Laws
+                        // first -- the engine would otherwise charge the stolen
+                        // card's whole 6-point cost to the victim's stock).
+                        //
+                        // How a stale group is recognised: a real war's FIRST
+                        // pick is always a `Steal` (a science-only war is the
+                        // auto-resolved case). So a front pick that is `Science`
+                        // can only be stale. BUT we do not trust that alone: we
+                        // additionally require the stale group's picks to NOT be
+                        // an exact prefix of the live choices' options, so a
+                        // genuine single-`Science` war that BGO DID open a
+                        // choice for (budget 0, science offered) is never
+                        // skipped. All of this runs before any `self` borrow.
+                        let (pick, wins_lineno) = {
+                            let spoils = self.war_tech_spoils.entry(decider).or_default();
+                            // The live choice's options as `WarSpoil`-like tags:
+                            // index 0 is the science pick, the rest are steals.
+                            let is_prefix = |g: &WarSpoilGroup| -> bool {
+                                g.picks.len() <= c.options.len()
+                                    && g.picks.iter().enumerate().all(|(i, p)| match p {
+                                        WarSpoil::Science => i == crate::interact::WAR_TECH_SCIENCE_IDX as usize,
+                                        WarSpoil::Steal(card) => c
+                                            .options
+                                            .as_slice()
+                                            .iter()
+                                            .any(|o| matches!(o, ChoiceOption::Card(id) if *id == *card)),
+                                    })
+                            };
+                            while let Some(g) = spoils.front() {
+                                if matches!(g.picks.front(), Some(WarSpoil::Science)) && !is_prefix(g) {
+                                    spoils.pop_front(); // stale auto-resolved war
+                                } else {
+                                    break;
+                                }
+                            }
+                            let mut group = spoils.pop_front().ok_or_else(|| {
+                                MismatchKind::StuckPending(format!(
+                                    "WarTech choice open for player {decider} but no journal-observed \
+                                     \"takes spoils of war\" line left to resolve it with"
+                                ))
+                            })?;
+                            let wins_lineno = group.wins_lineno;
+                            let pick = group.picks.pop_front().ok_or_else(|| {
+                                MismatchKind::StuckPending(format!(
+                                    "WarTech choice open for player {decider} but its journal-observed \
+                                     war group (line {wins_lineno}) is empty"
+                                ))
+                            })?;
+                            if !group.picks.is_empty() {
+                                spoils.push_front(group);
+                            }
+                            (pick, wins_lineno)
+                        };
+                        let n = match pick {
                             WarSpoil::Steal(card) => c
                                 .options
                                 .as_slice()
@@ -2287,7 +2389,7 @@ impl<'a> Replayer<'a> {
                                 .position(|o| matches!(o, ChoiceOption::Card(id) if *id == card))
                                 .ok_or_else(|| {
                                     MismatchKind::ParserGap(format!(
-                                        "WarTech options {:?} do not offer the journal-observed steal of {card:?}",
+                                        "WarTech options {:?} do not offer the journal-observed steal of {card:?} (war at line {wins_lineno})",
                                         c.options.as_slice()
                                     ))
                                 })?,
@@ -4500,7 +4602,7 @@ fn take_blocked_only_by_wonder_in_progress(
     }
     let gate = costs::take_gate(state, p, None);
     let names_wonder =
-        matches!(costs::take_rejection(state, p, slot, &gate), Some(costs::TakeRejection::WonderInProgress));
+        matches!(costs::take_rejection(state, p, slot, &gate, None), Some(costs::TakeRejection::WonderInProgress));
     if !names_wonder {
         return false;
     }
@@ -4509,7 +4611,7 @@ fn take_blocked_only_by_wonder_in_progress(
     // `IllegalMove: Take` mismatch stands.
     let mut shadow = p.clone();
     shadow.wonder = CardId::NONE;
-    costs::take_rejection(state, &shadow, slot, &gate).is_none()
+    costs::take_rejection(state, &shadow, slot, &gate, None).is_none()
 }
 
 /// REPLAYER-ONLY divergence (see [`Replayer::try_apply_take`]'s doc, item
@@ -4542,14 +4644,14 @@ fn take_blocked_only_by_budget(
         return false; // affordable anyway -- `legal_moves` would have offered it
     }
     let names_budget = matches!(
-        costs::take_rejection(state, p, slot, &gate),
+        costs::take_rejection(state, p, slot, &gate, None),
         Some(costs::TakeRejection::Budget | costs::TakeRejection::WonderBudget)
     );
     if !names_budget {
         return false;
     }
     let probe = costs::TakeGate { have: n, ..gate };
-    costs::take_rejection(state, p, slot, &probe).is_none()
+    costs::take_rejection(state, p, slot, &probe, None).is_none()
 }
 
 /// REPLAYER-ONLY divergence from self-play legality (`docs/REPLAY.md`'s
@@ -4572,11 +4674,11 @@ fn take_blocked_only_by_budget(
 /// ([`Replayer::try_apply_take`]) -- self-play legality is unaffected.
 fn take_blocked_only_by_hand_full(state: &GameState, p: &PlayerState, slot: usize) -> bool {
     let gate = costs::take_gate(state, p, None);
-    if !matches!(costs::take_rejection(state, p, slot, &gate), Some(costs::TakeRejection::HandFull)) {
+    if !matches!(costs::take_rejection(state, p, slot, &gate, None), Some(costs::TakeRejection::HandFull)) {
         return false;
     }
     let probe = costs::TakeGate { hand_full: false, ..gate };
-    costs::take_rejection(state, p, slot, &probe).is_none()
+    costs::take_rejection(state, p, slot, &probe, None).is_none()
 }
 
 /// The `Move` a player OTHER than `state.decider()` is legally allowed to
@@ -7367,25 +7469,57 @@ fn parse_war_tech_science_line(text: &str) -> Option<Color> {
     Some(actor)
 }
 
-/// Pre-scans the whole journal once for every [`parse_war_tech_steal_line`] /
-/// [`parse_war_tech_science_line`] match into a per-actor FIFO, in journal
-/// order -- the exact sequence `interact::offer_war_tech`'s own re-offer
-/// loop produces the picks in, so no validate-and-skip is needed the way
-/// `raid_destroys`/`lose_colonies` need it (those FIFOs can also collect
-/// entries from an EARLIER, already-auto-resolved single-option choice;
-/// `offer_war_tech` never auto-resolves once a real `Pending::Choice` is
-/// open -- `push_choice`'s len-1 rule only fires before the choice exists at
-/// all, when `war_tech_options` is empty). See `Replayer::war_tech_spoils`'s
-/// doc and `resolve_intervening`'s `ChoiceKind::WarTech` handling, which
-/// drains this per-actor.
-fn prescan_war_tech_spoils(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<WarSpoil>> {
-    let mut out: HashMap<u8, VecDeque<WarSpoil>> = HashMap::new();
+/// `"<Color> wins War over Technology ..."` -- the confirmation line that
+/// starts one war's spoils. Only War over Technology is recognised (the other
+/// two war kinds pay a flat yellow/culture spoil with no steal decision and
+/// so never open a `WarTech` choice); the actor is the VICTOR, the one who
+/// takes the spoils.
+fn parse_war_tech_win_line(text: &str) -> Option<Color> {
+    let (actor, rest) = actor_and_rest(text)?;
+    rest.strip_prefix("wins War over Technology")?;
+    Some(actor)
+}
+
+/// Pre-scans the whole journal once into per-actor, per-WAR groups of
+/// War over Technology spoils picks, in journal order. Each group is keyed by
+/// the line of its own `"wins War over Technology"` confirmation, and its
+/// picks are the `Steal`/`Science` lines that follow, in order, until the
+/// next such confirmation for the same actor.
+///
+/// Grouping by war (not a flat pick FIFO) is what lets the drain skip a war
+/// that resolved with nothing stealable: that war auto-takes its remainder as
+/// science WITHOUT opening a `Pending::Choice`, so its group is never drained
+/// and must not shift the picks of a later war that DOES open one (7521829:
+/// the line-213 war's auto-science pick was popped for the line-257 war,
+/// which should have stolen Code of Laws first -- the engine then charged the
+/// stolen card's whole 6-point cost to the victim's science stock). See
+/// `Replayer::war_tech_spoils`'s doc and `resolve_intervening`'s
+/// `ChoiceKind::WarTech` handling, which drains one group's picks per open
+/// `WarTech` choice.
+fn prescan_war_tech_spoils(lines: &[Line], card_index: &HashMap<&'static str, CardId>) -> HashMap<u8, VecDeque<WarSpoilGroup>> {
+    // Per actor, the group currently being filled (None until the first
+    // `"wins War over Technology"` line for that actor is seen).
+    let mut open: HashMap<u8, WarSpoilGroup> = HashMap::new();
+    let mut out: HashMap<u8, VecDeque<WarSpoilGroup>> = HashMap::new();
     for line in lines {
-        if let Some((actor, id)) = parse_war_tech_steal_line(card_index, line.text) {
-            out.entry(actor.seat()).or_default().push_back(WarSpoil::Steal(id));
+        if let Some(actor) = parse_war_tech_win_line(line.text) {
+            if let Some(prev) = open.remove(&actor.seat()) {
+                out.entry(actor.seat()).or_default().push_back(prev);
+            }
+            open.insert(actor.seat(), WarSpoilGroup { wins_lineno: line.lineno, picks: VecDeque::new() });
+        } else if let Some((actor, id)) = parse_war_tech_steal_line(card_index, line.text) {
+            open.entry(actor.seat()).or_insert_with(|| WarSpoilGroup { wins_lineno: usize::MAX, picks: VecDeque::new() })
+                .picks
+                .push_back(WarSpoil::Steal(id));
         } else if let Some(actor) = parse_war_tech_science_line(line.text) {
-            out.entry(actor.seat()).or_default().push_back(WarSpoil::Science);
+            open.entry(actor.seat()).or_insert_with(|| WarSpoilGroup { wins_lineno: usize::MAX, picks: VecDeque::new() })
+                .picks
+                .push_back(WarSpoil::Science);
         }
+    }
+    // Flush any still-open group (a war whose picks end the journal).
+    for (seat, group) in open {
+        out.entry(seat).or_default().push_back(group);
     }
     out
 }
@@ -9340,16 +9474,15 @@ pub fn replay_game(
                     // us, and the event's 5-CA budget covers at most that.
                     // A slot grounded by an earlier journal line is never
                     // touched; an empty (already-taken) slot is skipped.
-                    // `take_rejection_named`'s first branch reads
-                    // `state.card_row[idx]` regardless of the `name`
-                    // override (it only decides which identity the COST and
-                    // identity-keyed gates test), so an EMPTY slot names
-                    // `EmptySlot` even for a real `name`. Skip those: the
-                    // pick is substituted into a NON-empty filler slot.
+                    // `take_rejection`'s `None` arm names `EmptySlot` on an
+                    // empty slot, but this path always substitutes into a
+                    // NON-empty filler slot (see the `is_none` filter
+                    // below), so the `Some(name)` override -- which never
+                    // reads the occupant -- is the shape the probe needs.
                     //
                     // The probe itself is `can_take_gated` with the
                     // `name` override and `have: i32::MAX`, NOT
-                    // `take_rejection_named`: this override's only job is
+                    // `take_rejection`: this override's only job is
                     // to answer "was the take rejected AT ALL?" -- if
                     // `can_take` says yes (a `can_take`-legal slot was
                     // never offered, so `resolve_intervening` drained the
@@ -10534,7 +10667,7 @@ fn apply_one(
             if crate::debugflags::replay_debug() {
                 let p = &r.state.players[actor as usize];
                 let gate = costs::take_gate(&r.state, p, None);
-                if let Some(reason) = costs::take_rejection(&r.state, p, slot as usize, &gate) {
+                if let Some(reason) = costs::take_rejection(&r.state, p, slot as usize, &gate, None) {
                     let s = effects::state_stats(&r.state, p);
                     eprintln!(
                         "DEBUG TAKE REJECT: lineno={} age_civil={:?} card={} slot={slot} reason={reason:?} our_take_cost={} \
@@ -16145,7 +16278,10 @@ mod tests {
         // describes.
         crate::interact::war_tech_spoils(&mut r.state, 0, 1, 8);
         assert!(r.state.pending.top().is_some(), "war_tech_spoils must open a real choice when a steal is on offer");
-        r.war_tech_spoils.insert(0, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
+        r.war_tech_spoils.insert(
+            0,
+            VecDeque::from([WarSpoilGroup { wins_lineno: 201, picks: VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]) }]),
+        );
 
         // `expected_actor: 0`, matching the victor: once both picks drain
         // and `state.pending` empties, `resolve_intervening`'s own "whose
@@ -16293,8 +16429,15 @@ mod tests {
             line(202, "II", "Orange takes spoils of war Orange gets 6 science; Purple loses 6 science"),
         ];
         let mut out = prescan_war_tech_spoils(&journal, &card_index);
-        let q = out.remove(&Color::Orange.seat()).expect("Orange has two spoils picks");
-        assert_eq!(q, VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]));
+        let q = out.remove(&Color::Orange.seat()).expect("Orange has one war group");
+        assert_eq!(q.len(), 1, "exactly one war group");
+        assert_eq!(
+            &q[0],
+            &WarSpoilGroup {
+                wins_lineno: 198,
+                picks: VecDeque::from([WarSpoil::Steal(navigation), WarSpoil::Science]),
+            }
+        );
     }
 
     /// [`parse_ravages_of_time_line`]: the actor comes from `Line::color`

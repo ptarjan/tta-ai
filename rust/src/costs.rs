@@ -439,63 +439,15 @@ pub enum TakeRejection {
 /// run by `take_rejection_agrees_with_can_take_gated` below, which checks
 /// `take_rejection(..).is_none() == can_take_gated(..)` for every fixture in
 /// this module's `can_take*` tests. Returns `None` iff the take is legal.
+///
+/// `name` is the same override as `can_take_gated`'s `name` parameter: `None`
+/// reads the slot's CURRENT occupant (`state.card_row[idx]`, naming
+/// `EmptySlot` when that is `None`), while `Some(id)` tests the GIVEN card's
+/// identity against the slot's position price -- the replayer's
+/// International-Agreement hand-full override grounds a pick against a slot
+/// whose `card_row` entry is still `new_game`'s fictional filler, not the
+/// journal's card, so feeding the filler would test the wrong card.
 pub fn take_rejection(
-    state: &GameState,
-    p: &PlayerState,
-    idx: usize,
-    gate: &TakeGate,
-) -> Option<TakeRejection> {
-    let id = state.card_row[idx];
-    if id.is_none() {
-        return Some(TakeRejection::EmptySlot);
-    }
-    let card = id.get();
-    let mut cost = row_cost(idx);
-    if card.kind == CardType::Wonder {
-        cost += gate.surcharge;
-        cost -= leader_replacement_take_discount(card, p);
-        if cost > gate.have {
-            return Some(TakeRejection::WonderBudget);
-        }
-        return if p.wonder.is_none() { None } else { Some(TakeRejection::WonderInProgress) };
-    }
-    if card.kind == CardType::Leader {
-        cost -= gate.leader_discount;
-    }
-    if cost > gate.have {
-        return Some(TakeRejection::Budget);
-    }
-    if gate.hand_full {
-        return Some(TakeRejection::HandFull);
-    }
-    if card.kind == CardType::Leader {
-        return if gate.taken_leader_ages & (1 << (card.age as u8)) == 0 {
-            None
-        } else {
-            Some(TakeRejection::LeaderAgeTaken)
-        };
-    }
-    if card.kind != CardType::Action
-        && (p.hand_civil.contains(id) || p.techs.has(id) || id == p.government)
-    {
-        return Some(TakeRejection::DuplicateCard);
-    }
-    None
-}
-
-/// [`take_rejection`] with an explicit card identity, mirroring
-/// [`can_take_gated`]'s `name` parameter: the slot's CURRENT occupant
-/// (`state.card_row[idx]`) is what [`take_rejection`] reads, but a caller
-/// that has ALREADY decided which card the take is for (the replayer's
-/// `International Agreement` hand-full override grounds a pick against a
-/// slot whose `card_row` entry is still `new_game`'s fictional filler, not
-/// the journal's card) must probe the GATES against the pick's own
-/// identity -- the wonder/leader/duplicate branches all key off `id`, so
-/// feeding the filler in there tests the wrong card. Branch order and every
-/// gate are identical to [`take_rejection`]; only where `id` comes from
-/// differs, for the same "the two must never drift" reason `take_rejection`
-/// exists at all (its own doc comment).
-pub fn take_rejection_named(
     state: &GameState,
     p: &PlayerState,
     idx: usize,
@@ -504,7 +456,13 @@ pub fn take_rejection_named(
 ) -> Option<TakeRejection> {
     let id = match name {
         Some(id) => id,
-        None => return take_rejection(state, p, idx, gate),
+        None => {
+            let slot = state.card_row[idx];
+            if slot.is_none() {
+                return Some(TakeRejection::EmptySlot);
+            }
+            slot
+        }
     };
     let card = id.get();
     let mut cost = row_cost(idx);
@@ -1333,7 +1291,7 @@ mod tests {
         let gate = take_gate(&state, p, None);
         assert!(gate.hand_full, "civil hand at the CA limit must report hand_full");
         assert!(!can_take_gated(&state, p, 0, &gate, None), "self-play legality must still refuse the take");
-        assert_eq!(take_rejection(&state, p, 0, &gate), Some(TakeRejection::HandFull));
+        assert_eq!(take_rejection(&state, p, 0, &gate, None), Some(TakeRejection::HandFull));
     }
 
     /// RULES_SPEC §2.4/§2.5: a wonder "goes directly into play sideways as
@@ -1413,7 +1371,7 @@ mod tests {
         fn check(state: &GameState, p: &PlayerState, idx: usize) {
             let gate = take_gate(state, p, None);
             let legal = can_take_gated(state, p, idx, &gate, None);
-            let rejection = take_rejection(state, p, idx, &gate);
+            let rejection = take_rejection(state, p, idx, &gate, None);
             assert_eq!(rejection.is_none(), legal, "idx={idx} rejection={rejection:?}");
         }
 
@@ -1472,36 +1430,36 @@ mod tests {
         check(&state, &state.players[0], 0);
     }
 
-    /// [`take_rejection_named`] must mirror [`take_rejection`] (and
-    /// [`can_take_gated`]'s `name` parameter) gate-for-gate when the
-    /// override is `None`, and must test the OVERRIDDEN card's identity --
-    /// not the slot's current occupant -- when it is `Some`. The replayer's
+    /// `take_rejection`'s `name` override must mirror `can_take_gated`'s
+    /// `name` parameter gate-for-gate: with `None` it reads the slot's
+    /// CURRENT occupant (naming `EmptySlot` when that is `None`), and with
+    /// `Some(id)` it tests the OVERRIDDEN card's identity -- not the slot's
+    /// occupant -- against the slot's position price. The replayer's
     /// International-Agreement hand-full override calls it with the journal
     /// pick against a slot still holding fictional filler, so a drift here
     /// would silently reject (or accept) takes on the wrong card's
     /// duplicate/wonder/leader status.
     #[test]
-    fn take_rejection_named_mirrors_take_rejection_and_overrides_the_card_identity() {
+    fn take_rejection_name_override_tests_the_overridden_card_not_the_occupant() {
         fn check(state: &GameState, p: &PlayerState, idx: usize, name: Option<CardId>) {
             let gate = take_gate(state, p, None);
             let legal = can_take_gated(state, p, idx, &gate, name);
-            let rejection = take_rejection_named(state, p, idx, &gate, name);
+            let rejection = take_rejection(state, p, idx, &gate, name);
             assert_eq!(rejection.is_none(), legal, "idx={idx} name={name:?} rejection={rejection:?}");
         }
 
-        // `None` override: identical to `take_rejection` for every shape
-        // above (a different-occupant slot, a duplicate in hand).
+        // `None` override: reads the slot's occupant for every shape above
+        // (a different-occupant slot, a duplicate in hand).
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 10;
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
         state.card_row[0] = card("Irrigation");
         check(&state, &state.players[0], 0, None);
-        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None)), take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), None));
 
         // `Some` override: the slot holds `Irrigation` but the take is for
         // `Bronze` -- the duplicate gate must test `Bronze`'s identity
-        // (not in hand) and pass, while `take_rejection` on the same slot
+        // (not in hand) and pass, while the same slot with no override
         // names the occupant's duplicate.
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 10;
@@ -1512,8 +1470,8 @@ mod tests {
         state.card_row[0] = card("Irrigation");
         let bronze = card("Bronze");
         check(&state, &state.players[0], 0, Some(bronze));
-        assert_eq!(take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), None);
-        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None)), Some(TakeRejection::DuplicateCard));
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), None);
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), None), Some(TakeRejection::DuplicateCard));
 
         // `Some` override, hand FULL: the overridden card is affordable and
         // not a duplicate, so `HandFull` is named -- the exact answer the
@@ -1530,20 +1488,20 @@ mod tests {
         state.card_row[0] = card("Irrigation");
         let bronze = card("Bronze");
         check(&state, &state.players[0], 0, Some(bronze));
-        assert_eq!(take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), Some(TakeRejection::HandFull));
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), Some(TakeRejection::HandFull));
 
-        // `Some` override of an EMPTY slot: `take_rejection` names
-        // `EmptySlot` on the occupant, but `take_rejection_named` has no
-        // occupant to read -- it tests the OVERRIDDEN card against the
-        // slot's position price, so an affordable card on an empty slot is
-        // legal (the caller grounding a pick into an empty slot is a
-        // replayer-side concern, not a gate this function polices).
+        // `Some` override of an EMPTY slot: the `None` arm names `EmptySlot`
+        // on the (absent) occupant, but a `Some` override has no occupant to
+        // read -- it tests the OVERRIDDEN card against the slot's position
+        // price, so an affordable card on an empty slot is legal (the caller
+        // grounding a pick into an empty slot is a replayer-side concern,
+        // not a gate this function polices).
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 1;
         let state = one_player_state(p);
         let bronze = card("Bronze");
-        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None)), Some(TakeRejection::EmptySlot));
-        assert_eq!(take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), None);
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), None), Some(TakeRejection::EmptySlot));
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), None);
     }
 
     // ------------------------------------------------------- build_cost_for
