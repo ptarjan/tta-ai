@@ -642,6 +642,18 @@ struct Replayer<'a> {
     /// stage against the wonder the journal line NAMED. `None` for any
     /// non-wonder line.
     named_wonder_step: Option<CardId>,
+    /// `raw_text` of a `BuildWonderStage` journal line whose effect was
+    /// ALREADY applied early, out of journal order, by the `TakeCard` arm's
+    /// own [`apply_wonder_completion_before_take`] -- see that function's
+    /// doc for the exact shape (BGO logs a same-instant SECOND-wonder take
+    /// BEFORE the first wonder's own completing stage-build line, games
+    /// `7521751`/`7523330`). The `BuildWonderStage` arm checks this at entry
+    /// and, on a match, clears it and returns without re-applying (paying
+    /// the stage twice would starve a later, genuinely-affordable build).
+    /// `None` almost always; at most one line is ever claimed at a time,
+    /// since only the ONE line immediately following the triggering take can
+    /// match.
+    claimed_wonder_completion_text: Option<String>,
     /// The journal `Line::lineno` currently being resolved, set once per
     /// loop iteration in `replay_game` before `resolve_intervening` runs.
     /// `DiscardSolver::choose` needs this to tell a FUTURE named play
@@ -1237,6 +1249,7 @@ impl<'a> Replayer<'a> {
             trailing_discards_lines: Vec::new(),
             duplicate_build_lines: Vec::new(),
             last_wonder_step_text: None,
+            claimed_wonder_completion_text: None,
             named_wonder_step: None,
             current_lineno: 0,
             gain_produces,
@@ -4403,6 +4416,35 @@ impl<'a> Replayer<'a> {
         }
         if !legal.as_slice().contains(&mv)
             && take_blocked_only_by_wonder_in_progress(&self.state, &self.state.players[actor as usize], slot as usize)
+            && {
+                // `take_card_impl` (apply.rs) now REFUSES to silently
+                // overwrite an unfinished outgoing wonder -- it finalizes a
+                // COMPLETE one, or panics loudly, and this binary's
+                // `difftest` profile inherits `panic = "abort"`, so a stray
+                // panic here would abort the WHOLE corpus run, not just this
+                // one game. `apply_wonder_completion_before_take` (called a
+                // few lines above `try_apply_take`, in `apply_one`'s
+                // `TakeCard` arm) already finalized the outgoing wonder EARLY
+                // for the one documented same-instant shape (`7521751`/
+                // `7523330`) -- if that fired, `p.wonder` is already `NONE`
+                // and this whole override no longer needs to run at all
+                // (`take_blocked_only_by_wonder_in_progress` already returns
+                // `false` for an empty `p.wonder`, so we'd never even reach
+                // here). Reaching here with `p.wonder` STILL non-empty and
+                // NOT complete means neither finalizer accounted for it --
+                // an as-yet-undiagnosed shape, not the one this override was
+                // built for, UNLESS the outgoing wonder has zero progress
+                // (`wonder_steps == 0`, matching `take_card_impl`'s own
+                // "nothing real to lose" carve-out -- game `7521828`: Orange
+                // abandons a never-built Transcontinental Railroad for First
+                // Space Flight 7 rounds later). Falling through to the
+                // honest `IllegalMove: Take` below (rather than forcing an
+                // unaccountable take through `h_take`) is what pre-`apply_
+                // wonder_completion_before_take` code already did for every
+                // OTHER `WonderInProgress`-only take in the corpus.
+                let p = &self.state.players[actor as usize];
+                p.wonder_steps == 0 || (p.wonder_steps as usize) >= p.wonder.get().stages.len()
+            }
         {
             self.wonder_takes_overridden += 1;
             // The journal proves BGO charged (and the human paid) the take;
@@ -5384,6 +5426,75 @@ fn wonder_stage_count(rest_after_builds: &str) -> Option<u8> {
         return None;
     }
     rest_after_builds[..digits_end].parse().ok()
+}
+
+/// If `text` is a `BuildWonderStage` line that EXACTLY finishes `p`'s own
+/// wonder-in-progress (names it, pays every remaining stage, and carries
+/// BGO's own `"Wonder completed"` trailer), returns the step count -- the
+/// signal [`apply_wonder_completion_before_take`] uses to apply that line's
+/// effect early. `None` for anything else (a different wonder, a partial
+/// stage, or no trailer), which leaves the caller's normal `IllegalMove`
+/// path to fire honestly rather than manufacture a pass.
+fn wonder_completion_line_matches(p: &PlayerState, text: &str) -> Option<u8> {
+    if p.wonder.is_none() {
+        return None;
+    }
+    let after_builds = text.find("builds ").map(|i| &text[i + "builds ".len()..])?;
+    let steps = wonder_stage_count(after_builds)?;
+    let stages_len = p.wonder.get().stages.len() as u8;
+    let remaining = stages_len.checked_sub(p.wonder_steps)?;
+    if steps == remaining && text.contains(p.wonder.get().name) && text.contains("Wonder completed") {
+        Some(steps)
+    } else {
+        None
+    }
+}
+
+/// The other half of [`take_blocked_only_by_wonder_in_progress`]'s own
+/// "REPLAYER-ONLY divergence" (see that function's doc): BGO's journal, on
+/// games `7521751`/`7523330`, logs a same-instant SECOND-wonder take BEFORE
+/// the FIRST wonder's own completing stage-build line, even though the
+/// completion is what makes the take legal in the first place. Forcing the
+/// take through via `apply::h_take` and letting `apply::take_card_impl`
+/// overwrite `p.wonder` (the old bug) silently discarded the first wonder's
+/// live, paid-for progress: never pushed to `completed_wonders`, `on_enter_
+/// play` never ran, its completion culture never credited -- confirmed by
+/// `7523330`'s own culture-oracle divergence at journal line 97 (engine 4,
+/// journal 5, exactly Hanging Gardens' un-applied +1).
+///
+/// Called from the `TakeCard` arm, BEFORE `try_apply_take`, only on the
+/// ordinary (non-`TakeRow`) path. When the take is itself a Wonder AND the
+/// player's current `p.wonder` is non-empty and NOT YET complete AND the
+/// VERY NEXT journal line is that wonder's own completing stage-build
+/// ([`wonder_completion_line_matches`]), applies that stage now -- exactly
+/// the same `apply::do_wonder_step_named` call the ordinary `BuildWonderStage`
+/// arm would make when it later reaches that line -- so the wonder is
+/// properly finalized (completion culture credited, `on_enter_play` run)
+/// before `take_card_impl` ever sees it. Records the claimed line's own
+/// text in `r.claimed_wonder_completion_text` so the `BuildWonderStage` arm
+/// recognizes it as already-applied and does not pay the stage a second
+/// time.
+///
+/// Does nothing (and returns) for every other shape, INCLUDING an
+/// unfinished wonder with no matching next-line completion -- that case is
+/// left to `take_card_impl`'s own defensive check, which errors loudly
+/// rather than silently discarding progress that this function could not
+/// account for.
+fn apply_wonder_completion_before_take(r: &mut Replayer, actor: u8, card: CardId, next_text: Option<&str>) {
+    if card.get().kind != CardType::Wonder {
+        return;
+    }
+    let p = &r.state.players[actor as usize];
+    if p.wonder.is_none() || (p.wonder_steps as usize) >= p.wonder.get().stages.len() {
+        return;
+    }
+    let Some(text) = next_text else { return };
+    let Some(steps) = wonder_completion_line_matches(p, text) else {
+        return;
+    };
+    let named = p.wonder;
+    crate::apply::do_wonder_step_named(&mut r.state, actor, steps, 0, false, Some(named));
+    r.claimed_wonder_completion_text = Some(text.to_string());
 }
 
 /// `"<From> to <To> ..."` -- the FROM card, which `classify` also does not
@@ -10407,6 +10518,12 @@ fn apply_one(
                     return Ok(());
                 }
             }
+            // Only on the ordinary (non-`TakeRow`) path, and only when this
+            // take is ITSELF a wonder: see `apply_wonder_completion_before_
+            // take`'s own doc for why the outgoing wonder must be finalized
+            // HERE, before `try_apply_take` can reach `take_card_impl`'s
+            // overwrite.
+            apply_wonder_completion_before_take(r, actor, card, next_text);
             // `IllegalMove: Take` diagnostic (docs/REPLAY.md's Take/Bid
             // handoff): a slot was found whose `take_cost` reproduces the
             // journal's own stated cost, but `try_apply` may still reject it
@@ -10509,6 +10626,15 @@ fn apply_one(
             r.try_apply(Move::Build { card }, true)
         }
         ActionClass::BuildWonderStage => {
+            // Already applied EARLY, out of journal order, by the `TakeCard`
+            // arm's own `apply_wonder_completion_before_take` -- see that
+            // function's doc and `claimed_wonder_completion_text`'s own.
+            // Re-running this line would pay the stage's resources a second
+            // time and re-credit its completion culture.
+            if r.claimed_wonder_completion_text.as_deref() == Some(raw_text) {
+                r.claimed_wonder_completion_text = None;
+                return Ok(());
+            }
             let card = card.ok_or_else(|| MismatchKind::ParserGap("wonder stage with no resolved card".into()))?;
             let after_builds = rest.strip_prefix("builds ").ok_or_else(|| MismatchKind::ParserGap("wonder-stage line missing 'builds '".into()))?;
             let steps = wonder_stage_count(after_builds).ok_or_else(|| MismatchKind::ParserGap("could not parse wonder stage count".into()))?;
@@ -14127,6 +14253,123 @@ mod tests {
             None,
             "no clause at all is a genuinely free build, still None"
         );
+    }
+
+    /// The narrow pattern-match `apply_wonder_completion_before_take` relies
+    /// on to decide whether the VERY NEXT journal line is safe to apply
+    /// early: it must name the player's own wonder-in-progress, pay exactly
+    /// the remaining stages (not a partial stage, not an over-shoot), and
+    /// carry BGO's own `"Wonder completed"` trailer -- anything else must be
+    /// left alone so the ordinary `IllegalMove`/`take_card_impl` panic can
+    /// fire honestly instead of a manufactured pass.
+    #[test]
+    fn wonder_completion_line_matches_only_the_players_own_wonder_completing_exactly() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let hanging_gardens = CardId::by_name("Hanging Gardens").unwrap();
+        r.state.players[0].wonder = hanging_gardens;
+
+        // Real game 7523330 line 92: 1 stage short of `stages.len() == 3`,
+        // and this line exactly closes it.
+        r.state.players[0].wonder_steps = 2;
+        assert_eq!(
+            wonder_completion_line_matches(
+                &r.state.players[0],
+                "Purple builds 1 stage of Hanging Gardens Purple spends 2 resources; ; Wonder completed"
+            ),
+            Some(1)
+        );
+
+        // A partial stage that does NOT close the gap must not match.
+        r.state.players[0].wonder_steps = 0;
+        assert_eq!(
+            wonder_completion_line_matches(
+                &r.state.players[0],
+                "Purple builds 1 stage of Hanging Gardens Purple spends 2 resources; ; Wonder completed"
+            ),
+            None,
+            "1 stage does not close a 3-stage gap"
+        );
+
+        // A DIFFERENT wonder's completion, even with the trailer, must not
+        // match -- it is not the wonder this player is displacing.
+        r.state.players[0].wonder_steps = 2;
+        assert_eq!(
+            wonder_completion_line_matches(
+                &r.state.players[0],
+                "Purple builds 1 stage of Taj Mahal Purple spends 3 resources; ; Wonder completed"
+            ),
+            None
+        );
+
+        // No "Wonder completed" trailer -- BGO always appends it on the
+        // line that actually finishes a wonder, so its absence means this
+        // is an ordinary intermediate stage, not the completing one.
+        assert_eq!(
+            wonder_completion_line_matches(&r.state.players[0], "Purple builds 1 stage of Hanging Gardens Purple spends 2 resources"),
+            None
+        );
+    }
+
+    /// ENGINE BUG FIX (culture-oracle divergence, real game `7523330` line
+    /// 97: this reconstruction read 4, the journal said 5 -- exactly Hanging
+    /// Gardens' un-applied +1 completion culture): BGO's journal logs a
+    /// same-instant SECOND-wonder take BEFORE the FIRST wonder's own
+    /// completing stage-build line. The old `take_card_impl` unconditionally
+    /// overwrote `p.wonder` when the replayer's `WonderInProgress` override
+    /// forced such a take through, silently discarding the first wonder's
+    /// live, paid-for progress -- never finalized, completion culture never
+    /// credited. `apply_wonder_completion_before_take` closes the gap by
+    /// applying that completing stage EARLY, right here, before `take_card_
+    /// impl` can ever see an incomplete `p.wonder`.
+    ///
+    /// CONFIRMED RED by reverting this function to a no-op (`{}`): this test
+    /// then failed both assertions (`completed_wonders` stayed empty and
+    /// `r.state.players[0].wonder` stayed `Hanging Gardens`, 2/3 built) --
+    /// see `/private/tmp/wonderfix_notes.txt` for the exact panic output.
+    #[test]
+    fn apply_wonder_completion_before_take_finalizes_the_outgoing_wonder_and_claims_the_line() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let hanging_gardens = CardId::by_name("Hanging Gardens").unwrap();
+        let taj_mahal = CardId::by_name("Taj Mahal").unwrap();
+        r.state.players[0].wonder = hanging_gardens;
+        r.state.players[0].wonder_steps = 2; // 1 stage short of 3
+        r.state.players[0].resources = 10; // enough to pay the final stage
+
+        let next_text = "Purple builds 1 stage of Hanging Gardens Purple spends 2 resources; ; Wonder completed";
+        apply_wonder_completion_before_take(&mut r, 0, taj_mahal, Some(next_text));
+
+        assert!(
+            r.state.players[0].completed_wonders.contains(hanging_gardens),
+            "the outgoing wonder must be finalized, not left dangling"
+        );
+        assert_eq!(r.state.players[0].wonder, CardId::NONE, "cleared, ready for take_card_impl to install the incoming wonder");
+        assert_eq!(
+            r.claimed_wonder_completion_text.as_deref(),
+            Some(next_text),
+            "so the BuildWonderStage arm recognizes and skips the real line later instead of re-applying it"
+        );
+    }
+
+    /// The defensive complement: with no matching next line (a different
+    /// action, an unrelated wonder, or a genuinely partial stage), this
+    /// function must do nothing at all and leave the incomplete wonder in
+    /// place for `take_card_impl`'s own loud panic to catch.
+    #[test]
+    fn apply_wonder_completion_before_take_does_nothing_without_a_matching_next_line() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        let hanging_gardens = CardId::by_name("Hanging Gardens").unwrap();
+        let taj_mahal = CardId::by_name("Taj Mahal").unwrap();
+        r.state.players[0].wonder = hanging_gardens;
+        r.state.players[0].wonder_steps = 2;
+
+        apply_wonder_completion_before_take(&mut r, 0, taj_mahal, Some("Purple takes something unrelated"));
+
+        assert_eq!(r.state.players[0].wonder, hanging_gardens, "left untouched for take_card_impl's own defensive check");
+        assert_eq!(r.state.players[0].wonder_steps, 2);
+        assert!(r.claimed_wonder_completion_text.is_none());
     }
 
     #[test]

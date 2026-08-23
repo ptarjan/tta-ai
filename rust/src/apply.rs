@@ -594,6 +594,58 @@ fn take_card_impl(state: &mut GameState, idx: u8, slot: usize, record_taken_this
     on_take_card(&mut state.players[idx as usize], id);
     let card = id.get();
     if card.kind == CardType::Wonder {
+        let outgoing = state.players[idx as usize].wonder;
+        let outgoing_steps = state.players[idx as usize].wonder_steps;
+        // A wonder taken but never yet built (`wonder_steps == 0`, no
+        // resources committed, no completion at stake) has no PROGRESS to
+        // discard -- overwriting it is exactly as harmless as it looks, and
+        // real BGO play confirms players can simply abandon one this way
+        // (game `7521828`: Orange takes Transcontinental Railroad round 12,
+        // never builds a single stage of it, takes First Space Flight round
+        // 19 instead). Only a wonder with `wonder_steps > 0` has anything
+        // real to lose.
+        if !outgoing.is_none() && outgoing_steps > 0 {
+            // RULES_SPEC §2.4:67: only one wonder may be unfinished at a
+            // time -- taking a second one is illegal while the first still
+            // is. By the time this runs, the outgoing wonder must already
+            // be COMPLETE: normally `do_wonder_step_named`'s own completion
+            // branch finalizes it the same statement it detects
+            // `wonder_is_complete`, well before any subsequent take is
+            // even attempted; for the one documented shape where BGO's own
+            // journal logs a same-instant second-wonder take BEFORE the
+            // first wonder's completing stage-build line (games
+            // `7521751`/`7523330`), `replay_common`'s `apply_wonder_
+            // completion_before_take` finalizes it EARLY, out of journal
+            // order, before the replayer's `WonderInProgress` override ever
+            // reaches this function. Reaching here with the outgoing
+            // wonder STILL incomplete means both of those finalizers were
+            // skipped -- silently overwriting it (the old bug) discards
+            // live, paid-for progress and its completion culture forever,
+            // with no visible symptom beyond a downstream stat drift
+            // (confirmed on `7523330`: a culture-oracle divergence at
+            // journal line 97, this binary's own reconstruction reading 4
+            // against the journal's 5, exactly Hanging Gardens' un-applied
+            // +1 completion culture). A loud, immediate panic here is
+            // cheaper than that silent, hard-to-trace drift.
+            assert!(
+                outgoing_steps as usize >= outgoing.get().stages.len(),
+                "take_card_impl: player {idx} still has an UNFINISHED wonder {} ({outgoing_steps}/{} \
+                 stages) when taking {} -- RULES_SPEC §2.4:67 forbids a second wonder while the first \
+                 is unfinished; finalize the outgoing wonder before calling take_card_impl, never here",
+                outgoing.get().name,
+                outgoing.get().stages.len(),
+                card.name,
+            );
+            // Complete, but never finalized (the ordinary completion path
+            // above should already have done this -- defensive net only).
+            let gained = wonder_completion_culture(&state.players[idx as usize], outgoing);
+            let p = &mut state.players[idx as usize];
+            p.wonder = CardId::NONE;
+            p.wonder_steps = 0;
+            p.completed_wonders.push(outgoing);
+            on_enter_play(p, outgoing);
+            p.culture = (p.culture as i32 + gained).max(0) as u16;
+        }
         // § 2.4 / § 9.2: a taken wonder goes DIRECTLY into play sideways as the
         // one unfinished wonder, never to hand. Only one may be unfinished at a
         // time (`costs::can_take*`'s `WonderInProgress` gate).
@@ -2107,6 +2159,71 @@ mod tests {
         assert_eq!(state.players[0].wonder, card("Colossus"));
         assert_eq!(state.players[0].wonder_steps, 0);
         assert!(state.players[0].hand_civil.is_empty());
+    }
+
+    /// `do_wonder_step_named` finalizes a wonder (pushes to
+    /// `completed_wonders`, runs `on_enter_play`, credits completion
+    /// culture) in the SAME statement it detects `wonder_is_complete`, so in
+    /// normal play `p.wonder` is never left set once `wonder_steps` reaches
+    /// `stages.len()`. This test manufactures that otherwise-unreachable
+    /// shape directly (bypassing `do_wonder_step_named`) to exercise
+    /// `take_card_impl`'s own defensive finalize-on-complete branch. Before
+    /// that branch existed, `take_card_impl` unconditionally overwrote
+    /// `p.wonder`/`p.wonder_steps` here, silently discarding a complete
+    /// wonder's progress and its completion culture forever -- exactly what
+    /// happened to Hanging Gardens in real game `7523330` (RULES_SPEC
+    /// §2.4:67; see `replay_common::apply_wonder_completion_before_take`'s
+    /// doc for the full corpus story).
+    #[test]
+    fn h_take_a_second_wonder_finalizes_a_complete_but_not_yet_flushed_outgoing_wonder() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.wonder = card("Hanging Gardens");
+        p.wonder_steps = 3; // == stages.len(): complete, but never finalized
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Colossus");
+        h_take(&mut state, 0, 0);
+        assert!(
+            state.players[0].completed_wonders.contains(card("Hanging Gardens")),
+            "the outgoing wonder must be finalized, not discarded"
+        );
+        // Hanging Gardens has no INSTANT completion-culture award (it is not
+        // one of the `OnBuildCulture` Age III wonders `wonder_completion_
+        // culture` handles) -- its printed benefit (`effects.culture: 1,
+        // happy: 2`) is an ONGOING rate that `effects::state_stats` only
+        // picks up by walking `p.completed_wonders` (`effects.rs`'s own
+        // several `for &w in p.completed_wonders.as_slice()` loops). So the
+        // real, corpus-visible symptom of the old bug (game `7523330`'s
+        // culture-oracle divergence at journal line 97, its own end-of-turn
+        // SCORING line) is exactly this: the rate stays live only once the
+        // wonder is actually in the list, never from a one-time credit.
+        assert_eq!(
+            effects::state_stats(&state, &state.players[0]).culture,
+            1,
+            "Hanging Gardens' +1 culture rate must be live now that it's a completed wonder"
+        );
+        assert_eq!(state.players[0].wonder, card("Colossus"), "the incoming wonder still takes the now-empty slot");
+        assert_eq!(state.players[0].wonder_steps, 0);
+    }
+
+    /// The other half of the same guard: taking a second wonder while the
+    /// first is GENUINELY unfinished (one stage short, not just un-flushed)
+    /// is a RULES_SPEC §2.4:67 violation that `legal::legal_moves` already
+    /// excludes from ordinary play. Calling the handler directly (bypassing
+    /// legality, the same way the replayer's own `WonderInProgress` override
+    /// does for a journal-proven-legal take) must still refuse to silently
+    /// overwrite an unfinished wonder's live progress -- it has to error
+    /// loudly instead.
+    #[test]
+    #[should_panic(expected = "still has an UNFINISHED wonder")]
+    fn h_take_a_second_wonder_panics_when_the_first_is_genuinely_unfinished() {
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.wonder = card("Hanging Gardens");
+        p.wonder_steps = 2; // one stage short of stages.len() == 3
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Colossus");
+        h_take(&mut state, 0, 0);
     }
 
     #[test]

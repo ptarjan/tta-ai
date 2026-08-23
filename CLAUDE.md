@@ -59,10 +59,10 @@ rewrites them every few minutes.
 
 ## The only metric that counts
 
-The corpus of 1011 replayed human BGO games. Current: **877 of 1011 complete**, and
-**835 of those 877 also score exactly**. (Exact is a subset of complete, so it is
-always the smaller number; never write the pair as "877/835", which reads as a
-ratio.) Guard lists `analysis/guard_ids_877.txt` and `analysis/guard_exact_835.txt`,
+The corpus of 1011 replayed human BGO games. Current: **878 of 1011 complete**, and
+**836 of those 878 also score exactly**. (Exact is a subset of complete, so it is
+always the smaller number; never write the pair as "878/836", which reads as a
+ratio.) Guard lists `analysis/guard_ids_878.txt` and `analysis/guard_exact_836.txt`,
 both frozen from the same sweep as this line — refreeze them together, from one
 sweep, or a later `comm` compares two different engines.
 
