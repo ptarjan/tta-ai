@@ -2832,9 +2832,10 @@ mod tests {
         let mut state = one_player_state(p);
         h_develop(&mut state, 0, card("Monarchy"), false, None);
         assert_eq!(state.players[0].government, card("Monarchy"));
-        // Monarchy: 5 CA / 3 MA. 1 CA was spent paying for `develop` itself,
-        // so the new pool is 5 - 1 = 4 (recomputed relative to what was
-        // already spent, per `_set_government`'s comment).
+        // Monarchy: 5 CA / 3 MA. A peaceful government change is a normal
+        // Develop a Technology action, so 1 CA is spent paying for it
+        // (RULES_SPEC 8.2) and the new pool is 5 - 1 = 4, recomputed
+        // relative to what was already spent per `_set_government`.
         assert_eq!(state.players[0].civil_actions, 4);
         assert_eq!(state.players[0].military_actions, 3);
     }
