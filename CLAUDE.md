@@ -26,6 +26,24 @@ not the code. On 2026-08-15 an agent "fixed" Impact of Population to match a Pyt
 comment and cost 141 exact score matches; see
 `analysis/worker_notes_2026-08-15/impact_of_population_pool_exclusion.txt`.
 
+**Search the open web before you settle a rules reading.** The oracle order above
+decides which source WINS; it does not tell you that you read the winner correctly,
+and a misreading of `RULES_SPEC.md` looks exactly like a correct one from inside.
+BoardGameGeek rules threads, CGE's own pages and the published summaries are cheap,
+independent, and have caught a wrong reading here before. They are a CHECK, never an
+authority: if the web disagrees with RULES_SPEC or the official errata, the errata
+win and the disagreement is a finding worth writing down. BGG itself is
+Cloudflare-protected and returns 403 to a direct fetch, so read it through search
+results.
+
+**A BGO journal is evidence of what BGO DID, never of what the rules ARE.** Reaching
+for the corpus to settle a rules question inverts the oracle order. Argument from
+silence over the journals is worth nothing in particular: on 2026-08-23 a government
+develop was made CA-free because "the journal never prints a CA cost on a
+`discovers <Gov>` line", when 269 of those 2185 lines do print one, the journal's
+separate `revolutions Change government to <Gov>` phrasing already marks the other
+path, and RULES_SPEC 8.2 and every outside summary say a peaceful change costs 1 CA.
+
 ## The lint gate
 
 What makes a tree clean is `cargo clippy --all-targets -- -D warnings`, not `cargo
