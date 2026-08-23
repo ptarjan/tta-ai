@@ -26,6 +26,25 @@ not the code. On 2026-08-15 an agent "fixed" Impact of Population to match a Pyt
 comment and cost 141 exact score matches; see
 `analysis/worker_notes_2026-08-15/impact_of_population_pool_exclusion.txt`.
 
+## The lint gate
+
+What makes a tree clean is `cargo clippy --all-targets -- -D warnings`, not `cargo
+build`. `rust/Cargo.toml` denies the wildcard-match lints on purpose; CI runs the same
+command and nothing else guards it.
+
+**CI installs the latest stable toolchain, and this machine's may be older**, so a
+locally green clippy does not prove the gate. On 2026-08-23 clippy 1.98 added
+`chunks_exact_to_as_chunks` and turned three pushes red on code none of them touched,
+while local clippy 1.97 exited 0 every time. Clippy also stops at the first error *per
+target*, so fixing one site only reveals the next — grep for the pattern across
+`rust/src` and fix every instance in one commit.
+
+Before pushing a lint fix, run the gate under the newest toolchain rather than
+guessing: `rustup toolchain install <ver> --profile minimal --component clippy`, then
+`cargo +<ver> clippy --all-targets -- -D warnings` in a `cp -Rc` clone, so the main
+tree's build cache and any live sweep are untouched. Prefer a fix that compiles on both
+toolchains over `#[allow]`.
+
 ## Git
 
 `/Users/pt/tta-ai` is the tree the training league runs from, and as of 2026-08-15 it
