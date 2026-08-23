@@ -210,7 +210,7 @@ fn read_u64(r: &mut impl Read) -> io::Result<u64> {
 fn read_f32_vec(r: &mut impl Read, n: usize) -> io::Result<Vec<f32>> {
     let mut buf = vec![0u8; n * 4];
     r.read_exact(&mut buf)?;
-    Ok(buf.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Ok(buf.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect())
 }
 
 fn ctx(path: &Path, e: io::Error) -> String {
