@@ -210,7 +210,6 @@ section { flex: 0 0 auto; }
   font-weight: 700;
   margin-bottom: 6px;
 }
-.adviceTop .score { color: var(--good); font-weight: 700; }
 .adviceTop .detail, .adviceRest .detail { display: block; font-size: 11px; color: var(--dim); font-weight: 400; margin-top: 3px; }
 .adviceRest .move {
   background: var(--panel2);
@@ -220,7 +219,6 @@ section { flex: 0 0 auto; }
   font-size: 13px;
   margin-bottom: 4px;
 }
-.adviceRest .move .score { color: var(--dim); float: right; }
 
 .modal {
   position: fixed;
@@ -251,4 +249,18 @@ section { flex: 0 0 auto; }
   #deltaSection { flex: 1 1 55%; }
   #adviceSection { flex: 1 1 40%; }
   #handSection { flex: 1 1 100%; }
+}
+
+/* Step number for the turn sequence. The engine reports the moves it played
+   in order, so these are consecutive steps to carry out, not alternatives. */
+.step {
+  display: inline-block;
+  min-width: 1.6em;
+  margin-right: .5em;
+  padding: .05em .35em;
+  border-radius: .3em;
+  background: #2b6cb0;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
 }

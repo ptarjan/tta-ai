@@ -58,3 +58,7 @@ archive/
 rust/logs/
 rust/pgo/
 *.ckpt
+
+# Built by app/build.sh from rust/ttawasm. A megabyte of binary that changes
+# on every champion promotion does not belong in history.
+app/tta.wasm

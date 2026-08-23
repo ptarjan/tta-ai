@@ -75,14 +75,17 @@ const Engine = {
         };
       })
       .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
-    moves.push({ text: 'END YOUR TURN (production, then pass the board on)', score: -99, detail: 'stub always offers this as a fallback' });
+      // The real engine returns a SEQUENCE of moves it played this turn, so
+      // the stub emits a plausible short sequence too -- a stub that returned
+      // a ranked menu would train the UI on a shape the engine never sends.
+      .slice(0, 2);
+    moves.push({ text: 'END YOUR TURN (production, then pass the board on)', score: 0, detail: 'stub always ends the turn here' });
     const prevTurn = (request.state && request.state.turn) || 0;
     return {
       ok: true,
       moves,
       state: { turn: prevTurn + 1, stub: true },
-      log: `-- move 1 (round ?, age ?): CA ? MA ? food ? res ? sci ?  [STUB]`,
+      position: { round: '?', age: 'STUB', civil_actions: '?', military_actions: '?', food: '?', resources: '?', science: '?' },
     };
   },
 };
@@ -331,22 +334,23 @@ function renderAdvice() {
     el.adviceRest.innerHTML = '';
     return;
   }
+  // The engine auto-plays the whole turn and reports the moves it PLAYED, in
+  // order -- these are consecutive steps, not alternatives to choose between.
+  // Rendering move 2 as a runner-up would read as "or do this instead" and
+  // lose the rest of the turn, so every step is shown, numbered, all of them.
+  // Scores are 0.0 by construction (each move was the top candidate at its own
+  // decision point), so there is nothing informative to display.
   const top = moves[0];
-  el.adviceTop.innerHTML = `${top.text} <span class="score">(${fmtScore(top.score)})</span>` +
+  el.adviceTop.innerHTML = `<span class="step">1</span>${top.text}` +
     (top.detail ? `<span class="detail">${top.detail}</span>` : '');
   el.adviceRest.innerHTML = '';
-  moves.slice(1, 5).forEach((m) => {
+  moves.slice(1).forEach((m, i) => {
     const div = document.createElement('div');
     div.className = 'move';
-    div.innerHTML = `<span class="score">${fmtScore(m.score)}</span>${m.text}` +
+    div.innerHTML = `<span class="step">${i + 2}</span>${m.text}` +
       (m.detail ? `<span class="detail">${m.detail}</span>` : '');
     el.adviceRest.appendChild(div);
   });
-}
-
-function fmtScore(s) {
-  if (typeof s !== 'number') return '';
-  return (s > 0 ? '+' : '') + s.toFixed(1);
 }
 
 function renderHand() {
@@ -447,9 +451,9 @@ async function applyTurn(newRow) {
     if (resp && resp.ok) {
       state.wasmState = resp.state;
       state.moves = resp.moves || [];
-      state.positionText = extractPosition(resp.log) || state.positionText;
+      state.positionText = formatPosition(resp.position) || state.positionText;
     } else {
-      state.moves = [{ text: 'advisor error: ' + (resp && resp.log ? resp.log : 'unknown'), score: 0, detail: '' }];
+      state.moves = [{ text: 'advisor error: ' + (resp && resp.error ? resp.error : 'unknown'), score: 0, detail: '' }];
     }
   } catch (e) {
     state.moves = [{ text: 'advisor call failed: ' + e.message, score: 0, detail: '' }];
@@ -464,10 +468,13 @@ async function applyTurn(newRow) {
   renderAll();
 }
 
-function extractPosition(log) {
-  if (!log) return '';
-  const m = log.match(/-- move \d+ \(([^)]+)\): (.+)/);
-  return m ? `${m[1]} · ${m[2]}` : '';
+// The engine reports the position as fields, so there is nothing to parse.
+// It is the position at the START of the turn -- what the listed moves are
+// about to spend.
+function formatPosition(p) {
+  if (!p) return '';
+  return `round ${p.round}, age ${p.age} · CA ${p.civil_actions}, MA ${p.military_actions}, ` +
+    `food ${p.food}, res ${p.resources}, sci ${p.science}`;
 }
 
 /* ---------------------------------------------------------------------

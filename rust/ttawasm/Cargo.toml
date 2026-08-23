@@ -1,0 +1,16 @@
+[package]
+name = "ttawasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "wasm32-unknown-unknown C-ABI wrapper around tta::advisor for a browser front end, no backend server"
+
+# Same zero-dependency policy as the parent crate (see `../Cargo.toml`'s own
+# `[dependencies]` comment): this is a path dependency on `tta` itself, no
+# wasm-bindgen, no serde, no allocator crate. The C ABI (`alloc`/`dealloc`/
+# `advise`) is raw pointers/length, not a bindgen-generated shim.
+[dependencies]
+tta = { path = ".." }
+
+[lib]
+crate-type = ["cdylib"]

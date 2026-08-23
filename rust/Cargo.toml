@@ -41,7 +41,7 @@ wildcard_in_or_patterns = "deny"
 # -- Cargo's default-package behaviour when invoked inside a workspace
 # member's own directory, not something this file has to opt into.
 [workspace]
-members = ["trainer"]
+members = ["trainer", "ttawasm"]
 
 [profile.release]
 opt-level = 3
