@@ -33,6 +33,9 @@ body {
 
 .hidden { display: none !important; }
 
+/* The banner is the only signal that advice is coming from the stub instead of
+   the wasm engine, so it must outrank the modal -- the row-entry modal opens by
+   itself on a fresh load and would otherwise hide it exactly when it matters. */
 .banner {
   background: var(--bad);
   color: #1a0000;
@@ -41,6 +44,9 @@ body {
   padding: 6px 8px;
   font-size: 13px;
   flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+  z-index: 200;
 }
 
 #topbar {
