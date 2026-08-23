@@ -57,6 +57,14 @@ looking wrong afterwards.
 `experiments/rust_champion_*.json` are deliberately untracked — the running climb
 rewrites them every few minutes.
 
+There is no rule anywhere that you need permission to commit. If you finished
+something, commit it and push it. Do not hold a working tree full of finished work
+waiting to be asked. Commit **by pathspec** — several agents share this index, and
+`git add -A` swallows another agent's files. Landing a change and being right about
+it are separate things: a rules-correct fix lands even when it costs corpus games,
+but it lands with its regression list stated (§"The only metric that counts"), never
+behind a total that happens to come out unchanged.
+
 ## The only metric that counts
 
 The corpus of 1011 replayed human BGO games. Current: **878 of 1011 complete**, and
