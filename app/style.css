@@ -180,6 +180,19 @@ body {
 .btn.big { font-size: 17px; padding: 14px 18px; min-height: 56px; flex: 1 1 auto; }
 .btn.danger { background: var(--bad); color: #1a0000; border: none; }
 
+.ocrRow { margin: 6px 0; }
+.ocrRow input[type="file"] {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .addRow { position: relative; margin: 4px 0; }
 .addRow input {
   width: 100%;

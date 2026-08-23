@@ -100,13 +100,469 @@ function hashStr(s) {
 }
 
 /* ---------------------------------------------------------------------
- * OCR seam. NOT implemented — no camera, no OCR library, per spec.
- * Anything that later fills this in just has to return the same shape
- * manual entry produces, and the rest of the app does not change.
+ * Slot finder — vendored from findRowSlots.js (calibrated separately
+ * against a real iPad capture; see /private/tmp/slotcal/notes.txt at the
+ * time this was vendored). Copied in whole, comments intact, rather than
+ * added as a second <script> tag: the app loads exactly one script and
+ * this keeps it that way. Zero deps, pure ES2020, no DOM.
+ *
+ * Rule this relies on: the Through the Ages card row is drawn as THREE
+ * bracketed groups of cards (take-cost banding) with a visible background
+ * gap between groups, and a thin painted border between individual cards
+ * within the same group. That grouping is fixed by the game rules (same at
+ * every player count), not by resolution, so it is used as the structural
+ * landmark: exactly two of the twelve boundaries between the thirteen card
+ * slots are "wide" (inter-group background gaps) and the other ten are
+ * "narrow" (inter-card borders).
+ *
+ * Detection is texture-based and resolution-independent (all outputs are
+ * fractions of image width/height, 0..1). The row band is found by
+ * smoothed row-texture + Otsu. Card dividers are found by a VALLEY
+ * threshold on vertical column texture — Otsu was tried there FIRST and
+ * FAILED (it landed inside the high-texture card-interior mass instead of
+ * the tight low-texture border/gap cluster, because border/gap columns are
+ * a small minority sitting near zero while card-interior columns have huge
+ * internal spread; Otsu's between-class-variance objective preferred
+ * splitting the spread-out majority over isolating the tight minority).
+ * The two widest boundary runs are classified as the inter-group gaps.
+ * Returns null on anything short of a clean 13-slot / 3-group result —
+ * a wrong guess would silently corrupt game state, a null just asks a
+ * human to type the row instead.
  * ------------------------------------------------------------------- */
-async function ocrScanSeam(_imageBlobOrDataUrl) {
-  throw new Error('OCR not implemented: this is a stub seam. Fill in to return ' +
-    '{ row: [13 card ids or null], rivalStr: N, rivalCulture: N, militaryDraws: [ids] }');
+function findRowSlots(imageData) {
+  const { data, width, height } = imageData || {};
+  if (!data || !width || !height || width < 20 || height < 20) return null;
+
+  function px(x, y) {
+    const i = (y * width + x) * 4;
+    return [data[i], data[i + 1], data[i + 2]];
+  }
+
+  function otsuThreshold(values) {
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    if (max <= min) return min;
+    const bins = 256;
+    const hist = new Array(bins).fill(0);
+    const scale = bins / (max - min);
+    for (let i = 0; i < values.length; i++) {
+      let b = Math.floor((values[i] - min) * scale);
+      if (b >= bins) b = bins - 1;
+      if (b < 0) b = 0;
+      hist[b]++;
+    }
+    const n = values.length;
+    let sumAll = 0;
+    for (let i = 0; i < bins; i++) sumAll += i * hist[i];
+    let sumB = 0, wB = 0, best = -1, bestBin = 0;
+    for (let i = 0; i < bins; i++) {
+      wB += hist[i];
+      if (wB === 0) continue;
+      const wF = n - wB;
+      if (wF === 0) break;
+      sumB += i * hist[i];
+      const mB = sumB / wB;
+      const mF = (sumAll - sumB) / wF;
+      const varBetween = wB * wF * (mB - mF) * (mB - mF);
+      if (varBetween > best) { best = varBetween; bestBin = i; }
+    }
+    return min + bestBin / scale;
+  }
+
+  // Otsu balances two roughly-comparable-mass classes; it is used for the
+  // row band, where "row" vs "background" rows are both a sizeable share of
+  // the image height. It is a poor fit for the column pass, where border/gap
+  // columns are a small minority (~5-10%) sitting in a tight cluster near
+  // zero: Otsu's optimum there tends to land inside the high-texture card
+  // mass rather than at the true valley. valleyThreshold instead looks for
+  // the single biggest jump between consecutive values in the lower half of
+  // the sorted data - that jump is the gap between "uniform border/gap
+  // column" values and "textured card interior" values.
+  function valleyThreshold(values) {
+    const sorted = Float64Array.from(values).sort();
+    const n = sorted.length;
+    const limit = Math.max(2, Math.floor(n * 0.5));
+    let bestGap = -1, bestIdx = 1;
+    for (let i = 1; i < limit; i++) {
+      const gap = sorted[i] - sorted[i - 1];
+      if (gap > bestGap) { bestGap = gap; bestIdx = i; }
+    }
+    return (sorted[bestIdx] + sorted[bestIdx - 1]) / 2;
+  }
+
+  function longestRun(values, thresh, n) {
+    let bestStart = -1, bestEnd = -1, bestLen = 0, curStart = -1;
+    for (let i = 0; i < n; i++) {
+      if (values[i] >= thresh) {
+        if (curStart === -1) curStart = i;
+      } else if (curStart !== -1) {
+        const len = i - curStart;
+        if (len > bestLen) { bestLen = len; bestStart = curStart; bestEnd = i - 1; }
+        curStart = -1;
+      }
+    }
+    if (curStart !== -1) {
+      const len = n - curStart;
+      if (len > bestLen) { bestLen = len; bestStart = curStart; bestEnd = n - 1; }
+    }
+    return bestStart === -1 ? null : { start: bestStart, end: bestEnd };
+  }
+
+  function buildRuns(values, thresh, n) {
+    const runs = [];
+    let curLow = values[0] < thresh;
+    let start = 0;
+    for (let i = 1; i < n; i++) {
+      const low = values[i] < thresh;
+      if (low !== curLow) {
+        runs.push({ low: curLow, start, end: i - 1 });
+        curLow = low;
+        start = i;
+      }
+    }
+    runs.push({ low: curLow, start, end: n - 1 });
+    return runs;
+  }
+
+  function mergeAdjacentLow(runs) {
+    const out = [];
+    for (const r of runs) {
+      const last = out[out.length - 1];
+      if (last && last.low && r.low) {
+        last.end = r.end;
+      } else {
+        out.push({ low: r.low, start: r.start, end: r.end });
+      }
+    }
+    return out;
+  }
+
+  // box-smooth a signal so a single narrow dip/spike (art detail, a stray
+  // icon) doesn't fool the threshold search; window scales with the array
+  // length so it stays proportionate at any capture resolution
+  function boxSmooth(values, window) {
+    const n = values.length;
+    const half = Math.floor(window / 2);
+    // prefix sums so each window average is O(1) regardless of window size
+    const prefix = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) prefix[i + 1] = prefix[i] + values[i];
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const lo = Math.max(0, i - half);
+      const hi = Math.min(n - 1, i + half);
+      out[i] = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1);
+    }
+    return out;
+  }
+
+  // ---- 1. locate the row band (top/bottom) via row texture ----
+  const xStride = Math.max(1, Math.floor(width / 600));
+  const rowTexRaw = new Float64Array(height);
+  for (let y = 0; y < height; y++) {
+    let prev = null, total = 0, n = 0;
+    for (let x = 0; x < width; x += xStride) {
+      const p = px(x, y);
+      if (prev) {
+        total += Math.abs(p[0] - prev[0]) + Math.abs(p[1] - prev[1]) + Math.abs(p[2] - prev[2]);
+        n++;
+      }
+      prev = p;
+    }
+    rowTexRaw[y] = n ? total / n : 0;
+  }
+  const rowSmoothWindow = Math.max(3, Math.round(height / 60));
+  const rowTex = boxSmooth(rowTexRaw, rowSmoothWindow);
+  const rowThresh = otsuThreshold(rowTex);
+  const band = longestRun(rowTex, rowThresh, height);
+  if (!band) return null;
+  const yTop = band.start, yBot = band.end;
+  const bandH = yBot - yTop + 1;
+  if (bandH < height * 0.03) return null; // too thin to be the card row
+
+  // ---- 2. column vertical-texture profile within the band ----
+  const yStride = Math.max(1, Math.floor(bandH / 100));
+  const colTex = new Float64Array(width);
+  for (let x = 0; x < width; x++) {
+    let prev = null, total = 0, n = 0;
+    for (let y = yTop; y <= yBot; y += yStride) {
+      const p = px(x, y);
+      if (prev) {
+        total += Math.abs(p[0] - prev[0]) + Math.abs(p[1] - prev[1]) + Math.abs(p[2] - prev[2]);
+        n++;
+      }
+      prev = p;
+    }
+    colTex[x] = n ? total / n : 0;
+  }
+  const colThresh = valleyThreshold(colTex);
+
+  // ---- 3. build slot (high) / border-or-gap (low) runs, drop outer margins ----
+  let runs = buildRuns(colTex, colThresh, width);
+  if (runs.length && runs[0].low) runs.shift();
+  if (runs.length && runs[runs.length - 1].low) runs.pop();
+  if (!runs.length) return null;
+
+  // drop spuriously narrow "high" runs (noise inside a gap/border) and
+  // re-merge the low runs that were separated only by that noise
+  const highWidths = runs.filter(r => !r.low).map(r => r.end - r.start + 1);
+  if (!highWidths.length) return null;
+  highWidths.sort((a, b) => a - b);
+  const medianHighWidth = highWidths[Math.floor(highWidths.length / 2)];
+  runs = runs.filter(r => r.low || (r.end - r.start + 1) >= medianHighWidth * 0.3);
+  runs = mergeAdjacentLow(runs);
+  if (runs.length && runs[0].low) runs.shift();
+  if (runs.length && runs[runs.length - 1].low) runs.pop();
+
+  const slotRuns = runs.filter(r => !r.low);
+  const gapRuns = runs.filter(r => r.low);
+  if (slotRuns.length !== 13) return null;
+  if (gapRuns.length !== 12) return null;
+
+  // ---- 4. classify the 12 boundaries into 2 group gaps + 10 card borders ----
+  const gapWidths = gapRuns.map(r => r.end - r.start + 1);
+  const sortedWidths = [...gapWidths].sort((a, b) => b - a);
+  const groupGapThresh = (sortedWidths[1] + sortedWidths[2]) / 2;
+
+  const groups = [];
+  let cur = 1;
+  for (let i = 0; i < gapRuns.length; i++) {
+    if (gapWidths[i] >= groupGapThresh) {
+      groups.push(cur);
+      cur = 1;
+    } else {
+      cur++;
+    }
+  }
+  groups.push(cur);
+
+  if (groups.length !== 3) return null;
+  if (groups.reduce((a, b) => a + b, 0) !== 13) return null;
+
+  const slots = slotRuns.map(r => ({
+    x: r.start / width,
+    y: yTop / height,
+    w: (r.end - r.start + 1) / width,
+    h: bandH / height,
+  }));
+
+  return { slots, groups };
+}
+
+/* ---------------------------------------------------------------------
+ * Slot hashing — exact-match, not perceptual/fuzzy. A slot rect (fractions
+ * of image width/height, from findRowSlots) is resampled by AREA averaging
+ * — never absolute pixel offsets — into a fixed GRID x GRID greyscale grid
+ * in slot-relative coordinates, so the same card in the same slot hashes
+ * identically regardless of the capture's pixel resolution. Each cell is
+ * then quantized to one of 32 grey buckets to absorb the residual
+ * floating-point noise that different source resolutions introduce into
+ * the area-average — this is still exact-match (post-quantization
+ * equality), not a distance-threshold fuzzy hash: two grids that land in
+ * different buckets anywhere are a different hash, full stop, and a slot
+ * that hashes to nothing in the table comes back unknown rather than
+ * guessed.
+ *
+ * Grid size: 12x12. At the reference capture (2360x1640 iPad screenshot)
+ * a slot is ~168x200px — 12x12 keeps each cell a coarse patch (~14x17px)
+ * so minor resampling/anti-aliasing differences between capture
+ * resolutions average out inside a cell rather than landing on a cell
+ * boundary, while still being far more than enough resolution to tell
+ * ~200 distinct card arts apart (144 cells x 32 grey levels is a huge
+ * space relative to the card pool). 8x8 was considered but risked
+ * aliasing thin card-art details that help distinguish similarly-colored
+ * cards; anything much finer (24x24+) bought no real discriminating power
+ * for a card-art-sized source image and made the exact-match hash more
+ * sensitive to capture-resolution resampling noise, working against the
+ * whole point of area-sampling in the first place.
+ * ------------------------------------------------------------------- */
+const HASH_GRID = 12;
+const HASH_BUCKETS = 32; // 256 grey levels / 8 per bucket
+
+function overlap1d(a0, a1, b0, b1) {
+  return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+}
+
+// Area-average the greyscale value of imageData within [sx0,sx1)x[sy0,sy1),
+// weighting each covered source pixel by how much of it falls inside the
+// box (true box-filter resampling), not by nearest/rounded pixel lookup —
+// that's what makes the result the same whether the source is native-res
+// or a scaled-up/down capture of the same content.
+function boxAverageGrey(data, width, height, sx0, sy0, sx1, sy1) {
+  const px0 = Math.max(0, Math.floor(sx0)), px1 = Math.min(width, Math.ceil(sx1));
+  const py0 = Math.max(0, Math.floor(sy0)), py1 = Math.min(height, Math.ceil(sy1));
+  let sum = 0, weightSum = 0;
+  for (let py = py0; py < py1; py++) {
+    const wy = overlap1d(py, py + 1, sy0, sy1);
+    if (wy <= 0) continue;
+    for (let px = px0; px < px1; px++) {
+      const wx = overlap1d(px, px + 1, sx0, sx1);
+      if (wx <= 0) continue;
+      const weight = wx * wy;
+      const i = (py * width + px) * 4;
+      const grey = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      sum += grey * weight;
+      weightSum += weight;
+    }
+  }
+  return weightSum > 0 ? sum / weightSum : 0;
+}
+
+// Resample a slot rect (fractions of image width/height) into a GRID x GRID
+// array of quantized grey buckets, entirely in slot-relative coordinates —
+// the grid cell boundaries are computed as fractions of the slot's own
+// width/height, never as fixed pixel offsets from the image origin.
+function slotToGrid(imageData, slot, gridSize) {
+  const { data, width, height } = imageData;
+  const x0 = slot.x * width, y0 = slot.y * height;
+  const w = slot.w * width, h = slot.h * height;
+  const cellW = w / gridSize, cellH = h / gridSize;
+  const grid = new Uint8Array(gridSize * gridSize);
+  for (let gy = 0; gy < gridSize; gy++) {
+    const sy0 = y0 + gy * cellH, sy1 = sy0 + cellH;
+    for (let gx = 0; gx < gridSize; gx++) {
+      const sx0 = x0 + gx * cellW, sx1 = sx0 + cellW;
+      const avg = boxAverageGrey(data, width, height, sx0, sy0, sx1, sy1);
+      const bucket = Math.max(0, Math.min(HASH_BUCKETS - 1, Math.round((avg / 255) * (HASH_BUCKETS - 1))));
+      grid[gy * gridSize + gx] = bucket;
+    }
+  }
+  return grid;
+}
+
+// Two independent FNV-1a-style passes over the quantized grid, concatenated
+// as hex -> a 16-char (64-bit) string. Short, stable, exact (no distance
+// threshold): any single cell landing in a different bucket changes the
+// hash. Collisions across a ~200-card pool are astronomically unlikely at
+// this width.
+function hashGrid(grid) {
+  let h1 = 2166136261, h2 = 0x811c9dc5 ^ 0x5bd1e995;
+  for (let i = 0; i < grid.length; i++) {
+    const v = grid[i];
+    h1 ^= v;
+    h1 = Math.imul(h1, 16777619);
+    h2 ^= (v + i * 131) & 0xff;
+    h2 = Math.imul(h2, 2246822519);
+    h2 ^= h2 >>> 13;
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+
+function hashSlot(imageData, slot) {
+  return hashGrid(slotToGrid(imageData, slot, HASH_GRID));
+}
+
+/* ---------------------------------------------------------------------
+ * Learning table — hash -> card id, in its OWN localStorage key. Kept
+ * separate from STORAGE_KEY (the game-state save) on purpose: a corrupt
+ * or unparseable hash table must never take the whole app down with it,
+ * so a broken read here just degrades to "nothing recognised", never a
+ * thrown error at boot.
+ * ------------------------------------------------------------------- */
+const OCR_HASH_KEY = 'ttaapp_ocr_hashes_v1';
+
+function loadHashTable() {
+  try {
+    const raw = localStorage.getItem(OCR_HASH_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) { return {}; }
+}
+
+function saveHashTable(table) {
+  try { localStorage.setItem(OCR_HASH_KEY, JSON.stringify(table)); } catch (e) { /* ignore quota errors */ }
+}
+
+function recordHash(hash, cardId) {
+  if (!hash || !cardId) return;
+  const table = loadHashTable();
+  table[hash] = cardId;
+  saveHashTable(table);
+}
+
+// Holds the imageData + slot rects from the most recent successful scan, so
+// that when the user subsequently TYPES a name for a slot the scan left
+// unknown (or overrides one it got wrong), that keystroke can teach the
+// table — every name typed after a scan improves the next scan. Cleared
+// whenever a fresh full-row session starts, so a stale image never teaches
+// hashes against a slot layout it doesn't actually match.
+let lastScan = null; // { data, width, height, slots } | null
+
+function learnSlotIfScanned(slotIndex, cardId) {
+  if (!lastScan || !lastScan.slots || !lastScan.slots[slotIndex]) return;
+  const hash = hashSlot(lastScan, lastScan.slots[slotIndex]);
+  recordHash(hash, cardId);
+}
+
+/* ---------------------------------------------------------------------
+ * data: URL -> Blob, with no fetch() involved (fetching a data: URL would
+ * work, but this app's policy is no network calls at all, full stop, and
+ * keeping data: URLs out of fetch() entirely avoids ever having to reason
+ * about whether that counts).
+ * ------------------------------------------------------------------- */
+function dataUrlToBlob(dataUrl) {
+  const match = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(dataUrl);
+  if (!match) throw new Error('not a data: URL');
+  const mime = match[1] || 'application/octet-stream';
+  const isBase64 = !!match[2];
+  const payload = match[3];
+  const binary = isBase64 ? atob(payload) : decodeURIComponent(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+// Decode a Blob/File to {data,width,height} RGBA via createImageBitmap +
+// canvas. OffscreenCanvas is preferred (works off the main thread and is
+// the documented path), but iPad Safari support has varied across versions
+// — a silent failure there would be worse than the small cost of a normal
+// <canvas> fallback, so this always has a working path in a browser.
+async function decodeImageToPixels(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const w = bitmap.width, h = bitmap.height;
+  let ctx;
+  if (typeof OffscreenCanvas !== 'undefined') {
+    ctx = new OffscreenCanvas(w, h).getContext('2d');
+  } else {
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    ctx = canvas.getContext('2d');
+  }
+  ctx.drawImage(bitmap, 0, 0);
+  if (bitmap.close) bitmap.close();
+  const imgData = ctx.getImageData(0, 0, w, h);
+  return { data: imgData.data, width: w, height: h };
+}
+
+/* ---------------------------------------------------------------------
+ * OCR seam. Reads a SCREEN CAPTURE (not a photo — see header notes on why
+ * that distinction is load-bearing) of the 13-card row: finds the slot
+ * rectangles, hashes each one, and looks each hash up in the learning
+ * table. An unknown hash resolves to null for that slot rather than a
+ * guess — the caller (renderFullRowStep) pre-fills what it recognises and
+ * leaves the rest for the user to type, which is also what teaches the
+ * table going forward.
+ * ------------------------------------------------------------------- */
+async function ocrScanSeam(imageBlobOrDataUrl) {
+  const blob = typeof imageBlobOrDataUrl === 'string' ? dataUrlToBlob(imageBlobOrDataUrl) : imageBlobOrDataUrl;
+  const pixels = await decodeImageToPixels(blob);
+  const found = findRowSlots(pixels);
+  if (!found) {
+    const err = new Error('Could not find the 13-card row in that image.');
+    err.code = 'NO_SLOTS';
+    throw err;
+  }
+  const table = loadHashTable();
+  const row = found.slots.map((slot) => {
+    const hash = hashSlot(pixels, slot);
+    return table[hash] || null;
+  });
+  lastScan = { data: pixels.data, width: pixels.width, height: pixels.height, slots: found.slots };
+  return { row, rivalStr: null, rivalCulture: null, militaryDraws: [] };
 }
 if (typeof window !== 'undefined') window.ocrScanSeam = ocrScanSeam;
 
@@ -265,6 +721,7 @@ function freshFlow() {
     dupMessage: '',
     fullRowDraft: null,
     fullRowCursor: 0,
+    fullRowScanStatus: '',
   };
 }
 
@@ -678,9 +1135,18 @@ function renderFullRowStep(container) {
   });
   container.appendChild(grid);
 
+  container.appendChild(renderScanControl());
+  if (state.flow.fullRowScanStatus) {
+    container.appendChild(makeSub(state.flow.fullRowScanStatus));
+  }
+
   const { input, suggest } = makeAutocompleteRow('type card, Enter to place');
   container.appendChild(input.wrap);
-  setupAutocomplete(input.el, suggest, () => ROW_POOL, (c) => { draft[cursor] = c.id; fullRowAdvance(); });
+  setupAutocomplete(input.el, suggest, () => ROW_POOL, (c) => {
+    draft[cursor] = c.id;
+    learnSlotIfScanned(cursor, c.id); // every name typed after a scan teaches the table
+    fullRowAdvance();
+  });
   input.el.focus();
 
   const btnRow = document.createElement('div');
@@ -723,6 +1189,49 @@ function makeSub(text) {
   div.className = 'stepSub';
   div.textContent = text;
   return div;
+}
+
+// File-picker entry point for a screenshot scan. A plain <input type=file
+// accept=image/*> is the only thing that works on iOS without a dependency
+// — no <video>/getUserMedia capture flow, because this app wants a PHOTOS-
+// LIBRARY screen capture, not a live camera shot of the glossy screen.
+function renderScanControl() {
+  const wrap = document.createElement('div');
+  wrap.className = 'ocrRow';
+
+  const label = makeSub('Or scan a screenshot of the row:');
+  label.style.marginBottom = '4px';
+  wrap.appendChild(label);
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*';
+  fileInput.className = 'ocrFileInput';
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    state.flow.fullRowScanStatus = 'Scanning…';
+    renderAll();
+    try {
+      const result = await ocrScanSeam(file);
+      let filled = 0;
+      result.row.forEach((id, i) => {
+        if (id) { state.flow.fullRowDraft[i] = id; filled++; }
+      });
+      const firstUnknown = state.flow.fullRowDraft.findIndex((x) => x === null);
+      state.flow.fullRowCursor = firstUnknown === -1 ? state.flow.fullRowCursor : firstUnknown;
+      state.flow.fullRowScanStatus = filled === 13
+        ? 'Recognised all 13 of 13 from the screenshot.'
+        : `Recognised ${filled} of 13 from the screenshot — type the rest; each one you type teaches it for next time.`;
+    } catch (err) {
+      state.flow.fullRowScanStatus = err && err.code === 'NO_SLOTS'
+        ? "Couldn't find the row in that image — type it in instead."
+        : 'Scan failed: ' + (err && err.message ? err.message : String(err));
+    }
+    renderAll();
+  });
+  wrap.appendChild(fileInput);
+  return wrap;
 }
 
 function makeAutocompleteRow(placeholder) {
@@ -893,6 +1402,7 @@ function formatPosition(p) {
  * Full-row entry (turn 1 / resync escape hatch)
  * ------------------------------------------------------------------- */
 function openFullRow() {
+  lastScan = null; // a new full-row session invalidates any prior scan's slot geometry
   state.flow.step = 'fullrow';
   state.flow.fullRowDraft = state.row.slice(0, 13);
   while (state.flow.fullRowDraft.length < 13) state.flow.fullRowDraft.push(null);
@@ -942,7 +1452,10 @@ async function boot() {
  * browser `module` is undefined and this just calls boot() as before.
  * ------------------------------------------------------------------- */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { validateRow, AGE_ORDER, matchScore, searchCards };
+  module.exports = {
+    validateRow, AGE_ORDER, matchScore, searchCards,
+    findRowSlots, hashSlot, slotToGrid, hashGrid, HASH_GRID, HASH_BUCKETS,
+  };
 } else {
   boot();
 }
