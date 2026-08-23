@@ -8,16 +8,23 @@ const path = require('path');
 const { execSync } = require('child_process');
 const cards = require('./cards.json');
 const {
-  findRowSlots, ocrRecognizeSlot, ocrSlotRaw, resolveOCRString,
+  findRowSlots, ocrRecognizeSlot, ocrSlotRaw, resolveOCRString, readAgeBadge,
 } = require('./app.js');
 
 const PNG = '/Users/pt/tta-ai/analysis/app_samples/ipad_screenshot_2360x1640_2026-08-23.png';
 const BMP = path.join(require('os').tmpdir(), 'tta_ocr_test_cap.bmp');
 
+// Display strings: cards.json suffixes the age onto `display` ONLY for
+// names shared by more than one age copy (Rich Land, Engineering Genius,
+// Frugality, Cultural Heritage here) — see cards.json's `ambiguous` flag.
+// The age badge on all 13 cards in this capture reads 'A' (confirmed by
+// visual inspection of the crop, cross-checked against cards.json: every
+// one of the 9 unambiguous names in this row already IS age A), so the
+// age-settled display for those 4 is "<Name> (A)".
 const EXPECTED = [
-  'Stock Pile', 'Pyramids', 'Rich Land', 'Engineering Genius', 'Hanging Gardens',
-  'Julius Caesar', 'Frugality', 'Homer', 'Alexander the Great', 'Moses',
-  'Hammurabi', 'Cultural Heritage', 'Colossus',
+  'Stock Pile', 'Pyramids', 'Rich Land (A)', 'Engineering Genius (A)', 'Hanging Gardens',
+  'Julius Caesar', 'Frugality (A)', 'Homer', 'Alexander the Great', 'Moses',
+  'Hammurabi', 'Cultural Heritage (A)', 'Colossus',
 ];
 
 function loadBMP(bmpPath) {
@@ -60,7 +67,8 @@ if (!found || found.slots.length !== 13) {
 let pass = 0, fail = 0;
 found.slots.forEach((slot, i) => {
   const raw = ocrSlotRaw(pixels, slot);
-  const resolved = resolveOCRString(raw, cards);
+  const badgeAge = readAgeBadge(pixels, slot);
+  const resolved = resolveOCRString(raw, cards, badgeAge);
   const got = resolved ? resolved.display : 'UNKNOWN';
   const expected = EXPECTED[i];
   const correct = resolved ? resolved.display === expected : false; // UNKNOWN never counts as correct, but is not a wrong-answer failure
@@ -68,7 +76,7 @@ found.slots.forEach((slot, i) => {
   if (correct) pass++;
   if (wrong) fail++;
   const tag = correct ? 'OK' : wrong ? 'WRONG' : 'UNKNOWN';
-  console.log(`slot ${i + 1}: ${JSON.stringify(raw)} -> ${got}  [${tag}, expected ${expected}]`);
+  console.log(`slot ${i + 1}: ${JSON.stringify(raw)} badge=${badgeAge} -> ${got}  [${tag}, expected ${expected}]`);
 });
 
 const unknownCount = 13 - pass - fail;

@@ -815,13 +815,16 @@ function levenshtein(a, b) {
 const OCR_MATCH_DIST_BOUND = 4;
 const OCR_MATCH_MARGIN = 3;
 
-// Compare against the card's base NAME, never its age-disambiguated
-// display ("Rich Land (A)" vs "(I)" vs "(II)"). OCR reads only the
-// printed name text — it never sees the age badge — so matching against
-// the suffixed display would manufacture a spurious near-tie between a
-// card and its own other-age copies, which is not real ambiguity, just
-// an artifact of what string we happened to compare against.
-function resolveOCRString(raw, cardList) {
+// Shared name-matching core: normalizes the OCR string and every card's
+// base NAME (never the age-suffixed display — see resolveOCRString below
+// for why) and picks the best Levenshtein match. Returns { group } where
+// group is every card sharing that normalized name (1 entry when the name
+// is unique in the pool, 2+ for an age-ambiguous family like "Rich Land"),
+// or null when OCR didn't confidently match ANY name at all. Split out
+// from resolveOCRString so the "name known, age unknown" UI hint (see
+// ocrRecognizeSlot) can reuse the exact same match instead of re-deriving
+// it with a second, potentially-diverging pass.
+function matchOCRName(raw, cardList) {
   const query = ocrNormalize(raw);
   if (!query) return null;
   const byName = new Map(); // normalized base name -> [cards with that name]
@@ -841,22 +844,152 @@ function resolveOCRString(raw, cardList) {
     if (bestDist > OCR_MATCH_DIST_BOUND) return null;
     if (secondDist - bestDist < OCR_MATCH_MARGIN) return null;
   }
-  const group = byName.get(bestName);
-  // Multiple cards share this exact name (same card, different age copy)
-  // — text OCR fundamentally cannot tell which age is on the table, so
-  // this is a real "ask a human" case, not a tunable false negative.
-  if (group.length !== 1) return null;
-  return group[0];
+  return { group: byName.get(bestName) };
 }
 
-// Full per-slot entry point: raw OCR string + resolved card (or null).
+// Compare against the card's base NAME, never its age-disambiguated
+// display ("Rich Land (A)" vs "(I)" vs "(II)"). OCR reads only the
+// printed name text — it never sees the age badge — so matching against
+// the suffixed display would manufacture a spurious near-tie between a
+// card and its own other-age copies, which is not real ambiguity, just
+// an artifact of what string we happened to compare against.
+//
+// badgeAge (optional, from readAgeBadge — see below) settles a name that
+// maps to more than one age copy: if exactly one member of the family
+// carries that age, that's the card. Omitted, or the badge unreadable, or
+// the badge age not present in the family (a misread) — stays an "ask a
+// human" case exactly as before, never a guess.
+function resolveOCRString(raw, cardList, badgeAge) {
+  const match = matchOCRName(raw, cardList);
+  if (!match) return null;
+  const group = match.group;
+  if (group.length === 1) return group[0];
+  if (badgeAge) {
+    const filtered = group.filter((c) => c.age === badgeAge);
+    if (filtered.length === 1) return filtered[0];
+  }
+  return null;
+}
+
+/* ---------------------------------------------------------------------
+ * Age badge — every printed card carries a small age medallion (A / I /
+ * II / III) centered just above the name band (the same top strip the
+ * name-OCR search deliberately excludes — see OCR_LINE_Y_LO above). This
+ * is the piece resolveOCRString needs to settle a name that 2-4 age
+ * copies share (Rich Land, Engineering Genius, Frugality, Cultural
+ * Heritage in this capture's own pool).
+ *
+ * Region: calibrated against all 13 cards in the one real capture. The
+ * medallion's own ink (the letter, not its gold/purple/green shield
+ * background, which varies by card frame colour) lands within x
+ * [0.452,0.538] / y [0.050,0.115] of slot size on every one of the 13 —
+ * the box below pads that for margin against a different capture
+ * resolution or font hinting, same "fraction, never absolute pixels"
+ * rule as everything else in this file.
+ *
+ * Classifier: 4-class (A / I / II / III), so simpler than general glyph
+ * OCR — and I/II/III differ from each other, and from A, purely by how
+ * many separate vertical ink strokes a horizontal scan crosses. I/II/III
+ * are 1/2/3 parallel bars running the FULL glyph height with no row-to-
+ * row variation. 'A' is the only non-bar shape in this alphabet: a
+ * scanline through its point or crossbar sees 1 run, through its open
+ * legs sees 2 — so unlike a numeral, its run-count genuinely varies down
+ * the glyph. That row-to-row (in)consistency, not the run-count value by
+ * itself, is what tells 'A' apart from 'II' (both can show "2" on any
+ * single row picked in isolation). Counting strokes this way was chosen
+ * over template matching because there is no real captured I/II/III
+ * badge to build templates from — every one of the 13 cards in the only
+ * capture available reads 'A' (see appbadge_notes.txt) — while stroke-
+ * counting only needs to know what a bar LOOKS like, not what one from
+ * this exact font/resolution looks like.
+ * ------------------------------------------------------------------- */
+const AGE_BADGE_X_LO = 0.40, AGE_BADGE_X_HI = 0.60;
+const AGE_BADGE_Y_LO = 0.035, AGE_BADGE_Y_HI = 0.135;
+const AGE_BADGE_MIN_INK = 8; // fewer lit pixels than this in the whole box -> nothing readable there
+const AGE_BADGE_RUN_CONSISTENCY = 0.8; // fraction of ink rows that must agree on one run-count to call it a bar numeral
+
+// Badge letter is white/pale on every card frame colour tested (gold,
+// purple, green) — the opposite polarity from isInk() (which finds DARK
+// desaturated name text further down the same card): bright AND low
+// saturation, so it doesn't false-positive on the (saturated) frame art
+// immediately around the medallion. Threshold tuned looser than a first
+// pass (luma>195) because the letter's own anti-aliased fill dims well
+// below that on the green/purple leader-card frames (down to ~luma 170)
+// even though it hits ~250 on the gold action-card frames — a single
+// luma>195 cutoff read as a broken, mostly-1-run scribble on green/purple
+// cards (visually still a clean 'A', just fainter) and would have voted
+// those into a false 'I'. luma>165/sat<50 recovers a clean, fully-
+// connected 'A' shape on every one of the 13 cards in this capture
+// (checked directly against the ascii dumps used to tune this).
+function isBadgeInk(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+  return luma > 165 && (mx - mn) < 50;
+}
+
+// Returns 'A' | 'I' | 'II' | 'III' | null. null = unreadable — no ink, or
+// ink present but neither a consistent bar-count nor enough of it to call
+// 'A' either (e.g. this region of a different, badge-less image) — the
+// caller must treat null exactly like OCR's own '?': never guessed.
+function readAgeBadge(imageData, slot) {
+  const { data, width, height } = imageData;
+  const x0 = slot.x * width, y0 = slot.y * height;
+  const w = slot.w * width, h = slot.h * height;
+  const bx0 = Math.round(w * AGE_BADGE_X_LO), bx1 = Math.round(w * AGE_BADGE_X_HI);
+  const by0 = Math.round(h * AGE_BADGE_Y_LO), by1 = Math.round(h * AGE_BADGE_Y_HI);
+  function px(x, y) {
+    const i = (Math.round(y0 + y) * width + Math.round(x0 + x)) * 4;
+    return [data[i], data[i + 1], data[i + 2]];
+  }
+  let totalInk = 0, countedRows = 0;
+  const counts = {}; // run-count (strokes crossed in that row) -> how many rows had that count
+  for (let y = by0; y < by1; y++) {
+    let runs = 0, inRun = false, rowInk = 0;
+    for (let x = bx0; x < bx1; x++) {
+      const [r, g, b] = px(x, y);
+      if (isBadgeInk(r, g, b)) {
+        rowInk++; totalInk++;
+        if (!inRun) { runs++; inRun = true; }
+      } else {
+        inRun = false;
+      }
+    }
+    if (rowInk > 0) { counts[runs] = (counts[runs] || 0) + 1; countedRows++; }
+  }
+  if (totalInk < AGE_BADGE_MIN_INK || countedRows === 0) return null;
+  let bestRuns = 0, bestFreq = 0;
+  for (const k in counts) {
+    if (counts[k] > bestFreq) { bestFreq = counts[k]; bestRuns = +k; }
+  }
+  const consistency = bestFreq / countedRows;
+  if (consistency >= AGE_BADGE_RUN_CONSISTENCY && bestRuns >= 1 && bestRuns <= 3) {
+    return ['I', 'II', 'III'][bestRuns - 1];
+  }
+  return 'A'; // real ink present, but not a consistent bar count -> the one non-bar glyph
+}
+
+// Full per-slot entry point: raw OCR string + resolved card (or null) +
+// the age badge read for this slot + a nameHint for the UI (Job 2) when
+// the name matched a family but no single card could be settled (age
+// unreadable, or read but not unique/absent from the family) — nameHint
+// is null whenever resolved is non-null (nothing left to hint at) and
+// also null when OCR didn't match any name at all (there's no better
+// starting point to offer than a blank input in that case).
 // cardList defaults to the module-level CARDS (populated by loadCards()
 // before any scan happens in the real app); tests pass it explicitly
 // since node never calls loadCards().
 function ocrRecognizeSlot(imageData, slot, cardList) {
   const raw = ocrSlotRaw(imageData, slot);
-  const resolved = resolveOCRString(raw, cardList || CARDS);
-  return { raw, cardId: resolved ? resolved.id : null };
+  const list = cardList || CARDS;
+  const badgeAge = readAgeBadge(imageData, slot);
+  const resolved = resolveOCRString(raw, list, badgeAge);
+  const nameHint = resolved ? null : (matchOCRName(raw, list) || {}).group;
+  return {
+    raw,
+    cardId: resolved ? resolved.id : null,
+    badgeAge,
+    nameHint: nameHint ? nameHint[0].name : null,
+  };
 }
 
 /* ---------------------------------------------------------------------
@@ -965,15 +1098,23 @@ async function ocrScanSeam(imageBlobOrDataUrl) {
   // backstop for whatever OCR can't read — including every age-ambiguous
   // name OCR deliberately declines to guess; see resolveOCRString). The
   // hash table keeps learning from typed names exactly as before,
-  // regardless of which path filled a given slot.
-  const row = found.slots.map((slot) => {
+  // regardless of which path filled a given slot. nameHints runs parallel
+  // to row: null wherever row[i] resolved (nothing left to hint at) or
+  // the hash table filled it (already an exact id, not a hint), and the
+  // recognised base name wherever OCR matched a name but couldn't settle
+  // which age copy — the caller (renderFullRowStep) prefills that name so
+  // the user only has to pick the age, instead of a blank input.
+  const row = [], nameHints = [];
+  found.slots.forEach((slot) => {
     const ocr = ocrRecognizeSlot(pixels, slot, CARDS);
-    if (ocr.cardId) return ocr.cardId;
+    if (ocr.cardId) { row.push(ocr.cardId); nameHints.push(null); return; }
     const hash = hashSlot(pixels, slot);
-    return table[hash] || null;
+    const hashId = table[hash] || null;
+    row.push(hashId);
+    nameHints.push(hashId ? null : ocr.nameHint);
   });
   lastScan = { data: pixels.data, width: pixels.width, height: pixels.height, slots: found.slots };
-  return { row, rivalStr: null, rivalCulture: null, militaryDraws: [] };
+  return { row, nameHints, rivalStr: null, rivalCulture: null, militaryDraws: [] };
 }
 if (typeof window !== 'undefined') window.ocrScanSeam = ocrScanSeam;
 
@@ -1131,6 +1272,7 @@ function freshFlow() {
     blockMessage: '',
     dupMessage: '',
     fullRowDraft: null,
+    fullRowNameHints: null, // parallel to fullRowDraft: recognised name, age not yet settled
     fullRowCursor: 0,
     fullRowScanStatus: '',
   };
@@ -1551,13 +1693,29 @@ function renderFullRowStep(container) {
     container.appendChild(makeSub(state.flow.fullRowScanStatus));
   }
 
+  // "Name known, age unknown" (Job 2): OCR read the printed name cleanly
+  // but the name is shared by 2-4 age copies and the badge couldn't (or
+  // didn't) settle which one — see readAgeBadge/resolveOCRString. Rather
+  // than hand the user a blank input, prefill the recognised name so the
+  // autocomplete already lists just that family (e.g. "Rich Land (A)" /
+  // "(I)" / "(II)") and picking the right one is a tap, not typing.
+  const nameHint = !draft[cursor] && state.flow.fullRowNameHints ? state.flow.fullRowNameHints[cursor] : null;
+  if (nameHint) {
+    container.appendChild(makeSub(`Name recognised as "${nameHint}" — scan couldn't tell the age; pick it below.`));
+  }
+
   const { input, suggest } = makeAutocompleteRow('type card, Enter to place');
   container.appendChild(input.wrap);
   setupAutocomplete(input.el, suggest, () => ROW_POOL, (c) => {
     draft[cursor] = c.id;
+    if (state.flow.fullRowNameHints) state.flow.fullRowNameHints[cursor] = null;
     learnSlotIfScanned(cursor, c.id); // every name typed after a scan teaches the table
     fullRowAdvance();
   });
+  if (nameHint) {
+    input.el.value = nameHint;
+    input.el.dispatchEvent(new Event('input'));
+  }
   input.el.focus();
 
   const btnRow = document.createElement('div');
@@ -1625,15 +1783,19 @@ function renderScanControl() {
     renderAll();
     try {
       const result = await ocrScanSeam(file);
-      let filled = 0;
+      let filled = 0, hinted = 0;
       result.row.forEach((id, i) => {
-        if (id) { state.flow.fullRowDraft[i] = id; filled++; }
+        if (id) { state.flow.fullRowDraft[i] = id; filled++; return; }
+        const hint = result.nameHints && result.nameHints[i];
+        if (hint) { state.flow.fullRowNameHints[i] = hint; hinted++; }
       });
       const firstUnknown = state.flow.fullRowDraft.findIndex((x) => x === null);
       state.flow.fullRowCursor = firstUnknown === -1 ? state.flow.fullRowCursor : firstUnknown;
       state.flow.fullRowScanStatus = filled === 13
         ? 'Recognised all 13 of 13 from the screenshot.'
-        : `Recognised ${filled} of 13 from the screenshot — type the rest; each one you type teaches it for next time.`;
+        : `Recognised ${filled} of 13 from the screenshot` +
+          (hinted ? `, and the name (age not settled) on ${hinted} more` : '') +
+          ' — type the rest; each one you type teaches it for next time.';
     } catch (err) {
       state.flow.fullRowScanStatus = err && err.code === 'NO_SLOTS'
         ? "Couldn't find the row in that image — type it in instead."
@@ -1817,6 +1979,7 @@ function openFullRow() {
   state.flow.step = 'fullrow';
   state.flow.fullRowDraft = state.row.slice(0, 13);
   while (state.flow.fullRowDraft.length < 13) state.flow.fullRowDraft.push(null);
+  state.flow.fullRowNameHints = new Array(13).fill(null);
   const cursor = state.flow.fullRowDraft.findIndex((x) => x === null);
   state.flow.fullRowCursor = cursor === -1 ? 0 : cursor;
   renderAll();
@@ -1867,7 +2030,8 @@ if (typeof module !== 'undefined' && module.exports) {
     validateRow, AGE_ORDER, matchScore, searchCards,
     findRowSlots, hashSlot, slotToGrid, hashGrid, HASH_GRID, HASH_BUCKETS,
     findTextLines, segmentGlyphs, glyphToGrid, gridDistance, classifyGlyph,
-    ocrSlotRaw, ocrNormalize, levenshtein, resolveOCRString, ocrRecognizeSlot,
+    ocrSlotRaw, ocrNormalize, levenshtein, matchOCRName, resolveOCRString, ocrRecognizeSlot,
+    isBadgeInk, readAgeBadge,
     GLYPH_W, GLYPH_H, OCR_ATLAS,
   };
 } else {
