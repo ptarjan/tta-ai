@@ -3158,6 +3158,16 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 0,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
+        // 2026-08-21 (corrected): the card text and the journal both grant
+        // 1 science to EACH civilization at this event. The journal's own
+        // arithmetic confirms it: on 245/294 reveal turns where the
+        // revealer does not develop that turn, science net = production + 1
+        // (the +1 being the Trade Routes grant). Engine-wide the end-turn
+        // science checkpoints are all negative (engine <= journal), i.e. the
+        // engine was under-producing science with `science: 0`. Restored to
+        // `science: 1` to match data/cards_military_actions.json and the
+        // official BGA text "Each civilization scores 1 science, gains 1
+        // food, and gains 1 resource."
         special: &[Special::AllPlayers(EventBlock { science: 1, culture: 0, food: 1, resources: 1, food_and_or_resources: 0, blue_tokens: 0, lose_all_stored_food: false, draw_military_cards: 0, decrease_population: 0, increase_population: 0, produce_food: false, produce_resources: false, extra_production: false, science_equal_to_science_production: false, culture_equal_to_culture_production: false, culture_equal_to_science_production: false, food_equal_to_happy_faces: false, food_equal_to_happy_faces_max: 0, discard_leader_unless_current_age: false, take_yellow_tokens_from_weakest: 0, decrease_population_by_half_discontent_workers_rounded_up: false, civil_actions_per_discontent_worker: 0, one_time_discount_build_resources: 0, one_time_discount_develop_science: 0, one_time_discount_pop_food: 0, destroy_one_urban_building_of_each_opponent: false, optional_take_cards_with_civil_actions: 0, culture_per_discontent_worker: 0, choose_food: 0, choose_resources: 0, free_build_card: CardId::NONE, free_build_age: None, free_build_kind: None, free_build_cost: 0, destroy_own_building: 0, lose_colony: 0, flip_completed_wonder_ages: &[], discard_military_cards: 0 })],
         stages: &[],
         peaceful_cost: 0,

@@ -1553,13 +1553,13 @@
    "target": "all players / ranked players as stated",
    "effects": {
     "allPlayers": {
+     "science": 1,
      "food": 1,
-     "resources": 1,
-     "science": 1
+     "resources": 1
     }
    },
-   "text": "Players gain 1 food, 1 resource and 1 science.",
-   "source": "digital-edition card text (DEVELOPMENT_OF_TRADE_ROUTES); cross-checked namu_events.txt (2015 '(new)' values); Age A deck is exactly these 10 cards, 1 copy each (military deck A total = 10)"
+   "text": "Each civilization scores 1 science and gains 1 food and 1 resource.",
+   "source": "digital-edition card text (DEVELOPMENT_OF_TRADE_ROUTES); 2026-08-21 correction reverted: the 'scores 1 science' clause IS real. The official BGA text is 'Each civilization scores 1 science, gains 1 food, and gains 1 resource.' (BGA material.inc.php id 16) and the BGO journal's own arithmetic confirms the grant: on 245/294 reveal turns where the revealer does not develop that turn, science net = production + 1 (the +1 being this grant), and the engine-wide end-turn science checkpoints are all negative with science:0. Restored to science+food+resources for each civilization."
   },
   {
    "name": "Development of Civil Life",

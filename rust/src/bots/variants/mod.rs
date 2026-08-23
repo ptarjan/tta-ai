@@ -481,7 +481,7 @@ pub(crate) fn best_develop(
     let mut best: Option<Move> = None;
     let mut best_v = 0.0;
     for &m in moves {
-        if let Move::Develop { card } = m {
+        if let Move::Develop { card, .. } = m {
             if table_bool_contains(profile.tech_veto, card, ctx.nplayers) {
                 continue;
             }
@@ -871,7 +871,7 @@ fn r_population(_state: &GameState, p: &PlayerState, ctx: &Ctx, profile: &Profil
             }
         }
     }
-    let has_pop = moves.iter().any(|m| matches!(m, Move::Pop));
+    let has_pop = moves.iter().any(|m| matches!(m, Move::Pop { .. }));
     if combo_best.is_none() && !has_pop {
         return None;
     }
@@ -897,7 +897,7 @@ fn r_population(_state: &GameState, p: &PlayerState, ctx: &Ctx, profile: &Profil
     if let Some(m) = combo_best {
         return Some(m);
     }
-    moves.iter().find(|m| matches!(m, Move::Pop)).copied()
+    moves.iter().find(|m| matches!(m, Move::Pop { .. })).copied()
 }
 
 /// An idle worker produces nothing.

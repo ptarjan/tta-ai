@@ -223,7 +223,7 @@ fn classify_move(mv: Move) -> Option<BotClass> {
         Develop { .. } => Some(BotClass::DevelopTechnology),
         Upgrade { to, .. } => Some(upgrade_class(to)),
         WonderStep { .. } => Some(BotClass::BuildWonderStage),
-        Pop => Some(BotClass::IncreasePopulation),
+        Pop { .. } => Some(BotClass::IncreasePopulation),
         Revolution { .. } => Some(BotClass::ChangeGovernment),
         PlayLeader { .. } => Some(BotClass::ElectLeader),
         PlayAction { .. } => Some(BotClass::PlayActionCard),
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn develop_is_technology_regardless_of_card_kind() {
         // Matches corpuscensus's own "discovers" arm: kind-agnostic.
-        assert_eq!(classify_move(Move::Develop { card: card("Bronze") }), Some(BotClass::DevelopTechnology));
+        assert_eq!(classify_move(Move::Develop { card: card("Bronze"), full: None }), Some(BotClass::DevelopTechnology));
     }
 
     #[test]
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn pop_is_increase_population_but_pop_free_is_not_counted() {
-        assert_eq!(classify_move(Move::Pop), Some(BotClass::IncreasePopulation));
+        assert_eq!(classify_move(Move::Pop { full: None }), Some(BotClass::IncreasePopulation));
         assert_eq!(classify_move(Move::PopFree), None);
     }
 

@@ -98,6 +98,9 @@ fn bucket_key(kind: &MismatchKind) -> String {
         MismatchKind::IllegalMove { attempted, .. } => {
             format!("IllegalMove: {}", move_kind(attempted))
         }
+        MismatchKind::WonderStepBatchFallsBack { attempted, .. } => {
+            format!("WonderStepBatchFallsBack: {}", move_kind(attempted))
+        }
     }
 }
 
@@ -293,6 +296,12 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
     let mut n_bid_ceiling_games: u32 = 0;
     let mut hand_full_takes_overridden: u32 = 0;
     let mut n_hand_full_take_games: u32 = 0;
+    let mut ia_hand_full_takes_overridden: u32 = 0;
+    let mut n_ia_hand_full_take_games: u32 = 0;
+    let mut budget_takes_overridden: u32 = 0;
+    let mut n_budget_take_games: u32 = 0;
+    let mut wonder_takes_overridden: u32 = 0;
+    let mut n_wonder_take_games: u32 = 0;
     let mut n_completed = 0u32;
     let mut round_reached_sum = 0u64;
     let mut rounds_total_sum = 0u64;
@@ -355,6 +364,10 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
     let mut resource_oracle_checked_total = 0u64;
     let mut resource_oracle_agreed_total = 0u64;
     let mut n_resource_diverging_games = 0u32;
+    // `GameResult::food_oracle_checked`/`_agreed`'s twin, `FOOD_ORACLE`-gated.
+    let mut food_oracle_checked_total = 0u64;
+    let mut food_oracle_agreed_total = 0u64;
+    let mut n_food_diverging_games = 0u32;
     // The task's own deliverable: FIRST-divergence-per-game, ranked by the
     // `ActionClass` of whatever the last classified action line was
     // strictly before the diverging checkpoint. `None` keys (no prior
@@ -393,6 +406,18 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
         hand_full_takes_overridden += result.hand_full_takes_overridden;
         if result.hand_full_takes_overridden > 0 {
             n_hand_full_take_games += 1;
+        }
+        ia_hand_full_takes_overridden += result.ia_hand_full_takes_overridden;
+        if result.ia_hand_full_takes_overridden > 0 {
+            n_ia_hand_full_take_games += 1;
+        }
+        budget_takes_overridden += result.budget_takes_overridden;
+        if result.budget_takes_overridden > 0 {
+            n_budget_take_games += 1;
+        }
+        wonder_takes_overridden += result.wonder_takes_overridden;
+        if result.wonder_takes_overridden > 0 {
+            n_wonder_take_games += 1;
         }
         discard_oracle_checked_total += result.discard_oracle_checked as u64;
         discard_oracle_agreed_total += result.discard_oracle_agreed as u64;
@@ -475,6 +500,24 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
             println!("RESOURCE_DIVERGING_ID {}", meta.id);
             println!(
                 "RESOURCE_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
+                 reconstructed={} delta={}",
+                meta.id,
+                d.lineno,
+                d.round,
+                d.actor,
+                d.last_action_class,
+                d.journal_now,
+                d.reconstructed,
+                d.reconstructed - d.journal_now
+            );
+        }
+        food_oracle_checked_total += result.food_oracle_checked as u64;
+        food_oracle_agreed_total += result.food_oracle_agreed as u64;
+        if let Some(d) = &result.food_oracle_divergence {
+            n_food_diverging_games += 1;
+            println!("FOOD_DIVERGING_ID {}", meta.id);
+            println!(
+                "FOOD_DETAIL {} lineno={} round={} actor={} last_action_class={:?} journal_now={} \
                  reconstructed={} delta={}",
                 meta.id,
                 d.lineno,
@@ -1536,6 +1579,32 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
          (in {n_hand_full_take_games} games; the known corpus shape is ~109 games' worth -- a much larger number \
          here means the override is too loose)\n"
     );
+    // `GameResult::ia_hand_full_takes_overridden` -- the International
+    // Agreement analogue of the line above: an IA take the engine's own
+    // `offer_take_row` refused to offer (its `can_take` `hand_full` gate
+    // rejected every slot) that the journal nonetheless logs as taken.
+    // Reported separately so the two override paths are never conflated.
+    println!(
+        "journal-observed International Agreement takes accepted despite failing ONLY the hand_full gate: {ia_hand_full_takes_overridden} \
+         (in {n_ia_hand_full_take_games} games)\n"
+    );
+    // `GameResult::budget_takes_overridden` -- a take the journal logs at a
+    // cost the player's CA pool cannot currently cover (a CA-pool desync or
+    // take-cost model gap) that the replayer accepts with a clamped
+    // deduction so the card's later use still grounds.
+    println!(
+        "journal-observed takes accepted despite failing the budget (clamped deduction): {budget_takes_overridden} \
+         (in {n_budget_take_games} games)\n"
+    );
+    // `GameResult::wonder_takes_overridden` -- BGO's journals (7521751,
+    // 7523330) hold a SECOND unfinished wonder in parallel, which the
+    // rulebook's §"Wonders" text ("only 1 unfinished wonder") forbids. The
+    // engine carries the 2nd slot so the replayer reproduces the journal
+    // (corpus ground truth); self-play legality stays strict.
+    println!(
+        "journal-observed takes accepted despite failing ONLY the wonder-in-progress gate (2nd parallel wonder): {wonder_takes_overridden} \
+         (in {n_wonder_take_games} games)\n"
+    );
 
     // `GameResult::final_event_award_divergences` -- ranks WHICH §12.5.2
     // "Impact of ..." card's `scoring_culture` formula disagrees with BGO's
@@ -1647,6 +1716,14 @@ fn run(index_path: &str, journals_dir: &str, sample_size: Option<usize>, only_ga
          ({:.1}%) matched exactly. {n_resource_diverging_games}/{n_games} games sampled had at least one checkpoint \
          disagree (FIRST divergence only; see RESOURCE_DETAIL lines above).\n",
         100.0 * resource_oracle_agreed_total as f64 / resource_oracle_checked_total.max(1) as f64
+    );
+    println!("## Food oracle (FOOD_ORACLE=1 to populate; 0/0 otherwise)\n");
+    println!(
+        "{food_oracle_checked_total} \"End turn\" checkpoints had a `\"(now M)\"` food running total to \
+         check this binary's own reconstructed `state.players[_].food` against; {food_oracle_agreed_total} \
+         ({:.1}%) matched exactly. {n_food_diverging_games}/{n_games} games sampled had at least one checkpoint \
+         disagree (FIRST divergence only; see FOOD_DETAIL lines above).\n",
+        100.0 * food_oracle_agreed_total as f64 / food_oracle_checked_total.max(1) as f64
     );
 
     // `GameResult::civil_deck_premature_advance` -- docs/REPLAY.md's "civil

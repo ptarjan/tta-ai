@@ -136,9 +136,9 @@ fn bucket_of(kind: CardType) -> Bucket {
 /// target), never `from`.
 fn build_target_bucket(mv: Move) -> Option<Bucket> {
     match mv {
-        Move::Build { card } | Move::Develop { card } => Some(bucket_of(card.get().kind)),
+        Move::Build { card } | Move::Develop { card, .. } => Some(bucket_of(card.get().kind)),
         Move::Upgrade { to, .. } => Some(bucket_of(to.get().kind)),
-        Move::Take { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+        Move::Take { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
     }
 }
 
@@ -162,7 +162,7 @@ enum Category {
     /// is not legal or not affordable this turn" case: fall through.
     Fallthrough,
     /// Nothing in this goal's move family is on offer this decision at all
-    /// (e.g. every legal move is `Pop`/`EndTurn`) -- not a fallthrough, just
+    /// (e.g. every legal move is `Pop { full: None }`/`EndTurn`) -- not a fallthrough, just
     /// not this goal's moment; leave the list untouched and say nothing.
     Irrelevant,
 }
@@ -329,7 +329,7 @@ impl OpeningTracker {
             return;
         }
         match mv {
-            Move::Build { card } | Move::Develop { card } => match bucket_of(card.get().kind) {
+            Move::Build { card } | Move::Develop { card, .. } => match bucket_of(card.get().kind) {
                 Bucket::Mine => self.mine_built = true,
                 Bucket::Military => self.military_built = true,
                 Bucket::Leader | Bucket::Other => {}
@@ -340,7 +340,7 @@ impl OpeningTracker {
                 Bucket::Leader | Bucket::Other => {}
             },
             Move::PlayLeader { .. } => self.leader_elected = true,
-            Move::Take { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => {}
+            Move::Take { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => {}
         }
     }
 
@@ -500,7 +500,7 @@ mod tests {
     }
 
     /// If nothing in the legal list is a build/develop/upgrade at all this
-    /// decision (a pure Take/Pop/EndTurn moment), `MineFirst` must leave the
+    /// decision (a pure Take/Pop { full: None }/EndTurn moment), `MineFirst` must leave the
     /// list untouched and must NOT count that as a fallthrough -- fallthrough
     /// means "a build was on offer and none of it was Mine", not "there was
     /// no build to be had this instant".

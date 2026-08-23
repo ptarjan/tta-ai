@@ -48,13 +48,29 @@ pub enum Move {
     /// Build a wonder step, a unit, or an urban building.
     Build { card: CardId },
     /// Develop a technology.
-    Develop { card: CardId },
+    ///
+    /// `full` is the replay reconciliation's printed-cost override (the
+    /// mirror of [`Move::Pop { full: None }`]'s `full`): `Some(p)` charges `p` science
+    /// instead of the grant-folded `tech_cost`, because the journal's
+    /// stated loss was reconciled against the FULL printed price after a
+    /// food pre-conversion already covered the grant. `None` everywhere
+    /// else.
+    Develop { card: CardId, full: Option<i32> },
     /// Upgrade a worker from one card to a better one of the same family.
     Upgrade { from: CardId, to: CardId },
     /// Pay for `steps` stages of the wonder under construction.
     WonderStep { steps: u8 },
     /// Increase population (pay food, move a yellow token out of the bank).
-    Pop,
+    ///
+    /// `full` is the replay reconciliation's UN-discounted price override
+    /// (see `replay_common`'s `civil_life_pop_shortfall`): `Some(p)` charges
+    /// `p` food instead of the grant-folded `pop_cost`, because the
+    /// journal's stated spend was reconciled against the full price after a
+    /// resource pre-conversion already covered the grant. `None` everywhere
+    /// else -- `legal.rs` and every non-replay caller construct `Pop { full: None }` with
+    /// `None`, so a replay-legal `Pop { full: Some(_) }` is exactly the
+    /// reconciled shape and nothing else.
+    Pop { full: Option<i32> },
     /// The free population increase some cards grant.
     PopFree,
     /// Change government by revolution rather than by taking it as a tech.
@@ -158,7 +174,7 @@ impl Move {
         use Move::*;
         match self {
             Build { card }
-            | Develop { card }
+            | Develop { card, .. }
             | Revolution { card }
             | PlayLeader { card }
             | PlayAction { card }
@@ -176,10 +192,29 @@ impl Move {
             | SendBonus { card }
             | SendDiscard { card } => Some(card),
             Upgrade { from: _, to } | BachTheater { from: _, to } => Some(to),
-            Take { .. } | WonderStep { .. } | Pop | PopFree | CancelPact { .. } | Bid { .. }
+            Take { .. } | WonderStep { .. } | Pop { .. } | PopFree | CancelPact { .. } | Bid { .. }
             | BidPass | DefendDone | SendDone | Choose { .. } | Churchill { .. } | EndTurn
             | PolPass | Resign | RemoveLeaderYellow | TradeFoodAsResource
             | TradeResourceAsFood => None,
+        }
+    }
+
+    /// The number of wonder stages this move pays for, if it is a
+    /// [`Move::WonderStep`]. Used by the replayer's named-wonder routing
+    /// (`apply::do_wonder_step_named`), which needs the stage count out of a
+    /// move it is about to apply.
+    pub fn steps(self) -> Option<u8> {
+        use Move::*;
+        match self {
+            WonderStep { steps } => Some(steps),
+            Take { .. } | Build { .. } | Develop { .. } | Upgrade { .. } | Pop { .. } | PopFree
+            | Revolution { .. } | PlayLeader { .. } | PlayAction { .. } | Destroy { .. }
+            | PlayTactic { .. } | CopyTactic { .. } | Aggression { .. } | War { .. }
+            | OfferPact { .. } | CancelPact { .. } | PrepareEvent { .. } | RemoveLeaderYellow
+            | ColumbusColonize { .. } | Barbarossa { .. } | BachTheater { .. }
+            | TradeFoodAsResource | TradeResourceAsFood | Bid { .. } | BidPass | Defend { .. }
+            | DefendDone | SendUnit { .. } | SendBonus { .. } | SendDiscard { .. } | SendDone
+            | Choose { .. } | Churchill { .. } | EndTurn | PolPass | Resign => None,
         }
     }
 

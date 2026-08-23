@@ -152,7 +152,7 @@ pub fn categorize(mv: Move) -> Category {
     match mv {
         Take { .. } => Category::TakeCard,
         Build { .. } | Develop { .. } | Upgrade { .. } => Category::Build,
-        Pop | PopFree => Category::IncreasePopulation,
+        Pop { .. } | PopFree => Category::IncreasePopulation,
         PlayLeader { .. } | WonderStep { .. } => Category::LeaderOrWonderStep,
         Revolution { .. } | PolPass => Category::PoliticalAction,
         War { .. } | Aggression { .. } => Category::AggressionOrWar,

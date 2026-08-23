@@ -139,7 +139,7 @@ pub fn blocked_on(mv: Move) -> Option<&'static str> {
         | Move::Develop { .. }
         | Move::Upgrade { .. }
         | Move::WonderStep { .. }
-        | Move::Pop
+        | Move::Pop { .. }
         | Move::PopFree
         | Move::Revolution { .. }
         | Move::PlayLeader { .. }

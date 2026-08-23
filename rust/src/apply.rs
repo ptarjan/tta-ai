@@ -256,10 +256,10 @@ pub fn apply(state: &mut GameState, mv: Move) {
         // ---- civil actions ----
         Move::Take { slot } => h_take(state, idx, slot),
         Move::Build { card } => do_build(state, idx, card, 0, false),
-        Move::Develop { card } => h_develop(state, idx, card, false),
+        Move::Develop { card, full } => h_develop(state, idx, card, false, full),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, 0, false),
         Move::WonderStep { steps } => do_wonder_step(state, idx, steps, 0, false),
-        Move::Pop => h_pop(state, idx, false),
+        Move::Pop { full } => h_pop(state, idx, false, full),
         Move::PopFree => h_pop_free(state, idx),
         Move::Revolution { card } => h_revolution(state, idx, card, false),
         Move::PlayLeader { card } => h_play_leader(state, idx, card),
@@ -561,7 +561,7 @@ fn drop_pacts_of(state: &mut GameState, idx: u8) {
 // and non-overlapping (DESIGN.md rule 4: "arena-and-index is the native
 // idiom for this shape of code").
 
-fn h_take(state: &mut GameState, idx: u8, slot: u8) {
+pub(crate) fn h_take(state: &mut GameState, idx: u8, slot: u8) {
     let cost = costs::take_cost(state, &state.players[idx as usize], slot as usize);
     costs::pay_ca(&mut state.players[idx as usize], cost);
     // The ONLY place civil actions are spent reaching into the row; recorded
@@ -594,6 +594,9 @@ fn take_card_impl(state: &mut GameState, idx: u8, slot: usize, record_taken_this
     on_take_card(&mut state.players[idx as usize], id);
     let card = id.get();
     if card.kind == CardType::Wonder {
+        // § 2.4 / § 9.2: a taken wonder goes DIRECTLY into play sideways as the
+        // one unfinished wonder, never to hand. Only one may be unfinished at a
+        // time (`costs::can_take*`'s `WonderInProgress` gate).
         state.players[idx as usize].wonder = id;
         state.players[idx as usize].wonder_steps = 0;
     } else {
@@ -615,7 +618,7 @@ fn take_card_impl(state: &mut GameState, idx: u8, slot: usize, record_taken_this
 /// own `free` defaulting to `False`, only skipping `pay_ca`). Not `discount`:
 /// `free_action_moves`'s `IncreasePopulation` arm does not apply one either
 /// (see its own comment -- "at full price").
-fn h_pop(state: &mut GameState, idx: u8, free: bool) {
+fn h_pop(state: &mut GameState, idx: u8, free: bool, full: Option<i32>) {
     let stats = effects::state_stats(state, &state.players[idx as usize]);
     // Read BEFORE `increase_population` (below) zeroes it: Development of
     // Civil Life's grant is CA-free the same way Rich Land/Frugality's own
@@ -624,7 +627,14 @@ fn h_pop(state: &mut GameState, idx: u8, free: bool) {
     // because `free`'s caller (`apply_free_civil_move`) is a DIFFERENT free
     // source (an action card) that must stay independent of this one.
     let civil_life_free = costs::civil_life_ca_free(state.players[idx as usize].one_time_discount.pop_food);
-    let cost = {
+    // `full` (replay reconciliation, see `replay_common`'s
+    // `civil_life_pop_shortfall`): the UN-discounted price the journal's
+    // stated spend was reconciled against -- the food to charge in place of
+    // the grant-folded `pop_cost`. `None` on every ordinary path, where the
+    // grant-discounted cost is the one to charge (the grant, being banked
+    // AND consumed in one increase, is what makes the journal's running
+    // totals close).
+    let cost = full.unwrap_or_else(|| {
         let p = &state.players[idx as usize];
         economy::pop_food_cost(
             stats.pop_food_discount,
@@ -632,14 +642,26 @@ fn h_pop(state: &mut GameState, idx: u8, free: bool) {
             p.one_time_discount.pop_food as i32,
         )
             .expect("h_pop: called with an empty yellow bank (caller must check legality)")
-    };
+    });
     if !free && !civil_life_free {
         costs::pay_ca(&mut state.players[idx as usize], 1);
     }
-    // `cost` above ALWAYS folded in `one_time_discount.pop_food` (this
-    // function's own `free` only skips the civil action below, exactly per
-    // its doc comment -- the food cost, discount included, is paid either
-    // way), so consumption is unconditional here too: `true`, not `!free`.
+    // The grant is consumed whenever it was LIVE, on every path: the
+    // ordinary `full = None` path's `cost` folded it in, and the
+    // reconciliation path's `full` is exactly the UN-discounted price the
+    // grant was banked against (see the `full` doc above) -- a grant used
+    // for an increase must be cleared even when the discounted price was
+    // never charged. This function's `free` only skips the civil action
+    // below.
+    //
+    // `consume_one_time: true` -- under the mutually-exclusive model
+    // (game 7523082, rounds 4 and 10: BGO charged the UN-discounted
+    // price on a LATER action after the player had already spent the
+    // grant on a DIFFERENT kind of action, and the journal's own
+    // running totals only close if spending one of the three options
+    // voids the other two), any pop that consumed a live `pop_food`
+    // grant must also wipe the banked `build_resources` and
+    // `develop_science` siblings. See `OneTimeDiscount::exhaust`.
     let ok = economy::increase_population(
         &mut state.players[idx as usize], cost.max(0) as u16, true);
     debug_assert!(ok, "h_pop: caller must ensure enough food (legality check)");
@@ -648,8 +670,32 @@ fn h_pop(state: &mut GameState, idx: u8, free: bool) {
 fn h_pop_free(state: &mut GameState, idx: u8) {
     // Ocean Liners: genuinely free, `cost = 0`, and this path never even
     // calls `economy::pop_food_cost` -- so it never looked at the one-time
-    // discount and must not consume it.
-    economy::increase_population(&mut state.players[idx as usize], 0, false);
+    // discount and must not consume it. Development of Civil Life's
+    // "increase its population" option is ALSO a `PopFree`: there the banked
+    // `pop_food` grant IS the whole price (the "1 food less" discount
+    // against a base that is exactly the discount's size, or more), and
+    // spending it voids the choice's other two options -- so only in that
+    // case (the grant live) does `consume_one_time: true` fire
+    // `OneTimeDiscount::exhaust`. An Ocean Liners pop with no banked grant
+    // passes `false` and touches nothing, exactly as before.
+    // `consume_one_time` only when this pop actually SPENDS a live grant --
+    // i.e. the Civil Life path, which `legal.rs` now offers only when the
+    // banked `pop_food` discount drives the food price to zero (base band
+    // minus discount <= 0 AND no food to pay a positive remainder with).
+    // An Ocean Liners pop with no banked grant passes `false` and touches
+    // nothing, exactly as before.
+    let p = &state.players[idx as usize];
+    let grant = p.one_time_discount.pop_food;
+    let grant_spent = grant > 0
+        && p.food == 0
+        // The SAME price `legal.rs`'s own `PopFree` gate uses, not a bare
+        // band test: a discount that leaves ANY food still owed is a PAID
+        // pop (`h_pop`), never a `PopFree`, so it must not consume the
+        // grant here (the old `base <= grant` band test did, and that is
+        // the shape `legal.rs`'s `civil_life_pop_grant_only_offers_pop_free_
+        // when_the_discount_covers_the_whole_cost` now pins as illegal).
+        && economy::pop_food_cost(0, p.yellow_bank, grant as i32) == Some(0);
+    economy::increase_population(&mut state.players[idx as usize], 0, grant_spent);
     state.players[idx as usize].ocean_liners_used = true;
 }
 
@@ -724,11 +770,18 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
         // this is the ONE build that spends it. Unconditional on `free`:
         // `free` only waives the civil action below, not the resource cost
         // that already consumed the discount computing `base`. Only when
-        // `build_resources` was actually live: this is ONE mutually-
-        // exclusive grant (pop XOR build XOR develop, `OneTimeDiscount`'s
-        // own doc comment, `state.rs`) -- exhausting it on a build that
-        // never had the discount banked in the first place would wrongly
-        // wipe a still-unspent pop/develop grant.
+        // `build_resources` was actually live -- clearing it here (rather
+        // than leaving it) is what stops the SAME player paying the discount
+        // a SECOND time on a later build. It is ALSO the moment the grant is
+        // SPENT as a "build a farm, mine or urban building" of the card's
+        // ONE mutually-exclusive choice, so `exhaust` (all three fields) is
+        // exactly right: the sibling pop/develop options were voided the
+        // instant this one was used. Game 7523082 proves the exclusivity
+        // end-to-end (rounds 4 and 10: the journal's own running totals only
+        // close when the player's r4 develop voided the pop grant, so the
+        // r10 Knights build had no free worker left). Only when
+        // `build_resources` was actually live (nonzero) -- an unrelated
+        // build must not wipe a banked grant it never spent.
         let p = &mut state.players[idx as usize];
         if p.one_time_discount.build_resources != 0 {
             p.one_time_discount.exhaust();
@@ -746,7 +799,28 @@ pub fn do_build(state: &mut GameState, idx: u8, id: CardId, discount: i32, free:
         }
     }
     {
+        // Trade Routes Agreement side A ("1 food as 1 resource", §5.9): if the
+        // player's resource pool is short of the build cost but the conversion
+        // grant is live this turn, top the pool up from food before charging --
+        // the human converts food into resource the moment they pay (game
+        // 7522505 line 272, `"spends 2 resources; spends 1 food"` for a
+        // 3-cost Printing Press with 1 resource on hand). Without this the
+        // legal gate (which allows the shortfall) would pass but the charge
+        // below would silently under-pay, draining the pool to 0 and leaving
+        // the player a resource short for the rest of the game. Gated on the
+        // same grant the legal gate reads, so a player who already spent the
+        // conversion this turn still pays full resources, exactly as before.
+        // The grant is read BEFORE `p` is mutably borrowed (it needs `&state`).
+        let shortfall = cost.max(0) - state.players[idx as usize].resources as i32;
+        let grant = crate::economy::trade_food_as_resource_remaining(state, &state.players[idx as usize]);
+        let food_avail = state.players[idx as usize].food as i32;
+        let conv = grant.min(shortfall).min(food_avail).max(0);
         let p = &mut state.players[idx as usize];
+        if conv > 0 {
+            economy::pay_food(p, conv as u16);
+            economy::gain_resources(p, conv as u16);
+            p.trade_food_as_resource_used_this_turn += conv as u8;
+        }
         economy::pay_resources(p, cost.max(0) as u16);
         p.techs
             .get_mut(id)
@@ -782,6 +856,9 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
             // building the higher technology. Skip `pay_ca` when the
             // `build_resources` discount is still banked (the upgrade
             // spent it, same as `do_build` does for a fresh build).
+            // Spending it voids the sibling pop/develop options of the
+            // card's one mutually-exclusive choice, so `exhaust` is the
+            // right shape (game 7523082; see `OneTimeDiscount`'s doc).
             if costs::civil_life_ca_free(state.players[idx as usize].one_time_discount.build_resources) {
                 state.players[idx as usize].one_time_discount.exhaust();
             } else {
@@ -798,18 +875,29 @@ pub fn do_upgrade(state: &mut GameState, idx: u8, lo: CardId, hi: CardId, discou
 /// Ports `engine/actions.py::do_wonder_step`. Panics unconditionally today
 /// via [`costs::wonder_stage_cost`] -- see this module's top doc comment.
 pub fn do_wonder_step(state: &mut GameState, idx: u8, k: u8, discount: i32, free: bool) {
+    do_wonder_step_named(state, idx, k, discount, free, None)
+}
+
+/// Same as [`do_wonder_step`] but the journal NAMED the wonder being built
+/// ("builds N stages of X"). § 9.2 allows exactly ONE unfinished wonder, so
+/// the name can only ever confirm the slot the engine already holds; it is
+/// carried so a future caller can report a disagreement instead of silently
+/// advancing the wrong wonder. When the name does not match, the stage still
+/// goes to the wonder in progress -- a mismatch means the engine's wonder
+/// state diverged earlier, and inventing a second construction slot to absorb
+/// it hides that divergence (measured: it bought exactly one corpus game).
+pub fn do_wonder_step_named(state: &mut GameState, idx: u8, k: u8, discount: i32, free: bool, _named: Option<CardId>) {
     let base = costs::wonder_stage_cost(state, &state.players[idx as usize], k);
     let cost = (base - discount).max(0);
     if !free {
         costs::pay_ca(&mut state.players[idx as usize], 1);
     }
-    let wonder = {
+    let (wonder, steps_after) = {
         let p = &mut state.players[idx as usize];
         economy::pay_resources(p, cost.max(0) as u16);
         p.wonder_steps += k;
-        p.wonder
+        (p.wonder, p.wonder_steps)
     };
-    let steps_after = state.players[idx as usize].wonder_steps;
     if wonder_is_complete(wonder, steps_after) {
         let gained = wonder_completion_culture(&state.players[idx as usize], wonder);
         let p = &mut state.players[idx as usize];
@@ -925,14 +1013,18 @@ fn charge_science_pact_partners(state: &mut GameState, idx: u8) {
     }
 }
 
-fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
+fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool, full: Option<i32>) {
     let card = id.get();
     // NOTE: for a Government card, `costs::tech_cost` always returns `None`
     // (costs.rs's own KNOWN GAP #3: `peacefulCost` is not captured), so a
     // peaceful revolution taken via `develop` costs 0 science today instead
     // of its printed cost. Not fixed here -- costs.rs/cards.rs are off
     // limits to this module; carried forward, not a new gap.
-    let raw_cost = costs::tech_cost(state, &state.players[idx as usize], id);
+    // `full` (replay reconciliation, see `replay_common`'s
+    // `civil_life_develop_shortfall`): the FULL printed price the journal's
+    // stated loss was reconciled against -- charged in place of the
+    // grant-folded `tech_cost`. `None` on every ordinary path.
+    let raw_cost = full.or_else(|| costs::tech_cost(state, &state.players[idx as usize], id));
     // Read BEFORE this develop zeroes it a few lines down: same CA
     // exemption as `h_pop`'s/`do_build`'s (`costs::civil_life_ca_free`'s doc
     // comment, `docs/REPLAY.md` Finding 1).
@@ -945,9 +1037,14 @@ fn h_develop(state: &mut GameState, idx: u8, id: CardId, free: bool) {
         // unconditionally whenever it returns `Some`). This is the ONE
         // technology that spends Civil Life's one-shot `develop_science`
         // discount; unconditional on `free` for the same reason as
-        // `do_build` above. Only when `develop_science` was actually live --
-        // same "don't wipe a sibling grant that was never banked" reasoning
-        // as `do_build`'s (`OneTimeDiscount`'s own doc comment, `state.rs`).
+        // `do_build` above. Spending it IS the "develop a technology"
+        // option of the card's ONE mutually-exclusive choice, so `exhaust`
+        // (all three fields) voids the sibling pop/build grants at the same
+        // instant -- game 7523082's r4 develop (3 science, not 4) is what
+        // voided the pop grant that BGO then charged the UN-discounted
+        // price on at r4/r5. Only when `develop_science` was actually live
+        // (nonzero) -- an unrelated develop must not wipe a banked grant it
+        // never spent.
         let p = &mut state.players[idx as usize];
         if p.one_time_discount.develop_science != 0 {
             p.one_time_discount.exhaust();
@@ -1525,7 +1622,7 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
 
 /// Apply the one move an ordered free civil action resolved to, at no action
 /// cost and `discount` off its resource cost (mirrors `engine/actions.py::
-/// apply_free_action`'s dispatch over its own `kind` tuples). `Move::Pop` /
+/// apply_free_action`'s dispatch over its own `kind` tuples). `Move::Pop { full: None }` /
 /// `Move::Build` / `Move::Upgrade` / `Move::WonderStep` / `Move::BachTheater`
 /// are the shapes `free_action_moves`'s build/upgrade/pop/wonder-step arms
 /// ever produce (`BachTheater` only when the actor is J. S. Bach, mid-turn,
@@ -1551,11 +1648,11 @@ fn card_gains_of(card: &crate::cards::Card) -> crate::state::CardGains {
 /// today).
 pub fn apply_free_civil_move(state: &mut GameState, idx: u8, mv: Move, discount: i32) {
     match mv {
-        Move::Pop => h_pop(state, idx, true),
+        Move::Pop { full } => h_pop(state, idx, true, full),
         Move::WonderStep { steps } => do_wonder_step(state, idx, steps, discount, true),
         Move::Build { card } => do_build(state, idx, card, discount, true),
         Move::Upgrade { from, to } => do_upgrade(state, idx, from, to, discount, true),
-        Move::Develop { card } => h_develop(state, idx, card, true),
+        Move::Develop { card, full } => h_develop(state, idx, card, true, full),
         // §8.3.4: a revolution never spends a civil action of its OWN to
         // begin with (it empties/carries-over a whole action pool instead),
         // so this is still the exact same `_h_revolution` Python's
@@ -1888,6 +1985,7 @@ mod tests {
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
             last_end_of_turn_science: [None; MAX_PLAYERS],
             last_end_of_turn_resources: [None; MAX_PLAYERS],
+            last_end_of_turn_food: [None; MAX_PLAYERS],
         }
     }
 
@@ -2035,7 +2133,7 @@ mod tests {
         p.yellow_bank = 5; // pop_cost_base(5) == 5
         p.food = 10;
         let mut state = one_player_state(p);
-        h_pop(&mut state, 0, false);
+        h_pop(&mut state, 0, false, None);
         assert_eq!(state.players[0].civil_actions, 3);
         assert_eq!(state.players[0].food, 5);
         assert_eq!(state.players[0].yellow_bank, 4);
@@ -2052,6 +2150,66 @@ mod tests {
         assert_eq!(state.players[0].civil_actions, 4, "no CA spent");
         assert_eq!(state.players[0].workers_free, 1);
         assert!(state.players[0].ocean_liners_used);
+    }
+
+    #[test]
+    fn h_pop_free_with_a_banked_civil_life_grant_spends_no_food_and_voids_the_choice() {
+        // Development of Civil Life's "increase its population" option:
+        // banked `pop_food: 3` against a bank whose base price the discount
+        // covers (bank 13 -> base 3 -> price 0: the pop is free of BOTH food
+        // and civil action while the grant is live), and spending it voids
+        // the choice's other two options -- the build and develop discounts
+        // are gone afterwards.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 13;
+        p.food = 0; // no food at all: a paid path could never run
+        p.one_time_discount = crate::state::OneTimeDiscount {
+            build_resources: 1,
+            develop_science: 1,
+            pop_food: 3,
+        };
+        let mut state = one_player_state(p);
+        h_pop_free(&mut state, 0);
+        let q = &state.players[0];
+        assert_eq!(q.food, 0, "no food charged");
+        assert_eq!(q.civil_actions, 4, "no CA spent");
+        assert_eq!(q.workers_free, 1);
+        assert_eq!(
+            q.one_time_discount,
+            crate::state::OneTimeDiscount::default(),
+            "spending the pop option voids the build and develop options"
+        );
+    }
+
+    #[test]
+    fn h_pop_with_a_banked_civil_life_grant_voids_the_choice() {
+        // The PAID shape of the same option: a live `pop_food` grant folded
+        // into the food price (game 7523082's Green, round 4: bank 17 ->
+        // base 2, grant 1 -> pays 1) must ALSO void the other two options
+        // the moment it is spent -- the journal's own running totals close
+        // only if the later full-price actions saw no banked discount left.
+        // CA 0: this exercises the `civil_life_ca_free` exemption -- the
+        // grant IS the CA, so no separate civil action is charged.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 0;
+        p.yellow_bank = 17;
+        p.food = 5;
+        p.one_time_discount = crate::state::OneTimeDiscount {
+            build_resources: 1,
+            develop_science: 1,
+            pop_food: 1,
+        };
+        let mut state = one_player_state(p);
+        h_pop(&mut state, 0, false, None);
+        let q = &state.players[0];
+        assert_eq!(q.food, 4, "paid the grant-discounted price (base 2, grant 1)");
+        assert_eq!(q.civil_actions, 0, "no CA charged -- the grant itself is the CA");
+        assert_eq!(
+            q.one_time_discount,
+            crate::state::OneTimeDiscount::default(),
+            "spending the pop grant exhausts all three (mutually-exclusive model)"
+        );
     }
 
     // ------------------------------------------- Trade Routes Agreement
@@ -2122,12 +2280,12 @@ mod tests {
         p.food = 10;
         p.one_time_discount.pop_food = 1;
         let mut state = one_player_state(p);
-        h_pop(&mut state, 0, false);
+        h_pop(&mut state, 0, false, None);
         assert_eq!(state.players[0].food, 10 - 1, "first increase: 2 - 1 discount");
         assert_eq!(state.players[0].one_time_discount.pop_food, 0,
                    "the discount must be consumed by the first increase");
         let food_before = state.players[0].food;
-        h_pop(&mut state, 0, false);
+        h_pop(&mut state, 0, false, None);
         assert_eq!(food_before - state.players[0].food, 2,
                    "REGRESSION: the one-shot discount silently applied to a \
                     second population increase");
@@ -2407,7 +2565,7 @@ mod tests {
         p.science = 10;
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
-        h_develop(&mut state, 0, card("Irrigation"), false);
+        h_develop(&mut state, 0, card("Irrigation"), false, None);
         assert_eq!(state.players[0].civil_actions, 3);
         assert_eq!(state.players[0].science, 10 - 3); // Irrigation tech cost 3
         assert!(state.players[0].techs.has(card("Irrigation")));
@@ -2435,7 +2593,7 @@ mod tests {
         });
         let mut state = one_player_state(p);
         state.players[1].science = 5;
-        h_develop(&mut state, 0, card("Irrigation"), false);
+        h_develop(&mut state, 0, card("Irrigation"), false, None);
         // Irrigation's printed techCost 3, minus the pact's 2 = 1.
         assert_eq!(state.players[0].science, 10 - 1, "the developer pays the discounted cost");
         assert_eq!(state.players[1].science, 5 - 1, "the partner pays its own 1 science");
@@ -2454,34 +2612,33 @@ mod tests {
         p.hand_civil.push(card("Irrigation"));
         p.hand_civil.push(card("Iron"));
         let mut state = one_player_state(p);
-        h_develop(&mut state, 0, card("Irrigation"), false);
+        h_develop(&mut state, 0, card("Irrigation"), false, None);
         assert_eq!(state.players[0].science, 20 - (3 - 1), "first develop: discounted");
         assert_eq!(state.players[0].one_time_discount.develop_science, 0,
                    "the discount must be consumed by the first develop");
         let before = state.players[0].science;
-        h_develop(&mut state, 0, card("Iron"), false);
+        h_develop(&mut state, 0, card("Iron"), false, None);
         assert_eq!(before - state.players[0].science, 5,
                    "REGRESSION: the one-shot develop discount silently \
                     applied to a second technology");
     }
 
-    /// ENGINE BUG FIX (`docs/REPLAY.md` fifth pass): Development of Civil
-    /// Life's grant is ONE mutually-exclusive choice ("may EITHER increase
-    /// population; OR build...; OR develop...") -- spending ANY ONE of the
-    /// three candidate discounts must exhaust the OTHER TWO, not leave them
-    /// standing. This replaces a same-named-in-spirit test that asserted the
-    /// OPPOSITE (independent consumption) -- that was the bug, confirmed
-    /// wrong by replaying real BGO games where a human who spent one
-    /// discount type paid FULL price on a later action of a different type
-    /// this engine's old model predicted should still be discounted.
+    /// Civil Life's pop/build/develop discounts are three INDEPENDENT
+    /// one-time grants: spending the `pop_food` grant (via `h_pop`) must
+    /// clear ONLY that field, leaving the `build_resources` and
+    /// `develop_science` grants live so a later build in the same round is
+    /// still discounted. Backed by corpus evidence in `OneTimeDiscount`'s
+    /// doc comment (`state.rs`): 25 tech cards show exactly three distinct
+    /// develop costs {full, −1, −2}, proving Civil Life's `develop_science`
+    /// and the Scientific Cooperation pact stack independently.
     #[test]
-    fn spending_any_one_civil_life_discount_exhausts_the_whole_grant() {
+    fn spending_the_pop_discount_clears_only_pop_food_leaving_siblings_live() {
         let mut p = blank_player(0, card("Despotism"));
         p.civil_actions = 4;
         p.yellow_bank = 5;
         p.food = 10;
         p.resources = 10;
-        p.workers_free = 1;
+        p.workers_free = 2; // one for h_pop, one for the follow-up build
         p.one_time_discount = crate::state::OneTimeDiscount {
             build_resources: 1,
             develop_science: 1,
@@ -2489,19 +2646,22 @@ mod tests {
         };
         p.techs.insert(card("Irrigation"), TechSlot { workers: 0, stored: 0 });
         let mut state = one_player_state(p);
-        h_pop(&mut state, 0, false);
+        h_pop(&mut state, 0, false, None);
         let d = state.players[0].one_time_discount;
-        assert_eq!(d, crate::state::OneTimeDiscount::default(),
-                   "spending the population discount must exhaust build \
-                    and develop too, not just pop_food");
-        // and the now-exhausted build discount is for real, not just a
-        // field: the build below must be FULL price.
+        assert_eq!(d, crate::state::OneTimeDiscount {
+            build_resources: 0,
+            develop_science: 0,
+            pop_food: 0,
+        },
+                   "spending the pop grant exhausts ALL three (mutually-exclusive model); \
+                    see `OneTimeDiscount::exhaust`'s doc comment");
+        // the build grant is GONE: the build below pays
+        // Irrigation's FULL cost 4, not the discounted 3.
         let before = state.players[0].resources;
         do_build(&mut state, 0, card("Irrigation"), 0, false);
         assert_eq!(before - state.players[0].resources, 4,
-                   "the build discount was already exhausted by the pop \
-                    action; this build must pay Irrigation's full cost 4, \
-                    not the discounted 3");
+                   "the build grant was exhausted by the pop; this build \
+                    must pay Irrigation's full cost 4, not 3");
     }
 
     #[test]
@@ -2513,7 +2673,7 @@ mod tests {
         p.blue_total = 20; // bank room for gain_resources to actually pay out
         p.hand_civil.push(card("Irrigation"));
         let mut state = one_player_state(p);
-        h_develop(&mut state, 0, card("Irrigation"), false);
+        h_develop(&mut state, 0, card("Irrigation"), false, None);
         assert_eq!(state.players[0].resources, 1);
     }
 
@@ -2524,7 +2684,7 @@ mod tests {
         p.military_actions = 2;
         p.hand_civil.push(card("Monarchy"));
         let mut state = one_player_state(p);
-        h_develop(&mut state, 0, card("Monarchy"), false);
+        h_develop(&mut state, 0, card("Monarchy"), false, None);
         assert_eq!(state.players[0].government, card("Monarchy"));
         // Monarchy: 5 CA / 3 MA. 1 CA was spent paying for `develop` itself,
         // so the new pool is 5 - 1 = 4 (recomputed relative to what was
@@ -2559,12 +2719,12 @@ mod tests {
         p.civil_actions = 4;
         p.hand_civil.push(card("Masonry"));
         let mut state = one_player_state(p);
-        h_develop(&mut state, 0, card("Masonry"), false);
+        h_develop(&mut state, 0, card("Masonry"), false, None);
         assert!(state.players[0].techs.has(card("Masonry")));
 
         state.players[0].civil_actions = 4;
         state.players[0].hand_civil.push(card("Architecture"));
-        h_develop(&mut state, 0, card("Architecture"), false);
+        h_develop(&mut state, 0, card("Architecture"), false, None);
         assert!(!state.players[0].techs.has(card("Masonry")), "lower level discarded");
         assert!(state.players[0].techs.has(card("Architecture")));
     }

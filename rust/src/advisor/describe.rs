@@ -50,8 +50,8 @@ pub fn cost_note(state: &GameState, p: &crate::state::PlayerState, mv: Move) -> 
         Move::Take { slot } => {
             format!("{} civil action(s)", costs::take_cost(state, p, slot as usize))
         }
-        Move::Pop => {
-            // `Move::Pop` is only ever legal when the yellow bank has food
+        Move::Pop { .. } => {
+            // `Move::Pop { full: None }` is only ever legal when the yellow bank has food
             // left to spend (`legal.rs`'s own gate), so `pop_cost` returning
             // `None` (empty bank) cannot happen here -- `unwrap_or(0)` is a
             // defensive floor, not a real fallback path.
@@ -93,7 +93,7 @@ pub fn cost_note(state: &GameState, p: &crate::state::PlayerState, mv: Move) -> 
         Move::WonderStep { steps } => {
             format!("{} resources, 1 civil action", costs::wonder_stage_cost(state, p, steps))
         }
-        Move::Develop { card } => {
+        Move::Develop { card, .. } => {
             // See this module's top doc comment: net, not raw -- this is the
             // one place Python priced the wrong number.
             format!("{} science, 1 civil action", costs::tech_cost_net(state, p, card).unwrap_or(0))
@@ -177,7 +177,7 @@ pub fn describe_move(state: &GameState, mv: Move, board: Option<&Board>) -> Stri
                 card.age
             )
         }
-        Move::Pop => format!("INCREASE POPULATION: move a yellow token to your unused pile{t}"),
+        Move::Pop { .. } => format!("INCREASE POPULATION: move a yellow token to your unused pile{t}"),
         Move::PopFree => {
             "INCREASE POPULATION for free (Ocean Liners / leader ability)".to_string()
         }
@@ -207,7 +207,7 @@ pub fn describe_move(state: &GameState, mv: Move, board: Option<&Board>) -> Stri
             format!("BUILD WONDER '{name}' step {step_num}/{stages_len}{mult}{t}")
         }
         Move::PlayLeader { card } => format!("PLAY LEADER '{}'{t}", card.name()),
-        Move::Develop { card } => {
+        Move::Develop { card, .. } => {
             let c = card.get();
             format!("DEVELOP '{}' ({:?}, age {:?}){t}", card.name(), c.kind, c.age)
         }
@@ -424,7 +424,7 @@ mod tests {
         st.players[idx as usize].hand_civil.push(card("Swordsmen"));
 
         let note =
-            cost_note(&st, &st.players[idx as usize], Move::Develop { card: card("Swordsmen") });
+            cost_note(&st, &st.players[idx as usize], Move::Develop { card: card("Swordsmen"), full: None });
         // Swordsmen costs 4 science printed; a 3-point discount pool nets it
         // to 1 -- the raw price (what the bug priced) would have printed
         // "4 science" instead.
@@ -435,7 +435,7 @@ mod tests {
         // caught an over-broad fix that discounted every tech's cost.
         st.players[idx as usize].hand_civil.push(card("Irrigation"));
         let note2 =
-            cost_note(&st, &st.players[idx as usize], Move::Develop { card: card("Irrigation") });
+            cost_note(&st, &st.players[idx as usize], Move::Develop { card: card("Irrigation"), full: None });
         assert!(note2.starts_with("3 science"), "{note2}");
     }
 

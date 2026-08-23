@@ -483,6 +483,63 @@ pub fn take_rejection(
     None
 }
 
+/// [`take_rejection`] with an explicit card identity, mirroring
+/// [`can_take_gated`]'s `name` parameter: the slot's CURRENT occupant
+/// (`state.card_row[idx]`) is what [`take_rejection`] reads, but a caller
+/// that has ALREADY decided which card the take is for (the replayer's
+/// `International Agreement` hand-full override grounds a pick against a
+/// slot whose `card_row` entry is still `new_game`'s fictional filler, not
+/// the journal's card) must probe the GATES against the pick's own
+/// identity -- the wonder/leader/duplicate branches all key off `id`, so
+/// feeding the filler in there tests the wrong card. Branch order and every
+/// gate are identical to [`take_rejection`]; only where `id` comes from
+/// differs, for the same "the two must never drift" reason `take_rejection`
+/// exists at all (its own doc comment).
+pub fn take_rejection_named(
+    state: &GameState,
+    p: &PlayerState,
+    idx: usize,
+    gate: &TakeGate,
+    name: Option<CardId>,
+) -> Option<TakeRejection> {
+    let id = match name {
+        Some(id) => id,
+        None => return take_rejection(state, p, idx, gate),
+    };
+    let card = id.get();
+    let mut cost = row_cost(idx);
+    if card.kind == CardType::Wonder {
+        cost += gate.surcharge;
+        cost -= leader_replacement_take_discount(card, p);
+        if cost > gate.have {
+            return Some(TakeRejection::WonderBudget);
+        }
+        return if p.wonder.is_none() { None } else { Some(TakeRejection::WonderInProgress) };
+    }
+    if card.kind == CardType::Leader {
+        cost -= gate.leader_discount;
+    }
+    if cost > gate.have {
+        return Some(TakeRejection::Budget);
+    }
+    if gate.hand_full {
+        return Some(TakeRejection::HandFull);
+    }
+    if card.kind == CardType::Leader {
+        return if gate.taken_leader_ages & (1 << (card.age as u8)) == 0 {
+            None
+        } else {
+            Some(TakeRejection::LeaderAgeTaken)
+        };
+    }
+    if card.kind != CardType::Action
+        && (p.hand_civil.contains(id) || p.techs.has(id) || id == p.government)
+    {
+        return Some(TakeRejection::DuplicateCard);
+    }
+    None
+}
+
 // ------------------------------------------------------------- build/tech costs
 
 /// Resource cost to build a worker onto technology `id`, or `None` if `id`
@@ -511,7 +568,18 @@ pub fn build_cost_for(state: &GameState, p: &PlayerState, id: CardId) -> Option<
     //
     // Collapsing them onto one predicate would silently make Engineering pay
     // for a player's farms, which is not what the card says.
-    if card.kind.is_urban() || card.kind.is_production() {
+    //
+    // Neither discount reaches UNITS -- the one-time field is
+    // `URBAN_OR_PRODUCTION`-scoped and the per-age pool is `URBAN_TYPES`-scoped.
+    // Game 7523082 round 10 proves it: Purple built a 3-cost Knights (Cavalry)
+    // for exactly 3 resources while banked a live `build_resources` grant
+    // (Development of Civil Life, round 4). The journal's running totals only
+    // close when the Knights build pays full price and spends one of Purple's
+    // TWO workers (r9: 1 free + 2 earned = 3; r10: 1 earned + 1 spent = 1).
+    // Charging 2 would leave a free worker over and break every later total.
+    // The old `!is_unit` guard was deleted when this function was rewritten
+    // for the two-discount split; this is it restored.
+    if !card.kind.is_unit() && (card.kind.is_urban() || card.kind.is_production()) {
         cost -= p.one_time_discount.build_resources as i32;
     }
     if card.kind.is_urban() {
@@ -914,6 +982,7 @@ mod tests {
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
             last_end_of_turn_science: [None; MAX_PLAYERS],
             last_end_of_turn_resources: [None; MAX_PLAYERS],
+            last_end_of_turn_food: [None; MAX_PLAYERS],
         }
     }
 
@@ -923,6 +992,7 @@ mod tests {
         players[0] = p;
         blank_state(4, players)
     }
+
 
     // ------------------------------------------------------------ row_cost
 
@@ -1402,6 +1472,80 @@ mod tests {
         check(&state, &state.players[0], 0);
     }
 
+    /// [`take_rejection_named`] must mirror [`take_rejection`] (and
+    /// [`can_take_gated`]'s `name` parameter) gate-for-gate when the
+    /// override is `None`, and must test the OVERRIDDEN card's identity --
+    /// not the slot's current occupant -- when it is `Some`. The replayer's
+    /// International-Agreement hand-full override calls it with the journal
+    /// pick against a slot still holding fictional filler, so a drift here
+    /// would silently reject (or accept) takes on the wrong card's
+    /// duplicate/wonder/leader status.
+    #[test]
+    fn take_rejection_named_mirrors_take_rejection_and_overrides_the_card_identity() {
+        fn check(state: &GameState, p: &PlayerState, idx: usize, name: Option<CardId>) {
+            let gate = take_gate(state, p, None);
+            let legal = can_take_gated(state, p, idx, &gate, name);
+            let rejection = take_rejection_named(state, p, idx, &gate, name);
+            assert_eq!(rejection.is_none(), legal, "idx={idx} name={name:?} rejection={rejection:?}");
+        }
+
+        // `None` override: identical to `take_rejection` for every shape
+        // above (a different-occupant slot, a duplicate in hand).
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        p.hand_civil.push(card("Irrigation"));
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Irrigation");
+        check(&state, &state.players[0], 0, None);
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None)), take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), None));
+
+        // `Some` override: the slot holds `Irrigation` but the take is for
+        // `Bronze` -- the duplicate gate must test `Bronze`'s identity
+        // (not in hand) and pass, while `take_rejection` on the same slot
+        // names the occupant's duplicate.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 10;
+        p.hand_civil.push(card("Irrigation"));
+        let mut state = one_player_state(p);
+        // `Bronze` in a cost-1 slot (idx < 5) so the override's affordability
+        // gate passes; the occupant is the duplicate-in-hand `Irrigation`.
+        state.card_row[0] = card("Irrigation");
+        let bronze = card("Bronze");
+        check(&state, &state.players[0], 0, Some(bronze));
+        assert_eq!(take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), None);
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None)), Some(TakeRejection::DuplicateCard));
+
+        // `Some` override, hand FULL: the overridden card is affordable and
+        // not a duplicate, so `HandFull` is named -- the exact answer the
+        // IA override branch in `replay_common.rs` keys off.
+        // Hand limit is `ca_total` (Despotism's 4, from state_stats) +
+        // `civil_hand_limit` bonus; 5 cards in hand is full. Budget is the
+        // player's OWN spare (None) -- Despotism's 4 covers Bronze's cost 1.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        for _ in 0..5 {
+            p.hand_civil.push(card("Irrigation"));
+        }
+        let mut state = one_player_state(p);
+        state.card_row[0] = card("Irrigation");
+        let bronze = card("Bronze");
+        check(&state, &state.players[0], 0, Some(bronze));
+        assert_eq!(take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), Some(TakeRejection::HandFull));
+
+        // `Some` override of an EMPTY slot: `take_rejection` names
+        // `EmptySlot` on the occupant, but `take_rejection_named` has no
+        // occupant to read -- it tests the OVERRIDDEN card against the
+        // slot's position price, so an affordable card on an empty slot is
+        // legal (the caller grounding a pick into an empty slot is a
+        // replayer-side concern, not a gate this function polices).
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 1;
+        let state = one_player_state(p);
+        let bronze = card("Bronze");
+        assert_eq!(take_rejection(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None)), Some(TakeRejection::EmptySlot));
+        assert_eq!(take_rejection_named(&state, &state.players[0], 0, &take_gate(&state, &state.players[0], None), Some(bronze)), None);
+    }
+
     // ------------------------------------------------------- build_cost_for
 
     #[test]
@@ -1516,7 +1660,13 @@ mod tests {
         p.techs.insert(card("Engineering"), TechSlot { workers: 0, stored: 0 });
         p.one_time_discount.build_resources = 1;
         let state = one_player_state(p);
+        // Same player, same discounts, on a CAVALRY unit of the same age:
+        // still full price. Read with the test above, this pins down that
+        // the one-time `build_resources` field never reaches a unit build --
+        // game 7523082 round 10: Purple built Knights (3) for exactly 3
+        // resources with a live Development of Civil Life grant banked.
         assert_eq!(build_cost_for(&state, &state.players[0], card("Swordsmen")), Some(3));
+        assert_eq!(build_cost_for(&state, &state.players[0], card("Knights")), Some(3));
     }
 
     /// ONE clamp, at the very end. With a discount stack bigger than the

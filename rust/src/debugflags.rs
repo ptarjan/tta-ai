@@ -40,6 +40,7 @@ static COLONIZE_FALLBACK_DUMP: LazyLock<bool> = LazyLock::new(|| flag("COLONIZE_
 static TIE_CENSUS: LazyLock<bool> = LazyLock::new(|| flag("TIE_CENSUS"));
 static SCIENCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("SCIENCE_ORACLE"));
 static RESOURCE_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("RESOURCE_ORACLE"));
+static FOOD_ORACLE: LazyLock<bool> = LazyLock::new(|| flag("FOOD_ORACLE"));
 
 /// `REPLAY_DEBUG`: per-game replay tracing.
 pub fn replay_debug() -> bool {
@@ -94,6 +95,13 @@ pub fn science_oracle() -> bool {
 /// `GameState::last_end_of_turn_resources` in place of science's.
 pub fn resource_oracle() -> bool {
     *RESOURCE_ORACLE
+}
+
+/// [`science_oracle`]'s food twin -- same checkpoint shape, same
+/// env-var gate, `state.players[_].food` /
+/// `GameState::last_end_of_turn_food` in place of science's.
+pub fn food_oracle() -> bool {
+    *FOOD_ORACLE
 }
 
 // ============================================================== tests ====

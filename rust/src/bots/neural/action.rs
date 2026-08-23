@@ -86,7 +86,7 @@ pub(crate) fn move_kind_slot(mv: &Move) -> usize {
         Move::Develop { .. } => 2,
         Move::Upgrade { .. } => 3,
         Move::WonderStep { .. } => 4,
-        Move::Pop => 5,
+        Move::Pop { .. } => 5,
         Move::PopFree => 6,
         Move::Revolution { .. } => 7,
         Move::PlayLeader { .. } => 8,
@@ -183,7 +183,7 @@ pub(crate) fn decode_aux(mv: Move) -> Aux {
         Move::Churchill { choice } => Aux { churchill: Some(choice), ..Aux::EMPTY },
         Move::Build { .. }
         | Move::Develop { .. }
-        | Move::Pop
+        | Move::Pop { .. }
         | Move::PopFree
         | Move::Revolution { .. }
         | Move::PlayLeader { .. }
@@ -409,10 +409,10 @@ mod tests {
         let samples = [
             Move::Take { slot: 0 },
             Move::Build { card: CardId::NONE },
-            Move::Develop { card: CardId::NONE },
+            Move::Develop { card: CardId::NONE, full: None },
             Move::Upgrade { from: CardId::NONE, to: CardId::NONE },
             Move::WonderStep { steps: 1 },
-            Move::Pop,
+            Move::Pop { full: None },
             Move::PopFree,
             Move::Revolution { card: CardId::NONE },
             Move::PlayLeader { card: CardId::NONE },
@@ -483,7 +483,7 @@ mod tests {
             encode_action(0, Move::Take { slot: 1 }),
             encode_action(0, Move::Build { card: warriors }),
             encode_action(0, Move::Build { card: irrigation }),
-            encode_action(0, Move::Develop { card: warriors }),
+            encode_action(0, Move::Develop { card: warriors, full: None }),
             encode_action(0, Move::Aggression { card: warriors, target: 1 }),
             encode_action(0, Move::Aggression { card: warriors, target: 2 }),
             encode_action(0, Move::EndTurn),

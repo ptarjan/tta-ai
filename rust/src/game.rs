@@ -416,6 +416,7 @@ pub fn new_game(num_players: u8, seed: u64) -> GameState {
         last_end_of_turn_culture: [None; MAX_PLAYERS],
         last_end_of_turn_science: [None; MAX_PLAYERS],
         last_end_of_turn_resources: [None; MAX_PLAYERS],
+        last_end_of_turn_food: [None; MAX_PLAYERS],
     };
 
     // The thirteen row slots, dealt from the shuffled Age A civil deck. That
@@ -962,6 +963,7 @@ pub fn resume_end_turn(state: &mut GameState, idx: u8) {
     // always-on culture oracle exactly.
     state.last_end_of_turn_science[idx as usize] = Some(state.players[idx as usize].science);
     state.last_end_of_turn_resources[idx as usize] = Some(state.players[idx as usize].resources);
+    state.last_end_of_turn_food[idx as usize] = Some(state.players[idx as usize].food);
     advance_turn(state, &mut rng);
 }
 

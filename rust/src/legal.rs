@@ -430,11 +430,89 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
 
     // increase population
     if let Some(cost) = pop_cost(state, p) {
-        if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food)) && p.food as i32 >= cost {
-            moves.push(Move::Pop);
+        // `Pop { full: None }` while a Civil Life `pop_food` grant is banked:
+        // the CA exemption is `civil_life_ca_free`'s (grant live -> no CA
+        // needed) and the food price is the grant-discounted one that
+        // `pop_cost` above already folds in. There is no `!grant_live` guard
+        // here: game 7523809 line 54 ("Purple increases population Purple
+        // spends 1 food", bank 17 base 2 minus 1-discount = 1, with a CA in
+        // hand) is exactly this shape -- BGO takes the paid pop while the
+        // grant is live -- and a 200-game `IllegalMove: Pop` cluster (mean
+        // round 4.9) came from this arm refusing every such pop. The
+        // replayer's `civil_life_pop_shortfall` reconciliation and the
+        // `PopFree` arm (below) own the grant's two other shapes, so both
+        // arms coexisting is how the replayer picks the one the journal
+        // logged.
+        if (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food))
+            && p.food as i32 >= cost
+        {
+            moves.push(Move::Pop { full: None });
+        }
+        // The replay reconciliation's `Pop { full: Some(f) }` (see
+        // `replay_common`'s `civil_life_pop_shortfall`): the journal's
+        // stated spend was reconciled against the UN-discounted price after
+        // a resource pre-conversion covered the grant, so legality here is
+        // the CA gate alone plus food covering the FULL price `f` -- never
+        // the grant-discounted `cost` (that would re-admit the very drift
+        // the reconciliation exists to close). No non-replay code ever
+        // constructs a `full: Some(_)`, so this arm is replay-exclusive;
+        // `f` is derived here (discounted `cost` + the live grant) exactly
+        // as the replayer derives it, and the replayer's own
+        // `try_apply` consults this list, so the move is offered iff the
+        // player can actually pay the full price.
+        //
+        // The `pop_food > 0` gate is `civil_life_pop_shortfall`'s own first
+        // precondition, repeated here so the two agree by construction.
+        // Without it this arm is not replay-exclusive: at a zero grant
+        // `Some(cost + 0)` is a byte-identical duplicate of `full: None`, and
+        // `legal.rs` is shared with BOT move generation, so the duplicate
+        // doubles this action's weight in every uniform rollout. The
+        // replayer can never want that shape -- `civil_life_pop_shortfall`
+        // returns `None` outright when the grant is zero -- so the gate
+        // cannot cost a replay.
+        //
+        // Its two SIBLING preconditions (a side-B conversion covering the
+        // gap, and the resources to feed it) must NOT be repeated here.
+        // They are true when the replayer DECIDES on this move and false by
+        // the time it applies it: the fallback spends the grant first, as
+        // `res` separate `Move::TradeResourceAsFood` applications, and only
+        // then asks whether the pop is legal. Gating on them rejected the
+        // move the replayer had already paid for (test
+        // `a_pop_line_at_the_civil_life_discounted_price_converts_the_gap_from_resources`).
+        // A dominated overpay does survive here whenever a grant is live;
+        // closing that needs the arm moved out of `action_moves` and reached
+        // through the replayer's own bypass machinery, not a tighter gate.
+        if p.food as i32 >= cost + p.one_time_discount.pop_food as i32
+            && p.one_time_discount.pop_food > 0
+            && (ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food))
+        {
+            moves.push(Move::Pop {
+                full: Some(cost + p.one_time_discount.pop_food as i32),
+            });
         }
     }
     if s.free_pop_per_turn && !p.ocean_liners_used && p.yellow_bank > 0 {
+        moves.push(Move::PopFree);
+    }
+    // Development of Civil Life's "increase its population" option: the
+    // pop is free of BOTH food and civil action when the banked `pop_food`
+    // discount drives the whole food price to zero -- base cost (bank
+    // band) minus the discount <= 0. Game 7523082's r4 "Development of
+    // Civilization" banked a 1-discount: at the bank sizes players reach
+    // (13 -> 3-1 = 2, 17 -> 3-1 = 2) the pop still COSTS food, so the
+    // journal logs it as a paid pop ("spends 2/3 food") and the replayer
+    // must apply it as `Pop { full: None }` -- offering a free pop there
+    // would swallow that spend and drift the worker count. A 2+ discount
+    // at bank 13+ (base 3 -> 0) is the true free case, and this gate
+    // finds it directly from the same `pop_cost_base` band table the
+    // charge path uses, so a future 2-discount card gets its free pop
+    // exactly when it costs nothing. `h_pop_free` never reads food.
+    if p.yellow_bank > 0
+        && p.one_time_discount.pop_food > 0
+        && p.food == 0
+        && economy::pop_cost_base(p.yellow_bank)
+            .is_some_and(|base| u16::from(base) <= p.one_time_discount.pop_food as u16)
+    {
         moves.push(Move::PopFree);
     }
 
@@ -486,7 +564,22 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                 // Civil Life's text does NOT cover ("build", not
                 // "upgrade") -- the exemption is checked here, inline, not
                 // folded into `have_ca` itself.
-                if res < cost || !(have_ca || costs::civil_life_ca_free(p.one_time_discount.build_resources)) {
+                //
+                // Trade Routes Agreement side A ("1 food as 1 resource", §5.9)
+                // can pay part of a non-unit build's resource cost in food:
+                // a build whose resource pool is short by exactly the
+                // conversion grant is still payable -- the human converts food
+                // into resource the moment they pay (game 7522505 line 272,
+                // Green side-A: `"spends 2 resources; spends 1 food"` for a
+                // 3-cost Printing Press with 1 resource on hand). `res` alone
+                // would reject it; the conversion makes it legal. Gated on the
+                // grant being live this turn AND the food actually being there,
+                // so a player who has already spent the conversion this turn
+                // (or has no food) still pays full resources, exactly as before.
+                let trade_fill = crate::economy::trade_food_as_resource_remaining(state, p)
+                    .min(p.food as i32);
+                let affordable = res >= cost || (res + trade_fill) >= cost;
+                if !affordable || !(have_ca || costs::civil_life_ca_free(p.one_time_discount.build_resources)) {
                     continue;
                 }
                 if kind.is_urban() && costs::urban_count(p, kind) >= s.urban_limit {
@@ -567,6 +660,24 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                     moves.push(Move::WonderStep { steps: k as u8 });
                 }
             }
+            if crate::debugflags::replay_debug() {
+                eprintln!(
+                    "DEBUG wonder-legal: actor={} ca={} steps={} left={} wstages={} res={} gov={} max_k={} costs=[{}|{}|{}|{}] ham={}",
+                    p.idx,
+                    ca,
+                    p.wonder_steps,
+                    stages_left,
+                    s.wonder_stages,
+                    p.resources,
+                    p.government.get().name,
+                    max_k,
+                    costs::wonder_stage_cost(state, p, 1),
+                    costs::wonder_stage_cost(state, p, 2),
+                    costs::wonder_stage_cost(state, p, 3),
+                    costs::wonder_stage_cost(state, p, 4),
+                    ca > p.civil_actions as i32,
+                );
+            }
         }
     }
 
@@ -597,7 +708,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                     && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
                     && effects::science_pact_partners_can_pay(state, p)
                 {
-                    moves.push(Move::Develop { card: id });
+                    moves.push(Move::Develop { card: id, full: None });
                 }
                 if can_revolt(state, p, id) {
                     moves.push(Move::Revolution { card: id });
@@ -619,7 +730,7 @@ fn action_moves(state: &GameState, p: &PlayerState) -> MoveList {
                     && p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
                     && effects::science_pact_partners_can_pay(state, p)
                 {
-                    moves.push(Move::Develop { card: id });
+                    moves.push(Move::Develop { card: id, full: None });
                 }
             }
             _k @ CardType::Farm | _k @ CardType::Mine | _k @ CardType::Lab | _k @ CardType::Temple | _k @ CardType::Library | _k @ CardType::Arena | _k @ CardType::Theater | _k @ CardType::Infantry | _k @ CardType::Cavalry | _k @ CardType::Artillery | _k @ CardType::Air | _k @ CardType::SpecialTech | _k @ CardType::Wonder | _k @ CardType::Tactic | _k @ CardType::Aggression | _k @ CardType::War | _k @ CardType::Pact | _k @ CardType::Bonus | _k @ CardType::Territory | _k @ CardType::Event => {} // Wonder/other military-deck types never sit in hand_civil.
@@ -806,6 +917,13 @@ fn bach_moves(state: &GameState, p: &PlayerState, names: &[CardId], res: i32, di
 /// 2026-08-05 against `data/cards_civil.json`: every government that DOES
 /// print a `revolutionCost` prints a nonzero one, 1 through 9; only
 /// Despotism prints `null`).
+///
+/// The action-pool half is `revolt_pool_ok` alone. §8.3/§8.4 are SETTLED:
+/// a revolution requires that no civil action was spent this turn, and
+/// Hammurabi's conversion does not qualify as an exemption. A blanket
+/// `|| leader_is(p, "Hammurabi")` was tried on 2026-08-22 -- it does not
+/// even encode the claimed rule, since it lets Hammurabi revolt after
+/// spending every civil action in the pool. Do not re-add it.
 pub(crate) fn can_revolt(state: &GameState, p: &PlayerState, id: CardId) -> bool {
     // `costs::revolution_cost` folds in the standing pact discount (`Stats::
     // tech_discount`) -- a bare `card.revolution_cost` comparison here used
@@ -1024,7 +1142,7 @@ pub fn free_action_moves(
             // wonder-step kinds do).
             if let Some(cost) = pop_cost(state, p) {
                 if p.food as i32 >= cost {
-                    out.push(Move::Pop);
+                    out.push(Move::Pop { full: None });
                 }
             }
         }
@@ -1047,7 +1165,7 @@ pub fn free_action_moves(
                 if p.science as i32 >= costs::tech_cost_net(state, p, id).unwrap_or(0)
                     && effects::science_pact_partners_can_pay(state, p)
                 {
-                    out.push(Move::Develop { card: id });
+                    out.push(Move::Develop { card: id, full: None });
                 }
                 // RB p.15: Breakthrough may also pay for a revolution --
                 // this is `_can_revolt`'s COST test only (`revolution_cost`
@@ -1265,6 +1383,7 @@ mod tests {
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
             last_end_of_turn_science: [None; MAX_PLAYERS],
             last_end_of_turn_resources: [None; MAX_PLAYERS],
+            last_end_of_turn_food: [None; MAX_PLAYERS],
         }
     }
 
@@ -1863,14 +1982,88 @@ mod tests {
         p.yellow_bank = 20; // pop_cost_base -> 2
         p.food = 2;
         let state = one_player_state(p);
-        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Pop));
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Pop { full: None }));
 
         let mut p2 = blank_player(0, card("Despotism"));
         p2.civil_actions = 4;
         p2.yellow_bank = 20;
         p2.food = 1; // one short
         let state2 = one_player_state(p2);
-        assert!(!action_moves(&state2, &state2.players[0]).as_slice().contains(&Move::Pop));
+        assert!(!action_moves(&state2, &state2.players[0]).as_slice().contains(&Move::Pop { full: None }));
+    }
+
+    #[test]
+    fn civil_life_pop_grant_only_offers_pop_free_when_the_discount_covers_the_whole_cost() {
+        // The Development of Civil Life "increase its population" option is
+        // a free pop (no food, no CA) ONLY when the banked `pop_food`
+        // discount drives the whole food price to zero (base band cost
+        // minus discount <= 0). Game 7523082's r4 Civil Life banked a
+        // 1-discount: at the bank sizes its players reach (13 -> 3-1 = 2)
+        // the pop still COSTS food, so the journal logs it as a paid pop
+        // ("spends 2 food") and the replayer must apply it as
+        // `Pop { full: None }` -- a free-pop arm would swallow that spend
+        // and drift the worker count. Only a discount >= the band's base
+        // cost is truly free.
+        use crate::state::OneTimeDiscount;
+        let grant = |pop_food: i16| {
+            OneTimeDiscount {
+                build_resources: 1,
+                develop_science: 1,
+                pop_food,
+            }
+        };
+        // 1-discount at bank 15: base 3 - 1 = 2 > 0 -> PAID pop, no PopFree.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 15;
+        p.food = 0;
+        p.one_time_discount = grant(1);
+        let state = one_player_state(p);
+        let moves = action_moves(&state, &state.players[0]);
+        assert!(
+            !moves.as_slice().contains(&Move::PopFree),
+            "a 1-discount at bank 15 (base 3) leaves 2 food owed: not free"
+        );
+        assert!(
+            !moves.as_slice().contains(&Move::Pop { full: None }),
+            "no food -> no paid Pop"
+        );
+
+        // 2-discount at bank 13: base 3 - 2 = 1 > 0 -> still a paid pop.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 13;
+        p.food = 0;
+        p.one_time_discount = grant(2);
+        let state = one_player_state(p);
+        assert!(
+            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::PopFree),
+            "base 3 - 2 = 1 food still owed: not free"
+        );
+
+        // 3-discount at bank 13: base 3 - 3 = 0 -> genuinely free.
+        let mut p = blank_player(0, card("Despotism"));
+        p.civil_actions = 4;
+        p.yellow_bank = 13;
+        p.food = 0;
+        p.one_time_discount = grant(3);
+        let state = one_player_state(p);
+        let moves = action_moves(&state, &state.players[0]);
+        assert!(
+            moves.as_slice().contains(&Move::PopFree),
+            "base 3 - 3 = 0: the Civil Life pop is free"
+        );
+        // The paid arm IS offered here too (cost = 3 - 3 = 0, so food 0 >= 0
+        // passes): the zero-cost `Pop { full: None }` and the `PopFree` are
+        // two shapes of the same free pop, and the replayer picks `PopFree`
+        // for a zero-food line. There is no guard keeping the paid arm out --
+        // game 7523809/7522663 proved that refusing a paid pop while the grant
+        // is live (the old `!civil_life_live` guard) is what broke the 200-game
+        // `IllegalMove: Pop` cluster.
+        assert!(
+            moves.as_slice().contains(&Move::Pop { full: None }),
+            "zero-cost paid arm coexists with PopFree; replayer picks PopFree"
+        );
     }
 
     // ------------------------------------------------- Trade Routes Agreement
@@ -2201,7 +2394,7 @@ mod tests {
         p.science = 10;
         p.hand_civil.push(card("Irrigation"));
         let state = one_player_state(p);
-        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation") }));
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation"), full: None }));
     }
 
     #[test]
@@ -2213,7 +2406,7 @@ mod tests {
         p.hand_civil.push(card("Monarchy"));
         let state = one_player_state(p);
         assert!(
-            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Monarchy") }),
+            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Monarchy"), full: None }),
             "7 science is not enough to peacefully develop Monarchy (needs 8)"
         );
 
@@ -2222,7 +2415,7 @@ mod tests {
         p2.science = 8;
         p2.hand_civil.push(card("Monarchy"));
         let state2 = one_player_state(p2);
-        assert!(action_moves(&state2, &state2.players[0]).as_slice().contains(&Move::Develop { card: card("Monarchy") }));
+        assert!(action_moves(&state2, &state2.players[0]).as_slice().contains(&Move::Develop { card: card("Monarchy"), full: None }));
     }
 
     #[test]
@@ -2258,7 +2451,7 @@ mod tests {
         p.civil_actions = 4;
         // "Frugality (A)": ordered action increase_population + gainFood.
         // `p.yellow_bank` is 0 here (blank_player default), so
-        // `free_action_moves` has no legal `Move::Pop` to offer -- correctly
+        // `free_action_moves` has no legal `Move::Pop { full: None }` to offer -- correctly
         // NOT playable in THIS position, not blocked outright (see
         // `play_action_playable_when_its_ordered_action_has_a_legal_move`
         // below for the positive case).
@@ -2478,7 +2671,7 @@ mod tests {
         p.food = 2;
         let state = one_player_state(p);
         let out = free_action_moves(&state, &state.players[0], FreeActionKind::IncreasePopulation, 100, false);
-        assert!(out.as_slice().contains(&Move::Pop));
+        assert!(out.as_slice().contains(&Move::Pop { full: None }));
     }
 
     #[test]
@@ -2525,7 +2718,7 @@ mod tests {
         p.hand_civil.push(card("Irrigation"));
         let state = one_player_state(p);
         let out = free_action_moves(&state, &state.players[0], FreeActionKind::DevelopTechnology, 0, false);
-        assert!(out.as_slice().contains(&Move::Develop { card: card("Irrigation") }));
+        assert!(out.as_slice().contains(&Move::Develop { card: card("Irrigation"), full: None }));
     }
 
     #[test]
@@ -2593,12 +2786,12 @@ mod tests {
         let mut state = one_player_state(p);
         state.players[1].science = 0; // cannot pay its own 1
         assert!(
-            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation") }),
+            !action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation"), full: None }),
             "the partner cannot pay -- the develop is illegal"
         );
 
         state.players[1].science = 1; // now it can
-        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation") }));
+        assert!(action_moves(&state, &state.players[0]).as_slice().contains(&Move::Develop { card: card("Irrigation"), full: None }));
     }
 
     #[test]

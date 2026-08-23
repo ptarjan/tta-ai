@@ -374,7 +374,7 @@ mod tests {
     fn categorize_maps_take_build_pop_leader_wonder_step_and_end_turn() {
         assert_eq!(categorize(None, Move::Take { slot: 0 }), Category::TakeCard);
         assert_eq!(categorize(None, Move::Build { card: card("Bronze") }), Category::Build);
-        assert_eq!(categorize(None, Move::Pop), Category::IncreasePopulation);
+        assert_eq!(categorize(None, Move::Pop { full: None }), Category::IncreasePopulation);
         assert_eq!(categorize(None, Move::PopFree), Category::IncreasePopulation);
         assert_eq!(categorize(None, Move::PlayLeader { card: card("Hammurabi") }), Category::LeaderOrWonderStep);
         assert_eq!(categorize(None, Move::WonderStep { steps: 1 }), Category::LeaderOrWonderStep);
@@ -401,7 +401,7 @@ mod tests {
         // TTA's rules, and Bid/BidPass get their own bucket so the
         // colonization-auction census finding is testable at the move
         // level -- see the module doc above `Category` for the rationale.
-        assert_eq!(categorize(None, Move::Develop { card: card("Bronze") }), Category::Build);
+        assert_eq!(categorize(None, Move::Develop { card: card("Bronze"), full: None }), Category::Build);
         assert_eq!(categorize(None, Move::Upgrade { from: card("Bronze"), to: card("Iron") }), Category::Build);
         assert_eq!(categorize(None, Move::Bid { n: 3 }), Category::Bid);
         assert_eq!(categorize(None, Move::BidPass), Category::Bid);

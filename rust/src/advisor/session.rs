@@ -494,7 +494,7 @@ fn move_kind(m: &Move) -> &'static str {
         Develop { .. } => "develop",
         Upgrade { .. } => "upgrade",
         WonderStep { .. } => "wonder_step",
-        Pop => "pop",
+        Pop { .. } => "pop",
         PopFree => "pop_free",
         Revolution { .. } => "revolution",
         PlayLeader { .. } => "play_leader",
@@ -588,7 +588,7 @@ fn move_tokens(state: &GameState, m: Move) -> Vec<ArgToken> {
             v
         }
         Build { card }
-        | Develop { card }
+        | Develop { card, .. }
         | Revolution { card }
         | PlayLeader { card }
         | PlayAction { card }
@@ -626,7 +626,7 @@ fn move_tokens(state: &GameState, m: Move) -> Vec<ArgToken> {
             ChurchillChoice::Culture => "culture",
             ChurchillChoice::Military => "military",
         })],
-        Pop | PopFree | RemoveLeaderYellow | EndTurn | PolPass | Resign | BidPass
+        Pop { .. } | PopFree | RemoveLeaderYellow | EndTurn | PolPass | Resign | BidPass
         | DefendDone | SendDone | TradeFoodAsResource | TradeResourceAsFood => vec![],
     }
 }

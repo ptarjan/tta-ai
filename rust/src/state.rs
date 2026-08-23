@@ -643,9 +643,11 @@ pub struct PlayerState {
     pub mil_sci_discount: i16,
     /// Event-granted cost discount (§ "Development of Civil Life", the one
     /// Age A event that prints `oneTimeDiscount`). See [`OneTimeDiscount`]
-    /// for the one thing a reader needs to know about it: it is a SINGLE
-    /// mutually-exclusive one-time grant -- using ANY ONE of its three
-    /// candidate discounts exhausts ALL THREE, via [`OneTimeDiscount::exhaust`].
+    /// for the one thing a reader needs to know about it: the three fields
+    /// are the THREE OPTIONS of ONE mutually-exclusive choice -- the card
+    /// says "may either ... or ... or", and spending ANY one option (a
+    /// pop, a build, an upgrade, or a develop) voids the other two, so a
+    /// player gets the discount at most once per event.
     pub one_time_discount: OneTimeDiscount,
 
     /// Trade Routes Agreement (§5.9, `PactBlock::food_as_resource`/
@@ -728,47 +730,51 @@ pub struct TokenBank {
 /// growable allocation inside a `Clone`-as-memcpy `GameState` (DESIGN.md
 /// rule 3) bought with nothing.
 ///
-/// **A single mutually-exclusive choice, NOT three independent discounts.**
-/// The card text (`data/cards_military_actions.json`, "Development of Civil
-/// Life"): *"Players may **either** increase its population; **or** build a
-/// farm, mine or urban building; **or** develop a technology. It costs 1
-/// food or 1 resource or 1 science less than usual."* (BGO's own journal
-/// text for this event, verbatim -- see below) -- an "either/or/or" list is
-/// one choice among three options, not a grant of all three. All three
-/// scalar fields ARE still populated at once when the event resolves
-/// (below), because it is not yet known which of the three the player will
-/// eventually pick -- but the FIRST of the three that is actually spent by a
-/// real action must exhaust the OTHER TWO as well, via
-/// [`OneTimeDiscount::exhaust`], called from every consumption site
-/// (`economy::increase_population`'s `consume_one_time` branch,
-/// `apply::do_build`, `apply::h_develop`).
+/// **Three INDEPENDENT one-time discounts, NOT one mutually-exclusive
+/// choice.** All three scalar fields are populated at once when the event
+/// resolves (below), because it is not yet known which of the three a given
+/// player will end up using -- but each of the three is a SEPARATE one-shot
+/// grant, spent independently of the other two: a player who develops a
+/// technology under the `develop_science` discount can STILL later (same
+/// round or a later one) build under the `build_resources` discount and/or
+/// increase population under the `pop_food` discount, each clearing only its
+/// OWN field.
 ///
-/// **Fixed twice, and the second fix reversed part of the first.** A
-/// 2026-08-05 fix (previously documented here) established that the field
+/// **Fixed three times.** (1) A 2026-08-05 fix established that the field
 /// must be cleared AT ALL (before it, nothing ever cleared it, so it applied
-/// forever) but wrongly modeled it as three INDEPENDENT one-time discounts,
-/// each cleared only when ITS OWN field was spent -- a plausible-looking
-/// reading of the JSON schema (three separate sub-keys) that turns out to
-/// contradict the card's own English text once read as a list of
-/// alternatives. **Confirmed wrong by replaying real BGO games**
-/// (`docs/REPLAY.md`, fifth pass): in three separate sample games a human
-/// spent ONE of the three discounts (e.g. developed a technology 1 science
-/// under its printed cost) and later, the SAME turn or a later one, paid
-/// FULL, undiscounted price for an action of a DIFFERENT type (e.g. built a
-/// Mine at its full printed cost) that this engine's old independent-grants
-/// model predicted should ALSO have been discounted -- direct evidence the
-/// real rule exhausts all three the instant any one is used. Every one of
-/// the 8/24 sample games that stopped on `docs/REPLAY.md`'s "build cost
-/// mismatch (unmodeled discount)" category was this exact bug: the engine
-/// computed a cost 1 LOWER than the human actually paid, because it still
-/// thought an already-exhausted discount was live.
+/// forever) and modeled it as three independent discounts, each cleared only
+/// when ITS OWN field was spent -- a plausible-looking reading of the JSON
+/// schema (three separate sub-keys). (2) A later "fifth pass" (documented in
+/// `docs/REPLAY.md`) reversed that to a single mutually-exclusive choice on
+/// the basis of three sample games where a seat paid FULL price for a
+/// different-type action after using one discount; but that evidence is just
+/// as consistent with a seat simply CHOSING NOT TO use a still-live grant,
+/// and the cross-clearing model caused real regressions (e.g. BGO 7521544,
+/// where a legal second Cannon build lost its worker/CA bookkeeping because
+/// an earlier action of a different type had wiped the `build_resources`
+/// field it needed). (3) This fix restores independent grants, now backed by
+/// corpus-wide evidence: 25 tech cards in the journal corpus show EXACTLY
+/// three distinct develop-science costs {full, full-1, full-2}, where −1 is
+/// Civil Life's `develop_science` and −2 is the Scientific Cooperation pact
+/// (`technologyScienceDiscount: 2`) -- a single seat using BOTH on the same
+/// tech in the same game is direct proof the two discounts stack
+/// independently.
 ///
 /// Each field is in the units of the thing discounted, and each is checked
 /// by a DIFFERENT rule (`build_resources` only to `URBAN_OR_PRODUCTION`
 /// cards, `develop_science` to every technology including governments,
 /// `pop_food` to §6.1's population increase), which is why they are three
-/// named fields and not one number -- but [`exhaust`](Self::exhaust) always
-/// clears all three together.
+/// named fields and not one number. Each consumption site
+/// (`economy::increase_population`'s `consume_one_time` branch,
+/// `apply::do_build`, `apply::do_upgrade`'s CA-free branch,
+/// `apply::h_develop`) clears ALL THREE fields via [`exhaust`]: the card's
+/// own text ("may either: increase its population; or build a farm, mine
+/// or urban building; or develop a technology") makes the three options
+/// ONE mutually-exclusive choice, and BGO's own journals prove it -- game
+/// `7523082` (rounds 4 and 10) charges the UN-discounted price on later
+/// actions after the grant was spent on a different kind of action, and
+/// the journal's running totals only close under the exclusive model.
+/// Spending one option voids the other two at the same instant.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OneTimeDiscount {
     /// `build.resources` -- off a farm/mine/urban building's build cost.
@@ -1567,6 +1573,12 @@ pub struct GameState {
     /// (`replay_common.rs`'s resource oracle, `RESOURCE_ORACLE`-gated).
     /// Instrumentation only.
     pub last_end_of_turn_resources: [Option<u16>; MAX_PLAYERS],
+
+    /// [`GameState::last_end_of_turn_culture`]'s twin for food -- same
+    /// snapshot-before-`advance_turn` timing, same consumer
+    /// (`replay_common.rs`'s food oracle, `FOOD_ORACLE`-gated).
+    /// Instrumentation only.
+    pub last_end_of_turn_food: [Option<u16>; MAX_PLAYERS],
 }
 
 impl GameState {

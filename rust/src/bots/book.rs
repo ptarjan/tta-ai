@@ -874,7 +874,7 @@ fn r_population(_state: &GameState, p: &PlayerState, ctx: &Ctx, moves: &[Move]) 
             }
         }
     }
-    let has_pop = moves.iter().any(|m| matches!(m, Move::Pop));
+    let has_pop = moves.iter().any(|m| matches!(m, Move::Pop { .. }));
     if combo_best.is_none() && !has_pop {
         return None;
     }
@@ -895,7 +895,7 @@ fn r_population(_state: &GameState, p: &PlayerState, ctx: &Ctx, moves: &[Move]) 
     if let Some(m) = combo_best {
         return Some(m);
     }
-    moves.iter().find(|m| matches!(m, Move::Pop)).copied()
+    moves.iter().find(|m| matches!(m, Move::Pop { .. })).copied()
 }
 
 // rule 7 -------------------------------------------------------------
@@ -1072,7 +1072,7 @@ fn best_develop(state: &GameState, p: &PlayerState, ctx: &Ctx, moves: &[Move], h
     let mut best: Option<Move> = None;
     let mut best_v = 0.0;
     for &m in moves {
-        if let Move::Develop { card } = m {
+        if let Move::Develop { card, .. } = m {
             let c = card.get();
             if happy_only && c.production.happy == 0 {
                 continue;
@@ -1609,7 +1609,7 @@ fn colonize(state: &GameState, p: &PlayerState, c: &Colonize, moves: &[Move]) ->
 /// * `wonder_step` -- it starts wonders and leaves them unfinished
 /// * `revolution`  -- it will not pay a turn of actions for a permanent one
 pub fn is_override_kind(mv: Move) -> bool {
-    matches!(mv, Move::Develop { .. } | Move::Pop | Move::PopFree | Move::WonderStep { .. } | Move::Revolution { .. })
+    matches!(mv, Move::Develop { .. } | Move::Pop { .. } | Move::PopFree | Move::WonderStep { .. } | Move::Revolution { .. })
 }
 
 /// The trained champion, overruled by the book in its known blind spots.
@@ -1803,8 +1803,8 @@ mod tests {
     #[test]
     fn is_override_kind_matches_exactly_the_five_documented_kinds() {
         let card = CardId::by_name("Irrigation").expect("Irrigation must exist");
-        assert!(is_override_kind(Move::Develop { card }));
-        assert!(is_override_kind(Move::Pop));
+        assert!(is_override_kind(Move::Develop { card, full: None }));
+        assert!(is_override_kind(Move::Pop { full: None }));
         assert!(is_override_kind(Move::PopFree));
         assert!(is_override_kind(Move::WonderStep { steps: 1 }));
         assert!(is_override_kind(Move::Revolution { card }));

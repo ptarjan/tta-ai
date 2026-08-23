@@ -264,6 +264,14 @@ pub enum MismatchKind {
     /// (this binary mis-translated the line) or a genuine engine rules
     /// mismatch (flagged separately once triaged).
     IllegalMove { attempted: String, legal_moves: String },
+    /// The line's exact stage count is unaffordable in the reconstructed
+    /// state, but a SMALLER batch of the same wonder is -- BGO's client
+    /// bundles several same-turn wonder actions into ONE line ("builds 2
+    /// stages of X") while this binary's one-step-per-action legality
+    /// (`legal.rs`'s `wonder_stages_per_action` cap) admits only the smaller
+    /// batch. Applied as the smaller `WonderStep`; the journal's stated total
+    /// payment is what the real game charged.
+    WonderStepBatchFallsBack { attempted: String, applied: String },
     /// `resolve_intervening` could not make progress -- the decider the
     /// state demands next never matches any upcoming actor, or a pending
     /// decision kind it does not know how to auto-resolve blocks it.
@@ -445,7 +453,7 @@ pub fn categorize(pre_move_pending: Option<&Pending>, mv: Move) -> Category {
     match mv {
         Take { .. } => Category::TakeCard,
         Build { .. } | Develop { .. } | Upgrade { .. } => Category::Build,
-        Pop | PopFree => Category::IncreasePopulation,
+        Pop { .. } | PopFree => Category::IncreasePopulation,
         PlayLeader { .. } | WonderStep { .. } => Category::LeaderOrWonderStep,
         Revolution { .. } | PolPass => Category::PoliticalAction,
         War { .. } | Aggression { .. } => Category::AggressionOrWar,
@@ -548,6 +556,34 @@ struct Replayer<'a> {
     /// one is a place this file knowingly diverges from self-play legality
     /// to reproduce what the real BGO implementation actually permitted.
     hand_full_takes_overridden: u32,
+    /// How many journal-observed `International Agreement` takes this
+    /// REPLAYER accepted despite `costs::take_gate`'s `hand_full` gate
+    /// rejecting them -- see the `replay_game` `ActionClass::TakeCard`
+    /// IA arm's `pending.is_empty()` branch for the mechanism and
+    /// [`take_blocked_only_by_hand_full`] (the SAME two-call probe the
+    /// ordinary-take override uses) for the legality test. Reported
+    /// rather than swallowed, right next to `hand_full_takes_overridden`:
+    /// each one is a place this file knowingly diverges from
+    /// self-play legality to reproduce what the real BGO implementation
+    /// actually permitted.
+    ia_hand_full_takes_overridden: u32,
+    /// How many journal-observed takes this REPLAYER accepted despite
+    /// `costs::take_gate`'s cost gate rejecting them, because the journal's
+    /// own `"uses N civil action"` clause states a price `N <= spare_ca` the
+    /// player COULD pay -- see [`take_blocked_only_by_budget`] and
+    /// [`Replayer::try_apply_take`]'s doc item 2 for the mechanism.
+    /// Reported rather than swallowed, right next to
+    /// `hand_full_takes_overridden`: each one is a place this file knowingly
+    /// diverges from self-play legality to reproduce what the real BGO
+    /// implementation actually permitted.
+    budget_takes_overridden: u32,
+    /// How many journal-observed takes this REPLAYER accepted despite
+    /// `costs::take_gate`'s `WonderInProgress` gate rejecting them, because
+    /// BGO's implementation permits holding a second unfinished wonder in
+    /// parallel -- see [`take_blocked_only_by_wonder_in_progress`] and
+    /// [`Replayer::try_apply_take`]'s doc item 2. Reported rather than
+    /// swallowed, right next to `budget_takes_overridden`.
+    wonder_takes_overridden: u32,
     /// Every `"<Color> colonizes ..."` line's own sacrifice list, in journal
     /// order -- see [`prescan_colonize_sacrifices`]. The front is the
     /// outcome of the auction currently in progress; it is popped when that
@@ -600,6 +636,12 @@ struct Replayer<'a> {
     /// it, so the wonder never completed and its completion effects were
     /// never credited.
     last_wonder_step_text: Option<String>,
+    /// The wonder the CURRENT journal line names as being built. Set by the
+    /// `BuildWonderStage` arm just before `try_apply(Move::WonderStep)` and
+    /// read by [`apply_one`] (via the `Move::WonderStep` arm) to route the
+    /// stage against the wonder the journal line NAMED. `None` for any
+    /// non-wonder line.
+    named_wonder_step: Option<CardId>,
     /// The journal `Line::lineno` currently being resolved, set once per
     /// loop iteration in `replay_game` before `resolve_intervening` runs.
     /// `DiscardSolver::choose` needs this to tell a FUTURE named play
@@ -840,6 +882,13 @@ struct Replayer<'a> {
     /// [`Replayer::pending_culture_check`]'s resources twin -- see
     /// [`PendingResourceCheck`].
     pending_resource_check: Option<PendingResourceCheck>,
+    /// [`Replayer::resource_oracle_divergence`]'s food twin -- see
+    /// [`FoodOracleDivergence`]. `FOOD_ORACLE`-gated.
+    food_oracle_divergence: Option<FoodOracleDivergence>,
+    food_oracle_checked: u32,
+    food_oracle_agreed: u32,
+    /// [`Replayer::pending_resource_check`]'s food twin.
+    pending_food_check: Option<PendingFoodCheck>,
     /// A `"GAME DATA UPDATED"` culture clause (`parse_game_data_updated_
     /// culture`'s own doc) not yet applied because its stated `old` did not
     /// match this reconstruction's live value the moment the line was read.
@@ -1180,11 +1229,15 @@ impl<'a> Replayer<'a> {
             colonize_approximated: false,
             bid_ceilings_grounded: 0,
             hand_full_takes_overridden: 0,
+            ia_hand_full_takes_overridden: 0,
+            budget_takes_overridden: 0,
+            wonder_takes_overridden: 0,
             colonize_sacrifices,
             actions_consumed: 0,
             trailing_discards_lines: Vec::new(),
             duplicate_build_lines: Vec::new(),
             last_wonder_step_text: None,
+            named_wonder_step: None,
             current_lineno: 0,
             gain_produces,
             plunder_splits,
@@ -1222,6 +1275,10 @@ impl<'a> Replayer<'a> {
             resource_oracle_checked: 0,
             resource_oracle_agreed: 0,
             pending_resource_check: None,
+            food_oracle_divergence: None,
+            food_oracle_checked: 0,
+            food_oracle_agreed: 0,
+            pending_food_check: None,
             pending_culture_corrections: Vec::new(),
             pending_resource_corrections: Vec::new(),
             pending_science_corrections: Vec::new(),
@@ -1293,6 +1350,27 @@ impl<'a> Replayer<'a> {
                 self.colonize_sacrifices.pop_front();
             }
         }
+        let mut after: Vec<CardId> = self.state.current_events.as_slice().to_vec();
+        for card in before {
+            match after.iter().position(|&c| c == card) {
+                Some(i) => {
+                    after.swap_remove(i);
+                }
+                None => self.events_resolved.push(card),
+            }
+        }
+    }
+
+    /// `apply_move` specialized for a NAMED wonder-stage: identical bookkeeping
+    /// (moves_applied, colonies, events_resolved) but carries the journal's
+    /// named wonder through `apply::do_wonder_step_named`. A
+    /// `WonderStep` is never a `Bid`/`BidPass`, so the auction/colonize
+    /// bookkeeping in `apply_move` is unreachable here and omitted.
+    fn apply_move_wonder_step(&mut self, mv: Move, named: Option<CardId>) {
+        self.moves_applied.push(mv);
+        let before: Vec<CardId> = self.state.current_events.as_slice().to_vec();
+        let idx = self.state.current;
+        crate::apply::do_wonder_step_named(&mut self.state, idx, mv.steps().unwrap(), 0, false, named);
         let mut after: Vec<CardId> = self.state.current_events.as_slice().to_vec();
         for card in before {
             match after.iter().position(|&c| c == card) {
@@ -1467,9 +1545,10 @@ impl<'a> Replayer<'a> {
             }
             if crate::debugflags::replay_debug_all() {
                 eprintln!(
-                    "DEBUG resolve_intervening loop: lineno={} decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?}",
+                    "DEBUG resolve_intervening loop: lineno={} decider={decider} expected_actor={expected_actor} upcoming={upcoming:?} pending_top={:?} pending_len={}",
                     self.current_lineno,
-                    self.state.pending.top()
+                    self.state.pending.top(),
+                    self.state.pending.len()
                 );
             }
             if let Some(Pending::Choice(c)) = self.state.pending.top().cloned() {
@@ -2616,7 +2695,7 @@ impl<'a> Replayer<'a> {
         // N), permanently overcounting this binary's own reconstructed hand
         // by one card per preparation -- see this file's "Discard-phase
         // hand-size oracle" section, `7522614`'s round-4 card-by-card trace.
-        // Pop one card of UNKNOWN provenance first (never one
+        // Pop { full: None } one card of UNKNOWN provenance first (never one
         // `DiscardSolver::needed_after` says this player is later observed
         // to play by name -- the same "never touch a card with known
         // identity" rule `ground_bid_ceiling`, just above, already applies
@@ -2667,7 +2746,7 @@ impl<'a> Replayer<'a> {
         // correction below on the REVEALED CARD itself, not just an
         // after-the-fact delta match, is load-bearing: a delta-only gate
         // (an earlier version of this fix) matched on totals ALONE and
-        // regressed the corpus (`IllegalMove: Pop` 184 -> 281) by
+        // regressed the corpus (`IllegalMove: Pop { full: None }` 184 -> 281) by
         // occasionally consuming an unrelated `ChoiceKind::GainBlock`
         // single-clause FIFO entry -- or even a stray same-total delta from
         // an entirely different simultaneous effect -- for a card that
@@ -2774,7 +2853,7 @@ impl<'a> Replayer<'a> {
         // then, the result is still a real, journal-observed split for that
         // player, just attributed to the wrong event.
         //
-        // REPLAYER BUG (found chasing `IllegalMove: Pop`'s "food short by
+        // REPLAYER BUG (found chasing `IllegalMove: Pop { full: None }`'s "food short by
         // 1/2/3, cost tier right" signature, `docs/REPLAY.md`'s handoff --
         // game `7523052` round 9): `prescan_produces_grants` fills this same
         // per-seat queue from EVERY standalone `"<Color> produces N food[;
@@ -3171,7 +3250,7 @@ impl<'a> Replayer<'a> {
         // `Move::SendBonus` arm, `hand_military.remove_first(card)`). A real
         // auction winner who sacrifices a bonus card they never revealed
         // beforehand already HELD it -- their hand shrinks by one per card
-        // sacrificed, not zero. Pop one filler of unknown provenance per
+        // sacrificed, not zero. Pop { full: None } one filler of unknown provenance per
         // phantom push (never a card this same sacrifice still needs --
         // cannibalizing one `needed` entry to manufacture another would just
         // relocate the phantom, not remove it -- and never one
@@ -3775,6 +3854,55 @@ impl<'a> Replayer<'a> {
         self.record_resource_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
     }
 
+    /// [`Replayer::record_resource_check`]'s food twin.
+    fn record_food_check(&mut self, lineno: usize, round: &str, actor_seat: u8, journal_now: i32, last_action_class: Option<ActionClass>) {
+        let got = self.state.last_end_of_turn_food[actor_seat as usize]
+            .take()
+            .unwrap_or_else(|| {
+                panic!(
+                    "record_food_check called for actor {actor_seat} at line {lineno} but \
+                     resume_end_turn never snapshotted this turn's post-production food -- \
+                     a caller reached this checkpoint before economy::end_of_turn actually ran"
+                )
+            }) as i32;
+        self.food_oracle_checked += 1;
+        if journal_now == got {
+            self.food_oracle_agreed += 1;
+            return;
+        }
+        if crate::debugflags::replay_debug() {
+            eprintln!(
+                "DEBUG end-turn food drift (FOOD_ORACLE): actor={actor_seat} journal says (now {journal_now}), \
+                 this binary computes {got} (delta {}) at line {lineno}",
+                got - journal_now,
+            );
+        }
+        if self.food_oracle_divergence.is_none() {
+            self.food_oracle_divergence = Some(FoodOracleDivergence {
+                lineno,
+                round: round.to_string(),
+                actor: Color::from_seat(actor_seat).map(Color::as_str).unwrap_or("?"),
+                journal_now,
+                reconstructed: got,
+                last_action_class,
+            });
+        }
+    }
+
+    /// [`Replayer::flush_pending_resource_check`]'s food twin.
+    fn flush_pending_food_check(&mut self) {
+        let Some(pending) = self.pending_food_check.take() else { return };
+        if matches!(self.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary && c.player == pending.actor_seat)
+        {
+            self.pending_food_check = Some(pending); // still blocked -- try again next line
+            return;
+        }
+        if self.state.last_end_of_turn_food[pending.actor_seat as usize].is_none() {
+            return;
+        }
+        self.record_food_check(pending.lineno, &pending.round, pending.actor_seat, pending.journal_now, pending.last_action_class);
+    }
+
     /// Flushes every [`Replayer::pending_culture_corrections`] entry whose
     /// stated `old` NOW matches this reconstruction's live culture for that
     /// player -- see that field's own doc for why a `"GAME DATA UPDATED"`
@@ -3988,6 +4116,11 @@ impl<'a> Replayer<'a> {
     /// file passes an explicit, considered value -- there is no default,
     /// on purpose, so a new call site can't silently mis-tag itself either
     /// way.
+    fn try_apply_pop(&mut self, full: Option<i32>, record: bool) -> Result<(), MismatchKind> {
+        let mv = Move::Pop { full };
+        self.try_apply(mv, record)
+    }
+
     fn try_apply(&mut self, mv: Move, record: bool) -> Result<(), MismatchKind> {
         let legal = legal::legal_moves(&self.state);
         if !legal.as_slice().contains(&mv) {
@@ -4021,7 +4154,7 @@ impl<'a> Replayer<'a> {
                 // though a same-named card IS present above), and this
                 // binary's own computed science price for it.
                 match mv {
-                    Move::Develop { card } | Move::PlayAction { card } => {
+                    Move::Develop { card, .. } | Move::PlayAction { card } => {
                         eprintln!(
                             "DEBUG develop/play detail: card={:?} age={:?} in_hand_civil={} tech_cost_net={:?}",
                             card,
@@ -4030,7 +4163,7 @@ impl<'a> Replayer<'a> {
                             costs::tech_cost_net(&self.state, p, card),
                         );
                     }
-                    Move::Take { .. } | Move::Build { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => {}
+                    Move::Take { .. } | Move::Build { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => {}
                 }
                 if let Move::Build { card } = mv {
                     eprintln!(
@@ -4078,6 +4211,20 @@ impl<'a> Replayer<'a> {
                 legal_moves: format!("{:?}", legal.as_slice()),
             });
         }
+        if crate::debugflags::replay_debug() {
+            if let Some(d) = self.decisions.last() {
+                eprintln!(
+                    "DEBUG decision recorded: lineno={} actor={} mv={:?} nlegal={}",
+                    d.lineno, d.state.current, d.human_move, d.legal_moves.len()
+                );
+            }
+            eprintln!(
+                "DEBUG apply mv={:?} actor={} ca={}",
+                mv,
+                self.state.current,
+                self.state.players[self.state.current as usize].civil_actions
+            );
+        }
         if record && self.record_decisions {
             // Never "solved" -- a constraint-derived certainty is a real
             // fact, not a guess -- so only "chosen"/"forced_collision" taint
@@ -4124,21 +4271,108 @@ impl<'a> Replayer<'a> {
         Ok(())
     }
 
+    /// `try_apply` specialized for a NAMED wonder-stage: identical legality
+    /// consult, decision recording, and military-hand repayment, but the
+    /// underlying apply carries the journal's named wonder through
+    /// `apply::do_wonder_step_named`. § 9.2 allows one unfinished wonder, so
+    /// the name only ever confirms the slot the engine already holds -- see
+    /// that function's doc. The `Move::WonderStep` here is constructed from
+    /// `steps`;
+    /// `named` is the card the journal line named as being built.
+    fn try_apply_wonder_step(&mut self, steps: u8, named: Option<CardId>, record: bool) -> Result<(), MismatchKind> {
+        let mv = Move::WonderStep { steps };
+        let legal = legal::legal_moves(&self.state);
+        if !legal.as_slice().contains(&mv) {
+            if crate::debugflags::replay_debug() {
+                eprintln!(
+                    "DEBUG try_apply fail (wonder step): mv={mv:?} actor(current)={} named={:?}",
+                    self.state.current,
+                    named.map(|c| c.get().name),
+                );
+            }
+            return Err(MismatchKind::IllegalMove {
+                attempted: format!("{mv:?}"),
+                legal_moves: format!("{:?}", legal.as_slice()),
+            });
+        }
+        if record && self.record_decisions {
+            let after_arbitrary_discard =
+                self.discard_solver.chosen > 0 || self.discard_solver.forced_collisions > 0;
+            self.decisions.push(Decision {
+                lineno: self.current_lineno,
+                state: self.state.clone(),
+                legal_moves: legal.as_slice().to_vec(),
+                human_move: mv,
+                after_arbitrary_discard,
+            });
+        }
+        let actor = self.state.current;
+        let hand_military_len_before: [usize; MAX_PLAYERS] =
+            std::array::from_fn(|i| self.state.players[i].hand_military.len());
+        self.apply_move_wonder_step(mv, named);
+        for seat in 0..self.state.num_players {
+            let before = hand_military_len_before[seat as usize];
+            let after = self.state.players[seat as usize].hand_military.len();
+            if after > before {
+                self.repay_military_hand_deficit(seat, (after - before) as u32);
+            }
+        }
+        let _ = actor;
+        Ok(())
+    }
+
     /// Applies a journal-observed `Move::Take { slot }` exactly like
-    /// [`Self::try_apply`], EXCEPT: if the engine's own `legal::legal_moves`
-    /// rejects it, and [`take_blocked_only_by_hand_full`] confirms
-    /// `costs::take_gate`'s `hand_full` gate is the ONLY reason (every other
-    /// `costs::take_rejection` gate agrees it would otherwise be legal),
-    /// this accepts it instead of raising `IllegalMove: Take` -- see that
-    /// function's own doc and `docs/REPLAY.md`'s Take/HandFull "genuinely
-    /// unexplained discrepancy" conclusion for why. `costs::take_gate` and
-    /// `legal::legal_moves` are only ever CONSULTED here, never modified --
-    /// self-play legality is untouched by this method existing.
+    /// [`Self::try_apply`], EXCEPT for the documented BGO-vs-engine
+    /// divergences this REPLAYER accepts instead of raising `IllegalMove:
+    /// Take` -- `costs::take_gate` and `legal::legal_moves` are only ever
+    /// CONSULTED here, never modified, so self-play legality is untouched by
+    /// this method existing. In priority order, each fires only when
+    /// `legal::legal_moves` rejected the move:
     ///
-    /// If the move is illegal for ANY other reason too (or legal outright),
-    /// this defers entirely to `try_apply`, so every other `IllegalMove:
-    /// Take` mismatch this file already produces is unaffected.
-    fn try_apply_take(&mut self, actor: u8, slot: u8) -> Result<(), MismatchKind> {
+    /// 1. **hand_full** ([`take_blocked_only_by_hand_full`], the original):
+    ///    `costs::take_gate`'s `hand_full` gate is the ONLY reason -- every
+    ///    other `costs::take_rejection` gate agrees it would otherwise be
+    ///    legal. BGO's own journals show humans taking past the §2.5 limit
+    ///    routinely (478 corpus takes); see `docs/REPLAY.md`'s Take/HandFull
+    ///    handoff for the primary-source discussion.
+    /// 2. **wonder-in-progress** (2026-08-21, games `7521751`/`7523330`):
+    ///    the take is rejected ONLY because `p.wonder` is occupied, while the
+    ///    journal's own stated price shows the take was actually charged (and
+    ///    paid) in the real game. The take applies verbatim into the single
+    ///    §9.2 construction slot, overwriting whatever the engine still had
+    ///    there. That overwrite is deliberate: a second construction slot was
+    ///    tried on 2026-08-22 and bought exactly ONE corpus game (`7523330`),
+    ///    while `PlayerState` is shared with the bot, so the slot widened the
+    ///    BOT's move space into moves § 9.2 forbids. If the engine reaches
+    ///    here it has ALREADY diverged -- § 2.4 and § 9.2 both say you may not
+    ///    take a wonder while one is unfinished, so the real defect is that
+    ///    the engine thinks the first wonder is unfinished when BGO had it
+    ///    done. Hunt that, do not re-add the slot.
+    /// 3. **budget-only** ([`take_blocked_only_by_budget`], 2026-08-21,
+    ///    games `7522216`/`7521741`): the take is rejected ONLY because
+    ///    `take_cost` exceeds `spare_ca` -- and the journal's own `"uses N
+    ///    civil action"` clause says the human PAID `N <= spare_ca`. BGO's
+    ///    client prices the take with a discount this engine's `take_cost`
+    ///    does not model (BGO's own row-position model for the take is
+    ///    unknowable from the journal -- the row content here is SIMULATED
+    ///    per `docs/REPLAY.md` -- so the honest read is that the journal's
+    ///    stated price is what was actually charged, and the engine's higher
+    ///    reconstruction is the outlier). The move is then applied with a
+    ///    clamped `pay_ca`-style deduction: `min(N, spare_ca)` civil actions
+    ///    come out of the player's pool, `ca_spent_taking` records `N`
+    ///    exactly like `h_take` does, and the card lands in hand via
+    ///    `apply::take_card`. No `pay_ca` under-draw panic, by construction.
+    ///
+    /// If the move is illegal for any OTHER reason too (duplicate, wonder,
+    /// leader-age -- or budget+something-else), this defers entirely to
+    /// `try_apply`, so every other `IllegalMove: Take` mismatch this file
+    /// already produces is unaffected.
+    fn try_apply_take(
+        &mut self,
+        actor: u8,
+        slot: u8,
+        observed_cost: Option<i32>,
+    ) -> Result<(), MismatchKind> {
         let mv = Move::Take { slot };
         let legal = legal::legal_moves(&self.state);
         if !legal.as_slice().contains(&mv)
@@ -4167,8 +4401,113 @@ impl<'a> Replayer<'a> {
             self.apply_move(mv);
             return Ok(());
         }
+        if !legal.as_slice().contains(&mv)
+            && take_blocked_only_by_wonder_in_progress(&self.state, &self.state.players[actor as usize], slot as usize)
+        {
+            self.wonder_takes_overridden += 1;
+            // The journal proves BGO charged (and the human paid) the take;
+            // the engine's own cost is what gets deducted, exactly as
+            // `apply::h_take` would have done -- no price override here,
+            // unlike the budget branch below.
+            crate::apply::h_take(&mut self.state, actor, slot);
+            return Ok(());
+        }
+        if !legal.as_slice().contains(&mv)
+            && take_blocked_only_by_budget(&self.state, &self.state.players[actor as usize], slot as usize, observed_cost)
+        {
+            self.budget_takes_overridden += 1;
+            // The journal's stated price is the price that was actually
+            // charged (see the method's own doc): deduct it from the
+            // player's civil-action pool CLAMPED at what is available,
+            // record the full observed amount in `ca_spent_taking` the way
+            // `apply::h_take` does, and land the card in hand via
+            // `apply::take_card` (which does the `card_row` -> hand move
+            // plus the `taken_this_turn`/leader-age bookkeeping `h_take`
+            // would have done). No `pay_ca` under-draw panic, by
+            // construction: `used` never exceeds the pool.
+            let p = &mut self.state.players[actor as usize];
+            let n = observed_cost.unwrap_or(0).max(0);
+            let used = (p.civil_actions as i32).min(n);
+            p.civil_actions -= used as i8;
+            p.ca_spent_taking += n as u8;
+            crate::apply::take_card(&mut self.state, actor, slot as usize);
+            return Ok(());
+        }
         self.try_apply(mv, true)
     }
+}
+
+/// REPLAYER-ONLY divergence (see [`Replayer::try_apply_take`]'s doc, item
+/// 2): whether a journal-observed take of `slot` is illegal ONLY because
+/// the player already has a wonder under construction -- a take the rulebook
+/// forbids but BGO's own journals prove happened (games `7521751`/`7523330`,
+/// where the player completes a wonder and later takes a SECOND one while
+/// the first is still standing). Same two-call discipline as
+/// [`take_blocked_only_by_hand_full`]: the real gate must name
+/// `WonderInProgress`, and a probe copy with the `WonderInProgress` gate
+/// waived (a `p.wonder`-empty shadow player) must return `None`, so no OTHER
+/// gate -- budget, duplicate, leader-age, hand-full -- also blocks this
+/// exact take. `costs.rs` is read, never modified.
+fn take_blocked_only_by_wonder_in_progress(
+    state: &GameState,
+    p: &PlayerState,
+    slot: usize,
+) -> bool {
+    if p.wonder.is_none() {
+        return false;
+    }
+    let gate = costs::take_gate(state, p, None);
+    let names_wonder =
+        matches!(costs::take_rejection(state, p, slot, &gate), Some(costs::TakeRejection::WonderInProgress));
+    if !names_wonder {
+        return false;
+    }
+    // Shadow player with the wonder cleared: if any OTHER gate still names a
+    // rejection, this is not a wonder-in-progress-only block and the honest
+    // `IllegalMove: Take` mismatch stands.
+    let mut shadow = p.clone();
+    shadow.wonder = CardId::NONE;
+    costs::take_rejection(state, &shadow, slot, &gate).is_none()
+}
+
+/// REPLAYER-ONLY divergence (see [`Replayer::try_apply_take`]'s doc, item
+/// 2): whether a journal-observed take of `slot` is illegal ONLY because
+/// `costs::take_cost` exceeds `spare_ca`, with the journal's own `"uses N
+/// civil action"` clause (`observed_cost`) stating a price the player COULD
+/// pay (`N <= spare_ca`). Discriminated with `costs::take_rejection` called
+/// TWICE, exactly like [`take_blocked_only_by_hand_full`]: the real gate
+/// must name `Budget`/`WonderBudget` (a cost rejection specifically -- any
+/// other named reason is an honest mismatch this function must not touch),
+/// and a probe copy whose `have` is raised to cover `N` must return `None`
+/// (no OTHER gate -- duplicate, leader-age, wonder-in-progress, hand-full --
+/// also blocks this exact take). `costs.rs` is read, never modified.
+fn take_blocked_only_by_budget(
+    state: &GameState,
+    p: &PlayerState,
+    slot: usize,
+    observed_cost: Option<i32>,
+) -> bool {
+    let Some(n) = observed_cost else {
+        return false;
+    };
+    let spare = costs::spare_ca(p);
+    if n > spare {
+        return false;
+    }
+    let gate = costs::take_gate(state, p, None);
+    let cost = costs::take_cost(state, p, slot);
+    if cost <= spare {
+        return false; // affordable anyway -- `legal_moves` would have offered it
+    }
+    let names_budget = matches!(
+        costs::take_rejection(state, p, slot, &gate),
+        Some(costs::TakeRejection::Budget | costs::TakeRejection::WonderBudget)
+    );
+    if !names_budget {
+        return false;
+    }
+    let probe = costs::TakeGate { have: n, ..gate };
+    costs::take_rejection(state, p, slot, &probe).is_none()
 }
 
 /// REPLAYER-ONLY divergence from self-play legality (`docs/REPLAY.md`'s
@@ -4220,7 +4559,7 @@ fn take_blocked_only_by_hand_full(state: &GameState, p: &PlayerState, slot: usiz
 ///
 /// `ActionClass::DevelopTechnology` (BGO logs this shape as `"<Color>
 /// discovers <Card> <Color> loses N science"`, not `"develops"` -- see
-/// `corpus.rs`'s `"discovers "` prefix) IS covered, unlike Pop/Build:
+/// `corpus.rs`'s `"discovers "` prefix) IS covered, unlike Pop { full: None }/Build:
 /// `apply::h_develop` also removes the developed card from `p.hand_civil`,
 /// which is only safe to trust out of turn when this binary already
 /// grounded that exact card in `actor`'s hand from an earlier, ordinary,
@@ -4262,7 +4601,20 @@ fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<Car
             // action to exercise this discount, so the only gate is
             // resource affordability (food). `legal.rs` checks this the
             // same way: `ca >= 1 || civil_life_ca_free(pop_food)`.
-            (p.food as i32 >= cost).then_some(Move::Pop)
+            //
+            // The DISCOUNTED-price shape is NOT handled here: BGO logs
+            // "spends N food" where N is the price AFTER the grant, so the
+            // journal's stated spend is the DISCOUNTED cost, not the full
+            // one `h_pop` would charge. Reconciling that shape needs to
+            // pre-convert the gap from resources (a legal, capacity-checked
+            // `TradeResourceAsFood`), which is `apply_one`'s
+            // `IncreasePopulation` arm's job via `civil_life_pop_shortfall`
+            // -- see that helper's doc for the corpus proof (game
+            // `7522663`). Routing the discounted shape through THIS
+            // CA-free path would charge the player a civil action they
+            // never spent in the journal (the line names no CA spend) and
+            // leave the food drift in place.
+            (p.food as i32 >= cost).then_some(Move::Pop { full: None })
         }
         ActionClass::BuildBuilding if p.one_time_discount.build_resources != 0 => {
             let card = card?;
@@ -4284,8 +4636,16 @@ fn civil_life_move(r: &Replayer, actor: u8, class: ActionClass, card: Option<Car
                 return None;
             }
             let cost = costs::tech_cost(&r.state, p, card)?;
-            // CA-free exemption: no CA needed, only science check.
-            (p.science as i32 >= cost).then_some(Move::Develop { card })
+            // CA-free exemption: no CA needed, only science check. The
+            // DISCOUNTED shape (journal's stated loss below the printed
+            // cost, `civil_life_develop_shortfall`'s gate) is NOT offered
+            // here: routing it through this CA-free path would charge the
+            // player a civil action they never spent and leave the science
+            // drift in place -- it is `apply_one`'s `DevelopTechnology`
+            // arm's job, via `Move::Develop { card, full }` (the mirror of
+            // the `IncreasePopulation` arm's `Move::Pop { full }`), and
+            // that arm only sees the line when THIS helper declines it.
+            (p.science as i32 >= cost).then_some(Move::Develop { card, full: None })
         }
         ActionClass::TakeCard | ActionClass::BuildBuilding | ActionClass::BuildUnit | ActionClass::BuildWonderStage | ActionClass::IncreasePopulation | ActionClass::UpgradeUnit | ActionClass::UpgradeProduction | ActionClass::DevelopTechnology | ActionClass::ElectLeader | ActionClass::ChangeGovernment | ActionClass::PlayTactic | ActionClass::DeclareWar | ActionClass::WinWar | ActionClass::PlayAggression | ActionClass::ProposePact | ActionClass::AcceptPact | ActionClass::Colonize | ActionClass::Discard | ActionClass::Bid | ActionClass::WinAuction | ActionClass::Destroy | ActionClass::Disband | ActionClass::Pass | ActionClass::PlayEvent | ActionClass::PlayActionCard | ActionClass::PutBack | ActionClass::EndTurn | ActionClass::RemoveLeaderYellow | ActionClass::ColumbusColonize | ActionClass::Barbarossa | ActionClass::BachTheater => None,
     }
@@ -4364,6 +4724,23 @@ fn trailing_now_resources(text: &str) -> Option<i32> {
         return None;
     }
     rest[..digits_end].parse().ok()
+}
+
+/// [`trailing_now_science`]'s food twin -- same checkpoint shape, same
+/// env-var gate, `state.players[_].food` /
+/// `GameState::last_end_of_turn_food` in place of science's.
+/// The journal format is `"N food - consumption: M (now K)"` where K is
+/// the post-consumption food total.
+fn trailing_now_food(text: &str) -> Option<i32> {
+    let p = text.find(" food - consumption:")?;
+    let rest = &text[p + " food - consumption:".len()..];
+    let p2 = rest.find(" (now ")?;
+    let rest2 = &rest[p2 + " (now ".len()..];
+    let digits_end = rest2.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 {
+        return None;
+    }
+    rest2[..digits_end].parse().ok()
 }
 
 /// Applies Winston Churchill's once-per-turn choice
@@ -4466,9 +4843,9 @@ fn trailing_now_culture(text: &str) -> Option<i32> {
 
 /// [`spent_resources`]'s twin for the food clause of a `"<Color> increases
 /// population <Color> spends N food"` line. An EARLIER version of this
-/// doc comment claimed food is "the ONLY clause a Pop line ever carries" --
-/// FALSE, found chasing the `IllegalMove: Pop` bucket (`docs/REPLAY.md`):
-/// a live Trade Routes Agreement grant (§5.9) lets a Pop be paid PART in
+/// doc comment claimed food is "the ONLY clause a Pop { full: None } line ever carries" --
+/// FALSE, found chasing the `IllegalMove: Pop { full: None }` bucket (`docs/REPLAY.md`):
+/// a live Trade Routes Agreement grant (§5.9) lets a Pop { full: None } be paid PART in
 /// converted resources, and BGO prints that as a SECOND clause on the SAME
 /// line -- `"<Color> increases population <Color> spends N food; <Color>
 /// spends M resource"` -- not folded into the food number the way an
@@ -4488,7 +4865,7 @@ fn spent_food(text: &str) -> Option<i32> {
 }
 
 /// The optional SECOND `"; <Color> spends M resource(s)"` clause that
-/// follows a Pop line's own `"<Color> spends N food"` clause -- see
+/// follows a Pop { full: None } line's own `"<Color> spends N food"` clause -- see
 /// [`spent_food`]'s doc comment for why this exists and the real corpus
 /// shape it reads (thousands of occurrences, e.g. game `7522658` line 289:
 /// `"Purple increases population Purple spends 2 food; Purple spends 1
@@ -4588,7 +4965,7 @@ fn total_paid_for_build(text: &str) -> Option<i32> {
 /// build/upgrade/wonder-stage line, whatever precedes it (`"spends M
 /// resource(s)"`, `"loses M military resource"`, or both) -- Trade Routes
 /// Agreement side A's "1 food as 1 resource" grant (§5.9) folded into the
-/// SAME printed line, the mirror of [`spent_resource_after_food`]'s Pop-line
+/// SAME printed line, the mirror of [`spent_resource_after_food`]'s Pop { full: None }-line
 /// shape in the OTHER direction. Found chasing the `UnrecoverableHiddenInfo:
 /// build cost mismatch` bucket (`docs/REPLAY.md`): real corpus games pay
 /// PART of a build/upgrade/wonder-stage's resource cost in converted food
@@ -4601,7 +4978,7 @@ fn total_paid_for_build(text: &str) -> Option<i32> {
 /// Searches from the LAST `" spends "` in `text`, not the first (so a
 /// resource-only line's own single clause is never misread as this one) --
 /// a build/upgrade/wonder-stage line never carries a food clause for any
-/// OTHER reason, unlike a Pop line's own food-native cost. Returns `0`, not
+/// OTHER reason, unlike a Pop { full: None } line's own food-native cost. Returns `0`, not
 /// `None`: every caller wants a plain amount to add to the resource figure,
 /// not an `Option` to unwrap.
 fn spent_food_after_resource(text: &str) -> i32 {
@@ -4676,6 +5053,154 @@ fn build_discount_reconciles(state: &GameState, p: &PlayerState, card: CardId, w
     card_ref.kind.is_urban() && held_discount > 0 && want - got == held_discount
 }
 
+/// Whether a `build cost mismatch` where the journal's stated total (`want`)
+/// is HIGHER than this binary's computed cost (`got`) is explained by the
+/// player DECLINING a live Civil Life one-time build grant: they held a
+/// `one_time_discount.build_resources` (banked by a just-revealed
+/// "Development of Civil Life" in the same turn, e.g. via the CA-free pop
+/// path) but CHOSE to pay the full printed price anyway -- a legal human
+/// choice (saving the grant for a later, bigger build), not a missing
+/// discount source. `costs::build_cost_for` correctly computes the
+/// DISCOUNTED price (what the player would have paid had they used the
+/// grant), so `got` already has the grant folded in and the full price is
+/// exactly `got + p.one_time_discount.build_resources`. Gated on the card
+/// being a farm/mine/urban (the grant's own scope), the grant being live,
+/// and the gap matching the grant EXACTLY. Real shape: game `7522663`
+/// round 3, Purple reveals "Development of Civil Life" (line 97), increases
+/// population (line 98, clearing ONLY `pop_food`), then builds Agriculture
+/// at its FULL 2-resource price (line 106) while still holding the live
+/// `build_resources: 1` grant -- the human declined to use it that turn.
+/// (Cross-exhausting the grant on the pop action to "fix" this shape would
+/// instead break the opposite, equally real shape where the player DOES use
+/// the grant on the follow-up build; the grants are independent.)
+/// Whether a `Pop { full: None }`/`PopFree`-illegal population increase is explained by
+/// the player using a live Civil Life (`one_time_discount.pop_food`) grant
+/// for this very increase, with BGO logging the DISCOUNTED spend.
+///
+/// `pop_food_cost` folds the grant into the computed price, so the engine
+/// charges the discounted amount; `h_pop` then clears the grant. BGO,
+/// however, logs the post-discount spend: "increases population ... spends
+/// N food" where N is the price AFTER the grant. That is the journal's own
+/// arithmetic, proven internally by game `7522663`'s round-6 EndTurn totals
+/// (start food 4, two increases stated at 3+2, production 1, consumption 1
+/// -> end food 4 -- the stated numbers only close because the first
+/// increase used the live `pop_food: 1` grant that round's event had just
+/// banked) and by the round-7 EndTurn line's own 11 -> 13 science and
+/// 6 -> 7 resource totals, which only close at the discounted prices.
+/// (BGO's journal is otherwise self-consistent, which is exactly what
+/// makes a stated-vs-computed pop-cost gap of exactly the live grant a
+/// safe reconciliation rather than a mask: every other shape keeps the
+/// ordinary `IllegalMove`.)
+///
+/// Returns the number of `Move::TradeResourceAsFood` pre-conversions the
+/// caller must apply before the plain `Pop { full: None }` so the player's food covers
+/// the engine's FULL (un-discounted) price: that is exactly
+/// `full_cost - stated_spend` (== the live grant, floored at 0), gated on
+/// the journal's stated spend being strictly below the computed full cost,
+/// the gap matching the live `pop_food` grant EXACTLY, the player holding
+/// enough resources to fund the pre-conversions, and no resource clause
+/// being present on the line (a resource clause means a Trade Routes
+/// conversion is already the story -- that has its own, stricter
+/// reconciliation above and must not be double-counted here). `None`
+/// otherwise.
+fn civil_life_pop_shortfall(state: &GameState, actor: u8, raw_text: &str) -> Option<i32> {
+    let p = &state.players[actor as usize];
+    if p.one_time_discount.pop_food == 0 {
+        return None;
+    }
+    if spent_resource_after_food(raw_text) > 0 {
+        return None;
+    }
+    let stated = spent_food(raw_text)?;
+    // The UN-discounted price: the same formula as `pop_cost` but WITHOUT
+    // the one-time grant folded in (exactly how the `develop_science`
+    // sibling compares the printed card cost to the stated loss). Comparing
+    // the grant-discounted price here would make `gap` always 0 -- the
+    // stated spend IS the discounted price -- and the branch would never
+    // fire.
+    let s = crate::effects::state_stats(state, p);
+    let full = crate::economy::pop_food_cost(s.pop_food_discount, p.yellow_bank, 0)?;
+    let gap = full - stated;
+    // The converted resource must be LEGAL food this turn: a Trade Routes
+    // Agreement side-B grant (this conversion is what makes the engine's
+    // full-price arithmetic agree with the journal's discounted totals),
+    // not just "the player happens to hold a resource".
+    let grant = crate::economy::trade_resource_as_food_remaining(state, p);
+    (gap == p.one_time_discount.pop_food as i32
+        && gap > 0
+        && gap <= grant
+        && gap <= p.resources as i32)
+        .then_some(gap)
+}
+
+/// Whether a `Move::Develop` the player can NOT afford at the engine's own
+/// (grant-discounted) price is explained by BGO logging the DISCOUNTED
+/// spend instead of the full one. The mirror of
+/// [`civil_life_pop_shortfall`], for `develop_science`: `tech_cost` already
+/// folds the live grant into the computed cost and `h_develop` clears it,
+/// while BGO's `"loses N science"` clause states the post-discount price.
+///
+/// The journal's own arithmetic proves the shape: game `7522663`'s round-8
+/// EndTurn line starts at science 13 (the round-7 EndTurn's stated 13,
+/// which itself only closes at the round-7 pop DISCOUNT -- see
+/// `civil_life_pop_shortfall`), loses 12 here for Constitutional Monarchy
+/// (printed 13, so the live `develop_science` grant is what made 12 legal
+/// in the true game), gains 4 production to end at 5 -- exactly the
+/// line's own "now 5". Without the grant the same turn could not have
+/// happened at all (13 < 13 is a strict affordability failure, not a
+/// rounding difference).
+///
+/// Returns the number of `Move::TradeFoodAsResource` pre-conversions the
+/// caller must apply before the `Develop` so the player's science covers
+/// the FULL printed price: exactly `full_cost - stated_loss` (== the live
+/// grant, floored at 0), gated on the stated loss being strictly below the
+/// computed full cost, the gap matching the live `develop_science` grant
+/// EXACTLY, the player holding enough food to fund the conversions, and no
+/// "using" clause being present (one means Breakthrough's ordered develop
+/// already has its own, stricter reconciliation and must not be
+/// double-counted). `None` otherwise.
+fn civil_life_develop_shortfall(state: &GameState, actor: u8, card: CardId, raw_text: &str) -> Option<i32> {
+    let p = &state.players[actor as usize];
+    if p.one_time_discount.develop_science == 0 {
+        return None;
+    }
+    if raw_text.contains(" using ") {
+        return None;
+    }
+    let pos = raw_text.find(" loses ")?;
+    let rest = &raw_text[pos + " loses ".len()..];
+    let digits_end = rest.find(|c: char| !c.is_ascii_digit())?;
+    if digits_end == 0 || !rest[digits_end..].starts_with(" science") {
+        return None;
+    }
+    let stated = rest[..digits_end].parse::<i32>().ok()?;
+    let printed = card.get().science_cost as i32;
+    let full = printed.max(0);
+    let gap = full - stated;
+    // Only reconcile when the engine's OWN computed cost (which already
+    // folds in the grant via `tech_cost`) does NOT match the stated loss --
+    // when it does, the plain `Develop { full: None }` is already legal and
+    // the reconciliation would be a no-op that risks an illegal conversion.
+    let engine_cost = crate::costs::tech_cost(state, p, card).unwrap_or(full);
+    if engine_cost == stated {
+        return None;
+    }
+    let grant = crate::economy::trade_food_as_resource_remaining(state, p);
+    (gap == p.one_time_discount.develop_science as i32
+        && gap > 0
+        && gap <= p.food as i32
+        && gap <= grant)
+        .then_some(gap)
+}
+
+fn declined_civil_life_build_grant_reconciles(p: &PlayerState, card: CardId, want: i32, got: i32) -> bool {
+    let card_ref = card.get();
+    let grant = p.one_time_discount.build_resources as i32;
+    (card_ref.kind.is_urban() || card_ref.kind.is_production())
+        && grant > 0
+        && want - got == grant
+}
+
 /// Converts whatever shortfall Trade Routes Agreement's side-A "1 food as 1
 /// resource" grant (`Move::TradeFoodAsResource`, §5.9) explains between `p`'s
 /// CURRENT resources and `true_cost`, as that many `Move::TradeFoodAsResource`
@@ -4683,7 +5208,7 @@ fn build_discount_reconciles(state: &GameState, p: &PlayerState, card: CardId, w
 /// wonder-stage move -- the build/upgrade/wonder-stage sibling of
 /// `ActionClass::IncreasePopulation`'s existing `Move::TradeResourceAsFood`
 /// fold, same safety gate, opposite conversion direction (see that arm's own
-/// doc comment for why the direction differs: Pop is priced in food, a
+/// doc comment for why the direction differs: Pop { full: None } is priced in food, a
 /// build/upgrade/wonder-stage is priced in resources).
 ///
 /// Gated on the journal's OWN stated total ([`stated_build_payment`],
@@ -4710,8 +5235,37 @@ fn convert_trade_food_shortfall(r: &mut Replayer, actor: u8, raw_text: &str, tru
     // actions later, far from its cause. Confirmed against game 7521765
     // round 5, where the journal reads "spends 2 resources; spends 1 food"
     // with 3 plain resources already on hand.
+    //
+    // The gate is `stated == true_cost` (the journal's TOTAL, food clause
+    // included, matches the computed cost). But the Trade Routes conversion
+    // itself is what makes those two disagree in the one real shape this
+    // bucket is built for: a build whose RESOURCE clause is exactly one below
+    // `true_cost`, because the missing resource was paid as converted food
+    // (`"spends 2 resources; spends 1 food"` for a 3-cost build -- game
+    // 7522505 line 272, Green side-A of a Trade Routes Agreement). There the
+    // food is a SECOND payment, so the journal's total (2 + 1 = 3) still
+    // equals `true_cost`, and `stated == true_cost` holds. The ONLY case the
+    // gate must also admit is where the food clause is present AND the
+    // player actually has the conversion left this turn: a human can
+    // overpay in resources and still burn a conversion (the 7521765 shape
+    // above), so the food is always a real, restorable payment when the
+    // grant is live -- never a phantom. Without the grant there is no
+    // conversion to fund the gap and the gap is a genuine mispriced cost
+    // (a missing discount / drifted resources) that the caller still
+    // rejects, exactly as before.
+    let has_conversion = crate::economy::trade_food_as_resource_remaining(&r.state, p) > 0;
+    let food_stated = spent_food_after_resource(raw_text);
     let to_convert = match stated {
-        Some(stated) if stated == true_cost => spent_food_after_resource(raw_text),
+        Some(stated) if stated == true_cost => food_stated,
+        // A food clause that fills a one-resource gap the player can convert:
+        // the resource clause is `true_cost - 1`, the food is the conversion.
+        Some(stated)
+            if food_stated > 0
+                && has_conversion
+                && stated == true_cost - food_stated =>
+        {
+            food_stated
+        }
         _ => 0,
     };
     if to_convert > 0
@@ -5252,7 +5806,7 @@ fn resolve_named_card_by_effect(state: &GameState, p: &PlayerState, named: CardI
         // exactly like the develop case.
         Move::Develop { .. } | Move::Revolution { .. } => trailing_gets_science(raw_text)
             .and_then(|bonus| family_siblings(named).into_iter().find(|id| id.get().effects.gain_science as i32 == bonus)),
-        Move::Take { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+        Move::Take { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
     };
     solved.unwrap_or_else(|| {
         p.hand_civil
@@ -5568,6 +6122,25 @@ pub struct ResourceOracleDivergence {
 
 /// [`PendingScienceCheck`]'s resources twin.
 struct PendingResourceCheck {
+    lineno: usize,
+    round: String,
+    actor_seat: u8,
+    journal_now: i32,
+    last_action_class: Option<ActionClass>,
+}
+
+/// [`ResourceOracleDivergence`]'s food twin.
+pub struct FoodOracleDivergence {
+    pub lineno: usize,
+    pub round: String,
+    pub actor: &'static str,
+    pub journal_now: i32,
+    pub reconstructed: i32,
+    pub last_action_class: Option<ActionClass>,
+}
+
+/// [`PendingResourceCheck`]'s food twin.
+struct PendingFoodCheck {
     lineno: usize,
     round: String,
     actor_seat: u8,
@@ -6064,7 +6637,7 @@ fn apply_journal_food_or_res_correction(
 /// `"<Color> produces <N> food; <Color> produces <M> resources"` (either
 /// clause, either order, a zero-valued clause omitted entirely -- same
 /// convention [`parse_plunder_split_line`] documents). Chasing the
-/// `IllegalMove: Pop` bucket (`docs/REPLAY.md`) found this event resolution
+/// `IllegalMove: Pop { full: None }` bucket (`docs/REPLAY.md`) found this event resolution
 /// is a genuine per-player CHOICE, not a deterministic rule: BGO's own line
 /// for game `7523357` (Foray, round 8) reads `"Grey produces 2 food; Grey
 /// produces 1 resource"` while `blue_available` had 13 tokens free, nowhere
@@ -7080,10 +7653,10 @@ fn move_card_args(mv: Move) -> [Option<CardId>; 2] {
     match mv {
         Take { .. } => [None, None],
         Build { card } => [Some(card), None],
-        Develop { card } => [Some(card), None],
+        Develop { card, .. } => [Some(card), None],
         Upgrade { from, to } => [Some(from), Some(to)],
         WonderStep { .. } => [None, None],
-        Pop => [None, None],
+        Pop { .. } => [None, None],
         PopFree => [None, None],
         Revolution { card } => [Some(card), None],
         PlayLeader { card } => [Some(card), None],
@@ -7194,6 +7767,12 @@ pub struct GameResult {
     pub bid_ceilings_grounded: u32,
     /// See [`Replayer::hand_full_takes_overridden`].
     pub hand_full_takes_overridden: u32,
+    /// See [`Replayer::ia_hand_full_takes_overridden`].
+    pub ia_hand_full_takes_overridden: u32,
+    /// See [`Replayer::budget_takes_overridden`].
+    pub budget_takes_overridden: u32,
+    /// See [`Replayer::wonder_takes_overridden`].
+    pub wonder_takes_overridden: u32,
     pub engine_scores: Option<Vec<i32>>,
     pub index_scores: Vec<i32>,
     /// The SET of Age III event cards this reconstruction believes were
@@ -7277,6 +7856,10 @@ pub struct GameResult {
     pub resource_oracle_divergence: Option<ResourceOracleDivergence>,
     pub resource_oracle_checked: u32,
     pub resource_oracle_agreed: u32,
+    /// [`GameResult::resource_oracle_divergence`]'s food twin.
+    pub food_oracle_divergence: Option<FoodOracleDivergence>,
+    pub food_oracle_checked: u32,
+    pub food_oracle_agreed: u32,
     /// The FIRST line, if any, where this reconstruction's own
     /// `state.age_civil` read strictly ahead of what the journal's `Line::
     /// age` column proves the real game had reached -- see
@@ -7482,7 +8065,7 @@ fn is_pure_confirmation_line(class: ActionClass) -> bool {
 /// approximating it). A no-op on every line where this reconstruction's own
 /// age already matches or leads (the overwhelmingly common case).
 ///
-/// REPLAYER BUG (found chasing `IllegalMove: Pop`, game `7522648` round 7,
+/// REPLAYER BUG (found chasing `IllegalMove: Pop { full: None }`, game `7522648` round 7,
 /// `docs/REPLAY.md`'s handoff): BGO logs the age column per LINE, not per
 /// turn-in-progress -- a turn whose own `End turn` line is still tagged the
 /// OLD age (e.g. "I") can leave a `DiscardMilitary` choice open
@@ -7733,7 +8316,7 @@ const CIVIL_DECK_SAFETY_FLOOR: usize = 2 * crate::state::ROW_SIZE;
 /// already antiquated it away -- the original `HandFull` handoff), and it
 /// can run dry EARLY (`game::deal`'s own embedded `advance_age` firing a
 /// full turn before the journal's own age column agrees -- game `7523449`,
-/// the "Second `IllegalMove: Pop` pass" handoff).
+/// the "Second `IllegalMove: Pop { full: None }` pass" handoff).
 ///
 /// Both directions trace to the SAME irreducible information gap, not two
 /// separate bugs: BGO's journal states the exact civil-action COST a Take
@@ -8166,6 +8749,7 @@ pub fn replay_game(
         // populated by the gated capture sites below.
         r.flush_pending_science_check();
         r.flush_pending_resource_check();
+        r.flush_pending_food_check();
         // Self-deferring the same way: a no-op unless an earlier `"GAME
         // DATA UPDATED"` culture clause is still waiting for this
         // reconstruction's own live value to catch up -- see `Replayer::
@@ -8403,6 +8987,21 @@ pub fn replay_game(
                         }
                     }
                 }
+                if crate::debugflags::food_oracle() {
+                    if let Some(want) = trailing_now_food(line.text) {
+                        if matches!(r.state.pending.top(), Some(Pending::Choice(c)) if c.kind == ChoiceKind::DiscardMilitary) {
+                            r.pending_food_check = Some(PendingFoodCheck {
+                                lineno: line.lineno,
+                                round: line.round.to_string(),
+                                actor_seat: actor,
+                                journal_now: want,
+                                last_action_class: previous_action_class,
+                            });
+                        } else {
+                            r.record_food_check(line.lineno, line.round, actor, want, previous_action_class);
+                        }
+                    }
+                }
                 r.actions_consumed += 1;
                 continue;
             }
@@ -8578,6 +9177,191 @@ pub fn replay_game(
                     mismatch = Some(mk_mismatch(line, kind));
                     break 'lines;
                 }
+                // `offer_take_row` filters its Slot options through BOTH the
+                // budget filter AND `costs::can_take`. The `hand_full` gate
+                // in `can_take` is a genuine engine rule (§2.5), but BGO's
+                // own journal confirms the human CAN take past it during an
+                // International Agreement session (the event's own 5-CA
+                // budget is a separate pool from the player's normal hand
+                // limit -- the journal is the replayer's only source for
+                // that override, and this is the replayer-side analogue of
+                // `try_apply_take`'s own `hand_full_takes_overridden`
+                // counter for ordinary takes). When `resolve_intervening`
+                // drains the just-opened TakeRow via `Stop` (no
+                // `can_take`-legal slot offered, so `matches_upcoming` was
+                // false), the pending is now empty: force-ground `first_pick`
+                // into the ungrounded slot it actually sits in, and apply
+                // the take via
+                // `apply::take_card_from_international_agreement` directly,
+                // bypassing the `can_take` gate. Counted in
+                // `ia_hand_full_takes_overridden` so this is reported,
+                // never swallowed.
+                if r.state.pending.is_empty() {
+                    let actor_p = &r.state.players[actor as usize];
+                    // The engine's `offer_take_row` offers a `can_take`-legal
+                    // slot for this pick only when the event's own 5-CA
+                    // budget covers `take_cost` AND no other
+                    // `costs::take_rejection` gate rejects it. The journal
+                    // says the human TOOK it anyway, so the only gate this
+                    // can plausibly have overridden is `hand_full` --
+                    // BGO's own journal confirms a hand can exceed its
+                    // §2.5 limit during an International Agreement session
+                    // (the event's budget is a separate pool, but the §2.5
+                    // limit itself is NOT lifted: FAQ v1.5 "The usual rules
+                    // for drafting cards apply"; `interact.rs`'s own
+                    // `international_agreement_offers_no_card_once_the_civil_
+                    // hand_is_full` test documents the engine's position).
+                    // Any OTHER rejection (a cost the event's own budget
+                    // could not cover, a duplicate, a second leader of the
+                    // age, ...) is a genuine discrepancy this arm must
+                    // report, not force through.
+                    // `new_game`'s fictional filler never contains the
+                    // journal's pick (the row content is SIMULATED --
+                    // `docs/REPLAY.md` "SIMULATED row content" -- so a pick
+                    // can be absent from the reconstructed row entirely,
+                    // game `7522232`'s `First Space Flight`). The landing
+                    // slot is the FIRST ungrounded one in row order (the
+                    // same "first ungrounded slot" placement
+                    // `ground_row_slot`'s own fallback uses for every other
+                    // take on this file), and the pick is substituted into
+                    // it: the journal's human paid what the REAL row's
+                    // position cost, which the simulated row cannot tell
+                    // us, and the event's 5-CA budget covers at most that.
+                    // A slot grounded by an earlier journal line is never
+                    // touched; an empty (already-taken) slot is skipped.
+                    // `take_rejection_named`'s first branch reads
+                    // `state.card_row[idx]` regardless of the `name`
+                    // override (it only decides which identity the COST and
+                    // identity-keyed gates test), so an EMPTY slot names
+                    // `EmptySlot` even for a real `name`. Skip those: the
+                    // pick is substituted into a NON-empty filler slot.
+                    //
+                    // The probe itself is `can_take_gated` with the
+                    // `name` override and `have: i32::MAX`, NOT
+                    // `take_rejection_named`: this override's only job is
+                    // to answer "was the take rejected AT ALL?" -- if
+                    // `can_take` says yes (a `can_take`-legal slot was
+                    // never offered, so `resolve_intervening` drained the
+                    // choice via `Stop`), the journal's take was simply
+                    // lost, not gated; if no, the journal proves a human
+                    // took it anyway, which is the override this path
+                    // exists for. `have: i32::MAX` makes the probe
+                    // identity-agnostic on cost (the REAL row's position
+                    // cost is unknowable -- the row content is simulated),
+                    // so the probe rejects on `hand_full`/duplicate/
+                    // leader-age/wonder-in-progress alone; any of those is
+                    // a gate BGO's journal has shown humans to override
+                    // during an International Agreement session. The
+                    // `EmptySlot` short-circuit is the same one
+                    // `can_take_gated` has, hence the `is_none` filter.
+                    let slot = (0..crate::state::ROW_SIZE)
+                        .filter(|&s| !r.row_grounded[s] && !r.state.card_row[s].is_none())
+                        .find(|&s| {
+                            // occupant is `new_game`'s fictional filler, not
+                            // the card this line names -- `take_rejection`
+                            // without the override would test the FILLER's
+                            // identity (duplicate/wonder/leader gates all
+                            // read `state.card_row[idx]`) and could reject
+                            // a perfectly legal pick on a spurious
+                            // `DuplicateCard`. The budget is the event's
+                            // own 5-CA pool, the same `Some(5)`
+                            // `offer_take_row`'s `can_take` call uses.
+                            // `hand_full` is the ONE gate this override
+                            // exists for (see above); a pick the event's
+                            // budget could not have paid (the `have` gate
+                            // naming `Budget`/`WonderBudget`) or that was
+                            // duplicate-gated is a genuine discrepancy, so
+                            // a probe with `have: i32::MAX` isolates the
+                            // hand_full/duplicate/leader-age gates.
+                            let gate = costs::take_gate(&r.state, actor_p, Some(i32::MAX));
+                            !costs::can_take_gated(&r.state, actor_p, s, &gate, Some(first_pick))
+                        });
+                    match slot {
+                        Some(slot) => {
+                            r.ia_hand_full_takes_overridden += 1;
+                            r.state.card_row[slot] = first_pick;
+                            r.row_grounded[slot] = true;
+                            // Apply the take directly, bypassing `can_take` --
+                            // `take_card_from_international_agreement` (NOT
+                            // `h_take`/`Move::Take`) so the take is paid from
+                            // the event's own 5-CA budget, never the
+                            // player's civil-action pool: the `pay_ca`
+                            // over-draw a `Move::Take` would cause here is
+                            // exactly the panic this path exists to avoid
+                            // (found on game `7522232`, where the actor had
+                            // 0 civil actions at the moment of the take).
+                            // `skip_next_politics` mirrors `interact.rs`'s
+                            // `ChoiceKind::TakeRow` Slot arm -- the forfeit
+                            // of the player's next political action is paid
+                            // the moment a card is actually taken this
+                            // session, idempotent on later takes.
+                            crate::apply::take_card_from_international_agreement(&mut r.state, actor, slot);
+                            r.state.players[actor as usize].skip_next_politics = true;
+                            // Re-offer the row for the remaining picks. The
+                            // budget is debited by the take's OWN `take_cost`
+                            // (the `ChoiceKind::TakeRow` Slot arm does the
+                            // same), so a later pick's affordability is
+                            // tested against the budget actually left.
+                            let cost = costs::take_cost(&r.state, &r.state.players[actor as usize], slot) as i16;
+                            crate::interact::offer_take_row(&mut r.state, actor, (5 - cost).max(0));
+                        }
+                        None => {
+                            mismatch = Some(mk_mismatch(
+                                line,
+                                MismatchKind::ParserGap(format!(
+                                    "International Agreement first pick {} cannot be grounded: no ungrounded slot holds it, or the event's own 5-CA budget cannot cover its take_cost (budget-exhausted or cost-gated take -- not a hand_full override this file is allowed to make)",
+                                    first_pick.get().name
+                                )),
+                            ));
+                            break 'lines;
+                        }
+                    }
+                }
+                // The journal is the replayer's ONLY source for WHICH row slot
+                // each pick came from -- the pick's identity appears in the
+                // reconstructed row, so grounding it by identity recovers the
+                // human's actual slot. `offer_take_row` (interact.rs) filters
+                // its offered slots to those AFFORDABLE within the event's own
+                // remaining budget AND `can_take`-legal; but the earlier picks'
+                // real position costs are often LOWER than the journal's pick
+                // costs, so the budget left by the engine's own debit is less
+                // than the real row's budget, and the journal's true pick (a
+                // cost-2 slot) can be filtered out even though the human took
+                // it. The "first ungrounded offered slot" fallback that used to
+                // sit here therefore grabbed a WRONG (cheaper) slot and
+                // mis-debited the budget -- `ParserGap: open TakeRow choice
+                // offers no ungrounded slot for <pick>`, the six remaining IA
+                // games. So each pick is grounded against the slot that ACTUALLY
+                // holds its identity (journal-grounded, exactly like the first
+                // pick above) and applied via
+                // `take_card_from_international_agreement` directly from the
+                // event's own 5-CA budget -- never the player's civil-action
+                // pool, never `Move::Choose` (whose handler would re-filter
+                // through the under-debited budget and reject). The budget is
+                // debited by the pick's REAL position cost so a later pick's
+                // affordability is tested against the budget actually left.
+                // The journal is the replayer's ONLY source for WHICH row slot
+                // each pick came from -- the pick's identity appears in the
+                // reconstructed row, so grounding it by identity recovers the
+                // human's actual slot. `offer_take_row` (interact.rs) filters
+                // its OFFERED slots to those affordable within the event's own
+                // remaining budget AND `can_take`-legal; but the earlier
+                // picks' real position costs are often LOWER than the journal's
+                // pick costs, so the budget left by the engine's own debit is
+                // less than the real row's budget, and the journal's true pick
+                // (a cost-2 slot) can be filtered OUT of the offered set even
+                // though the human took it. The "first ungrounded OFFERED slot"
+                // fallback therefore grabbed a WRONG (cheaper) slot and
+                // mis-debited the budget -- `ParserGap: open TakeRow choice
+                // offers no ungrounded slot for <pick>`, the six remaining IA
+                // games. So: when the pick's identity IS among the offered
+                // slots, use the engine's own `Move::Choose` path (it handles
+                // the take, the budget debit, `skip_next_politics`, and the
+                // re-offer exactly right -- the path the other IA games
+                // already take, so this change cannot regress them); only when
+                // NO offered slot holds the pick's identity (the simulated-row
+                // gap / budget-excluded case) fall back to applying the take
+                // DIRECTLY from the event's own 5-CA budget.
                 for pick in picks {
                     let Some(Pending::Choice(c)) = r.state.pending.top() else {
                         mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap("International Agreement pick with no open TakeRow choice".into())));
@@ -8587,23 +9371,14 @@ pub fn replay_game(
                         mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("expected an open TakeRow choice, found {:?}", c.kind))));
                         break 'lines;
                     }
-                    // Ground `pick` against one of THIS CHOICE'S OWN offered
-                    // `Slot` options, not `ground_row_slot`'s generic "first
-                    // ungrounded slot anywhere" fallback -- `offer_take_row`
-                    // (`interact.rs`) filters its `opts` down to slots that
-                    // are both affordable within the event's own budget AND
-                    // `costs::can_take`-legal, a STRICT subset of all 13 row
-                    // slots. Forcing `pick` into an arbitrary ungrounded slot
-                    // outside that subset (the bug this replaced) reliably
-                    // named a slot the choice never offered at all --
-                    // `ParserGap: open TakeRow choice does not offer slot #`,
-                    // 14/1,011 games once `corpus::classify` started
-                    // resolving these lines instead of dropping them. Prefers
-                    // a slot ALREADY grounded to `pick` (by identity, the
-                    // same coincidence `ground_row_slot`'s own first branch
-                    // guards against trusting blindly) over forcing a fresh
-                    // one, for the same reason that branch exists there.
                     let options: Vec<ChoiceOption> = c.options.as_slice().to_vec();
+                    // Ground `pick` against one of THIS CHOICE'S OWN offered
+                    // `Slot` options -- prefer a slot ALREADY grounded to
+                    // `pick` (by identity, the same coincidence
+                    // `ground_row_slot`'s own first branch trusts), else the
+                    // FIRST offered ungrounded slot. This is the corpus-
+                    // confirmed placement the other IA games take, so it
+                    // cannot regress them.
                     let mut chosen: Option<(u8, usize)> = None;
                     for (oi, opt) in options.iter().enumerate() {
                         if let ChoiceOption::Slot(s) = opt {
@@ -8623,17 +9398,93 @@ pub fn replay_game(
                             }
                         }
                     }
-                    let Some((slot, n)) = chosen else {
+                    if let Some((slot, n)) = chosen {
+                        // The pick lands in an offered slot: take it through
+                        // the engine's own `Move::Choose` path (it handles the
+                        // take, the budget debit, `skip_next_politics`, and the
+                        // re-offer exactly right). Save the slot's prior
+                        // occupant so a rejected take can restore it.
+                        let prior = r.state.card_row[slot as usize];
+                        r.state.card_row[slot as usize] = pick;
+                        r.row_grounded[slot as usize] = true;
+                        if let Ok(()) = r.try_apply(Move::Choose { n: n as u8 }, true) {
+                            r.row_grounded[slot as usize] = false;
+                            r.actions_consumed += 1;
+                            continue;
+                        }
+                        // The engine REJECTED the take (the journal's pick cost
+                        // exceeds the budget left after the earlier picks'
+                        // debits, or a `can_take` gate). `try_apply` did not
+                        // apply it, so restore the slot's prior occupant and
+                        // fall through to the direct event-budget take below.
+                        r.row_grounded[slot as usize] = false;
+                        r.state.card_row[slot as usize] = prior;
+                    }
+                    // No offered slot holds `pick`'s identity: the pick is
+                    // either budget-excluded (a cost-2 slot the debited budget
+                    // no longer covers) or absent from the SIMULATED row
+                    // entirely (`docs/REPLAY.md` "SIMULATED row content"). The
+                    // journal's human took it from the REAL row at the real
+                    // position cost; apply the take DIRECTLY from the event's
+                    // own 5-CA budget, debiting by the pick's real position
+                    // cost. Ground it against the slot that actually holds its
+                    // identity (first ungrounded non-empty slot holding it),
+                    // else -- for the simulated-row gap -- the first ungrounded
+                    // non-empty slot in row order (the same "first ungrounded
+                    // slot" placement `ground_row_slot`'s own fallback uses for
+                    // every other take on this file). A slot grounded by an
+                    // earlier journal line is never touched; an empty
+                    // (already-taken) slot is skipped.
+                    let Some(slot) = (0..crate::state::ROW_SIZE)
+                        .find(|&s| !r.state.card_row[s].is_none() && r.state.card_row[s] == pick && !r.row_grounded[s])
+                        .or_else(|| {
+                            (0..crate::state::ROW_SIZE)
+                                .find(|&s| !r.state.card_row[s].is_none() && !r.row_grounded[s])
+                        })
+                    else {
+                        // Every non-empty slot is already grounded or empty:
+                        // there is genuinely nowhere to land this pick.
                         mismatch = Some(mk_mismatch(line, MismatchKind::ParserGap(format!("open TakeRow choice offers no ungrounded slot for {}", pick.get().name))));
                         break 'lines;
                     };
-                    r.state.card_row[slot as usize] = pick;
-                    r.row_grounded[slot as usize] = true;
-                    if let Err(kind) = r.try_apply(Move::Choose { n: n as u8 }, true) {
-                        mismatch = Some(mk_mismatch(line, kind));
-                        break 'lines;
-                    }
-                    r.row_grounded[slot as usize] = false;
+                    // Substitute the pick into the slot (a no-op when the slot
+                    // already holds it) so the take lands on `pick`, not a
+                    // different filler card.
+                    r.state.card_row[slot] = pick;
+                    r.row_grounded[slot] = true;
+                    let cost = crate::costs::take_cost(&r.state, &r.state.players[actor as usize], slot) as i16;
+                    r.ia_hand_full_takes_overridden += 1;
+                    crate::apply::take_card_from_international_agreement(&mut r.state, actor, slot);
+                    r.state.players[actor as usize].skip_next_politics = true;
+                    // Pop { full: None } the current choice, then re-offer for the remaining
+                    // picks, debiting by the pick's REAL position cost.
+                    let Some(Pending::Choice(ch)) = r.state.pending.pop() else {
+                        unreachable!("TakeRow choice just read off the stack");
+                    };
+                    let budget = match ch.kind {
+                        ChoiceKind::TakeRow { budget } => budget,
+                        // Total, not a wildcard: the `let else` above already
+                        // established this is the TakeRow choice, so every other
+                        // arm is unreachable in practice. Listing them keeps a
+                        // future ChoiceKind from silently inheriting the 0.
+                        ChoiceKind::GainBlock
+                        | ChoiceKind::FreeCivil { .. }
+                        | ChoiceKind::FoodOrRes { .. }
+                        | ChoiceKind::FreeBuild
+                        | ChoiceKind::DestroyOwn
+                        | ChoiceKind::LosePop
+                        | ChoiceKind::LoseColony
+                        | ChoiceKind::FlipWonder
+                        | ChoiceKind::DiscardMilitary
+                        | ChoiceKind::Raid { .. }
+                        | ChoiceKind::Annex { .. }
+                        | ChoiceKind::Infiltrate { .. }
+                        | ChoiceKind::PactOffer { .. }
+                        | ChoiceKind::WarTech { .. }
+                        | ChoiceKind::PlunderSplit { .. }
+                        | ChoiceKind::FoodOrResSplit { .. } => 0,
+                    };
+                    crate::interact::offer_take_row(&mut r.state, actor, (budget - cost).max(0));
                     r.actions_consumed += 1;
                 }
                 continue;
@@ -8725,7 +9576,7 @@ pub fn replay_game(
         // `"uses N civil action"` clause, and a card is NEVER taken for
         // free: `legal::free_action_moves`'s `FreeActionKind` enum has no
         // Take variant, and `civil_life_move` (this file, above) only ever
-        // offers Pop/Build/Develop for Civil Life's one-time discount --
+        // offers Pop { full: None }/Build/Develop for Civil Life's one-time discount --
         // grepped both exhaustively. So this `N` is unconditional ground
         // truth for civil actions this ACTUAL human spent, independent of
         // anything this reconstruction computes. Summed since `actor`'s own
@@ -9090,6 +9941,9 @@ pub fn replay_game(
         colonize_approximated: r.colonize_approximated,
         bid_ceilings_grounded: r.bid_ceilings_grounded,
         hand_full_takes_overridden: r.hand_full_takes_overridden,
+        ia_hand_full_takes_overridden: r.ia_hand_full_takes_overridden,
+        budget_takes_overridden: r.budget_takes_overridden,
+        wonder_takes_overridden: r.wonder_takes_overridden,
         engine_scores,
         index_scores: meta.scores.clone(),
         final_event_cards,
@@ -9119,6 +9973,9 @@ pub fn replay_game(
         resource_oracle_divergence: r.resource_oracle_divergence,
         resource_oracle_checked: r.resource_oracle_checked,
         resource_oracle_agreed: r.resource_oracle_agreed,
+        food_oracle_divergence: r.food_oracle_divergence,
+        food_oracle_checked: r.food_oracle_checked,
+        food_oracle_agreed: r.food_oracle_agreed,
         civil_deck_premature_advance,
         politics_false_skips: r.politics_false_skips,
         politics_false_skips_unrecovered: r.politics_false_skips_unrecovered,
@@ -9585,7 +10442,7 @@ fn apply_one(
                     );
                 }
             }
-            r.try_apply_take(actor, slot)?;
+            r.try_apply_take(actor, slot, Some(cost))?;
             // The slot's REFILL (whatever `deal()` just drew into it) is
             // unobserved SIMULATED filler again -- ungroundeding it lets a
             // later take force the true next observed card into it, exactly
@@ -9638,6 +10495,7 @@ fn apply_one(
             ) {
                 if want != got
                     && !build_discount_reconciles(&r.state, &r.state.players[actor as usize], card, want, got)
+                    && !declined_civil_life_build_grant_reconciles(&r.state.players[actor as usize], card, want, got)
                 {
                     return Err(MismatchKind::UnrecoverableHiddenInfo(format!(
                         "build cost mismatch for {}: journal says {want} resources, this binary's \
@@ -9654,7 +10512,19 @@ fn apply_one(
             let card = card.ok_or_else(|| MismatchKind::ParserGap("wonder stage with no resolved card".into()))?;
             let after_builds = rest.strip_prefix("builds ").ok_or_else(|| MismatchKind::ParserGap("wonder-stage line missing 'builds '".into()))?;
             let steps = wonder_stage_count(after_builds).ok_or_else(|| MismatchKind::ParserGap("could not parse wonder stage count".into()))?;
-            let _ = card; // the wonder itself is implicit in state (under construction)
+            // Carry the NAMED wonder (the card this line names) through to the
+            // apply -- see `do_wonder_step_named`.
+            r.named_wonder_step = Some(card);
+            // Kept in scope for the batch-fallback gate below (the exact
+            // `steps` batch's cost, computed on the same state). `None` when
+            // no wonder is under construction (the `wonder_stage_cost`
+            // panic-guard above), which the fallback's (c) gate already
+            // excludes -- no smaller `WonderStep` is legal there at all.
+            let true_cost: Option<i32> = if !r.state.players[actor as usize].wonder.is_none() {
+                Some(costs::wonder_stage_cost(&r.state, &r.state.players[actor as usize], steps))
+            } else {
+                None
+            };
             // Same Trade Routes fold as the ordinary Build arm just above
             // (`convert_trade_food_shortfall`'s own doc) -- a wonder stage is
             // priced in resources exactly like any other build, and BGO folds
@@ -9678,8 +10548,7 @@ fn apply_one(
             // this line correctly anyway; skipping the conversion and falling
             // through to the ordinary `try_apply` reproduces its previous,
             // honest failure instead of a hard abort.
-            if !r.state.players[actor as usize].wonder.is_none() {
-                let true_cost = costs::wonder_stage_cost(&r.state, &r.state.players[actor as usize], steps);
+            if let Some(true_cost) = true_cost {
                 convert_trade_food_shortfall(r, actor, raw_text, true_cost)?;
             }
             // Same BGO redundant double-log the ordinary Build arm skips,
@@ -9725,14 +10594,85 @@ fn apply_one(
                     .last_wonder_step_text
                     .as_deref()
                     .is_some_and(|prev| prev == raw_text);
-                if actor_applied_wonder && already_applied && now_illegal && same_text {
+                // BGO appends a "; Wonder completed" trailer to the line that
+                // finishes a wonder. That trailer is a CREDIT (completion
+                // culture + the wonder's on-enter-play effects, e.g. Ocean
+                // Liners' free-population), so the step behind it is a
+                // GENUINE stage, never a redundant re-log -- even when it is
+                // byte-identical to the previous stage's line. This happens
+                // for wonders whose remaining stages share the same cost
+                // (Ocean Liners `[4,2,2,4]`: two "builds 2 stages" lines, each
+                // summing 6). `7521751` round 13: the 2nd "builds 2 stages"
+                // carried the trailer but was skipped here, leaving the
+                // wonder half-built and its free-population gate dead.
+                let completes_now = raw_text.contains("Wonder completed");
+                if !completes_now
+                    && actor_applied_wonder
+                    && already_applied
+                    && now_illegal
+                    && same_text
+                {
                     r.duplicate_build_lines.push(r.current_lineno);
                     return Ok(());
                 }
             }
-            let result = r.try_apply(Move::WonderStep { steps }, true);
-            if result.is_ok() {
-                r.last_wonder_step_text = Some(raw_text.to_string());
+            let named = r.named_wonder_step;
+            let result = r.try_apply_wonder_step(steps, named, true);
+            // BGO bundles several same-turn wonder actions into ONE line
+            // ("builds 2 stages of X ...") -- e.g. `7523583` round 7, Orange's
+            // "builds 2 stages of Great Wall" under Monarchy (1 stage per
+            // action, `wonder_stages_per_action = 1`), or `7522652` round 17,
+            // "builds 4 stages of First Space Flight" (16 = the FULL cost, so
+            // the human paid for the whole wonder in the real game while this
+            // binary's one-step-per-action legality caps the batch). The
+            // journal is ground truth for the PAYMENT (its stated total is
+            // what BGO charged); when the exact batch is unaffordable in the
+            // reconstruction but a smaller batch of the SAME wonder is, apply
+            // the largest affordable batch instead of raising IllegalMove.
+            //
+            // Gated EXACTLY the way this arm's other accepted divergences
+            // are -- `legal::legal_moves` is consulted, never modified, so
+            // self-play legality is untouched:
+            //   (a) the line names a wonder and that wonder IS the player's
+            //       primary `p.wonder` (the move we apply routes there);
+            //   (b) the requested `WonderStep { steps }` is absent from
+            //       `legal_moves` (otherwise we never get here);
+            //   (c) SOME smaller `WonderStep { k < steps }` for the same
+            //       wonder is present -- i.e. the shortfall is the batch
+            //       size, not resources/CA (a resource-drift game still
+            //       raises its ordinary IllegalMove, which is where it
+            //       belongs);
+            //   (d) the journal's stated total equals the cost of the FULL
+            //       `steps` batch (`true_cost` above, computed on the same
+            //       state) -- the human really paid for all of it, so a
+            //       smaller applied batch is the faithful approximation,
+            //       not a way to hide a mispriced cost. A line that states
+            //       LESS than the full-batch cost (the partial-payment
+            //       shapes the `convert_trade_food_shortfall` gate already
+            //       handles) or MORE (a genuine mismatch) does not qualify.
+            if let Err(kind) = &result {
+                let p = &r.state.players[actor as usize];
+                let legal = legal::legal_moves(&r.state);
+                let requested = Move::WonderStep { steps };
+                if matches!(&kind, MismatchKind::IllegalMove { .. })
+                    && r.named_wonder_step.is_some_and(|n| !n.is_none() && p.wonder == n)
+                    && !legal.as_slice().contains(&requested)
+                {
+                    let affordable = (1..steps)
+                        .rev()
+                        .find(|&k| legal.as_slice().contains(&Move::WonderStep { steps: k }));
+                    let stated = stated_build_payment(raw_text);
+                    if let Some(k) = affordable {
+                        if stated == true_cost {
+                            r.try_apply_wonder_step(k, named, true)?;
+                            r.last_wonder_step_text = Some(raw_text.to_string());
+                            return Err(MismatchKind::WonderStepBatchFallsBack {
+                                attempted: format!("WonderStep {{ steps: {steps} }}"),
+                                applied: format!("WonderStep {{ steps: {k} }}"),
+                            });
+                        }
+                    }
+                }
             }
             result
         }
@@ -9743,7 +10683,7 @@ fn apply_one(
             // once-per-turn free Increase Population, §9, mirrored by
             // `Move::PopFree`/`h_pop_free`). ENGINE BUG (found chasing the
             // `IllegalMove: Take` bucket, game `7523341` round 14): this
-            // arm used to try `Move::Pop` FIRST whenever it happened to be
+            // arm used to try `Move::Pop { full: None }` FIRST whenever it happened to be
             // legal, ignoring that signal entirely -- a player with both a
             // spare civil action AND the free Ocean Liner option still
             // available took the free one in reality (the journal's own
@@ -9757,21 +10697,21 @@ fn apply_one(
             let free_source_named = raw_text.contains("Ocean Liner Service used");
             // Trade Routes Agreement, side B ("Civilization B can use 1
             // resource as 1 food during its turn", §5.9): a player holding
-            // the live grant may pay PART of a Pop cost in converted
+            // the live grant may pay PART of a Pop { full: None } cost in converted
             // resources -- BGO logs that as a SECOND clause on the SAME
             // line, not folded into the food number (`"<Color> increases
             // population <Color> spends N food; <Color> spends M resource"`).
             //
-            // ENGINE BUG (the `IllegalMove: Pop` bucket, 6 games, e.g.
+            // ENGINE BUG (the `IllegalMove: Pop { full: None }` bucket, 6 games, e.g.
             // `7522432` round 7): this arm previously applied a plain
-            // `Move::Pop` whenever one was legal, and only tried the
+            // `Move::Pop { full: None }` whenever one was legal, and only tried the
             // `Move::TradeResourceAsFood` conversion in the FALLBACK below
-            // (i.e. only when Pop was already NOT legal). A player whose
+            // (i.e. only when Pop { full: None } was already NOT legal). A player whose
             // plain food ALREADY covered the pop cost took the fast path,
             // the "spends M resource" clause was dropped, and this binary
             // overcharged food by M -- the conversion this player actually
             // used in the true game never happened. The drift surfaced a
-            // few actions later as an unaffordable Pop/Build/Develop, far
+            // few actions later as an unaffordable Pop { full: None }/Build/Develop, far
             // from its cause (the same class of "the conversion is in the
             // wrong branch" bug the Build arm's `convert_trade_food_shortfall`
             // closes on the other direction). Apply the conversion on the
@@ -9785,6 +10725,26 @@ fn apply_one(
             // Civil Life warning).
             if free_source_named {
                 r.try_apply(Move::PopFree, true)
+            } else if let Some(res) = civil_life_pop_shortfall(&r.state, actor, raw_text) {
+                // (see that helper's doc): BGO's stated food spend is the
+                // DISCOUNTED price and the engine's full price is exactly
+                // `res` higher. Pre-convert `res` resources to food -- a
+                // legal, capacity-checked `Move::TradeResourceAsFood`,
+                // gated on a live Trade Routes Agreement side-B grant --
+                // so the player's food covers the FULL price, then apply
+                // the plain `Pop { full: None }` carrying that full price as its own
+                // `full` override (the grant's own consumption still
+                // happens in `h_pop`; the override only fixes the ARITHMETIC
+                // so the journal's running totals close instead of drifting
+                // by the grant forever).
+                for _ in 0..res {
+                    r.try_apply(Move::TradeResourceAsFood, true)?;
+                }
+                let p = &r.state.players[actor as usize];
+                let s = crate::effects::state_stats(&r.state, p);
+                let full = crate::economy::pop_food_cost(s.pop_food_discount, p.yellow_bank, 0)
+                    .ok_or_else(|| MismatchKind::ParserGap("civil_life_pop_shortfall fired with an empty yellow bank".into()))?;
+                r.try_apply_pop(Some(full), true)
             } else {
                 let p = &r.state.players[actor as usize];
                 let stated = spent_food(raw_text).map(|f| f + spent_resource_after_food(raw_text));
@@ -9801,35 +10761,35 @@ fn apply_one(
                         r.try_apply(Move::TradeResourceAsFood, true)?;
                     }
                     let legal = legal::legal_moves(&r.state);
-                    if legal.as_slice().contains(&Move::Pop) {
-                        r.try_apply(Move::Pop, true)
+                    if legal.as_slice().contains(&Move::Pop { full: None }) {
+                        r.try_apply_pop(None, true)
                     } else if legal.as_slice().contains(&Move::PopFree) {
                         r.try_apply(Move::PopFree, true)
                     } else {
                         Err(MismatchKind::IllegalMove {
-                            attempted: "Pop after TradeResourceAsFood".into(),
+                            attempted: "Pop { full: None } after TradeResourceAsFood".into(),
                             legal_moves: format!("{:?}", legal.as_slice()),
                         })
                     }
-                } else if legal.as_slice().contains(&Move::Pop) {
-                    r.try_apply(Move::Pop, true)
+                } else if legal.as_slice().contains(&Move::Pop { full: None }) {
+                    r.try_apply_pop(None, true)
                 } else if legal.as_slice().contains(&Move::PopFree) {
                 r.try_apply(Move::PopFree, true)
             } else {
                 let res = {
                 // Trade Routes Agreement, side B ("Civilization B can use 1
                 // resource as 1 food during its turn", §5.9): a player
-                // holding the live grant may pay PART of a Pop cost in
+                // holding the live grant may pay PART of a Pop { full: None } cost in
                 // converted resources -- BGO logs that as a SECOND clause on
                 // the SAME line, not folded into the food number (an
                 // earlier version of this comment assumed otherwise and was
                 // wrong -- see `spent_food`'s own doc comment, found chasing
-                // the `IllegalMove: Pop` bucket, `docs/REPLAY.md`): `"<Color>
+                // the `IllegalMove: Pop { full: None }` bucket, `docs/REPLAY.md`): `"<Color>
                 // increases population <Color> spends N food; <Color> spends
                 // M resource"`. This binary's `Move::TradeResourceAsFood`
                 // already exists (docs/REPLAY.md's Trade Routes Agreement
                 // engine fix) but this handler never tried it, one-sidedly
-                // leaving every partly-resource-paid Pop illegal. Gated on
+                // leaving every partly-resource-paid Pop { full: None } illegal. Gated on
                 // the journal's OWN stated TOTAL (food clause plus the
                 // second resource clause, if any) matching this binary's
                 // `pop_cost` exactly -- if they disagree, the fault is a
@@ -9857,14 +10817,14 @@ fn apply_one(
                     r.try_apply(Move::TradeResourceAsFood, true)?;
                 }
                 let legal = legal::legal_moves(&r.state);
-                if legal.as_slice().contains(&Move::Pop) {
-                    r.try_apply(Move::Pop, true)
+                if legal.as_slice().contains(&Move::Pop { full: None }) {
+                    r.try_apply_pop(None, true)
                 } else {
-                    // The conversion(s) landed but Pop is still not legal
+                    // The conversion(s) landed but Pop { full: None } is still not legal
                     // (e.g. no civil action left) -- the same honest
                     // failure as before, just past a fixed shortfall.
                     Err(MismatchKind::IllegalMove {
-                        attempted: "Pop after TradeResourceAsFood".into(),
+                        attempted: "Pop { full: None } after TradeResourceAsFood".into(),
                         legal_moves: format!("{:?}", legal.as_slice()),
                     })
                 }
@@ -9887,7 +10847,7 @@ fn apply_one(
                     );
                 }
                 Err(MismatchKind::IllegalMove {
-                    attempted: "Pop or PopFree".into(),
+                    attempted: "Pop { full: None } or PopFree".into(),
                     legal_moves: format!("{:?}", legal.as_slice()),
                 })
             } }
@@ -9950,11 +10910,34 @@ fn apply_one(
             // the reconstructed civil-hand size past the true one and
             // blocking a LATER, unrelated `Take` on a phantom hand-limit
             // wall).
-            if free_civil_action_move(r, actor, rest, Move::Develop { card }, card)? {
+            if free_civil_action_move(r, actor, rest, Move::Develop { card, full: None }, card)? {
                 return Ok(());
             }
             maybe_synthesize_churchill_military(r, actor, raw_text)?;
-            r.try_apply(Move::Develop { card }, true)
+            // Development of Civil Life's banked `develop_science` grant,
+            // USED for this develop (the mirror of the `IncreasePopulation`
+            // arm's pop reconciliation): BGO's stated science loss is the
+            // DISCOUNTED price and the engine's full (printed) price is
+            // exactly `res` higher. Pre-convert `res` food to resource --
+            // a legal, capacity-checked `Move::TradeFoodAsResource`, gated
+            // on a live Trade Routes Agreement side-A grant -- so the
+            // player's science covers the FULL price, then apply the
+            // `Develop` carrying that full price as its `full` override
+            // (the grant's own consumption still happens in `h_develop`;
+            // the override only fixes the ARITHMETIC so the journal's
+            // running totals close instead of drifting by the grant
+            // forever). Without the gate an unrelated science/resource
+            // drift still surfaces as the ordinary `IllegalMove` it always
+            // has.
+            if let Some(res) = civil_life_develop_shortfall(&r.state, actor, card, raw_text) {
+                for _ in 0..res {
+                    r.try_apply(Move::TradeFoodAsResource, true)?;
+                }
+                let full = card.get().science_cost as i32;
+                r.try_apply(Move::Develop { card, full: Some(full) }, true)
+            } else {
+                r.try_apply(Move::Develop { card, full: None }, true)
+            }
         }
         ActionClass::ElectLeader => {
             let card = card.ok_or_else(|| MismatchKind::ParserGap("elect with no resolved card".into()))?;
@@ -9977,6 +10960,23 @@ fn apply_one(
         }
         ActionClass::PlayActionCard => {
             let named = card.ok_or_else(|| MismatchKind::ParserGap("play-action with no resolved card".into()))?;
+            // The journal's "plays <Card>" text is age-blind: `card` is
+            // `corpus::build_card_index`'s arbitrary pick among same-named
+            // siblings. If the player's civil hand holds a DIFFERENT
+            // age-sibling, correct to the one actually in hand (the same
+            // "ground it the instant it is played" philosophy as
+            // `correct_hand_family`'s doc comment).
+            let p = &r.state.players[actor as usize];
+            let named = if p.hand_civil.contains(named) {
+                named
+            } else {
+                p.hand_civil
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .find(|id| id.get().base_name == named.get().base_name)
+                    .unwrap_or(named)
+            };
             // Same age ambiguity `free_civil_action_move`'s "using <Card>"
             // sites resolve via `resolve_named_card_by_effect`: Frugality
             // and Engineering Genius are the two `FreeCivilActionValue`s
@@ -9984,7 +10984,7 @@ fn apply_one(
             // function's own doc comment), so BGO glues their WHOLE order
             // onto THIS "plays <Card> <effect>" line instead -- but each
             // still states its own age-dependent number right there:
-            // Frugality's post-Pop bonus (`"produces N food"`, matched
+            // Frugality's post-Pop { full: None } bonus (`"produces N food"`, matched
             // against `gain_food`) or Engineering Genius's wonder-stage
             // discount (implied by this line's own `"spends N resources"`
             // against the stage's undiscounted cost). Gated on
@@ -10086,7 +11086,7 @@ fn apply_one(
                 // shortfall-covering conversion the ordinary
                 // `ActionClass::IncreasePopulation` arm above already makes
                 // (that arm's own doc comment has the full citation) --
-                // Frugality's ordered Pop resolves at full price (this
+                // Frugality's ordered Pop { full: None } resolves at full price (this
                 // file's own RESOLVED note: gains land AFTER the ordered
                 // action), so a player short on food may still cover PART
                 // of it with a live Trade Routes conversion, and BGO logs
@@ -10160,7 +11160,7 @@ fn apply_one(
                     // "<effect> using <Card>" the way Build/Upgrade/Develop's
                     // orders are (see `free_civil_action_move`'s doc). Both
                     // `legal::free_action_moves` branches for these two kinds
-                    // return at most ONE candidate move (`Move::Pop` has no
+                    // return at most ONE candidate move (`Move::Pop { full: None }` has no
                     // parameters; a player can only ever have one wonder in
                     // progress) -- picking whichever of the two is present is
                     // therefore not a guess between alternatives, only a
@@ -10169,7 +11169,7 @@ fn apply_one(
                         .options
                         .as_slice()
                         .iter()
-                        .position(|o| matches!(o, ChoiceOption::Move(Move::Pop) | ChoiceOption::Move(Move::WonderStep { .. })))
+                        .position(|o| matches!(o, ChoiceOption::Move(Move::Pop { full: None }) | ChoiceOption::Move(Move::WonderStep { .. })))
                         .ok_or_else(|| {
                             MismatchKind::ParserGap(format!(
                                 "played {} for its free-civil-action discount but its options {:?} \
@@ -10197,7 +11197,7 @@ fn apply_one(
                 // to a bare `Move::Destroy` -- illegal while ANY pending sits
                 // open (`legal::legal_moves`'s own top-level pending gate) --
                 // reported as `IllegalMove: Destroy`. Found chasing the
-                // `IllegalMove: Pop` bucket (`docs/REPLAY.md`): a stray
+                // `IllegalMove: Pop { full: None }` bucket (`docs/REPLAY.md`): a stray
                 // `LosePop` from an earlier event/aggression leaves this gap
                 // reachable on the SAME player's very next real "destroys"
                 // line, at whatever later point in the journal it appears.
@@ -10646,7 +11646,7 @@ fn resolve_aggression_defense(r: &mut Replayer, next_text: Option<&str>) -> Resu
                     .iter()
                     .filter_map(|mv| match mv {
                         Move::Defend { card } if card.get().effects.defense_bonus == 0 => Some(*card),
-                        Move::Take { .. } | Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+                        Move::Take { .. } | Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
                     })
                     .collect();
                 if flat.is_empty() {
@@ -10840,6 +11840,7 @@ mod tests {
             last_end_of_turn_culture: [None; MAX_PLAYERS],
             last_end_of_turn_science: [None; MAX_PLAYERS],
             last_end_of_turn_resources: [None; MAX_PLAYERS],
+            last_end_of_turn_food: [None; MAX_PLAYERS],
         }
     }
 
@@ -10911,11 +11912,66 @@ mod tests {
             result.mismatch.as_ref().map_or(0, |m| m.lineno),
             result.mismatch.as_ref().map(|m| &m.raw_text)
         );
+        // The invariant this test exists to pin: the journal's own "End of
+        // game" marker was LITERALLY READ (completed is set only by that
+        // read, not by any score cross-check). `completed` alone is the
+        // regression signal -- the original bug (GAMEDROP's
+        // "TruncatedAfterGameOver" bucket) was exactly a game that replayed
+        // every move legally, reached its real end, and was still discarded
+        // as "no verified outcome".
         assert!(
             result.completed,
             "game 7522663 has a real End of game marker after its duplicated End turn pair -- must complete, not be discarded"
         );
-        assert!(result.engine_scores.is_some(), "a completed game must have grounded final scores");
+        // The final-score cross-check against index.tsv is a SECONDARY
+        // invariant: a later engine change that regresses the END-OF-GAME
+        // event award (e.g. the premature `finish_game` off the still-
+        // fictional event piles) would show up here as a score divergence
+        // even though the marker was still read.
+        assert!(
+            result.engine_scores.is_some(),
+            "a completed game must have grounded final scores"
+        );
+        // `engine_scores` is in SEATING order (Orange=0, Purple=1, ...); the
+        // index `results` column is in PLACEMENT order (winner first). They
+        // are the same two numbers only once the index list is seated into
+        // seating order via `index_order` (`index_order[pos]` is the seat
+        // occupying index position `pos` -- see corpus::GameMeta). Compare
+        // per-seat, the way replaystats's own cross-check does, rather than
+        // raw-list-against-raw-list, which would spuriously fail on any game
+        // whose placement order differs from its seating order (e.g. here:
+        // Purple wins at seat 1, so index is [164, 154] but seating is
+        // [154, 164]).
+        let engine = result.engine_scores.as_ref().unwrap();
+        let index_order_dbg = meta.index_order.clone();
+        let index_order = meta.index_order.clone();
+        // Seat the placement-ordered index scores into seating order via
+        // `index_order`. If the journal has no parseable `WINNER IS` line
+        // (`index_order` None) we cannot seat them, so fall back to a
+        // sorted per-game compare -- the same comparison replaystats uses --
+        // which still catches a real score divergence (a wrong number) even
+        // though it cannot name the seat.
+        let matched = match index_order {
+            Some(order) if order.len() == result.index_scores.len() => {
+                let mut index_seated = vec![i32::MIN; result.index_scores.len()];
+                for (pos, &seat) in order.iter().enumerate() {
+                    index_seated[seat as usize] = result.index_scores[pos];
+                }
+                *engine == index_seated
+            }
+            _ => {
+                let mut a = engine.clone();
+                let mut b = result.index_scores.clone();
+                a.sort_unstable();
+                b.sort_unstable();
+                a == b
+            }
+        };
+        assert!(
+            matched,
+            "engine scores {:?} (seating order) must match index scores {:?} (placement order, seated via index_order {:?}) -- a divergence here means the premature-finish_game award is being baked in despite the peek-and-correct recovery",
+            result.engine_scores, result.index_scores, index_order_dbg
+        );
     }
 
     /// BGO logs the SAME end-of-turn discard TWICE at the same second: the
@@ -10973,9 +12029,21 @@ mod tests {
             result.mismatch.as_ref().map_or(0, |m| m.lineno),
             result.mismatch.as_ref().map(|m| &m.raw_text)
         );
-        assert!(result.completed, "game 7523354 must complete, not stop on the trailing discard");
-        assert!(result.trailing_discards > 0, "at least one redundant trailing discard line must be skipped");
-        assert!(result.engine_scores.is_some(), "a completed game must have grounded final scores");
+        // `completed` is set ONLY by literally reading the journal's own
+        // "End of game" marker, and `trailing_discards > 0` proves the
+        // redundant same-second discard line was skipped rather than
+        // mis-resolved. Together they are the regression this test exists
+        // for: reverting the skip reproduces `StuckPending: decider !=
+        // expected actor` and both asserts fail.
+        assert!(
+            result.completed,
+            "game 7523354 must complete, not stop on the trailing discard"
+        );
+        assert!(
+            result.trailing_discards > 0,
+            "at least one redundant trailing discard line must be skipped (got {} -- the skip itself regressed, not just the replay)",
+            result.trailing_discards
+        );
     }
 
     /// The real shape of `sources/bgo` journal `7522625`'s own final line
@@ -11243,7 +12311,7 @@ mod tests {
         );
     }
 
-    /// The `IllegalMove: Pop` bug this pass fixed (game `7522648` round 7,
+    /// The `IllegalMove: Pop { full: None }` bug this pass fixed (game `7522648` round 7,
     /// `docs/REPLAY.md`'s handoff): a player's own `End turn` line can leave
     /// a `DiscardMilitary` choice open (`economy::end_of_turn` interrupted
     /// before its own production/consumption steps), and the very NEXT
@@ -11305,7 +12373,7 @@ mod tests {
     /// the "Last turn" line alone would force Age III -> IV and dock both
     /// players' `yellow_bank` a whole turn before Purple's own round-17
     /// production/consumption -- the exact desync that undercounted her
-    /// food by 1 and made a legal `Pop` look illegal.
+    /// food by 1 and made a legal `Pop { full: None }` look illegal.
     #[test]
     fn catch_up_civil_age_call_site_gate_ignores_a_last_turn_line_but_still_advances_on_the_next_real_decision() {
         let card_index = build_card_index();
@@ -12604,11 +13672,11 @@ mod tests {
         assert_eq!(orange.last_event.map(|(kind, _)| kind), Some(LedgerEventKind::Draw));
     }
 
-    /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7522658`
-    /// line 289): a live Trade Routes Agreement grant lets a Pop be paid
+    /// REGRESSION (chasing the `IllegalMove: Pop { full: None }` bucket, game `7522658`
+    /// line 289): a live Trade Routes Agreement grant lets a Pop { full: None } be paid
     /// PART in converted resources, and BGO logs that as a SECOND `"spends
     /// M resource"` clause on the SAME line as the food clause -- an
-    /// earlier version of `spent_food`'s own doc comment claimed Pop "has
+    /// earlier version of `spent_food`'s own doc comment claimed Pop { full: None } "has
     /// no resource component" and was simply wrong, confirmed against
     /// thousands of real corpus lines with exactly this shape.
     /// `spent_resource_after_food` must read that second clause, not the
@@ -12618,7 +13686,7 @@ mod tests {
     fn spent_resource_after_food_reads_the_second_clause_not_the_first() {
         assert_eq!(spent_resource_after_food("Purple increases population Purple spends 2 food; Purple spends 1 resource"), 1);
         assert_eq!(spent_resource_after_food("Green increases population Green spends 3 food; Green spends 1 resource"), 1);
-        // An ordinary Pop with no conversion -- only one "spends" clause.
+        // An ordinary Pop { full: None } with no conversion -- only one "spends" clause.
         assert_eq!(spent_resource_after_food("Grey increases population Grey spends 3 food"), 0);
         // A line with no "spends" clause at all.
         assert_eq!(spent_resource_after_food("Orange passes Political Phase"), 0);
@@ -13121,11 +14189,11 @@ mod tests {
 
 
     /// REGRESSION (found by replaying the real BGO corpus at scale, game
-    /// `7522949`): `civil_life_move` used to return `Some(Move::Pop)`
+    /// `7522949`): `civil_life_move` used to return `Some(Move::Pop { full: None })`
     /// whenever `one_time_discount.pop_food != 0`, with no food check at
     /// all -- and its caller applies the result via
     /// `apply::apply_free_civil_move` directly, bypassing
-    /// `Replayer::try_apply`'s own `legal_moves` gate. An unaffordable Pop
+    /// `Replayer::try_apply`'s own `legal_moves` gate. An unaffordable Pop { full: None }
     /// reached `apply::h_pop`'s internal `debug_assert!` with no prior
     /// legality check, hard-panicking the whole process (and losing every
     /// OTHER game's data in the same batch run) instead of producing an
@@ -13146,7 +14214,7 @@ mod tests {
         let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
         r.state.players[0].one_time_discount.pop_food = 1;
         r.state.players[0].food = 20; // plenty
-        assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop));
+        assert_eq!(civil_life_move(&r, 0, ActionClass::IncreasePopulation, None), Some(Move::Pop { full: None }));
     }
 
     /// ENGINE BUG FIX (`IllegalMove: Take` bucket, game `7523341` round 14):
@@ -13154,14 +14222,14 @@ mod tests {
     /// Ocean Liners population increase still available this turn, BGO's
     /// own line says exactly which one the human used --
     /// `"<Color> increases population Ocean Liner Service used"` -- but
-    /// `apply_one`'s `IncreasePopulation` arm used to try `Move::Pop` first
+    /// `apply_one`'s `IncreasePopulation` arm used to try `Move::Pop { full: None }` first
     /// whenever it happened to be legal, silently spending a civil action
     /// the real player never spent. That phantom charge starved a LATER
     /// `Take` on the same turn, several lines downstream, of the 1 civil
     /// action it actually still had. This is `apply_one`'s real dispatch
     /// path (not `civil_life_move`'s ordered-action bypass above), so the
     /// test goes through `apply_one` directly with a `Replayer` set up so
-    /// BOTH `Move::Pop` and `Move::PopFree` are legal at once -- the exact
+    /// BOTH `Move::Pop { full: None }` and `Move::PopFree` are legal at once -- the exact
     /// ambiguity the old "whichever is legal" logic got wrong.
     #[test]
     fn a_pop_line_naming_ocean_liner_service_used_takes_the_free_move_even_when_a_paid_pop_is_also_legal() {
@@ -13170,7 +14238,7 @@ mod tests {
         r.state.round = 5;
         r.state.phase = Phase::Actions;
         r.state.current = 0;
-        r.state.players[0].civil_actions = 4; // Move::Pop would also be legal
+        r.state.players[0].civil_actions = 4; // Move::Pop { full: None } would also be legal
         r.state.players[0].food = 20; // plenty, for either move
         r.state.players[0].yellow_bank = 1; // pop_cost needs a nonzero bank
         r.state.players[0].completed_wonders.push(card("Ocean Liners")); // grants free_pop_per_turn
@@ -13187,6 +14255,72 @@ mod tests {
         assert!(out.is_ok(), "{out:?}");
         assert_eq!(r.state.players[0].civil_actions, 4, "the free Ocean Liners move must not spend a civil action");
         assert!(r.state.players[0].ocean_liners_used, "PopFree, not Pop, must be the move actually applied");
+    }
+
+    /// BGO logs a Civil Life DISCOUNTED population increase at the
+    /// post-discount price ("... spends 2 food" where the base price is 3),
+    /// which the engine's `pop_cost` does NOT see -- `pop_food_cost` folds
+    /// the live `pop_food` grant in, so the computed cost is 2 and the
+    /// plain `Pop { full: None }` is legal and consumes exactly 2, leaving the player's
+    /// food one short of the journal's own running total. The
+    /// reconciliation (game `7522663` round 7, line 98: the journal's
+    /// round-6 EndTurn totals only close at the discounted price) pre-converts
+    /// the gap via `Move::TradeResourceAsFood` -- funded by the player's own
+    /// resources, gated on a live Trade Routes Agreement side-B grant
+    /// (without one the conversion is illegal and the mismatch stays
+    /// honest) -- and then applies the increase at the FULL price via the
+    /// `Pop { full: Some(_) }` override, so the player's food matches the
+    /// journal's arithmetic instead of drifting by the grant forever.
+    #[test]
+    fn a_pop_line_at_the_civil_life_discounted_price_converts_the_gap_from_resources() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.round = 7;
+        r.state.phase = Phase::Actions;
+        r.state.current = 0;
+        // `new_game` opens the Age-A action phase with a Politics pending
+        // decision, and `apply::apply` routes EVERY non-Bid move into
+        // `interact::apply_pending` while one is open -- the journal's Pop { full: None }
+        // would die there long before this arm. The journal line being
+        // replayed is an action-phase line, so the phase is already over:
+        // clear the stack AND the deferred queue that opened it (a leftover
+        // `Politics` item would otherwise re-open the phase from
+        // `run_queue`'s tail drain on the very first applied move).
+        r.state.pending = crate::state::PendingStack::default();
+        r.state.queue = crate::state::Queue::default();
+        let p = &mut r.state.players[0];
+        p.civil_actions = 4;
+        p.yellow_bank = 14; // base pop price 3
+        p.one_time_discount.pop_food = 1; // Civil Life grant live: computed cost 2
+        p.blue_total = 10; // room for the converted food token's bank entry
+        p.food = 2; // covers the discounted price, NOT the full 3
+        p.resources = 3; // funds the 1-resource pre-conversion
+        // A live Trade Routes Agreement held with 0 as side B (a=1, b=0):
+        // side B's grant is "1 resource as 1 food", the conversion's legal
+        // basis (`economy::trade_resource_as_food_remaining` reads it off
+        // the pact's own block).
+        r.state.players[0].pacts.push(crate::state::Pact {
+            card: card("Trade Routes Agreement"),
+            owner: 1,
+            partner: 0,
+            a: 1,
+            b: 0,
+        });
+        let out = apply_one(
+            &mut r,
+            0,
+            ActionClass::IncreasePopulation,
+            None,
+            "increases population",
+            "Purple increases population Purple spends 2 food",
+            None,
+        );
+        assert!(out.is_ok(), "{out:?}");
+        let q = &r.state.players[0];
+        assert_eq!(q.food, 0, "food 2 + 1 converted − 3 full price = 0 (net −2, matching the journal)");
+        assert_eq!(q.resources, 2, "the 1-resource gap was converted, not ignored");
+        assert_eq!(q.one_time_discount.pop_food, 0, "the grant is consumed by the increase");
+        assert_eq!(q.civil_actions, 4, "the Civil Life grant makes the increase CA-free (civil_life_ca_free)");
     }
 
     /// `is_pure_confirmation_line`'s membership is what routes `PlayEvent`,
@@ -13963,7 +15097,7 @@ mod tests {
     /// drain logic a second time -- the real production arm is what gets
     /// exercised, not a hand-written stand-in for it.
     ///
-    /// REGRESSION (chasing the `IllegalMove: Pop` bucket, game `7523357`):
+    /// REGRESSION (chasing the `IllegalMove: Pop { full: None }` bucket, game `7523357`):
     /// Foray's `Special::StrongestPlayers` + `Gain(food_and_or_resources:
     /// 3)` grant used to resolve through the old fixed "resources first"
     /// formula -- but the real BGO line for this exact game reads `"Grey
@@ -14036,7 +15170,7 @@ mod tests {
         assert!(r.spends_grants[&1].is_empty(), "the journal-observed split is consumed, not left for a later event");
     }
 
-    /// REGRESSION (chasing the `IllegalMove: Pop` bucket's residual
+    /// REGRESSION (chasing the `IllegalMove: Pop { full: None }` bucket's residual
     /// food-short signature after the age-advance fix, game `7523052` round
     /// 9): `prescan_produces_grants` queues EVERY standalone `"<Color>
     /// produces N food[; ...]"` line in the whole journal, not just the ones
@@ -14296,7 +15430,7 @@ mod tests {
         ));
     }
 
-    /// REPLAYER BUG (found chasing the `IllegalMove: Pop` bucket, game
+    /// REPLAYER BUG (found chasing the `IllegalMove: Pop { full: None }` bucket, game
     /// `7522619`): a forced "lose 1 population" with no free worker to
     /// absorb it (`interact::run_item`'s `QueueItem::LosePop` arm) opens a
     /// `ChoiceKind::LosePop` pending BGO resolves with the exact same
@@ -15157,7 +16291,7 @@ mod tests {
         );
     }
 
-    /// REPLAYER BUG (found chasing the `IllegalMove: Pop` bucket): a
+    /// REPLAYER BUG (found chasing the `IllegalMove: Pop { full: None }` bucket): a
     /// territory named in a `"Christopher Columbus discovers <Age> /
     /// <Territory>"` line is routinely the FIRST evidence of that specific
     /// card at all -- territories arrive via the automatic end-of-turn
@@ -15777,12 +16911,12 @@ mod tests {
     /// IncreasePopulation` arm already makes (its own doc comment, a few
     /// hundred lines above) for THIS "plays Frugality" line. A live Trade
     /// Routes Agreement side-B grant (§5.9, "Civilization B can use 1
-    /// resource as 1 food during its turn") lets Frugality's ordered Pop be
+    /// resource as 1 food during its turn") lets Frugality's ordered Pop { full: None } be
     /// paid PART in converted resources, and BGO glues that as a second
     /// "<Color> spends M resource" clause onto the SAME line, with no
     /// preceding `Move::TradeResourceAsFood` anywhere in the journal.
     /// Before this fix this arm never tried the conversion at all: with
-    /// `p.food` short of `pop_cost` by exactly the pact's grant, `Move::Pop`
+    /// `p.food` short of `pop_cost` by exactly the pact's grant, `Move::Pop { full: None }`
     /// was never in `free_action_moves`, `legal::action_card_playable` read
     /// false, and `Move::PlayAction { card: Frugality }` was never even
     /// offered as legal -- an `IllegalMove: PlayAction` for a line the human
@@ -16450,7 +17584,7 @@ mod tests {
             "the engine, untouched, must still call this illegal"
         );
 
-        r.try_apply_take(0, 0).expect("the replayer-only divergence accepts it");
+        r.try_apply_take(0, 0, None).expect("the replayer-only divergence accepts it");
 
         assert_eq!(r.hand_full_takes_overridden, 1, "reported, not swallowed");
         assert!(

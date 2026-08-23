@@ -522,7 +522,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // pre-move info needed for classification
         let taken_card = match mv {
             Move::Take { slot } => Some(state.card_row[slot as usize]),
-            Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+            Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
         };
         // Cost must be read PRE-move (`tta::costs::take_cost` reads the
         // row/player state a `Move::Take` is about to consume) -- same
@@ -530,7 +530,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // applying the human's move, not after.
         let taken_card_cost = match mv {
             Move::Take { slot } => Some(tta::costs::take_cost(&state, &state.players[actor as usize], slot as usize)),
-            Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+            Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
         };
         let ca_before_move = state.players[actor as usize].civil_actions;
         let pre_govt = state.players[actor as usize].government;
@@ -579,7 +579,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 tracks[actor as usize].first_take = Some(card);
             }
         }
-        if let Move::Develop { card } = mv {
+        if let Move::Develop { card, .. } = mv {
             if tracks[actor as usize].first_develop.is_none() {
                 tracks[actor as usize].first_develop = Some((card, round_before));
             }
@@ -617,7 +617,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 }
             }
             match mv {
-                Move::Build { card } | Move::Develop { card } => {
+                Move::Build { card } | Move::Develop { card, .. } => {
                     if t.first_build.is_none() {
                         t.first_build = Some((opening_build_kind(card.get().kind), card.get().name));
                     }
@@ -628,7 +628,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                     }
                 }
                 Move::PlayLeader { .. } => t.took_leader_r3 = true,
-                Move::Pop | Move::PopFree => t.increased_pop_r3 = true,
+                Move::Pop { .. } | Move::PopFree => t.increased_pop_r3 = true,
                 Move::EndTurn => {
                     if ca_before_move > 0 {
                         t.ca_unused_r3 += ca_before_move as i32;

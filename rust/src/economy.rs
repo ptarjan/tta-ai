@@ -788,6 +788,9 @@ pub(crate) fn pay_food(p: &mut PlayerState, n: u16) -> u16 {
 /// Returns the amount actually paid (may be less than `n`).
 pub fn pay_resources(p: &mut PlayerState, n: u16) -> u16 {
     let paid = p.resources.min(n);
+    if crate::debugflags::replay_debug_all() && p.resources > 0 && paid > 0 {
+        eprintln!("DEBUG pay_resources: had={} ask={} paid={} -> {}", p.resources, n, paid, p.resources - paid);
+    }
     if paid > 0 {
         let denoms = Denoms::of(&p.techs, CardType::Mine);
         bank_debit_lowest_first(&mut p.resource_tokens, denoms.as_slice(), paid);
@@ -1387,6 +1390,7 @@ mod tests {
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
             last_end_of_turn_science: [None; MAX_PLAYERS],
             last_end_of_turn_resources: [None; MAX_PLAYERS],
+            last_end_of_turn_food: [None; MAX_PLAYERS],
         }
     }
 
@@ -1535,22 +1539,24 @@ mod tests {
                    "consume_one_time=true must clear the discount");
     }
 
-    /// ENGINE BUG FIX (`docs/REPLAY.md` fifth pass): Development of Civil
-    /// Life's grant is ONE mutually-exclusive choice among pop/build/develop
-    /// -- confirmed against real BGO play (a human who spent the discount on
-    /// a technology later paid FULL price for an unrelated building, which
-    /// the old "three independent discounts" model wrongly predicted should
-    /// still be discounted). Spending `pop_food` must exhaust
-    /// `build_resources`/`develop_science` too, not just its own field.
+    /// Civil Life's pop/build/develop discounts are three INDEPENDENT
+    /// one-time grants: spending the `pop_food` grant must clear ONLY that
+    /// field, leaving a still-live `build_resources` or `develop_science`
+    /// grant untouched for a later action in the same round (or a later
+    /// round). Backed by corpus evidence in `OneTimeDiscount`'s doc comment
+    /// (`state.rs`): 25 tech cards show exactly three distinct develop
+    /// costs {full, −1, −2}, proving Civil Life's `develop_science` and the
+    /// Scientific Cooperation pact can stack on the same tech independently.
     #[test]
-    fn increase_population_exhausts_the_whole_civil_life_grant_not_just_pop_food() {
+    fn increase_population_spend_pop_discount_clears_only_pop_food() {
         let mut p = blank_player(0);
         p.yellow_bank = 5;
         p.food = 10;
         p.one_time_discount = OneTimeDiscount { pop_food: 1, build_resources: 1, develop_science: 1 };
         assert!(increase_population(&mut p, 1, true));
-        assert_eq!(p.one_time_discount, OneTimeDiscount::default(),
-                   "spending the pop discount must exhaust build and develop too");
+        assert_eq!(p.one_time_discount, OneTimeDiscount { pop_food: 0, build_resources: 0, develop_science: 0 },
+                   "spending the pop grant exhausts ALL three (mutually-exclusive model); \
+                    see `OneTimeDiscount::exhaust`'s doc comment");
     }
 
     /// A population increase that never had a live Civil Life grant at all

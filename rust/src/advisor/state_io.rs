@@ -860,6 +860,7 @@ fn blank_state(n: u8, seed: u64) -> GameState {
         last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
         last_end_of_turn_science: [None; MAX_PLAYERS],
         last_end_of_turn_resources: [None; MAX_PLAYERS],
+        last_end_of_turn_food: [None; MAX_PLAYERS],
     }
 }
 

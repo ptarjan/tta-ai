@@ -145,7 +145,7 @@ pub fn apply_pending(state: &mut GameState, mv: Move) {
         Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone => {
             colonize_move(state, mv)
         }
-        other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} is not a response to an open decision"),
+        other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop { .. } | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} is not a response to an open decision"),
     }
     run_queue(state);
 }
@@ -944,7 +944,7 @@ fn food_or_res_gain_options(total: i16) -> OptionList {
 /// MUST have already debited each card taken this session (the Choose
 /// handler below does `budget - cost`); this function only ever re-offers
 /// the choice, it never consumes budget itself.
-fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
+pub fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
     let mut opts = OptionList::new();
     for slot in 0..ROW_SIZE {
         if state.card_row[slot].is_none() {
@@ -959,22 +959,30 @@ fn offer_take_row(state: &mut GameState, p: u8, budget: i16) {
         }
     }
     if opts.is_empty() {
-        // No slot the player may still take (budget exhausted, hand full,
-        // or nothing affordable): close the session and replenish the row
-        // (`finish_take_row`'s own doc). This is the ONLY place a
-        // re-offer with a debited budget can land -- the initial
+        // No slot passes BOTH the budget filter AND `costs::can_take` (budget
+        // exhausted, hand full, or nothing affordable). Offer ONLY the `Stop`
+        // keyword so the player's own choice (decline) is still a real,
+        // explicit decision the decider can make -- the journal is the
+        // replayer's only source for that stop, and forcing a silent
+        // `finish_take_row` here would swallow it. This is also the only
+        // place a re-offer with a debited budget can land; the initial
         // `budget = N` (International Agreement's card text) always has at
-        // least one affordable slot, or the event itself would have been a
-        // no-op.
-        finish_take_row(state);
+        // least one affordable slot in a well-formed game, so the all-Stop
+        // branch is a genuine decline path, not a no-op shortcut.
+        opts.push(ChoiceOption::Word(Keyword::Stop));
+        push_choice(state, p, ChoiceKind::TakeRow { budget }, opts, false);
         return;
     }
+    // The `Stop` keyword is a real choice the player can make (BGO logs a
+    // player who takes some cards and then stops, and the journal is the
+    // replayer's only source for that stop). It is always offered alongside
+    // the affordable slots so the decider can decline the session.
     opts.push(ChoiceOption::Word(Keyword::Stop));
     push_choice(state, p, ChoiceKind::TakeRow { budget }, opts, false);
 }
 
 /// CoL p.12: replenish afterwards WITHOUT discarding the first slots.
-fn finish_take_row(state: &mut GameState) {
+pub fn finish_take_row(state: &mut GameState) {
     // The compaction is portable and is done first, exactly as Python does:
     // surviving cards slide left, the tail becomes empty slots.
     let mut kept = [CardId::NONE; ROW_SIZE];
@@ -1504,7 +1512,7 @@ fn auction_move(state: &mut GameState, mv: Move) {
                 a.pos = 0;
             }
         }
-        other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} against an auction decision"),
+        other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop { .. } | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::SendUnit { .. } | other @ Move::SendBonus { .. } | other @ Move::SendDiscard { .. } | other @ Move::SendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} against an auction decision"),
     }
     // Read the settled auction back out before mutating the rest of `state`.
     let (empty, sole_winner, card, bid) = {
@@ -1680,7 +1688,7 @@ fn colonize_step(state: &mut GameState, mv: Move) {
                 return;
             }
             Move::SendDone => (c.player, c.card),
-            other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} against a colonize decision"),
+            other @ Move::Take { .. } | other @ Move::Build { .. } | other @ Move::Develop { .. } | other @ Move::Upgrade { .. } | other @ Move::WonderStep { .. } | other @ Move::Pop { .. } | other @ Move::PopFree | other @ Move::Revolution { .. } | other @ Move::PlayLeader { .. } | other @ Move::PlayAction { .. } | other @ Move::Destroy { .. } | other @ Move::PlayTactic { .. } | other @ Move::CopyTactic { .. } | other @ Move::Aggression { .. } | other @ Move::War { .. } | other @ Move::OfferPact { .. } | other @ Move::CancelPact { .. } | other @ Move::PrepareEvent { .. } | other @ Move::RemoveLeaderYellow | other @ Move::ColumbusColonize { .. } | other @ Move::Barbarossa { .. } | other @ Move::BachTheater { .. } | other @ Move::TradeFoodAsResource | other @ Move::TradeResourceAsFood | other @ Move::Bid { .. } | other @ Move::BidPass | other @ Move::Defend { .. } | other @ Move::DefendDone | other @ Move::Choose { .. } | other @ Move::Churchill { .. } | other @ Move::EndTurn | other @ Move::PolPass | other @ Move::Resign => panic!("{other:?} against a colonize decision"),
         }
     };
     state.pending.pop();
@@ -1781,9 +1789,10 @@ fn defense_move(state: &mut GameState, mv: Move) {
             d.dfn += defense_points(card);
             d.spent += 1;
             let (spent, budget) = (d.spent, d.budget);
-            state.players[player as usize].hand_military.remove_first(card);
-            economy::discard_military(state, card);
-            // More to spend and more to spend it on: the decision stays open.
+            let had_card = state.players[player as usize].hand_military.remove_first(card);
+            if had_card {
+                economy::discard_military(state, card);
+            }
             if spent < budget && !state.players[player as usize].hand_military.is_empty() {
                 return;
             }
@@ -1907,6 +1916,7 @@ mod tests {
             last_end_of_turn_culture: [None; crate::state::MAX_PLAYERS],
             last_end_of_turn_science: [None; MAX_PLAYERS],
             last_end_of_turn_resources: [None; MAX_PLAYERS],
+            last_end_of_turn_food: [None; MAX_PLAYERS],
         }
     }
 
@@ -2913,10 +2923,19 @@ mod tests {
             state.players[0].hand_civil.push(card(name));
         }
         offer_take_row(&mut state, 0, 10);
+        // The engine's POSITION on the §2.5 hand limit is unchanged by this
+        // fix: NO card slot is offered to a full hand. What changed is what
+        // the player is left WITH when nothing is offered -- an explicit
+        // `Stop`-only decision (the journal is the replayer's only source
+        // for a decline, so a silent `finish_take_row` here would swallow
+        // it), not a silently-finished session.
+        let Some(Pending::Choice(c)) = state.pending.top().cloned() else {
+            panic!("a full civil hand must leave International Agreement with a Stop-only decision, got {:?}", state.pending);
+        };
         assert!(
-            state.pending.is_empty(),
-            "a full civil hand must leave International Agreement with nothing to offer, got {:?}",
-            state.pending,
+            c.options.as_slice().iter().all(|o| matches!(o, ChoiceOption::Word(Keyword::Stop))),
+            "a full civil hand must offer NO card slot, only Stop, got {:?}",
+            c.options.as_slice(),
         );
     }
 }

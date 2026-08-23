@@ -107,7 +107,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                         }
                     }
                 }
-                Move::Build { card } | Move::Develop { card } => {
+                Move::Build { card } | Move::Develop { card, .. } => {
                     if first_build[seat].is_none() {
                         first_build[seat] = Some((build_kind(card.get().kind), card.get().name));
                     }
@@ -120,7 +120,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                 Move::PlayLeader { .. } => {
                     took_leader[seat] = true;
                 }
-                Move::Pop | Move::PopFree => {
+                Move::Pop { .. } | Move::PopFree => {
                     increased_pop[seat] = true;
                 }
                 Move::EndTurn => {

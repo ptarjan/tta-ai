@@ -52,6 +52,9 @@ fn main() {
                 | MismatchKind::StuckPending(s)
                 | MismatchKind::ParserGap(s)
                 | MismatchKind::EventPlanInfeasible(s) => println!("{:?}: {s}", m.kind),
+                MismatchKind::WonderStepBatchFallsBack { attempted, applied } => {
+                    println!("WONDERSTEP BATCH FALLBACK: attempted={attempted} applied={applied}");
+                }
             }
         }
         None => println!("no mismatch; completed={}", res.completed),
