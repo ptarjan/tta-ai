@@ -489,11 +489,23 @@ struct TakenCard {
     /// auction was there to be won, whether or not the bot won it.
     playable_turns: u32,
     /// Count of this player's own decision points, since this card was
-    /// taken, at which this card was NOT legal and NO civil card in hand
-    /// was legal either -- the civilization was too poor to develop
-    /// anything at all, so the miss cannot be blamed on this card losing
-    /// a competition it never had.
-    blocked_nothing_developable: u32,
+    /// taken, at which NO civil card in hand was legal and the player had
+    /// NO civil action left to spend -- the hand may well have been
+    /// affordable, there was simply nothing left to pay the action with.
+    /// This is an action-budget miss, not a production shortfall, and the
+    /// two have opposite fixes.
+    ///
+    /// Slight OVER-count: Hammurabi can convert a military action into a
+    /// civil one at `civil_actions == 0`
+    /// (`costs::hammurabi_conversion_available`), which is `pub(crate)` and
+    /// so unreachable from a bin target. One leader, so the leak is small.
+    blocked_no_civil_action: u32,
+    /// Count of this player's own decision points, since this card was
+    /// taken, at which NO civil card in hand was legal even though the
+    /// player still had a civil action to spend -- a true production
+    /// shortfall: the action was there and nothing in hand could be paid
+    /// for.
+    blocked_nothing_affordable: u32,
     /// Count of this player's own decision points, since this card was
     /// taken, at which this card was NOT legal even though some OTHER
     /// civil card in hand WAS -- a card-selection defect: this specific
@@ -750,18 +762,19 @@ struct Report {
     /// legal, until it was culled or the game ended.
     playable_turns_never_played_early: Vec<u32>,
     playable_turns_never_played_late: Vec<u32>,
-    /// One `(blocked_nothing_developable, blocked_something_else_
+    /// One `(blocked_no_civil_action, blocked_nothing_affordable,
+    /// blocked_something_else_
     /// developable)` pair per PLAYED card -- the control population for the
     /// poverty/selection-loss follow-up (see `TakenCard`'s own doc
     /// comments for what each half of the pair counts).
-    blocked_played_early: Vec<(u32, u32)>,
-    blocked_played_late: Vec<(u32, u32)>,
+    blocked_played_early: Vec<(u32, u32, u32)>,
+    blocked_played_late: Vec<(u32, u32, u32)>,
     /// The same pair, restricted to NEVER-played cards that also scored
     /// zero `playable_turns` -- the population the poverty/selection-loss
     /// question is actually about: a card that was legal at least once
     /// already has its story told by `playable_turns_never_played_*`.
-    blocked_never_played_zero_early: Vec<(u32, u32)>,
-    blocked_never_played_zero_late: Vec<(u32, u32)>,
+    blocked_never_played_zero_early: Vec<(u32, u32, u32)>,
+    blocked_never_played_zero_late: Vec<(u32, u32, u32)>,
 }
 
 impl Report {
@@ -940,17 +953,18 @@ struct PlayerTrack {
     /// never_played_*` at game end, matching how `censored_dwell` already
     /// blends antiquated + still-in-hand into one "never played" population.
     playable_turns_antiquated: Vec<u32>,
-    /// One `(blocked_nothing_developable, blocked_something_else_
+    /// One `(blocked_no_civil_action, blocked_nothing_affordable,
+    /// blocked_something_else_
     /// developable)` pair per PLAYED card, pushed at the same call site as
     /// `playable_turns_played` -- the control population for the poverty/
     /// selection-loss follow-up below.
-    blocked_played: Vec<(u32, u32)>,
+    blocked_played: Vec<(u32, u32, u32)>,
     /// The same pair, for cards resolved ANTIQUATED with zero playable-
     /// turns -- blended with the still-in-hand-at-game-end half (also
     /// filtered to zero playable-turns) into `Report::blocked_never_
     /// played_zero_*` at game end, matching how `playable_turns_antiquated`
     /// already blends into `playable_turns_never_played_*`.
-    blocked_zero_antiquated: Vec<(u32, u32)>,
+    blocked_zero_antiquated: Vec<(u32, u32, u32)>,
 }
 
 impl PlayerTrack {
@@ -1182,6 +1196,12 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             // "something else in hand WAS legal" (this card specifically
             // lost the auction).
             let any_civil_playable = !playable_cards.is_empty();
+            // ... and when nothing was legal, WHY: no action left to spend,
+            // or an action in hand that nothing could be paid for. Both look
+            // identical in `legal_moves` (a Develop the player cannot pay
+            // the CA for is simply absent) and they have opposite fixes, so
+            // the budget has to be read off the player directly.
+            let has_civil_action = state.players[actor as usize].civil_actions > 0;
             let hand_now = state.players[actor as usize].hand_civil.as_slice();
             let mut credited: Vec<CardId> = Vec::new();
             for &card in hand_now {
@@ -1195,8 +1215,10 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                             entry.playable_turns += 1;
                         } else if any_civil_playable {
                             entry.blocked_something_else_developable += 1;
+                        } else if has_civil_action {
+                            entry.blocked_nothing_affordable += 1;
                         } else {
-                            entry.blocked_nothing_developable += 1;
+                            entry.blocked_no_civil_action += 1;
                         }
                     }
                 }
@@ -1238,7 +1260,8 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                     .push_back(TakenCard {
                         taken_round: round_before,
                         playable_turns: 0,
-                        blocked_nothing_developable: 0,
+                        blocked_no_civil_action: 0,
+                        blocked_nothing_affordable: 0,
                         blocked_something_else_developable: 0,
                     });
                 tracks[actor as usize].n_taken += 1;
@@ -1252,11 +1275,11 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         if let Some(card) = played_this_move {
             let t = &mut tracks[actor as usize];
             match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
-                Some(TakenCard { taken_round, playable_turns, blocked_nothing_developable, blocked_something_else_developable }) => {
+                Some(TakenCard { taken_round, playable_turns, blocked_no_civil_action, blocked_nothing_affordable, blocked_something_else_developable }) => {
                     t.n_played += 1;
                     t.played_dwell.push(round_before as i32 - taken_round as i32);
                     t.playable_turns_played.push(playable_turns);
-                    t.blocked_played.push((blocked_nothing_developable, blocked_something_else_developable));
+                    t.blocked_played.push((blocked_no_civil_action, blocked_nothing_affordable, blocked_something_else_developable));
                 }
                 None => t.n_card_fate_mismatch += 1,
             }
@@ -1287,7 +1310,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 let t = &mut tracks[i as usize];
                 for card in removed {
                     match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
-                        Some(TakenCard { taken_round, playable_turns, blocked_nothing_developable, blocked_something_else_developable }) => {
+                        Some(TakenCard { taken_round, playable_turns, blocked_no_civil_action, blocked_nothing_affordable, blocked_something_else_developable }) => {
                             t.n_antiquated += 1;
                             t.censored_dwell.push(round_before as i32 - taken_round as i32);
                             t.playable_turns_antiquated.push(playable_turns);
@@ -1297,7 +1320,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                             // has its story told by playable_turns itself.
                             if playable_turns == 0 {
                                 t.blocked_zero_antiquated
-                                    .push((blocked_nothing_developable, blocked_something_else_developable));
+                                    .push((blocked_no_civil_action, blocked_nothing_affordable, blocked_something_else_developable));
                             }
                         }
                         None => t.n_card_fate_mismatch += 1,
@@ -1577,7 +1600,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             // recorded at its own pop site, StillInHand half appended here,
             // both restricted to zero-playable-turns entries only (see the
             // `if playable_turns == 0` guard at the ANTIQUATED pop site).
-            let mut blocked_never_played_zero_this_game: Vec<(u32, u32)> =
+            let mut blocked_never_played_zero_this_game: Vec<(u32, u32, u32)> =
                 tracks[i as usize].blocked_zero_antiquated.clone();
             for queue in tracks[i as usize].taken_rounds.values() {
                 for entry in queue {
@@ -1586,7 +1609,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                     playable_turns_never_played_this_game.push(entry.playable_turns);
                     if entry.playable_turns == 0 {
                         blocked_never_played_zero_this_game
-                            .push((entry.blocked_nothing_developable, entry.blocked_something_else_developable));
+                            .push((entry.blocked_no_civil_action, entry.blocked_nothing_affordable, entry.blocked_something_else_developable));
                     }
                 }
             }
@@ -2151,55 +2174,64 @@ fn print_report(players: u8, r: &Report) {
     // zero-playable-turns card never legal -- was the whole hand too poor
     // to develop anything, or did some OTHER card in hand win every time?
     // Read off the SAME `legal_now` MoveList the playable-turns count
-    // above already computed (see `TakenCard::blocked_nothing_developable`
-    // / `blocked_something_else_developable`'s doc comments), never a
-    // second `legal::legal_moves` call.
-    println!("\n### Zero playable-turns follow-up: poverty, or a card-selection loss?\n");
+    // above already computed (see `TakenCard::blocked_no_civil_action`,
+    // `blocked_nothing_affordable` and `blocked_something_else_developable`'s
+    // doc comments), never a second `legal::legal_moves` call.
+    println!("\n### Zero playable-turns follow-up: why was it never legal?\n");
     println!(
         "For never-played cards that scored zero playable-turns, every one of their blocked decision points is \
-         attributed to one of two buckets: \"nothing developable\" (no civil card in this player's hand was \
-         legal to play at all right then) or \"something else developable\" (some OTHER civil card in hand WAS \
-         legal, so this specific card lost the competition). PLAYED cards are the control: the same two \
-         buckets, over however many blocked turns they sat through before finally winning one."
+         attributed to exactly one of three buckets: \"no civil action\" (nothing in hand was legal because the \
+         player had no action left to spend -- an action-budget miss, the hand may have been affordable), \
+         \"nothing affordable\" (an action WAS available and still nothing in hand could be paid for -- a true \
+         production shortfall), or \"something else developable\" (some OTHER civil card in hand WAS legal, so \
+         this specific card lost the competition). PLAYED cards are the control: the same three buckets, over \
+         however many blocked turns they sat through before finally winning one."
+    );
+    println!(
+        "The \"at least one turn\" shares below are counts of CARDS and inflate easily over a long dwell; the \
+         per-turn shares are the comparable quantity, because civil-action exhaustion hits both populations at \
+         the same rate and cancels out of a ratio."
     );
     for (label, played_v, never_zero_v) in [
         ("EARLY", &r.blocked_played_early, &r.blocked_never_played_zero_early),
         ("LATE", &r.blocked_played_late, &r.blocked_never_played_zero_late),
     ] {
-        let played_nothing: Vec<u32> = played_v.iter().map(|&(n, _)| n).collect();
-        let played_something: Vec<u32> = played_v.iter().map(|&(_, s)| s).collect();
-        let never_nothing: Vec<u32> = never_zero_v.iter().map(|&(n, _)| n).collect();
-        let never_something: Vec<u32> = never_zero_v.iter().map(|&(_, s)| s).collect();
         let n_never_zero = never_zero_v.len();
-        let n_pure_poverty = never_zero_v.iter().filter(|&&(_, s)| s == 0).count();
+        let n_pure_poverty = never_zero_v.iter().filter(|&&(_, _, s)| s == 0).count();
         let n_selection_loss = n_never_zero - n_pure_poverty;
-        let n_no_blocked_turns = never_zero_v.iter().filter(|&&(n, s)| n == 0 && s == 0).count();
+        let n_no_blocked_turns = never_zero_v.iter().filter(|&&(a, p, s)| a == 0 && p == 0 && s == 0).count();
         let pure_poverty_share = 100.0 * n_pure_poverty as f64 / (n_never_zero.max(1)) as f64;
         let selection_loss_share = 100.0 * n_selection_loss as f64 / (n_never_zero.max(1)) as f64;
         let no_blocked_share = 100.0 * n_no_blocked_turns as f64 / (n_never_zero.max(1)) as f64;
         println!("\n{label}:");
-        println!(
-            "  blocked turns \"nothing developable\",        PLAYED cards (control): {}",
-            percentiles_u32(played_nothing)
-        );
-        println!(
-            "  blocked turns \"something else developable\", PLAYED cards (control): {}",
-            percentiles_u32(played_something)
-        );
-        println!(
-            "  blocked turns \"nothing developable\",        NEVER-played zero-playable-turn cards: {}",
-            percentiles_u32(never_nothing)
-        );
-        println!(
-            "  blocked turns \"something else developable\", NEVER-played zero-playable-turn cards: {}",
-            percentiles_u32(never_something)
-        );
+        for (who, v) in [
+            ("PLAYED cards (control)          ", played_v),
+            ("NEVER-played zero-playable-turn ", never_zero_v),
+        ] {
+            let no_action: Vec<u32> = v.iter().map(|&(a, _, _)| a).collect();
+            let nothing_afford: Vec<u32> = v.iter().map(|&(_, p, _)| p).collect();
+            let something_else: Vec<u32> = v.iter().map(|&(_, _, s)| s).collect();
+            let sum_action: u64 = no_action.iter().map(|&x| u64::from(x)).sum();
+            let sum_afford: u64 = nothing_afford.iter().map(|&x| u64::from(x)).sum();
+            let sum_else: u64 = something_else.iter().map(|&x| u64::from(x)).sum();
+            let total = (sum_action + sum_afford + sum_else).max(1) as f64;
+            println!("  {who} blocked \"no civil action\":         {}", percentiles_u32(no_action));
+            println!("  {who} blocked \"nothing affordable\":      {}", percentiles_u32(nothing_afford));
+            println!("  {who} blocked \"something else developable\": {}", percentiles_u32(something_else));
+            println!(
+                "  {who} per-turn share of ALL its blocked decision points: no civil action {:.1}%, \
+                 nothing affordable {:.1}%, something else developable {:.1}%",
+                100.0 * sum_action as f64 / total,
+                100.0 * sum_afford as f64 / total,
+                100.0 * sum_else as f64 / total
+            );
+        }
         println!(
             "  of {n_never_zero} never-played zero-playable-turn cards: {n_pure_poverty} ({pure_poverty_share:.1}%) \
-             were blocked by poverty on EVERY turn (pure poverty -- nothing in hand was ever developable), \
-             {n_selection_loss} ({selection_loss_share:.1}%) had at least one turn where something ELSE in hand \
-             was developable (this card specifically lost the competition), and {n_no_blocked_turns} \
-             ({no_blocked_share:.1}%) sat through zero decision points of their own before resolving"
+             never once shared a decision point with a developable card, {n_selection_loss} \
+             ({selection_loss_share:.1}%) had at least one turn where something ELSE in hand was developable, \
+             and {n_no_blocked_turns} ({no_blocked_share:.1}%) sat through zero decision points of their own \
+             before resolving"
         );
     }
 }

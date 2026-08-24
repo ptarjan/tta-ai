@@ -1,5 +1,5 @@
-Card rot, cause split: poverty or a card-selection loss?
-========================================================
+Card rot, cause split: why was a wasted card never legal?
+=========================================================
 Date: 2026-08-24
 Tool: rust/src/bin/behavcensus.rs, "Zero playable-turns follow-up" section
 Run:  ./target/release/behavcensus --games 200 --players 3 \
@@ -9,89 +9,90 @@ WHAT THIS ANSWERS
 -----------------
 analysis/card_rot_3p_2026-08-24.txt (commit ff05c2d) found that 63.6% early /
 61.3% late of the civil cards the bot never plays were never LEGAL to play
-again after the take. That file closed by naming the next discriminator: at
-each decision point where this card was not legal, was ANY other civil card in
-hand legal?
+again after the take. This file asks why, and splits every blocked decision
+point into exactly one of three buckets, all attributed from the SAME
+legal::legal_moves result the playable-turns count already computes -- no
+second call, no re-derived affordability check:
 
-Two buckets, attributed from the SAME legal::legal_moves result the previous
-section already computes -- no second call, no re-derived affordability check:
-  "nothing developable"        -- no civil card in this player's hand was legal
-  "something else developable" -- some OTHER civil card in hand WAS legal
+  "no civil action"            -- nothing in hand was legal because the player
+                                  had no action left to spend. An action-budget
+                                  miss; the hand may have been perfectly
+                                  affordable.
+  "nothing affordable"         -- an action WAS available and still nothing in
+                                  hand could be paid for. A true production
+                                  shortfall.
+  "something else developable" -- some OTHER civil card in hand WAS legal, so
+                                  this specific card lost the competition. A
+                                  card-selection defect.
 
-PLAYED cards are the control: the same two buckets over the blocked turns they
-sat through before finally winning one.
+PLAYED cards are the control: the same three buckets over the blocked turns
+they sat through before finally winning one.
 
 RESULT
 ------
-EARLY (942 never-played zero-playable-turn cards, 1914 played controls):
-  nothing developable,        PLAYED:      median=5  mean=8.28
-  something else developable, PLAYED:      median=0  mean=1.23
-  nothing developable,        NEVER:       median=22 mean=22.99
-  something else developable, NEVER:       median=3  mean=4.97
-  231 (24.5%) blocked by poverty on EVERY turn; 711 (75.5%) had >=1 turn where
-  something else in hand was developable.
+Per-turn share of ALL blocked decision points:
 
-LATE (830 never-played zero-playable-turn cards, 1712 played controls):
-  nothing developable,        PLAYED:      median=5  mean=7.96
-  something else developable, PLAYED:      median=0  mean=1.21
-  nothing developable,        NEVER:       median=23 mean=23.96
-  something else developable, NEVER:       median=3  mean=5.10
-  190 (22.9%) blocked by poverty on EVERY turn; 640 (77.1%) had >=1 turn where
-  something else in hand was developable.
+                       no civil action   nothing affordable   something else
+  EARLY, PLAYED              32.6%              54.4%             13.0%
+  EARLY, NEVER-played        16.6%              65.6%             17.8%
+  LATE,  PLAYED              33.4%              53.4%             13.2%
+  LATE,  NEVER-played        16.6%              65.8%             17.6%
 
-THE ANSWER IS ECONOMY-SIDE, NOT CARD-SELECTION-SIDE
----------------------------------------------------
-Do NOT read the 75.5% / 77.1% as the headline. It is an "at least one"
-statistic over a population that sits through ~28 blocked decision points; a
-card that is the odd-one-out even once lands in it. The comparable quantity is
-the per-turn share of blocked turns at which another card WAS developable:
+Absolute means, blocked decision points per card:
 
-                       EARLY            LATE
-  PLAYED (control)     12.9%            13.2%
-  NEVER-played zero    17.8%            17.6%
+                       no civil action   nothing affordable   something else
+  EARLY, PLAYED               3.11               5.17              1.23
+  EARLY, NEVER-played         4.63              18.35              4.97
+  LATE,  PLAYED               3.07               4.89              1.21
+  LATE,  NEVER-played         4.82              19.14              5.10
 
-A never-played card is the odd-one-out on 17.8% of its blocked turns against
-12.9% for a card that eventually got played. That enrichment is real but it is
-1.4x, not the 6x the "at least one" framing suggests.
+THE ANSWER: A PRODUCTION SHORTFALL
+----------------------------------
+Two thirds of a wasted card's blocked decision points are turns at which the
+player HAD a civil action to spend and could not afford a single card in hand.
+The median wasted card sits through 17 early / 18 late such decision points.
+The played control sits through 3, and 5.17 on the mean against 18.35 -- a
+3.5x gap on the one bucket that means "too poor", against a 1.4x gap on the
+one that means "wrong card".
 
-What actually separates the two populations is DURATION in a hand that can
-build nothing at all:
-  blocked decision points, total   PLAYED 9.5   NEVER-played zero 28.0  (early)
-                                   PLAYED 9.2   NEVER-played zero 29.1  (late)
+The defect is the civilization's production, not the take gate's choice of
+card and not the action budget.
 
-Roughly 82% of a wasted card's blocked decision points are turns at which NO
-civil card in the hand was legal. The bot is not mainly taking the wrong card
-out of an affordable field. It is spending the large majority of its decision
-points unable to build ANYTHING it owns. One in four wasted cards (24.5% /
-22.9%) never once shared a decision point with a developable card.
+THE CIVIL-ACTION CONFOUND IS DEAD
+---------------------------------
+The previous version of this file could not separate "too poor" from "out of
+actions", and flagged the poverty count as an upper bound. It is now measured
+and the confound is small and points the WRONG way: only 16.6% of a wasted
+card's blocked turns are action exhaustion, against 32.6% for a played card.
+Played cards resolve fast, so their blocked turns concentrate in busy,
+action-starved turns; wasted cards accumulate long stretches of plain poverty.
+Removing the exhaustion bucket entirely makes the poverty gap wider, not
+narrower.
 
-This is consistent with the human mirror in
+DO NOT LEAD WITH THE "AT LEAST ONE TURN" SHARE
+----------------------------------------------
+The report also prints that 75.5% early / 77.1% late of wasted cards had at
+least one turn where something else in hand was developable. That is a count
+of CARDS over a population that sits through ~28 blocked decision points, so
+nearly anything lands in it. The per-turn share above is the comparable
+quantity: 17.8% against 13.0%. Real, but secondary.
+
+CONSISTENT WITH THE HUMAN MIRROR
+--------------------------------
 analysis/card_fate_human_2026-08-24.txt: humans take 26.92 civil cards per
-player-game and play 78.3% of them; the bot takes 17.49 and plays 61.0%.
-Humans take MORE and cash a HIGHER fraction. A bot that takes fewer cards and
-still cannot afford them does not have a selection problem at the take gate --
-it has less civilization behind the take.
+player-game at 3p and play 78.3%; the bot takes 17.49 and plays 61.0%. A bot
+that takes FEWER cards and still cannot afford them does not have a selection
+problem at the take gate -- it has less civilization behind the take.
 
-THE CONFOUND, AND WHY THE RATIO IS THE TRUSTWORTHY NUMBER
----------------------------------------------------------
-"Nothing developable" absorbs every decision point at which the player has no
-civil actions left, because no Develop is legal then for any card. That
-inflates the poverty bucket. It inflates it in BOTH populations at the same
-per-turn rate, which is why the 17.8%-vs-12.9% comparison survives it and the
-absolute "22.99 poverty turns" figure must be read as an UPPER BOUND on
-resource poverty.
+WHAT THIS STILL DOES NOT SAY
+----------------------------
+"Nothing affordable" is a state, not a cause. It has at least two:
+  - the bot under-builds production (too few farms/mines, or it upgrades too
+    late), so its per-turn income never reaches what its hand costs; versus
+  - its income is fine but its blue tokens are committed, so the resources
+    exist on paper and not in the bank.
+The discriminating follow-up is a production-curve census against the human
+corpus: resources and food PRODUCED per round by round number, bot vs human,
+at 3p. That is a diagnostic mirror only.
 
-THE NEXT DISCRIMINATOR
-----------------------
-Split "nothing developable" into:
-  - no civil action left (an action-budget effect: the hand is affordable, the
-    player simply has nothing left to spend this turn), versus
-  - civil action available but nothing in hand affordable (a true production
-    shortfall).
-
-Until that split exists, "the bot is too poor" and "the bot runs out of civil
-actions before it runs out of cards" are the same number here, and they have
-opposite fixes. Do not touch a weight on the strength of this file alone.
-
-DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS. The human census is a diagnostic
-mirror only.
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
