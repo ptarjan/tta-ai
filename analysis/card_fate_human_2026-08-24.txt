@@ -1,0 +1,99 @@
+Card fate, human corpus vs bot: the bot takes fewer cards AND wastes more of
+them. The 39% never-played figure IS a defect.
+=====================================================================
+Measured 2026-08-24 with `humanopenings` over the 1011-game BGO corpus at
+/private/tmp/bgo-journals/journals. The bot side is
+analysis/card_fate_3p_2026-08-24.txt (200 games of 3p self-play against the
+frozen champ3p). This file is the mirror that decides whether that 39% means
+anything.
+
+Definitions are deliberately IDENTICAL to the bot side
+------------------------------------------------------
+PLAYED = the card left hand_civil via Develop / PlayLeader / Revolution /
+PlayAction. `played_civil_card` and `hand_multiset_diff` were copied from
+bin/behavcensus.rs rather than reimplemented, precisely so the two percentages
+are the same statistic. Dwell is per CARD IDENTITY through a FIFO of
+take-rounds. Only games with GameResult::completed are counted; skipped
+player-games are COUNTED and printed, never silently dropped.
+
+This is a DIAGNOSTIC MIRROR. A divergence from human play says where to look.
+It is not, and must never become, a target to fit weights against.
+
+Result, 3p (the player count the bot side was measured at)
+-----------------------------------------------------------
+                                     HUMAN (336 pg)   BOT (349 pg)
+  civil cards taken per player-game     26.92           17.49 / 17.95
+  ... median                               27              18
+  of every taken card: PLAYED            78.3%          61.0% / 61.7%
+                       never played      21.7%          39.0% / 38.3%
+  cards in hand at game end, median          6            (3.5-3.9 mean)
+  dwell, PLAYED, median / mean          1 / 1.64       1 / 1.48-1.50
+  dwell, never played, median / mean    7 / 7.66       5 / 5.19-5.32
+  human winners  played 80.7%,  losers played 77.1%
+  human winners  took 28.14,    losers took 26.30
+
+2p: taken 31.30, played 77.3%.  4p: taken 27.41, played 78.0%.  The human
+played-share is 77-78% at EVERY table size, and at every table size winners
+both take MORE cards and play a HIGHER fraction of them than losers. The
+direction is consistent and it is the opposite of the bot's behaviour on both
+axes.
+
+Two findings
+------------
+1. THE BOT TAKES ~35% FEWER CIVIL CARDS THAN HUMANS AT THE SAME TABLE SIZE
+   (17.5 vs 26.9 per player-game). This is not a game-length artifact: TTA's
+   length is set by deck exhaustion, and the row is replenished at a fixed rate
+   per round per player count, so a 3p game runs about the same number of
+   rounds whoever is playing. The bot is leaving cards on the row to slide off
+   the end.
+
+2. AND IT PLAYS A MUCH SMALLER FRACTION OF WHAT IT DOES TAKE (61% vs 78%).
+   These compound. Per player-game the bot converts ~10.7 taken cards into
+   played cards; a human converts ~21. The bot is not merely taking less, it is
+   taking WORSE - its marginal take is one it will not use.
+
+So 39% never-played is a real defect, not "how the game goes". The prior file
+left this question open on purpose and the mirror has now closed it.
+
+What it does NOT tell us
+------------------------
+Which way the causation runs. Taking fewer cards and playing a smaller share of
+them are both consistent with (a) the take being priced too high, so only
+already-marginal cards clear the bar, or (b) the DEVELOP side being priced too
+low relative to the take, so taken cards lose the CA auction every turn
+afterwards and rot in hand. The bot's never-played dwell of 5 rounds against
+the human's 7 is a hint but not a decision: the bot's games end with fewer
+cards in hand, so its censoring is tighter. Distinguishing (a) from (b) is the
+next measurement, and it is a take-side/play-side pricing question, which is
+exactly where analysis/wonder_progress_ab_3p_2026-08-24.txt pointed after the
+wonder subspace closed.
+
+Two known defects in this census's own tracking - read before quoting finer
+numbers
+----------------------------------------------------------------------------
+ANTIQUATED READS 0 AT EVERY TABLE SIZE. That is certainly false; hands are
+culled at every age transition. The bot side detects antiquation by a pre/post
+hand_civil multiset diff across the one move that advances state.age_civil, and
+in the replayer that transition evidently does not happen INSIDE a recorded
+decision - the same shape as the war-resolution timing already documented
+(resolve_war_outcome fires inside start_turn, not at the line that names it).
+Cards culled that way stay in the tracking map and are counted in "still in
+hand at game end".
+
+  This does NOT affect the played / never-played split above, which is the
+  headline: PLAYED is detected by an explicit removal site, and everything else
+  is the complement. It DOES mean the human never-played bucket cannot be split
+  into destroyed-by-antiquation vs stranded-in-hand, and that the human "cards
+  in hand at game end = 6" is inflated by the culled cards. Do not compare that
+  row against the bot's 3.5-3.9 - it is not the same quantity.
+
+MISMATCHES: 468 of 9044 cards at 3p (5.2%), 2529 of 39569 at 2p (6.4%), 763 of
+15130 at 4p (5.0%) were played with no matching take recorded. Some path puts a
+civil card into hand without a Move::Take. The bot side's counterpart is 3 of
+6177 (0.05%), so this is corpus-replay-specific, not shared instrumentation
+rot. Mismatched cards are counted in NEITHER the played nor the never-played
+bucket (taken = played + still-in-hand exactly), so they do not skew the shares;
+they mean the true human take count is somewhat higher than 26.92, which would
+only widen finding 1.
+
+Raw: /private/tmp/hcf3_report.txt (stderr), /private/tmp/hcf3_openings.tsv.

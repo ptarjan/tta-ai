@@ -36,14 +36,15 @@
 //! for every 2p game) -- the same convention `replay_common`'s own
 //! `target_actor_color` and `humanwinners::color_for_seat` already encode.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::env;
 use std::fs;
 use std::process::ExitCode;
 
 use tta::corpus::{self, parse_winner_line, Color};
+use tta::game;
 use tta::replay_common::{build_card_index, replay_game};
-use tta::{CardType, Move};
+use tta::{CardId, CardType, Move};
 
 /// First-take civil-action-cost tally for one player count, accumulated
 /// across every player-game at that count.
@@ -189,6 +190,291 @@ fn build_kind(kind: CardType) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------
+// Civil card fate -- the human-corpus twin of `bin/behavcensus.rs`'s own
+// "Card fate" section (search that file for `taken_rounds`). Tracks every
+// civil card a `Move::Take` ever puts into a player's `hand_civil`, by CARD
+// IDENTITY, to its eventual resolution: played, culled by age-transition
+// antiquation (RULES_SPEC.md \u{a7}12.2), or still in hand at game end --
+// mirroring behavcensus's definitions exactly so the two censuses' numbers
+// are directly comparable, never a fourth bucket or a different rule.
+//
+// `Move::Take`'s card_row can only ever hold a civil-track card: reading
+// `apply::take_card_impl`, a non-Wonder taken card always goes to
+// `hand_civil` unconditionally, and `hand_military` is only ever populated
+// by the automatic per-round military draw (`economy.rs`/`events.rs`), never
+// by a take -- so `card.get().kind != CardType::Wonder` is already the
+// correct, complete "civil card" filter, same as behavcensus's own.
+//
+// UNLIKE behavcensus's live self-play loop (which drives its own
+// `game::step` calls and so has real pre/post `GameState` at every move for
+// free), this file only has `replay_game`'s recorded `Decision` list: one
+// PRE-move `GameState` plus the `human_move` about to be applied, no
+// post-move state stored on the `Decision` itself. So for every decision
+// this section clones the pre-move state and calls the SAME public
+// `tta::game::step` behavcensus itself uses, to recover a genuine post-move
+// state (needed only for the antiquation hand-diff and for the final
+// player-game's own true ending round) -- not a second copy of the engine,
+// the one existing step function, applied to a move the replayer already
+// proved legal.
+//
+// Gated on `GameResult::completed`: "still in hand at game end" is not a
+// meaningful observation for a replay that stopped mid-game (an abandoned
+// BGO game, or a replay divergence) -- skipped player-games are counted in
+// `CardFateStats::n_incomplete_skipped`, never silently dropped.
+
+/// The three fates a distinct taken civil card (one `taken_rounds` queue
+/// entry) resolves to by game end -- mirrors `bin/behavcensus.rs`'s own
+/// `CardFate` exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardFate {
+    /// Left `hand_civil` via `Develop`/`PlayLeader`/`Revolution`/
+    /// `PlayAction` -- see [`played_civil_card`].
+    Played,
+    /// Culled by age-transition antiquation before ever being played.
+    Antiquated,
+    /// Neither of the above by game end.
+    StillInHand,
+}
+
+/// Tallies of [`CardFate`] across many player-games -- named counters, not
+/// an array indexed by an enum discriminant, so a fate nobody hit prints as
+/// an explicit `0` rather than a missing key.
+#[derive(Default, Clone, Copy)]
+struct CardFateCounts {
+    taken: u64,
+    played: u64,
+    antiquated: u64,
+    still_in_hand: u64,
+}
+
+impl CardFateCounts {
+    fn record(&mut self, fate: CardFate, n: u64) {
+        self.taken += n;
+        match fate {
+            CardFate::Played => self.played += n,
+            CardFate::Antiquated => self.antiquated += n,
+            CardFate::StillInHand => self.still_in_hand += n,
+        }
+    }
+
+    fn report(&self, label: &str) {
+        if self.taken == 0 {
+            eprintln!("  {label}: n=0");
+            return;
+        }
+        let pct = |n: u64| 100.0 * n as f64 / self.taken as f64;
+        eprintln!(
+            "  {label} ({} taken): played {} ({:.1}%), antiquated {} ({:.1}%), still in hand {} ({:.1}%)",
+            self.taken,
+            self.played,
+            pct(self.played),
+            self.antiquated,
+            pct(self.antiquated),
+            self.still_in_hand,
+            pct(self.still_in_hand),
+        );
+    }
+}
+
+/// The `CardId` a civil card was played AS, if `mv` is one of the four
+/// sites that ever call `hand_civil.remove_first` in production code
+/// (`apply::h_play_leader`, the `Develop` handler, `apply::h_revolution`,
+/// `apply::h_play_action`) -- copied verbatim from `bin/behavcensus.rs`'s
+/// own `played_civil_card` so the two definitions cannot drift apart.
+/// `Move::Build`/`Move::Upgrade` do NOT touch `hand_civil` at all: both
+/// operate on a card already sitting in `PlayerState::techs`, so a
+/// built/upgraded card's hand-departure already happened, earlier, at
+/// whichever `Develop` move put it in the tableau. Exhaustive over every
+/// `Move` variant so a future new variant that also drains `hand_civil`
+/// cannot silently fall through unclassified.
+fn played_civil_card(mv: Move) -> Option<CardId> {
+    match mv {
+        Move::Develop { card, .. } => Some(card),
+        Move::PlayLeader { card } => Some(card),
+        Move::Revolution { card } => Some(card),
+        Move::PlayAction { card } => Some(card),
+        Move::Take { .. }
+        | Move::Build { .. }
+        | Move::Upgrade { .. }
+        | Move::WonderStep { .. }
+        | Move::Pop { .. }
+        | Move::PopFree
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::Churchill { .. }
+        | Move::EndTurn
+        | Move::PolPass
+        | Move::Resign => None,
+    }
+}
+
+/// Cards present in `pre` but not matched one-for-one in `post` -- a plain
+/// multiset difference (not a set difference: `hand_civil` can hold more
+/// than one copy of the same `CardId`). Copied verbatim from
+/// `bin/behavcensus.rs`'s own `hand_multiset_diff`.
+fn hand_multiset_diff(pre: &[CardId], post: &[CardId]) -> Vec<CardId> {
+    let mut remaining: Vec<CardId> = post.to_vec();
+    let mut removed = Vec::new();
+    for &card in pre {
+        match remaining.iter().position(|&c| c == card) {
+            Some(pos) => {
+                remaining.swap_remove(pos);
+            }
+            None => removed.push(card),
+        }
+    }
+    removed
+}
+
+/// Per-seat, per-game scratch state for the card-fate walk -- one FIFO
+/// queue of "round taken" per distinct `CardId`, exactly like
+/// `bin/behavcensus.rs`'s own `PlayerTrack::taken_rounds`: a queue, not a
+/// single value, because a hand can hold more than one physical copy of the
+/// same-named card, and `CardList::remove_first` removes the EARLIEST
+/// matching instance -- exactly the semantics `pop_front` gives.
+struct CardFateTrack {
+    taken_rounds: HashMap<CardId, VecDeque<u16>>,
+    n_taken: u32,
+    n_played: u32,
+    n_antiquated: u32,
+    /// A Played or Antiquated event that could not be matched back to a
+    /// `taken_rounds` entry -- see `CardFateStats::n_mismatch`'s doc
+    /// comment; never panics, just counted.
+    n_mismatch: u32,
+    played_dwell: Vec<i32>,
+    /// Antiquation-censored dwell only; the still-in-hand-at-game-end half
+    /// of the censored population is computed once, at game end, from
+    /// whatever is left in `taken_rounds`.
+    censored_dwell: Vec<i32>,
+}
+
+impl CardFateTrack {
+    fn new() -> Self {
+        CardFateTrack {
+            taken_rounds: HashMap::new(),
+            n_taken: 0,
+            n_played: 0,
+            n_antiquated: 0,
+            n_mismatch: 0,
+            played_dwell: Vec::new(),
+            censored_dwell: Vec::new(),
+        }
+    }
+}
+
+/// One outcome-group's (all-player-games / winners-only / losers-only)
+/// accumulated card-fate numbers.
+#[derive(Default)]
+struct CardFateGroupStats {
+    counts: CardFateCounts,
+    taken_per_game: Vec<i32>,
+    still_in_hand_per_game: Vec<i32>,
+    played_dwell: Vec<i32>,
+    censored_dwell: Vec<i32>,
+}
+
+impl CardFateGroupStats {
+    fn record(
+        &mut self,
+        n_taken: u32,
+        n_played: u32,
+        n_antiquated: u32,
+        still_in_hand: u64,
+        played_dwell: &[i32],
+        censored_dwell: &[i32],
+    ) {
+        self.counts.record(CardFate::Played, u64::from(n_played));
+        self.counts.record(CardFate::Antiquated, u64::from(n_antiquated));
+        self.counts.record(CardFate::StillInHand, still_in_hand);
+        self.taken_per_game.push(n_taken as i32);
+        self.still_in_hand_per_game.push(still_in_hand as i32);
+        self.played_dwell.extend_from_slice(played_dwell);
+        self.censored_dwell.extend_from_slice(censored_dwell);
+    }
+}
+
+/// Civil-card-fate tally for one player count, split all/winners/losers --
+/// never pooled across player counts, same convention as `CostStats`/
+/// `WonderRoundStats` above.
+#[derive(Default)]
+struct CardFateStats {
+    n_player_games: u64,
+    /// Player-games skipped because `GameResult::completed` was false for
+    /// that game's replay -- "still in hand at game end" is not a
+    /// meaningful observation for a replay that stopped mid-game.
+    n_incomplete_skipped: u64,
+    /// A card played or antiquated with no matching `taken_rounds` entry --
+    /// see `bin/behavcensus.rs`'s own `n_card_fate_mismatches` doc comment:
+    /// that census found 3 of 6177 cards this way on the bot side ("some
+    /// path puts a civil card into hand without a Take"); printed as its
+    /// own WARNING, never folded silently into the totals above.
+    n_mismatch: u64,
+    overall: CardFateGroupStats,
+    winners: CardFateGroupStats,
+    losers: CardFateGroupStats,
+}
+
+impl CardFateStats {
+    fn report(&self, players: u8) {
+        eprintln!(
+            "\ncivil card fate, {players}p (n={} player-games, {} skipped as incomplete replays):",
+            self.n_player_games, self.n_incomplete_skipped
+        );
+        if self.n_mismatch > 0 {
+            eprintln!(
+                "  WARNING  {} card(s) played or antiquated with no matching take -- see \
+                 bin/behavcensus.rs's own n_card_fate_mismatches doc comment for the known-shape \
+                 counterpart on the bot side",
+                self.n_mismatch
+            );
+        }
+        eprintln!("  civil cards taken per player-game: {}", median_mean(&self.overall.taken_per_game));
+        eprintln!("    winners: {}", median_mean(&self.winners.taken_per_game));
+        eprintln!("    losers:  {}", median_mean(&self.losers.taken_per_game));
+        self.overall.counts.report("fate of every taken card, all player-games");
+        self.winners.counts.report("fate of every taken card, winners");
+        self.losers.counts.report("fate of every taken card, losers");
+        eprintln!(
+            "  cards still in hand at game end per player-game: {}",
+            median_mean(&self.overall.still_in_hand_per_game)
+        );
+        eprintln!("    winners: {}", median_mean(&self.winners.still_in_hand_per_game));
+        eprintln!("    losers:  {}", median_mean(&self.losers.still_in_hand_per_game));
+        eprintln!(
+            "  dwell in rounds, taken -> played (n={}): {}",
+            self.overall.played_dwell.len(),
+            median_mean(&self.overall.played_dwell)
+        );
+        eprintln!(
+            "  dwell in rounds, taken -> never played, censored at antiquation/game-end (n={}): {}",
+            self.overall.censored_dwell.len(),
+            median_mean(&self.overall.censored_dwell)
+        );
+    }
+}
+
 /// This game's per-colour outcome, from the journal's own "WINNER IS" line
 /// (`corpus::parse_winner_line`): `("win"|"loss"|"tie", Color)` pairs for
 /// every colour a rank clause was found for. Rank 1 alone is "win" (base
@@ -216,6 +502,10 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     // First-wonder-stage-round distribution, segmented by player count --
     // never pooled (see `WonderRoundStats`'s own doc comment).
     let mut wonder_stats: BTreeMap<u8, WonderRoundStats> = BTreeMap::new();
+
+    // Civil-card-fate distribution, segmented by player count -- never
+    // pooled (see the "Civil card fate" section's own doc comment above).
+    let mut card_fate_stats: BTreeMap<u8, CardFateStats> = BTreeMap::new();
 
     for meta in games.iter() {
         let n = meta.players as usize;
@@ -325,12 +615,146 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             }
             wonder_stats.entry(meta.players).or_default().record(first_wonder_round[seat], outcome);
         }
+
+        // ---- civil card fate: see the "Civil card fate" section's own doc
+        // comment above for why this needs its own recomputed post-move
+        // state per decision (unlike the round<=3 opening trackers above,
+        // which only ever read pre-move state).
+        if result.completed && !result.decisions.is_empty() {
+            let mut fate_tracks: Vec<CardFateTrack> = (0..n).map(|_| CardFateTrack::new()).collect();
+            let mut final_round: u16 = result.decisions[0].state.round;
+
+            for d in &result.decisions {
+                let actor = d.state.current as usize;
+                if actor >= n {
+                    continue;
+                }
+                let round_before = d.state.round;
+                let taken_card = match d.human_move {
+                    Move::Take { slot } => Some(d.state.card_row[slot as usize]),
+                    Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::WonderStep { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => None,
+                };
+                let played_this_move = played_civil_card(d.human_move);
+                let pre_age = d.state.age_civil;
+                let pre_hands: Vec<Vec<CardId>> =
+                    (0..n).map(|i| d.state.players[i].hand_civil.as_slice().to_vec()).collect();
+
+                // Recovers a genuine post-move `GameState` -- see the
+                // section doc comment above for why `replay_game`'s own
+                // `Decision` list doesn't already carry one.
+                let mut post_state = d.state.clone();
+                game::step(&mut post_state, d.human_move);
+                final_round = post_state.round;
+
+                if let Some(card) = taken_card {
+                    if !card.is_none() && card.get().kind != CardType::Wonder {
+                        fate_tracks[actor].taken_rounds.entry(card).or_default().push_back(round_before);
+                        fate_tracks[actor].n_taken += 1;
+                    }
+                }
+
+                if let Some(card) = played_this_move {
+                    let t = &mut fate_tracks[actor];
+                    match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
+                        Some(taken_round) => {
+                            t.n_played += 1;
+                            t.played_dwell.push(round_before as i32 - taken_round as i32);
+                        }
+                        None => t.n_mismatch += 1,
+                    }
+                }
+
+                if post_state.age_civil != pre_age {
+                    for i in 0..n {
+                        let post_hand = post_state.players[i].hand_civil.as_slice();
+                        let mut removed = hand_multiset_diff(&pre_hands[i], post_hand);
+                        if i == actor {
+                            if let Some(played) = played_this_move {
+                                if let Some(pos) = removed.iter().position(|&c| c == played) {
+                                    removed.remove(pos);
+                                }
+                            }
+                        }
+                        let t = &mut fate_tracks[i];
+                        for card in removed {
+                            match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
+                                Some(taken_round) => {
+                                    t.n_antiquated += 1;
+                                    t.censored_dwell.push(round_before as i32 - taken_round as i32);
+                                }
+                                None => t.n_mismatch += 1,
+                            }
+                        }
+                    }
+                }
+            }
+
+            let stats = card_fate_stats.entry(meta.players).or_default();
+            for (seat, track) in fate_tracks.iter().enumerate() {
+                let mut still_in_hand: u64 = 0;
+                let mut censored_dwell_this_game = track.censored_dwell.clone();
+                for rounds in track.taken_rounds.values() {
+                    for &taken_round in rounds {
+                        still_in_hand += 1;
+                        censored_dwell_this_game.push(final_round as i32 - taken_round as i32);
+                    }
+                }
+                let n_taken = track.n_taken;
+                let n_played = track.n_played;
+                let n_antiquated = track.n_antiquated;
+                let played_dwell_this_game = &track.played_dwell;
+                let outcome = Color::from_seat(seat as u8)
+                    .and_then(|c| outcomes_by_color.iter().find(|(oc, _)| *oc == c))
+                    .map(|(_, o)| *o)
+                    .unwrap_or("unknown");
+
+                stats.n_player_games += 1;
+                stats.n_mismatch += u64::from(track.n_mismatch);
+                stats.overall.record(
+                    n_taken,
+                    n_played,
+                    n_antiquated,
+                    still_in_hand,
+                    played_dwell_this_game,
+                    &censored_dwell_this_game,
+                );
+                match outcome {
+                    "win" => stats.winners.record(
+                        n_taken,
+                        n_played,
+                        n_antiquated,
+                        still_in_hand,
+                        played_dwell_this_game,
+                        &censored_dwell_this_game,
+                    ),
+                    "loss" => stats.losers.record(
+                        n_taken,
+                        n_played,
+                        n_antiquated,
+                        still_in_hand,
+                        played_dwell_this_game,
+                        &censored_dwell_this_game,
+                    ),
+                    _ => {}
+                }
+            }
+        } else {
+            // Not `result.completed`, or (vanishingly rare) a completed
+            // replay with zero recorded decisions -- either way there is no
+            // usable "game end" to measure a still-in-hand fate against, so
+            // this player-game is counted as skipped rather than silently
+            // dropped.
+            card_fate_stats.entry(meta.players).or_default().n_incomplete_skipped += n as u64;
+        }
     }
 
     for (players, stats) in &cost_stats {
         stats.report(*players);
     }
     for (players, stats) in &wonder_stats {
+        stats.report(*players);
+    }
+    for (players, stats) in &card_fate_stats {
         stats.report(*players);
     }
     Ok(())
