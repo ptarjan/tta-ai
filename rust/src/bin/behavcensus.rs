@@ -230,7 +230,16 @@ struct Report {
     first_take_card: HashMap<&'static str, u64>,
     first_develop_card: HashMap<&'static str, u64>,
     first_develop_round: Vec<i32>,
-    first_wonder_round: Vec<i32>, // round of first WonderStep move, per player-game that ever built one
+    /// Round of first `WonderStep` move -> (wins, total), per player-game
+    /// that ever built one; same (wins, total) shape as `opening_first_take`
+    /// / `opening_first_build_kind` below, so a win-rate prints next to
+    /// every round the same way theirs does. Player-games with an
+    /// unresolvable outcome (see `is_winner`) are excluded, matching those
+    /// two maps.
+    first_wonder_round: HashMap<i32, (u64, u64)>,
+    /// (wins, total) for player-games that never built a wonder stage at
+    /// all -- its own labelled bucket, never folded into `first_wonder_round`.
+    first_wonder_never_built: (u64, u64),
     n_player_games_no_wonder_by_round4: u64,
     n_player_games: u64,
 
@@ -290,7 +299,9 @@ impl Report {
         merge_map(&mut self.first_take_card, other.first_take_card);
         merge_map(&mut self.first_develop_card, other.first_develop_card);
         self.first_develop_round.extend(other.first_develop_round);
-        self.first_wonder_round.extend(other.first_wonder_round);
+        merge_pair_map(&mut self.first_wonder_round, other.first_wonder_round);
+        self.first_wonder_never_built.0 += other.first_wonder_never_built.0;
+        self.first_wonder_never_built.1 += other.first_wonder_never_built.1;
         self.n_player_games_no_wonder_by_round4 += other.n_player_games_no_wonder_by_round4;
         self.n_player_games += other.n_player_games;
 
@@ -736,14 +747,34 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             *report.first_develop_card.entry(card.name()).or_insert(0) += 1;
             report.first_develop_round.push(round as i32);
         }
+        // Win-rate bucket, same (wins, total) shape and same "unresolvable
+        // outcome is excluded" rule as the `opening_first_take` /
+        // `opening_first_build_kind` maps above -- `n_player_games_no_wonder_
+        // by_round4` stays unconditional (every player-game, resolvable or
+        // not), matching its pre-existing definition.
+        let win = is_winner(i as usize);
         match tracks[i as usize].first_wonder_round {
             Some(r) => {
-                report.first_wonder_round.push(r as i32);
                 if r > 4 {
                     report.n_player_games_no_wonder_by_round4 += 1;
                 }
+                if let Some(w) = win {
+                    let e = report.first_wonder_round.entry(r as i32).or_insert((0, 0));
+                    e.1 += 1;
+                    if w {
+                        e.0 += 1;
+                    }
+                }
             }
-            None => report.n_player_games_no_wonder_by_round4 += 1,
+            None => {
+                report.n_player_games_no_wonder_by_round4 += 1;
+                if let Some(w) = win {
+                    report.first_wonder_never_built.1 += 1;
+                    if w {
+                        report.first_wonder_never_built.0 += 1;
+                    }
+                }
+            }
         }
 
         let completed: Vec<CardId> = p.completed_wonders.as_slice().to_vec();
@@ -889,6 +920,18 @@ fn top_pair_n(map: &HashMap<&'static str, (u64, u64)>, n: usize) -> Vec<(&'stati
     v
 }
 
+/// Reconstructs the flat per-player-game round sample a `(round -> (wins,
+/// total))` map was built from, so [`percentiles_i32`] can still print the
+/// same distribution it always has, now sourced from `Report::
+/// first_wonder_round`'s win-rate map instead of a bare `Vec<i32>`.
+fn flatten_round_totals(map: &HashMap<i32, (u64, u64)>) -> Vec<i32> {
+    let mut v = Vec::new();
+    for (&round, &(_, total)) in map {
+        v.extend(std::iter::repeat_n(round, total as usize));
+    }
+    v
+}
+
 fn print_report(players: u8, r: &Report) {
     println!("\n## {players}p (n={} games, {} player-games)\n", r.games, r.n_player_games);
 
@@ -904,10 +947,27 @@ fn print_report(players: u8, r: &Report) {
     println!("\nRound of first Develop: {}", percentiles_i32(r.first_develop_round.clone()));
     println!(
         "Round of first wonder-stage build (only among player-games that ever built one): {}",
-        percentiles_i32(r.first_wonder_round.clone())
+        percentiles_i32(flatten_round_totals(&r.first_wonder_round))
+    );
+    println!("\nRound of first wonder-stage build, count/share/win-rate (outcome-resolvable player-games only):");
+    let mut wonder_round_keys: Vec<i32> = r.first_wonder_round.keys().copied().collect();
+    wonder_round_keys.sort_unstable();
+    for k in wonder_round_keys {
+        let (w, t) = r.first_wonder_round[&k];
+        println!(
+            "- round {k}: {t} ({:.1}%)  win-rate {:.1}% ({w}/{t})",
+            100.0 * t as f64 / r.n_player_games.max(1) as f64,
+            100.0 * w as f64 / t.max(1) as f64
+        );
+    }
+    let (never_w, never_t) = r.first_wonder_never_built;
+    println!(
+        "- never built a wonder stage at all: {never_t} ({:.1}%)  win-rate {:.1}% ({never_w}/{never_t})",
+        100.0 * never_t as f64 / r.n_player_games.max(1) as f64,
+        100.0 * never_w as f64 / never_t.max(1) as f64
     );
     println!(
-        "Player-games with NO wonder step by end of round 4: {}/{} ({:.1}%)",
+        "\nPlayer-games with NO wonder step by end of round 4: {}/{} ({:.1}%)",
         r.n_player_games_no_wonder_by_round4,
         r.n_player_games,
         100.0 * r.n_player_games_no_wonder_by_round4 as f64 / r.n_player_games.max(1) as f64

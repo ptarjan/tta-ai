@@ -77,6 +77,103 @@ impl CostStats {
     }
 }
 
+/// min/p25/median/p75/max/mean of a non-empty sample, in `behavcensus.rs`'s
+/// own `percentiles_i32` format so the two binaries' distribution lines are
+/// directly diffable.
+fn percentile_summary(sorted: &[i32]) -> String {
+    let at = |p: f64| -> i32 {
+        let i = ((sorted.len() - 1) as f64 * p).round() as usize;
+        sorted[i]
+    };
+    let mean: f64 = sorted.iter().map(|&x| f64::from(x)).sum::<f64>() / sorted.len() as f64;
+    format!(
+        "min={} p25={} median={} p75={} max={} mean={mean:.2} n={}",
+        sorted[0],
+        at(0.25),
+        at(0.50),
+        at(0.75),
+        sorted[sorted.len() - 1],
+        sorted.len()
+    )
+}
+
+/// median/mean of a sample, or an explicit "n/a" for an empty one -- the
+/// winner/loser split below can be empty on one side in a small bucket.
+fn median_mean(v: &[i32]) -> String {
+    if v.is_empty() {
+        return "n/a (n=0)".to_string();
+    }
+    let mut sorted = v.to_vec();
+    sorted.sort_unstable();
+    let median = sorted[(sorted.len() - 1) / 2];
+    let mean: f64 = sorted.iter().map(|&x| f64::from(x)).sum::<f64>() / sorted.len() as f64;
+    format!("median={median} mean={mean:.2} n={}", sorted.len())
+}
+
+/// Round of the FIRST `Move::WonderStep` a human player-game ever plays,
+/// segmented by player count (never pooled -- see this file's own top doc
+/// comment on why an n-player game is a structurally different population).
+/// This is a SEPARATE observation window from `CostStats`'s round<=3 opening
+/// window: it runs over the whole game (the bot's own median first-wonder
+/// round is 6, max 14, so round<=3 would see almost nothing) and must not be
+/// merged with or substituted for that window, which feeds a published
+/// baseline.
+#[derive(Default)]
+struct WonderRoundStats {
+    /// One entry per player-game that built at least one wonder stage.
+    rounds: Vec<i32>,
+    /// Same rounds, split by this player-game's own outcome; ties/unknown
+    /// outcomes land in `rounds` but neither split.
+    win_rounds: Vec<i32>,
+    loss_rounds: Vec<i32>,
+    /// Player-games that never built a wonder stage at all -- its own
+    /// labelled bucket, never folded into `rounds`'s tail or dropped.
+    never_built: u64,
+    /// Every player-game at this count, built or not.
+    total: u64,
+}
+
+impl WonderRoundStats {
+    fn record(&mut self, first_round: Option<i32>, outcome: &str) {
+        self.total += 1;
+        let Some(r) = first_round else {
+            self.never_built += 1;
+            return;
+        };
+        self.rounds.push(r);
+        match outcome {
+            "win" => self.win_rounds.push(r),
+            "loss" => self.loss_rounds.push(r),
+            _ => {}
+        }
+    }
+
+    /// Player-games with no wonder-stage progress by round 4: never-built
+    /// ones plus built-but-late ones, matching `behavcensus.rs`'s own
+    /// `n_player_games_no_wonder_by_round4` definition (`r > 4`).
+    fn no_progress_by_round4(&self) -> u64 {
+        self.never_built + self.rounds.iter().filter(|&&r| r > 4).count() as u64
+    }
+
+    fn report(&self, players: u8) {
+        eprintln!("\nfirst wonder-stage round, {players}p (n={} player-games):", self.total);
+        if self.rounds.is_empty() {
+            eprintln!("  no player-game at this count ever built a wonder stage");
+        } else {
+            let mut sorted = self.rounds.clone();
+            sorted.sort_unstable();
+            eprintln!("  {}", percentile_summary(&sorted));
+        }
+        let never_pct = 100.0 * self.never_built as f64 / self.total.max(1) as f64;
+        eprintln!("  never built a wonder stage at all: {}/{} ({never_pct:.1}%)", self.never_built, self.total);
+        let np4 = self.no_progress_by_round4();
+        let np4_pct = 100.0 * np4 as f64 / self.total.max(1) as f64;
+        eprintln!("  no wonder-stage progress by round 4: {np4}/{} ({np4_pct:.1}%)", self.total);
+        eprintln!("  winners: {}", median_mean(&self.win_rounds));
+        eprintln!("  losers:  {}", median_mean(&self.loss_rounds));
+    }
+}
+
 fn build_kind(kind: CardType) -> &'static str {
     match kind {
         CardType::Farm => "Farm",
@@ -115,6 +212,10 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     // economics differ by card-row width, which is itself a function of
     // player count; a pooled number would silently mix populations.
     let mut cost_stats: BTreeMap<u8, CostStats> = BTreeMap::new();
+
+    // First-wonder-stage-round distribution, segmented by player count --
+    // never pooled (see `WonderRoundStats`'s own doc comment).
+    let mut wonder_stats: BTreeMap<u8, WonderRoundStats> = BTreeMap::new();
 
     for meta in games.iter() {
         let n = meta.players as usize;
@@ -177,6 +278,28 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             }
         }
 
+        // First-wonder-stage-round tracker: a SEPARATE pass over the whole
+        // game (no round cap), because the loop above intentionally stops at
+        // round 3 and that window must not move. `Move::WonderStep` is the
+        // only variant of interest here, matched explicitly against the
+        // full variant list so a future new `Move` case cannot fall through
+        // silently.
+        let mut first_wonder_round: Vec<Option<i32>> = vec![None; n];
+        for d in &result.decisions {
+            let seat = d.state.current as usize;
+            if seat >= n {
+                continue;
+            }
+            match d.human_move {
+                Move::WonderStep { .. } => {
+                    if first_wonder_round[seat].is_none() {
+                        first_wonder_round[seat] = Some(d.state.round as i32);
+                    }
+                }
+                Move::Take { .. } | Move::Build { .. } | Move::Develop { .. } | Move::Upgrade { .. } | Move::Pop { .. } | Move::PopFree | Move::Revolution { .. } | Move::PlayLeader { .. } | Move::PlayAction { .. } | Move::Destroy { .. } | Move::PlayTactic { .. } | Move::CopyTactic { .. } | Move::Aggression { .. } | Move::War { .. } | Move::OfferPact { .. } | Move::CancelPact { .. } | Move::PrepareEvent { .. } | Move::RemoveLeaderYellow | Move::ColumbusColonize { .. } | Move::Barbarossa { .. } | Move::BachTheater { .. } | Move::TradeFoodAsResource | Move::TradeResourceAsFood | Move::Bid { .. } | Move::BidPass | Move::Defend { .. } | Move::DefendDone | Move::SendUnit { .. } | Move::SendBonus { .. } | Move::SendDiscard { .. } | Move::SendDone | Move::Choose { .. } | Move::Churchill { .. } | Move::EndTurn | Move::PolPass | Move::Resign => {}
+            }
+        }
+
         for seat in 0..n {
             let (take_name, take_cost) = first_take[seat].unwrap_or(("none", -1));
             let (build_kind_s, build_name) = first_build[seat].unwrap_or(("none", "none"));
@@ -200,10 +323,14 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             if first_take[seat].is_some() {
                 cost_stats.entry(meta.players).or_default().record(take_cost);
             }
+            wonder_stats.entry(meta.players).or_default().record(first_wonder_round[seat], outcome);
         }
     }
 
     for (players, stats) in &cost_stats {
+        stats.report(*players);
+    }
+    for (players, stats) in &wonder_stats {
         stats.report(*players);
     }
     Ok(())
