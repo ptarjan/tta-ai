@@ -1426,11 +1426,13 @@ function validateRow(row, cardsById) {
  * taking a card out of the middle, which happens constantly). Key is
  * bumped so a stale v1 save is never misread as the new shape.
  * ------------------------------------------------------------------- */
-const STORAGE_KEY = 'ttaapp_state_v2';
+const STORAGE_KEY = 'ttaapp_state_v3';
 
 function freshFlow() {
   return {
-    step: 'gone', // gone | new | blocked | dupConfirm | thinking | advice | fullrow
+    step: 'gone', // setup | gone | new | blocked | dupConfirm | thinking | advice | fullrow
+    setupPlayers: 2,
+    setupSeat: 0,
     goneSlots: [],
     newCards: [],
     newIndex: 0,
@@ -1447,11 +1449,23 @@ function freshFlow() {
   };
 }
 
-function freshState() {
+/* `players` and `seat` are not cosmetic and cannot be defaulted. RULES_SPEC
+ * 1.9: in the first round available civil actions run 1, 2, 3, 4 by seating
+ * order, so the starting player of a 2p game gets ONE action and the second
+ * player gets TWO. Seat also fixes who moves between your turns. A mirror
+ * built on the wrong seat is wrong from the first action onwards, which is
+ * why New Game asks before anything else rather than assuming seat 0. */
+function freshState(players, seat) {
+  const n = players || 2;
+  const s = seat || 0;
+  const rivals = [];
+  for (let i = 0; i < n; i++) if (i !== s) rivals.push({ seat: i, str: 0, culture: 0 });
   return {
-    v: 2,
+    v: 3,
+    players: n,
+    seat: s,
     row: new Array(13).fill(null),
-    rival: { str: 0, culture: 0 },
+    rivals,
     seed: Math.floor(Math.random() * 1e9),
     wasmState: null,
     moves: [],
@@ -1472,7 +1486,7 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || parsed.v !== 2 || !parsed.flow) return null; // reject anything not shaped like v2
+    if (!parsed || parsed.v !== 3 || !parsed.flow) return null; // reject anything not shaped like v3
     return parsed;
   } catch (e) { return null; }
 }
@@ -1565,9 +1579,10 @@ function renderAll() {
    here could only ever drift out of step with the one the advisor reasons
    over, and there is nothing the user would have to remember to tap. */
 function handFromEngine() {
-  const line = (state.wasmState || '').split('\n').find((l) => l.startsWith('p0 hand '));
+  const prefix = `p${state.seat} hand `;
+  const line = (state.wasmState || '').split('\n').find((l) => l.startsWith(prefix));
   if (!line) return { civil: [], military: [] };
-  const [civilTxt, milTxt] = line.slice('p0 hand '.length).split('|');
+  const [civilTxt, milTxt] = line.slice(prefix.length).split('|');
   const names = (t) => (t || '').split(',').map((s) => s.trim()).filter(Boolean);
   return { civil: names(civilTxt), military: names(milTxt) };
 }
@@ -1598,6 +1613,7 @@ function renderHandPanel() {
  * ------------------------------------------------------------------- */
 function renderStep(container) {
   switch (state.flow.step) {
+    case 'setup': return renderSetupStep(container);
     case 'gone': return renderGoneStep(container);
     case 'new': return renderNewStep(container);
     case 'blocked': return renderBlockedStep(container);
@@ -1694,6 +1710,47 @@ function advanceNew() {
   }
 }
 
+/* STEP 0 — table size and seat. Asked once per game, before the row, because
+ * the mirror cannot be built without them (see freshState). "Seat 1" is the
+ * starting player; the seats after it are in turn order. */
+function renderSetupStep(container) {
+  container.appendChild(makeTitle('New game'));
+  container.appendChild(makeSub('How many players, and where do you sit? Seat 1 goes first.'));
+
+  const players = state.flow.setupPlayers;
+  const seat = state.flow.setupSeat;
+
+  const pRow = document.createElement('div');
+  pRow.className = 'btnRow';
+  [2, 3, 4].forEach((n) => {
+    pRow.appendChild(makeBtn(`${n} players`, n === players ? 'primary big' : 'big', () => {
+      state.flow.setupPlayers = n;
+      if (state.flow.setupSeat >= n) state.flow.setupSeat = n - 1;
+      renderAll();
+    }));
+  });
+  container.appendChild(pRow);
+
+  const sRow = document.createElement('div');
+  sRow.className = 'btnRow';
+  for (let i = 0; i < players; i++) {
+    sRow.appendChild(makeBtn(`Seat ${i + 1}${i === 0 ? ' (first)' : ''}`, i === seat ? 'primary big' : 'big', () => {
+      state.flow.setupSeat = i;
+      renderAll();
+    }));
+  }
+  container.appendChild(sRow);
+
+  const go = document.createElement('div');
+  go.className = 'btnRow';
+  go.appendChild(makeBtn('Enter the card row →', 'primary big', () => {
+    state = freshState(players, seat);
+    save();
+    openFullRow();
+  }));
+  container.appendChild(go);
+}
+
 // Hard block (Task 1a) — cannot proceed until the row is fixed.
 function renderBlockedStep(container) {
   container.appendChild(makeTitle('That row is not legal.', 'bad'));
@@ -1774,11 +1831,14 @@ function renderAdviceCorrections(container) {
   box.className = 'corrections';
   box.appendChild(makeSub('Assuming rival strength and culture are unchanged, and you drew no military card.'));
 
-  const row = document.createElement('div');
-  row.className = 'rivalRow';
-  row.appendChild(makeStepper('Rival strength', state.rival.str, (v) => { state.rival.str = v; reviseTurn(); }));
-  row.appendChild(makeStepper('Rival culture', state.rival.culture, (v) => { state.rival.culture = v; reviseTurn(); }));
-  box.appendChild(row);
+  state.rivals.forEach((r, i) => {
+    const row = document.createElement('div');
+    row.className = 'rivalRow';
+    const who = state.rivals.length > 1 ? `Seat ${r.seat + 1} ` : 'Rival ';
+    row.appendChild(makeStepper(who + 'strength', r.str, (v) => { state.rivals[i].str = v; reviseTurn(); }));
+    row.appendChild(makeStepper(who + 'culture', r.culture, (v) => { state.rivals[i].culture = v; reviseTurn(); }));
+    box.appendChild(row);
+  });
 
   if (!state.flow.militaryDrafted) {
     const milRow = document.createElement('div');
@@ -1988,7 +2048,7 @@ function makeAutocompleteRow(placeholder) {
  * are carried across that rollback by hand -- they are the whole point of
  * the revision, and the snapshot predates them. */
 function reviseTurn() {
-  const rival = { str: state.rival.str, culture: state.rival.culture };
+  const rivals = state.rivals.map((r) => ({ seat: r.seat, str: r.str, culture: r.culture }));
   const militaryCards = state.flow.militaryCards.slice();
   const militaryDrafted = state.flow.militaryDrafted;
   const candidateRow = state.flow.candidateRow;
@@ -1999,7 +2059,7 @@ function reviseTurn() {
     state = state.history.pop();
     state.history = prevHistory.slice(0, prevHistory.length - 1);
   }
-  state.rival = rival;
+  state.rivals = rivals;
   state.flow.militaryCards = militaryCards;
   state.flow.militaryDrafted = militaryDrafted;
   state.flow.candidateRow = candidateRow;
@@ -2093,20 +2153,20 @@ async function finalizeTurn(newRow) {
   while (state.row.length < 13) state.row.push(null);
 
   const lines = [buildRowLine(state.row)];
-  lines.push(`p1 str=${state.rival.str} c=${state.rival.culture}`);
+  state.rivals.forEach((r) => lines.push(`p${r.seat} str=${r.str} c=${r.culture}`));
   // A military draw is the one thing the engine cannot deduce -- the card comes
-  // off a face-down deck. `p0 hand` REPLACES both halves of the hand, so the
+  // off a face-down deck. A `hand` line REPLACES both halves of the hand, so the
   // civil side has to be re-stated verbatim from the engine's own dump or the
   // line silently empties a hand the advisor was counting on.
   if (state.flow.militaryCards.length) {
     const hand = handFromEngine();
     const military = hand.military.concat(state.flow.militaryCards.map(cardDisplay));
-    lines.push(`p0 hand ${hand.civil.join(', ')} | ${military.join(', ')}`);
+    lines.push(`p${state.seat} hand ${hand.civil.join(', ')} | ${military.join(', ')}`);
   }
 
   const request = {
-    players: 2,
-    seat: 0,
+    players: state.players,
+    seat: state.seat,
     seed: state.seed,
     state: state.wasmState,
     lines,
@@ -2138,6 +2198,19 @@ function formatPosition(p) {
     `food ${p.food}, res ${p.resources}, sci ${p.science}`;
 }
 
+/* Table size and seat are asked on a scratch state, so that abandoning the
+ * setup screen cannot leave a half-built game behind: `freshState` is not
+ * called until the choices are confirmed. */
+function openSetup() {
+  const players = (state && state.players) || 2;
+  const seat = (state && state.seat) || 0;
+  state = freshState(players, seat);
+  state.flow.step = 'setup';
+  state.flow.setupPlayers = players;
+  state.flow.setupSeat = seat;
+  renderAll();
+}
+
 /* ---------------------------------------------------------------------
  * Full-row entry (turn 1 / resync escape hatch)
  * ------------------------------------------------------------------- */
@@ -2161,9 +2234,7 @@ function wireUI() {
 
   el.newGameBtn.addEventListener('click', () => {
     if (!confirm('Start a new game? This clears the current session.')) return;
-    state = freshState();
-    save();
-    openFullRow();
+    openSetup();
   });
 
   el.handToggleBtn.addEventListener('click', () => el.handPanel.classList.toggle('hidden'));
@@ -2183,7 +2254,9 @@ async function boot() {
   renderAll();
   const hasAnyCard = state.row.some((x) => x);
   const freshBoot = !hasAnyCard && !state.moves.length && state.flow.step === 'gone' && !state.flow.goneSlots.length;
-  if (freshBoot) openFullRow();
+  // A boot with nothing restored has no seat either, so it starts at setup,
+  // not at the row.
+  if (freshBoot) { if (restored) openFullRow(); else openSetup(); }
 }
 
 /* ---------------------------------------------------------------------
