@@ -1700,6 +1700,71 @@ mod tests {
         }
     }
 
+    /// The invariant above must still hold once the two NEW leaf-eval
+    /// coordinates (`leader_replacement`, `wonder_pool_rival_claimed`) are
+    /// actually non-zero, not just on a fresh board where both start at
+    /// their default zero -- an off-by-one in either derivation (e.g.
+    /// `linear_features`'s generic `WeightKey::ALL` loop reading the wrong
+    /// index, or `features()` writing the wrong value) would only show up
+    /// once the coordinate moves. Fixtures: an empty leader slot, an
+    /// original (never-swapped) leader, a replaced leader, and a board
+    /// where a rival has completed one `age_civil` wonder alongside the
+    /// evaluated player.
+    #[test]
+    fn linear_features_still_reproduces_evaluate_once_the_two_new_coordinates_are_nonzero() {
+        fn check(state: &crate::state::GameState, label: &str) {
+            let moves = crate::legal::legal_moves(state);
+            let w = Weights::default();
+            let bot = WeightedBot::new(w);
+            let ranked = bot.rank_moves(state, moves.as_slice());
+            let feats = candidate_features(state, moves.as_slice(), false, &w);
+            assert_eq!(ranked.len(), feats.len(), "{label}: candidate set must match rank_moves' own");
+            for &(mv, score) in &ranked {
+                let (_, f) =
+                    feats.iter().find(|&&(m, _)| m == mv).unwrap_or_else(|| panic!("{label} {mv:?} missing"));
+                let linear = dot(&w, f);
+                assert!((linear - score).abs() < 1e-6, "{label} {mv:?}: linear={linear} evaluate={score}");
+            }
+        }
+
+        let moses = crate::cards::CardId::by_name("Moses").expect("a base-game leader");
+        for n in [2u8, 3, 4] {
+            // Empty leader slot: `LeaderReplacement` must read 0.0 (proven
+            // separately in features.rs's own test), but the DOT invariant
+            // needs checking too, not just the raw feature value.
+            let mut empty = G::new_game(n, 81);
+            empty.players[0].leader = crate::cards::CardId::NONE;
+            empty.players[0].taken_leader_ages = 0;
+            check(&empty, &format!("{n}p empty leader"));
+
+            // An original, never-swapped leader.
+            let mut original = G::new_game(n, 82);
+            original.players[0].leader = moses;
+            original.players[0].taken_leader_ages = 1 << (crate::cards::Age::A as u8);
+            check(&original, &format!("{n}p original leader"));
+
+            // A replaced leader: popcount(taken_leader_ages) >= 2.
+            let mut replaced = G::new_game(n, 83);
+            replaced.players[0].leader = moses;
+            replaced.players[0].taken_leader_ages =
+                (1 << (crate::cards::Age::A as u8)) | (1 << (crate::cards::Age::I as u8));
+            check(&replaced, &format!("{n}p replaced leader"));
+        }
+
+        // Wonder pool: a rival (idx 1) completes an `age_civil` wonder
+        // alongside the evaluated player's own (idx 0) -- needs a real
+        // rival, so 2p/3p only.
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("an Age A wonder");
+        let hanging_gardens = crate::cards::CardId::by_name("Hanging Gardens").expect("an Age A wonder");
+        for n in [2u8, 3] {
+            let mut state = G::new_game(n, 84);
+            state.age_civil = crate::cards::Age::A;
+            state.players[0].completed_wonders.push(pyramids);
+            state.players[1].completed_wonders.push(hanging_gardens);
+            check(&state, &format!("{n}p wonder pool"));
+        }
+    }
+
     // ---------------------------------------------------------- dominance
 
     /// The bug this gate was added for, reproduced with the champion's own
@@ -2325,6 +2390,64 @@ mod tests {
             WeightKey::TakeCostShare,
             WeightKey::HandPerishable,
         ];
+        for &k in &new_keys {
+            assert_eq!(
+                k.default_weight(),
+                0.0,
+                "{} must default to 0.0: every champion file on disk predates it and would \
+                 silently inherit anything else written here",
+                k.name()
+            );
+        }
+
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../analysis/frozen/gauntlet");
+        let mut checked = 0usize;
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display())) {
+            let path = entry.expect("a readable directory entry").path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+            let w = parse_weights(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            for &k in &new_keys {
+                assert_eq!(
+                    w.get(k),
+                    0.0,
+                    "{}: {} must come back at 0.0 -- a file written before the key existed cannot \
+                     name it, so anything else here means the DEFAULT moved",
+                    path.display(),
+                    k.name()
+                );
+            }
+            // Not vacuous: the file really is narrower than the vector it is
+            // being loaded into, which is the whole situation under test.
+            for &k in &new_keys {
+                assert!(
+                    !text.contains(k.name()),
+                    "{}: names {}, so this file does NOT predate the key and cannot stand in for \
+                     one that does",
+                    path.display(),
+                    k.name()
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked >= 6, "expected the frozen gauntlet's six members, found {checked}");
+    }
+
+    /// The same guarantee, for `leader_replacement` and
+    /// `wonder_pool_rival_claimed` -- the two coordinates this task adds.
+    /// Both default to 0.0 (`weights.rs`'s `weight_keys!` table), so by the
+    /// same `parse_weights`-starts-from-`Weights::defaults` mechanism the
+    /// sibling test above exercises, every champion already on disk --
+    /// including everything under `analysis/frozen/`, which is FROZEN AND
+    /// APPEND-ONLY -- must come back with both new keys at exactly 0.0 and
+    /// must therefore evaluate every position bit-identically to how it did
+    /// before this task landed.
+    #[test]
+    fn a_champion_file_saved_before_leader_replacement_and_wonder_pool_rival_claimed_existed_still_loads_with_them_at_zero(
+    ) {
+        let new_keys = [WeightKey::LeaderReplacement, WeightKey::WonderPoolRivalClaimed];
         for &k in &new_keys {
             assert_eq!(
                 k.default_weight(),

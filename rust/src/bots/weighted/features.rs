@@ -621,6 +621,21 @@ pub fn features(
 
     // --- wonders / leader
     f.set(WeightKey::Wonders, p.completed_wonders.len() as f64);
+    // `WeightKey::WonderPoolRivalClaimed`'s own doc comment in `weights.rs`:
+    // raw count (0..=4) of `state.age_civil` wonders sitting in OTHER
+    // players' `completed_wonders`. Deliberately excludes `idx`'s own
+    // completions -- those are already priced by `Wonders` above, and
+    // folding them in here would average two opposite-sign cases into one
+    // scalar, the exact defect this coordinate exists to avoid one level up
+    // from where `LeaderReplacement` avoids it. Fresh O(players * 16) scan;
+    // no `RivalContext` field already carries this tally.
+    let rival_wonders_this_age: usize = state.players[..state.num_players as usize]
+        .iter()
+        .filter(|q| q.idx != idx)
+        .flat_map(|q| q.completed_wonders.as_slice().iter())
+        .filter(|w| w.get().age == state.age_civil)
+        .count();
+    f.set(WeightKey::WonderPoolRivalClaimed, rival_wonders_this_age as f64);
     f.set(WeightKey::WonderProgress, f64::from(progress));
     f.set(WeightKey::WonderRemaining, f64::from(remaining));
     // Finish discipline -- all 0.0 with nothing in progress.
@@ -637,6 +652,16 @@ pub fn features(
     f.set(WeightKey::WonderAgeOverrun, age_overrun);
     f.set(WeightKey::WonderStagesPerAction, f64::from(s.wonder_stages - 1));
     f.set(WeightKey::Leader, if p.leader.is_none() { 0.0 } else { 1.0 });
+    // `WeightKey::LeaderReplacement`'s own doc comment in `weights.rs` has
+    // the full derivation: §2.5/§9.1 (one leader per age) means
+    // `taken_leader_ages.count_ones()` is the exact number of leader cards
+    // this player has EVER taken, so holding a leader (`!p.leader.is_none()`)
+    // while that count is 2+ can only mean at least one earlier leader was
+    // swapped out for the current one.
+    f.set(
+        WeightKey::LeaderReplacement,
+        if !p.leader.is_none() && p.taken_leader_ages.count_ones() >= 2 { 1.0 } else { 0.0 },
+    );
     // RULES_SPEC 5.5 cliff, not a slope -- see `WeightKey::WonderInProgress`'s
     // own doc comment in `weights.rs`. `legal.rs`'s `aggression_target_
     // qualifies` reads `q.wonder.is_none()` (the same field `horizon::
@@ -1344,6 +1369,82 @@ mod tests {
             f.get(WeightKey::WonderAgeOverrun) > 0.0,
             "an Age A wonder with the Age I deck nearly out is past its own deadline, got {}",
             f.get(WeightKey::WonderAgeOverrun)
+        );
+    }
+
+    /// `WeightKey::LeaderReplacement`'s three branches, named after the
+    /// popcount cases in the derivation this feature is built on
+    /// (`weights.rs`'s own doc comment on the variant): an empty slot that
+    /// never took a leader, a leader that is still the ONLY one ever taken,
+    /// and a leader held after `taken_leader_ages.count_ones() >= 2` proves
+    /// at least one earlier leader was swapped out (§2.5/§9.1's one-leader-
+    /// per-age rule is what makes 2+ distinct take-events imply a swap).
+    #[test]
+    fn leader_replacement_feature_distinguishes_an_original_leader_from_a_swapped_in_one() {
+        let moses = crate::cards::CardId::by_name("Moses").expect("a base-game leader");
+
+        // Never taken a leader: slot empty, popcount 0.
+        let mut never_taken = G::new_game(2, 71);
+        never_taken.players[0].leader = crate::cards::CardId::NONE;
+        never_taken.players[0].taken_leader_ages = 0;
+        assert_eq!(
+            features(&never_taken, 0, None, None, false).get(WeightKey::LeaderReplacement),
+            0.0,
+            "an empty slot that never took a leader must not read as a replacement"
+        );
+
+        // Holding the ONLY leader ever taken: popcount 1, slot occupied.
+        let mut original = G::new_game(2, 71);
+        original.players[0].leader = moses;
+        original.players[0].taken_leader_ages = 1 << (crate::cards::Age::A as u8);
+        assert_eq!(
+            features(&original, 0, None, None, false).get(WeightKey::LeaderReplacement),
+            0.0,
+            "a first, never-swapped leader must not read as a replacement"
+        );
+
+        // A second leader-take event happened (popcount >= 2) and the slot
+        // is occupied: the current leader can only be the replacement.
+        let mut replaced = G::new_game(2, 71);
+        replaced.players[0].leader = moses;
+        replaced.players[0].taken_leader_ages =
+            (1 << (crate::cards::Age::A as u8)) | (1 << (crate::cards::Age::I as u8));
+        assert_eq!(
+            features(&replaced, 0, None, None, false).get(WeightKey::LeaderReplacement),
+            1.0,
+            "a leader held after a second leader-take event must read as a replacement"
+        );
+    }
+
+    /// `WeightKey::WonderPoolRivalClaimed` counts RIVALS' completed wonders
+    /// of `state.age_civil` only -- the evaluated player's own completions
+    /// are excluded because `Wonders` already prices them, and folding them
+    /// in here would reproduce the sign-averaging defect this whole task
+    /// exists to avoid (see the variant's own doc comment in `weights.rs`).
+    /// Three players each complete one Age::A wonder: the evaluated player
+    /// (idx 0, `Pyramids`) plus two rivals (`Hanging Gardens`, `Colossus`).
+    /// The feature must read 2.0 -- NOT 3.0 -- which is the one assertion
+    /// that pins the rivals-only decision rather than the plan's original
+    /// all-players proposal.
+    #[test]
+    fn wonder_pool_rival_claimed_counts_only_rivals_completed_wonders_of_the_current_age() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("an Age A wonder");
+        let hanging_gardens = crate::cards::CardId::by_name("Hanging Gardens").expect("an Age A wonder");
+        let colossus = crate::cards::CardId::by_name("Colossus").expect("an Age A wonder");
+
+        let mut state = G::new_game(3, 72);
+        state.age_civil = crate::cards::Age::A;
+        state.players[0].completed_wonders.push(pyramids);
+        state.players[1].completed_wonders.push(hanging_gardens);
+        state.players[2].completed_wonders.push(colossus);
+
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(
+            f.get(WeightKey::WonderPoolRivalClaimed),
+            2.0,
+            "two RIVALS completed an Age::A wonder; the evaluated player's own Pyramids must not \
+             be counted, or this would reproduce the all-players sign-averaging defect the task \
+             exists to fix"
         );
     }
 }
