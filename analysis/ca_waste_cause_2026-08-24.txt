@@ -1,0 +1,239 @@
+THROUGH THE AGES -- ROOT CAUSE OF OPENING CA WASTE (2P, WORST DEFECT)
+Diagnosis only. No code or weights were changed. Read-only investigation.
+Date: 2026-08-24
+
+============================================================
+THE MEASURED FACT BEING EXPLAINED
+============================================================
+28.0% of 2p player-games (84/300) end at least one round-1-3 turn holding an
+unspent civil action, vs 0.8% (11/1384) for humans -- from
+analysis/opening_census_2026-08-24.txt. This report explains WHY, using the
+frozen champions already pinned there:
+  /private/tmp/opencensus/champ2p.json (gen 108239, 2p)
+  /private/tmp/opencensus/champ4p.json (gen 19761, 4p)
+
+============================================================
+COMMANDS RUN
+============================================================
+
+# 1. Confirm which bot the champion self-play census plays (behavcensus.rs
+#    line 509: every seat is BotKind::Weighted, i.e. weighted::eval::
+#    WeightedBot -- a pure, 1-ply, seed-free function of GameState. This
+#    matters because it means WeightedBot's decisions can be reproduced
+#    EXACTLY by any other caller that builds the identical state and calls
+#    the identical evaluator, with no bot-internal RNG to fight.)
+grep -n "BotKind::Weighted" /Users/pt/tta-ai/rust/src/bin/behavcensus.rs
+
+# 2. Read the weighted evaluator + WeightedBot::choose
+#    /Users/pt/tta-ai/rust/src/bots/weighted/eval.rs:445-501
+
+# 3. Confirmed `advisor --search greedy` calls the SAME WeightedBot
+#    1-ply evaluate() (advisor/session.rs uses `self.bot: WeightedBot`,
+#    loaded from --weights, and SearchMode::Greedy is literally
+#    WeightedBot::rank_moves under the hood) -- so advisor's --save
+#    one-shot mode, chained across seats via --load/--save snapshot files,
+#    reproduces REAL self-play move-for-move (same game::new_game(seed),
+#    same deterministic evaluator) while ALSO printing each candidate's
+#    score, which behavcensus's own census never does (the "instrumentation
+#    gap" the task anticipated does NOT apply here -- advisor already
+#    exposes it).
+
+# 4. The chaining trick (verified against /Users/pt/tta-ai/rust/src/
+#    advisor/state_io.rs:291-292 `new_board` == `game::new_game`, and
+#    session.rs:882 `skip_opponent_turn` -- NOT used here, because it
+#    fakes the opponent's turn as a no-op EndTurn; instead each seat's
+#    OWN whole turn is auto-played by calling advisor once PER SEAT PER
+#    TURN, alternating --seat and chaining --load/--save):
+mkdir -p /private/tmp/cawaste
+advisor --players 2 --seat 0 --seed <S> --weights champ2p.json \
+    --search greedy --save snap1.txt < /dev/null
+advisor --players 2 --seat 1 --load snap1.txt --weights champ2p.json \
+    --search greedy --save snap2.txt < /dev/null
+... (alternate seat 0/1, chaining snapN.txt) ...
+
+Scripts used (deleted at cleanup):
+  /private/tmp/cawaste/find_waste.sh   -- seeds 100-200, stop at first hit
+  /private/tmp/cawaste/find_waste2.sh  -- seeds 200-260, collect every hit
+
+============================================================
+RESULT: THE DEFECT REPRODUCES, REPEATEDLY, WITH A SINGLE RECURRING SIGNATURE
+============================================================
+11 genuine hits found scanning seeds 200-260 (~61 seeded 2p games, rounds
+1-3 only) -- a hit being "the top-ranked candidate at a real decision point
+is EndTurn while CA > 0, in round <= 3". This rate (11 hits / ~122
+player-game-turns sampled) is the right order of magnitude for the
+census's 28% player-game figure (a player-game can hit this on more than
+one turn, and not every round-1-3 turn is a live decision).
+
+First hit found, full transcript (seed 125, seat 1, round 2):
+  move 5 (round 2, age I): CA 1, MA 2, food 0, res 0, sci 1
+   *1. END YOUR TURN                                    [score: top]
+        why: -3 resource gap, +3 resources, -2 food gap
+    2. TAKE 'Rich Land (A)' [1 civil action(s)]           (-0.8)
+        why: +1 civil cards in hand, +1 take cost paid, -1 unspent civil actions
+    3. TAKE 'Urban Growth (A)' [1 civil action(s)]        (-0.8)
+        why: +1 civil cards in hand, +1 take cost paid, -1 unspent civil actions
+
+Ten more hits (seeds 201, 202, 213, 223, 224x2, 233, 245, 248, 257, 260),
+every one of them at food=0 and/or res=0 at the decision, and EVERY single
+one's EndTurn "why" line cites resolving the resource_gap/food_gap via
+production ("-3 resource gap, +3 resources, -1 food gap" or the same shape)
+as the reason EndTurn outscores every live alternative. The alternatives are
+never exotic -- ordinary TAKE (cost "1 civil action(s)", nothing else),
+PLAY LEADER (cost "1 civil action", nothing else), one TAKE of a 2-CA wonder
+slot -- always things the player could legally and materially afford with
+the CA already in hand.
+
+============================================================
+HYPOTHESIS TESTING
+============================================================
+
+H2 (move generation too narrow) -- RULED OUT.
+In all 11 hits, `legal::legal_moves` (shared with `advisor`'s own board,
+identical function the replayer and bots both call) offered real,
+CA-costing TAKE/PLAY LEADER/wonder-TAKE candidates alongside EndTurn. The
+move set was never empty or narrowed to just EndTurn.
+
+H4 (affordability -- can't afford the CA-consuming move) -- RULED OUT as the
+general explanation, and this is the most important negative result: every
+alternative candidate in all 11 hits costs "[1 civil action(s)]" (one case
+"[2 civil action(s)]") with NO food/resource component -- Take's cost in
+this engine is paid in CA (plus whatever the row slot's own listed cost is,
+already folded into "N civil action(s)"), not from stock. The player had
+that many CA sitting unspent at the moment EndTurn was chosen. 0/11 sampled
+hits were resource-blocked. This means essentially none of the measured 28%
+looks "legitimate" by this test -- the waste is avoidable, not a food/CA
+mismatch.
+
+H1 (valuation: every legal move genuinely prices worse) -- CONFIRMED as the
+PROXIMATE mechanism: WeightedBot really does score EndTurn higher, by a
+real, computed margin (-0.6 to -8-ish across the 11 hits), using the exact
+evaluator the champion self-play uses. But WHY every alternative prices
+worse turns out to have a specific, structural cause (next section), not a
+generic "cards are just overpriced-negative" story.
+
+H3 (search/turn-continuation ends the turn early) -- CONFIRMED, in a
+specific and previously-undocumented form: it is not a beam or loop
+"stopping early" in the sense of a bug in the search LOOP -- WeightedBot's
+1-ply search is a single argmax, not a loop that can stop partway. What
+actually happens is a STRUCTURAL ASYMMETRY in what gets scored for each
+candidate.
+
+============================================================
+THE ROOT CAUSE
+============================================================
+`WeightedBot::choose` (rust/src/bots/weighted/eval.rs:445-501) is a 1-ply
+search: for each candidate move it clones a SHARED root state, applies ONLY
+that one move, and scores the result:
+
+    for &mv in moves {
+        let mut trial = root.clone();
+        apply::apply(&mut trial, mv);
+        let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
+        if matches!(mv, Move::EndTurn) { val += end_bias; }
+        ...
+    }
+                                                    (eval.rs:479-496)
+
+`Move::EndTurn`'s `apply` arm is `crate::game::end_turn` (rust/src/
+apply.rs:314), which calls `resume_end_turn` (rust/src/game.rs:923-946),
+whose FIRST substantive call is `economy::end_of_turn(state, idx)`
+(rust/src/economy.rs:935) -- the turn's production step, which converts
+worker output into food/resource STOCK and is what resolves a player's
+`food_gap`/`resource_gap` features. `economy::end_of_turn` has exactly ONE
+call site in the whole engine: `resume_end_turn`, reached only through
+`Move::EndTurn`.
+
+The consequence: in the SAME 1-ply comparison, the EndTurn candidate's
+trial state has ALREADY had this turn's production applied, while every
+OTHER candidate's trial state (Take, PlayLeader, Build, ...) has NOT --
+production has not happened yet in that trial, because the trial is exactly
+one move deep and that move was not EndTurn. `food_gap`/`resource_gap` are
+negatively-weighted features (champ2p.json: food_gap=-1.237,
+resource_gap=-1.803), so a player sitting at food=0/res=0 (routine at this
+point in the opener) is charged the FULL penalty in every non-EndTurn
+trial, and credited close to zero penalty (having just produced) in the
+EndTurn trial -- worth the observed "+3 resources, -1..-2 food/resource
+gap" swing, several points on this vector's scale.
+
+This is not a wrong fact about the position -- ending the turn NOW really
+does produce sooner than ending it one action later. The bug is that the
+1-ply evaluator has no way to score "take the card, THEN also end the turn
+and get the SAME production" as a candidate: that is a 2-move sequence, and
+this search only ever considers 1-move sequences from the current root. It
+is comparing "produce now" against "hold this position forever" when the
+true comparison a human makes is "produce now vs. produce one action later,
+after also banking a free card" -- an option this searcher structurally
+cannot represent. `hand_civil` (-0.470) and `take_cost_paid` (-0.346) being
+negatively weighted on top of that (the previously-known "prefers to
+overpay" pattern) is real but secondary here -- in most hits it is only a
+fraction of a point; the multi-point production-timing swing is what
+actually flips the decision, confirmed by it appearing in essentially every
+one of the 11 EndTurn "why" lines and in NONE of the alternatives' "why"
+lines (structurally impossible for it to, by the mechanism above).
+
+============================================================
+WHY THIS IS WORSE AT 2P THAN 4P -- RESOLVING THE ca_left CONTRADICTION
+============================================================
+The task's framing noted `ca_left` (rewards/penalises leftover CA) points
+the "wrong way" for this to be worse at 2p: 2p's ca_left=-0.196 SHOULD
+discourage hoarding, 4p's ca_left=+1.393 should REWARD it, yet 2p wastes
+2.9x more. Measured weight comparison (champ2p.json vs champ4p.json)
+resolves this: ca_left is not the operative term, and its sign was never
+going to be -- it is a flat, position-independent nudge on the order of
+0.2-1.4 points, completely swamped by the multi-point, position-dependent
+production-timing swing described above. The swing's SIZE is set by
+food_gap/resource_gap, and those differ sharply between the two frozen
+champions:
+
+  weight            2p (champ2p.json)   4p (champ4p.json)
+  food_gap          -1.237              0.0   (OFF)
+  resource_gap      -1.803              -1.175
+  hand_civil        -0.470              -12.29
+  take_cost_paid    -0.346              +0.218  (reward, not penalty)
+  hand_potential    +9.93               -1.20
+
+At 4p, `food_gap` is turned off entirely (weight 0) and `resource_gap` is
+weaker, so half of the production-timing mechanism cannot fire and the
+other half fires less hard. `take_cost_paid` is actually POSITIVE at 4p
+(taking a card is rewarded, not fined), which works directly against the
+2p pattern found here. This is consistent with, and gives a mechanistic
+explanation for, 4p's measured 9.5% opening-CA-waste rate being milder than
+2p's 28.0% -- not because 4p's evaluator reasons any better about turn
+sequencing (the SAME 1-ply structural gap exists at 4p, unmeasured directly
+here for budget reasons), but because the weight vector that would trigger
+it is largely defused at 4p. The task's own note that 4p is far less
+trained (gen 19761 vs 108239) is the most likely reason these vectors
+differ this much, not a reasoned fix.
+
+============================================================
+WHAT FRACTION OF THE 28% IS UNAVOIDABLE (H4) VS GENUINELY DUMB
+============================================================
+Of the 11 reproduced hits (a real sample, not the full 84 -- exhaustively
+enumerating all 84 was out of budget), 0 were resource/food-blocked: 11/11
+had a fully legal, fully affordable (CA-only-cost) alternative to EndTurn
+available and rejected it in favour of EndTurn. So on this sample, 0% looks
+legitimately unavoidable and 100% looks like the production-timing artifact
+above. This is a SAMPLE OF 11, not the full 84 -- stated as measured, not
+extrapolated to an exact percentage of the full 28.0%.
+
+============================================================
+INSTRUMENTATION NOTE
+============================================================
+The task anticipated per-move bot scores might be unmeasurable
+(behavcensus never prints them, confirmed in the prior report). That gap
+exists in `behavcensus`, but `advisor --search greedy`'s one-shot `--save`
+mode calls the IDENTICAL `WeightedBot` 1-ply evaluator and prints every
+candidate's move, score gap and top-3 feature-delta "why" -- this is a
+real, already-built substitute, not a proposed fix. Chaining it across
+seats via `--load`/`--save` reproduces true self-play exactly because
+`state_io::new_board` calls the same `game::new_game(players, seed)`
+behavcensus does and `WeightedBot` reads no RNG of its own.
+
+============================================================
+CLEANUP
+============================================================
+Deleted: /private/tmp/cawaste/ (scripts, snapshot files -- scratch only).
+Kept: this report, and the frozen champions at /private/tmp/opencensus/
+(champ2p.json, champ3p.json, champ4p.json), per instructions.
+df -h / at finish: 186Gi total, 10Gi used, 7.6Gi avail, 58% capacity.
