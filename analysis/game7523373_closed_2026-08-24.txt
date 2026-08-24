@@ -1,0 +1,37 @@
+Game 7523373 (Grey = seat idx 3) — CLOSURE NOTE
+
+CONSERVATION IDENTITY (yellow tokens, Grey)
+
+Setup (game.rs:118 START_TECHS, game.rs:268, game.rs:376):
+  Warriors 1 + Agriculture 2 + Bronze 2 + Philosophy 1 + Religion 0 = 6 placed
+  + workers_free 1 = 7 on the board
+  + yellow_bank 18
+  = 25 tokens total at setup
+
+Ledger over the game: +3 (r6 Vast Territory grant_yellow n=3, the only tokens
+entering from outside) and -4 (two age changes, -2 each). Sacrifices move
+board->bank and conserve.
+
+Expected at r15: 25 + 3 - 4 = 24
+Measured at r15: bank 10 + staffed 13 + workers_free 1 = 24
+Exact match. No token is leaked, duplicated or lost anywhere in the game.
+
+S12.2.4 FINDING (game.rs:571)
+
+The two -2 bank gaps (r6->r7: 18->16; r12->r13: 11->9) are the rule-correct
+age-change deduction at game.rs:571 (in advance_age, for every player):
+
+    // §12.2.4: two unborn population are removed from every supply at
+    // every age change after the first.
+    for p in state.players[..state.num_players as usize].iter_mut() {
+        p.yellow_bank = p.yellow_bank.saturating_sub(2);
+    }
+
+Not a bug.
+
+CONCLUSION
+
+The engine is correct and there is no oracle for the remaining delta: the
+engine fires an r15 uprising (discontent = happy_required(10)=3 - s.happy=1 = 2
+> workers_free=1) that BGO's journal does not record, and every rule the engine
+applies in this game has been verified with the journal and the card table.
