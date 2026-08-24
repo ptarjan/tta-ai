@@ -570,8 +570,9 @@ impl WeightedBot {
 // faithful for every coordinate `evaluate`'s own `WeightKey::ALL`/
 // `PHASE_KEYS` loops price, which is most of the vector.
 //
-// One documented, deliberate gap, not hidden: ten coordinates ([`WeightKey::
-// HandPotential`], [`WeightKey::WonderPotential`], [`WeightKey::
+// One documented, deliberate gap, not hidden: eleven coordinates
+// ([`WeightKey::HandPotential`], [`WeightKey::WonderPotential`],
+// [`WeightKey::WonderPromise`], [`WeightKey::
 // HandMilPotential`], [`WeightKey::RivalHandPotential`], [`WeightKey::
 // RowUrgency`], [`WeightKey::RowBargainForgone`], [`WeightKey::RowLastCopy`],
 // [`WeightKey::MyEventThreat`], plus [`WeightKey::RateHorizon`]'s own scaling
@@ -579,9 +580,9 @@ impl WeightedBot {
 // itself -- each is priced by calling a function that takes the FULL weight
 // vector and reprices its own internal sub-terms through it (`cards::
 // hand_potential(state, idx, w)` and siblings), so the true `evaluate(state,
-// w)` is bilinear in `w` on these ten dimensions, not expressible as
+// w)` is bilinear in `w` on these eleven dimensions, not expressible as
 // `w . f(state)` for any single fixed `f`. [`linear_features`] resolves this
-// by freezing those ten sub-computations at a caller-supplied `freeze`
+// by freezing those eleven sub-computations at a caller-supplied `freeze`
 // vector (the champion, in every real call site) rather than the `w` being
 // fit -- the OUTER gate weight (e.g. `hand_potential`'s own coordinate) is
 // still fully free and fit, only the INNER sub-pricing inside it is held at
@@ -594,7 +595,7 @@ impl WeightedBot {
 /// The raw linear feature vector, one entry per [`WeightKey`], such that
 /// `sum_k w.get(k) * out[k as usize]` equals [`evaluate`]'s own total
 /// whenever `w == freeze` -- see this section's own doc comment for exactly
-/// which ten coordinates are only equal in that one case (frozen at
+/// which eleven coordinates are only equal in that one case (frozen at
 /// `freeze`, not recomputed for a different `w`) and why.
 ///
 /// `ctx` must be the SAME [`RivalContext`] `evaluate`'s own caller built for
@@ -664,10 +665,11 @@ pub fn linear_features(state: &GameState, idx: u8, ctx: Option<&RivalContext>, f
         }
     }
 
-    // The ten identity-aware, `freeze`-priced gates -- see this section's
+    // The eleven identity-aware, `freeze`-priced gates -- see this section's
     // top doc comment.
     out[WeightKey::HandPotential as usize] = cards::hand_potential(state, idx, freeze);
     out[WeightKey::WonderPotential as usize] = cards::wonder_potential(state, idx, freeze);
+    out[WeightKey::WonderPromise as usize] = cards::wonder_promise(state, idx, freeze);
     out[WeightKey::HandMilPotential as usize] = cards::hand_mil_potential(state, idx, freeze);
     let (tactic_gain, tactic_short) = cards::tactic_terms(state, idx);
     out[WeightKey::TacticGain as usize] = tactic_gain;
@@ -1691,6 +1693,57 @@ mod tests {
             assert_eq!(ranked.len(), feats.len(), "{n}p: candidate set must match rank_moves' own");
             for &(mv, score) in &ranked {
                 let (_, f) = feats.iter().find(|&&(m, _)| m == mv).unwrap_or_else(|| panic!("{mv:?} missing"));
+                let linear = dot(&w, f);
+                assert!(
+                    (linear - score).abs() < 1e-6,
+                    "{n}p {mv:?}: linear={linear} evaluate={score}"
+                );
+            }
+        }
+    }
+
+    /// Every identity-aware gate defaults to 0.0, so the invariant above is
+    /// satisfied vacuously for any coordinate `linear_features` forgets to
+    /// write: nothing multiplies the missing entry. Turn one on and the
+    /// omission becomes an arithmetic disagreement.
+    ///
+    /// `wonder_promise` is the one that was missing. It is the ONLY term
+    /// nonzero on the move that TAKES a wonder, so every offline fitting
+    /// tool -- all of which read `linear_features`, not `evaluate` -- saw an
+    /// exactly-zero coordinate and could not learn a wonder preference at
+    /// the only moment one is expressible. Measured on the 2p `Take` below
+    /// with the coordinate unwritten: `linear_features` reported 0.0 where
+    /// `cards::wonder_promise` returns 3.06, while `wonder_potential` was
+    /// 0.0 on BOTH sides (its documented early return at `paid_fraction ==
+    /// 0.0`) -- so on a take there is no second term to absorb the loss.
+    #[test]
+    fn linear_features_reproduces_evaluate_with_the_wonder_gates_switched_on() {
+        for n in [2u8, 3, 4] {
+            let mut state = G::new_game(n, 11);
+            // A fresh board has nobody building anything, and
+            // `cards::wonder_promise` returns 0.0 before a single stage is
+            // owed -- put a real wonder in progress or the test passes
+            // whether or not the coordinate is ever written.
+            state.players[0].wonder = crate::cards::CardId::by_name("Pyramids").unwrap();
+            assert_ne!(
+                cards::wonder_promise(&state, 0, &Weights::default()),
+                0.0,
+                "{n}p: fixture must actually price a promise"
+            );
+            let moves = crate::legal::legal_moves(&state);
+            let mut w = Weights::default();
+            // Both halves of the wonder pricing, so a swap between the two
+            // sibling coordinates cannot pass either. Ordered the way
+            // `DOMINATES` requires (potential >= promise) so the fixture is a
+            // vector `dominance_repair` would leave alone.
+            w.set(WeightKey::WonderPotential, 2.5);
+            w.set(WeightKey::WonderPromise, 1.5);
+            let bot = WeightedBot::new(w);
+            let ranked = bot.rank_moves(&state, moves.as_slice());
+            let feats = candidate_features(&state, moves.as_slice(), false, &w);
+            for &(mv, score) in &ranked {
+                let (_, f) =
+                    feats.iter().find(|&&(m, _)| m == mv).unwrap_or_else(|| panic!("{mv:?} missing"));
                 let linear = dot(&w, f);
                 assert!(
                     (linear - score).abs() < 1e-6,
