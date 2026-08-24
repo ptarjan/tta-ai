@@ -15787,6 +15787,51 @@ mod tests {
         assert!(!r.state.players[0].churchill_used);
     }
 
+    /// The Build-arm tests above only ever exercise `apply_one` on a BARE
+    /// line ("Orange builds Warrior ..."), which is exactly why the ordering
+    /// bug went uncaught: a bare line never goes near `free_civil_action_move`
+    /// at all. This drives the ORDERED shape through the real
+    /// `DevelopTechnology` arm instead: `"discovers Air Forces using
+    /// Breakthrough"`. Air Forces is an Age III unit (techCost 12), so
+    /// `costs::tech_cost_net`'s `is_unit` gate nets `mil_sci_discount` off its
+    /// price BEFORE `action_card_playable` even offers the develop as one of
+    /// Breakthrough's legal orders -- with the pool still empty (9 science on
+    /// hand, cost 12) there is no legal `Move::Develop` for `free_action_moves`
+    /// to return at all, so `PlayAction { Breakthrough }` itself is illegal and
+    /// the WHOLE line fails, not just a mispriced one. Synthesizing Churchill's
+    /// choice before `free_civil_action_move` runs fills the pool to 3 first,
+    /// making 9 science exactly enough for the netted cost of 9 (12 - 3).
+    #[test]
+    fn an_ordered_develop_line_still_fills_churchills_military_pool_before_pricing() {
+        let card_index = build_card_index();
+        let mut r = Replayer::new(&card_index, 2, EventPlan::default(), HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new(), HashMap::new(), HashMap::new(), HashMap::new(), VecDeque::new());
+        r.state.current = 0;
+        r.state.phase = Phase::Actions;
+        r.state.round = 17; // Churchill is Age III, never legitimately in play in round 1
+        r.state.players[0].leader = crate::CardId::by_name("Winston Churchill").expect("Churchill is in the table");
+        r.state.players[0].civil_actions = 4;
+        r.state.players[0].science = 9; // Air Forces techCost 12, minus the 3 the pool must cover
+        r.state.players[0].hand_civil.push(card("Breakthrough (I)")); // gainScience 2, matches the trailing "gets 2 science" clause below
+        r.state.players[0].hand_civil.push(card("Air Forces")); // techCost 12, an Age III unit -- tech_cost_net nets mil_sci_discount off it
+        assert_eq!(r.state.players[0].mil_sci_discount, 0, "no prior grant this turn");
+
+        let out = apply_one(
+            &mut r,
+            0,
+            ActionClass::DevelopTechnology,
+            Some(card("Air Forces")),
+            "discovers Air Forces using Breakthrough Orange loses 3 military science; Orange loses 9 science; Orange gets 2 science",
+            "Orange discovers Air Forces using Breakthrough Orange loses 3 military science; Orange loses 9 science; Orange gets 2 science",
+            None,
+        );
+
+        assert!(out.is_ok(), "{out:?}");
+        assert!(r.state.players[0].techs.has(card("Air Forces")), "the develop landed");
+        assert!(r.state.players[0].churchill_used, "Churchill's once-per-turn choice was spent to cover this line");
+        assert_eq!(r.state.players[0].mil_sci_discount, 0, "the whole 3-point grant was spent on this line's own 3-point shortfall");
+        assert_eq!(r.state.players[0].science, 2, "9 available minus the netted cost 9 (12 printed - 3 from the pool), plus Breakthrough's own +2 gainScience landing in the same PlayAction");
+    }
+
     /// Julius Caesar offers a SECOND political action after the first one
     /// (`apply::end_politics`), and a human who declines it leaves BGO's
     /// `"passes Political Phase"` line wherever they happened to click it --
