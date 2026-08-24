@@ -1,0 +1,180 @@
+4-PLAYER CREDIT-WEIGHT ZERO-FLIP MEASUREMENT
+Date: 2026-08-24
+Repo: /Users/pt/tta-ai (Rust, package `tta`)
+READ-ONLY measurement. No files under /Users/pt/tta-ai were modified except this report.
+
+BACKGROUND
+----------
+rust/src/bots/weighted/cards.rs prices individual cards board-aware, gating each
+pricing branch on a `*_credit` weight with `if c != 0.0 { ... }`. About 20 such
+credit keys exist, all trained away from 0.0 in the 2p and 3p champions.
+Exactly three sit at 0.0 in the 4p champion ONLY:
+  free_action_credit, restricted_resource_credit, tactic_board_credit
+Question: is that zero correct at 4p, or is it a stuck/undertrained coordinate?
+
+FROZEN CHAMPION
+----------------
+Source: /Users/pt/tta-ai/experiments/rust_champion_4p.json
+Frozen copy: /private/tmp/credflip4p/champ4p_frozen.json
+Frozen champion gen: 19717
+(Frozen at the very start of this measurement; the live file is rewritten by the
+running climb every few minutes, so all duels below used ONLY this frozen copy.)
+
+SEED VALUES (2p / 3p champions, read directly, untouched)
+-----------------------------------------------------------
+Key                          2p (gen 107674)     3p (gen 58601)      4p (gen 19717, frozen)   mean(2p,3p)
+free_action_credit           0.02255826182118     0.09309819617633     0.0                      0.05782822899876
+restricted_resource_credit   0.17829723125154     0.46507591500975     0.0                      0.32168657313064
+tactic_board_credit          0.07063428113636     0.02015305023589     0.0                      0.04539366568613
+
+VARIANT CONSTRUCTION
+---------------------
+Built with plain python3 json load/dump from champ4p_frozen.json, changing ONLY the
+named coordinate(s) to the mean(2p,3p) value shown above, all other weights untouched:
+  variant_free_action.json          -> free_action_credit = 0.05782822899876
+  variant_restricted_resource.json  -> restricted_resource_credit = 0.32168657313064
+  variant_tactic_board.json         -> tactic_board_credit = 0.04539366568613
+  variant_all_three.json            -> all three set simultaneously
+
+DUEL COMMAND (repeated per variant, only --a-weights changes)
+----------------------------------------------------------------
+/Users/pt/tta-ai/rust/target/release/kindmatch \
+  --a weighted --b weighted \
+  --a-weights <variant>.json --b-weights /private/tmp/credflip4p/champ4p_frozen.json \
+  --games 240 --players 4 --seed 4100 --threads 2
+
+Both sides are `weighted` kind (same champion loader) per instructions; A rotates
+seat, B fills the other three seats (1 vs 3 at 4p) -- this is why the tool's own
+printed null is 25.00%, NOT 50%. All numbers below are judged against that printed
+null, quoted from the tool's own output each time. n = 240 games for every variant
+(full budget used, no need to drop to 120).
+
+RESULTS
+--------
+Variant                    A win rate   +/- interval   printed null   n     p-value   Clears null?
+variant_free_action         25.00%        0.00          25.00%         240   1.0000    NO  (dead-on the null)
+variant_restricted_resource 26.04%        1.23          25.00%         240   0.0906    NO  (leans positive, not significant)
+variant_tactic_board        21.88%        2.57          25.00%         240   0.0148    YES (significantly WORSE than champion)
+variant_all_three           21.46%        2.23          25.00%         240   0.0015    YES (significantly WORSE than champion)
+
+Tool's own verdict lines, verbatim:
+  free_action:          "inconclusive -- the interval still straddles the null"
+  restricted_resource:  "inconclusive -- the interval still straddles the null"
+  tactic_board:          "reject -- weighted is WORSE than weighted"
+  all_three:             "reject -- weighted is WORSE than weighted"
+
+PER-KEY VERDICT
+-----------------
+free_action_credit:         UNLEARNABLE BY SCALE -- see the FOLLOW-UP below.
+  Raising it to 0.0578 produced 25.00% +/-0.00, p=1.0000. In a PAIRED design an
+  interval of exactly zero is not a weak effect: the paired difference was zero in
+  all 240 games, so the weight moved no decision anywhere. That is a fact about the
+  code path, not a strength measurement, and "leave at zero" is the wrong lesson to
+  draw from it. The follow-up section settles what it actually means.
+
+restricted_resource_credit: INCONCLUSIVE
+  Raising it to 0.3217 produced a small positive lean (26.04% vs 25.00% null) but
+  the interval still straddles the null (p=0.09, not significant at conventional
+  thresholds). Worth a longer/independent run if a firmer answer is wanted; current
+  n=240 is not enough to call it either way.
+
+tactic_board_credit:        LEAVE AT ZERO
+  Raising it to 0.0454 significantly HURT the variant (21.88% vs 25.00% null,
+  p=0.0148, tool verdict "reject -- weighted is WORSE"). The 4p champion's zero for
+  this coordinate looks correct, not just untrained -- forcing in the 2p/3p value
+  actively costs games at 4p.
+
+ALL_THREE combined:         Matches tactic_board's direction (21.46%, p=0.0015,
+  reject/worse) -- consistent with tactic_board_credit being the dominant driver of
+  harm when all three are forced on simultaneously.
+
+CAVEATS
+--------
+- Single seed (4100), n=240 per variant -- adequate to catch tactic_board's effect
+  clearly but restricted_resource sits right at the edge of significance and would
+  benefit from more games/seeds if a decision is needed.
+- "Mean of 2p and 3p" is a plausible seed candidate, not the only one; it is not
+  itself validated as an optimum, only used to test direction of effect.
+- Frozen champion is gen 19717; the live climb has moved on since. Re-freeze before
+  any re-run if this analysis is repeated later.
+
+================================================================================
+FOLLOW-UP: WHY free_action_credit MOVES NOTHING
+================================================================================
+Same frozen champion (gen 19717), same command shape, same seed 4100, n=240 each.
+
+THE PRICING SITE
+-----------------
+rust/src/bots/weighted/cards.rs:1161-1166, inside `action_value`:
+
+    if card.special.iter().any(|sp| matches!(sp, Special::FreeCivilAction(_))) {
+        let fc = w.get(WeightKey::FreeActionCredit);
+        if fc != 0.0 {
+            total += fc * rivals::feature_marginal(WeightKey::CivilActions, ...);
+        }
+    }
+
+`action_value` has exactly one non-test caller, cards.rs:1819, behind an outer gate:
+
+    } else if kind.is_action() {
+        let ab = w.get(WeightKey::ActionBoardCredit);
+        if ab != 0.0 { return ab * action_value(id, st, ix, w, late); }
+
+All 18 `freeCivilAction` carriers are in data/cards_military_actions.json and are
+action cards, so `kind.is_action()` is satisfied and the branch does execute.
+
+THE CONTRIBUTION IS A TRIPLE PRODUCT
+-------------------------------------
+    action_board_credit  x  free_action_credit  x  marginal(civil_actions)
+
+4p champion values:  0.0070187  x  fc  x  (civil_actions = 0.0074246, phase-blended)
+
+At fc = 0.0578 that is ~3e-6 eval points against card yields of order 1.
+
+LADDER (all vs champ4p_frozen.json, 240 games, seed 4100, 4 players)
+---------------------------------------------------------------------
+Variant                                          win rate   +/-     p        reading
+free_action_credit 0 -> 0.0578                    25.00%     0.00   1.0000   no decision moved
+free_action_credit 0 -> 1.0   (~17x)              25.00%     0.00   1.0000   no decision moved
+action_board_credit 0.007 -> 0.177 alone          23.33%     1.62   0.0401   REJECT, worse
+  same + free_action_credit 0 -> 1.0              23.33%     1.62   0.0401   IDENTICAL to the line above
+free_action_credit 0 -> 500, outer gate untouched 25.62%     4.85   0.7963   decisions DO move; no effect
+free_action_credit 0 -> 500, outer gate 0.177     24.79%     4.99   0.9334   decisions DO move; no effect
+
+READINGS
+---------
+1. THE BRANCH IS NOT DEAD CODE. At fc=500 the paired interval opens to +/-4.85 --
+   decisions change. The hypothesis that the outer `action_board_credit` gate was
+   silencing it is FALSIFIED: opening that gate to the 2p value left the result
+   byte-identical (23.33% +/-1.62, p=0.0401 both times).
+
+2. IT IS UNLEARNABLE BY SCALE. The smallest value that moves any decision is ~500,
+   roughly four orders of magnitude above the range the climb explores. Every step
+   the climb can take in this coordinate produces EXACTLY zero fitness difference,
+   so the coordinate random-walks. This is the concrete, measured instance of the
+   "seldom-used features are just noise" problem: not rarity, but a coefficient whose
+   natural scale is wrong by ~1000x because it is multiplied by two other small
+   numbers before it reaches the score.
+
+3. AT THE SCALE WHERE IT DOES BITE, IT IS WORTH NOTHING. fc=500 is inconclusive both
+   with the gate at its champion value (p=0.80) and raised (p=0.93). So there is no
+   hidden win being suppressed -- the key is not a missed opportunity, it is a
+   coordinate that cannot carry the idea it names.
+
+4. THE 4p action_board_credit ZERO-ISH VALUE IS CORRECT. Forcing the 2p value
+   (0.007 -> 0.177) is significantly WORSE at 4p, p=0.0401. Same verdict shape as
+   tactic_board_credit above: player-count-dependent, not undertrained.
+
+5. THE PRODUCT-OF-CREDITS SHAPE IS THE GENERAL DEFECT. One idea ("what is a free
+   civil action on this card worth") is spread across coordinates that multiply.
+   Whichever drifts small first silences the others, and the climb must move all of
+   them in concert to express anything. tech_board_credit / gov_board_credit and
+   their inner credits have the same shape and have not been checked.
+
+WHAT THIS DOES NOT SAY
+-----------------------
+It does not say free civil actions are worthless in Through the Ages. It says this
+particular parameterisation cannot price them. Rescaling the branch so fc sits near
+1.0 at parity is a code change with a corpus-neutral, gauntlet-measurable effect --
+not done here, and not to be done by retuning the coefficient, which is exactly what
+does not work.
