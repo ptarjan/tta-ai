@@ -205,14 +205,6 @@ fn movable(key: WeightKey) -> bool {
     !FROZEN.contains(&key)
 }
 
-/// Hold `key`'s coefficient inside the magnitude its own feature earns at
-/// this table size.
-///
-/// Enforced HERE, on every mutation, and not only when a vector is loaded:
-/// a constraint that runs at load alone is a constraint the search spends
-/// its whole run outside of. That is not hypothetical -- `dominance_repair`
-/// was load-only and the climb priced five sign-gated penalties positive for
-/// thousands of generations underneath it.
 /// `key`'s own measured bound, tightened to its dominator's where
 /// [`DOMINATES`] would otherwise undo the clamp.
 ///
@@ -232,6 +224,14 @@ fn effective_bound(key: WeightKey, players: u8) -> f64 {
         .fold(own, |acc, (dominator, _)| acc.min(dominator.clamp_bound(players)))
 }
 
+/// Hold `key`'s coefficient inside the magnitude its own feature earns at
+/// this table size.
+///
+/// Enforced on every mutation, and not only when a vector is loaded: a
+/// constraint that runs at load alone is a constraint the search spends its
+/// whole run outside of. That is not hypothetical -- `dominance_repair` was
+/// load-only and the climb priced five sign-gated penalties positive for
+/// thousands of generations underneath it.
 fn clamp(x: f64, key: WeightKey, players: u8) -> f64 {
     let bound = effective_bound(key, players);
     if x.abs() > bound {
@@ -239,6 +239,44 @@ fn clamp(x: f64, key: WeightKey, players: u8) -> f64 {
     } else {
         x
     }
+}
+
+/// Pull an INCUMBENT vector inside the bounds, reporting every coordinate it
+/// had to move.
+///
+/// Clamping mutations alone is only half the rail. A champion promoted before
+/// the bounds existed keeps whatever it was carrying: the 3p champion loaded
+/// with `attack_target_weakness` at exactly 60.0 against a bound of 37.4, and
+/// nothing would ever have pulled it in, because the clamp only shapes the
+/// CANDIDATE and the candidate is rejected far more often than not. The
+/// incumbent would have sat outside the rail indefinitely while every
+/// challenger was held inside it -- which is worse than no rail, since it
+/// hands the champion an advantage no rival may copy.
+///
+/// [`dominance_repair`] runs again afterwards because clamping a dominated
+/// coefficient can leave it above a dominator that was already inside its own
+/// bound. That second pass raises the dominator at most to the dominated
+/// key's freshly clamped value, and [`effective_bound`] guarantees that value
+/// is within the dominator's own bound -- so one pass settles it rather than
+/// chasing its own tail.
+///
+/// A FROZEN key is left alone. The bound answers "how far may the search walk
+/// this", and the search never walks a frozen key at all; `culture` is the
+/// scale every other coordinate is denominated against, so silently rescaling
+/// it would move all 162 of them.
+fn repair_to_bounds(w: &Weights, players: u8) -> (Weights, Vec<(WeightKey, f64, f64)>) {
+    let mut out = *w;
+    let mut moved = Vec::new();
+    for &k in WeightKey::ALL.iter().filter(|k| movable(**k)) {
+        let before = w.get(k);
+        let after = clamp(before, k, players);
+        if after != before {
+            out.set(k, after);
+            moved.push((k, before, after));
+        }
+    }
+    let (out, _) = dominance_repair(&out);
+    (out, moved)
 }
 
 /// Every movable weight sitting at or very near its own bound -- logged
@@ -1043,7 +1081,19 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
 
     if let Some(p) = &start {
-        a.cfg.champion = load_weights(p)?;
+        // AFTER the flag loop, so `a.cfg.players` is final: the bounds are
+        // per player count and repairing a 2p champion against 3p bounds
+        // would be worse than not repairing at all.
+        let (repaired, moved) = repair_to_bounds(&load_weights(p)?, a.cfg.players);
+        for (k, before, after) in moved {
+            println!(
+                "[{}p] clamp-repair {} {before:.4} -> {after:.4} (bound {:.4})",
+                a.cfg.players,
+                k.name(),
+                effective_bound(k, a.cfg.players)
+            );
+        }
+        a.cfg.champion = repaired;
     }
     // Resolve every gauntlet member now that `a.cfg.kind` is final: a member
     // with no `--gauntlet-kind` override plays the champion's own kind
@@ -1643,6 +1693,49 @@ mod tests {
         let two = WeightKey::HandPotential.clamp_bound(2);
         let three = WeightKey::HandPotential.clamp_bound(3);
         assert!(three < two / 10.0, "2p {two} and 3p {three} are not far apart");
+    }
+
+    /// An incumbent promoted before the bounds existed must be pulled in too.
+    ///
+    /// The live 3p champion was carrying `attack_target_weakness` at exactly
+    /// 60.0 -- the old flat rail -- against its own measured bound of 37.4,
+    /// and clamping mutations alone would never have touched it: the clamp
+    /// shapes the CANDIDATE, and the candidate loses most generations. That
+    /// leaves the champion holding a coefficient no challenger is allowed to
+    /// match, which is worse than having no rail at all.
+    #[test]
+    fn an_incumbent_outside_the_bounds_is_pulled_in_at_load() {
+        let mut w = Weights::defaults();
+        w.set(WeightKey::AttackTargetWeakness, 60.0);
+        w.set(WeightKey::HandPotential, -60.0);
+        let (repaired, moved) = repair_to_bounds(&w, 3);
+
+        for &k in WeightKey::ALL.iter().filter(|k| movable(**k)) {
+            let bound = effective_bound(k, 3);
+            assert!(
+                repaired.get(k).abs() <= bound,
+                "{} survived repair at {} against its bound of {bound}",
+                k.name(),
+                repaired.get(k)
+            );
+        }
+        // Sign is the coordinate's own, not the bound's: pulling a penalty in
+        // must not flip it into a bonus.
+        assert!(repaired.get(WeightKey::HandPotential) < 0.0);
+        let names: Vec<&str> = moved.iter().map(|(k, _, _)| k.name()).collect();
+        assert!(names.contains(&"attack_target_weakness"), "repair reported {names:?}");
+        assert!(names.contains(&"hand_potential"), "repair reported {names:?}");
+    }
+
+    /// A frozen coordinate is the scale everything else is measured against,
+    /// so repair must not rescale it out from under 161 other weights.
+    #[test]
+    fn repair_leaves_a_frozen_weight_alone() {
+        let mut w = Weights::defaults();
+        w.set(WeightKey::Culture, 1_000.0);
+        let (repaired, moved) = repair_to_bounds(&w, 3);
+        assert_eq!(repaired.get(WeightKey::Culture), 1_000.0);
+        assert!(moved.iter().all(|(k, _, _)| *k != WeightKey::Culture));
     }
 
     /// The climb may not walk a penalty weight positive. `dominance_repair`
