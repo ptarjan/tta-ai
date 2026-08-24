@@ -46,6 +46,7 @@ use tta::bots::weighted::weights::Weights;
 use tta::cards::Special;
 use tta::effects;
 use tta::game::{self, MOVE_CAP};
+use tta::legal;
 use tta::moves::Move;
 use tta::state::{ChoiceKind, Pending};
 use tta::{Age, CardId, CardType};
@@ -456,6 +457,40 @@ fn hand_multiset_diff(pre: &[CardId], post: &[CardId]) -> Vec<CardId> {
 }
 
 // ---------------------------------------------------------------------
+// Card fate follow-up: WHY does a never-played card rot -- was it ever
+// legal to play, or did it lose the civil-action auction every turn?
+// ---------------------------------------------------------------------
+//
+// analysis/card_fate_human_2026-08-24.txt left this open: 39% of every
+// civil card the bot takes is never played, and that could mean (a) the
+// card was never affordable/legal again after the take (a bad take), or
+// (b) it WAS legal on some later turn but the bot always spent its civil
+// actions on something else. This section answers that by checking, at
+// every one of the acting player's own decision points, whether each card
+// already sitting in `hand_civil` had a matching move in `legal::
+// legal_moves` -- the engine's own move generator, the same one `Seat::
+// pick` already calls to choose `mv` (see `legal.rs`'s "single source of
+// truth" doc comment) -- rather than re-deriving affordability from
+// `costs.rs`, which could silently drift from what the bot was actually
+// allowed to do.
+
+/// One outstanding (not yet played or antiquated) copy of a taken civil
+/// card. Bundles "round taken" with "how many decision points it has been
+/// legal to play since" into ONE queue entry, rather than a second
+/// `VecDeque` kept in step with `taken_rounds`'s by position -- the two
+/// numbers must pop together off the same queue entry, and a pair of
+/// parallel collections could let them drift out of sync.
+#[derive(Clone, Copy, Debug)]
+struct TakenCard {
+    taken_round: u16,
+    /// Count of this player's own decision points, since this card was
+    /// taken, at which Develop/PlayLeader/Revolution/PlayAction of this
+    /// exact `CardId` appeared in `legal::legal_moves` -- i.e. the CA
+    /// auction was there to be won, whether or not the bot won it.
+    playable_turns: u32,
+}
+
+// ---------------------------------------------------------------------
 // Per-age snapshot bucket
 // ---------------------------------------------------------------------
 
@@ -692,6 +727,18 @@ struct Report {
     /// questions.
     censored_dwell_early: Vec<i32>,
     censored_dwell_late: Vec<i32>,
+    /// `TakenCard::playable_turns` for PLAYED cards -- the control
+    /// population for the never-played question below (see the "Card fate
+    /// follow-up" section above `TakenCard`'s own definition).
+    playable_turns_played_early: Vec<u32>,
+    playable_turns_played_late: Vec<u32>,
+    /// The same, for cards that were NEVER played (antiquated or still in
+    /// hand at game end, blended exactly as `censored_dwell_*` already
+    /// blends them). Zero here means the take was never legal again by
+    /// game end; nonzero means it lost the CA auction every turn it was
+    /// legal, until it was culled or the game ended.
+    playable_turns_never_played_early: Vec<u32>,
+    playable_turns_never_played_late: Vec<u32>,
 }
 
 impl Report {
@@ -756,6 +803,10 @@ impl Report {
         self.played_dwell_late.extend(other.played_dwell_late);
         self.censored_dwell_early.extend(other.censored_dwell_early);
         self.censored_dwell_late.extend(other.censored_dwell_late);
+        self.playable_turns_played_early.extend(other.playable_turns_played_early);
+        self.playable_turns_played_late.extend(other.playable_turns_played_late);
+        self.playable_turns_never_played_early.extend(other.playable_turns_never_played_early);
+        self.playable_turns_never_played_late.extend(other.playable_turns_never_played_late);
     }
 }
 
@@ -841,7 +892,7 @@ struct PlayerTrack {
     /// `Move::Take` and popped by exactly one of the "played" or
     /// "antiquated" event blocks in `play_one`'s move loop; whatever is
     /// left in the queues at game end is `StillInHand`.
-    taken_rounds: HashMap<CardId, VecDeque<u16>>,
+    taken_rounds: HashMap<CardId, VecDeque<TakenCard>>,
     n_taken: u32,
     n_played: u32,
     n_antiquated: u32,
@@ -853,6 +904,15 @@ struct PlayerTrack {
     /// computed once, at game end, from whatever is left in `taken_rounds`
     /// (see `play_one`'s end-of-game card-fate block), not accumulated here.
     censored_dwell: Vec<i32>,
+    /// `TakenCard::playable_turns`, one sample per PLAYED card, pushed at
+    /// the same call site as `played_dwell` -- the control population: how
+    /// many decision points a card sat legal before it was actually played.
+    playable_turns_played: Vec<u32>,
+    /// The same, for cards resolved ANTIQUATED -- blended with the
+    /// still-in-hand-at-game-end population into `Report::playable_turns_
+    /// never_played_*` at game end, matching how `censored_dwell` already
+    /// blends antiquated + still-in-hand into one "never played" population.
+    playable_turns_antiquated: Vec<u32>,
 }
 
 impl PlayerTrack {
@@ -882,6 +942,8 @@ impl PlayerTrack {
             n_card_fate_mismatch: 0,
             played_dwell: Vec::new(),
             censored_dwell: Vec::new(),
+            playable_turns_played: Vec::new(),
+            playable_turns_antiquated: Vec::new(),
         }
     }
 }
@@ -1048,6 +1110,45 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             (0..players).map(|i| state.players[i as usize].completed_wonders.len()).collect();
         let pending_infiltrate_victim: Option<u8> = infiltrate_candidate_victim(&state, mv);
 
+        // ---- card fate: playable-turns -- for every distinct civil card
+        // already sitting in the ACTING player's hand at this exact
+        // decision point (before `mv` is applied), was Develop/PlayLeader/
+        // Revolution/PlayAction of it in `legal::legal_moves` right now?
+        // This is the same call `Seat::pick` above already made internally
+        // to choose `mv` -- see legal.rs:214's "single source of truth" doc
+        // comment -- so it can never drift from what the bot was actually
+        // allowed to do here, unlike re-deriving affordability from
+        // `costs.rs`. One increment per distinct `CardId` per decision
+        // point, not per physical copy: `legal_moves` itself only ever
+        // offers one Develop/PlayLeader/Revolution/PlayAction move per
+        // distinct card (`legal.rs`'s hand iteration dedupes via
+        // `sorted_unique_into`), so every outstanding copy of that card in
+        // `taken_rounds` is equally playable right now.
+        {
+            let legal_now = legal::legal_moves(&state);
+            let mut playable_cards: Vec<CardId> = Vec::new();
+            for &m in legal_now.as_slice() {
+                if let Some(card) = played_civil_card(m) {
+                    if !playable_cards.contains(&card) {
+                        playable_cards.push(card);
+                    }
+                }
+            }
+            let hand_now = state.players[actor as usize].hand_civil.as_slice();
+            let mut credited: Vec<CardId> = Vec::new();
+            for &card in hand_now {
+                if credited.contains(&card) || !playable_cards.contains(&card) {
+                    continue;
+                }
+                credited.push(card);
+                if let Some(queue) = tracks[actor as usize].taken_rounds.get_mut(&card) {
+                    for entry in queue.iter_mut() {
+                        entry.playable_turns += 1;
+                    }
+                }
+            }
+        }
+
         game::step(&mut state, mv);
         moves_played += 1;
 
@@ -1076,7 +1177,11 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // same fact the wonder-fate section above depends on).
         if let Some(card) = taken_card {
             if !card.is_none() && card.get().kind != CardType::Wonder {
-                tracks[actor as usize].taken_rounds.entry(card).or_default().push_back(round_before);
+                tracks[actor as usize]
+                    .taken_rounds
+                    .entry(card)
+                    .or_default()
+                    .push_back(TakenCard { taken_round: round_before, playable_turns: 0 });
                 tracks[actor as usize].n_taken += 1;
             }
         }
@@ -1088,9 +1193,10 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         if let Some(card) = played_this_move {
             let t = &mut tracks[actor as usize];
             match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
-                Some(taken_round) => {
+                Some(TakenCard { taken_round, playable_turns }) => {
                     t.n_played += 1;
                     t.played_dwell.push(round_before as i32 - taken_round as i32);
+                    t.playable_turns_played.push(playable_turns);
                 }
                 None => t.n_card_fate_mismatch += 1,
             }
@@ -1121,9 +1227,10 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 let t = &mut tracks[i as usize];
                 for card in removed {
                     match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
-                        Some(taken_round) => {
+                        Some(TakenCard { taken_round, playable_turns }) => {
                             t.n_antiquated += 1;
                             t.censored_dwell.push(round_before as i32 - taken_round as i32);
+                            t.playable_turns_antiquated.push(playable_turns);
                         }
                         None => t.n_card_fate_mismatch += 1,
                     }
@@ -1390,16 +1497,25 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         if let Some(group) = wonder_tempo_group(tracks[i as usize].first_wonder_round) {
             let mut still_in_hand: u64 = 0;
             let mut censored_dwell_this_game: Vec<i32> = tracks[i as usize].censored_dwell.clone();
-            for rounds in tracks[i as usize].taken_rounds.values() {
-                for &taken_round in rounds {
+            // "Never played" playable-turns pool starts from the ANTIQUATED
+            // half (recorded per-entry at its own pop site, above) and gets
+            // the StillInHand half appended right here, matching exactly
+            // how `censored_dwell_this_game` above blends the same two
+            // populations.
+            let mut playable_turns_never_played_this_game: Vec<u32> =
+                tracks[i as usize].playable_turns_antiquated.clone();
+            for queue in tracks[i as usize].taken_rounds.values() {
+                for entry in queue {
                     still_in_hand += 1;
-                    censored_dwell_this_game.push(final_round as i32 - taken_round as i32);
+                    censored_dwell_this_game.push(final_round as i32 - entry.taken_round as i32);
+                    playable_turns_never_played_this_game.push(entry.playable_turns);
                 }
             }
             let n_taken = tracks[i as usize].n_taken;
             let n_played = tracks[i as usize].n_played;
             let n_antiquated = tracks[i as usize].n_antiquated;
             let played_dwell_this_game = tracks[i as usize].played_dwell.clone();
+            let playable_turns_played_this_game = tracks[i as usize].playable_turns_played.clone();
             match group {
                 WonderTempoGroup::Early => {
                     report.card_fate_early.record(CardFate::Played, n_played as u64);
@@ -1409,6 +1525,8 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                     report.cards_still_in_hand_per_playergame_early.push(still_in_hand as i32);
                     report.played_dwell_early.extend(played_dwell_this_game);
                     report.censored_dwell_early.extend(censored_dwell_this_game);
+                    report.playable_turns_played_early.extend(playable_turns_played_this_game);
+                    report.playable_turns_never_played_early.extend(playable_turns_never_played_this_game);
                 }
                 WonderTempoGroup::Late => {
                     report.card_fate_late.record(CardFate::Played, n_played as u64);
@@ -1418,6 +1536,8 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                     report.cards_still_in_hand_per_playergame_late.push(still_in_hand as i32);
                     report.played_dwell_late.extend(played_dwell_this_game);
                     report.censored_dwell_late.extend(censored_dwell_this_game);
+                    report.playable_turns_played_late.extend(playable_turns_played_this_game);
+                    report.playable_turns_never_played_late.extend(playable_turns_never_played_this_game);
                 }
             }
         }
@@ -1909,6 +2029,38 @@ fn print_report(players: u8, r: &Report) {
         println!("  cards still in hand at game end:       {}", percentiles_i32(hand_v.clone()));
         println!("  dwell (rounds in hand), PLAYED cards:              {}", percentiles_i32(played_dwell_v.clone()));
         println!("  dwell (rounds in hand), NEVER played (censored):   {}", percentiles_i32(censored_dwell_v.clone()));
+    }
+
+    // ---- card fate follow-up: WHY does a never-played card rot -- never
+    // legal again after the take, or legal but losing the CA auction every
+    // turn? See the "Card fate follow-up" section above `TakenCard`'s own
+    // definition for the `legal::legal_moves` check this counts.
+    println!("\n### Card fate follow-up: was a never-played card ever LEGAL to play?\n");
+    println!(
+        "playable-turns = count of this player's own decision points, since the card was taken, at which \
+         Develop/PlayLeader/Revolution/PlayAction of it appeared in legal::legal_moves (the same move list \
+         Seat::pick already chose from) -- ZERO means the card was never legal again after the take (a bad \
+         take, or the resources/prereqs never arrived); nonzero means it lost the civil-action auction to \
+         something else on every turn it was legal, until it was culled or the game ended. PLAYED cards are \
+         the control population: how many turns a card sat legal before it was actually played."
+    );
+    for (label, played_v, never_v) in [
+        ("EARLY", &r.playable_turns_played_early, &r.playable_turns_never_played_early),
+        ("LATE", &r.playable_turns_played_late, &r.playable_turns_never_played_late),
+    ] {
+        let n_never = never_v.len();
+        let n_never_zero = never_v.iter().filter(|&&n| n == 0).count();
+        let zero_share = 100.0 * n_never_zero as f64 / (n_never.max(1)) as f64;
+        println!("\n{label}:");
+        println!("  playable-turns, PLAYED cards (control):   {}", percentiles_u32(played_v.clone()));
+        println!("  playable-turns, NEVER-played cards:       {}", percentiles_u32(never_v.clone()));
+        println!(
+            "  of {n_never} never-played cards, {n_never_zero} ({zero_share:.1}%) were NEVER legal to play again \
+             after the take -- the rest ({}, {:.1}%) were legal on at least one later turn and lost the CA \
+             auction to something else",
+            n_never - n_never_zero,
+            100.0 - zero_share
+        );
     }
 }
 

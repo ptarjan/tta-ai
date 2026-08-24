@@ -1,0 +1,93 @@
+Card rot: was a never-played card ever LEGAL to play?
+=====================================================
+Date: 2026-08-24
+Tool: rust/src/bin/behavcensus.rs, "Card fate follow-up" section
+Run:  ./target/release/behavcensus --games 200 --players 3 \
+        --weights /private/tmp/opencensus/champ3p.json --threads 5
+
+WHAT THIS ANSWERS
+-----------------
+analysis/card_fate_3p_2026-08-24.txt found that ~39% of every civil card the
+bot takes is never played. analysis/card_fate_human_2026-08-24.txt (commit
+d464068) showed that is a real defect: at 3p humans take 26.92 civil cards per
+player-game and play 78.3% of them, the bot takes 17.49 and plays 61.0%. Wrong
+on both axes, and they compound.
+
+That left one question, and it had exactly two candidate answers:
+  (a) the TAKE is mispriced -- the bot buys cards it should not buy; or
+  (b) DEVELOP is priced too low relative to the take -- the bot buys fine cards
+      and then loses the civil-action auction to something else every single
+      turn until the card is culled or the game ends.
+
+The discriminator is: for every card that was never played, on how many of that
+player's own later decision points was Develop/PlayLeader/Revolution/PlayAction
+of that card actually in the legal move list?
+
+HOW IT IS MEASURED
+------------------
+The census calls legal::legal_moves(&state) on its own state immediately before
+game::step, which is the SAME call every Seat::pick opens with, on the same
+state -- so it reproduces exactly the move list the bot chose from, rather than
+re-deriving an affordability check that could disagree with the engine. Card
+identity comes from the file's existing played_civil_card helper, not a second
+copy of that logic. "playable-turns" travels inside the existing taken_rounds
+queue entry (struct TakenCard) rather than in a parallel collection.
+
+PLAYED cards are the control: how many turns a card sat legal before it was
+actually played.
+
+RESULT
+------
+EARLY (n=192 player-games):
+  playable-turns, PLAYED cards (control):  p25=1 median=1 p75=3 mean=2.80 n=1914
+  playable-turns, NEVER-played cards:      p25=0 median=0 p75=1 mean=2.24 n=1480
+  942 of 1480 never-played cards (63.6%) were NEVER legal to play again.
+
+LATE (n=163 player-games):
+  playable-turns, PLAYED cards (control):  p25=1 median=1 p75=3 mean=2.87 n=1712
+  playable-turns, NEVER-played cards:      p25=0 median=0 p75=2 mean=2.42 n=1353
+  830 of 1353 never-played cards (61.3%) were NEVER legal to play again.
+
+THE ANSWER IS (a), AND IT IS NOT THE ANSWER EITHER BRANCH PREDICTED
+-------------------------------------------------------------------
+Roughly five eighths of the wasted cards were never buildable at any point
+after the take. They did not lose an auction. They were never on the ballot.
+
+This is stable across both tempo groups (63.6% / 61.3%), so it is not an
+artifact of the early/late wonder split.
+
+The remaining ~37% did lose the CA auction and are the (b) population, so
+develop-vs-take pricing is a real but secondary effect.
+
+WHY THE CA-EXHAUSTION CONFOUND DOES NOT EXPLAIN IT
+--------------------------------------------------
+A decision point at which the player has no civil actions left offers no
+Develop at all, so it counts as "not legal" for every card in hand. That
+inflates the zero bucket -- but it cannot produce this number. The median
+never-played card sits in hand 5-6 rounds, which is on the order of 25 decision
+points. Scoring exactly zero across all of them requires the card to be
+genuinely unbuildable throughout, not merely to catch a few CA-exhausted
+moments.
+
+WHAT THIS DOES NOT YET SAY
+--------------------------
+"Never legal" has more than one cause and this census does not separate them:
+  - the civilization never had the resources, for this card or for any card
+    (an economy defect: the bot is too poor to build what it owns); versus
+  - other cards WERE developable at those same decision points and this one
+    specifically was too expensive (a card-selection defect: the take gate
+    prices the take, which is positional -- see the take-cost analysis -- and
+    never asks whether the build will ever be affordable); versus
+  - a non-resource blocker (missing prerequisite, government action limit).
+
+The discriminating follow-up is cheap and sits in the same block: at each
+decision point where this card was NOT legal, was ANY Develop legal?
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS. The human census is a diagnostic
+mirror only.
+
+KNOWN DEFECT IN THIS RUN
+------------------------
+6 of 6459 cards (0.09%) were played or antiquated with no matching take entry
+-- the census's own tracking, not a sample gap. Too small to move any share
+reported here.
