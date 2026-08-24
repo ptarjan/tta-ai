@@ -1,0 +1,67 @@
+A/B: raising wonder_promise at 3p to cure the late-wonder pathology. REJECTED.
+=============================================================================
+Measured 2026-08-24. Prerequisites: analysis/wonder_tempo_2026-08-24.txt and
+analysis/wonder_tempo_3p_cause_2026-08-24.txt, which established that 3p late
+starters are NOT resource-constrained and spend the wonder-step budget on takes.
+
+The four keys that price a wonder
+---------------------------------
+  WonderProgress   features.rs:639   stages paid    champ3p =  6.375
+  WonderRemaining  features.rs:640                  champ3p = -1.155
+  WonderInProgress features.rs:671   flat cliff     champ3p =  0.661
+  WonderPromise    cards.rs:2197, eval.rs:344-347   champ3p =  0.568
+
+WonderPotential (cards.rs:2148) is the only identity-aware wonder-value
+channel, but its `paid_fraction` is exactly 0 on the move that TAKES a wonder
+(cards.rs:2159-2162). So at the take decision, WonderPromise is the only term
+active, and 0.568 sits well under the DOMINATES ceiling of wonder_potential
+(1.938, enforced eval.rs:855).
+
+The perturbation
+----------------
+Single coordinate, /private/tmp/w3ab/cand.json:
+  wonder_promise: 0.568 -> 1.938   (exactly the DOMINATES ceiling)
+Verified no other key differs from the frozen champ3p.json.
+
+Common-opponent duel (kindmatch, 1 A-seat vs 2 B-seats, --players 3)
+--------------------------------------------------------------------
+Reference opponent: frozen champ4p.json. Weights::defaults() was tried first
+and REJECTED as a reference: it is ceiling-saturated at 100%, so it has no
+discriminating power. champ4p sits near par with champ3p at 3p, which is what
+a reference has to do to be able to measure anything.
+
+  vector   seed   A win rate        null      verdict
+  champ3p    1    32.92% +- 5.96    33.33%    at par
+  champ3p    2    33.33% +- 6.02    33.33%    at par
+  cand       1    14.79% +- 4.53    33.33%    REJECT
+  cand       2    14.79% +- 4.53    33.33%    REJECT
+
+behavcensus --games 200 --players 3 (opponent-free, cannot be gamed by a
+shared blind spot)
+-------------------------------------------------------------------------
+                                    champ3p    cand
+  mean final score                   128.65   107.53   -16.4%
+  wonders completed per player-game    1.74     0.35   -80%
+  wonders started per player-game      2.42     2.29   flat
+  wonders started-but-abandoned        0.69     1.94   +181%
+  median first wonder-stage round         7       12   LATER, not earlier
+
+Verdict and mechanism
+---------------------
+REJECTED on every measure, and it moved the target metric the WRONG WAY.
+
+Raising the reward for TAKING a wonder without raising the reward for PAYING
+one off teaches a one-ply evaluator to grab wonders it never follows through
+on. Starts stayed flat while abandonments nearly tripled - a strictly worse
+pathology than the late start it was meant to cure.
+
+This reproduces a warning the codebase already carries: eval.rs:836-850's
+DOMINATES doc comment says raising wonder_promise relative to wonder_potential
+produces exactly this take-but-never-build behaviour. The numeric invariant
+(wonder_potential 1.938 >= wonder_promise 1.938) was still satisfied - so
+satisfying DOMINATES is necessary, not sufficient, and the doc comment's prose
+is the binding constraint, not its inequality.
+
+Next lever, NOT yet tried: move wonder_progress (the key that rewards paying
+stages), or a joint move of wonder_progress and wonder_potential together.
+Do not retry wonder_promise alone in either direction.
