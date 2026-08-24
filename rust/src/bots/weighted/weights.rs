@@ -1036,6 +1036,16 @@ impl WeightKey {
             WonderPotential | WonderPromise => {
                 NonNegative("prices the in-progress wonder's completion value")
             }
+            // The only channel `Special::FreeCivilAction` has, and unlike its
+            // `*BoardCredit` bucket-mates it is provably gains-only without
+            // auditing a whole card-pricing function: `cards::action_value`'s
+            // branch for it multiplies this scale by ONE non-negative
+            // marginal (`CivilActions`, itself gated below), never a sum over
+            // printed effects that could carry a Cost. A card granting a free
+            // civil action is never worse than the same card without it --
+            // the same sentence that gates `FreeCivilAction`, which prices
+            // the identical printed ability through the typed-field path.
+            FreeActionCredit => NonNegative("scales a printed benefit"),
             // Raw board STOCKS the rules only ever ADD effects for, cited
             // chapter and verse (RULES_SPEC, see `eval::dominance_repair`'s
             // own doc comment on this bucket): an available civil action, its
@@ -1260,7 +1270,7 @@ impl WeightKey {
             // top follow-up candidate, not guessed at here.
             CardRateCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
             | GovBoardCredit | WonderBoardCredit | BuildFreshCredit | RestrictedResourceCredit
-            | FreeActionCredit | TerritoryCredit | BonusCardCredit | TacticBoardCredit
+            | TerritoryCredit | BonusCardCredit | TacticBoardCredit
             | AggressionBoardCredit | WarBoardCredit | PactBoardCredit | EventBoardCredit
             | TacticShortfallCost | TacticReachCredit => Free,
             // Hand-content magnitudes other than `HandValue` (handled above)
@@ -1778,6 +1788,19 @@ mod tests {
         assert!(matches!(WeightKey::TacticGain.sign_intent(), SignIntent::NonNegative(_)));
         assert!(matches!(WeightKey::TacticShort.sign_intent(), SignIntent::NonPositive(_)));
         assert!(matches!(WeightKey::PopCost.sign_intent(), SignIntent::NonPositive(_)));
+    }
+
+    /// The two keys pricing `Special::FreeCivilAction` -- `FreeCivilAction`
+    /// through the typed field, `FreeActionCredit` through
+    /// `cards::action_value`'s special-list branch -- scale the SAME printed
+    /// ability and must therefore carry the SAME gate. Left split, the credit
+    /// side is free to go negative and price Rich Land's and Engineering
+    /// Genius's whole headline grant as a penalty, which is what every 2p
+    /// champion on disk had learned (-0.24 on the deployed one).
+    #[test]
+    fn both_keys_pricing_a_free_civil_action_are_gated_non_negative() {
+        assert!(matches!(WeightKey::FreeCivilAction.sign_intent(), SignIntent::NonNegative(_)));
+        assert!(matches!(WeightKey::FreeActionCredit.sign_intent(), SignIntent::NonNegative(_)));
     }
 
     /// `card_board_government`/`card_board_action`/`card_board_wonder` are
