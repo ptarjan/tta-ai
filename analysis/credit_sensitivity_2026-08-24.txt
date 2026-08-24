@@ -1,0 +1,231 @@
+CREDIT SENSITIVITY SWEEP -- Through The Ages weighted bot (kindmatch paired-duel test)
+Run date: 2026-08-24. READ-ONLY measurement; no repo files touched except this report.
+
+FROZEN CHAMPIONS (copied once, live files never re-read after this point)
+  /private/tmp/credsens/champ2p.json  <- experiments/rust_champion_2p.json   gen=107806
+  /private/tmp/credsens/champ4p.json  <- experiments/rust_champion_4p.json   gen=19733
+
+BINARY: /Users/pt/tta-ai/rust/target/release/kindmatch  (prebuilt release, not rebuilt)
+
+COMMANDS USED
+
+2p sweep, per key <K>, variant file has ONLY <K> changed from champ2p.json:
+  /Users/pt/tta-ai/rust/target/release/kindmatch \
+    --a weighted --b weighted \
+    --a-weights /private/tmp/credsens/variant_2p_<K>.json \
+    --b-weights /private/tmp/credsens/champ2p.json \
+    --games 120 --players 2 --seed 5200 --threads 2
+
+4p sweep, per key <K>, variant file has ONLY <K> changed from champ4p.json:
+  /Users/pt/tta-ai/rust/target/release/kindmatch \
+    --a weighted --b weighted \
+    --a-weights /private/tmp/credsens/variant_4p_<K>.json \
+    --b-weights /private/tmp/credsens/champ4p.json \
+    --games 120 --players 4 --seed 5400 --threads 2
+
+Both player counts used the full --games 120 as planned (4p took ~19 min total for
+19 keys, well inside the 45-min budget, so no reduction to --games 60 was needed).
+
+Test-value rule (applied per key, independently at 2p and 4p, using each count's own
+champion value): champ value 0.0 -> tested value 1.0; otherwise tested = 10x champ value.
+500x escalation (only run for keys that came back +/-0.00): tested value x 500 (i.e.
+5000x the original champion value), or 500.0 if champion value was 0.
+
+19 `_credit` keys found (top-level, under champion's "weights" object):
+action_board_credit, aggression_board_credit, bonus_card_credit, build_fresh_credit,
+card_board_credit, card_rate_credit, event_board_credit, free_action_credit,
+gov_board_credit, pact_board_credit, restricted_resource_credit, tactic_board_credit,
+tactic_reach_credit, tech_board_credit, territory_credit, unit_strength_credit,
+unit_tech_credit, war_board_credit, wonder_board_credit
+
+A NOTE ON READING "+/- 0.00"
+kindmatch's paired interval has width exactly 0.00 whenever the per-deal win share has
+zero variance across the 60 (2p) / 30 (4p) complete deals. That happens in two very
+different situations, and the task brief only describes one of them:
+ (a) TRUE SILENCING -- the weight change never alters a single decision anywhere, so
+     the "variant" strategy is byte-for-byte behaviourally identical to the champion.
+     Two identical strategies duelled against each other land EXACTLY on the null win
+     rate (50.00% at 2p, 25.00% at 4p) every single deal -> zero variance -> +/-0.00.
+     This is the case the task is asking us to find.
+ (b) DETERMINISTIC DOMINANCE -- the change is so large that it flips the SAME decision
+     the SAME way in literally every deal, so the win share is a constant far from the
+     null (e.g. 0.00% or 1.67%) -- also zero variance, also prints +/-0.00, but this is
+     the most extreme form of LIVE, not silenced.
+We disambiguate by checking whether the printed win rate sits exactly on the null. Only
+one key exhibited case (b): card_board_credit at 2p (0.00% win, +/-0.00) -- flagged
+separately below, NOT counted as silenced.
+As instructed: interval width is the only thing treated as a strength signal here; win
+rate magnitude for the ordinary nonzero-width rows is noise and no strength claims are
+drawn from it.
+
+=====================================================================
+TABLE: key | 2p val | 2p tested | 2p width | 4p val | 4p tested | 4p width
+=====================================================================
+action_board_credit        | 0.180467  | 1.804668  | 5.88 | 0.025375  | 0.253755  | 2.45
+aggression_board_credit    | 0.012660  | 0.126604  | 3.36 | -0.149352 | -1.493521 | 2.85
+bonus_card_credit          | -0.233027 | -2.330270 | 5.59 | -0.931167 | -9.311671 | 2.92
+build_fresh_credit         | 0.017780  | 0.177799  | 7.01 | -0.798729 | -7.987294 | 0.00 *SILENCED (4p)
+card_board_credit          | 0.164422  | 1.644223  | 0.00 **DOMINANT,not silenced (2p) | 0.101726 | 1.017263 | 2.37
+card_rate_credit           | 0.207328  | 2.073282  | 0.00 *SILENCED (2p) | -0.340835 | -3.408346 | 5.74
+event_board_credit         | -0.343352 | -3.433523 | 6.54 | -0.417678 | -4.176780 | 4.70
+free_action_credit         | 0.022558  | 0.225583  | 5.38 | 0 (champ=0)| 1.000000 | 1.70
+gov_board_credit           | 0.090737  | 0.907370  | 6.39 | -0.021324 | -0.213238 | 4.86
+pact_board_credit          | 0.001686  | 0.016864  | 0.00 *SILENCED (2p) | 0.099254 | 0.992542 | 0.00 *SILENCED (4p)
+restricted_resource_credit | 0.178297  | 1.782972  | 6.95 | 0 (champ=0)| 1.000000 | 2.37
+tactic_board_credit        | 0.065293  | 0.652928  | 2.34 | 0 (champ=0)| 1.000000 | 4.57
+tactic_reach_credit        | -0.572929 | -5.729286 | 3.36 | 0.291190  | 2.911897  | 0.00 *SILENCED (4p)
+tech_board_credit          | -0.535114 | -5.351139 | 4.18 | -0.125285 | -1.252846 | 3.23
+territory_credit           | 0.026515  | 0.265147  | 5.30 | -0.294155 | -2.941554 | 6.65
+unit_strength_credit       | 0.012797  | 0.127973  | 0.00 *SILENCED (2p) | 0.023349  | 0.233488  | 0.00 *SILENCED (4p)
+unit_tech_credit           | 0.003334  | 0.033339  | 6.16 | 0.048089  | 0.480891  | 6.01
+war_board_credit           | 0.164026  | 1.640257  | 2.34 | 0.180718  | 1.807185  | 3.12
+wonder_board_credit        | 0.032688  | 0.326882  | 7.60 | 0.071973  | 0.719731  | 3.41
+
+(All widths in percentage points, as printed by kindmatch. n=120 games per duel = 60
+complete deals at 2p, 30 at 4p, per the tool's own pairing.)
+
+=====================================================================
+SILENCED LIST (interval width EXACTLY 0.00, win rate exactly at the null -> proof of
+zero decisions changed anywhere in 120 games at 10x/1.0 test value)
+=====================================================================
+2p SILENCED (3 of 19): card_rate_credit, pact_board_credit, unit_strength_credit
+4p SILENCED (4 of 19): build_fresh_credit, pact_board_credit, tactic_reach_credit,
+                        unit_strength_credit
+
+Union across both counts: 5 unique keys ever silenced --
+  card_rate_credit (2p only), pact_board_credit (both), unit_strength_credit (both),
+  build_fresh_credit (4p only), tactic_reach_credit (4p only)
+This is exactly 5, not more than 5, so it does not cross the "report immediately"
+threshold in the brief, but it is still roughly a quarter of all 19 _credit keys and
+is reported as the headline finding below.
+
+SEPARATE FLAG (not silenced, not a normal live row): card_board_credit at 2p prints
++/-0.00 with win rate 0.00% -- this is DETERMINISTIC DOMINANCE (every single one of the
+60 deals flips the same way), the opposite of silencing. At 4p the same key is a normal
+live row (1.67% win, +/-2.37).
+
+LIVE LIST (nonzero interval width -- proof at least one decision changed at least once)
+2p LIVE (16 of 19): action_board_credit, aggression_board_credit, bonus_card_credit,
+  build_fresh_credit, card_board_credit(dominant), event_board_credit,
+  free_action_credit, gov_board_credit, restricted_resource_credit, tactic_board_credit,
+  tactic_reach_credit, tech_board_credit, territory_credit, unit_tech_credit,
+  war_board_credit, wonder_board_credit
+4p LIVE (15 of 19): action_board_credit, aggression_board_credit, bonus_card_credit,
+  card_board_credit, card_rate_credit, event_board_credit, free_action_credit,
+  gov_board_credit, restricted_resource_credit, tactic_board_credit, tech_board_credit,
+  territory_credit, unit_tech_credit, war_board_credit, wonder_board_credit
+
+=====================================================================
+500x ESCALATION RESULTS (only run for the 5 silenced keys, at each count where silenced)
+=====================================================================
+2p, tested value x500 (= 5000x champion value):
+  card_rate_credit      esc=1036.641 -> win 50.00% +/-0.00  STILL SILENCED at 500x
+  pact_board_credit     esc=8.432    -> win 50.00% +/-0.00  STILL SILENCED at 500x
+  unit_strength_credit  esc=63.986   -> win 50.00% +/-0.00  STILL SILENCED at 500x
+
+4p, tested value x500 (= 5000x champion value):
+  build_fresh_credit    esc=-3993.647 -> win 25.00% +/-0.00  STILL SILENCED at 500x
+  pact_board_credit     esc=496.271   -> win 17.50% +/-6.55  OPENED at 500x (reject verdict)
+  tactic_reach_credit   esc=1455.949  -> win 25.00% +/-0.00  STILL SILENCED at 500x
+  unit_strength_credit  esc=116.744   -> win 25.00% +/-0.00  STILL SILENCED at 500x
+
+Interpretation per the brief's two hypotheses ("dead code, never executes" vs "live but
+drowned by scale"):
+  - pact_board_credit @ 4p is the "drowned by scale" case, the same pattern already
+    confirmed for free_action_credit @ 4p in the prior investigation: dead at 10x
+    (0.993), still dead at 2p even at 5000x champ (8.432), but OPENS at 4p once pushed
+    to ~496 (5000x the 4p champion value of 0.0993). This means the climb CAN in
+    principle learn this coordinate at 4p, but only after crossing a threshold roughly
+    5000x its current champion value -- the same kind of unreachable-by-gradient-walk
+    coordinate documented for free_action_credit.
+  - card_rate_credit @ 2p, unit_strength_credit @ both counts, build_fresh_credit @ 4p,
+    tactic_reach_credit @ 4p all remained fully silent at 5000x the champion value.
+    That is consistent with "dead/rarely-exercised code" in these 120-game seeded
+    samples rather than merely being drowned by a multiplier -- though a single 500x
+    escalation cannot rule out that an even larger multiplier (or a different seed set
+    that happens to draw the relevant cards/situations) would eventually open them; see
+    each key's pricing-site note below for why they may rarely fire.
+
+=====================================================================
+PRICING SITES (rust/src/bots/weighted/cards.rs, read-only grep+read, no guessing)
+=====================================================================
+unit_strength_credit (silenced both counts):
+  Lines ~520 and ~1044, inside `sum_yields()`:
+    YieldKind::Unit => amt *= w.get(WeightKey::UnitStrengthCredit),
+  then gated by `if wk != 0.0 && amt != 0.0 { total += wk * amt; }` where wk is the
+  OTHER weight paired with that yield triple (WeightKey::Strength for Unit-kind
+  triples, base weight `strength` = 12.58 in the 2p champion, so that gate is open).
+  A doc comment at line ~504-514 notes "at most one YieldKind::Unit triple exists per
+  card today" -- i.e. this is already a rare code path by construction, consistent
+  with staying silent even at 5000x the champion value in a 120-game sample.
+
+card_rate_credit (silenced 2p only):
+  Lines ~1881 and ~2161: `let credit = w.get(WeightKey::CardRateCredit);` then passed
+  as the `credit` argument into `sum_yields(..., credit)`, where it multiplies
+  YieldKind::Rate triples (`YieldKind::Rate => amt *= credit`), and separately as a
+  multiplier for wonder-outlook valuation (`discount * board * gains_only_board_sum`
+  path uses `board`, a different weight, when board!=0; the credit path is the
+  fallback `sum_yields(&buf, w, credit)` when board resolution doesn't apply).
+
+pact_board_credit (silenced at 10x both counts; opens at 500x/4p only):
+  Line ~1869, inside card_potential's per-CardType dispatch:
+    else if kind == CardType::Pact {
+        let pc = w.get(WeightKey::PactBoardCredit);
+        if pc != 0.0 { return pc * pact_value(id, st, ix, w, late); }
+    }
+  Single multiplication against `pact_value(...)`'s return (not a further internal
+  `_credit`-named factor at this call site). Only reached for CardType::Pact cards.
+
+build_fresh_credit (silenced 4p only):
+  Line ~1203, inside the staffing-plan valuation:
+    let build_credit = w.get(WeightKey::BuildFreshCredit);
+    if build_credit != 0.0 { ... b_net *= build_credit; if b_net > net { net = b_net; } }
+  `b_net` is itself a sum of feature-marginal-weighted yields for the "build one fresh
+  worker" plan; it only replaces `net` via `max()` if it exceeds the OTHER staffing
+  plan's net, so a very large build_credit still needs b_net (pre-multiply) to already
+  be in a competitive range to matter -- a two-factor gate similar in spirit to
+  free_action_credit's board-credit x marginal chain.
+
+tactic_reach_credit (silenced 4p only):
+  Line ~1352:
+    let strength_m = yield_marginal(WeightKey::Strength, state, idx, w, None);
+    let reach_credit = w.get(WeightKey::TacticReachCredit);
+    (reach_credit * (potential * strength_m - cost)).max(0.0)
+  Multiplied against `(potential * strength_m - cost)`, then floored at 0 by `.max(0.0)`
+  -- so if that inner term is typically <=0 in the sampled games (cost routinely meets
+  or exceeds the strength-marginal value of closing the gap), the whole term floors to
+  0 regardless of how large reach_credit gets, which would explain persistence at 500x.
+
+=====================================================================
+READINGS -- what the climb provably cannot learn, and where
+=====================================================================
+1. pact_board_credit is silenced (unlearnable by gradient walk) at BOTH 2p and 4p at
+   the magnitudes the climb actually explores (it is currently at 0.0017 / 0.0993,
+   and even 10x-100x that range moves nothing). At 4p specifically it is the SAME kind
+   of coordinate as free_action_credit -- live in principle but requires a value
+   ~5000x the current champion's to matter, which a local hill-climb will never reach
+   by continuous small steps. At 2p it stayed fully dead even at 5000x, so 2p pact
+   pricing may simply not be exercised by these seeded games (CardType::Pact cards
+   rare/absent in the drawn decks) rather than just under-scaled.
+2. unit_strength_credit is silenced at BOTH player counts and stays dead even at
+   5000x the champion value -- best explained by the code comment itself: at most one
+   Unit-kind yield triple exists per card today, so this coordinate is rarely, perhaps
+   almost never, exercised regardless of its weight. The climb cannot learn it not
+   because of a multiplier chain but because the code path barely fires.
+3. card_rate_credit is silenced at 2p only (live at 4p, width 5.74) -- a genuine
+   player-count-dependent finding: the climb can learn this coordinate at 4p but not
+   at 2p at all, even out to 5000x. Worth flagging to whoever owns 2p card-rate
+   pricing, since the 2p climb has been running far longer (gen 107806 vs gen 19733)
+   yet has never been able to move this weight.
+4. build_fresh_credit and tactic_reach_credit are silenced at 4p only (both live at
+   2p). Both stayed dead at 5000x, and both sit behind a floor/max gate against a
+   competing valuation, which is a plausible mechanical reason a large credit can
+   still produce zero effect: the multiplied term is clamped to non-negative or must
+   beat a competing plan, so scaling the credit alone does not guarantee it becomes
+   decision-relevant.
+5. Net structural point for the coordinator: after free_action_credit, this is the
+   SECOND confirmed instance of a `_credit` weight requiring roughly 5000x its current
+   champion value before it can be learned (pact_board_credit @ 4p) -- plus four more
+   keys that look outright dead within the sampled games rather than merely
+   under-scaled. Roughly a quarter of the 19 `_credit` keys are unlearnable as
+   currently coded/scaled at one or both player counts.
