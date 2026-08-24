@@ -172,17 +172,15 @@ fn play_one(policy: OpeningPolicy, weights: Weights, seed0: u64, index: usize) -
 
     let winners = game::winners(&state);
     let share = if winners.contains(&(a_seat as u8)) { 1.0 / winners.len() as f64 } else { 0.0 };
-    let culture = |i: usize| state.players[i].culture as f64;
-    let best_other =
-        (0..players).filter(|i| *i != a_seat).map(culture).fold(f64::NEG_INFINITY, f64::max);
+    let cultures: Vec<f64> = (0..players).map(|i| state.players[i].culture as f64).collect();
 
-    let duel = Duel {
+    let duel = Duel::from_final_cultures(
+        &cultures,
+        a_seat,
         share,
-        culture_a: culture(a_seat),
-        culture_best_other: best_other,
-        moves: outcome.moves_played,
-        cap_hit: outcome.move_cap_hit,
-    };
+        outcome.moves_played,
+        outcome.move_cap_hit,
+    );
 
     let mut mine = GoalTally::default();
     let mut leader = GoalTally::default();

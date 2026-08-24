@@ -150,6 +150,15 @@ fn report(args: &Args, s: &Summary, games: usize, elapsed: f64) {
         "culture      A {:.1}   best other {:.1}   lead {:+.1} +/- {:.1}",
         s.mean_culture_a, s.mean_culture_best_other, s.lead.mean, s.lead.half,
     );
+    // `lead` is a maximum over the defenders, so it is negative on average
+    // even between identical vectors -- print the centred one beside it, whose
+    // null IS zero, so nobody has to remember that again.
+    println!(
+        "             centred lead {:+.1} +/- {:.1}   (null 0.0; raw lead's null is {:+.1})",
+        s.centred_lead.mean,
+        s.centred_lead.half,
+        s.lead.mean - s.centred_lead.mean,
+    );
     println!();
 
     // The gate: the whole interval clear of the null, not just the point.

@@ -457,14 +457,22 @@ struct Challenge {
 /// quietly bias every mean this flag produces; the non-finite guard beside
 /// it is the same rule applied to any OTHER reason a lead might not be a
 /// real number, not just this one known cause.
+///
+/// It scores [`Duel::centred_lead`], NOT `Duel::lead`. `lead` is a maximum
+/// over the defenders and so is negative on average even when both sides play
+/// the same vector -- measured at -29.2 (3p) and -43.9 (4p) over 240 games of
+/// one champion against itself. Scoring `lead` directly put a neutral mutant
+/// at a share of ~0.376 (3p) against a null of 0.5, so above two players the
+/// accept gate rejected everything, indefinitely, and read as a converged
+/// climb rather than a broken one.
 fn per_game_value(d: &Duel, cfg: &Config) -> Option<f64> {
     match cfg.fitness {
         Fitness::Win => Some(d.share),
         Fitness::Margin => {
-            if d.cap_hit || !d.lead().is_finite() {
+            if d.cap_hit || !d.centred_lead().is_finite() {
                 None
             } else {
-                Some(margin_share(d.lead(), cfg.players))
+                Some(margin_share(d.centred_lead(), cfg.players))
             }
         }
     }
@@ -1458,20 +1466,22 @@ impl Config {
     ///
     /// `Fitness::Win`'s `1 / players` is exact by symmetry -- `players`
     /// interchangeable seats split the win evenly. `Fitness::Margin`'s `0.5`
-    /// is [`margin_share`] evaluated at `lead == 0`, the rule-derived
-    /// win/lose boundary, and is exact at 2p for the same symmetry reason --
-    /// but at 3p/4p it is a deliberate APPROXIMATION: the TRUE expected
-    /// margin share of two identical vectors sits measurably below 0.5,
-    /// because the best of several equally-strong rivals beats their own
-    /// average (the same reason `Fitness::Win`'s null itself shrinks as
-    /// `players` grows). Getting that exact number needs measuring it by
-    /// self-play, which this change does not do. `0.5` errs on the
-    /// conservative side of that gap -- a neutral mutant is slightly LESS
-    /// likely to clear it than a perfectly calibrated threshold would allow
-    /// -- and a spuriously rejected neutral mutant costs one generation
-    /// where a spuriously accepted harmful one costs a permanent regression,
-    /// so this is the same asymmetric bet the pool veto's whole design
-    /// already makes (module doc, section 2).
+    /// is [`margin_share`] at a centred lead of zero, and it is exact at every
+    /// player count because [`per_game_value`] scores
+    /// [`Duel::centred_lead`]: each game's raw lead has that same game's own
+    /// no-difference point subtracted off, which is zero in expectation
+    /// whenever both sides are the same strength, at any table size.
+    ///
+    /// It did NOT used to be. This arm shipped scoring the RAW lead with the
+    /// same 0.5 null, called a conservative approximation at 3p/4p. It was
+    /// not conservative, it was inoperative: a champion measured against
+    /// ITSELF leads by -29.2 at 3p and -43.9 at 4p, worth a share of ~0.376
+    /// and ~0.343, so `c.lo > null` could not be met by a neutral mutant or
+    /// by a better one, and the climb would have sat at zero accepts looking
+    /// converged. The no-difference point is measured from each game's own
+    /// final scores rather than tabulated per player count, so it tracks how
+    /// spread out this population's outcomes actually are instead of going
+    /// stale the first time the bots get better.
     fn null(&self) -> f64 {
         match self.fitness {
             Fitness::Win => 1.0 / self.players as f64,
@@ -1863,7 +1873,7 @@ mod tests {
         let win_cfg = cfg();
         assert_eq!(win_cfg.fitness, Fitness::Win);
         for (share, cap_hit) in [(1.0, false), (0.0, false), (0.5, false), (1.0, true), (0.0, true)] {
-            let d = Duel { share, culture_a: 40.0, culture_best_other: 40.0, moves: 10, cap_hit };
+            let d = Duel::from_final_cultures(&[40.0, 40.0], 0, share, 10, cap_hit);
             assert_eq!(
                 per_game_value(&d, &win_cfg),
                 Some(share),
@@ -1942,7 +1952,7 @@ mod tests {
         // win (share 1.0) at BOTH records -- only the lead differs.
         let record = |lead: f64| -> Vec<Duel> {
             (0..(players as usize * 2))
-                .map(|_| Duel { share: 1.0, culture_a: 100.0 + lead, culture_best_other: 100.0, moves: 30, cap_hit: false })
+                .map(|_| Duel::from_final_cultures(&[100.0 + lead, 100.0, 100.0], 0, 1.0, 30, false))
                 .collect()
         };
         let small_margin = record(2.0);
@@ -1988,8 +1998,8 @@ mod tests {
         c.players = players;
         c.fitness = Fitness::Margin;
 
-        let finished = Duel { share: 1.0, culture_a: 150.0, culture_best_other: 100.0, moves: 40, cap_hit: false };
-        let capped_out = Duel { share: 1.0, culture_a: 150.0, culture_best_other: 100.0, moves: 500, cap_hit: true };
+        let finished = Duel::from_final_cultures(&[150.0, 100.0], 0, 1.0, 40, false);
+        let capped_out = Duel::from_final_cultures(&[150.0, 100.0], 0, 1.0, 500, true);
 
         assert!(per_game_value(&finished, &c).is_some(), "a finished game must have a margin");
         assert_eq!(

@@ -112,17 +112,15 @@ impl<'a> Eval<'a> {
 
         let winners = game::winners(&state);
         let share = if winners.contains(&(seat as u8)) { 1.0 / winners.len() as f64 } else { 0.0 };
-        let culture = |i: usize| state.players[i].culture as f64;
-        let best_other =
-            (0..players).filter(|i| *i != seat).map(culture).fold(f64::NEG_INFINITY, f64::max);
+        let cultures: Vec<f64> = (0..players).map(|i| state.players[i].culture as f64).collect();
 
-        Duel {
+        Duel::from_final_cultures(
+            &cultures,
+            seat,
             share,
-            culture_a: culture(seat),
-            culture_best_other: best_other,
-            moves: outcome.moves_played,
-            cap_hit: outcome.move_cap_hit,
-        }
+            outcome.moves_played,
+            outcome.move_cap_hit,
+        )
     }
 
     /// Play every game across `threads` workers and return them **in task

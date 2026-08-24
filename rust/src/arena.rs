@@ -70,7 +70,11 @@ pub fn loader_for(kind: BotKind) -> fn(&std::path::Path) -> Result<Weights, Stri
 }
 
 /// One game's result from A's point of view.
+///
+/// `#[non_exhaustive]` so the binaries have to go through
+/// [`Duel::from_final_cultures`] rather than fill the fields in themselves.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Duel {
     /// 1.0 for a clean win, 1/n for an n-way tie, 0.0 otherwise.
     pub share: f64,
@@ -80,15 +84,78 @@ pub struct Duel {
     /// list; the mean-of-defenders margin does NOT have that property (you can
     /// beat the average and still come third).
     pub culture_best_other: f64,
+    /// What [`Duel::lead`] would have averaged in THIS game had A been an
+    /// equally likely one of the seats: the mean over seats of that seat's own
+    /// culture minus the best of the others.
+    ///
+    /// `lead` is a maximum over the defenders, so it is NOT centred on zero
+    /// when both sides play the same vector -- the best of several equal
+    /// rivals beats their average by construction. Measured over 240 games of
+    /// one champion against itself: 0.0 at 2p, **-29.2** at 3p, **-43.9** at
+    /// 4p. Anything treating `lead == 0` as the no-difference point is wrong
+    /// above two players, which is exactly the bug this field exists to close.
+    ///
+    /// Under the null that every seat plays the same strength, A's seat is
+    /// exchangeable with the rest, so this mean has the same expectation as
+    /// `lead` itself and `lead - null_lead` has expectation zero at EVERY
+    /// player count. It is computed from the game's own final scores, so it
+    /// tracks how spread out this population's outcomes actually are and does
+    /// not go stale as the bots improve. At 2p every term is `X_i - X_other`
+    /// and they cancel exactly, so this is 0.0 and `lead - null_lead == lead`.
+    pub null_lead: f64,
     pub moves: usize,
     pub cap_hit: bool,
 }
 
 impl Duel {
+    /// Build a `Duel` from the final culture of EVERY seat, with A in `seat`.
+    ///
+    /// The only way to make one: `culture_best_other` and `null_lead` are both
+    /// maxima over the other seats, so a caller filling the fields in by hand
+    /// can get them out of step with each other, and every runner that plays a
+    /// game already has the whole score list right there.
+    pub fn from_final_cultures(
+        cultures: &[f64],
+        seat: usize,
+        share: f64,
+        moves: usize,
+        cap_hit: bool,
+    ) -> Duel {
+        let best_of_others = |me: usize| {
+            cultures
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != me)
+                .map(|(_, c)| *c)
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
+        let null_lead = cultures
+            .iter()
+            .enumerate()
+            .map(|(i, c)| c - best_of_others(i))
+            .sum::<f64>()
+            / cultures.len() as f64;
+        Duel {
+            share,
+            culture_a: cultures[seat],
+            culture_best_other: best_of_others(seat),
+            null_lead,
+            moves,
+            cap_hit,
+        }
+    }
+
     /// A's culture minus the best defender's -- the margin
     /// `docs/LEAGUE_OBJECTIVE.md` has the league train on.
     pub fn lead(&self) -> f64 {
         self.culture_a - self.culture_best_other
+    }
+
+    /// [`Duel::lead`] with this game's own no-difference point subtracted off
+    /// -- see [`Duel::null_lead`]. Zero in expectation when both sides play
+    /// the same vector, at every player count.
+    pub fn centred_lead(&self) -> f64 {
+        self.lead() - self.null_lead
     }
 }
 
@@ -178,17 +245,15 @@ impl Match {
         let winners = game::winners(&state);
         let share =
             if winners.contains(&(seat as u8)) { 1.0 / winners.len() as f64 } else { 0.0 };
-        let culture = |i: usize| state.players[i].culture as f64;
-        let best_other =
-            (0..players).filter(|i| *i != seat).map(culture).fold(f64::NEG_INFINITY, f64::max);
+        let cultures: Vec<f64> = (0..players).map(|i| state.players[i].culture as f64).collect();
 
-        Duel {
+        Duel::from_final_cultures(
+            &cultures,
+            seat,
             share,
-            culture_a: culture(seat),
-            culture_best_other: best_other,
-            moves: outcome.moves_played,
-            cap_hit: outcome.move_cap_hit,
-        }
+            outcome.moves_played,
+            outcome.move_cap_hit,
+        )
     }
 
     /// Play every game, in `self.threads` threads, and return them **in task
@@ -231,6 +296,11 @@ impl Match {
 pub struct Summary {
     pub win: Estimate,
     pub lead: Estimate,
+    /// [`Duel::centred_lead`]'s estimate: the same margin with each game's own
+    /// no-difference point subtracted, so its null is 0.0 at every player
+    /// count. `lead`'s is not -- read this one to ask whether A actually beat
+    /// B, and `lead` only for the raw culture picture.
+    pub centred_lead: Estimate,
     pub mean_moves: f64,
     pub mean_culture_a: f64,
     pub mean_culture_best_other: f64,
@@ -247,10 +317,12 @@ impl Summary {
         // keeps a deal's seats recoverable by index.
         let shares: Vec<Option<f64>> = duels.iter().map(|d| Some(d.share)).collect();
         let leads: Vec<Option<f64>> = duels.iter().map(|d| Some(d.lead())).collect();
+        let centred: Vec<Option<f64>> = duels.iter().map(|d| Some(d.centred_lead())).collect();
         let mean = |f: fn(&Duel) -> f64| duels.iter().map(f).sum::<f64>() / duels.len() as f64;
         Summary {
             win: stats::paired(&shares, players),
             lead: stats::paired(&leads, players),
+            centred_lead: stats::paired(&centred, players),
             mean_moves: mean(|d| d.moves as f64),
             mean_culture_a: mean(|d| d.culture_a),
             mean_culture_best_other: mean(|d| d.culture_best_other),
@@ -262,6 +334,44 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// At two players the raw lead is already centred: `X_a - X_b` and
+    /// `X_b - X_a` cancel, so the no-difference point is exactly zero and
+    /// `centred_lead` must equal `lead` bit for bit. This is what keeps every
+    /// 2p number ever measured against the raw lead comparable.
+    #[test]
+    fn a_two_player_duel_needs_no_centring_at_all() {
+        for (a, b) in [(100.0, 100.0), (150.0, 100.0), (80.0, 137.0)] {
+            let d = Duel::from_final_cultures(&[a, b], 0, 1.0, 30, false);
+            assert_eq!(d.null_lead, 0.0, "2p null lead must be exactly zero, scores {a} {b}");
+            assert_eq!(d.centred_lead(), d.lead());
+        }
+    }
+
+    /// Above two players the best of several EQUAL rivals beats their own
+    /// average, so a table of identical players shows a negative raw lead --
+    /// the order-statistic artifact that made `Fitness::Margin`'s 0.5 null
+    /// inoperative at 3p/4p. Whatever the table size, a dead-even game must
+    /// centre to exactly zero.
+    #[test]
+    fn identical_scores_leave_a_negative_raw_lead_but_a_zero_centred_one() {
+        for players in [3usize, 4] {
+            let scores = vec![120.0; players];
+            let d = Duel::from_final_cultures(&scores, 0, 1.0 / players as f64, 30, false);
+            assert_eq!(d.lead(), 0.0, "{players}p: equal scores tie");
+            assert_eq!(d.centred_lead(), 0.0, "{players}p: a tie is the no-difference point");
+        }
+        // Spread the SAME strength out and the raw lead goes negative while
+        // the centred one stays at zero: A sits in seat 0, and seats 1 and 2
+        // are equally likely to be the one that happened to score highest.
+        let spread = [100.0, 130.0, 70.0];
+        let d = Duel::from_final_cultures(&spread, 0, 0.0, 30, false);
+        assert_eq!(d.lead(), -30.0, "A trails the best of the others");
+        let by_seat: f64 = (0..3)
+            .map(|i| Duel::from_final_cultures(&spread, i, 0.0, 30, false).centred_lead())
+            .sum();
+        assert!(by_seat.abs() < 1e-9, "the seats of one game must centre to zero, got {by_seat}");
+    }
 
     /// The pairing is the design: over a whole number of deals, A must sit in
     /// every seat the same number of times.
