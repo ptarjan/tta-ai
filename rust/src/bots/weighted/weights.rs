@@ -1029,10 +1029,18 @@ impl WeightKey {
                 NonNegative("discounts a redundant card, never rewards one")
             }
             // The SOLE identity-aware channel pricing what completing THIS
-            // in-progress wonder would do -- gains-only by construction
-            // (`gains_only_sum`/`gains_only_board_sum` drop every Cost-kind
-            // triple before either function ever sees one). Former
-            // `WONDER_VALUE_GATES`.
+            // in-progress wonder would do. `gains_only_sum`/
+            // `gains_only_board_sum` drop every Cost-kind triple, but that
+            // does NOT floor the sum at zero: `cards::push` admits a triple on
+            // `amount != 0` alone and never checks its sign, so a Gain-kind
+            // triple can carry a negative amount -- Kremlin (II) prints
+            // `happy: -1` beside its three gains and reaches the sum as
+            // `(HappyMargin, -1.0, YieldKind::Gain)`. The gate rests on what
+            // the COEFFICIENT means instead: it scales an estimate of what
+            // finishing this wonder is worth, so a negative one would price a
+            // better wonder as worse than a poorer one. A genuinely
+            // unattractive wonder is already expressed by the sum itself
+            // coming out negative. Former `WONDER_VALUE_GATES`.
             WonderPotential | WonderPromise => {
                 NonNegative("prices the in-progress wonder's completion value")
             }
@@ -1207,12 +1215,51 @@ impl WeightKey {
             // rate/level here rather than re-litigated key by key.
             RateHorizon | Culture | CultureRate | Science | ScienceRate | FoodRate
             | ResourceRate | FoodStock | ResourceStock | BlueFree | YellowBank | FreeWorkers
+            // Several of these now have a CITED counterexample rather than
+            // merely a missing citation, and they are not to be re-proposed:
+            // `GovLevel`/`TechLevels` (which sums `p.government.level()` in
+            // directly) are blocked by Communism's `happy: -1` and
+            // Fundamentalism's `science: -2`; `Colonies`/`HasColony` by Vast
+            // Territory's `blueTokens: -1`; `Leader` by Sid Meier's
+            // `sciencePerLab: -1`; `PactBlocksAttack` because
+            // `NoAttacksBetweenParties` is symmetric and costs the holder its
+            // own attack option; `TacticLevel` by RULES_SPEC 10.4, where a
+            // higher-age tactic makes units 2+ levels below it outdated.
+            // `StrengthLead` is the near-miss worth naming: unlike its
+            // siblings it IS floored (`rel.clamp(0.0, 6.0)`) and only ever
+            // added, which is the shape that earned other keys a gate -- but
+            // `Special::StrongestPlayer` (RULES_SPEC 5.3) makes being ranked
+            // strongest a targetable liability that nothing else here prices.
             | Workers | ProdWorkers | UrbanWorkers | UnitWorkers | HappyMargin
-            | MilitaryActions | TechLevels | GovLevel | BestFarm | BestMine | BestLab
+            | TechLevels | GovLevel | BestFarm | BestMine | BestLab
             | BestTemple | BestTheater | BestLibrary | BestArena | BestUnit | NumTechs
             | SpecialTechs | WonderProgress | Leader | Strength | StrengthRel | StrengthLead
             | TacticLevel | HasUnit | Colonies | HasColony | Pacts | PactBlocksAttack
-            | WarImmune | AttackCostDoubled | WonderInProgress => Free,
+            | WonderInProgress => Free,
+            // The military twin of the `CivilActions` gate above, on the same
+            // citations: `features.rs` sets it from `s.military_actions`, the
+            // government-derived allowance for the turn, which RULES_SPEC 3
+            // never compels a player to spend. Every mechanic reading the
+            // total only benefits from more of it -- the military hand limit
+            // IS the MA total (6.7), and defence capacity scales with it
+            // (5.4). `cards::unit_type_reach_cost` already hard-clamps this
+            // very weight with `.max(0.0)` beside the identical clamp on
+            // `CivilActions`, so the invariant was already assumed in code
+            // before it was stated here.
+            MilitaryActions => NonNegative("prices an action allowance the rules never compel spending"),
+            // Two purely PROTECTIVE booleans. `WarImmune`
+            // (`cannotBeDeclaredWarOnByAnyone`, RULES_SPEC 5.6) only ever
+            // enters combat legality on the ATTACKER's side, removing no
+            // option from its holder; the one pact granting it also carries
+            // `cultureProduction: -2`, but that is priced by the culture
+            // coordinates and floored at 0 by the rulebook's rating limits.
+            // `AttackCostDoubled` reads the DEFENDER's leader in
+            // `combat::start_aggression` -- it means "rivals pay double to
+            // attack me", not "my attacks cost double"; Gandhi's matching
+            // self-restriction is `NoAggression` above.
+            WarImmune | AttackCostDoubled => {
+                NonNegative("a protective flag that removes no option from its holder")
+            }
             // `CorruptionHeadroom`/`ConsumptionHeadroom`: `features.rs`'s own
             // comment on these two, verbatim -- "headroom is a deterministic
             // function of `BlueFree`/`YellowBank`, so 'good all else equal'
@@ -1263,13 +1310,31 @@ impl WeightKey {
             // colony/aggression slot), not a rules-imposed penalty the
             // player never chooses.
             AuctionCommitted | AuctionBid => Free,
-            // Board-state indicator features (`features()` writes a raw
-            // count/flag for each) rather than a per-card printed benefit in
-            // `BuildDiscount`'s sense -- no dedicated citation established
-            // this audit pass; flagged in SIGNAUDIT.txt as a follow-up
-            // candidate, not gated here (a wrong gate is worse than a
-            // missing one).
-            ColonizeBonus | UrbanLimit | NoAggression => Free,
+            // `s.colonize` is the printed colonization-force bonus, and the
+            // card data prints only 1..=4 for it -- no card anywhere in
+            // `data/` prints a negative colonization bonus. Its sole consumer
+            // adds it to the player's bid force (`interact.rs`), so a bigger
+            // bonus is strictly more force at the same cost.
+            ColonizeBonus => NonNegative("scales a printed colonization-force bonus, never a malus"),
+            // Mahatma Gandhi's flag, and the name reads backwards: this is the
+            // DOWNSIDE half of the leader. `legal.rs` uses it to strip the
+            // holder's OWN `Move::Aggression` and `Move::War` from its legal
+            // set; the upside half (rivals paying double to attack) is
+            // `AttackCostDoubled`, priced separately. Strictly fewer legal
+            // moves at the same board state is never better, so the
+            // coefficient may not reward the flag. Web-checked against the
+            // published card text, which agrees the restriction is
+            // self-imposed.
+            NoAggression => NonPositive("strips the holder's own aggression and war moves"),
+            // `s.urban_limit` is a deterministic function of which government
+            // the player holds -- the eight base-game governments span exactly
+            // {2, 3, 4} -- and `GovLevel` already prices the government. The
+            // two coordinates cannot move independently, so "a bigger urban
+            // limit, all else equal" is not a reachable comparison and a
+            // negative here is a legitimate correction rather than an
+            // inversion. Same reasoning as `CorruptionHeadroom`/
+            // `ConsumptionHeadroom` below.
+            UrbanLimit => Free,
             // `docs/OPEN_ITEMS.md` item 1: a real, live-reading coordinate
             // whose drift is documented as "signal vs noise, not yet
             // determined" -- explicitly not concluded to be rules-forced
@@ -1303,11 +1368,28 @@ impl WeightKey {
             | TerritoryCredit | BonusCardCredit
             | AggressionBoardCredit | WarBoardCredit | EventBoardCredit
             | TacticReachCredit => Free,
-            // Hand-content magnitudes other than `HandValue` (handled above)
-            // -- plausible `NonNegative` candidates by the same "a card in
-            // hand is never a rules-level cost" logic, but not individually
-            // verified this pass; left `Free` rather than guessed at.
-            HandCivil | HandPotential | HandMilitary | HandMilValue | HandMilPotential => Free,
+            // The exact military twin of the `HandValue` gate above:
+            // `features.rs` sums `level + 1` over the military hand, so every
+            // term is >= 1 and the feature can never go below zero. A card
+            // sitting in hand is never a rules-level cost -- §2.5's hand limit
+            // is enforced by `costs::can_take` making the take ILLEGAL, so a
+            // full hand is a legality constraint and can never show up as an
+            // evaluation penalty.
+            HandMilValue => NonNegative("sums level + 1 over the military hand, so the feature is always >= 0"),
+            // `HandCivil`/`HandMilitary` are RESIDUALS, not independent
+            // quantities: `hand_value` is `hand_civil` count plus the sum of
+            // levels, and `hand_mil_value` decomposes the same way, so the
+            // count is the intercept term of a feature already gated above and
+            // may legitimately price as a negative correction. `HandMilitary`
+            // additionally reaches `events.rs` multiplied by a `sign` that is
+            // negative when the event hurts its target, so it is not a
+            // one-directional magnitude there either.
+            //
+            // `HandPotential`/`HandMilPotential` price hand cards by what
+            // playing them would do, and that value is not floored: Vast
+            // Territory (I and II) prints `blueTokens: -1` inside its yields,
+            // so a card in hand can price negative on real card data.
+            HandCivil | HandPotential | HandMilitary | HandMilPotential => Free,
             // `WeightedBot::choose`'s own doc comment: "DO NOT fix this
             // asymmetry ... measured (twice, two different ways) against
             // every alternative and is strictly stronger" -- an empirically
@@ -1862,6 +1944,62 @@ mod tests {
             assert!(
                 matches!(key.sign_intent(), SignIntent::Free),
                 "{key:?} prices a net value and must stay free to go negative"
+            );
+        }
+    }
+
+    /// The third sign-audit pass, which swept every remaining key rather than
+    /// a bucket. Each gate here is either a twin of one already landed
+    /// (`HandMilValue` of `HandValue`, `MilitaryActions` of `CivilActions`) or
+    /// a flag whose rules effect is one-directional on its holder. The `Free`
+    /// half is the point of the test: these are the keys the same pass looked
+    /// at and REFUSED, each for a cited reason in `sign_intent`'s own comments,
+    /// so re-proposing one needs to answer the counterexample first.
+    #[test]
+    fn the_third_audit_pass_gates_six_more_keys_and_deliberately_refuses_the_rest() {
+        for key in [
+            WeightKey::HandMilValue,
+            WeightKey::ColonizeBonus,
+            WeightKey::MilitaryActions,
+            WeightKey::WarImmune,
+            WeightKey::AttackCostDoubled,
+        ] {
+            assert!(
+                matches!(key.sign_intent(), SignIntent::NonNegative(_)),
+                "{key:?} must be gated non-negative"
+            );
+        }
+        assert!(
+            matches!(WeightKey::NoAggression.sign_intent(), SignIntent::NonPositive(_)),
+            "NoAggression strips its own holder's aggression and war moves, so it may never reward"
+        );
+        for key in [
+            // Deterministic function of the government `GovLevel` prices.
+            WeightKey::UrbanLimit,
+            // Residuals of the two gated `*Value` sums.
+            WeightKey::HandCivil,
+            WeightKey::HandMilitary,
+            // Vast Territory prints `blueTokens: -1` inside a hand card's yields.
+            WeightKey::HandPotential,
+            WeightKey::HandMilPotential,
+            // Communism `happy: -1`, Fundamentalism `science: -2`.
+            WeightKey::GovLevel,
+            WeightKey::TechLevels,
+            // Vast Territory again, as a permanent colony effect.
+            WeightKey::Colonies,
+            WeightKey::HasColony,
+            // Sid Meier prints `sciencePerLab: -1`.
+            WeightKey::Leader,
+            // Symmetric: it costs the holder its own attack option too.
+            WeightKey::PactBlocksAttack,
+            // RULES_SPEC 10.4 outdated armies.
+            WeightKey::TacticLevel,
+            // `Special::StrongestPlayer` makes the lead a targetable liability.
+            WeightKey::StrengthLead,
+        ] {
+            assert!(
+                matches!(key.sign_intent(), SignIntent::Free),
+                "{key:?} has a cited counterexample and must stay free"
             );
         }
     }
