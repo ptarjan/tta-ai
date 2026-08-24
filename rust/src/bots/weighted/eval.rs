@@ -479,15 +479,22 @@ impl WeightedBot {
         let mut best: Option<(Move, f64)> = None;
         for &mv in moves {
             let mut trial = root.clone();
-            apply::apply(&mut trial, mv);
+            // Every candidate is scored at the SAME point in time -- mid-turn,
+            // before this turn's production. `Move::EndTurn` is the only move
+            // whose apply arm reaches `economy::end_of_turn` (`apply.rs` ->
+            // `game::end_turn` -> `resume_end_turn`), so applying it here would
+            // score it against a board that already holds this turn's food and
+            // resources while every rival candidate is still charged the full
+            // negative `food_gap`/`resource_gap`. Playing a card and THEN
+            // ending the turn collects the identical production, but one ply
+            // cannot represent that pair, so the comparison would price doing
+            // nothing as if it produced. `EndTurn` is therefore scored on the
+            // unmoved root, and `end_bias` below is what prices ending a turn.
+            if !matches!(mv, Move::EndTurn) {
+                apply::apply(&mut trial, mv);
+            }
             let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
             if matches!(mv, Move::EndTurn) {
-                // DO NOT "fix" this asymmetry -- scoring `end_turn` on the
-                // unmoved trial, with this bias added, was measured (twice,
-                // two different ways) against every alternative and is
-                // strictly stronger; see `weighted.py`'s own extensive note
-                // immediately above `"end_turn_bias"` in `BASE_WEIGHTS`
-                // (not reproduced here) for the exact A/B numbers.
                 val += end_bias;
             }
             if best.is_none_or(|(_, bv)| val > bv) {
