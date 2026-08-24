@@ -300,36 +300,74 @@ function findRowSlots(imageData) {
   }
   const colThresh = valleyThreshold(colTex);
 
-  // ---- 3. build slot (high) / border-or-gap (low) runs, drop outer margins ----
+  // ---- 3. build slot (high) / border-or-gap (low) runs ----
   let runs = buildRuns(colTex, colThresh, width);
-  if (runs.length && runs[0].low) runs.shift();
-  if (runs.length && runs[runs.length - 1].low) runs.pop();
   if (!runs.length) return null;
 
   // drop spuriously narrow "high" runs (noise inside a gap/border) and
   // re-merge the low runs that were separated only by that noise
-  const highWidths = runs.filter(r => !r.low).map(r => r.end - r.start + 1);
+  let highWidths = runs.filter(r => !r.low).map(r => r.end - r.start + 1);
   if (!highWidths.length) return null;
   highWidths.sort((a, b) => a - b);
   const medianHighWidth = highWidths[Math.floor(highWidths.length / 2)];
   runs = runs.filter(r => r.low || (r.end - r.start + 1) >= medianHighWidth * 0.3);
   runs = mergeAdjacentLow(runs);
-  if (runs.length && runs[0].low) runs.shift();
-  if (runs.length && runs[runs.length - 1].low) runs.pop();
 
-  const slotRuns = runs.filter(r => !r.low);
-  const gapRuns = runs.filter(r => r.low);
+  highWidths = runs.filter(r => !r.low).map(r => r.end - r.start + 1).sort((a, b) => a - b);
+  if (!highWidths.length) return null;
+  const cardW = highWidths[Math.floor(highWidths.length / 2)];
+  // A card border is the narrow class of low run; the group gaps and any
+  // empty-slot span are the wide class, so the median is taken over the
+  // narrow class alone or a single wide gap would drag it up.
+  const borderWidths = runs
+    .filter(r => r.low && (r.end - r.start + 1) < cardW * 0.5)
+    .map(r => r.end - r.start + 1)
+    .sort((a, b) => a - b);
+  const border = borderWidths.length
+    ? borderWidths[Math.floor(borderWidths.length / 2)]
+    : Math.max(1, Math.round(cardW * 0.04));
+  const pitch = cardW + border;
+
+  // An EMPTY row position has no card art in it, so its columns carry no
+  // vertical texture and it reads as one wide low run merged with the
+  // borders either side of it — 12 cards instead of 13, and the whole scan
+  // fails. A low run is therefore measured rather than trusted: subtract
+  // one border and it holds round(rest / pitch) card-width spans, which is
+  // 0 for a border, 0 for a group gap, and k for k empty positions.
+  // Empty slots in the LEADING run sit against the first real card on
+  // their right (the rest of that run is the outer margin); everywhere
+  // else they start one border after the card on their left.
+  const slotRuns = [];
+  runs.forEach((r, idx) => {
+    if (!r.low) { slotRuns.push({ start: r.start, end: r.end, empty: false }); return; }
+    const span = r.end - r.start + 1;
+    if (span < cardW * 0.6) return;
+    const k = Math.round((span - border) / pitch);
+    for (let i = 0; i < k; i++) {
+      if (idx === 0) {
+        const end = r.end - border - i * pitch;
+        slotRuns.push({ start: end - cardW + 1, end, empty: true });
+      } else {
+        const start = r.start + border + i * pitch;
+        slotRuns.push({ start, end: start + cardW - 1, empty: true });
+      }
+    }
+  });
+  slotRuns.sort((a, b) => a.start - b.start);
   if (slotRuns.length !== 13) return null;
-  if (gapRuns.length !== 12) return null;
 
   // ---- 4. classify the 12 boundaries into 2 group gaps + 10 card borders ----
-  const gapWidths = gapRuns.map(r => r.end - r.start + 1);
+  const gapWidths = [];
+  for (let i = 1; i < slotRuns.length; i++) {
+    gapWidths.push(slotRuns[i].start - slotRuns[i - 1].end - 1);
+  }
+  if (gapWidths.some(g => g < 0)) return null;
   const sortedWidths = [...gapWidths].sort((a, b) => b - a);
   const groupGapThresh = (sortedWidths[1] + sortedWidths[2]) / 2;
 
   const groups = [];
   let cur = 1;
-  for (let i = 0; i < gapRuns.length; i++) {
+  for (let i = 0; i < gapWidths.length; i++) {
     if (gapWidths[i] >= groupGapThresh) {
       groups.push(cur);
       cur = 1;
@@ -347,6 +385,7 @@ function findRowSlots(imageData) {
     y: yTop / height,
     w: (r.end - r.start + 1) / width,
     h: bandH / height,
+    empty: r.empty,
   }));
 
   return { slots, groups };
@@ -1106,6 +1145,11 @@ async function ocrScanSeam(imageBlobOrDataUrl) {
   // the user only has to pick the age, instead of a blank input.
   const row = [], nameHints = [];
   found.slots.forEach((slot) => {
+    // A slot the geometry pass found by measurement rather than by seeing
+    // card art in it IS the empty row position — null is exactly how the
+    // row model spells that, and reading text out of blank felt would only
+    // invent one.
+    if (slot.empty) { row.push(null); nameHints.push(null); return; }
     const ocr = ocrRecognizeSlot(pixels, slot, CARDS);
     if (ocr.cardId) { row.push(ocr.cardId); nameHints.push(null); return; }
     const hash = hashSlot(pixels, slot);
