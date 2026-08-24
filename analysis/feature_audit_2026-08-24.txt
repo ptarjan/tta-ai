@@ -1,0 +1,611 @@
+THROUGH THE AGES -- LINEAR LEAF-EVALUATION FEATURE AUDIT (2026-08-24)
+========================================================================
+
+HEADLINE: 160 WeightKeys classified -- RETIRE 56 (of which 37 are EXACT null: mean spread identically 0.0 across all 253,906 sampled decisions in all 3 player counts, 19 near-zero), CHANGE 5, KEEP 99.
+
+========================================================================
+METHODOLOGY
+========================================================================
+
+Firing rate is NOT the metric (military_actions and civil_actions both fire
+on 100% of positions and only one was corrupted -- see this task's own brief).
+The metric is CANDIDATE-SET SPREAD: the bot picks a move by evaluating the
+RESULTING STATE of every legal move and taking the argmax, so a feature only
+influences a decision to the extent it VARIES ACROSS THE CANDIDATE MOVES at
+that decision. A feature identical in every candidate cancels out of the
+argmax exactly, no matter how large its weight, and a hill-climber random-
+walks that coordinate forever.
+
+At every real self-play decision point (>1 legal move) reached by
+WeightedBot::choose under the LIVE CHAMPION weights (own file per player
+count), every legal move was applied to a scratch clone of the state and
+eval::candidate_features() was read for each resulting state --
+candidate_features() IS linear_features() run once per candidate, the exact
+per-WeightKey vector `evaluate` dots against a weight vector (pinned by
+eval.rs's own test
+linear_features_dotted_with_a_weight_vector_reproduces_evaluate_exactly).
+Per WeightKey, per decision: spread = max(candidate values) - min(candidate
+values). Aggregated as MEAN, MEDIAN and ZERO-FRACTION (share of decisions
+where spread was exactly 0.0) over every decision sampled, separately for
+2p/3p/4p self-play under that player count's own champion.
+
+TOOLING -- what was found, what was built, and why:
+Searched rust/src/bin/ (behavcensus.rs, botcensus.rs, dump_selfplay.rs,
+orderprobe.rs, dumpweights.rs), git log --all for "blind"/"coordinate"/
+"argmax", and docs/ for a prior candidate-spread sweep. The closest prior
+art is docs/COVERAGE_AUDIT.md's tools/feature_variance.py (varying/
+mean_range/flip columns -- literally this same methodology), built for the
+OLD PYTHON engine's own feature vocabulary. That engine, and
+tools/feature_variance.py with it, was DELETED 2026-08-15
+(rust/CLAUDE.md: "do not resurrect it"), so it is gone and not reusable.
+No Rust binary in rust/src/bin/ computes candidate-set spread.
+dumpweights.rs is the closest Rust precedent (per-WeightKey contribution to
+evaluate()'s delta between two FIXED moves at one FIXED hardcoded position
+-- a single-fixture diagnostic, not a self-play sweep) but does not sample
+real decisions or aggregate across many of them.
+eval::candidate_features (rust/src/bots/weighted/eval.rs:699), already used
+by bin/agreefit.rs's human-agreement fit, computes EXACTLY the per-candidate
+linear_features vector this audit needs, sharing the same root/RivalContext
+construction WeightedBot::choose itself uses -- REUSED DIRECTLY, no scoring
+logic re-derived. Wrote ONE NEW small binary, rust/src/bin/featspread.rs,
+whose only job is to drive real self-play with WeightedBot::choose (so
+sampled decisions are the ones the champion actually reaches, not synthetic
+positions) and call candidate_features() once per decision, then aggregate.
+
+COMMANDS RUN (from rust/, in the isolated clone):
+  cargo build --profile difftest --bin featspread
+  ./target/difftest/featspread \
+      --weights-2p ../experiments/rust_champion_2p.json \
+      --weights-3p ../experiments/rust_champion_3p.json \
+      --weights-4p ../experiments/rust_champion_4p.json \
+      --games 200 --seed 0 --threads 6 --out featspread_full.txt
+  (a 10-games-per-count smoke test preceded this at --seed 0 --threads 4,
+  used only to sanity-check the tool before committing to the full run)
+
+Champion files: cp'd into an isolated `cp -Rc` clone BEFORE this ever ran
+(the live /Users/pt/tta-ai/experiments/rust_champion_*.json are rewritten by
+the (paused) climb every few minutes; this audit never reads them).
+
+SAMPLE SIZE: 200 self-play games per player count (600 games total),
+producing 50,524 (2p) + 77,546 (3p) + 125,836 (4p) = 253,906 real decision
+points (>1 legal move), each with its full legal-move candidate set scored.
+Run took 146.1s wall on 6 threads.
+
+CLASSIFICATION RULE APPLIED (mechanical default, overridden by name below
+for well-evidenced shape cases):
+  RETIRE: mean spread < 0.02 in EVERY player count AND zero-fraction >=
+          0.95 in EVERY player count. (Within RETIRE, "EXACT null" marks the
+          37 keys whose mean spread is IDENTICALLY 0.0 in all three counts,
+          not merely small -- see the list below.)
+  CHANGE: real spread, but a documented mis-specification -- see the CHANGE
+          list below, each backed by a specific weights.rs/features.rs
+          citation or a PINNED TEST, not just the spread numbers.
+  KEEP:   everything else -- real, nonzero candidate-set spread.
+This is a threshold, not a proof, for the boundary cases (mean 0.01-0.03,
+zero_frac 0.95-0.99) -- see LIMITATIONS at the end.
+
+========================================================================
+RETIRE LIST (56 keys)
+========================================================================
+
+-- EXACT NULL (37): mean candidate-set spread is IDENTICALLY 0.0 in ALL THREE player counts, over all 253,906 decisions. These cannot have moved a single argmax in this sample, structurally, not by chance. --
+    action_board_credit
+    aggression_board_credit
+    bonus_card_credit
+    build_fresh_credit
+    card_board_bonus
+    card_board_credit
+    card_board_leader
+    card_rate_credit
+    culture_rate_trailing
+    defense_bonus
+    event_board_credit
+    free_action_credit
+    free_civil_action
+    gov_action_cost
+    gov_board_credit
+    hand_swap_extra
+    pact_board_credit
+    rate_horizon
+    resource_discount
+    restricted_resource_credit
+    restricted_resources
+    rival_desire
+    rival_science_rate
+    rival_take_share
+    rival_wonders
+    science_rate_trailing
+    tactic_board_credit
+    tactic_reach_credit
+    tactic_shortfall_cost
+    tech_board_credit
+    tech_redundancy_discount
+    territory_credit
+    unit_strength_credit
+    unit_tech_credit
+    war_board_credit
+    wonder_board_credit
+    wonder_promise
+
+-- NEAR-ZERO (19): spread is nonzero but tiny (mean < 0.02) and zero at >=95% of decisions in every count. --
+    attack_cost_doubled
+    auction_committed
+    best_lab
+    best_mine
+    best_theater
+    best_unit
+    colonies
+    hand_limit
+    has_colony
+    no_aggression
+    rival_building_wonder
+    rival_colonies
+    rival_culture_rate
+    rival_free_ca
+    rival_free_workers
+    rival_mil_actions
+    rival_strength
+    urban_limit
+    war_immune
+
+WHY roughly a third of the exact-null group is exact-null BY CONSTRUCTION:
+rival_desire, rival_take_share, rival_science_rate, rival_wonders,
+rival_free_ca (and, in the near-zero group, rival_free_workers,
+rival_building_wonder, rival_colonies, rival_culture_rate, rival_mil_actions,
+rival_strength) are all sourced from RivalContext, which eval.rs's own
+WeightedBot::choose/candidate_features doc comments say is computed ONCE AT
+THE ROOT, on the unmoved board, and reused for every candidate ("an
+information leak, not just an optimisation, if recomputed per candidate").
+Every candidate at a decision therefore gets the IDENTICAL value for any
+rival_* feature sourced purely from that frozen context -- a structural
+certainty, not a training artifact. This is the Rust-era re-discovery of
+exactly the same root-freeze mechanism docs/COVERAGE_AUDIT.md section 5.1
+already documented for the OLD Python engine's rival_strength/
+rival_science_rate (also root-frozen, also exact nulls there). The rival_*
+features that DO show real spread here (rival_culture, rival_mean_culture,
+rival_food_stock, rival_resource_stock, rival_science_stock, rival_yellow_bank,
+rival_hand_civil, rival_hand_potential) all re-read the TRIAL state per
+candidate rather than the frozen ctx object -- exactly the distinction
+COVERAGE_AUDIT already drew for the Python engine's rival_culture/
+rival_mean_culture.
+
+The `_board_credit` family (action_board_credit, aggression_board_credit,
+card_board_credit, event_board_credit, gov_board_credit, pact_board_credit,
+tactic_board_credit, tech_board_credit, war_board_credit, card_board_bonus,
+card_board_leader) and the sibling `_credit` gates (bonus_card_credit,
+build_fresh_credit, card_rate_credit, free_action_credit,
+restricted_resource_credit, tactic_reach_credit, tactic_shortfall_cost,
+territory_credit, unit_strength_credit, unit_tech_credit,
+tech_redundancy_discount) are exact nulls for a DIFFERENT reason: several
+of these are 0.0 in every champion (see the table below), and the raw
+feature they gate is itself proportional to `w.get(that same gate)` inside
+cards.rs/row.rs -- so with freeze==champion, a 0.0 champion weight makes the
+RAW FEATURE 0.0 too, independent of which candidate is scored. This is not
+drift -- these are deliberately-off gates awaiting a league measurement
+(weights.rs's own comments: "trust nothing until the league finds it") --
+but it does mean this audit CANNOT tell whether the underlying mechanism
+has real spread once turned on; see LIMITATIONS.
+
+========================================================================
+CHANGE LIST (5 keys)
+========================================================================
+
+food_stock:
+    champion (2p/3p/4p) = -0.048726386816813023/60/0.17011132058606684
+    spread mean (2p/3p/4p) = 1.01706/0.676506/1.26331
+    raw stock; FoodGap/FoodSurplus (features.rs ~732) already hinge the SAME need off it -- weights.rs:920-926 groups them as the hinged version of this key. Prior audit: -0.049/60/0.17 (3p pinned at rail while 2p/4p near flat) is the drift signature of a level standing in for a need.
+
+resource_stock:
+    champion (2p/3p/4p) = 0.7674123693653438/60/0.02848628951116719
+    spread mean (2p/3p/4p) = 2.14401/1.09414/1.62759
+    raw stock; ResourceGap/ResourceSurplus (features.rs ~734-737) already hinge the SAME need off it -- weights.rs:920-926 groups them as the hinged version of this key. Prior audit: 0.77/60/0.028, same drift signature as food_stock.
+
+unit_workers:
+    champion (2p/3p/4p) = -0.07937905261040411/-0.915254261964806/-60
+    spread mean (2p/3p/4p) = 0.676372/0.553968/0.556423
+    raw count of units; HasUnit's own doc comment (weights.rs:553-563) states this directly: 'unit_workers (linear) cannot express that unit #1 is worth far more than unit #5' -- a cliff HasUnit is meant to cover, but HasUnit is itself Free/0.0 in all 3 champions, so nothing prices the cliff. Prior audit: -0.079/-0.92/-60, a 3-orders-of-magnitude single-count outlier.
+
+wonder_potential:
+    champion (2p/3p/4p) = 1.8742813926750739/2.333967411834124/7.305249781204885
+    spread mean (2p/3p/4p) = 1.18649/5.11141/0.452637
+    shape (ii), same mechanism as wonder_progress -- WonderPotential's own doc comment (eval.rs) and WonderPromise's (weights.rs:170-194) both name this: paid_fraction is exactly 0.0 on the move that TAKES a wonder, so this identity-aware channel is switched off precisely when the choice is made. Two wonders with the same stage multiset are interchangeable to every weight in the table at take time.
+
+wonder_progress:
+    champion (2p/3p/4p) = 0.6939834923225893/5.785488428853454/-0.07659353533212006
+    spread mean (2p/3p/4p) = 0.558922/0.451706/0.338186
+    shape (ii): cards.rs::tests::two_wonders_with_different_powers_score_identically_at_the_moment_they_are_taken is a PINNED TEST proving Pyramids [3,2,1] and Hanging Gardens [2,2,2] (same total, different stage shape) score bit-identically through wonder_progress/wonder_potential at take time -- WonderPromise (weights.rs:170-194) was built as the fix but is gated at 0.0 in every champion, so the blindness this key has at the one decision that matters (WHICH wonder to take) is still live.
+
+========================================================================
+KEEP: 99 keys -- real, nonzero candidate-set spread. 13 of these
+(workers_late, culture_rate, event_scoring_margin, strength,
+attack_target_weakness, end_turn_bias, workers, rival_colonies[*],
+wonder_potential[*], pact_blocks_attack, worker_gap, auction_bid,
+culture) also agree in SIGN across all 3 champion files at |v|>=1.0
+(analysis/champion_audit_2026-08-24.txt section 3a) -- [*] rival_colonies
+is RETIRE here (root-frozen, see above) despite that sign agreement, and
+wonder_potential is CHANGE here (see above) despite it -- sign agreement
+across player counts is evidence the CLIMB likes a weight, not evidence
+the ARGMAX can ever see it; the two disagree on exactly these two keys.
+Full per-key numbers are in the table below.
+
+========================================================================
+FULL PER-KEY TABLE (all 160 WeightKeys)
+========================================================================
+Columns: key | champ_2p champ_3p champ_4p | spread_2p(mean,median,zero_frac,n) | spread_3p(...) | spread_4p(...) | VERDICT
+(n = decisions sampled at that player count: 2p=50524 3p=77546 4p=125836 for every key)
+
+food_stock                   champ=-0.048726386816813023         60 0.17011132058606684 | 2p:1.01706,0,0.5664,50524 | 3p:0.676506,0,0.7378,77546 | 4p:1.26331,0,0.6100,125836 | CHANGE
+    reason: raw stock; FoodGap/FoodSurplus (features.rs ~732) already hinge the SAME need off it -- weights.rs:920-926 groups them as the hinged version of this key. Prior audit: -0.049/60/0.17 (3p pinned at rail while 2p/4p near flat) is the drift signature of a level standing in for a need.
+resource_stock               champ=0.7674123693653438         60 0.02848628951116719 | 2p:2.14401,2,0.3753,50524 | 3p:1.09414,0,0.6307,77546 | 4p:1.62759,0,0.5619,125836 | CHANGE
+    reason: raw stock; ResourceGap/ResourceSurplus (features.rs ~734-737) already hinge the SAME need off it -- weights.rs:920-926 groups them as the hinged version of this key. Prior audit: 0.77/60/0.028, same drift signature as food_stock.
+unit_workers                 champ=-0.07937905261040411 -0.915254261964806        -60 | 2p:0.676372,1,0.4119,50524 | 3p:0.553968,0,0.5117,77546 | 4p:0.556423,0,0.5093,125836 | CHANGE
+    reason: raw count of units; HasUnit's own doc comment (weights.rs:553-563) states this directly: 'unit_workers (linear) cannot express that unit #1 is worth far more than unit #5' -- a cliff HasUnit is meant to cover, but HasUnit is itself Free/0.0 in all 3 champions, so nothing prices the cliff. Prior audit: -0.079/-0.92/-60, a 3-orders-of-magnitude single-count outlier.
+wonder_potential             champ=1.8742813926750739 2.333967411834124 7.305249781204885 | 2p:1.18649,0,0.7277,50524 | 3p:5.11141,0,0.7978,77546 | 4p:0.452637,0,0.8028,125836 | CHANGE
+    reason: shape (ii), same mechanism as wonder_progress -- WonderPotential's own doc comment (eval.rs) and WonderPromise's (weights.rs:170-194) both name this: paid_fraction is exactly 0.0 on the move that TAKES a wonder, so this identity-aware channel is switched off precisely when the choice is made. Two wonders with the same stage multiset are interchangeable to every weight in the table at take time.
+wonder_progress              champ=0.6939834923225893 5.785488428853454 -0.07659353533212006 | 2p:0.558922,0,0.8673,50524 | 3p:0.451706,0,0.8686,77546 | 4p:0.338186,0,0.9147,125836 | CHANGE
+    reason: shape (ii): cards.rs::tests::two_wonders_with_different_powers_score_identically_at_the_moment_they_are_taken is a PINNED TEST proving Pyramids [3,2,1] and Hanging Gardens [2,2,2] (same total, different stage shape) score bit-identically through wonder_progress/wonder_potential at take time -- WonderPromise (weights.rs:170-194) was built as the fix but is gated at 0.0 in every champion, so the blindness this key has at the one decision that matters (WHICH wonder to take) is still live.
+attack_target_lead           champ=2.8333484370023463 0.2054404578884725 0.5164878731384858 | 2p:0,0,1.0000,50524 | 3p:2.88244,0,0.9309,77546 | 4p:3.06781,0,0.9379,125836 | KEEP
+    reason: real candidate-set spread (mean 0/2.882/3.068, zero_frac 1.000/0.931/0.938).
+attack_target_weakness       champ=9.212712456314767         60 7.094951495831161 | 2p:0.286715,0,0.9183,50524 | 3p:0.469476,0,0.9057,77546 | 4p:0.575646,0,0.9127,125836 | KEEP
+    reason: real candidate-set spread (mean 0.2867/0.4695/0.5756, zero_frac 0.918/0.906/0.913).
+auction_bid                  champ=30.477246491100725 1.0329117328498372 1.4964170698297814 | 2p:0.099794,0,0.9786,50524 | 3p:0.065821,0,0.9834,77546 | 4p:0.096683,0,0.9793,125836 | KEEP
+    reason: real candidate-set spread (mean 0.09979/0.06582/0.09668, zero_frac 0.979/0.983/0.979).
+best_arena                   champ=-0.014879289516324078 -0.052722027445997605 -0.21772338482502285 | 2p:0.026205,0,0.9849,50524 | 3p:0.000529,0,0.9998,77546 | 4p:0.012492,0,0.9924,125836 | KEEP
+    reason: real candidate-set spread (mean 0.0262/0.000529/0.01249, zero_frac 0.985/1.000/0.992).
+best_farm                    champ=-0.9452241137866526 -0.17333355021721206 14.619121781258384 | 2p:0.232009,0,0.8352,50524 | 3p:0.003018,0,0.9987,77546 | 4p:0.016204,0,0.9894,125836 | KEEP
+    reason: real candidate-set spread (mean 0.232/0.003018/0.0162, zero_frac 0.835/0.999/0.989).
+best_library                 champ=-0.1328088254872343 -0.04494137833595994         60 | 2p:0.050689,0,0.9635,50524 | 3p:0.001186,0,0.9995,77546 | 4p:0.013526,0,0.9897,125836 | KEEP
+    reason: real candidate-set spread (mean 0.05069/0.001186/0.01353, zero_frac 0.964/1.000/0.990).
+best_temple                  champ=-0.016854640820421377 0.39240524611113287 -0.07958558185578024 | 2p:0.026957,0,0.9834,50524 | 3p:1.3e-05,0,1.0000,77546 | 4p:0.035244,0,0.9745,125836 | KEEP
+    reason: real candidate-set spread (mean 0.02696/1.3e-05/0.03524, zero_frac 0.983/1.000/0.975).
+blue_free                    champ=0.4017068941230297         60 -0.30594195238538446 | 2p:2.75921,3,0.3560,50524 | 3p:1.45395,0,0.6013,77546 | 4p:2.11303,0,0.5003,125836 | KEEP
+    reason: real candidate-set spread (mean 2.759/1.454/2.113, zero_frac 0.356/0.601/0.500).
+build_discount               champ=         0 0.12393127947964055 0.0691372126737275 | 2p:0.08875,0,0.9735,50524 | 3p:0.00895,0,0.9982,77546 | 4p:0.020638,0,0.9941,125836 | KEEP
+    reason: real candidate-set spread (mean 0.08875/0.00895/0.02064, zero_frac 0.974/0.998/0.994).
+ca_left                      champ=-0.06949858170233766 -1.64893809485797 0.7078381572129819 | 2p:2.49856,3,0.3030,50524 | 3p:1.55807,1,0.4993,77546 | 4p:2.10675,2,0.4092,125836 | KEEP
+    reason: real candidate-set spread (mean 2.499/1.558/2.107, zero_frac 0.303/0.499/0.409).
+civil_action_gap             champ=-0.12167677518788425 -0.9758169971482622 -0.05823307112852871 | 2p:2.01015,2,0.3189,50524 | 3p:1.07204,0,0.5415,77546 | 4p:1.04511,0,0.5067,125836 | KEEP
+    reason: real candidate-set spread (mean 2.01/1.072/1.045, zero_frac 0.319/0.541/0.507).
+civil_action_surplus         champ=         0 0.031020611344821928 0.06093921389176685 | 2p:0.976585,0,0.5327,50524 | 3p:0.853906,0,0.6692,77546 | 4p:1.53342,1,0.4994,125836 | KEEP
+    reason: real candidate-set spread (mean 0.9766/0.8539/1.533, zero_frac 0.533/0.669/0.499).
+civil_actions                champ=0.42364335724060315 0.019343484280658928 0.007424566800618128 | 2p:0.02959,0,0.9783,50524 | 3p:0.018879,0,0.9843,77546 | 4p:0.038709,0,0.9751,125836 | KEEP
+    reason: real candidate-set spread (mean 0.02959/0.01888/0.03871, zero_frac 0.978/0.984/0.975).
+colonize_bonus               champ=0.5440607681054149          0 0.6822820822120907 | 2p:0.025295,0,0.9867,50524 | 3p:0.007982,0,0.9941,77546 | 4p:0.010863,0,0.9939,125836 | KEEP
+    reason: real candidate-set spread (mean 0.0253/0.007982/0.01086, zero_frac 0.987/0.994/0.994).
+consumption_headroom         champ=-0.2542044222100378 3.5880185601094814 -1.4136072314133812 | 2p:0.402858,0,0.7781,50524 | 3p:0.254855,0,0.8367,77546 | 4p:0.425077,0,0.7426,125836 | KEEP
+    reason: real candidate-set spread (mean 0.4029/0.2549/0.4251, zero_frac 0.778/0.837/0.743).
+corruption_headroom          champ=-0.25322832590890487 0.09563870848711237 0.1196027336421207 | 2p:1.39332,1,0.4114,50524 | 3p:0.907977,0,0.6277,77546 | 4p:1.11095,0,0.5427,125836 | KEEP
+    reason: real candidate-set spread (mean 1.393/0.908/1.111, zero_frac 0.411/0.628/0.543).
+culture                      champ=         1          1          1 | 2p:3.60887,2,0.4045,50524 | 3p:1.3499,0,0.7098,77546 | 4p:2.07171,0,0.6308,125836 | KEEP
+    reason: real candidate-set spread (mean 3.609/1.35/2.072, zero_frac 0.405/0.710/0.631).
+culture_gap                  champ=         0 -1.2674846449623032 -0.05462828841595002 | 2p:1.57453,0,0.6741,50524 | 3p:0.72526,0,0.7965,77546 | 4p:1.37938,0,0.7084,125836 | KEEP
+    reason: real candidate-set spread (mean 1.575/0.7253/1.379, zero_frac 0.674/0.796/0.708).
+culture_rate                 champ=47.70651790084676         60 56.85229724706134 | 2p:0.797995,0.477889,0.3452,50524 | 3p:0.799835,0,0.5162,77546 | 4p:0.98636,0.956985,0.4183,125836 | KEEP
+    reason: real candidate-set spread (mean 0.798/0.7998/0.9864, zero_frac 0.345/0.516/0.418).
+culture_surplus              champ=-0.15350025317706 -0.5894167274600691 0.37673456138518874 | 2p:1.95562,0,0.6749,50524 | 3p:0.488428,0,0.8951,77546 | 4p:0.609435,0,0.8960,125836 | KEEP
+    reason: real candidate-set spread (mean 1.956/0.4884/0.6094, zero_frac 0.675/0.895/0.896).
+discontent                   champ=-0.12928621205488638 -0.3205960620682321 -0.6368108803661363 | 2p:0.092372,0,0.9124,50524 | 3p:0.099651,0,0.9035,77546 | 4p:0.1185,0,0.8962,125836 | KEEP
+    reason: real candidate-set spread (mean 0.09237/0.09965/0.1185, zero_frac 0.912/0.903/0.896).
+end_turn_bias                champ=-15.41190698339129 -5.499853114492407 -35.11405618299217 | 2p:0.727892,1,0.2721,50524 | 3p:0.553581,1,0.4464,77546 | 4p:0.637242,1,0.3628,125836 | KEEP
+    reason: real candidate-set spread (mean 0.7279/0.5536/0.6372, zero_frac 0.272/0.446/0.363).
+event_scoring_margin         champ=27.100253996017813 34.65346125369487 27.861362423427813 | 2p:0.756269,0,0.7332,50524 | 3p:0.840607,0,0.7830,77546 | 4p:0.992251,0,0.7414,125836 | KEEP
+    reason: real candidate-set spread (mean 0.7563/0.8406/0.9923, zero_frac 0.733/0.783/0.741).
+food_gap                     champ=-0.9289599452935231 -0.39201881356200247 -0.037587431900199905 | 2p:0.695471,0,0.6085,50524 | 3p:0.408027,0,0.7893,77546 | 4p:0.714015,0,0.6709,125836 | KEEP
+    reason: real candidate-set spread (mean 0.6955/0.408/0.714, zero_frac 0.609/0.789/0.671).
+food_rate                    champ=-0.13693027735276933 0.1663920075025766 0.8661267757826663 | 2p:0.779552,0.601686,0.3140,50524 | 3p:0.53151,0,0.5304,77546 | 4p:0.951632,0.96026,0.4072,125836 | KEEP
+    reason: real candidate-set spread (mean 0.7796/0.5315/0.9516, zero_frac 0.314/0.530/0.407).
+food_surplus                 champ=-1.184486135395025 -0.7095319713317915 -2.790879985394334 | 2p:0.388409,0,0.8148,50524 | 3p:0.310558,0,0.8605,77546 | 4p:0.636529,0,0.7654,125836 | KEEP
+    reason: real candidate-set spread (mean 0.3884/0.3106/0.6365, zero_frac 0.815/0.861/0.765).
+free_workers                 champ=0.542369127822328 0.2959978013268797 -11.50799459503406 | 2p:0.820699,1,0.2842,50524 | 3p:0.618796,1,0.4520,77546 | 4p:0.703763,1,0.3715,125836 | KEEP
+    reason: real candidate-set spread (mean 0.8207/0.6188/0.7038, zero_frac 0.284/0.452/0.371).
+gov_level                    champ=-1.9501350688409829 -0.47565814816323 -0.2021171443902433 | 2p:0.019357,0,0.9887,50524 | 3p:0.014391,0,0.9886,77546 | 4p:0.024254,0,0.9809,125836 | KEEP
+    reason: real candidate-set spread (mean 0.01936/0.01439/0.02425, zero_frac 0.989/0.989/0.981).
+hand_civil                   champ=-0.06875649991279528 -0.033230894753999374 -12.286493577052088 | 2p:0.89312,1,0.4301,50524 | 3p:0.609703,0,0.5682,77546 | 4p:0.736959,1,0.4623,125836 | KEEP
+    reason: real candidate-set spread (mean 0.8931/0.6097/0.737, zero_frac 0.430/0.568/0.462).
+hand_mil_potential           champ=0.6153293262013125 -0.0562665836905001 0.05888067986973412 | 2p:0.541341,0.310839,0.2803,50524 | 3p:6.34573,3.19703,0.2912,77546 | 4p:1.49164,0.191723,0.4054,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5413/6.346/1.492, zero_frac 0.280/0.291/0.405).
+hand_mil_value               champ=0.08676337527192243 0.37345600769721576 0.730213760511019 | 2p:4.12699,4,0.2568,50524 | 3p:2.38409,2,0.3954,77546 | 4p:3.04684,2,0.3334,125836 | KEEP
+    reason: real candidate-set spread (mean 4.127/2.384/3.047, zero_frac 0.257/0.395/0.333).
+hand_military                champ=0.032906464236786656 -0.05773767181162149 -0.6152493275603734 | 2p:1.41378,1,0.2790,50524 | 3p:0.827159,1,0.4592,77546 | 4p:1.05113,1,0.3596,125836 | KEEP
+    reason: real candidate-set spread (mean 1.414/0.8272/1.051, zero_frac 0.279/0.459/0.360).
+hand_perishable              champ=         0 -2.0164241494270017 -1.8753643871276644 | 2p:0.422934,0.145649,0.3933,50524 | 3p:0.242678,0,0.6013,77546 | 4p:0.244347,0,0.5325,125836 | KEEP
+    reason: real candidate-set spread (mean 0.4229/0.2427/0.2443, zero_frac 0.393/0.601/0.532).
+hand_potential               champ=9.287414175821592 0.4343716158188331 -0.9907603760573132 | 2p:4.32647,0.434391,0.3109,50524 | 3p:168.273,0,0.5019,77546 | 4p:13.9881,1.61976,0.4109,125836 | KEEP
+    reason: real candidate-set spread (mean 4.326/168.3/13.99, zero_frac 0.311/0.502/0.411).
+hand_value                   champ=0.017870460389824396 0.002321164054315358 0.7837576449561363 | 2p:0.867047,0.427632,0.3680,50524 | 3p:0.616501,0,0.5588,77546 | 4p:0.730447,0.100559,0.4611,125836 | KEEP
+    reason: real candidate-set spread (mean 0.867/0.6165/0.7304, zero_frac 0.368/0.559/0.461).
+hand_value_late              champ=         0          0 0.05377693710393078 | 2p:1.59234,0.552632,0.3281,50524 | 3p:1.06556,0,0.5283,77546 | 4p:1.38845,0.357542,0.4263,125836 | KEEP
+    reason: real candidate-set spread (mean 1.592/1.066/1.388, zero_frac 0.328/0.528/0.426).
+happy_margin                 champ=-0.3542335510775388 -0.261514954181091 -1.81948731597405 | 2p:0.486155,0,0.5905,50524 | 3p:0.395514,0,0.6518,77546 | 4p:0.488211,0,0.6466,125836 | KEEP
+    reason: real candidate-set spread (mean 0.4862/0.3955/0.4882, zero_frac 0.591/0.652/0.647).
+happy_surplus                champ=3.6820713917582855 5.294901409214334 0.2998564666800129 | 2p:0.624337,0,0.5243,50524 | 3p:0.391944,0,0.6698,77546 | 4p:0.605199,0,0.6134,125836 | KEEP
+    reason: real candidate-set spread (mean 0.6243/0.3919/0.6052, zero_frac 0.524/0.670/0.613).
+has_unit                     champ=-0.0356038570924144 -0.7198324566513318 -0.09358703463930085 | 2p:0.302213,0,0.6978,50524 | 3p:0.217935,0,0.7821,77546 | 4p:0.189668,0,0.8103,125836 | KEEP
+    reason: real candidate-set spread (mean 0.3022/0.2179/0.1897, zero_frac 0.698/0.782/0.810).
+leader                       champ=17.930573662169603 -0.0006116233230168931 -16.2229560299842 | 2p:0.098725,0,0.9013,50524 | 3p:0.067444,0,0.9326,77546 | 4p:0.038383,0,0.9616,125836 | KEEP
+    reason: real candidate-set spread (mean 0.09872/0.06744/0.03838, zero_frac 0.901/0.933/0.962).
+ma_left                      champ=0.020759907686594553 33.737621344517024 -0.43870224889183546 | 2p:1.29675,1,0.2793,50524 | 3p:0.874952,1,0.4536,77546 | 4p:1.01409,1,0.3965,125836 | KEEP
+    reason: real candidate-set spread (mean 1.297/0.875/1.014, zero_frac 0.279/0.454/0.397).
+military_action_gap          champ=-0.15094630615620466 -0.40639601305991807 -0.16204276221656505 | 2p:1.15126,1,0.3372,50524 | 3p:1.10684,1,0.3616,77546 | 4p:1.11847,1,0.3516,125836 | KEEP
+    reason: real candidate-set spread (mean 1.151/1.107/1.118, zero_frac 0.337/0.362/0.352).
+military_action_surplus      champ=0.16746892027232202 0.009646590918860484 0.05662975129166668 | 2p:0.590502,0,0.6219,50524 | 3p:0.190734,0,0.8682,77546 | 4p:0.277478,0,0.8058,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5905/0.1907/0.2775, zero_frac 0.622/0.868/0.806).
+military_actions             champ=0.05042571724534679 0.17948228981657322 3.042975324195477 | 2p:0.071095,0,0.9427,50524 | 3p:0.061763,0,0.9514,77546 | 4p:0.082886,0,0.9274,125836 | KEEP
+    reason: real candidate-set spread (mean 0.0711/0.06176/0.08289, zero_frac 0.943/0.951/0.927).
+my_event_threat              champ=22.784503331187917 0.07413158493260064 0.1211057348163082 | 2p:0.401093,0,0.9045,50524 | 3p:8.01923,0,0.9014,77546 | 4p:0.436886,0,0.9366,125836 | KEEP
+    reason: real candidate-set spread (mean 0.4011/8.019/0.4369, zero_frac 0.904/0.901/0.937).
+my_seeded_pending            champ=0.9490504900965292 -0.231701846772786 0.0030731436693655894 | 2p:0.117053,0,0.9226,50524 | 3p:0.219869,0,0.8765,77546 | 4p:0.158452,0,0.9083,125836 | KEEP
+    reason: real candidate-set spread (mean 0.1171/0.2199/0.1585, zero_frac 0.923/0.876/0.908).
+num_techs                    champ=-0.12034486749727459 4.378196912916898 2.0506609039422377 | 2p:0.202716,0,0.7973,50524 | 3p:0.02209,0,0.9779,77546 | 4p:0.071863,0,0.9281,125836 | KEEP
+    reason: real candidate-set spread (mean 0.2027/0.02209/0.07186, zero_frac 0.797/0.978/0.928).
+pact_blocks_attack           champ=2.0540252293112333 3.1912360844348977 1.7152531106431934 | 2p:0,0,1.0000,50524 | 3p:0.012406,0,0.9835,77546 | 4p:0.022438,0,0.9702,125836 | KEEP
+    reason: real candidate-set spread (mean 0/0.01241/0.02244, zero_frac 1.000/0.984/0.970).
+pact_partner_lead            champ=0.40888518522527884 -0.0738556826125066 -0.21165099108620264 | 2p:0,0,1.0000,50524 | 3p:1.40987,0,0.9667,77546 | 4p:2.37101,0,0.9578,125836 | KEEP
+    reason: real candidate-set spread (mean 0/1.41/2.371, zero_frac 1.000/0.967/0.958).
+pacts                        champ=-1.0142649956468095 -22.019509500868963 -0.1145098587863899 | 2p:0,0,1.0000,50524 | 3p:0.052717,0,0.9365,77546 | 4p:0.103508,0,0.8993,125836 | KEEP
+    reason: real candidate-set spread (mean 0/0.05272/0.1035, zero_frac 1.000/0.936/0.899).
+pop_cost                     champ=-0.004545896180991596 -0.07205737760571784          0 | 2p:0.096271,0,0.9054,50524 | 3p:0.046347,0,0.9541,77546 | 4p:0.095744,0,0.9111,125836 | KEEP
+    reason: real candidate-set spread (mean 0.09627/0.04635/0.09574, zero_frac 0.905/0.954/0.911).
+prod_workers                 champ=2.4900955458852514 -0.052294652437475754 0.311535408105468 | 2p:0.680587,1,0.4150,50524 | 3p:0.51189,0,0.5527,77546 | 4p:0.607672,1,0.4633,125836 | KEEP
+    reason: real candidate-set spread (mean 0.6806/0.5119/0.6077, zero_frac 0.415/0.553/0.463).
+resource_gap                 champ=-1.9686700445075929 -0.161459252639887 -1.175325382204307 | 2p:0.850645,0,0.6441,50524 | 3p:0.551378,0,0.7598,77546 | 4p:0.654019,0,0.6954,125836 | KEEP
+    reason: real candidate-set spread (mean 0.8506/0.5514/0.654, zero_frac 0.644/0.760/0.695).
+resource_rate                champ=0.14265767840658425 15.576527341025518 3.49774501471253 | 2p:1.39636,0.970325,0.2845,50524 | 3p:0.924344,0.645667,0.4700,77546 | 4p:1.21083,0.981625,0.3713,125836 | KEEP
+    reason: real candidate-set spread (mean 1.396/0.9243/1.211, zero_frac 0.284/0.470/0.371).
+resource_surplus             champ=-0.4725769330293735 -0.4390954425784344 -0.46900561334445157 | 2p:2.26405,2,0.3580,50524 | 3p:1.15008,0,0.5941,77546 | 4p:1.23931,0,0.6092,125836 | KEEP
+    reason: real candidate-set spread (mean 2.264/1.15/1.239, zero_frac 0.358/0.594/0.609).
+rival_culture                champ=10.435566573371347 -6.2239754526466555 0.4828559294583027 | 2p:0.210672,0,0.9751,50524 | 3p:0.340894,0,0.9668,77546 | 4p:0.21234,0,0.9821,125836 | KEEP
+    reason: real candidate-set spread (mean 0.2107/0.3409/0.2123, zero_frac 0.975/0.967/0.982).
+rival_food_stock             champ=0.25741835469463076 -0.19471070883185784 1.5924766053661625 | 2p:0.037448,0,0.9824,50524 | 3p:0.050847,0,0.9698,77546 | 4p:0.052338,0,0.9837,125836 | KEEP
+    reason: real candidate-set spread (mean 0.03745/0.05085/0.05234, zero_frac 0.982/0.970/0.984).
+rival_hand_civil             champ=-2.061317548078043 3.8359954772215765 0.9879396450916077 | 2p:0.051678,0,0.9742,50524 | 3p:0.006009,0,0.9969,77546 | 4p:0.005261,0,0.9966,125836 | KEEP
+    reason: real candidate-set spread (mean 0.05168/0.006009/0.005261, zero_frac 0.974/0.997/0.997).
+rival_hand_potential         champ=-1.3751950824046748 -2.528301759782478 6.185695253334902 | 2p:0.046415,0,0.6390,50524 | 3p:1.07378,0,0.8650,77546 | 4p:0.001642,0,0.9232,125836 | KEEP
+    reason: real candidate-set spread (mean 0.04641/1.074/0.001642, zero_frac 0.639/0.865/0.923).
+rival_mean_culture           champ=0.11101535243673771 -0.09009044975841651 1.4484070817825454 | 2p:0.210672,0,0.9751,50524 | 3p:0.296676,0,0.9595,77546 | 4p:0.161732,0,0.9784,125836 | KEEP
+    reason: real candidate-set spread (mean 0.2107/0.2967/0.1617, zero_frac 0.975/0.960/0.978).
+rival_resource_stock         champ=-0.12153035178627758 3.4332390319936397 0.7017294009366086 | 2p:0.04392,0,0.9831,50524 | 3p:0.052794,0,0.9710,77546 | 4p:0.033528,0,0.9873,125836 | KEEP
+    reason: real candidate-set spread (mean 0.04392/0.05279/0.03353, zero_frac 0.983/0.971/0.987).
+rival_science_stock          champ=0.1639941226771352 6.5279758674636525 -0.8184599680871573 | 2p:0.026166,0,0.9883,50524 | 3p:0.058662,0,0.9653,77546 | 4p:0.038757,0,0.9848,125836 | KEEP
+    reason: real candidate-set spread (mean 0.02617/0.05866/0.03876, zero_frac 0.988/0.965/0.985).
+rival_yellow_bank            champ=-4.487395213452275 -1.0375006769954929 1.005153345715747 | 2p:0.088611,0,0.9505,50524 | 3p:0.020762,0,0.9871,77546 | 4p:0.023467,0,0.9858,125836 | KEEP
+    reason: real candidate-set spread (mean 0.08861/0.02076/0.02347, zero_frac 0.951/0.987/0.986).
+row_bargain_forgone          champ=2.084376623898689 0.6739283254641857 4.362372791103353 | 2p:1.95739,2,0.3839,50524 | 3p:0.491199,0,0.5943,77546 | 4p:0.571696,0,0.5461,125836 | KEEP
+    reason: real candidate-set spread (mean 1.957/0.4912/0.5717, zero_frac 0.384/0.594/0.546).
+row_last_copy                champ=-1.0078917401285405 0.7906856495552256 2.9937854485037345 | 2p:1.82038,1,0.3840,50524 | 3p:0.585638,0,0.5991,77546 | 4p:0.687259,0.147059,0.4756,125836 | KEEP
+    reason: real candidate-set spread (mean 1.82/0.5856/0.6873, zero_frac 0.384/0.599/0.476).
+row_urgency                  champ=-0.10719663204705801 -0.09172026260081864 -0.24435044931694017 | 2p:0.440118,0.210775,0.3616,50524 | 3p:11.5877,0,0.6865,77546 | 4p:5.75961,0,0.5479,125836 | KEEP
+    reason: real candidate-set spread (mean 0.4401/11.59/5.76, zero_frac 0.362/0.686/0.548).
+science                      champ=-0.7939099815642374 -39.290575417892036 -0.16493322064611754 | 2p:1.76403,1,0.4274,50524 | 3p:0.467198,0,0.7487,77546 | 4p:1.11341,0,0.6381,125836 | KEEP
+    reason: real candidate-set spread (mean 1.764/0.4672/1.113, zero_frac 0.427/0.749/0.638).
+science_gap                  champ=-0.8911537165013851 -0.4670319924910692 -19.435390100588613 | 2p:0.920236,0,0.6864,50524 | 3p:1.32474,0,0.6693,77546 | 4p:1.80072,0,0.6214,125836 | KEEP
+    reason: real candidate-set spread (mean 0.9202/1.325/1.801, zero_frac 0.686/0.669/0.621).
+science_rate                 champ=-0.01903861616472568 0.2590151307412138 -0.2473837557781337 | 2p:0.61228,0.275886,0.3724,50524 | 3p:0.415022,0,0.5940,77546 | 4p:0.623956,0,0.5023,125836 | KEEP
+    reason: real candidate-set spread (mean 0.6123/0.415/0.624, zero_frac 0.372/0.594/0.502).
+science_surplus              champ=0.46251943344024077 -10.91078721987386 0.09038570015649595 | 2p:1.76381,0,0.5028,50524 | 3p:0.863604,0,0.6603,77546 | 4p:2.11696,1,0.4902,125836 | KEEP
+    reason: real candidate-set spread (mean 1.764/0.8636/2.117, zero_frac 0.503/0.660/0.490).
+special_techs                champ=-0.34130877534631865 -0.6101114187614223 45.159570551063055 | 2p:0.04675,0,0.9532,50524 | 3p:0.007389,0,0.9926,77546 | 4p:0.011173,0,0.9888,125836 | KEEP
+    reason: real candidate-set spread (mean 0.04675/0.007389/0.01117, zero_frac 0.953/0.993/0.989).
+strength                     champ=10.2227166214498 56.9061470247489 55.90120835390151 | 2p:1.22146,1,0.3724,50524 | 3p:1.04412,1,0.4749,77546 | 4p:1.22689,1,0.4445,125836 | KEEP
+    reason: real candidate-set spread (mean 1.221/1.044/1.227, zero_frac 0.372/0.475/0.445).
+strength_deficit             champ=-0.5840312564486116 -0.057529647066215425 -0.7214003956440054 | 2p:0.595479,0,0.6171,50524 | 3p:0.65741,0,0.6136,77546 | 4p:0.86429,0,0.5441,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5955/0.6574/0.8643, zero_frac 0.617/0.614/0.544).
+strength_lead                champ=-2.2564614178559874 -0.327234864131944 -2.6207394576798704 | 2p:0.525592,0,0.6968,50524 | 3p:0.323649,0,0.8303,77546 | 4p:0.286581,0,0.8594,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5256/0.3236/0.2866, zero_frac 0.697/0.830/0.859).
+strength_rel                 champ=0.3528562213786294 -2.661299053431205 0.28958352678290084 | 2p:1.16891,1,0.3715,50524 | 3p:1.01789,0.694118,0.4750,77546 | 4p:1.19704,1,0.4445,125836 | KEEP
+    reason: real candidate-set spread (mean 1.169/1.018/1.197, zero_frac 0.371/0.475/0.445).
+strength_rel_early           champ=-9.576632650498258 -3.1756297468647805 9.179931978974592 | 2p:0.531586,0.296053,0.3389,50524 | 3p:0.459488,0.035294,0.4914,77546 | 4p:0.486786,0.111732,0.4216,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5316/0.4595/0.4868, zero_frac 0.339/0.491/0.422).
+strength_rel_late            champ=-0.012943782133043398 -0.5954201217711277 4.864011945782066 | 2p:0.717984,0.368421,0.3022,50524 | 3p:0.595941,0.188235,0.4587,77546 | 4p:0.754025,0.223464,0.3867,125836 | KEEP
+    reason: real candidate-set spread (mean 0.718/0.5959/0.754, zero_frac 0.302/0.459/0.387).
+tactic_gain                  champ=0.4924862806499713 0.029587259606345784 0.5633471866336304 | 2p:0.27478,0,0.8107,50524 | 3p:0.272122,0,0.8196,77546 | 4p:0.339942,0,0.7801,125836 | KEEP
+    reason: real candidate-set spread (mean 0.2748/0.2721/0.3399, zero_frac 0.811/0.820/0.780).
+tactic_level                 champ=0.44568911701144515 -17.221041175910177 -53.65269712472627 | 2p:0.331842,0,0.7576,50524 | 3p:0.319256,0,0.7650,77546 | 4p:0.402556,0,0.7197,125836 | KEEP
+    reason: real candidate-set spread (mean 0.3318/0.3193/0.4026, zero_frac 0.758/0.765/0.720).
+tactic_short                 champ=-0.5290206824294683 -0.029403806090091363 -0.015340937734642145 | 2p:0.574321,0,0.5080,50524 | 3p:0.462293,0,0.5974,77546 | 4p:0.486506,0,0.5735,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5743/0.4623/0.4865, zero_frac 0.508/0.597/0.574).
+take_cost_paid               champ=-0.25047468112785415 -2.387088111238164 0.374883182469704 | 2p:1.19595,0,0.5266,50524 | 3p:1.00614,0,0.6081,77546 | 4p:1.3473,1,0.4870,125836 | KEEP
+    reason: real candidate-set spread (mean 1.196/1.006/1.347, zero_frac 0.527/0.608/0.487).
+take_cost_share              champ=0.12995377455207596 0.2623815798576878 0.17606588677180324 | 2p:0.268424,0,0.5246,50524 | 3p:0.215967,0,0.6078,77546 | 4p:0.277634,0.166667,0.4867,125836 | KEEP
+    reason: real candidate-set spread (mean 0.2684/0.216/0.2776, zero_frac 0.525/0.608/0.487).
+tech_levels                  champ=0.03941009842915931 -0.1915365520248031 1.3420515712514445 | 2p:0.127986,0,0.5769,50524 | 3p:0.021938,0,0.8717,77546 | 4p:0.056049,0,0.7175,125836 | KEEP
+    reason: real candidate-set spread (mean 0.128/0.02194/0.05605, zero_frac 0.577/0.872/0.718).
+tech_levels_late             champ=0.0186757300733255 -0.42283158477592414 1.8583518630044256 | 2p:0.228978,0,0.5720,50524 | 3p:0.032402,0,0.8704,77546 | 4p:0.114409,0,0.7127,125836 | KEEP
+    reason: real candidate-set spread (mean 0.229/0.0324/0.1144, zero_frac 0.572/0.870/0.713).
+uprising                     champ=-5.251390433653381 -6.552418813140621          0 | 2p:0.331526,0,0.9788,50524 | 3p:0.260968,0,0.9709,77546 | 4p:0.586788,0,0.9515,125836 | KEEP
+    reason: real candidate-set spread (mean 0.3315/0.261/0.5868, zero_frac 0.979/0.971/0.952).
+urban_workers                champ=-0.23040071485597488 0.14255370192974715 -0.33416592417520463 | 2p:0.651611,1,0.4134,50524 | 3p:0.497369,0,0.5513,77546 | 4p:0.589561,1,0.4653,125836 | KEEP
+    reason: real candidate-set spread (mean 0.6516/0.4974/0.5896, zero_frac 0.413/0.551/0.465).
+wonder_age_overrun           champ=-0.5747095846544241 -0.013274462173063137 -0.01706751624303747 | 2p:0.063819,0,0.9634,50524 | 3p:0.063764,0,0.9608,77546 | 4p:0.048712,0,0.9658,125836 | KEEP
+    reason: real candidate-set spread (mean 0.06382/0.06376/0.04871, zero_frac 0.963/0.961/0.966).
+wonder_in_progress           champ=0.17047536387106607 0.7180396198657498 1.5421502380169776 | 2p:0.159568,0,0.8404,50524 | 3p:0.132257,0,0.8677,77546 | 4p:0.121531,0,0.8785,125836 | KEEP
+    reason: real candidate-set spread (mean 0.1596/0.1323/0.1215, zero_frac 0.840/0.868/0.878).
+wonder_overrun               champ=-0.9459409359887097 -0.09280468946376748 -0.3024291886837125 | 2p:0.051931,0,0.9735,50524 | 3p:0.043212,0,0.9788,77546 | 4p:0.036782,0,0.9762,125836 | KEEP
+    reason: real candidate-set spread (mean 0.05193/0.04321/0.03678, zero_frac 0.974/0.979/0.976).
+wonder_remaining             champ=         0 -0.9883113098174019 -0.6499460621364074 | 2p:1.79483,0,0.7433,50524 | 3p:1.65738,0,0.7623,77546 | 4p:1.50738,0,0.8171,125836 | KEEP
+    reason: real candidate-set spread (mean 1.795/1.657/1.507, zero_frac 0.743/0.762/0.817).
+wonder_stages_left           champ=-1.1600518105099693 -0.17494953273445707 -0.7202178500432144 | 2p:0.585167,0,0.7433,50524 | 3p:0.532291,0,0.7623,77546 | 4p:0.461792,0,0.8171,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5852/0.5323/0.4618, zero_frac 0.743/0.762/0.817).
+wonder_stages_per_action     champ=0.035756682406463014 0.27004105377216947 0.26880971176499524 | 2p:0.032737,0,0.9735,50524 | 3p:0.003675,0,0.9982,77546 | 4p:0.00863,0,0.9941,125836 | KEEP
+    reason: real candidate-set spread (mean 0.03274/0.003675/0.00863, zero_frac 0.974/0.998/0.994).
+wonder_turns_to_finish       champ=-0.01953537439904427 -0.20557371854165823 -0.738935048987716 | 2p:0.65638,0,0.5809,50524 | 3p:0.513094,0,0.6732,77546 | 4p:0.480908,0,0.6760,125836 | KEEP
+    reason: real candidate-set spread (mean 0.6564/0.5131/0.4809, zero_frac 0.581/0.673/0.676).
+wonders                      champ=0.006501405124353909 4.436694506179873 0.05924273343031221 | 2p:0.034716,0,0.9653,50524 | 3p:0.02503,0,0.9750,77546 | 4p:0.023284,0,0.9767,125836 | KEEP
+    reason: real candidate-set spread (mean 0.03472/0.02503/0.02328, zero_frac 0.965/0.975/0.977).
+worker_gap                   champ=-4.316828778367475 -2.138658430274594 -1.4005315461746934 | 2p:0.492479,0,0.5893,50524 | 3p:0.338421,0,0.6799,77546 | 4p:0.621301,1,0.4817,125836 | KEEP
+    reason: real candidate-set spread (mean 0.4925/0.3384/0.6213, zero_frac 0.589/0.680/0.482).
+worker_surplus               champ=0.0952459732853847 0.06429204466700116 1.6038218560166984 | 2p:0.460712,0,0.5916,50524 | 3p:0.262077,0,0.7596,77546 | 4p:0.138225,0,0.8753,125836 | KEEP
+    reason: real candidate-set spread (mean 0.4607/0.2621/0.1382, zero_frac 0.592/0.760/0.875).
+workers                      champ=1.6812882090655579 19.192232583655596 55.285881274085156 | 2p:0.362497,0.276316,0.3142,50524 | 3p:0.283663,0.047059,0.4847,77546 | 4p:0.308642,0.156425,0.4028,125836 | KEEP
+    reason: real candidate-set spread (mean 0.3625/0.2837/0.3086, zero_frac 0.314/0.485/0.403).
+workers_late                 champ=57.12167624587452         60 52.42086470453326 | 2p:0.564543,0.572368,0.2643,50524 | 3p:0.359069,0.264706,0.4475,77546 | 4p:0.428266,0.340782,0.3626,125836 | KEEP
+    reason: real candidate-set spread (mean 0.5645/0.3591/0.4283, zero_frac 0.264/0.448/0.363).
+yellow_bank                  champ=-5.3135819724331625 -3.466060385647056 0.024632882821968665 | 2p:0.269783,0,0.7760,50524 | 3p:0.179326,0,0.8349,77546 | 4p:0.277101,0,0.7386,125836 | KEEP
+    reason: real candidate-set spread (mean 0.2698/0.1793/0.2771, zero_frac 0.776/0.835/0.739).
+action_board_credit          champ=0.0686642110881546 0.05456192629878068 0.0070187381166088875 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0687/0.0546/0.00702 weight -- pure accumulated noise.
+aggression_board_credit      champ=0.01622863170760884 -0.12681843075269866 -0.1493520663251847 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0162/-0.127/-0.149 weight -- pure accumulated noise.
+attack_cost_doubled          champ=0.03238730668014746         60 0.06148877167869353 | 2p:0.003345,0,0.9967,50524 | 3p:0.002463,0,0.9975,77546 | 4p:0.005277,0,0.9947,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.997/0.998/0.995, mean 0.003345/0.002463/0.005277); cannot affect an argmax regardless of its 0.0324/60/0.0615 weight -- pure accumulated noise.
+auction_committed            champ=-0.2499918252552161 0.9925123019570301 -0.42879781231492686 | 2p:0.015389,0,0.9786,50524 | 3p:0.010183,0,0.9834,77546 | 4p:0.011443,0,0.9793,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.979/0.983/0.979, mean 0.01539/0.01018/0.01144); cannot affect an argmax regardless of its -0.25/0.993/-0.429 weight -- pure accumulated noise.
+best_lab                     champ=0.048734581137453444 8.58072748737487 4.214229198036163 | 2p:0.014607,0,0.9896,50524 | 3p:0,0,1.0000,77546 | 4p:0.010426,0,0.9943,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.990/1.000/0.994, mean 0.01461/0/0.01043); cannot affect an argmax regardless of its 0.0487/8.58/4.21 weight -- pure accumulated noise.
+best_mine                    champ=1.0857785587254427 7.843847705914054 -0.12230053616712594 | 2p:0.000238,0,0.9998,50524 | 3p:0,0,1.0000,77546 | 4p:0.012596,0,0.9939,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/0.994, mean 0.000238/0/0.0126); cannot affect an argmax regardless of its 1.09/7.84/-0.122 weight -- pure accumulated noise.
+best_theater                 champ=0.29282552407290585 -8.112499138548708 47.0040361141113 | 2p:0.001306,0,0.9992,50524 | 3p:0.016867,0,0.9875,77546 | 4p:0.012477,0,0.9909,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.999/0.988/0.991, mean 0.001306/0.01687/0.01248); cannot affect an argmax regardless of its 0.293/-8.11/47 weight -- pure accumulated noise.
+best_unit                    champ=-0.901856083840712 0.7730990599122137 34.581736620173636 | 2p:0.016329,0,0.9900,50524 | 3p:0.000284,0,0.9998,77546 | 4p:0.006183,0,0.9970,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.990/1.000/0.997, mean 0.01633/0.000284/0.006183); cannot affect an argmax regardless of its -0.902/0.773/34.6 weight -- pure accumulated noise.
+bonus_card_credit            champ=-0.14138228862542182 2.584832489481834 -0.931167115374166 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.141/2.58/-0.931 weight -- pure accumulated noise.
+build_fresh_credit           champ=0.0022355952559737595 1.6356867438755642 -0.6670125007464517 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.00224/1.64/-0.667 weight -- pure accumulated noise.
+card_board_bonus             champ=-0.22925986491574726 0.032692936080023625 0.2103278549858684 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.229/0.0327/0.21 weight -- pure accumulated noise.
+card_board_credit            champ=0.22925986491574726 0.642261566756586 0.10172634619038641 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.229/0.642/0.102 weight -- pure accumulated noise.
+card_board_leader            champ=-0.21023795204036042 0.08729001214292045 -0.10172634619038641 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.21/0.0873/-0.102 weight -- pure accumulated noise.
+card_rate_credit             champ=0.1401442215388832 -7.877123081910862 -0.34083460654578995 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.14/-7.88/-0.341 weight -- pure accumulated noise.
+colonies                     champ=-0.8766912435026449 24.384768918539333 -6.164666722915178 | 2p:0.009401,0,0.9906,50524 | 3p:0.007015,0,0.9930,77546 | 4p:0.008813,0,0.9912,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.991/0.993/0.991, mean 0.009401/0.007015/0.008813); cannot affect an argmax regardless of its -0.877/24.4/-6.16 weight -- pure accumulated noise.
+culture_rate_trailing        champ=-0.26136856060984426 0.015629108635507226 -0.03473621272699785 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.261/0.0156/-0.0347 weight -- pure accumulated noise.
+defense_bonus                champ=0.077844278367457 0.010563360739196769 0.1150735765326699 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0778/0.0106/0.115 weight -- pure accumulated noise.
+event_board_credit           champ=-0.31083853581416276 -3.2243311193418065 -0.4176780278694586 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.311/-3.22/-0.418 weight -- pure accumulated noise.
+free_action_credit           champ=         0 0.9971437232525701          0 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0/0.997/0 weight -- pure accumulated noise.
+free_civil_action            champ=0.5348669441376475          0 8.605221829729679 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.535/0/8.61 weight -- pure accumulated noise.
+gov_action_cost              champ=-0.8467932255492776 -0.3639922409333897 -0.9630605446454965 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.847/-0.364/-0.963 weight -- pure accumulated noise.
+gov_board_credit             champ=0.08105466439459393 1.1556947042241017 -0.02132382340058656 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0811/1.16/-0.0213 weight -- pure accumulated noise.
+hand_limit                   champ=0.054573928196638796          0 0.015889187354171254 | 2p:0.004909,0,0.9975,50524 | 3p:0,0,1.0000,77546 | 4p:0.00418,0,0.9979,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.998/1.000/0.998, mean 0.004909/0/0.00418); cannot affect an argmax regardless of its 0.0546/0/0.0159 weight -- pure accumulated noise.
+hand_swap_extra              champ=-0.013435221385660133 0.9989258263739562 -0.07680983044539941 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.0134/0.999/-0.0768 weight -- pure accumulated noise.
+has_colony                   champ=19.890976497880114 -0.6265627954422174 0.3946258390685624 | 2p:0.0057,0,0.9943,50524 | 3p:0.0061,0,0.9939,77546 | 4p:0.006334,0,0.9937,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.994/0.994/0.994, mean 0.0057/0.0061/0.006334); cannot affect an argmax regardless of its 19.9/-0.627/0.395 weight -- pure accumulated noise.
+no_aggression                champ=-0.006213496216626194 -0.008593336553852958 -17.033508435696007 | 2p:0.003345,0,0.9967,50524 | 3p:0.002463,0,0.9975,77546 | 4p:0.005277,0,0.9947,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.997/0.998/0.995, mean 0.003345/0.002463/0.005277); cannot affect an argmax regardless of its -0.00621/-0.00859/-17 weight -- pure accumulated noise.
+pact_board_credit            champ=         0 0.056877451643801535 0.09925423129959501 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0/0.0569/0.0993 weight -- pure accumulated noise.
+rate_horizon                 champ=0.8003361784568053 0.391631179430709 0.07285284746233205 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.8/0.392/0.0729 weight -- pure accumulated noise.
+resource_discount            champ=0.05267352863183293 4.041048889886384 0.3176392879944578 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0527/4.04/0.318 weight -- pure accumulated noise.
+restricted_resource_credit   champ=0.01673113520122509 0.48514380617528424          0 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0167/0.485/0 weight -- pure accumulated noise.
+restricted_resources         champ=0.09843375304261379 1.8577066930229253 0.4056222945092715 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0984/1.86/0.406 weight -- pure accumulated noise.
+rival_building_wonder        champ=0.08378464568961418 14.007654784875314 1.2215115938548946 | 2p:0.002078,0,0.9979,50524 | 3p:0.003624,0,0.9968,77546 | 4p:0.001907,0,0.9983,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.998/0.997/0.998, mean 0.002078/0.003624/0.001907); cannot affect an argmax regardless of its 0.0838/14/1.22 weight -- pure accumulated noise.
+rival_colonies               champ=-1.621942394480056 -24.324452107838237 -2.8200489289064263 | 2p:0.00384,0,0.9962,50524 | 3p:0.001676,0,0.9983,77546 | 4p:0.001121,0,0.9989,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.996/0.998/0.999, mean 0.00384/0.001676/0.001121); cannot affect an argmax regardless of its -1.62/-24.3/-2.82 weight -- pure accumulated noise.
+rival_culture_rate           champ=1.3247803676472643 0.20908832373923972 -15.255931937017829 | 2p:0,0,1.0000,50524 | 3p:0.007899,0,0.9897,77546 | 4p:0.009878,0,0.9889,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/0.990/0.989, mean 0/0.007899/0.009878); cannot affect an argmax regardless of its 1.32/0.209/-15.3 weight -- pure accumulated noise.
+rival_desire                 champ=0.0019759720583030008 0.35145785350526615 -0.2873740184538011 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.00198/0.351/-0.287 weight -- pure accumulated noise.
+rival_free_ca                champ=-0.698415739083806 0.24931043090045513 -0.075717622607016 | 2p:0.000297,0,0.9998,50524 | 3p:0.000232,0,0.9998,77546 | 4p:0.000199,0,0.9998,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0.000297/0.000232/0.000199); cannot affect an argmax regardless of its -0.698/0.249/-0.0757 weight -- pure accumulated noise.
+rival_free_workers           champ=0.031754426344874645 0.38273709705670383 18.042036922269236 | 2p:0.00958,0,0.9905,50524 | 3p:0.015165,0,0.9849,77546 | 4p:0.011348,0,0.9887,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.991/0.985/0.989, mean 0.00958/0.01516/0.01135); cannot affect an argmax regardless of its 0.0318/0.383/18 weight -- pure accumulated noise.
+rival_mil_actions            champ=-0.0039357869297151765 6.414788679310548 0.49294200152736056 | 2p:0.007224,0,0.9937,50524 | 3p:0.002992,0,0.9978,77546 | 4p:0.017094,0,0.9833,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.994/0.998/0.983, mean 0.007224/0.002992/0.01709); cannot affect an argmax regardless of its -0.00394/6.41/0.493 weight -- pure accumulated noise.
+rival_science_rate           champ=-0.18499299002501954 8.273446064307587 11.81257622293121 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.185/8.27/11.8 weight -- pure accumulated noise.
+rival_strength               champ=0.3266705087321041 -0.5827209887547353 0.17131036647790032 | 2p:0,0,1.0000,50524 | 3p:0.008053,0,0.9954,77546 | 4p:0.00563,0,0.9967,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/0.995/0.997, mean 0/0.008053/0.00563); cannot affect an argmax regardless of its 0.327/-0.583/0.171 weight -- pure accumulated noise.
+rival_take_share             champ=-0.02375083692537288 3.834150472454891 -9.762265589469079 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.0238/3.83/-9.76 weight -- pure accumulated noise.
+rival_wonders                champ=-0.5978676556034312 0.06115191161148916 -0.29263575728308966 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.598/0.0612/-0.293 weight -- pure accumulated noise.
+science_rate_trailing        champ=20.479302778330716 0.36003978778972967 -0.8011054326133396 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 20.5/0.36/-0.801 weight -- pure accumulated noise.
+tactic_board_credit          champ=0.06343805364368246 0.04405103740304782          0 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0634/0.0441/0 weight -- pure accumulated noise.
+tactic_reach_credit          champ=-0.3796241492695008 -0.024233871635507026 0.2911897157824694 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.38/-0.0242/0.291 weight -- pure accumulated noise.
+tactic_shortfall_cost        champ=0.014249988634890886 0.13316961120432472          0 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0142/0.133/0 weight -- pure accumulated noise.
+tech_board_credit            champ=-0.5610735990129455 -27.071740486532345 -0.12528463216920843 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.561/-27.1/-0.125 weight -- pure accumulated noise.
+tech_redundancy_discount     champ=1.1468039124174658 3.370945089972653 0.4786325742454236 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 1.15/3.37/0.479 weight -- pure accumulated noise.
+territory_credit             champ=0.05850349263858794 -0.030147477317211444 -0.24315086899185562 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0585/-0.0301/-0.243 weight -- pure accumulated noise.
+unit_strength_credit         champ=0.034611886884928215 0.11178112841587387 0.02334877866169817 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0346/0.112/0.0233 weight -- pure accumulated noise.
+unit_tech_credit             champ=-0.04552060514801143 1.63389822406958 0.13497639247034526 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its -0.0455/1.63/0.135 weight -- pure accumulated noise.
+urban_limit                  champ=-0.07308823439819137 0.03655632825703309 0.23978175121001966 | 2p:0.014251,0,0.9887,50524 | 3p:0.010613,0,0.9898,77546 | 4p:0.01471,0,0.9858,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 0.989/0.990/0.986, mean 0.01425/0.01061/0.01471); cannot affect an argmax regardless of its -0.0731/0.0366/0.24 weight -- pure accumulated noise.
+war_board_credit             champ=0.2071750959670981 -0.3451878385691261 0.1807184780459185 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.207/-0.345/0.181 weight -- pure accumulated noise.
+war_immune                   champ=0.027879156092482562          0 23.793255555414003 | 2p:0,0,1.0000,50524 | 3p:0.001328,0,0.9987,77546 | 4p:0.004132,0,0.9959,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/0.999/0.996, mean 0/0.001328/0.004132); cannot affect an argmax regardless of its 0.0279/0/23.8 weight -- pure accumulated noise.
+wonder_board_credit          champ=0.027296249767641743 0.29101608197958717 0.07197313381900075 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.0273/0.291/0.072 weight -- pure accumulated noise.
+wonder_promise               champ=0.7609367943332256 0.6032340649994601 2.0134303193378082 | 2p:0,0,1.0000,50524 | 3p:0,0,1.0000,77546 | 4p:0,0,1.0000,125836 | RETIRE
+    reason: zero/near-zero spread at every decision in all 3 counts (zero_frac 1.000/1.000/1.000, mean 0/0/0); cannot affect an argmax regardless of its 0.761/0.603/2.01 weight -- pure accumulated noise.
+
+========================================================================
+LIMITATIONS / WHAT WAS NOT MEASURED
+========================================================================
+
+1. Gated (0.0-weight) identity-aware channels: for the ten keys
+   linear_features() prices through a `freeze`-priced sub-function
+   (hand_potential, wonder_potential, hand_mil_potential,
+   rival_hand_potential, row_urgency, row_bargain_forgone, row_last_copy,
+   my_event_threat, plus rate_horizon's own RATE_KEYS scaling), spread was
+   measured with freeze == that player count's OWN champion, matching
+   `evaluate`'s real behaviour exactly (by construction, pinned by
+   eval.rs's own dotted-reproduces-evaluate-exactly test). Where a GATE
+   weight feeding one of these is 0.0 in the champion, the measured
+   near-null spread reflects the gate being off, not a proof the underlying
+   mechanism is inert -- see the `_board_credit`/`_credit` note above.
+
+2. Single-legal-move decisions are excluded from every measurement (the
+   whole exercise is about CANDIDATE spread; a forced move has none). Some
+   RETIRE verdicts here -- `colonies` and `has_colony` most notably, both
+   RETIRE despite real board weight (colonies up to 24.4 at 3p) and an
+   extensive weights.rs comment on why HasColony's cliff shape should
+   matter -- are consistent with colonizing being a MULTI-STEP action whose
+   `.colonies` count does not change on the SAME ply that offers the
+   colonize move as a candidate; if so, this is a real 1-ply-search
+   blindness (the same shape docs/COVERAGE_AUDIT.md called "search-blind"
+   for the Python engine's wonder-stage decisions), not evidence that
+   colonizing is rare. This audit measures what the LINEAR BASIS can see
+   at 1 ply, which is the question asked; it does not attribute the cause.
+
+3. 200 games/player count (253,906 decisions) is a large sample by the
+   standard this repo already uses elsewhere (docs/COVERAGE_AUDIT.md used
+   40 games/cell, ~2,300-5,500 decisions per cell) but boundary verdicts
+   (mean spread 0.01-0.03, zero_frac 0.95-0.99 -- the "near-zero" RETIRE
+   subgroup, plus a handful of low-margin KEEPs) could flip with more
+   samples, particularly for leader-ability gates (war_immune,
+   attack_cost_doubled, no_aggression) that depend on a specific leader
+   being in play, which is itself rare in any single game.
+
+4. `sign_intent()` cross-check, clamp-pinning and the 13-key cross-count
+   sign-agreement list were NOT re-derived here -- reused verbatim from
+   analysis/champion_audit_2026-08-24.txt (frozen from the same 3 champion
+   files this audit also used), per this task's brief.
+
+5. This audit did not re-verify every CHANGE candidate's shape by reading
+   its full features.rs/cards.rs implementation; the 5 listed are the ones
+   with either a PINNED TEST (wonder_progress/wonder_potential -- see
+   cards.rs::tests::two_wonders_with_different_powers_score_identically_
+   at_the_moment_they_are_taken) or an explicit features.rs/weights.rs
+   architecture comment naming the SAME feature as both a raw LEVEL and
+   the subject of an already-built DIFFERENCE hinge (food_stock,
+   resource_stock) or an explicit "linear cannot express" comment
+   (unit_workers). Other keys may share these shapes without a comment
+   flagging them; a full audit of all 99 KEEP keys' feature definitions
+   was out of scope for the tool-call budget here.
