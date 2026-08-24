@@ -360,7 +360,6 @@ mod tests {
         // weight nobody has climbed off its 0.0 default yet -- a VALUE bug,
         // not a missing-reader one, which is exactly why this probe does
         // not (and should not) flag it.
-        (WeightKey::FreeCivilAction, "cards.rs static/board card valuation"),
         (WeightKey::ResourceDiscount, "cards.rs static/board card valuation"),
         (WeightKey::DefenseBonus, "cards.rs static/board card valuation"),
         (WeightKey::GovActionCost, "cards.rs government valuation (feature_key); docs/OPEN_ITEMS.md item 1"),

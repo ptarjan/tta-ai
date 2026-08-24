@@ -399,9 +399,10 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
             // reachable when `action_board_credit == 0.0`, which no live
             // champion's trained vector has ever been (see this function's
             // `resource_discount` comment above for the same shape and a
-            // measured disagreement). `WeightKey::FreeCivilAction` stays
-            // in the registry as a known-dead coordinate; nothing pushes it
-            // anymore.
+            // measured disagreement). The `free_civil_action` coordinate it
+            // used to push is retired outright (`weights::RETIRED_KEYS`) --
+            // a dead coordinate left indexable is a coordinate the climb
+            // still mutates.
             //
             // BUG, found by turning `clippy::wildcard_enum_match_arm` on
             // (this arm used to be a bare `_ => {}`, which is exactly what
@@ -2758,9 +2759,9 @@ mod tests {
             ),
             (
                 "freeCivilAction",
-                "Special::FreeCivilAction: WeightKey::FreeCivilAction is a documented-dead coordinate \
-                 in card_yields, but action_value prices the same 18 action cards board-aware through \
-                 free_action_credit instead",
+                "Special::FreeCivilAction: card_yields does not price it (its free_civil_action \
+                 coordinate is retired), but action_value prices the same 18 action cards \
+                 board-aware through free_action_credit instead",
             ),
             (
                 "onBuildCulture",
@@ -3385,8 +3386,9 @@ mod tests {
     /// (`action_board_credit != 0.0` on all three) and the board-aware one
     /// is what the league actually trains against. This test is the
     /// tripwire: walk every card in the base game and fail the moment
-    /// `card_yields` prices any of the three coordinates again, however it
-    /// got reintroduced.
+    /// `card_yields` prices either surviving coordinate again, however it got
+    /// reintroduced. `free_civil_action` needs no tripwire anymore -- it was
+    /// retired outright on 2026-08-24, so there is no variant left to push.
     #[test]
     fn card_yields_never_reprices_the_action_boards_ring_fenced_coordinates() {
         let mut buf = Vec::new();
@@ -3396,7 +3398,7 @@ mod tests {
             card_yields(id, &mut buf);
             for &(key, amount, _kind) in &buf {
                 assert!(
-                    !matches!(key, WeightKey::ResourceDiscount | WeightKey::RestrictedResources | WeightKey::FreeCivilAction),
+                    !matches!(key, WeightKey::ResourceDiscount | WeightKey::RestrictedResources),
                     "{id:?} priced {amount} of {key:?} through the static table -- \
                      action_value must be the only pricer of this coordinate"
                 );
