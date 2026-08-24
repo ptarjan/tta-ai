@@ -135,6 +135,156 @@ impl WonderFateCounts {
 }
 
 // ---------------------------------------------------------------------
+// Wonder-tempo EARLY/LATE grouping
+// ---------------------------------------------------------------------
+//
+// analysis/wonder_tempo_2026-08-24.txt measured that a player-game whose
+// first wonder-stage build lands at round 10+ wins well below the self-play
+// null (24.6% vs 33.3% at 3p, p=0.0171), while the bulk of the population
+// starts by round 5. This section answers the follow-up question the
+// analysis could not: what did the LATE group's civil actions go toward
+// instead, and how does its board differ from the EARLY group's by the
+// point (round 6) where the gap is already visible.
+
+/// The two groups the wonder-tempo comparison below is over. A player-game
+/// whose first wonder-stage round falls in 6..=9 is in NEITHER group (see
+/// `wonder_tempo_group`) -- this is the boundary the analysis used, not an
+/// exhaustive split of the population.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WonderTempoGroup {
+    /// First wonder-stage build by round 5.
+    Early,
+    /// First wonder-stage build at round 10 or later, or never built at all.
+    Late,
+}
+
+/// Classifies one player-game's `PlayerTrack::first_wonder_round` into a
+/// [`WonderTempoGroup`], or `None` for the excluded middle band (round
+/// 6-9) -- pulled out of `play_one`'s end-of-game loop so the boundary is
+/// defined in exactly one place.
+fn wonder_tempo_group(first_wonder_round: Option<u16>) -> Option<WonderTempoGroup> {
+    match first_wonder_round {
+        Some(r) if r <= 5 => Some(WonderTempoGroup::Early),
+        Some(r) if r >= 10 => Some(WonderTempoGroup::Late),
+        Some(_) => None,
+        // Never built a wonder stage at all: grouped with LATE, matching
+        // analysis/wonder_tempo_2026-08-24.txt's own "rounds 10+" win-rate
+        // bucket, which folds in the "never built" player-games rather than
+        // giving them a third bucket.
+        None => Some(WonderTempoGroup::Late),
+    }
+}
+
+/// A civil-action-consuming move, bucketed into the coarse kind the
+/// round-3-9 cross-tab reports spend by. Coarser than `Move` itself (a
+/// single named enum per task-requested bucket) rather than keying a map by
+/// `Move` directly, matching this file's own preference for named buckets
+/// over reusing an engine type as a report key (see `opening_build_kind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CivilMoveKind {
+    Take,
+    Build,
+    Develop,
+    Pop,
+    Leader,
+    ActionCard,
+    WonderStep,
+    /// Everything else that can still spend a civil action (Revolution,
+    /// Upgrade, BachTheater, ...) or spends none at all (a response move
+    /// like `Choose`/`Defend`, which only ever reaches this classifier when
+    /// `ca_spent > 0` happens to be true for it too).
+    Other,
+}
+
+fn civil_move_kind(mv: Move) -> CivilMoveKind {
+    match mv {
+        Move::Take { .. } => CivilMoveKind::Take,
+        Move::Build { .. } => CivilMoveKind::Build,
+        Move::Develop { .. } => CivilMoveKind::Develop,
+        Move::Pop { .. } | Move::PopFree => CivilMoveKind::Pop,
+        Move::PlayLeader { .. } => CivilMoveKind::Leader,
+        Move::PlayAction { .. } => CivilMoveKind::ActionCard,
+        Move::WonderStep { .. } => CivilMoveKind::WonderStep,
+        Move::Upgrade { .. }
+        | Move::Revolution { .. }
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::Churchill { .. }
+        | Move::EndTurn
+        | Move::PolPass
+        | Move::Resign => CivilMoveKind::Other,
+    }
+}
+
+/// Tallies of civil-action SPEND (not move count -- `record`'s `spent` is
+/// the number of civil actions the move consumed) by [`CivilMoveKind`]. A
+/// struct of named counters for the same reason [`WonderFateCounts`] is one
+/// rather than a `HashMap<CivilMoveKind, u64>`: a kind nobody spent on
+/// prints as `0`, not as a missing key.
+#[derive(Default, Clone, Copy)]
+struct CivilSpendCounts {
+    take: u64,
+    build: u64,
+    develop: u64,
+    pop: u64,
+    leader: u64,
+    action_card: u64,
+    wonder_step: u64,
+    other: u64,
+}
+
+impl CivilSpendCounts {
+    fn record(&mut self, kind: CivilMoveKind, spent: u64) {
+        match kind {
+            CivilMoveKind::Take => self.take += spent,
+            CivilMoveKind::Build => self.build += spent,
+            CivilMoveKind::Develop => self.develop += spent,
+            CivilMoveKind::Pop => self.pop += spent,
+            CivilMoveKind::Leader => self.leader += spent,
+            CivilMoveKind::ActionCard => self.action_card += spent,
+            CivilMoveKind::WonderStep => self.wonder_step += spent,
+            CivilMoveKind::Other => self.other += spent,
+        }
+    }
+
+    fn total(&self) -> u64 {
+        self.take + self.build + self.develop + self.pop + self.leader + self.action_card + self.wonder_step + self.other
+    }
+
+    fn merge(&mut self, other: CivilSpendCounts) {
+        self.take += other.take;
+        self.build += other.build;
+        self.develop += other.develop;
+        self.pop += other.pop;
+        self.leader += other.leader;
+        self.action_card += other.action_card;
+        self.wonder_step += other.wonder_step;
+        self.other += other.other;
+    }
+}
+
+// ---------------------------------------------------------------------
 // Per-age snapshot bucket
 // ---------------------------------------------------------------------
 
@@ -150,6 +300,19 @@ struct AgeSample {
     strength: i32,
     culture_rate: i32,
     science_rate: i32,
+    /// Fields below are unused by the per-age table this struct was built
+    /// for -- they exist so the round-6 wonder-tempo snapshot (`Report::
+    /// round6_early`/`round6_late`) can reuse the pre-move sample this file
+    /// already takes on EVERY move (`play_one`'s `pre_snapshots`), instead
+    /// of calling `effects::state_stats` a second time per move. `food`/
+    /// `resources` above are STOCK; `food_rate`/`resource_rate` here are
+    /// PRODUCTION (`effects::Stats::food`/`resources` -- the two structs
+    /// name their fields identically but mean different things).
+    culture_stock: u32,
+    food_rate: i32,
+    resource_rate: i32,
+    hand_civil: u32,
+    buildings: u32,
 }
 
 fn age_index(age: Age) -> usize {
@@ -185,6 +348,21 @@ fn sample_player(state: &tta::GameState, idx: u8) -> AgeSample {
         strength: s.strength,
         culture_rate: s.culture,
         science_rate: s.science,
+        culture_stock: p.culture as u32,
+        food_rate: s.food,
+        resource_rate: s.resources,
+        hand_civil: p.hand_civil.len() as u32,
+        // "Buildings on board": the 7 urban/farm/mine CardTypes, counted as
+        // distinct developed CardIds rather than workers (unlike
+        // `farm_workers`/`mine_workers` above) -- mirrors `opening_build_
+        // kind`'s own building/military split, just summed instead of named.
+        buildings: (p.techs.of_type(CardType::Farm).count()
+            + p.techs.of_type(CardType::Mine).count()
+            + p.techs.of_type(CardType::Temple).count()
+            + p.techs.of_type(CardType::Lab).count()
+            + p.techs.of_type(CardType::Library).count()
+            + p.techs.of_type(CardType::Arena).count()
+            + p.techs.of_type(CardType::Theater).count()) as u32,
     }
 }
 
@@ -291,6 +469,22 @@ struct Report {
 
     // ---- score ----
     final_score: Vec<i32>,
+
+    // ---- wonder tempo: civil-action spend by move kind, rounds 3-9,
+    // EARLY vs LATE (see the "Wonder-tempo EARLY/LATE grouping" section
+    // above and analysis/wonder_tempo_2026-08-24.txt). Index 0..7 of each
+    // array is round 3..9. A player-game in the excluded round-6-9 middle
+    // band (`wonder_tempo_group` returns `None`) contributes to neither.
+    civil_spend_early: [CivilSpendCounts; 7],
+    civil_spend_late: [CivilSpendCounts; 7],
+    n_player_games_early: u64,
+    n_player_games_late: u64,
+    // End-of-round-6 board state, same EARLY/LATE grouping as above -- one
+    // sample per player-game that reached round 6 (a game that ends before
+    // round 6 contributes to neither Vec, same "no fabricated sample" rule
+    // as the rest of this file).
+    round6_early: Vec<AgeSample>,
+    round6_late: Vec<AgeSample>,
 }
 
 impl Report {
@@ -334,6 +528,15 @@ impl Report {
             self.age_samples[i].append(&mut other.age_samples[i]);
         }
         self.final_score.extend(other.final_score);
+
+        for i in 0..7 {
+            self.civil_spend_early[i].merge(other.civil_spend_early[i]);
+            self.civil_spend_late[i].merge(other.civil_spend_late[i]);
+        }
+        self.n_player_games_early += other.n_player_games_early;
+        self.n_player_games_late += other.n_player_games_late;
+        self.round6_early.append(&mut other.round6_early);
+        self.round6_late.append(&mut other.round6_late);
     }
 }
 
@@ -400,6 +603,17 @@ struct PlayerTrack {
     took_leader_r3: bool,
     increased_pop_r3: bool,
     ca_unused_r3: i32,
+
+    /// Civil-action spend by [`CivilMoveKind`], rounds 3-9 (index 0..7 =
+    /// round 3..9) -- accumulated regardless of this player-game's eventual
+    /// [`WonderTempoGroup`], which is not known until the game ends; folded
+    /// into `Report::civil_spend_early`/`civil_spend_late` at that point.
+    civil_spend_by_round: [CivilSpendCounts; 7],
+    /// This player's board, sampled PRE-move at the move that ends round 6
+    /// (same "state before the transition" convention as the age-boundary
+    /// snapshots above) -- `None` if the game ended before round 6 was
+    /// reached.
+    round6_sample: Option<AgeSample>,
 }
 
 impl PlayerTrack {
@@ -420,6 +634,8 @@ impl PlayerTrack {
             took_leader_r3: false,
             increased_pop_r3: false,
             ca_unused_r3: 0,
+            civil_spend_by_round: [CivilSpendCounts::default(); 7],
+            round6_sample: None,
         }
     }
 }
@@ -526,6 +742,9 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
     let mut moves_played = 0usize;
     let mut cap_hit = false;
     let mut prev_age = state.age_civil;
+    // Round-6 wonder-tempo board snapshot boundary -- mirrors `prev_age`
+    // above exactly, just keyed on `state.round` instead of `state.age_civil`.
+    let mut prev_round = state.round;
 
     while !state.game_over {
         if moves_played >= MOVE_CAP {
@@ -588,6 +807,23 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 state.players[i as usize].completed_wonders.len() > before_completed_len[i as usize];
             let fate = classify_wonder_change(completed_this_move, pending_infiltrate_victim, i, age_changed_this_move);
             tracks[i as usize].wonder_fate.entry(before).or_insert(fate);
+        }
+
+        // ---- wonder tempo: civil-action spend by move kind, rounds 3-9
+        // (see the "Wonder-tempo EARLY/LATE grouping" section above). Spend
+        // is read as the ACTUAL post-move drop in `civil_actions`, not a
+        // flat 1 per move, so a discounted/free move (a banked civil-life
+        // grant, an action-card discount) correctly contributes 0 -- the
+        // same reasoning `ca_before_move` above already relies on for the
+        // round<=3 `ca_unused_r3` bucket, just read on the other side of
+        // `game::step` too.
+        if (3..=9).contains(&round_before) {
+            let ca_after_move = state.players[actor as usize].civil_actions;
+            let ca_spent = (ca_before_move as i32 - ca_after_move as i32).max(0) as u64;
+            if ca_spent > 0 {
+                let idx = (round_before - 3) as usize;
+                tracks[actor as usize].civil_spend_by_round[idx].record(civil_move_kind(mv), ca_spent);
+            }
         }
 
         // ---- openings ----
@@ -668,6 +904,21 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             let idx = age_index(prev_age);
             report.age_samples[idx].extend(pre_snapshots.iter().copied());
             prev_age = state.age_civil;
+        }
+
+        // ---- round-6 boundary snapshot (wonder-tempo EARLY/LATE board
+        // comparison) -- same PRE-move convention as the age-boundary
+        // snapshot just above, keyed on `state.round` instead. Stashed on
+        // `tracks` rather than `report` directly because the EARLY/LATE
+        // group isn't known until the game ends (`wonder_tempo_group` reads
+        // `first_wonder_round`, which is still being written this move).
+        if state.round != prev_round {
+            if prev_round == 6 {
+                for (i, sample) in pre_snapshots.iter().enumerate() {
+                    tracks[i].round6_sample = Some(*sample);
+                }
+            }
+            prev_round = state.round;
         }
     }
 
@@ -772,6 +1023,34 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                     report.first_wonder_never_built.1 += 1;
                     if w {
                         report.first_wonder_never_built.0 += 1;
+                    }
+                }
+            }
+        }
+
+        // ---- wonder-tempo EARLY/LATE cross-tab: fold this player-game's
+        // rounds-3-9 civil-action spend and round-6 board sample into
+        // whichever group its first-wonder-stage round belongs to (see
+        // `wonder_tempo_group`'s doc comment for the boundary and the
+        // excluded round-6-9 middle band).
+        if let Some(group) = wonder_tempo_group(tracks[i as usize].first_wonder_round) {
+            match group {
+                WonderTempoGroup::Early => {
+                    report.n_player_games_early += 1;
+                    for k in 0..7 {
+                        report.civil_spend_early[k].merge(tracks[i as usize].civil_spend_by_round[k]);
+                    }
+                    if let Some(s) = tracks[i as usize].round6_sample {
+                        report.round6_early.push(s);
+                    }
+                }
+                WonderTempoGroup::Late => {
+                    report.n_player_games_late += 1;
+                    for k in 0..7 {
+                        report.civil_spend_late[k].merge(tracks[i as usize].civil_spend_by_round[k]);
+                    }
+                    if let Some(s) = tracks[i as usize].round6_sample {
+                        report.round6_late.push(s);
                     }
                 }
             }
@@ -1160,6 +1439,51 @@ fn print_report(players: u8, r: &Report) {
          `game::scores` returns `PlayerState::culture`, a single accumulating stock with no source-tagged \
          ledger anywhere in the engine -- see this file's module doc."
     );
+
+    // ---- wonder tempo: what did the LATE group's civil actions go toward
+    // instead of a wonder step, and how far behind is its board by round 6?
+    // See the "Wonder-tempo EARLY/LATE grouping" section near the top of
+    // this file and analysis/wonder_tempo_2026-08-24.txt for why this
+    // comparison exists and what it measured before this instrumentation.
+    println!("\n### Wonder tempo: civil-action spend by move kind, rounds 3-9, EARLY vs LATE\n");
+    println!(
+        "EARLY = first wonder-stage build by round 5 (n={} player-games). LATE = round 10+ or \
+         never built (n={} player-games). Player-games whose first wonder-stage round is 6-9 are \
+         in neither group (see analysis/wonder_tempo_2026-08-24.txt).",
+        r.n_player_games_early, r.n_player_games_late
+    );
+    println!("\n| round | group | n (CA spent) | take | build | develop | pop | leader | action-card | wonder-step | other |");
+    println!("|---|---|---|---|---|---|---|---|---|---|---|");
+    for round in 3u16..=9u16 {
+        let idx = (round - 3) as usize;
+        for (label, counts) in [("EARLY", &r.civil_spend_early[idx]), ("LATE", &r.civil_spend_late[idx])] {
+            let total = counts.total();
+            let share = |n: u64| 100.0 * n as f64 / total.max(1) as f64;
+            println!(
+                "| {round} | {label} | {total} | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.1}% | {:.1}% |",
+                share(counts.take),
+                share(counts.build),
+                share(counts.develop),
+                share(counts.pop),
+                share(counts.leader),
+                share(counts.action_card),
+                share(counts.wonder_step),
+                share(counts.other),
+            );
+        }
+    }
+
+    println!("\n### Wonder tempo: end-of-round-6 board state, EARLY vs LATE\n");
+    for (label, samples) in [("EARLY", &r.round6_early), ("LATE", &r.round6_late)] {
+        println!("\n{label} (n={}):", samples.len());
+        println!("  total culture:       {}", percentiles_u32(samples.iter().map(|s| s.culture_stock).collect()));
+        println!("  science production:  {}", percentiles_i32(samples.iter().map(|s| s.science_rate).collect()));
+        println!("  food production:     {}", percentiles_i32(samples.iter().map(|s| s.food_rate).collect()));
+        println!("  resource production: {}", percentiles_i32(samples.iter().map(|s| s.resource_rate).collect()));
+        println!("  military strength:   {}", percentiles_i32(samples.iter().map(|s| s.strength).collect()));
+        println!("  cards in civil hand: {}", percentiles_u32(samples.iter().map(|s| s.hand_civil).collect()));
+        println!("  buildings on board:  {}", percentiles_u32(samples.iter().map(|s| s.buildings).collect()));
+    }
 }
 
 fn main() -> ExitCode {

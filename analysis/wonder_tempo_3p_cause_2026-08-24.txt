@@ -1,0 +1,87 @@
+Why the 3p champion starts wonders late: it buys cards instead
+==============================================================
+Measured 2026-08-24. Prerequisite reading: analysis/wonder_tempo_2026-08-24.txt,
+which established that 3p first-wonder-stage round 10+ wins 24.6% against a
+33.3% null (p=0.0171) while the 2p late median is NOT a defect.
+
+Command
+-------
+  cargo build --release --bin behavcensus
+  ./target/release/behavcensus --games 200 --players 3 \
+      --weights /private/tmp/opencensus/champ3p.json --threads 2
+
+Frozen champion snapshot, not experiments/rust_champion_3p.json, which the
+running climb rewrites on promotion.
+
+Groups: EARLY = first wonder stage by round 5 (n=192 player-games).
+        LATE  = round 10+ or never built (n=157). Rounds 6-9 excluded.
+Group win rates, from the crosstab in the prerequisite file:
+        EARLY 71/189 = 37.6%   LATE 37/154 = 24.0%   null 33.3%
+
+Civil-action spend by move kind, rounds 3-9 (share of CAs actually paid)
+-----------------------------------------------------------------------
+round group  n(CA)  take   build  devel  pop    leadr  actcd  wondr  other
+  3   EARLY   754   37.5%   9.8%   0.3%  23.9%   4.4%   4.8%  12.9%   6.5%
+  3   LATE    586   37.9%  17.6%   0.2%  26.6%   2.9%   5.3%   0.0%   9.6%
+  4   EARLY   737   41.5%  14.9%   4.6%  12.3%   1.9%   3.4%   8.8%  12.5%
+  4   LATE    582   52.2%  15.1%   7.4%   9.5%   1.9%   3.4%   0.0%  10.5%
+  5   EARLY   768   44.0%   8.6%   4.7%   8.7%   2.3%   5.9%  14.6%  11.2%
+  5   LATE    593   50.4%  10.3%   4.0%  10.1%   2.4%   5.7%   0.0%  17.0%
+  6   EARLY   778   51.0%  10.7%   5.3%   9.4%   1.4%   5.0%   9.4%   7.8%
+  6   LATE    583   48.4%  11.5%   5.3%  11.7%   0.9%   5.7%   0.0%  16.6%
+  7   EARLY   787   49.9%   9.9%   2.8%  11.6%   1.0%   5.8%  10.0%   8.9%
+  7   LATE    563   49.0%  12.8%   3.2%  12.8%   2.1%   9.6%   0.0%  10.5%
+  8   EARLY   793   43.5%  11.1%   4.2%   9.3%   1.5%   5.9%   9.7%  14.8%
+  8   LATE    615   53.2%   8.6%   2.9%   6.2%   2.8%   7.0%   0.0%  19.3%
+  9   EARLY   787   56.0%   8.3%   2.5%   5.7%   3.4%   4.1%   9.9%  10.0%
+  9   LATE    607   64.4%   6.4%   3.3%   5.6%   3.8%   6.9%   0.0%   9.6%
+
+Spend is the real post-move CA delta, so discounted and free moves correctly
+contribute 0. The LATE wonder-step column is 0.0% BY CONSTRUCTION - the group
+is defined by having no stage before round 10 and the table stops at 9. The
+informative question is where that 9-15% of the budget goes instead, and the
+answer is `take`: LATE's take share is higher in 5 of the 7 rounds, by +10.7pp
+(r4), +6.4pp (r5), +9.7pp (r8) and +8.4pp (r9).
+
+End-of-round-6 board state
+--------------------------
+                        EARLY (n=192)          LATE (n=157)
+  total culture         median 6  mean 6.43    median 7  mean 7.57
+  science production    median 1  mean 0.95    median 1  mean 0.97
+  food production       median 2  mean 1.96    median 2  mean 1.96
+  resource production   median 3  mean 3.17    median 3  mean 3.04
+  military strength     median 4  mean 4.55    median 3  mean 4.38
+  cards in civil hand   median 1  mean 1.39    median 2  mean 1.93
+  buildings on board    median 4  mean 4.42    median 5  mean 4.50
+
+Findings
+--------
+1. LATE IS NOT RESOURCE-CONSTRAINED. Resource production, food production,
+   science and buildings are all within noise of EARLY at the end of round 6.
+   The bot is not failing to afford a wonder stage; it is declining to buy one.
+   That kills the obvious economic explanation before it is proposed.
+
+2. LATE IS NOT BEHIND AT ROUND 6 - it is marginally AHEAD on culture (7.57 vs
+   6.43). It loses later, from an equal or better position. So the cost of the
+   plan is deferred, which is exactly why a leaf evaluation that scores the
+   board at round 6 cannot see it.
+
+3. THE REALLOCATED BUDGET GOES TO `take`, NOT TO develop/build/pop, and it
+   accumulates: LATE ends round 6 holding median 2 cards against EARLY's 1
+   (p75 3 vs 2, max 5 vs 4). The champion at 3p prices "take another card"
+   above "advance the wonder already paid into".
+
+Caveat, stated plainly
+----------------------
+This is a conditional split WITHIN self-play, so it is correlational. Points
+2 and 3 are partly two views of one fact: a group that spent no CAs on wonder
+stages will of course hold more of everything else. Point 1 is the one that
+does not have that circularity, and it is the load-bearing one - affordability
+is ruled out.
+
+This does NOT license a weight change on its own. See the recorded error in
+[[tta-selfplay-winrate-vs-advice]]: a mechanism that explains the observation
+is seductive precisely because it explains it. The settling test is a COMMON
+OPPONENT duel plus absolute score, not a replayed position and not a mirror
+match - raise the wonder-step valuation at 3p, then duel the new vector and
+the frozen champ3p against the same fixed reference and compare margins.
