@@ -83,8 +83,8 @@ use std::time::{Duration, Instant};
 
 use tta::arena::{loader_for, Duel, Match, Summary};
 use tta::bots::greedy::{BotKind, Search as SeatSearch, Seat};
-use tta::bots::weighted::eval::{dominance_repair, load_weights, save_weights};
-use tta::bots::weighted::weights::{WeightGroup, WeightKey, Weights};
+use tta::bots::weighted::eval::{dominance_repair, load_weights, save_weights, DOMINATES};
+use tta::bots::weighted::weights::{self, WeightGroup, WeightKey, Weights};
 use tta::rng::PyRandom;
 use tta::stats;
 
@@ -93,9 +93,17 @@ use tta::stats;
 /// nothing and just rescales `sigma` behind the search's back.
 const FROZEN: &[WeightKey] = &[WeightKey::Culture];
 
-/// Python's `_clamp`: no weight may exceed this magnitude. A coordinate that
-/// runs away takes over the evaluation regardless of what the others say.
-const CLAMP: f64 = 60.0;
+/// No weight may exceed this magnitude. A coordinate that runs away takes
+/// over the evaluation regardless of what the others say.
+///
+/// This is now the CEILING on a per-key, per-player-count bound rather than
+/// the bound itself -- see [`WeightKey::clamp_bound`], which divides what one
+/// typical decision is worth by how far this key's own feature actually
+/// swings between the moves on offer. A flat rail is 162 different rules
+/// wearing a costume: 60 on `culture` moves a decision by ~780 points and 60
+/// on `take_cost_share` moves it by 48. Keeping `CLAMP` as the ceiling means
+/// the per-key bound can only ever tighten a coordinate, never loosen one.
+const CLAMP: f64 = weights::CLAMP_BLIND;
 
 /// How close to `CLAMP` counts as "pinned" for [`runaway_weights`]. `0.95`
 /// (57.0 at the current `CLAMP`) is tight enough that a healthy vector
@@ -197,25 +205,53 @@ fn movable(key: WeightKey) -> bool {
     !FROZEN.contains(&key)
 }
 
-fn clamp(x: f64) -> f64 {
-    if x.abs() > CLAMP {
-        CLAMP.copysign(x)
+/// Hold `key`'s coefficient inside the magnitude its own feature earns at
+/// this table size.
+///
+/// Enforced HERE, on every mutation, and not only when a vector is loaded:
+/// a constraint that runs at load alone is a constraint the search spends
+/// its whole run outside of. That is not hypothetical -- `dominance_repair`
+/// was load-only and the climb priced five sign-gated penalties positive for
+/// thousands of generations underneath it.
+/// `key`'s own measured bound, tightened to its dominator's where
+/// [`DOMINATES`] would otherwise undo the clamp.
+///
+/// `dominance_repair` runs AFTER every mutation and raises a dominating
+/// coefficient to match the one it must not fall below -- so clamping the
+/// dominated key at its own, looser bound just hands the repair a value that
+/// pushes the dominating key straight back over. `wonder_potential` is
+/// bounded at 4.13 at three players and `wonder_promise` at 6.33, and the
+/// repair duly walked potential out to 6.33 on the first run of this guard.
+/// Bounding the DOMINATED side at the tighter of the two makes both
+/// constraints hold at once, and only ever tightens.
+fn effective_bound(key: WeightKey, players: u8) -> f64 {
+    let own = key.clamp_bound(players);
+    DOMINATES
+        .iter()
+        .filter(|(_, dominated)| *dominated == key)
+        .fold(own, |acc, (dominator, _)| acc.min(dominator.clamp_bound(players)))
+}
+
+fn clamp(x: f64, key: WeightKey, players: u8) -> f64 {
+    let bound = effective_bound(key, players);
+    if x.abs() > bound {
+        bound.copysign(x)
     } else {
         x
     }
 }
 
-/// Every movable weight sitting at or very near `CLAMP` -- logged loudly by
-/// the caller rather than silently clamped-and-continued, because a pinned
-/// coordinate is exactly what let the 3p arm's gen1384 champion beat its one
-/// sparring partner while collapsing against everyone else.
-fn runaway_weights(w: &Weights) -> Vec<(WeightKey, f64)> {
+/// Every movable weight sitting at or very near its own bound -- logged
+/// loudly by the caller rather than silently clamped-and-continued, because a
+/// pinned coordinate is exactly what let the 3p arm's gen1384 champion beat
+/// its one sparring partner while collapsing against everyone else.
+fn runaway_weights(w: &Weights, players: u8) -> Vec<(WeightKey, f64)> {
     WeightKey::ALL
         .iter()
         .copied()
         .filter(|k| movable(*k))
         .map(|k| (k, w.get(k)))
-        .filter(|(_, v)| v.abs() >= CLAMP * RUNAWAY_FRACTION)
+        .filter(|(k, v)| v.abs() >= effective_bound(*k, players) * RUNAWAY_FRACTION)
         .collect()
 }
 
@@ -331,13 +367,13 @@ struct Mutation {
 /// the live arms did, pushing five authored-negative penalty weights
 /// (corruption, consumption, discontent, uprising, strength deficit)
 /// positive. A constraint that holds only at startup is not a constraint.
-fn mutate(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mutation {
-    let m = mutate_raw(w, s, sigma, forced);
+fn mutate(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>, players: u8) -> Mutation {
+    let m = mutate_raw(w, s, sigma, forced, players);
     let (repaired, _) = dominance_repair(&m.weights);
     Mutation { weights: repaired, ..m }
 }
 
-fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mutation {
+fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>, players: u8) -> Mutation {
     let keys: Vec<WeightKey> =
         WeightKey::ALL.iter().copied().filter(|k| movable(*k)).collect();
 
@@ -378,7 +414,7 @@ fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mu
         let factor = s.gauss(sigma.max(0.20)).exp();
         let picks: Vec<WeightKey> = g.keys().into_iter().filter(|k| movable(*k)).collect();
         for k in &picks {
-            out.set(*k, clamp(out.get(*k) * factor));
+            out.set(*k, clamp(out.get(*k) * factor, *k, players));
         }
         return Mutation {
             weights: out,
@@ -416,7 +452,7 @@ fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mu
         // would creep slowest of all.
         let s_k = scale * if s.random() < 0.10 { 4.0 } else { 1.0 };
         let old = out.get(*k);
-        out.set(*k, clamp(old + s.gauss(s_k) * (old.abs() + 0.15)));
+        out.set(*k, clamp(old + s.gauss(s_k) * (old.abs() + 0.15), *k, players));
     }
     Mutation { weights: out, label, moved: picks.len() }
 }
@@ -1198,7 +1234,7 @@ fn main() -> ExitCode {
         let mut best: Option<(Mutation, Challenge)> = None;
         let mut tried: Vec<String> = Vec::new();
         for j in 0..args.lambda {
-            let m = mutate(&args.cfg.champion, &mut search, progress.sigma, forced);
+            let m = mutate(&args.cfg.champion, &mut search, progress.sigma, forced, args.cfg.players);
             let seed = progress
                 .gen
                 .wrapping_mul(1_000_003)
@@ -1265,7 +1301,7 @@ fn main() -> ExitCode {
                 // failure the pool veto above exists to catch, so an
                 // accepted champion that has one is worth a human's
                 // attention even though it cleared every check.
-                runaway = runaway_weights(&args.cfg.champion);
+                runaway = runaway_weights(&args.cfg.champion, args.cfg.players);
                 for (k, v) in &runaway {
                     eprintln!(
                         "climb: RUNAWAY [{}p] gen {} {} = {:.3} (clamp {:.1}) -- pinned coordinate",
@@ -1517,7 +1553,7 @@ mod tests {
         let mut s = Search::new(1);
         for op in [Op::Scatter, Op::Group, Op::Rescale, Op::Kick] {
             for _ in 0..40 {
-                let m = mutate(&w, &mut s, 0.5, Some(op));
+                let m = mutate(&w, &mut s, 0.5, Some(op), 3);
                 assert_eq!(
                     m.weights.get(WeightKey::Culture),
                     w.get(WeightKey::Culture),
@@ -1532,7 +1568,7 @@ mod tests {
         let w = Weights::defaults();
         let mut s = Search::new(7);
         for op in [Op::Scatter, Op::Group, Op::Rescale, Op::Kick] {
-            let m = mutate(&w, &mut s, 0.4, Some(op));
+            let m = mutate(&w, &mut s, 0.4, Some(op), 3);
             assert!(m.moved > 0, "{op:?} picked no keys");
             assert!(m.weights != w, "{op:?} produced the champion unchanged");
         }
@@ -1548,7 +1584,7 @@ mod tests {
             w.set(k, 0.0);
         }
         let mut s = Search::new(3);
-        let m = mutate(&w, &mut s, 0.4, Some(Op::Rescale));
+        let m = mutate(&w, &mut s, 0.4, Some(Op::Rescale), 3);
         assert!(!m.label.starts_with("rescale"), "label was {}", m.label);
         assert!(m.weights != w, "nothing moved off zero");
     }
@@ -1556,16 +1592,57 @@ mod tests {
     #[test]
     fn no_weight_escapes_the_clamp() {
         let mut w = Weights::defaults();
-        for &k in WeightKey::ALL {
-            w.set(k, 55.0);
-        }
         let mut s = Search::new(11);
-        for _ in 0..200 {
-            w = mutate(&w, &mut s, 0.8, None).weights;
+        // Did the rail actually bite? A bounds assertion that never fires is
+        // a test that passes for the wrong reason, so the run has to prove
+        // it drove at least one coordinate all the way out to its own bound
+        // and not merely that nothing wandered far.
+        let mut pinned = 0;
+        for _ in 0..500 {
+            w = mutate(&w, &mut s, 0.8, None, 3).weights;
             for &k in WeightKey::ALL {
-                assert!(w.get(k).abs() <= CLAMP, "{} ran to {}", k.name(), w.get(k));
+                let bound = effective_bound(k, 3);
+                assert!(
+                    w.get(k).abs() <= bound,
+                    "{} ran to {} against its own bound of {}",
+                    k.name(),
+                    w.get(k),
+                    bound
+                );
+                if w.get(k).abs() >= bound * 0.999 {
+                    pinned += 1;
+                }
             }
         }
+        assert!(pinned > 0, "500 mutations at sigma 0.8 never reached a single bound");
+    }
+
+    /// The whole point of a per-key bound: a coefficient's ceiling has to
+    /// track how far its own feature actually swings between the moves on
+    /// offer. `hand_potential` moves the score by hundreds of points between
+    /// candidates at three players and `take_cost_share` moves it by less
+    /// than one, so a rail that gives them the same ceiling is giving one of
+    /// them a hundredfold more authority than the other by accident.
+    #[test]
+    fn a_wide_swinging_feature_is_bounded_far_tighter_than_a_narrow_one() {
+        let wide = WeightKey::HandPotential.clamp_bound(3);
+        let narrow = WeightKey::TakeCostShare.clamp_bound(3);
+        assert!(wide < 1.0, "hand_potential's 3p bound should be under one point, got {wide}");
+        assert_eq!(narrow, CLAMP, "take_cost_share swings so little its bound saturates the rail");
+        assert!(wide < narrow / 50.0, "{wide} is not meaningfully tighter than {narrow}");
+    }
+
+    /// The same key at a different table size is a different feature. At two
+    /// players `hand_potential` swings by about eleven points and at three by
+    /// eight hundred, so one bound covering both is wrong by seventy-fold at
+    /// whichever end it was not measured on -- and collapsing the two with a
+    /// maximum is precisely the arithmetic that once reported a healthy 2p
+    /// coordinate as a hundredfold runaway.
+    #[test]
+    fn the_same_key_is_bounded_differently_at_different_table_sizes() {
+        let two = WeightKey::HandPotential.clamp_bound(2);
+        let three = WeightKey::HandPotential.clamp_bound(3);
+        assert!(three < two / 10.0, "2p {two} and 3p {three} are not far apart");
     }
 
     /// The climb may not walk a penalty weight positive. `dominance_repair`
@@ -1585,7 +1662,7 @@ mod tests {
         }
         let mut s = Search::new(2027);
         for gen in 0..300 {
-            w = mutate(&w, &mut s, 0.8, None).weights;
+            w = mutate(&w, &mut s, 0.8, None, 3).weights;
             for (k, why) in eval::non_positive_gates() {
                 assert!(
                     w.get(k) <= 1e-12,
@@ -1617,7 +1694,7 @@ mod tests {
         }
         let mut s = Search::new(2028);
         for gen in 0..300 {
-            w = mutate(&w, &mut s, 0.8, None).weights;
+            w = mutate(&w, &mut s, 0.8, None, 3).weights;
             for (k, why) in eval::non_negative_gates() {
                 assert!(
                     w.get(k) >= -1e-12,
@@ -1648,7 +1725,7 @@ mod tests {
         }
         let mut s = Search::new(2029);
         for gen in 0..300 {
-            w = mutate(&w, &mut s, 0.8, None).weights;
+            w = mutate(&w, &mut s, 0.8, None, 3).weights;
             for &(hi, lo) in eval::DOMINATES {
                 assert!(
                     w.get(hi) >= w.get(lo) - 1e-12,
@@ -1682,7 +1759,7 @@ mod tests {
         }
         let mut s = Search::new(2030);
         for gen in 0..300 {
-            w = mutate(&w, &mut s, 0.8, None).weights;
+            w = mutate(&w, &mut s, 0.8, None, 3).weights;
             let base = w.get(WeightKey::CardBoardCredit);
             for &k in eval::card_board_credit_keys() {
                 assert!(
@@ -1716,7 +1793,7 @@ mod tests {
         }
         let mut s = Search::new(2031);
         for gen in 0..300 {
-            w = mutate(&w, &mut s, 0.8, None).weights;
+            w = mutate(&w, &mut s, 0.8, None, 3).weights;
             for &k in eval::NET_NONNEG_PHASE {
                 let base = w.get(k);
                 for mk in [k.early(), k.late()] {
@@ -1899,7 +1976,7 @@ mod tests {
         c.threads = 1;
         assert_eq!(c.fitness, Fitness::Win);
 
-        let mutant = mutate(&c.champion, &mut Search::new(4), 0.3, None).weights;
+        let mutant = mutate(&c.champion, &mut Search::new(4), 0.3, None, 3).weights;
         let seed = 909u64;
 
         // `challenge`'s own loop, inlined, reading `d.share` directly instead
@@ -2512,7 +2589,7 @@ mod tests {
         let mut w = Weights::defaults();
         w.set(WeightKey::Workers, CLAMP); // pinned exactly at the wall
         w.set(WeightKey::Culture, CLAMP); // frozen; must never be flagged
-        let got = runaway_weights(&w);
+        let got = runaway_weights(&w, 3);
         let keys: Vec<WeightKey> = got.iter().map(|(k, _)| *k).collect();
         assert!(keys.contains(&WeightKey::Workers), "a weight pinned at CLAMP must be flagged");
         assert!(!keys.contains(&WeightKey::Culture), "the frozen key must never be reported as runaway");
@@ -2520,7 +2597,7 @@ mod tests {
 
     #[test]
     fn runaway_weights_is_empty_for_a_vector_nowhere_near_the_clamp() {
-        assert!(runaway_weights(&Weights::defaults()).is_empty());
+        assert!(runaway_weights(&Weights::defaults(), 3).is_empty());
     }
 
     /// The sampling half of `play_pool`'s determinism claim (module doc:

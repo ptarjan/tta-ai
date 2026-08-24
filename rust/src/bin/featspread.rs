@@ -68,20 +68,29 @@ struct Args {
     games: usize,
     seed: u64,
     champion_dir: String,
+    /// Print the `p95_candidate_spread` match arms as compilable Rust after
+    /// the report, so the clamp's ~486 constants are never transcribed by
+    /// hand out of a text table.
+    emit_rust: bool,
 }
 
-const USAGE: &str = "usage: featspread <games_per_count> <seed> <champion_dir>";
+const USAGE: &str = "usage: featspread <games_per_count> <seed> <champion_dir> [emit]";
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
-    if argv.len() != 3 {
-        return Err(format!("{USAGE}\ngot {} argument(s), expected 3", argv.len()));
+    if argv.len() != 3 && argv.len() != 4 {
+        return Err(format!("{USAGE}\ngot {} argument(s), expected 3 or 4", argv.len()));
     }
+    let emit_rust = match argv.get(3) {
+        None => false,
+        Some(flag) if flag == "emit" => true,
+        Some(flag) => return Err(format!("{USAGE}\nfourth argument must be \"emit\", got {flag:?}")),
+    };
     let games: usize = argv[0].parse().map_err(|_| format!("games_per_count: {:?} is not a number", argv[0]))?;
     let seed: u64 = argv[1].parse().map_err(|_| format!("seed: {:?} is not a number", argv[1]))?;
     if games == 0 {
         return Err("games_per_count must be at least 1".to_string());
     }
-    Ok(Args { games, seed, champion_dir: argv[2].clone() })
+    Ok(Args { games, seed, champion_dir: argv[2].clone(), emit_rust })
 }
 
 /// Nearest-rank percentile (`rank = ceil(p/100 * n)`, 1-indexed) over an
@@ -133,6 +142,7 @@ impl KeyAgg {
 /// join point between the per-key table and the eval_share table, computed
 /// once so both readers agree.
 struct KeySummary {
+    key: WeightKey,
     name: &'static str,
     champ_w: f64,
     fire_rate: f64,
@@ -217,6 +227,7 @@ fn play_count(players: u8, games: usize, base_seed: u64, weights: &Weights) -> C
             let agg = &key_agg[ki];
             let firing_sorted = sorted(agg.firing_spreads.clone());
             KeySummary {
+                key: k,
                 name: k.name(),
                 champ_w: weights.get(k),
                 fire_rate: if decisions > 0 { agg.firing as f64 / decisions as f64 } else { 0.0 },
@@ -344,6 +355,50 @@ fn print_eval_share(results: &[CountResult]) {
     }
 }
 
+/// Print this run's per-key p95 firing spreads as the literal body of
+/// `WeightKey::p95_candidate_spread`, plus the per-count total-spread
+/// constants that go with them.
+///
+/// The clamp needs one bound per (key, player count) -- 486 numbers. Nobody
+/// should ever type those out of a text table, and nobody should have to
+/// trust that whoever did got the columns right: the previous hand-derived
+/// bound divided per-count weights by a cross-count maximum and reported a
+/// fake 107x outlier that survived into a message to Paul. Emitting the
+/// arms straight from the same `KeySummary` values the report prints makes
+/// that class of transcription error impossible.
+///
+/// A key whose spread is `0.0` at every count is not harmless, it is
+/// INVISIBLE TO THIS INSTRUMENT: `linear_features` prices the multiplier and
+/// credit keys at the caller's frozen vector, so their candidate-set spread
+/// is zero by construction while they still move real move ranking. Their
+/// arm is emitted as zeros and `clamp_bound` must fall back to the flat
+/// historical rail for them rather than inventing a tighter or looser
+/// number -- nine of them carry live champion weights between 6 and 27.
+fn print_clamp_table(results: &[CountResult]) {
+    println!();
+    println!("================================================================================");
+    println!("RUST TABLE -- paste as the body of WeightKey::p95_candidate_spread");
+    println!("================================================================================");
+    for r in results {
+        println!("// {}p: decisions {} p95_total_spread {:.6}", r.players, r.decisions, r.total_spread_p95);
+    }
+    print!("const P95_TOTAL_SPREAD: [f64; 3] = [");
+    let totals: Vec<String> = results.iter().map(|r| format!("{:.6}", r.total_spread_p95)).collect();
+    println!("{}];", totals.join(", "));
+    println!("match self {{");
+    for k in WeightKey::ALL.iter().copied() {
+        let cells: Vec<String> = results
+            .iter()
+            .map(|r| {
+                let v = r.keys.iter().find(|s| s.key == k).map_or(0.0, |s| s.p95_spread_firing);
+                format!("{v:.6}")
+            })
+            .collect();
+        println!("    WeightKey::{:?} => [{}],", k, cells.join(", "));
+    }
+    println!("}}");
+}
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&argv) {
@@ -391,6 +446,9 @@ fn main() -> ExitCode {
 
     print_total_spread_quantiles(&results);
     print_eval_share(&results);
+    if args.emit_rust {
+        print_clamp_table(&results);
+    }
 
     eprintln!("featspread: total elapsed {:.1}s", started.elapsed().as_secs_f64());
     ExitCode::SUCCESS

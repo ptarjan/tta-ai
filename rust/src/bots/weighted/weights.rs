@@ -1486,7 +1486,283 @@ impl WeightKey {
             | MilitaryActionSurplus | WorkerSurplus => Free,
         }
     }
+
+    /// The magnitude ceiling this coordinate may not exceed at `players`
+    /// players.
+    ///
+    /// The league used to hold every one of the 162 weights to the same flat
+    /// `60.0`, which is not one rule but 162 different rules wearing a
+    /// costume: what a coefficient of 60 DOES depends entirely on how far
+    /// the feature it scales swings between the moves on offer. `culture`
+    /// swings about 13 points between candidates at two players, so 60 on it
+    /// moves the score by ~780. `take_cost_share` swings 0.8, so 60 on it
+    /// moves the score by 48. The same rail let one coordinate dominate
+    /// every decision it touched and left another unable to matter at all,
+    /// and a coordinate that fires on 2% of decisions could carry a weight
+    /// fitted entirely to noise on the other 98% -- the defect this method
+    /// exists to close.
+    ///
+    /// The bound is therefore stated in units of WHOLE DECISIONS. Divide the
+    /// p95 swing of the full evaluation score across a decision's candidate
+    /// set ([`P95_TOTAL_SPREAD`]) by this key's own p95 swing when it fires
+    /// at all ([`Self::p95_candidate_spread`]) and no single coordinate can
+    /// command more than [`CLAMP_T`] whole typical decisions on its own.
+    /// Both quantities are MEASURED, by `bin/featspread`; neither is chosen.
+    ///
+    /// Two deliberate conservatisms:
+    ///
+    /// - The result is capped at [`CLAMP_BLIND`], the historical flat rail,
+    ///   so this can only ever TIGHTEN a coordinate and never hand one more
+    ///   room than it has today. 80 of the 365 measurable (key, count) pairs
+    ///   tighten; the rest are held where they already were.
+    /// - A key measuring exactly `0.0` spread is not harmless, it is
+    ///   INVISIBLE TO THE INSTRUMENT: [`super::eval::linear_features`]
+    ///   prices the multiplier and credit keys at the CALLER'S frozen
+    ///   vector, so their candidate-set spread is zero by construction while
+    ///   they still move real move ranking in `evaluate`. They keep the flat
+    ///   rail rather than an invented number -- nine of them carry live
+    ///   champion weights between 6 and 27, and `tech_board_credit` sits at
+    ///   -27.05 at three players.
+    ///
+    /// The bound is per (key, PLAYER COUNT) and never collapsed across
+    /// counts. `hand_potential` swings 815 between candidates at three
+    /// players and 11.5 at two; a single cross-count bound for it is off by
+    /// seventy-fold at one end or the other, and taking the maximum is
+    /// exactly the arithmetic that once produced a reported "107x runaway"
+    /// in a healthy 2p coordinate.
+    pub fn clamp_bound(self, players: u8) -> f64 {
+        let spread = self.p95_candidate_spread()[player_index(players)];
+        if spread <= 0.0 {
+            return CLAMP_BLIND;
+        }
+        let bound = CLAMP_T * P95_TOTAL_SPREAD[player_index(players)] / spread;
+        bound.min(CLAMP_BLIND)
+    }
+
+    /// This key's own p95 candidate-set spread, over the decisions where it
+    /// moves at all, at 2/3/4 players -- the denominator of
+    /// [`Self::clamp_bound`].
+    ///
+    /// MEASURED, not authored. Regenerate the whole body with
+    /// `featspread <games> <seed> <champion_dir> emit`, which prints these
+    /// arms and [`P95_TOTAL_SPREAD`] as compilable Rust from the same values
+    /// its report prints. Do not edit a number here by hand: hand-transcribing
+    /// this table out of a text report is how the 107x error happened.
+    ///
+    /// These are a property of the CHAMPION as much as of the game -- the
+    /// sample is that champion's own self-play, and `linear_features` prices
+    /// the helper keys at it. Rerunning after a few thousand generations of
+    /// climbing moves the noisier rows by tens of percent, which is fine for
+    /// a safety rail and would not be fine for a fitted parameter. It is a
+    /// rail.
+    fn p95_candidate_spread(self) -> [f64; 3] {
+    match self {
+        WeightKey::RateHorizon => [0.000000, 0.000000, 0.000000],
+        WeightKey::Culture => [13.000000, 13.000000, 15.000000],
+        WeightKey::CultureRate => [3.445143, 3.837466, 3.946870],
+        WeightKey::Science => [7.000000, 6.000000, 8.000000],
+        WeightKey::ScienceRate => [2.479157, 2.315004, 2.836833],
+        WeightKey::FoodRate => [3.458470, 2.518726, 3.924267],
+        WeightKey::ResourceRate => [5.281235, 3.885668, 3.981155],
+        WeightKey::FoodStock => [5.000000, 4.000000, 7.000000],
+        WeightKey::ResourceStock => [6.000000, 5.000000, 7.000000],
+        WeightKey::BlueFree => [7.000000, 7.000000, 8.000000],
+        WeightKey::CorruptionHeadroom => [4.000000, 4.000000, 4.000000],
+        WeightKey::ConsumptionHeadroom => [3.000000, 3.000000, 3.000000],
+        WeightKey::PopCost => [1.000000, 1.000000, 2.000000],
+        WeightKey::YellowBank => [2.000000, 2.000000, 2.000000],
+        WeightKey::FreeWorkers => [2.000000, 2.000000, 2.000000],
+        WeightKey::Workers => [1.447368, 1.435294, 1.273743],
+        WeightKey::ProdWorkers => [2.000000, 2.000000, 2.000000],
+        WeightKey::UrbanWorkers => [2.000000, 2.000000, 2.000000],
+        WeightKey::UnitWorkers => [2.000000, 2.000000, 2.000000],
+        WeightKey::HappyMargin => [2.000000, 2.000000, 3.000000],
+        WeightKey::Discontent => [2.000000, 1.000000, 2.000000],
+        WeightKey::Uprising => [33.000000, 16.000000, 33.000000],
+        WeightKey::CivilActions => [3.000000, 3.000000, 3.000000],
+        WeightKey::MilitaryActions => [2.000000, 2.000000, 2.000000],
+        WeightKey::CaLeft => [5.000000, 5.000000, 6.000000],
+        WeightKey::MaLeft => [3.000000, 2.000000, 3.000000],
+        WeightKey::TakeCostPaid => [4.000000, 4.000000, 4.000000],
+        WeightKey::RowUrgency => [2.975881, 109.220483, 65.308489],
+        WeightKey::RowBargainForgone => [7.000000, 2.728844, 3.000000],
+        WeightKey::RowLastCopy => [7.050000, 3.176471, 3.000000],
+        WeightKey::RivalDesire => [0.000000, 0.000000, 0.000000],
+        WeightKey::RivalTakeShare => [0.000000, 0.000000, 0.000000],
+        WeightKey::RivalFreeCa => [1.000000, 1.000000, 1.000000],
+        WeightKey::RivalHandCivil => [3.000000, 3.000000, 3.000000],
+        WeightKey::RivalWonders => [0.000000, 0.000000, 0.000000],
+        WeightKey::RivalHandPotential => [0.976721, 91.349900, 0.071267],
+        WeightKey::RivalScienceStock => [5.000000, 5.000000, 6.000000],
+        WeightKey::RivalFoodStock => [4.000000, 3.000000, 7.000000],
+        WeightKey::RivalResourceStock => [5.000000, 4.000000, 5.000000],
+        WeightKey::RivalFreeWorkers => [1.000000, 1.000000, 1.000000],
+        WeightKey::RivalYellowBank => [2.000000, 2.000000, 2.000000],
+        WeightKey::RivalColonies => [1.000000, 1.000000, 1.000000],
+        WeightKey::RivalMilActions => [2.000000, 2.000000, 1.000000],
+        WeightKey::RivalBuildingWonder => [1.000000, 1.000000, 1.000000],
+        WeightKey::MySeededPending => [3.000000, 3.000000, 3.000000],
+        WeightKey::MyEventThreat => [16.000000, 360.000000, 23.015989],
+        WeightKey::AttackTargetLead => [0.000000, 154.000000, 156.000000],
+        WeightKey::AttackTargetWeakness => [10.000000, 13.000000, 16.000000],
+        WeightKey::PactPartnerLead => [0.000000, 172.000000, 172.500000],
+        WeightKey::Strength => [4.000000, 4.000000, 5.000000],
+        WeightKey::StrengthRel => [4.000000, 4.000000, 5.000000],
+        WeightKey::StrengthDeficit => [3.000000, 3.000000, 4.000000],
+        WeightKey::StrengthLead => [4.000000, 4.000000, 4.000000],
+        WeightKey::TacticLevel => [2.000000, 2.000000, 2.000000],
+        WeightKey::TacticGain => [3.000000, 2.000000, 3.000000],
+        WeightKey::TacticShort => [2.000000, 2.000000, 2.000000],
+        WeightKey::HasUnit => [1.000000, 1.000000, 1.000000],
+        WeightKey::Colonies => [1.000000, 1.000000, 1.000000],
+        WeightKey::HasColony => [1.000000, 1.000000, 1.000000],
+        WeightKey::Pacts => [0.000000, 1.500000, 1.500000],
+        WeightKey::PactBlocksAttack => [0.000000, 1.500000, 1.000000],
+        WeightKey::WarImmune => [0.000000, 1.000000, 1.000000],
+        WeightKey::AttackCostDoubled => [1.000000, 1.000000, 1.000000],
+        WeightKey::AuctionCommitted => [1.000000, 1.000000, 1.000000],
+        WeightKey::AuctionBid => [13.000000, 17.000000, 15.000000],
+        WeightKey::TechLevels => [0.717105, 0.752941, 0.765363],
+        WeightKey::GovLevel => [3.000000, 2.000000, 2.000000],
+        WeightKey::BestFarm => [2.000000, 3.000000, 3.000000],
+        WeightKey::BestMine => [0.000000, 0.000000, 3.000000],
+        WeightKey::BestLab => [2.000000, 0.000000, 3.000000],
+        WeightKey::BestTemple => [2.000000, 0.000000, 2.000000],
+        WeightKey::BestTheater => [0.000000, 2.000000, 3.000000],
+        WeightKey::BestLibrary => [2.000000, 2.000000, 3.000000],
+        WeightKey::BestArena => [2.000000, 3.000000, 3.000000],
+        WeightKey::BestUnit => [3.000000, 1.000000, 3.000000],
+        WeightKey::NumTechs => [1.000000, 1.000000, 1.000000],
+        WeightKey::SpecialTechs => [1.000000, 1.000000, 1.000000],
+        WeightKey::Wonders => [1.000000, 1.000000, 1.000000],
+        WeightKey::WonderProgress => [10.000000, 10.000000, 9.000000],
+        WeightKey::WonderRemaining => [16.000000, 16.000000, 16.000000],
+        WeightKey::WonderStagesLeft => [4.000000, 5.000000, 5.000000],
+        WeightKey::WonderTurnsToFinish => [4.000000, 3.666667, 4.000000],
+        WeightKey::WonderOverrun => [7.524590, 3.500000, 3.597421],
+        WeightKey::WonderStagesPerAction => [2.000000, 3.000000, 3.000000],
+        WeightKey::WonderPotential => [14.571754, 117.744221, 8.797551],
+        WeightKey::WonderPromise => [12.894108, 76.692113, 9.822541],
+        WeightKey::WonderAgeOverrun => [5.235935, 3.166667, 3.500000],
+        WeightKey::Leader => [1.000000, 1.000000, 1.000000],
+        WeightKey::WonderInProgress => [1.000000, 1.000000, 1.000000],
+        WeightKey::HandLimit => [2.000000, 0.000000, 2.000000],
+        WeightKey::ColonizeBonus => [3.000000, 3.000000, 4.000000],
+        WeightKey::BuildDiscount => [5.000000, 6.000000, 6.000000],
+        WeightKey::FreeCivilAction => [0.000000, 0.000000, 0.000000],
+        WeightKey::ResourceDiscount => [0.000000, 0.000000, 0.000000],
+        WeightKey::DefenseBonus => [0.000000, 0.000000, 0.000000],
+        WeightKey::UrbanLimit => [2.000000, 1.000000, 1.000000],
+        WeightKey::GovActionCost => [0.000000, 0.000000, 0.000000],
+        WeightKey::NoAggression => [1.000000, 1.000000, 1.000000],
+        WeightKey::RestrictedResources => [0.000000, 0.000000, 0.000000],
+        WeightKey::CardBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::EventScoringMargin => [14.000000, 12.692308, 11.111111],
+        WeightKey::CardBoardLeader => [0.000000, 0.000000, 0.000000],
+        WeightKey::CardBoardBonus => [0.000000, 0.000000, 0.000000],
+        WeightKey::HandSwapExtra => [0.000000, 0.000000, 0.000000],
+        WeightKey::CardRateCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::UnitStrengthCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::UnitTechCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::TechBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::ActionBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::GovBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::WonderBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::BuildFreshCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::RestrictedResourceCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::FreeActionCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::TerritoryCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::BonusCardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::TacticBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::AggressionBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::WarBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::PactBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::EventBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::TacticShortfallCost => [0.000000, 0.000000, 0.000000],
+        WeightKey::TacticReachCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::HandCivil => [2.000000, 2.000000, 2.000000],
+        WeightKey::HandValue => [2.763158, 2.870588, 2.837989],
+        WeightKey::HandPotential => [11.523737, 815.007401, 79.200427],
+        WeightKey::HandMilitary => [4.000000, 4.000000, 4.000000],
+        WeightKey::HandMilValue => [12.000000, 11.000000, 12.000000],
+        WeightKey::HandMilPotential => [2.060114, 25.334188, 7.170485],
+        WeightKey::HandPerishable => [1.473244, 1.278721, 1.374853],
+        WeightKey::RivalCulture => [22.000000, 25.000000, 51.000000],
+        WeightKey::RivalMeanCulture => [22.000000, 23.500000, 44.000000],
+        WeightKey::RivalCultureRate => [0.000000, 1.500000, 1.500000],
+        WeightKey::RivalScienceRate => [0.000000, 0.000000, 0.000000],
+        WeightKey::RivalStrength => [0.000000, 2.000000, 2.000000],
+        WeightKey::EndTurnBias => [1.000000, 1.000000, 1.000000],
+        WeightKey::CultureRateTrailing => [0.000000, 0.000000, 0.000000],
+        WeightKey::ScienceRateTrailing => [0.000000, 0.000000, 0.000000],
+        WeightKey::WorkersLate => [1.355263, 1.082353, 1.385475],
+        WeightKey::StrengthRelEarly => [2.072368, 2.094118, 2.212291],
+        WeightKey::StrengthRelLate => [3.000000, 2.982353, 3.418994],
+        WeightKey::TechLevelsLate => [1.578947, 1.529412, 1.921788],
+        WeightKey::HandValueLate => [7.105263, 7.200000, 7.329609],
+        WeightKey::FoodGap => [4.000000, 4.000000, 4.000000],
+        WeightKey::FoodSurplus => [5.000000, 4.000000, 7.000000],
+        WeightKey::ResourceGap => [4.000000, 4.000000, 3.000000],
+        WeightKey::ResourceSurplus => [6.000000, 6.000000, 7.000000],
+        WeightKey::ScienceGap => [9.000000, 10.000000, 11.000000],
+        WeightKey::ScienceSurplus => [8.000000, 5.000000, 10.000000],
+        WeightKey::CultureGap => [10.000000, 10.000000, 13.000000],
+        WeightKey::CultureSurplus => [13.000000, 15.000000, 17.000000],
+        WeightKey::HappySurplus => [3.000000, 2.000000, 3.000000],
+        WeightKey::CivilActionGap => [5.000000, 4.000000, 4.000000],
+        WeightKey::CivilActionSurplus => [4.000000, 4.000000, 5.000000],
+        WeightKey::TakeCostShare => [0.800000, 0.750000, 0.800000],
+        WeightKey::MilitaryActionGap => [3.000000, 3.000000, 3.000000],
+        WeightKey::MilitaryActionSurplus => [3.000000, 3.000000, 3.000000],
+        WeightKey::WorkerGap => [2.000000, 2.000000, 2.000000],
+        WeightKey::WorkerSurplus => [2.000000, 2.000000, 2.000000],
+        WeightKey::TechRedundancyDiscount => [0.000000, 0.000000, 0.000000],
+        WeightKey::LeaderReplacement => [1.000000, 1.000000, 1.000000],
+        WeightKey::WonderPoolRivalClaimed => [1.000000, 1.000000, 3.000000],
+    }
+    }
 }
+
+/// How many whole typical decisions a single coordinate is allowed to
+/// command on its own -- the one free parameter in
+/// [`WeightKey::clamp_bound`], and dimensionless by construction because
+/// both sides of its ratio are score ranges over the same candidate sets.
+///
+/// `1.0` is the pick. Measured against the live champions, `2.0` forces no
+/// weight anywhere to move and so constrains nothing, while `0.5` would
+/// pull fifteen live coordinates in at once. `1.0` binds on the handful
+/// that had run to the old flat rail and leaves everything else alone,
+/// which is what a safety rail is for: it is not a fitted parameter and
+/// must never become one.
+pub const CLAMP_T: f64 = 1.0;
+
+/// The flat magnitude rail the league used for every weight before
+/// [`WeightKey::clamp_bound`] existed, kept as the CEILING on every derived
+/// bound and as the fallback for coordinates the spread instrument cannot
+/// see. Because it is a ceiling and not a floor, the per-key bound can only
+/// tighten a coordinate relative to the old behaviour.
+pub const CLAMP_BLIND: f64 = 60.0;
+
+/// The p95, over decisions, of the range the FULL evaluation score takes
+/// across a decision's candidate set, at 2/3/4 players -- "what one typical
+/// decision is worth" and the numerator of [`WeightKey::clamp_bound`].
+///
+/// MEASURED by `bin/featspread`, which emits this line and the whole body of
+/// [`WeightKey::p95_candidate_spread`] together; regenerate them together or
+/// the ratio compares two different samples.
+pub const P95_TOTAL_SPREAD: [f64; 3] = [300.449105, 485.704661, 414.407762];
+
+/// Where a player count sits in [`P95_TOTAL_SPREAD`] and in
+/// [`WeightKey::p95_candidate_spread`]'s triples.
+fn player_index(players: u8) -> usize {
+    match players {
+        2 => 0,
+        3 => 1,
+        4 => 2,
+        other => unreachable!("player counts are validated to 2..=4 before any weight is priced, got {other}"),
+    }
+}
+
 
 /// What [`WeightKey::sign_intent`] concludes about one coefficient's legal
 /// sign -- see that method's own doc comment for the derivation and
@@ -2083,5 +2359,83 @@ mod tests {
             assert_eq!(WeightKey::by_name(name), None, "{name}: retired but still resolvable");
             assert!(RETIRED_KEYS.contains(&name), "{name}: retired but missing from RETIRED_KEYS");
         }
+    }
+
+    /// The per-key bound is a CEILING-limited tightening, never a loosening.
+    /// Whatever the measurement says, no coordinate comes out of
+    /// `clamp_bound` with more room than the flat rail the league used
+    /// before it existed -- so landing this can only ever constrain the
+    /// climb, and a stale or badly-regenerated spread table cannot silently
+    /// hand a coordinate the run of the evaluation.
+    #[test]
+    fn no_key_is_ever_bounded_more_loosely_than_the_old_flat_rail() {
+        for &k in WeightKey::ALL {
+            for players in [2u8, 3, 4] {
+                let bound = k.clamp_bound(players);
+                assert!(
+                    bound <= CLAMP_BLIND,
+                    "{} at {}p is bounded at {}, looser than the {} rail",
+                    k.name(),
+                    players,
+                    bound,
+                    CLAMP_BLIND
+                );
+                assert!(bound > 0.0, "{} at {}p is bounded at {}", k.name(), players, bound);
+            }
+        }
+    }
+
+    /// A key measuring zero spread is INVISIBLE to the instrument, not
+    /// harmless: `linear_features` prices the credit and multiplier keys at
+    /// the caller's frozen vector, so their candidate-set spread is zero by
+    /// construction while they still move real move ranking. They keep the
+    /// flat rail rather than an invented number -- `tech_board_credit` alone
+    /// sits at -27 in the live 3p champion, and a tighter fallback would
+    /// rewrite it on no evidence at all.
+    #[test]
+    fn a_key_the_spread_instrument_cannot_see_keeps_the_flat_rail() {
+        assert_eq!(WeightKey::TechBoardCredit.p95_candidate_spread(), [0.0, 0.0, 0.0]);
+        assert_eq!(WeightKey::TechBoardCredit.clamp_bound(3), CLAMP_BLIND);
+    }
+
+    /// Every key must have a measured triple, and the whole table must have
+    /// come from one run: a key silently emitted as zeros because a
+    /// regeneration only covered part of the enum would quietly fall back to
+    /// the flat rail and look exactly like a legitimately blind coordinate.
+    /// Anchor on a handful whose spread is structural (a card row is thirteen
+    /// slots; `culture` moves in whole points) so a partial regeneration
+    /// cannot pass.
+    #[test]
+    fn the_measured_spread_table_covers_the_visible_keys() {
+        let visible = WeightKey::ALL
+            .iter()
+            .filter(|k| k.p95_candidate_spread().iter().any(|s| *s > 0.0))
+            .count();
+        assert!(visible > 100, "only {visible} of {} keys have a measured spread", WeightKey::ALL.len());
+        assert!(WeightKey::Culture.p95_candidate_spread()[0] > 1.0);
+        assert!(WeightKey::HandPotential.p95_candidate_spread()[1] > 100.0);
+    }
+
+    /// The authored default vector is legal under the measured bounds with
+    /// exactly one exception, and the exception is named here rather than
+    /// smoothed over: `uprising` is authored at -12 while two-player play
+    /// swings it 33 points between candidates, which buys it a bound of 9.1.
+    /// That is not a bug in either number -- an uprising is rare and
+    /// enormous, which is precisely the "seldom-used feature carrying a
+    /// weight fitted to noise" shape this bound exists to catch -- but it
+    /// does mean a freshly defaulted vector starts a shade outside the rail
+    /// and gets pulled in by the first mutation that touches it. If a
+    /// regenerated spread table changes this count, that is a finding, not a
+    /// number to update quietly.
+    #[test]
+    fn only_one_authored_default_starts_outside_its_measured_bound() {
+        let w = Weights::defaults();
+        let outside: Vec<(&str, u8)> = WeightKey::ALL
+            .iter()
+            .flat_map(|k| [2u8, 3, 4].map(|p| (k, p)))
+            .filter(|(k, p)| w.get(**k).abs() > k.clamp_bound(*p))
+            .map(|(k, p)| (k.name(), p))
+            .collect();
+        assert_eq!(outside, vec![("uprising", 2u8)], "authored defaults outside their bounds");
     }
 }
