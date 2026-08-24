@@ -392,114 +392,10 @@ function findRowSlots(imageData) {
 }
 
 /* ---------------------------------------------------------------------
- * Slot hashing — exact-match, not perceptual/fuzzy. A slot rect (fractions
- * of image width/height, from findRowSlots) is resampled by AREA averaging
- * — never absolute pixel offsets — into a fixed GRID x GRID greyscale grid
- * in slot-relative coordinates, so the same card in the same slot hashes
- * identically regardless of the capture's pixel resolution. Each cell is
- * then quantized to one of 32 grey buckets to absorb the residual
- * floating-point noise that different source resolutions introduce into
- * the area-average — this is still exact-match (post-quantization
- * equality), not a distance-threshold fuzzy hash: two grids that land in
- * different buckets anywhere are a different hash, full stop, and a slot
- * that hashes to nothing in the table comes back unknown rather than
- * guessed.
- *
- * Grid size: 12x12. At the reference capture (2360x1640 iPad screenshot)
- * a slot is ~168x200px — 12x12 keeps each cell a coarse patch (~14x17px)
- * so minor resampling/anti-aliasing differences between capture
- * resolutions average out inside a cell rather than landing on a cell
- * boundary, while still being far more than enough resolution to tell
- * ~200 distinct card arts apart (144 cells x 32 grey levels is a huge
- * space relative to the card pool). 8x8 was considered but risked
- * aliasing thin card-art details that help distinguish similarly-colored
- * cards; anything much finer (24x24+) bought no real discriminating power
- * for a card-art-sized source image and made the exact-match hash more
- * sensitive to capture-resolution resampling noise, working against the
- * whole point of area-sampling in the first place.
- * ------------------------------------------------------------------- */
-const HASH_GRID = 12;
-const HASH_BUCKETS = 32; // 256 grey levels / 8 per bucket
-
-function overlap1d(a0, a1, b0, b1) {
-  return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
-}
-
-// Area-average the greyscale value of imageData within [sx0,sx1)x[sy0,sy1),
-// weighting each covered source pixel by how much of it falls inside the
-// box (true box-filter resampling), not by nearest/rounded pixel lookup —
-// that's what makes the result the same whether the source is native-res
-// or a scaled-up/down capture of the same content.
-function boxAverageGrey(data, width, height, sx0, sy0, sx1, sy1) {
-  const px0 = Math.max(0, Math.floor(sx0)), px1 = Math.min(width, Math.ceil(sx1));
-  const py0 = Math.max(0, Math.floor(sy0)), py1 = Math.min(height, Math.ceil(sy1));
-  let sum = 0, weightSum = 0;
-  for (let py = py0; py < py1; py++) {
-    const wy = overlap1d(py, py + 1, sy0, sy1);
-    if (wy <= 0) continue;
-    for (let px = px0; px < px1; px++) {
-      const wx = overlap1d(px, px + 1, sx0, sx1);
-      if (wx <= 0) continue;
-      const weight = wx * wy;
-      const i = (py * width + px) * 4;
-      const grey = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      sum += grey * weight;
-      weightSum += weight;
-    }
-  }
-  return weightSum > 0 ? sum / weightSum : 0;
-}
-
-// Resample a slot rect (fractions of image width/height) into a GRID x GRID
-// array of quantized grey buckets, entirely in slot-relative coordinates —
-// the grid cell boundaries are computed as fractions of the slot's own
-// width/height, never as fixed pixel offsets from the image origin.
-function slotToGrid(imageData, slot, gridSize) {
-  const { data, width, height } = imageData;
-  const x0 = slot.x * width, y0 = slot.y * height;
-  const w = slot.w * width, h = slot.h * height;
-  const cellW = w / gridSize, cellH = h / gridSize;
-  const grid = new Uint8Array(gridSize * gridSize);
-  for (let gy = 0; gy < gridSize; gy++) {
-    const sy0 = y0 + gy * cellH, sy1 = sy0 + cellH;
-    for (let gx = 0; gx < gridSize; gx++) {
-      const sx0 = x0 + gx * cellW, sx1 = sx0 + cellW;
-      const avg = boxAverageGrey(data, width, height, sx0, sy0, sx1, sy1);
-      const bucket = Math.max(0, Math.min(HASH_BUCKETS - 1, Math.round((avg / 255) * (HASH_BUCKETS - 1))));
-      grid[gy * gridSize + gx] = bucket;
-    }
-  }
-  return grid;
-}
-
-// Two independent FNV-1a-style passes over the quantized grid, concatenated
-// as hex -> a 16-char (64-bit) string. Short, stable, exact (no distance
-// threshold): any single cell landing in a different bucket changes the
-// hash. Collisions across a ~200-card pool are astronomically unlikely at
-// this width.
-function hashGrid(grid) {
-  let h1 = 2166136261, h2 = 0x811c9dc5 ^ 0x5bd1e995;
-  for (let i = 0; i < grid.length; i++) {
-    const v = grid[i];
-    h1 ^= v;
-    h1 = Math.imul(h1, 16777619);
-    h2 ^= (v + i * 131) & 0xff;
-    h2 = Math.imul(h2, 2246822519);
-    h2 ^= h2 >>> 13;
-  }
-  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
-}
-
-function hashSlot(imageData, slot) {
-  return hashGrid(slotToGrid(imageData, slot, HASH_GRID));
-}
-
-/* ---------------------------------------------------------------------
  * OCR — reads the card NAME printed inside each slot, with zero prior
  * teaching, then resolves it against the 236 known card names in
- * cards.json. This runs BEFORE the learned-hash lookup in ocrScanSeam;
- * the hash table remains the backstop for whatever OCR can't resolve
- * (and keeps learning from typed names exactly as before).
+ * cards.json. A slot OCR can't resolve comes back unknown for the user to
+ * type — there is deliberately no second guessing pass behind it.
  *
  * Calibrated empirically against the one real capture this app has
  * (ipad_screenshot_2360x1640_2026-08-23.png) — see /private/tmp/
@@ -742,7 +638,7 @@ function segmentGlyphs(imageData, slot, lineRun, medianWidthHint) {
 
 // Normalise one glyph box to a fixed GLYPH_W x GLYPH_H grid of ink
 // coverage (0-255 per cell, box-averaged) in slot-relative coordinates —
-// same "resample by area, never by absolute pixel" rule as slotToGrid, so
+// resampled by area, never by absolute pixel offset, so
 // the same letter at a different capture resolution lands on the same
 // grid. Padding on all sides keeps stroke tips (serifs, dots) that sit
 // right at the glyph's bounding box from being cut off by resampling.
@@ -1291,49 +1187,6 @@ function ocrRecognizeSlot(imageData, slot, cardList) {
 }
 
 /* ---------------------------------------------------------------------
- * Learning table — hash -> card id, in its OWN localStorage key. Kept
- * separate from STORAGE_KEY (the game-state save) on purpose: a corrupt
- * or unparseable hash table must never take the whole app down with it,
- * so a broken read here just degrades to "nothing recognised", never a
- * thrown error at boot.
- * ------------------------------------------------------------------- */
-const OCR_HASH_KEY = 'ttaapp_ocr_hashes_v1';
-
-function loadHashTable() {
-  try {
-    const raw = localStorage.getItem(OCR_HASH_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (e) { return {}; }
-}
-
-function saveHashTable(table) {
-  try { localStorage.setItem(OCR_HASH_KEY, JSON.stringify(table)); } catch (e) { /* ignore quota errors */ }
-}
-
-function recordHash(hash, cardId) {
-  if (!hash || !cardId) return;
-  const table = loadHashTable();
-  table[hash] = cardId;
-  saveHashTable(table);
-}
-
-// Holds the imageData + slot rects from the most recent successful scan, so
-// that when the user subsequently TYPES a name for a slot the scan left
-// unknown (or overrides one it got wrong), that keystroke can teach the
-// table — every name typed after a scan improves the next scan. Cleared
-// whenever a fresh full-row session starts, so a stale image never teaches
-// hashes against a slot layout it doesn't actually match.
-let lastScan = null; // { data, width, height, slots } | null
-
-function learnSlotIfScanned(slotIndex, cardId) {
-  if (!lastScan || !lastScan.slots || !lastScan.slots[slotIndex]) return;
-  const hash = hashSlot(lastScan, lastScan.slots[slotIndex]);
-  recordHash(hash, cardId);
-}
-
-/* ---------------------------------------------------------------------
  * data: URL -> Blob, with no fetch() involved (fetching a data: URL would
  * work, but this app's policy is no network calls at all, full stop, and
  * keeping data: URLs out of fetch() entirely avoids ever having to reason
@@ -1376,11 +1229,10 @@ async function decodeImageToPixels(blob) {
 /* ---------------------------------------------------------------------
  * OCR seam. Reads a SCREEN CAPTURE (not a photo — see header notes on why
  * that distinction is load-bearing) of the 13-card row: finds the slot
- * rectangles, hashes each one, and looks each hash up in the learning
- * table. An unknown hash resolves to null for that slot rather than a
- * guess — the caller (renderFullRowStep) pre-fills what it recognises and
- * leaves the rest for the user to type, which is also what teaches the
- * table going forward.
+ * rectangles and reads the printed name out of each one. A slot that
+ * doesn't resolve to exactly one card comes back null rather than a guess
+ * — the caller (renderFullRowStep) pre-fills what it recognises and leaves
+ * the rest for the user to type.
  * ------------------------------------------------------------------- */
 async function ocrScanSeam(imageBlobOrDataUrl) {
   const blob = typeof imageBlobOrDataUrl === 'string' ? dataUrlToBlob(imageBlobOrDataUrl) : imageBlobOrDataUrl;
@@ -1391,17 +1243,11 @@ async function ocrScanSeam(imageBlobOrDataUrl) {
     err.code = 'NO_SLOTS';
     throw err;
   }
-  const table = loadHashTable();
-  // OCR first (needs no prior teaching), learned-hash lookup second (the
-  // backstop for whatever OCR can't read — including every age-ambiguous
-  // name OCR deliberately declines to guess; see resolveOCRString). The
-  // hash table keeps learning from typed names exactly as before,
-  // regardless of which path filled a given slot. nameHints runs parallel
-  // to row: null wherever row[i] resolved (nothing left to hint at) or
-  // the hash table filled it (already an exact id, not a hint), and the
-  // recognised base name wherever OCR matched a name but couldn't settle
-  // which age copy — the caller (renderFullRowStep) prefills that name so
-  // the user only has to pick the age, instead of a blank input.
+  // nameHints runs parallel to row: null wherever row[i] resolved (nothing
+  // left to hint at), and the recognised base name wherever OCR matched a
+  // name but couldn't settle which age copy — the caller
+  // (renderFullRowStep) prefills that name so the user only has to pick the
+  // age, instead of a blank input.
   const row = [], nameHints = [];
   found.slots.forEach((slot) => {
     // A slot the geometry pass found by measurement rather than by seeing
@@ -1410,13 +1256,9 @@ async function ocrScanSeam(imageBlobOrDataUrl) {
     // invent one.
     if (slot.empty) { row.push(null); nameHints.push(null); return; }
     const ocr = ocrRecognizeSlot(pixels, slot, CARDS);
-    if (ocr.cardId) { row.push(ocr.cardId); nameHints.push(null); return; }
-    const hash = hashSlot(pixels, slot);
-    const hashId = table[hash] || null;
-    row.push(hashId);
-    nameHints.push(hashId ? null : ocr.nameHint);
+    row.push(ocr.cardId || null);
+    nameHints.push(ocr.cardId ? null : ocr.nameHint);
   });
-  lastScan = { data: pixels.data, width: pixels.width, height: pixels.height, slots: found.slots };
   return { row, nameHints, rivalStr: null, rivalCulture: null, militaryDraws: [] };
 }
 if (typeof window !== 'undefined') window.ocrScanSeam = ocrScanSeam;
@@ -2012,7 +1854,6 @@ function renderFullRowStep(container) {
   setupAutocomplete(input.el, suggest, () => ROW_POOL, (c) => {
     draft[cursor] = c.id;
     if (state.flow.fullRowNameHints) state.flow.fullRowNameHints[cursor] = null;
-    learnSlotIfScanned(cursor, c.id); // every name typed after a scan teaches the table
     fullRowAdvance();
   });
   if (nameHint) {
@@ -2278,7 +2119,6 @@ function formatPosition(p) {
  * Full-row entry (turn 1 / resync escape hatch)
  * ------------------------------------------------------------------- */
 function openFullRow() {
-  lastScan = null; // a new full-row session invalidates any prior scan's slot geometry
   state.flow.step = 'fullrow';
   state.flow.fullRowDraft = state.row.slice(0, 13);
   while (state.flow.fullRowDraft.length < 13) state.flow.fullRowDraft.push(null);
@@ -2331,7 +2171,7 @@ async function boot() {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     validateRow, AGE_ORDER, matchScore, searchCards,
-    findRowSlots, hashSlot, slotToGrid, hashGrid, HASH_GRID, HASH_BUCKETS,
+    findRowSlots,
     findTextLines, segmentGlyphs, glyphToGrid, gridDistance, classifyGlyph,
     lineColInk, zeroInkBoxes, median, // exposed for the atlas-harvest tooling only (see appseg_notes.txt)
     ocrSlotRaw, ocrNormalize, levenshtein, matchOCRName, resolveOCRString, ocrRecognizeSlot,
