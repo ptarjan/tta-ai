@@ -1432,7 +1432,6 @@ function freshFlow() {
   return {
     step: 'gone', // setup | gone | new | blocked | dupConfirm | thinking | advice | fullrow
     setupPlayers: 2,
-    setupSeat: 0,
     goneSlots: [],
     newCards: [],
     newIndex: 0,
@@ -1449,23 +1448,23 @@ function freshFlow() {
   };
 }
 
-/* `players` and `seat` are not cosmetic and cannot be defaulted. RULES_SPEC
- * 1.9: in the first round available civil actions run 1, 2, 3, 4 by seating
- * order, so the starting player of a 2p game gets ONE action and the second
- * player gets TWO. Seat also fixes who moves between your turns. A mirror
- * built on the wrong seat is wrong from the first action onwards, which is
- * why New Game asks before anything else rather than assuming seat 0. */
-function freshState(players, seat) {
+/* Seat is not cosmetic. RULES_SPEC 1.9: in the first round available civil
+ * actions run 1, 2, 3, 4 by seating order, so the starting player of a 2p
+ * game gets ONE action and the second player gets TWO. Seat also fixes who
+ * moves between your turns. A mirror built on the wrong seat is wrong from
+ * the first action onwards.
+ *
+ * It is not asked, because the first card row already states it -- see
+ * seatFromGoneCount. So it starts null and is filled in from that row, and
+ * the rivals with it, since which seats are opponents follows from it. */
+function freshState(players) {
   const n = players || 2;
-  const s = seat || 0;
-  const rivals = [];
-  for (let i = 0; i < n; i++) if (i !== s) rivals.push({ seat: i, str: 0, culture: 0 });
   return {
     v: 3,
     players: n,
-    seat: s,
+    seat: null,
     row: new Array(13).fill(null),
-    rivals,
+    rivals: [],
     seed: Math.floor(Math.random() * 1e9),
     wasmState: null,
     moves: [],
@@ -1710,41 +1709,29 @@ function advanceNew() {
   }
 }
 
-/* STEP 0 — table size and seat. Asked once per game, before the row, because
- * the mirror cannot be built without them (see freshState). "Seat 1" is the
- * starting player; the seats after it are in turn order. */
+/* STEP 0 — table size only. Seat is NOT asked: the first card row states it
+ * (seatFromGoneCount). Table size is the one thing neither the row nor the
+ * rules can supply, since 0 or 1 cards gone is consistent with any count. */
 function renderSetupStep(container) {
   container.appendChild(makeTitle('New game'));
-  container.appendChild(makeSub('How many players, and where do you sit? Seat 1 goes first.'));
+  container.appendChild(makeSub('How many players? Where you sit is read off the first card row.'));
 
   const players = state.flow.setupPlayers;
-  const seat = state.flow.setupSeat;
 
   const pRow = document.createElement('div');
   pRow.className = 'btnRow';
   [2, 3, 4].forEach((n) => {
     pRow.appendChild(makeBtn(`${n} players`, n === players ? 'primary big' : 'big', () => {
       state.flow.setupPlayers = n;
-      if (state.flow.setupSeat >= n) state.flow.setupSeat = n - 1;
       renderAll();
     }));
   });
   container.appendChild(pRow);
 
-  const sRow = document.createElement('div');
-  sRow.className = 'btnRow';
-  for (let i = 0; i < players; i++) {
-    sRow.appendChild(makeBtn(`Seat ${i + 1}${i === 0 ? ' (first)' : ''}`, i === seat ? 'primary big' : 'big', () => {
-      state.flow.setupSeat = i;
-      renderAll();
-    }));
-  }
-  container.appendChild(sRow);
-
   const go = document.createElement('div');
   go.className = 'btnRow';
   go.appendChild(makeBtn('Enter the card row →', 'primary big', () => {
-    state = freshState(players, seat);
+    state = freshState(players);
     save();
     openFullRow();
   }));
@@ -2124,6 +2111,27 @@ function computeNewRowFromFlow() {
   return combined.slice(0, 13);
 }
 
+/* The first card row states which seat you are, so the app reads it instead of
+ * asking. Setup deals 13 cards (RULES_SPEC 1.4), round 1 never replenishes and
+ * the only legal action is taking a card (1.9), so every empty space is a card
+ * a player before you took -- and 1.9 gives those players 1, 2, 3, 4 civil
+ * actions by seating order. The running total is 0, 1, 3, 6: one value per
+ * seat, strictly increasing, so the count names the seat outright.
+ *
+ * Any other count means the row is mis-entered, and that is worth blocking on:
+ * a single missed card here silently seats you one place along and every turn
+ * afterwards is computed on the wrong board. */
+function seatFromGoneCount(gone, players) {
+  for (let k = 0; k < players; k++) if ((k * (k + 1)) / 2 === gone) return k;
+  return -1;
+}
+
+function setSeat(s) {
+  state.seat = s;
+  state.rivals = [];
+  for (let i = 0; i < state.players; i++) if (i !== s) state.rivals.push({ seat: i, str: 0, culture: 0 });
+}
+
 function proceedToValidation(rowOverride) {
   const newRow = rowOverride || computeNewRowFromFlow();
   state.flow.candidateRow = newRow;
@@ -2134,6 +2142,23 @@ function proceedToValidation(rowOverride) {
     state.flow.blockMessage = result.ageIssue.message;
     renderAll();
     return;
+  }
+  if (state.seat === null) {
+    const gone = newRow.slice(0, 13).filter((c) => !c).length;
+    const seat = seatFromGoneCount(gone, state.players);
+    if (seat === -1) {
+      const expected = [];
+      for (let k = 0; k < state.players; k++) expected.push((k * (k + 1)) / 2);
+      state.flow.step = 'blocked';
+      state.flow.blockMessage =
+        `${gone} of the 13 spaces are empty. Nobody replenishes the row in the first round, ` +
+        `so an empty space is a card taken by a player before you, and with ${state.players} ` +
+        `players that can only be ${expected.join(', ')} of them. Check the row: a missed card ` +
+        `here seats you in the wrong chair and every later turn is computed on the wrong board.`;
+      renderAll();
+      return;
+    }
+    setSeat(seat);
   }
   if (result.dupIssue && !state.flow.dupConfirmed) {
     state.flow.step = 'dupConfirm';
@@ -2198,16 +2223,14 @@ function formatPosition(p) {
     `food ${p.food}, res ${p.resources}, sci ${p.science}`;
 }
 
-/* Table size and seat are asked on a scratch state, so that abandoning the
- * setup screen cannot leave a half-built game behind: `freshState` is not
- * called until the choices are confirmed. */
+/* Table size is asked on a scratch state, so that abandoning the setup screen
+ * cannot leave a half-built game behind: `freshState` is not called again
+ * until the choice is confirmed. */
 function openSetup() {
   const players = (state && state.players) || 2;
-  const seat = (state && state.seat) || 0;
-  state = freshState(players, seat);
+  state = freshState(players);
   state.flow.step = 'setup';
   state.flow.setupPlayers = players;
-  state.flow.setupSeat = seat;
   renderAll();
 }
 
@@ -2266,7 +2289,7 @@ async function boot() {
  * ------------------------------------------------------------------- */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    validateRow, AGE_ORDER, matchScore, searchCards,
+    validateRow, AGE_ORDER, matchScore, searchCards, seatFromGoneCount,
     findRowSlots,
     findTextLines, segmentGlyphs, glyphToGrid, gridDistance, classifyGlyph,
     lineColInk, zeroInkBoxes, median, // exposed for the atlas-harvest tooling only (see appseg_notes.txt)

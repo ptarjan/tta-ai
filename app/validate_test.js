@@ -1,5 +1,5 @@
 'use strict';
-const { validateRow, AGE_ORDER } = require('./app.js');
+const { validateRow, AGE_ORDER, seatFromGoneCount } = require('./app.js');
 const cards = require('./cards.json');
 const byId = new Map(cards.map((c) => [c.id, c]));
 
@@ -70,6 +70,20 @@ function check(name, cond, extra) {
   const row = row13(ageA.slice(0, 2).concat(ageII.slice(0, 1)));
   const r = validateRow(row, byId);
   check('6. A+II (span 2) blocks', !!r.ageIssue, JSON.stringify(r));
+}
+
+// Seat inference from the first row. RULES_SPEC 1.9 gives the players before
+// you 1, 2, 3, 4 civil actions by seating order and round 1 never replenishes,
+// so the empty spaces run 0, 1, 3, 6 -- one value per seat. Every other count
+// must be rejected rather than rounded to the nearest seat, because a seat off
+// by one puts every later turn on the wrong board.
+{
+  check('7. 2p seats', seatFromGoneCount(0, 2) === 0 && seatFromGoneCount(1, 2) === 1);
+  check('7. 3p seats', seatFromGoneCount(0, 3) === 0 && seatFromGoneCount(1, 3) === 1 && seatFromGoneCount(3, 3) === 2);
+  check('7. 4p seats', [0, 1, 3, 6].every((g, k) => seatFromGoneCount(g, 4) === k));
+  check('7. 2p rejects a 3p-only count', seatFromGoneCount(3, 2) === -1);
+  check('7. 3p rejects a 4p-only count', seatFromGoneCount(6, 3) === -1);
+  check('7. rejects counts between seats', [2, 4, 5, 7, 13].every((g) => seatFromGoneCount(g, 4) === -1));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
