@@ -1,6 +1,45 @@
 THROUGH THE AGES -- PER-FEATURE WEIGHT CLAMP: DESIGN (NOT LANDED) (2026-08-24)
 ================================================================================
 
+!! THE DENOMINATOR AND THE SCALE CONSTANT BELOW ARE SUPERSEDED. DO NOT
+!! IMPLEMENT SECTION 1'S FORMULA. Read this file for its STRUCTURE only.
+!!
+!! What survives: the per-key exhaustive `match` in weights.rs with no
+!! wildcard; `eval::clamp_repair` at load time applied SECOND, after
+!! `dominance_repair`; `CLAMP_MULTIPLIER = 10.0` kept as a separate constant
+!! for the 31 multiplier keys (9 of which are AUTHORED at exactly 1.0, so a
+!! tighter bound trips `runaway_weights_is_empty_for_a_vector_nowhere_near_
+!! the_clamp` on the first load); silent repair rather than a load error.
+!!
+!! What is dead:
+!!   - the MEAN candidate-set spread as the denominator. Measured against
+!!     p95 in analysis/spread_quantiles_2026-08-24.txt, the mean bound is
+!!     20x to 160x too loose on every low-fire/high-tail key
+!!     (rival_mean_culture fires 3.8% of decisions: mean-bound 254.91 vs
+!!     p95-bound 1.591). A key that almost never fires but swings hard when
+!!     it does is exactly the class this clamp exists for, and the mean
+!!     averages that swing away against the decisions where it is 0.
+!!   - CLAMP_SCALE = 70.0. It was fitted to the mean formula and does not
+!!     transfer: at bound = 70/p95, `culture_rate` FAILS the invariant §3
+!!     required of it (17.74, where the design needs > 60).
+!!   - CLAMP_FLOOR = 500.0. Looser than today's flat 60 for precisely the
+!!     structurally-blind coordinates Paul asked about.
+!!   - one bound per key. The bound is per (key, PLAYER COUNT);
+!!     `clamp_bound` needs a player-count argument. hand_potential's p95
+!!     spread is 802.9 at 3p and 16.2 at 2p, and collapsing those with a max
+!!     is what produced the retracted "107x runaway" claim.
+!!
+!! The replacement, from analysis/eval_share_2026-08-24.txt:
+!!   bound(k, n) = T * p95_total_spread(n) / p95_spread_when_firing(k, n)
+!! where p95_total_spread is the p95 across decisions of the FULL evaluation
+!! score's range over the candidate set: 330.676 (2p) / 503.371 (3p) /
+!! 414.408 (4p). T is then dimensionless -- "no single feature may command
+!! more than T whole typical decisions". T = 1.0 is the pick: it binds on
+!! exactly 3 of 486 live (key, count) pairs, all at or beside the +/-60 rail
+!! (event_scoring_margin 2p 1.82x, auction_bid 2p 1.66x,
+!! attack_target_weakness 3p 1.19x). T = 2.0 is a no-op on the live
+!! champions and constrains nothing; T = 0.5 would force 15 to move.
+
 STATUS: design only. Implemented and TESTED (cargo check/test/clippy all
 green) inside an isolated `cp -Rc` clone at /private/tmp/clampwork, never
 touched /Users/pt/tta-ai, and was NOT committed or pushed anywhere. The
