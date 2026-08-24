@@ -1,0 +1,50 @@
+Policy-loop precondition: is the teacher stronger than the student?
+2p, kindmatch, paired + seat-swapped, frozen champion gen 107583
+(/private/tmp/teacher_champ_2p.json), human policy from
+analysis/frozen/human_weights.json. Each side loaded through the loader
+its OWN kind requires (kindmatch's module doc: a `human` side sharing a
+champion file is never correct).
+
+Common opponent = champion-greedy (BotKind::Weighted, champion vector).
+
+  A side                                    games   A win rate
+  ---------------------------------------   -----   ----------
+  human policy alone                          240     0.00%  +/- 0.00
+  human shortlist + beam (champion leaf)      240    15.21%  +/- 4.51
+  beam alone, no shortlist (width 2)          240    39.50%  +/- 5.10   [prior run]
+  beam alone, no shortlist (recorded)           -    41.90%             [2026-08-13]
+
+Calibration of the student against weak baselines (120 games each, seed 77):
+  human policy vs random                             96.25%  +/- 2.87
+  human policy vs greedy                             47.92%  +/- 10.39
+
+READINGS
+
+1. The student is not broken. It beats random 96% and ties greedy. It is
+   simply far below the champion: 0 wins in 240.
+
+2. Narrowly, the precondition PASSES. On the common opponent the teacher
+   (15.21%) is stronger than the student (0.00%). Imitating it would move
+   the policy head forward.
+
+3. The loop is still NO-GO, for a reason that outranks the precondition.
+   Ordering by strength: champion-greedy > beam-alone (39.5%) >
+   shortlist+beam (15.21%) > policy alone (0%). Every layer added on top
+   of the champion vector makes play WORSE. Search with the champion as
+   leaf eval loses to the same vector used greedily, and the human
+   shortlist loses more on top of that. A better policy head only feeds a
+   pipeline that is already behind plain 1-ply greedy.
+
+4. This contradicts "the shortlist is not the bottleneck / top-8 already
+   95%". Top-8 recall on human moves is high, but the shortlist still
+   costs 24 points of win rate against the champion, because the moves it
+   drops are the ones the champion vector wanted, not the ones humans
+   wanted. Recall against humans is the wrong yardstick for a shortlist
+   feeding a champion-scored beam.
+
+5. The leaf evaluation is the whole job, again and more sharply: an eval
+   that gets WORSE under deeper search is an eval calibrated only to the
+   depth it was fitted at.
+
+SUPERSEDED: the recorded "human shortlist+beam 68.3%" figure. Measured
+here at 15.21% +/- 4.51 against champion-greedy.
