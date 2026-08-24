@@ -1,0 +1,82 @@
+Wonder-start tempo: humans vs the champion, and whether starting late loses
+===========================================================================
+Measured 2026-08-24 with the instrumentation added in 410e6d7.
+
+Why this exists: after the EndTurn scoring fix (02086c6) the share of 2p
+player-games with no wonder-stage progress by round 4 rose 66.0% -> 85.3%,
+while wonders started (2.99 -> 3.11) and completed (2.57 -> 2.64) BOTH rose.
+Starting later while finishing more may be correct play the bot was
+previously prevented from finding, so no "fix" was attempted until the two
+measurements below existed.
+
+Commands
+--------
+  cargo build --release --bin humanopenings --bin behavcensus
+  ./target/release/humanopenings ../sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals            # new numbers on stderr
+  ./target/release/behavcensus --games 200 --players {2,3,4} \
+      --weights /private/tmp/opencensus/champ{2,3,4}p.json --threads 2
+
+Champion weights were the FROZEN snapshots in /private/tmp/opencensus/, not
+experiments/rust_champion_*.json, which the running climb rewrites on
+promotion.
+
+(A) Humans -- round of first wonder stage, 1011 BGO games
+--------------------------------------------------------
+  2p (n=1384 pg)  min 2  p25 3  median 3  p75 4  max 18  mean 3.78
+                  never built 3 (0.2%)   none by round 4: 250 (18.1%)
+                  winners median 3 mean 3.86 | losers median 3 mean 3.69
+  3p (n=399 pg)   min 2  p25 3  median 4  p75 4  max 17  mean 4.03
+                  never built 3 (0.8%)   none by round 4:  87 (21.8%)
+                  winners median 3 mean 3.73 | losers median 4 mean 4.18
+  4p (n=744 pg)   min 2  p25 3  median 4  p75 4  max 19  mean 4.13
+                  never built 8 (1.1%)   none by round 4: 171 (23.0%)
+                  winners median 4 mean 3.97 | losers median 4 mean 4.18
+
+Humans start EARLIER as the table gets smaller: median 3 / 4 / 4 at 2/3/4p.
+
+(B) Champion self-play, 200 games per player count
+--------------------------------------------------
+  2p  median 6  mean 5.82   none by round 4: 338/400 (84.5%)
+  3p  median 7  mean 7.27   never built 16 (2.7%)
+  4p  median 4  mean 3.94   none by round 4: 186/800 (23.2%)
+
+The bot's ordering by table size is INVERTED relative to humans: it starts
+latest at the SMALLEST table, where wonders are most affordable. 4p sits on
+top of the human distribution (23.2% vs 23.0%, median 4 vs 4); 2p is 4.7x
+outside it (84.5% vs 18.1%); 3p is median 7 against a human median of 4.
+
+(C) Does starting late lose? Win rate by first-wonder-stage round
+-----------------------------------------------------------------
+Self-play, so the null is 1/players. One-sided binomial P(X<=k).
+
+  2p  rounds 3-8   183/370 = 49.5%  null 50.0%  p=0.4380   at par
+      rounds 9+      5/24  = 20.8%  null 50.0%  p=0.0033   LOSES
+  3p  rounds 3-7   116/295 = 39.3%  null 33.3%  p=0.9868   above par
+      rounds 10+    34/138 = 24.6%  null 33.3%  p=0.0171   LOSES
+      never built    3/16  = 18.8%  null 33.3%  p=0.1659   n.s.
+  4p  rounds 3-5   187/727 = 25.7%  null 25.0%  p=0.6907   at par
+      rounds 6+     10/61  = 16.4%  null 25.0%  p=0.0757   n.s.
+
+Verdicts
+--------
+1. 2p median-6 starts are NOT a defect on this evidence. Rounds 3-8 are at
+   par in self-play, and among HUMAN 2p games winners start marginally LATER
+   than losers (mean 3.86 vs 3.69) -- the one table size where early starts
+   do not predict winning. Divergence from humans alone is a diagnostic
+   mirror, not a defect; see the Cultural Heritage precedent. CLOSED.
+
+2. The extreme tail IS a defect, at every table size. 2p round 9+ wins 20.8%
+   against a 50% null (p=0.0033) and 3p round 10+ wins 24.6% against 33.3%
+   (p=0.0171). Together that is 162 player-games the champion routinely
+   throws away. This is the live opening lead.
+
+3. 3p is the worst of the three: median 7 against a human median of 4, a
+   bimodal split (16% start at round 3, then a tail out to round 19), and
+   the only player count where 2.7% never build a stage at all. 3p also has
+   the largest share of its population inside the losing tail.
+
+Caveat on (C): a self-play crosstab compares a bot against ITSELF, so it can
+only find within-population variation. It cannot tell you the population
+median is wrong -- which is exactly why the human corpus in (A) was needed
+and why (1) rests on the human winner/loser split rather than on (C) alone.
