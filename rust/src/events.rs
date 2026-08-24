@@ -1372,6 +1372,16 @@ fn draw_military(state: &mut GameState, idx: u8, n: u32) {
 
 /// Event effects with no decision that [`apply_gains_block`] does not cover.
 /// Mirrors `engine/events.py::_apply_extras`.
+///
+/// Good Harvest ("produce food, ignoring corruption and consumption") and New
+/// Deposits ("produce resources, ignoring corruption") carry `ignoreCorruption`
+/// and `ignoreConsumption` in `data/cards_military_actions.json`, and
+/// [`EventBlock`] has no field for either. That is correct, not an omission:
+/// corruption and consumption are not haircuts on the production RATING, they
+/// are separate end-of-turn payments (`economy.rs` step 3b and the consumption
+/// step beside it). Crediting `state_stats().food`/`.resources` here therefore
+/// already skips both. Adding an exemption flag would exempt a charge this path
+/// never makes.
 fn apply_extras(state: &mut GameState, idx: u8, block: &EventBlock) {
     let s = effects::state_stats(state, &state.players[idx as usize]);
     if block.produce_food {
