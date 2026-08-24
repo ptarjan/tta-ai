@@ -1,0 +1,348 @@
+SLOT OPPORTUNITY COST MINING -- Through the Ages BGO journal corpus
+Date: 2026-08-24
+Corpus: /private/tmp/bgo-journals/journals (1011 games), index at
+        /Users/pt/tta-ai/sources/bgo/index.tsv, card data at
+        /Users/pt/tta-ai/data/cards_wonders_leaders.json (6 leaders + 4 wonders
+        per age, ages A/I/II/III; "Age IV" in journals is a post-Age-III
+        end-of-game scoring tag, not a real card-drawing age).
+
+====================================================================
+1. PARSER COVERAGE / GRAMMAR NOTES
+====================================================================
+
+Journal line grammar (tab-separated: date, player_colour, age, round, text;
+CRLF line endings):
+
+  "<Colour> takes <Card> in hand <Colour> uses <N> civil action"
+  "<Colour> takes <Card> in hand <Colour> uses <N> military action"
+    -> the row-take event. This is the moment a card (leader, wonder, or
+       ordinary civil/military card) leaves the row and forecloses it to
+       everyone else. N is the civil/military-action cost paid, which is
+       the direct row-position/slot-cost proxy called for in the task
+       (observed values: 1, 2, or 3 civil actions for leaders/wonders in
+       this corpus -- never higher).
+
+  "<Colour> elects <LeaderName>"
+  "<Colour> elects <LeaderName2> <LeaderName1> dies; <Colour> gets 1 civil action"
+    -> the leader-activation event. Self-contained: presence of the
+       "<OldLeader> dies;" clause means this is a REPLACEMENT of an
+       already-elected leader; its absence means it fills an EMPTY leader
+       slot. Matching required a name-aware splitter (regex alone is
+       ambiguous for two-word-vs-two-word leader names like
+       "Bill Gates"+"Isaac Newton"); built one against the 24 known leader
+       names (with 3 spelling aliases: "Charles Chaplin"->"Charlie Chaplin",
+       "Maximillien Robespierre"->"Maximilien Robespierre",
+       "Leonardo Da Vinci" case variant).
+
+  "<Colour> builds <N> stage(s) of <Wonder> <Colour> spends <N> resources; ; Wonder completed"
+    -> wonder completion. Linked back to the take event for the same
+       wonder name by the same player (unambiguous: only the current
+       holder can build/complete/return a given named card, and each
+       card name is unique in a game).
+
+  "<Colour> puts <Card> back in the row <Colour> gets <N> civil action"
+    -> a take that was reversed: the card returns to the row, available
+       again. Tracked as disposition "returned" (leader never elected /
+       wonder never completed by this player).
+
+  "WINNER IS <NAME> AS <COLOUR> (<PTS> PTS); 2nd is <name> as <Colour> (...); ..."
+    -> end-of-game outcome line, giving colour->placement directly. Found
+       in 956 of 1011 games (94.6%). The remaining 55 games (5.4%) ended
+       without this line (resignations/abandons visible only as
+       "concedes defeat" with no final tally) -- outcome is UNKNOWN for
+       leader/wonder takes in those games and they are excluded from all
+       win/loss tables below, but still counted in take/pass totals.
+       Note: colour in the WINNER clause is upper-case ("AS ORANGE"),
+       colour in "2nd/3rd is ... as Colour" is title-case -- had to
+       normalize both to match the colour field used elsewhere in the log.
+
+  Player count per game taken from index.tsv "players" column (692 x 2p,
+  133 x 3p, 186 x 4p games; sums to 1011) -- used to stratify every table
+  below, because it turned out to be a major confound (see section 2).
+
+COVERAGE SUMMARY
+  Games read: 1011 / 1011 (0 read errors).
+  Leader take-events extracted: 9268 (disposition: 8388 elected, 505
+    returned, 375 unresolved at game end -- i.e. still sitting unelected
+    in hand when the log ends).
+  Wonder take-events extracted: 7225 (disposition: 6285 completed, 569
+    returned, 371 unresolved/still under construction at game end).
+  Outcome (won/lost) known for 8697 of 9268 leader takes (93.8%) and
+    6783 of 7225 wonder takes (93.9%) -- tracks the 94.6% game-level
+    WINNER-line coverage.
+  "Elected, outcome known" leader takes used for the win-rate tables:
+    7871. "Completed, outcome known" wonder takes used: 5893.
+
+====================================================================
+2. LEADER TAKES -- CONDITIONAL TABLE
+====================================================================
+
+IMPORTANT CONFOUND FOUND AND CORRECTED: baseline win rate is mechanically
+~50% in 2-player games, ~33% in 3-player, ~25% in 4-player games. The
+"how many leaders of this age has anyone already taken" ordinal also
+scales with player count (more players draw from the same 6-card pool
+faster), so an unstratified ordinal-vs-win-rate table showed a fake
+"declining value" trend that was pure player-count confound. All tables
+below are stratified by player count to remove it.
+
+-- SLOT STATE (empty vs. replacement) x outcome, by player count --
+(counts are "won of total", elected leader-takes with known outcome)
+
+  2 players: empty slot        1256 of 2690 won  (46.7%)
+             replacement slot  1010 of 1777 won  (56.8%)
+  3 players: empty slot         230 of  753 won  (30.5%)
+             replacement slot   165 of  428 won  (38.6%)
+  4 players: empty slot         367 of 1510 won  (24.3%)
+             replacement slot   208 of  713 won  (29.2%)
+
+  This is the strongest, most consistent pattern found: taking a leader
+  as a REPLACEMENT (you already held one) beats an EMPTY-slot take by
+  roughly +10 points of win rate at 2p, +8 at 3p, +5 at 4p -- same
+  direction in all three strata, all well above the 30-observation floor
+  (n from 428 to 2690). This is exactly the kind of slot-state
+  conditionality the hypothesis predicts, though it is also consistent
+  with a simpler "players who are still alive/competitive later in the
+  game get to replacement events at all" survivorship story -- the data
+  cannot separate those two causes.
+
+-- SCARCITY (nth distinct leader taken this age, out of the fixed pool of
+   6, i.e. depletion-ordinal) x outcome, by player count --
+
+  2 players: ordinal 1: 1257 of 2432 won (51.7%)
+             ordinal 2:  955 of 1937 won (49.3%)
+             ordinal 3:   52 of   96 won (54.2%)
+             ordinal 4:    2 of    2 won  [n<30, no conclusion]
+  3 players: ordinal 1: 161 of 446 won (36.1%)
+             ordinal 2: 129 of 440 won (29.3%)
+             ordinal 3:  99 of 280 won (35.4%)
+             ordinal 4:   6 of  15 won  [n<30, no conclusion]
+  4 players: ordinal 1: 159 of 621 won (25.6%)
+             ordinal 2: 163 of 624 won (26.1%)
+             ordinal 3: 163 of 584 won (27.9%)
+             ordinal 4:  87 of 376 won (23.1%)
+             ordinal 5:   3 of  18 won  [n<30, no conclusion]
+
+  FLAT once player count is controlled for. No stratum shows a
+  monotonic or material trend; values bounce within a few points of that
+  stratum's baseline win rate. Ordinal 6 (the true "last leader in the
+  age's pool") NEVER occurs in this entire 1011-game corpus for leaders
+  -- max observed is ordinal 5, only 18-21 times total. The "last one
+  left" scenario in the hypothesis is essentially unobserved at the
+  pool-exhaustion level; most games only ever see 1-2 of an age's 6
+  leaders claimed by anyone (see section 4).
+
+-- ROW-COST (civil/military actions paid to take, direct slot-position
+   proxy) x outcome, by player count --
+
+  2 players: cost 1: 1566 of 3089 won (50.7%)
+             cost 2:  535 of 1059 won (50.5%)
+             cost 3:  165 of  319 won (51.7%)
+  3 players: cost 1: 273 of 779 won (35.0%)
+             cost 2:  92 of 313 won (29.4%)
+             cost 3:  30 of  89 won (33.7%)
+  4 players: cost 1: 369 of 1458 won (25.3%)
+             cost 2: 153 of  569 won (26.9%)
+             cost 3:  53 of  196 won (27.0%)
+
+  FLAT. No material or consistent movement with the civil-action cost
+  paid, in any player-count stratum.
+
+-- CARRYOVER (leader taken in a later game-age than the leader's own
+   origin age, i.e. it survived past its "natural" age and is being
+   grabbed as a leftover) x outcome, by player count --
+
+  2 players: same-age  1605 of 3103 won (51.7%)
+             carryover  661 of 1364 won (48.5%)
+  3 players: same-age   301 of  868 won (34.7%)
+             carryover   94 of  313 won (30.0%)
+  4 players: same-age   425 of 1650 won (25.8%)
+             carryover  150 of  573 won (26.2%)
+
+  Small and direction-inconsistent (slightly negative at 2p/3p, flat at
+  4p) -- read as noise, not a real effect.
+
+VERDICT FOR LEADERS: the one variable with a real, consistent,
+well-powered signal is SLOT STATE (replacement beats empty-slot by
+5-10 points of win rate across all three player counts). Scarcity
+(depletion ordinal), row cost, and carryover are all flat.
+
+====================================================================
+3. WONDER TAKES -- CONDITIONAL TABLE
+====================================================================
+
+-- SLOT STATE (already building another wonder vs. slot empty) x
+   outcome, by player count -- (completed wonders, known outcome)
+
+  2 players: already_building 17 of  44 won (38.6%)
+             empty          1771 of 3389 won (52.2%)
+  3 players: already_building  4 of  12 won  [n<30, no conclusion]
+             empty            314 of 830 won (37.8%)
+  4 players: already_building  4 of  16 won  [n<30, no conclusion]
+             empty            473 of 1602 won (29.5%)
+
+  Taking on a second wonder while one is already under construction is
+  RARE (90 of 7225 wonder takes total, 1.2%) -- consistent with the
+  simple rule-of-thumb that TTA players finish one wonder before
+  starting the next. Only the 2-player bucket clears the 30-observation
+  floor, and even 44 is thin. Direction (already-building worse, -13.6
+  points) is the OPPOSITE of the leader replacement effect and is
+  suggestive at best -- flagged, not concluded.
+
+-- SCARCITY (nth distinct wonder taken this age, out of the fixed pool
+   of 4) x outcome, by player count --
+
+  2 players: ordinal 1: 1108 of 2133 won (51.9%)
+             ordinal 2:  621 of 1196 won (51.9%)
+             ordinal 3:   55 of   97 won (56.7%)
+             ordinal 4:    4 of    7 won  [n<30, no conclusion]
+  3 players: ordinal 1: 164 of 412 won (39.8%)
+             ordinal 2: 103 of 281 won (36.7%)
+             ordinal 3:  47 of 137 won (34.3%)
+             ordinal 4:   4 of  12 won  [n<30, no conclusion]
+  4 players: ordinal 1: 213 of 645 won (33.0%)
+             ordinal 2: 148 of 521 won (28.4%)
+             ordinal 3:  84 of 331 won (25.4%)
+             ordinal 4:  32 of 121 won (26.4%)
+
+  Unlike leaders, wonders show a real, well-powered, monotonic-ish
+  decline at 3 and 4 players: the FIRST wonder claimed from an age's
+  pool of 4 carries a win rate several points above that stratum's
+  baseline (39.8% at 3p vs. ~33% baseline; 33.0% at 4p vs. ~25%
+  baseline), and it fades toward baseline by the 3rd/4th wonder taken.
+  2-player games stay flat (~52% throughout, n adequate at ordinal 1-3).
+  This is the one place in the whole dataset where scarcity-ordinal
+  shows a real signal -- opposite of leaders, where it was flat.
+
+-- CARRYOVER x outcome, by player count --
+
+  2 players: same-age 1194 of 2289 won (52.2%)
+             carryover  594 of 1144 won (51.9%)
+  3 players: same-age  236 of  603 won (39.1%)
+             carryover   82 of  239 won (34.3%)
+  4 players: same-age  367 of 1218 won (30.1%)
+             carryover  110 of  400 won (27.5%)
+
+  Small, direction-consistent-but-weak (carryover slightly worse, 0-5
+  points) across strata -- borderline, not strong enough to call a real
+  effect on its own.
+
+VERDICT FOR WONDERS: scarcity-ordinal (being the 1st vs. later wonder
+claimed from an age) is the one variable with a real signal here,
+opposite of the leader result where ordinal was flat. Slot state
+(already-building) is suggestive but under-powered (only one stratum
+above n=30, and thin even there).
+
+====================================================================
+4. PASSES -- CARDS NEVER TAKEN BY ANYONE
+====================================================================
+
+Counted per (game, age) for the fixed pool of 6 leaders / 4 wonders per
+age, restricted to games whose max journal age tag reached that card's
+own age (this restriction turned out not to bind: every one of the 1011
+games in this corpus carries an "Age IV" end-of-game scoring tag
+regardless of how far actual card-drawing progressed, so all 1011 games
+are counted for every age -- see caveat in section 6).
+
+  Leader age A:   3619 of 6066 possible slots never taken (59.7%)
+  Leader age I:   4059 of 6066 possible slots never taken (66.9%)
+  Leader age II:  4286 of 6066 possible slots never taken (70.7%)
+  Leader age III: 4003 of 6066 possible slots never taken (66.0%)
+
+  Wonder age A:   1812 of 4044 possible slots never taken (44.8%)
+  Wonder age I:   2281 of 4044 possible slots never taken (56.4%)
+  Wonder age II:  2901 of 4044 possible slots never taken (71.7%)
+  Wonder age III: 2276 of 4044 possible slots never taken (56.3%)
+
+These are large majorities: most named leaders and wonders in this
+corpus are never claimed by anyone in a given game. This is consistent
+with (not proof of) the low depletion-ordinals seen in sections 2-3 --
+most age-pools only ever get 1-2 cards pulled out of 4-6 before the game
+moves on. It also means the "last one in the pool" scenario the
+hypothesis describes is rare almost by construction: with 60-70% of an
+age's cards going untouched, running the pool down to its last member is
+the exception, not the rule.
+
+I could NOT identify, per individual pass event, the row position or
+"how many turns before it disappeared" for cards that were passed on --
+see section 6.
+
+====================================================================
+5. VERDICT
+====================================================================
+
+MIXED, not flat, but the conditional structure that shows up is not the
+one the hypothesis leads with (row-scarcity / "last one left"):
+
+  - Leaders: value looks CONDITIONAL on SLOT STATE (replacement beats
+    empty-slot by 5-10 win-rate points, consistent across all three
+    player counts, well powered) but FLAT on scarcity-ordinal, row cost,
+    and carryover.
+
+  - Wonders: value looks CONDITIONAL on SCARCITY-ORDINAL (first wonder
+    of an age's pool beats later ones by several win-rate points at 3p
+    and 4p) but the slot-state (already-building) effect is only
+    suggestive (thin n) and carryover is weak/borderline.
+
+  - The "last card in the pool" extreme (ordinal 6/6 for leaders,
+    4/4 for wonders) is real but rare: leaders NEVER reach full
+    depletion in 1011 games; wonders reach it 162 times, of which only
+    162 total (not broken out by player count above n=30 threshold in
+    most strata) -- too thin to say anything about win rate specifically
+    at full depletion.
+
+So: one scalar per card type is a reasonable first-order approximation
+for ROW COST and CARRYOVER (both flat), but is NOT capturing whatever is
+driving the leader slot-state effect or the wonder ordinal effect -- two
+different, real, non-overlapping conditional signals, one per card type.
+Neither signal is the specific "last one visible in the row" scarcity
+story from the hypothesis; that scenario is too rare in real games to
+test directly with this corpus.
+
+====================================================================
+6. WHAT THE JOURNALS COULD NOT TELL YOU
+====================================================================
+
+  - TRUE ROW VISIBILITY / SCARCITY (item 2 of the brief) is not
+    recoverable. The journal never logs the contents of the card row at
+    a point in time -- only "X takes CARD" events. There is no "reveal"
+    or "row refill" line anywhere in the corpus (checked). The
+    depletion-ordinal used above (nth distinct card of that type/age
+    ever taken by ANYONE in the game) is a real but coarser proxy: it
+    tells you how much of the total age-pool has been claimed
+    game-wide, not how many were visible in the row at this specific
+    moment, nor whether this was "the last one visible" as opposed to
+    "the last one anyone ever bothered to take." These are genuinely
+    different quantities and I did not have a way to compute the first
+    from this log format.
+
+  - The "how far into the age" progress measure (item 3) could only be
+    approximated by the carryover flag (card's own age vs. the game's
+    current age tag at the moment of the take) -- this catches leftovers
+    that survived into a later age, but says nothing about position
+    within the origin age itself (e.g. "3rd of 20 rounds into Age I" vs.
+    "18th of 20"). The round number is present in the log but is a
+    game-wide round counter, not reset per age, so it doesn't map
+    cleanly onto "age progress" without also knowing when each age
+    started, which the log does mark (age column changes) -- this was
+    not computed due to time budget, and is the most promising
+    follow-up if this were extended.
+
+  - Game-level "final_age" in index.tsv turned out to be uniformly
+    "Age IV" for all 1011 rows -- it is not a usable per-game
+    granularity signal for "did this game actually cycle its Age III
+    card pool," because it reflects the terminal scoring tag, not actual
+    card-draw depth. The "passes" restriction in section 4 that was
+    meant to filter out structurally-unreachable ages therefore did not
+    filter anything; the pass counts there should be read as slightly
+    overstated for games that ended (conceded/short) before truly
+    exhausting an age's row, and I have no way to separate that from
+    genuine in-row passes with this data.
+
+  - 55 of 1011 games (5.4%) have no parseable end-of-game WINNER line
+    (early resignations/abandons) -- their leader/wonder takes are
+    counted in totals but excluded from every win/loss table.
+
+====================================================================
+Artifact written by an automated mining pass. Raw counts only; no
+weights or coefficients were fit or recommended, per instructions.
+====================================================================

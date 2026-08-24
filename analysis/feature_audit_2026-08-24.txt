@@ -3,6 +3,23 @@ THROUGH THE AGES -- LINEAR LEAF-EVALUATION FEATURE AUDIT (2026-08-24)
 
 HEADLINE: 160 WeightKeys classified -- RETIRE 56 (of which 37 are EXACT null: mean spread identically 0.0 across all 253,906 sampled decisions in all 3 player counts, 19 near-zero), CHANGE 5, KEEP 99.
 
+*** CORRECTION 2026-08-24: DO NOT ACT ON THE RETIRE LIST AS WRITTEN. ***
+31 of the 56 RETIRE keys are never written into the linear feature vector at
+all -- `eval::linear_features` leaves out[k] at 0.0 for them -- so their
+measured spread is exactly 0.0 BY CONSTRUCTION OF THE INSTRUMENT and says
+nothing about whether they influence a decision. They are pricing
+MULTIPLIERS, consumed via `w.get(k)` inside `cards.rs` / `row.rs` /
+`horizon.rs` helpers whose scalar result lands in a DIFFERENT coordinate
+(HandPotential, WonderPotential, HandMilPotential, RivalHandPotential,
+RowUrgency, RowBargainForgone, RowLastCopy, MyEventThreat).
+`linear_features` prices those helpers at the caller's FROZEN vector
+(eval.rs:669-680), but the real `evaluate` prices them at the LIVE `w`
+(eval.rs:332, 338, 370, 375, 393). So these weights DO change real move
+ranking, and retiring them would delete working pricing.
+The self-gating / `w_k^2` hypothesis that motivated this section is
+FALSIFIED: 0 of the 23 suspected keys are self-gated.
+See the per-key disposition appended at the end of this file.
+
 ========================================================================
 METHODOLOGY
 ========================================================================
@@ -609,3 +626,368 @@ LIMITATIONS / WHAT WAS NOT MEASURED
    (unit_workers). Other keys may share these shapes without a comment
    flagging them; a full audit of all 99 KEEP keys' feature definitions
    was out of scope for the tool-call budget here.
+
+================================================================
+PER-KEY DISPOSITION OF THE 56 RETIRE KEYS  (appended 2026-08-24)
+21 COORDINATE, 31 MULTIPLIER, 1 DEAD (free_civil_action), 3 UNCLEAR
+================================================================
+
+COUNTS: 21 COORDINATE, 31 MULTIPLIER, 1 DEAD, 3 UNCLEAR (of 56)
+
+All file paths below are relative to /Users/pt/tta-ai/rust/src/bots/weighted/ unless a
+full crate path is given. "Family landing coordinates" = {HandPotential, RivalHandPotential,
+RowUrgency, RowBargainForgone} — the four out[]/eval::evaluate gates that cards::card_potential
+(and everything it calls: sum_yields, tech_value, gov_value, action_value, tactic_value,
+aggression_value, war_hand_value, pact_value, event_prepare_value, redundancy_discount) and
+row::row_pressure ultimately feed. Checked in experiments/rust_champion_{2,3,4}p.json:
+HandPotential (9.29 / 0.30 / -0.99), RivalHandPotential (-1.38 / -2.53 / 6.19),
+RowUrgency (-0.157 / -0.092 / -0.244), RowBargainForgone (2.07 / 0.67 / 4.36) —
+ALL FOUR are nonzero in all three champions, so no key in the MULTIPLIER section below is
+inert via this particular outer gate. The one exception found (tactic_board_credit = 0.0 in
+the 4p champion only, nonzero in 2p/3p) is called out individually.
+
+================================================================================
+COORDINATE (21)
+================================================================================
+
+attack_cost_doubled -> AttackCostDoubled
+  Write: features.rs:604 `f.set(WeightKey::AttackCostDoubled, if doubles_attack_cost {1.0} else {0.0});`
+  Also read directly (not via w.get on the live board) in legal.rs:1939/1952 for a legality check.
+
+auction_committed -> AuctionCommitted
+  Write: features.rs:605 `f.set(WeightKey::AuctionCommitted, dc.auction_committed);`
+
+best_lab -> BestLab
+  Write: features.rs:613 `f.set(WeightKey::BestLab, f64::from(best.lab));`
+  Also mapped cards.rs:983 `F::BestLab => WeightKey::BestLab` (feature_key table, used for
+  card-marginal pricing of this same coordinate — doesn't change the bucket).
+
+best_mine -> BestMine
+  Write: features.rs:612 `f.set(WeightKey::BestMine, f64::from(best.mine));`
+  Also cards.rs:982 feature_key mapping (see best_lab note).
+
+best_theater -> BestTheater
+  Write: features.rs:615 `f.set(WeightKey::BestTheater, f64::from(best.theater));`
+  Also cards.rs:985 feature_key mapping.
+
+best_unit -> BestUnit
+  Write: features.rs:618 `f.set(WeightKey::BestUnit, f64::from(best_unit));`
+  Also cards.rs:988 feature_key mapping.
+
+colonies -> Colonies
+  Write: features.rs:581 `f.set(WeightKey::Colonies, p.colonies.len() as f64);`
+
+hand_limit -> HandLimit
+  Write: features.rs:679 `f.set(WeightKey::HandLimit, f64::from(s.civil_hand_limit + s.military_hand_limit));`
+  Note: card_yields (cards.rs:324-325) ALSO pushes CardYield triples tagged WeightKey::HandLimit
+  into a scratch buffer consumed by sum_yields, which does `w.get(key)` on that SAME key
+  (cards.rs:509) — i.e. hand_limit's own weight is read a second time, for card-marginal
+  pricing, landing in the family coordinates. Doesn't change the bucket (f.set already applies).
+
+has_colony -> HasColony
+  Write: features.rs:586 `f.set(WeightKey::HasColony, if p.colonies.is_empty() {0.0} else {1.0});`
+
+no_aggression -> NoAggression
+  Write: features.rs:688 `f.set(WeightKey::NoAggression, if s.no_aggression {1.0} else {0.0});`
+  Also cards.rs:966 feature_key mapping (card-marginal pricing of this coordinate).
+
+rival_building_wonder -> RivalBuildingWonder
+  Write: features.rs:747 `f.set(WeightKey::RivalBuildingWonder, rboard.rival_building_wonder);`
+
+rival_colonies -> RivalColonies
+  Write: features.rs:745 `f.set(WeightKey::RivalColonies, rboard.rival_colonies);`
+
+rival_culture_rate -> RivalCultureRate
+  Write: features.rs:723 `f.set(WeightKey::RivalCultureRate, rival_culture_rate);`
+
+rival_free_ca -> RivalFreeCa
+  Write: features.rs:726 `f.set(WeightKey::RivalFreeCa, f64::from(rival_free_ca));`
+
+rival_free_workers -> RivalFreeWorkers
+  Write: features.rs:743 `f.set(WeightKey::RivalFreeWorkers, rboard.rival_free_workers);`
+
+rival_mil_actions -> RivalMilActions
+  Write: features.rs:746 `f.set(WeightKey::RivalMilActions, rboard.rival_mil_actions);`
+
+rival_science_rate -> RivalScienceRate
+  Write: features.rs:724 `f.set(WeightKey::RivalScienceRate, rival_science_rate);`
+
+rival_strength -> RivalStrength
+  Write: features.rs:725 `f.set(WeightKey::RivalStrength, rival_str);`
+
+rival_wonders -> RivalWonders
+  Write: features.rs:728 `f.set(WeightKey::RivalWonders, rival_wonders as f64);`
+
+urban_limit -> UrbanLimit
+  Write: features.rs:685 `f.set(WeightKey::UrbanLimit, f64::from(s.urban_limit));`
+  Also cards.rs:961 feature_key mapping.
+
+war_immune -> WarImmune
+  Write: features.rs:594 `f.set(WeightKey::WarImmune, if s.war_immune {1.0} else {0.0});`
+  Also read directly in legal.rs:1894/1912 for a legality check.
+
+================================================================================
+MULTIPLIER (31)
+================================================================================
+All 31 below feed the family landing coordinates described above (via cards::card_potential /
+card_potential_core / sum_yields / tech_value / gov_value / action_value / tactic_value /
+row::row_pressure), none of which write their OWN WeightKey slot into the linear proxy. Unless
+noted, the outer gate check is "not inert" (family coordinates are nonzero in all 3 champions).
+
+action_board_credit -> ActionBoardCredit
+  Read: cards.rs:1822 `let ab = w.get(WeightKey::ActionBoardCredit);` inside card_potential_core's
+  `kind.is_action()` branch — `ab * action_value(...)` feeds `total`, landing in the family coords.
+
+aggression_board_credit -> AggressionBoardCredit
+  Read: cards.rs:1864 `let ac = w.get(WeightKey::AggressionBoardCredit);` (CardType::Aggression
+  branch of card_potential_core) -> family coords.
+
+bonus_card_credit -> BonusCardCredit
+  Read: cards.rs:521 and 1051, `YieldKind::Bonus => amt *= w.get(WeightKey::BonusCardCredit)`
+  inside sum_yields/gains_only_sum -> total -> card_potential -> family coords.
+
+build_fresh_credit -> BuildFreshCredit
+  Read: cards.rs:1208 `let build_credit = w.get(WeightKey::BuildFreshCredit);` inside tech_value's
+  "build one fresh worker" alternative plan -> tech_value -> card_potential_core -> family coords.
+
+card_board_bonus -> CardBoardBonus
+  Read: cards.rs:1890 `w.get(k)` where `k` comes from `board_credit_key(id)` returning
+  `Some(WeightKey::CardBoardBonus)` for CardType::Bonus (cards.rs:555) -> credit_board ->
+  card_potential_core's generic swap-diff path -> family coords.
+
+card_board_credit -> CardBoardCredit
+  Read: cards.rs:1887 `let base = w.get(WeightKey::CardBoardCredit);` and cards.rs:2167 -> base/
+  credit_board -> card_potential_core -> family coords.
+
+card_board_leader -> CardBoardLeader
+  Read: cards.rs:1954 `w.get(key)` where key = `board_credit_key(id)` = `Some(WeightKey::
+  CardBoardLeader)` for CardType::Leader (cards.rs:554) -> same swap-diff path -> family coords.
+
+card_rate_credit -> CardRateCredit
+  Read: cards.rs:1886/2166 `let credit = w.get(WeightKey::CardRateCredit);` -> passed as the
+  `credit` argument of sum_yields (scales YieldKind::Rate triples) -> family coords.
+
+culture_rate_trailing -> CultureRateTrailing
+  NOT caught by a literal `WeightKey::CultureRateTrailing` grep (zero hits outside
+  weights.rs/registry.rs). Real read is generic, via the `.trailing()` indirection:
+  rivals.rs:922 `let hinge = w.get(key.trailing());` inside `feature_marginal`, reached when
+  `key == WeightKey::CultureRate` (a STANDING_KEYS member, weights.rs). `key.trailing()` resolves
+  to CultureRateTrailing at runtime. The hinge scales `trailing_fraction` (rivals.rs:864-892,
+  "how far behind the best rival's culture rate am I") and is added into the CultureRate marginal
+  used by card-pricing call sites (e.g. cards.rs:1200/1214 `rivals::feature_marginal(feature_key
+  (feat),...)` inside tech_value) -> family coords. Champion values are all nonzero
+  (-0.26 / 0.016 / -0.035), so this is live, not inert.
+
+defense_bonus -> DefenseBonus
+  Pushed cards.rs:363 `push(out, WeightKey::DefenseBonus, eff.defense_bonus as i32 - 1,
+  YieldKind::Bonus)` into a CardYield scratch buffer; sum_yields (cards.rs:509)
+  `let mut wk = w.get(key);` reads DefenseBonus's OWN weight for that triple (distinct from the
+  YieldKind::Bonus multiplier BonusCardCredit, which additionally scales `amt`) -> total ->
+  card_potential -> family coords.
+
+event_board_credit -> EventBoardCredit
+  Read: cards.rs:1879 `let ec = w.get(WeightKey::EventBoardCredit);` (CardType::Event branch) ->
+  family coords.
+
+free_action_credit -> FreeActionCredit
+  Read: cards.rs:1167 `let fc = w.get(WeightKey::FreeActionCredit);` inside action_value's
+  Special::FreeCivilAction branch -> `fc * rivals::feature_marginal(CivilActions,...)` -> total ->
+  family coords. (Only reachable when ActionBoardCredit != 0, itself live in 2p/3p/4p.)
+
+gov_action_cost -> GovActionCost
+  NOT caught by a literal `WeightKey::GovActionCost` grep beyond one feature_key mapping line.
+  Real path: bots/board_yields.rs:506 `out.push((Feature::GovActionCost, -(burned as f64),
+  Kind::Gain));` (a static government-valuation triple), mapped cards.rs:970 `F::GovActionCost =>
+  WeightKey::GovActionCost`, then priced generically through `rivals::feature_marginal`/
+  `yield_marginal(feature_key(feat),...)` inside gov_value -> `w.get(WeightKey::GovActionCost)`
+  happens inside feature_marginal's generic `let mut m = w.get(key);` (rivals.rs:909) -> gov_value
+  -> card_potential_core's `kind.is_government()` branch (gated by GovBoardCredit) -> family
+  coords. registry.rs:357-366's own comment confirms: "a real reader exists ... it is just
+  multiplied by a weight nobody has climbed off its 0.0 default yet" — that comment appears
+  stale: the current champions have gov_action_cost = -0.85 / -0.36 / -0.96, all nonzero.
+
+gov_board_credit -> GovBoardCredit
+  Read: cards.rs:1817 `let gb = w.get(WeightKey::GovBoardCredit);` and cards.rs:1957 -> family
+  coords.
+
+hand_swap_extra -> HandSwapExtra
+  Read: cards.rs:2021 `let extra = w.get(WeightKey::HandSwapExtra);` inside hand_total's
+  single-slot collapse -> HandPotential. ALSO row.rs:422 `let extra = w.get(WeightKey::
+  HandSwapExtra);` inside row_pressure's doomed-slot collapse -> RowUrgency. Two distinct landing
+  coordinates for the same key.
+
+pact_board_credit -> PactBoardCredit
+  Read: cards.rs:1874 `let pc = w.get(WeightKey::PactBoardCredit);` (CardType::Pact branch) ->
+  family coords.
+
+rate_horizon -> RateHorizon
+  Read: horizon.rs:441 `let c = weights.get(WeightKey::RateHorizon);` inside `rate_multiplier`.
+  UNLIKE the rest of this section, the resulting scalar `hz` does not land in one different
+  coordinate — it multiplies EVERY WeightKey in horizon::RATE_KEYS, both in eval::evaluate
+  (eval.rs:303-304, `let scale = if hz != 1.0 && RATE_KEYS.contains(&k) {hz} else {1.0}`) and in
+  linear_features (eval.rs:614-618/618). Self-gated: `if c == 0.0 { return 1.0; }`. Champion
+  values 0.80 / 0.39 / 0.07 — all nonzero, not inert.
+
+restricted_resource_credit -> RestrictedResourceCredit
+  Read: cards.rs:674 `RestrictedCredit::Weight(k) => w.get(k)` where `k` =
+  WeightKey::RestrictedResourceCredit, reached via `restricted_to_feature(WeightKey::
+  RestrictedResources)` (cards.rs:639-641) inside `yield_marginal`. Scales the ResourceStock
+  marginal for a "restricted resources" printed effect -> family coords. (Distinct from
+  RestrictedResources itself — see UNCLEAR.)
+
+rival_desire -> RivalDesire
+  Read: row.rs:323 `let desire = w.get(WeightKey::RivalDesire).clamp(0.0, 1.0);` inside
+  row_pressure, used only in the `bargain` accumulator (row.rs:394-420, the rival-competition
+  `compete`/`eff` blend) -> lands specifically in RowBargainForgone (not RowUrgency).
+
+rival_take_share -> RivalTakeShare
+  Read: row.rs:322 `let share = w.get(WeightKey::RivalTakeShare);` inside row_pressure, fed into
+  `rival_take_p(cost, gate.have, compete, view.hand_slack, share)` (row.rs:418) which scales
+  `survive`, multiplying into `bargain` (row.rs:420) -> lands specifically in RowBargainForgone.
+
+science_rate_trailing -> ScienceRateTrailing
+  Same `.trailing()` indirection as culture_rate_trailing: rivals.rs:922, reached when `key ==
+  WeightKey::ScienceRate` (the other STANDING_KEYS member). Champion values 20.5 / 0.36 / -0.80,
+  all nonzero -> live, feeds family coords via card-pricing marginal calls.
+
+tactic_board_credit -> TacticBoardCredit
+  Read: cards.rs:1859 `let tc = w.get(WeightKey::TacticBoardCredit);` (CardType::Tactic branch) ->
+  family coords. Champion values: 2p=0.0634, 3p=0.0441, 4p=0.0 exactly. This is the ONE case in
+  this file where an outer gate is 0.0 in one (not all three) champions: in the 4p champion,
+  tactic_value() is never reached through this branch at all.
+
+tactic_reach_credit -> TacticReachCredit
+  Read: cards.rs:1357 `let reach_credit = w.get(WeightKey::TacticReachCredit);` inside
+  tactic_value's not-yet-formable branch -> tactic_value -> gated by TacticBoardCredit (see
+  above: live in 2p/3p, exactly 0.0 in 4p) -> family coords when reached.
+
+tactic_shortfall_cost -> TacticShortfallCost
+  Read: cards.rs:1321 `let shortfall_w = w.get(WeightKey::TacticShortfallCost);` inside
+  tactic_value's already-formable branch -> same TacticBoardCredit gating as tactic_reach_credit.
+
+tech_board_credit -> TechBoardCredit
+  Read: cards.rs:1808 `let tb = w.get(WeightKey::TechBoardCredit);` -> gates both the
+  `kind.is_unit()` (via UnitTechCredit) and generic levelled-type branches of card_potential_core
+  -> family coords.
+
+tech_redundancy_discount -> TechRedundancyDiscount
+  Read: cards.rs:1744 `let discount = w.get(WeightKey::TechRedundancyDiscount);` inside
+  `redundancy_discount`, subtracted from card_potential's `base` (cards.rs:1795 `base -
+  redundancy_discount(...)`) -> family coords.
+
+territory_credit -> TerritoryCredit
+  Read: cards.rs:520/1050 `YieldKind::Territory => amt *= w.get(WeightKey::TerritoryCredit)`
+  inside sum_yields -> family coords.
+
+unit_strength_credit -> UnitStrengthCredit
+  Read: cards.rs:519/1049 `YieldKind::Unit => amt *= w.get(WeightKey::UnitStrengthCredit)` inside
+  sum_yields -> family coords.
+
+unit_tech_credit -> UnitTechCredit
+  Read: cards.rs:1810 `let uc = w.get(WeightKey::UnitTechCredit);` gates the `kind.is_unit()`
+  branch of card_potential_core (`uc * tech_value(...)`) -> family coords.
+
+war_board_credit -> WarBoardCredit
+  Read: cards.rs:1869 `let wac = w.get(WeightKey::WarBoardCredit);` (CardType::War branch) ->
+  family coords.
+
+wonder_board_credit -> WonderBoardCredit
+  Read: cards.rs:1850 `let wb = w.get(WeightKey::WonderBoardCredit);` (CardType::Wonder branch) ->
+  family coords.
+
+================================================================================
+DEAD (1)
+================================================================================
+
+free_civil_action -> FreeCivilAction
+  Never written into the feature vector (no f.set, no linear_features out[] entry).
+  Never read via w.get(WeightKey::FreeCivilAction) anywhere in rust/src. `card_yields` used to
+  push it (cards.rs comment at line 393-403) but was deliberately stopped: cards.rs:392-403's
+  comment states pricing moved entirely to `free_action_credit`/`action_value`, and
+  cards.rs:2746's documentation-table entry calls it explicitly "a documented-dead coordinate in
+  card_yields". The only remaining non-plumbing reference (cards.rs:3384) is inside
+  `#[cfg(test)] fn card_yields_never_reprices_the_action_boards_ring_fenced_coordinates`, a
+  tripwire test asserting card_yields NEVER prices it again — a test reference, does not count
+  per the task's rules. See SAFE TO DELETE below for the full reference list.
+
+================================================================================
+UNCLEAR (3)
+================================================================================
+
+resource_discount -> ResourceDiscount
+  Does not fit A/B/C cleanly. The enum variant IS used as a routing tag in real, non-test,
+  non-plumbing production code: `add(WeightKey::ResourceDiscount, eff.resource_discount)`
+  (cards.rs:1140, inside action_value) pushes a triple tagged with this key, and
+  `restricted_to_feature` (cards.rs:636-644) matches on `WeightKey::ResourceDiscount` (cards.rs:
+  638) to reroute pricing to `WeightKey::ResourceStock`'s own marginal at a HARDCODED credit of
+  `RestrictedCredit::Fixed(1.0)` — a compile-time constant, not `w.get(WeightKey::
+  ResourceDiscount)`. Exhaustive grep across rust/src confirms `w.get(WeightKey::
+  ResourceDiscount)` is called NOWHERE (the only other hits are cards.rs:994's feature_key
+  mapping — actually that's RestrictedResources, see below — and test asserts at cards.rs:2557/
+  2577, plus the test-only exclusion list at cards.rs:3384). The doc comment at cards.rs:614-623
+  states outright: "resource_discount/restricted_resources are not live evaluate coordinates
+  (features() emits neither), so no game the league plays can put a gradient on them directly."
+  So: the WEIGHT VALUE stored under WeightKey::ResourceDiscount can never affect real play (it is
+  never consulted) — closer to DEAD in effect — but the ENUM VARIANT is genuinely load-bearing in
+  real dispatch code (cards.rs:638, 1140), not just enum plumbing/tests, so it fails DEAD's "never
+  read anywhere outside enum plumbing" test on a technicality: the variant IS read (pattern-
+  matched) in cards.rs, just never through w.get(). Not forcing this into either bucket.
+
+restricted_resources -> RestrictedResources
+  Same shape as resource_discount, one level removed. `add(WeightKey::RestrictedResources,
+  eff.resources_for_military_units)` (cards.rs:1141) and the feature_key mapping cards.rs:994
+  `F::RestrictedResources => WeightKey::RestrictedResources` tag triples with this key;
+  `restricted_to_feature` (cards.rs:639-641) matches `WeightKey::RestrictedResources` and reroutes
+  to `WeightKey::ResourceStock`'s marginal scaled by `RestrictedCredit::Weight(WeightKey::
+  RestrictedResourceCredit)` — i.e. the credit read is `w.get(RestrictedResourceCredit)`, a
+  DIFFERENT key, never `w.get(WeightKey::RestrictedResources)` itself. Exhaustive grep confirms no
+  `w.get(WeightKey::RestrictedResources)` call exists anywhere outside tests (cards.rs:2566/2569/
+  2579) and the test-only exclusion list (cards.rs:3384). Same verdict as resource_discount: the
+  weight's own numeric value is never consulted, but the variant is a real production dispatch
+  key, not pure plumbing.
+
+wonder_promise -> WonderPromise
+  Read directly inside eval::evaluate itself — eval.rs:344-346 `let wpr = w.get(WeightKey::
+  WonderPromise); if wpr != 0.0 { total += wpr * cards::wonder_promise(state, idx, w); }` — a
+  real, live, non-plumbing read (champion values 0.76 / 0.60 / 2.01, all nonzero, and this is
+  exactly the same code shape as HandPotential/WonderPotential/RivalHandPotential/RowUrgency/
+  RowBargainForgone/RowLastCopy/MyEventThreat, all of which the audit correctly leaves un-RETIREd).
+  BUT unlike every one of those siblings, WonderPromise has NO corresponding entry in
+  eval.rs::linear_features's `out[]` assignments (eval.rs:604-683 read in full; the ten
+  "identity-aware, freeze-priced gates" comment at eval.rs:667 lists HandPotential,
+  WonderPotential, HandMilPotential, TacticGain, TacticShort, RivalHandPotential, RowUrgency,
+  RowBargainForgone, RowLastCopy, MyEventThreat — nine of "ten" named gates in that comment, and
+  WonderPromise is conspicuously absent from both the comment's count-of-ten and the actual code).
+  The only other WonderPromise mention in eval.rs is line 846, inside the `DOMINATES` table for
+  `dominance_repair` — explicitly excluded by the task's rules (sanity-checks a WEIGHT vector, not
+  a feature vector). So: WonderPromise's read does not happen "inside a helper in cards.rs/row.rs/
+  horizon.rs/events.rs" (case B's stated location) — it happens directly in eval.rs's own
+  `evaluate` function — and its result does not land in "a different coordinate" (case B's stated
+  landing) — it adds straight into the final scalar `total`, with no out[] slot in the linear
+  proxy at all, for any key. Operationally it behaves exactly like a MULTIPLIER with spread 0.0 by
+  construction (confirmed: audit shows 0,0,1.0000 spread for all of 2p/3p/4p) and a live nonzero
+  effect on real move ranking, but its precise mechanism doesn't match either A or B's wording, so
+  it is reported here rather than forced into B. Worth a second look: this may simply be a missing
+  `out[WeightKey::WonderPromise as usize] = cards::wonder_promise(state, idx, freeze);` line in
+  linear_features (eval.rs, right after line 670's WonderPotential line) — but confirming that is
+  a design question, not this audit's job.
+
+================================================================================
+SAFE TO DELETE (DEAD keys only, reference sites for a later mechanical deletion)
+================================================================================
+
+free_civil_action -> FreeCivilAction:
+  rust/src/bots/weighted/weights.rs:213     (enum variant declaration)
+  rust/src/bots/weighted/weights.rs:691     (weight_key_table! entry, name + 0.0 default)
+  rust/src/bots/weighted/weights.rs:864     (early() panic fallback arm, plumbing)
+  rust/src/bots/weighted/weights.rs:881     (late() panic fallback arm, plumbing)
+  rust/src/bots/weighted/weights.rs:907     (trailing() panic fallback arm, plumbing)
+  rust/src/bots/weighted/weights.rs:997     (group() match arm, plumbing)
+  rust/src/bots/weighted/weights.rs:1069    (sign_intent() match arm, plumbing)
+  rust/src/bots/weighted/weights.rs:1094-1101 (sign_intent() explanatory comment, plumbing)
+  rust/src/bots/weighted/weights.rs:1968    (test doc comment, #[cfg(test)])
+  rust/src/bots/weighted/weights.rs:1977    (test assertion, #[cfg(test)])
+  rust/src/bots/weighted/registry.rs:363    (NOT_SET_BY_FEATURES documentation table entry)
+  rust/src/bots/weighted/cards.rs:392-403   (comment explaining why nothing pushes it anymore)
+  rust/src/bots/weighted/cards.rs:2746      (documentation-table string entry, non-functional)
+  rust/src/bots/weighted/cards.rs:3384      (test assertion inside #[cfg(test)] tripwire test)

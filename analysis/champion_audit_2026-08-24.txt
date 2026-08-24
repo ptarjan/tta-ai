@@ -1,0 +1,156 @@
+COPY TIMESTAMP (UTC, when the three champion JSONs were frozen for this audit): 2026-08-24T11:09:10Z
+Assumption: 'non-trivial magnitude' in Section 3 = |value| >= 1.0. Clamp-pinning tolerance = within 1.0 of +/-60. Near-zero tolerance = within 0.05 of 0.0.
+
+====================================================================================================
+THROUGH THE AGES CHAMPION WEIGHT AUDIT
+Frozen from live files at copy timestamp (see COPY_TIMESTAMP.txt): see file
+Source champion files: rust_champion_2p.json / _3p.json / _4p.json
+weights.rs sign_intent() parsed: 160 keys classified
+Total distinct keys observed across all 3 champion files: 160
+  2p: 160 keys present in JSON
+  3p: 160 keys present in JSON
+  4p: 160 keys present in JSON
+====================================================================================================
+
+### SECTION 1: CLAMP PINNING (within 1.0 of +/-60) ###
+-- 2p: 0 pinned --
+-- 3p: 7 pinned --
+    attack_cost_doubled = 60
+    attack_target_weakness = 60
+    blue_free = 60
+    culture_rate = 60
+    food_stock = 60
+    resource_stock = 60
+    workers_late = 60
+-- 4p: 2 pinned --
+    best_library = 60
+    unit_workers = -60
+
+### SECTION 2: NEAR-ZERO (within 0.05 of 0.0) ###
+-- 2p: 36 near-zero --
+    aggression_board_credit = 0.01622863170760884
+    best_arena = -0.000701521754058132
+    best_temple = 0.0018894184774679648
+    build_discount = 0
+    build_fresh_credit = 0.0022355952559737595
+    civil_action_gap = -0.0465737600928977
+    civil_action_surplus = 0.016055850416308748
+    culture_gap = -0.0032382358710171108
+    food_stock = -0.017654847886645095
+    free_action_credit = 0
+    hand_military = 0.01658048208310879
+    hand_perishable = -0.03977672127450267
+    hand_swap_extra = -0.02878066086246478
+    hand_value = 0
+    hand_value_late = 0.005492046052703788
+    has_unit = -0.038839530894185084
+    military_actions = 0.02920871096489141
+    no_aggression = 0
+    pact_board_credit = 0
+    restricted_resource_credit = 0
+    rival_building_wonder = 0.0319660977112079
+    rival_desire = 0.0019759720583030008
+    rival_free_workers = 0.027346055271790643
+    rival_take_share = -0.02375083692537288
+    science_rate = -0.036592585860470844
+    strength_rel_late = -0.014120111333416445
+    tactic_shortfall_cost = 0.014249988634890886
+    tech_levels = 0.0206912542054445
+    unit_strength_credit = 0.034611886884928215
+    unit_tech_credit = -0.04552060514801143
+    unit_workers = -0.03629009910479067
+    war_immune = 0.03041281009378291
+    wonder_board_credit = 0.010041796092078413
+    wonder_remaining = 0
+    wonder_turns_to_finish = -0.01953537439904427
+    wonders = 0.006501405124353909
+-- 3p: 25 near-zero --
+    best_library = -0.04494137833595994
+    card_board_bonus = 0.032692936080023625
+    civil_action_surplus = 0.031020611344821928
+    civil_actions = 0.019343484280658928
+    colonize_bonus = 0
+    culture_rate_trailing = 0.015629108635507226
+    defense_bonus = 0.010563360739196769
+    discontent = 0
+    free_civil_action = 0
+    hand_civil = -0.033230894753999374
+    hand_limit = 0
+    hand_value = 0.002321164054315358
+    hand_value_late = 0
+    leader = -0.0006116233230168931
+    military_action_surplus = 0.009646590918860484
+    no_aggression = -0.008593336553852958
+    rival_wonders = 0.0494372121344517
+    tactic_board_credit = 0.04405103740304782
+    tactic_gain = 0.029587259606345784
+    tactic_reach_credit = -0.024233871635507026
+    tactic_short = -0.029403806090091363
+    territory_credit = -0.030147477317211444
+    urban_limit = 0.03655632825703309
+    war_immune = 0
+    wonder_age_overrun = -0.013274462173063137
+-- 4p: 18 near-zero --
+    action_board_credit = 0.0070187381166088875
+    civil_actions = 0.007424566800618128
+    culture_rate_trailing = -0.03473621272699785
+    food_gap = -0.037587431900199905
+    free_action_credit = 0
+    gov_board_credit = -0.02132382340058656
+    hand_limit = 0.015889187354171254
+    my_seeded_pending = 0.0030731436693655894
+    pop_cost = 0
+    resource_stock = 0.02848628951116719
+    restricted_resource_credit = 0
+    tactic_board_credit = 0
+    tactic_short = -0.015340937734642145
+    tactic_shortfall_cost = 0
+    unit_strength_credit = 0.02334877866169817
+    uprising = 0
+    wonder_age_overrun = -0.01706751624303747
+    yellow_bank = 0.024632882821968665
+
+### SECTION 3: AGREEMENT ACROSS PLAYER COUNTS ###
+-- (a) AGREE in sign, all non-trivial (|v|>=1.0): 13 keys --
+    workers_late: 2p=50.51808148990601 3p=60 4p=52.42086470453326
+    culture_rate: 2p=37.50108212930398 3p=60 4p=56.85229724706134
+    event_scoring_margin: 2p=34.97942046743033 3p=46.57441832394443 4p=27.861362423427813
+    strength: 2p=11.1517557496851 3p=56.9061470247489 4p=55.90120835390151
+    attack_target_weakness: 2p=9.212712456314767 3p=60 4p=7.094951495831161
+    end_turn_bias: 2p=-15.41190698339129 3p=-5.499853114492407 4p=-35.11405618299217
+    workers: 2p=2.9140258089729767 3p=19.192232583655596 4p=55.285881274085156
+    rival_colonies: 2p=-5.055265111871249 3p=-19.664685325774492 4p=-2.8200489289064263
+    wonder_potential: 2p=2.1441227221758563 3p=2.333967411834124 4p=7.305249781204885
+    pact_blocks_attack: 2p=2.2406947692267383 3p=3.1912360844348977 4p=1.7152531106431934
+    worker_gap: 2p=-3.6721402923355595 3p=-2.138658430274594 4p=-1.4005315461746934
+    auction_bid: 2p=33.24701460261167 3p=1.0329117328498372 4p=1.4964170698297814
+    culture: 2p=1 3p=1 4p=1
+
+-- (b) DISAGREE in sign, all non-trivial (|v|>=1.0): 2 keys --
+    strength_rel_early: 2p=-10.446955753300536 3p=-3.1756297468647805 4p=9.179931978974592
+    rival_hand_potential: 2p=-1.2878306013295338 3p=-2.0439621124581575 4p=6.185695253334902
+
+### SECTION 4: SIGN_INTENT CROSS-CHECK ###
+sign_intent() key counts: NonNegative=28  NonPositive=19  Free=113  (total 160)
+
+VIOLATIONS FOUND: 0 -- no champion coefficient violates its declared sign_intent in any of the 2p/3p/4p files.
+
+Keys present in champion JSON but NOT matched in parsed sign_intent() table: 0
+
+### SECTION 5: THE FREE MAJORITY (Free keys with |2p value| > 10) ###
+Free keys total: 113. Of these, 12 have |2p value| > 10:
+    workers_late = 50.51808148990601
+    culture_rate = 37.50108212930398
+    event_scoring_margin = 34.97942046743033
+    auction_bid = 33.24701460261167
+    my_event_threat = 25.388658710573267
+    has_colony = 25.245911903693784
+    science_rate_trailing = 18.977920338783083
+    leader = 17.48949909194248
+    end_turn_bias = -15.41190698339129
+    rival_culture = 11.482679711905595
+    strength = 11.1517557496851
+    strength_rel_early = -10.446955753300536
+
+====================================================================================================
+END OF AUDIT
