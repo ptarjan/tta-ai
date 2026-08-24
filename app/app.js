@@ -17,7 +17,14 @@ const Engine = {
   async init() {
     try {
       if (typeof WebAssembly === 'undefined') throw new Error('no WebAssembly');
-      const resp = await fetch(WASM_URL);
+      // `cache: 'reload'` because the weights are baked into this binary at
+      // compile time: a rebuilt wasm is a different bot, and a browser holding
+      // the old one keeps playing the old bot with no visible sign of it. An
+      // iPad kept a stale engine for a day this way, giving demonstrably worse
+      // advice than the one that had been shipped to replace it. The file is a
+      // megabyte on the LAN and only fetched at boot, so the revalidation is
+      // cheaper than the confusion.
+      const resp = await fetch(WASM_URL, { cache: 'reload' });
       if (!resp.ok) throw new Error('tta.wasm not found (' + resp.status + ')');
       // instantiateStreaming rejects anything not served as application/wasm,
       // which most trivial static servers get wrong. Compiling the buffer is
