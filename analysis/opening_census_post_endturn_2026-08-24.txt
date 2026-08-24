@@ -1,0 +1,155 @@
+THROUGH THE AGES -- OPENING (AGE A / ROUNDS 1-3) RE-CENSUS AFTER THE 1-PLY SEARCH FIX
+Read-only measurement. No code, no weights, no git commands were touched.
+Date: 2026-08-24
+
+============================================================
+BINARY / WEIGHTS PROVENANCE
+============================================================
+Binary under test:
+  /Users/pt/tta-ai/rust/target/release/behavcensus
+  mtime: Aug 24 14:03 (this run started ~14:09, i.e. 6 minutes after the rebuild
+  that shipped the WeightedBot::choose EndTurn-in-trial-clone fix)
+
+Frozen weights used (NOT the live experiments/rust_champion_*.json, which three
+running climb arms are rewriting concurrently):
+  /private/tmp/opencensus/champ2p.json  (gen 108239, players=2) -- same file used
+    by the pre-fix census, copied there at 13:03 on 2026-08-24, untouched since.
+  /private/tmp/opencensus/champ4p.json  (gen 19761, players=4) -- same file/gen
+    used by the pre-fix census.
+
+Pre-fix reference report (read, not re-run):
+  /Users/pt/tta-ai/analysis/opening_census_2026-08-24.txt
+
+============================================================
+COMMANDS RUN (from /private/tmp)
+============================================================
+/Users/pt/tta-ai/rust/target/release/behavcensus \
+  --weights /private/tmp/opencensus/champ2p.json --games 150 --players 2 \
+  --seed 100 --threads 2 > /private/tmp/recensus_2p.txt
+  -> seeds 100..249, 150 games, 300 player-games, 20.9s
+
+/Users/pt/tta-ai/rust/target/release/behavcensus \
+  --weights /private/tmp/opencensus/champ4p.json --games 100 --players 4 \
+  --seed 100 --threads 2 > /private/tmp/recensus_4p.txt
+  -> seeds 100..199, 100 games, 400 player-games, 46.2s
+
+Seed (100) and game count (150 @ 2p, 100 @ 4p) are identical to the prior
+census's full-scale runs (step 4 of the prior report's command log), so this
+is a paired comparison, not a fresh random sample. Threads left at 2 to match
+the prior run exactly and stay under the "4 or lower" ceiling given three
+climb arms are also on this machine.
+
+============================================================
+SANITY CHECK FIRST -- IS THIS REALLY THE FIXED BINARY?
+============================================================
+Q3 answer (civil actions left unused, rounds 1-3, 2p):
+  PRE-FIX:  84/300 = 28.0% of player-games left >=1 CA unspent (report's Q1
+            table; the task's "27%" is the same fact rounded looser)
+  POST-FIX: "Civil actions left unused across rounds 1-3 (count -> player-games):
+            0->299 1->1" -> 1/300 = 0.33%
+
+This lands on the task's expected ~0.33% almost exactly (1/300 = 0.333...%),
+not anywhere near the stale 27-28% pre-fix number. CONFIRMED: this is the
+fixed binary, not a stale one. Proceeding with the rest of the report.
+
+4p, same metric (not requested as a sanity gate, reported for completeness):
+  PRE-FIX:  38/400 = 9.5%
+  POST-FIX: 0->365 1->32 2->3 -> 35/400 = 8.75%
+  Barely moved, unlike the 2p collapse. Reported as-is, no explanation offered.
+
+============================================================
+Q1 -- FIRST AGE-A TAKE, CARD IDENTITY, 2P
+============================================================
+PRE-FIX (n=300): Cultural Heritage (A) 19.7% (59/300), win-rate 42.4%,
+  vs human 0.8% (11/1384).
+
+POST-FIX (n=300) full distribution, "First card taken by round 3":
+  Cultural Heritage (A) : 61 (20.3%)  win-rate 49.2% (30/61)
+  Julius Caesar         : 50 (16.7%)  win-rate 54.0% (27/50)
+  Alexander the Great    : 48 (16.0%)  win-rate 56.2% (27/48)
+  Hammurabi              : 22 (7.3%)   win-rate 59.1% (13/22)
+  Engineering Genius (A) : 21 (7.0%)   win-rate 57.1% (12/21)
+  Stock Pile              : 16 (5.3%)   win-rate 56.2% (9/16)
+  Urban Growth (A)        : 16 (5.3%)   win-rate 50.0% (8/16)
+  Moses                   : 15 (5.0%)   win-rate 26.7% (4/15)
+  Rich Land (A)           : 13 (4.3%)   win-rate 30.8% (4/13)
+  Library of Alexandria   : 12 (4.0%)   win-rate 50.0% (6/12)
+  Aristotle                : 10 (3.3%)   win-rate 30.0% (3/10)
+  Homer                    : 9 (3.0%)    win-rate 55.6% (5/9)
+  Hanging Gardens          : 6 (2.0%)    win-rate 33.3% (2/6)
+  Patriotism (A)           : 1 (0.3%)    win-rate 0.0% (0/1)
+  (sums to 300)
+
+VERDICT: Cultural Heritage (A) DID NOT MOVE in frequency or rank -- it is
+still the single most-picked first take (19.7%->20.3%, statistically flat,
+still ~25x the human 0.8% rate, still the top-ranked or #2-ranked card
+before and after). What DID move is its win-rate: 42.4% -> 49.2%, up ~7pp,
+now close to the field baseline (~50%, since 2p self-play win-rate is
+symmetric by construction). So: same overpick, no longer a losing overpick.
+
+============================================================
+Q2 -- WONDER START TIMING, 2P
+============================================================
+`behavcensus` emits this metric verbatim (no substitution needed):
+  "Player-games with NO wonder step by end of round 4"
+
+PRE-FIX:  198/300 = 66.0% (2p)   vs   89/400 = 22.2% (4p)
+POST-FIX: 256/300 = 85.3% (2p)   vs   88/400 = 22.0% (4p)
+
+VERDICT: at 2p this got WORSE, not better -- 66.0% to 85.3% of player-games
+now have zero wonder-stage progress by round 4, a further ~19pp increase.
+4p is unchanged (22.2% -> 22.0%, flat). The 2p/4p gap widened rather than
+closed. Also moved: median round of first wonder-stage build among games
+that ever build one, 2p: 5 -> 6 (mean 5.79); 4p: 4 -> ~4 (mean 3.83, roughly
+flat, min/p25 now 3).
+
+============================================================
+Q3 -- CIVIL ACTIONS LEFT UNUSED, ROUNDS 1-3, 2P
+============================================================
+See "SANITY CHECK" section above for full detail and 4p comparison.
+PRE-FIX:  84/300 = 28.0%  (report's Q1; task's rounded figure: "27%")
+POST-FIX: 1/300  = 0.33%
+Human rate (2p corpus, unchanged, not re-measured): 11/1384 = 0.8%
+The bot now wastes CA in the opener LESS OFTEN than humans do (0.33% vs
+0.8%), a full reversal from the pre-fix 35x-worse-than-human state.
+
+============================================================
+OTHER MOVEMENTS OF NOTE, 2P (movement only, not evaluated as good/bad)
+============================================================
+- No build/develop/upgrade at all by round 3: 2.0% -> 0.0% (0/300; every
+  player-game now makes some build/develop/upgrade move in rounds 1-3).
+- Elected >=1 leader by round 3: 89.3% -> 92.7% (278/300).
+- Increased population by round 3: 97.3% -> 99.7% (299/300).
+- First build kind: Mine share 75.7% (227/300) vs Military 24.0% (72/300)
+  plus a new single Temple case (0.3%) -- Mine/Military split is close to
+  the pre-fix figures implied by the report's table (not decomposed
+  identically pre-fix, so shown here as the post-fix baseline, not a delta).
+- Wonders completed per player-game (mean): 2.67 -> 2.70 (flat).
+- Wonder-slot fate "Completed": 801/928=86.3% -> 810/940=86.2% (flat; slot
+  totals differ slightly, 928 vs 940, because different moves are now taken).
+- New data not available pre-fix (instrumentation gap closed independently
+  of this task -- this binary now prints "First Age-A take, CA price paid",
+  which the prior report explicitly said was computed but never printed):
+  2p: 1 CA 74.0% (222/300), 2 CA 26.0% (78/300) -- vs human 81.9%/17.8%/0.1%,
+  much closer to human than the prior report could show (it had no bot number
+  to compare at all). Flagged as a bonus finding, not one of the three
+  assigned questions.
+- 4p first-take identity: Cultural Heritage (A) 4.5% (18/400) pre-fix vs
+  4.2-4.5% (17-18/400) post-fix -- flat, unlike the (also flat) 2p case.
+
+============================================================
+WHAT COULD NOT BE MEASURED
+============================================================
+Nothing in the three assigned questions was unmeasurable this run -- Q2's
+"wonder-stage progress by round 4" metric is emitted verbatim by
+`behavcensus`, contrary to the task's fallback instruction to say so if it
+weren't. All three answers came directly off stdout, no derivation.
+
+============================================================
+FILES
+============================================================
+/private/tmp/recensus_2p.txt        raw stdout, 2p run (150 games, seed 100)
+/private/tmp/recensus_4p.txt        raw stdout, 4p run (100 games, seed 100)
+/private/tmp/recensus_2p.stderr.txt stderr, 2p run (empty on success)
+/private/tmp/recensus_4p.stderr.txt stderr, 4p run (empty on success)
+/private/tmp/recensus_notes.txt     this file
