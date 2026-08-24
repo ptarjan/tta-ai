@@ -2603,4 +2603,47 @@ mod tests {
         assert!(text.contains("\"gen\": 7"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// `choose`'s 1-ply loop must score every candidate at the same point in
+    /// time. `EndTurn` is the only move whose apply arm reaches
+    /// `economy::end_of_turn`, so applying it would score passing on a board
+    /// that already held this turn's production while every rival candidate
+    /// still carried the full negative `food_gap`/`resource_gap` -- a weight
+    /// vector penalising those two gaps would then make passing look like it
+    /// produced.
+    ///
+    /// The fixture is the first hit of a plain `0..5000` seed scan, not a
+    /// hand-built position: `legal_moves` only ever offers a `Take` slot the
+    /// player can already pay for (`legal.rs`'s `can_take_gated`), so the
+    /// asserted `Take` is affordable by construction. `end_turn_bias` is
+    /// pinned to 0.0 -- its -3.0 default is a separate pass-discouragement,
+    /// and leaving it in would let the test pass for the wrong reason.
+    #[test]
+    fn weighted_bot_does_not_end_turn_with_an_affordable_take_and_a_civil_action_left_when_food_and_resource_gaps_are_heavily_penalized() {
+        let state = G::new_game(2, 0);
+        assert_eq!(state.decider(), 0, "fixture assumption: seat 0 decides seed 0's opening move");
+        assert_eq!(state.round, 1, "fixture assumption: an early round, before any real production has happened");
+        assert!(state.players[0].civil_actions > 0, "fixture assumption: a civil action must still be available to spend");
+
+        let movelist = crate::legal::legal_moves(&state);
+        let moves = movelist.as_slice();
+        assert!(moves.contains(&Move::EndTurn), "fixture assumption: EndTurn must be offered so the bot has to choose against it");
+        assert!(
+            moves.iter().any(|m| matches!(m, Move::Take { .. })),
+            "fixture assumption: a legal (therefore affordable) Take must be on offer, {moves:?}"
+        );
+
+        let mut w = Weights::default();
+        w.set(WeightKey::FoodGap, -100.0);
+        w.set(WeightKey::ResourceGap, -100.0);
+        w.set(WeightKey::EndTurnBias, 0.0);
+
+        let bot = WeightedBot::new(w);
+        let chosen = bot.choose(&state, moves);
+        assert!(
+            !matches!(chosen, Move::EndTurn),
+            "a heavy food/resource-gap penalty must not make passing with a civil action \
+             and an affordable Take in hand look better than actually taking it, got {chosen:?}"
+        );
+    }
 }
