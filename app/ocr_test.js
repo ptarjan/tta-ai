@@ -1,31 +1,19 @@
 'use strict';
-/* Node-only test: loads the real iPad screenshot (PNG->BMP via sips,
+/* Node-only test: loads the real iPad screenshots (PNG->BMP via sips,
  * since this app has zero deps and can't decode PNG itself under node),
- * runs the full slot-find -> OCR -> fuzzy-match pipeline, and prints one
- * line per slot. See appocr2_notes.txt for the full analysis. */
+ * runs the full slot-find -> OCR -> fuzzy-match pipeline against BOTH
+ * captures this app has, and prints one line per slot plus a per-capture
+ * pass/fail/unknown count. See appatlas_notes.txt for the full analysis
+ * of what changed when the second capture was added (glyph atlas widened,
+ * a two-line-name splitting bug fixed) and why some capture-B slots stay
+ * UNKNOWN on purpose rather than being force-matched. */
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const cards = require('./cards.json');
 const {
-  findRowSlots, ocrRecognizeSlot, ocrSlotRaw, resolveOCRString, readAgeBadge,
+  findRowSlots, ocrSlotRaw, resolveOCRString, readAgeBadge,
 } = require('./app.js');
-
-const PNG = '/Users/pt/tta-ai/analysis/app_samples/ipad_screenshot_2360x1640_2026-08-23.png';
-const BMP = path.join(require('os').tmpdir(), 'tta_ocr_test_cap.bmp');
-
-// Display strings: cards.json suffixes the age onto `display` ONLY for
-// names shared by more than one age copy (Rich Land, Engineering Genius,
-// Frugality, Cultural Heritage here) — see cards.json's `ambiguous` flag.
-// The age badge on all 13 cards in this capture reads 'A' (confirmed by
-// visual inspection of the crop, cross-checked against cards.json: every
-// one of the 9 unambiguous names in this row already IS age A), so the
-// age-settled display for those 4 is "<Name> (A)".
-const EXPECTED = [
-  'Stock Pile', 'Pyramids', 'Rich Land (A)', 'Engineering Genius (A)', 'Hanging Gardens',
-  'Julius Caesar', 'Frugality (A)', 'Homer', 'Alexander the Great', 'Moses',
-  'Hammurabi', 'Cultural Heritage (A)', 'Colossus',
-];
 
 function loadBMP(bmpPath) {
   const buf = fs.readFileSync(bmpPath);
@@ -54,32 +42,74 @@ function loadBMP(bmpPath) {
   return { data, width, height };
 }
 
-execSync(`sips -s format bmp "${PNG}" --out "${BMP}"`, { stdio: 'pipe' });
-const pixels = loadBMP(BMP);
-fs.unlinkSync(BMP);
+// EXPECTED entries use the card's age-settled display string (see
+// resolveOCRString / cards.json's `ambiguous` flag) for names shared by
+// more than one age copy; null means the slot is a genuine empty row
+// position that findRowSlots must mark .empty and OCR must never touch.
+const CAPTURES = [
+  {
+    label: 'capture A (ipad_screenshot_2360x1640_2026-08-23.png)',
+    png: '/Users/pt/tta-ai/analysis/app_samples/ipad_screenshot_2360x1640_2026-08-23.png',
+    expected: [
+      'Stock Pile', 'Pyramids', 'Rich Land (A)', 'Engineering Genius (A)', 'Hanging Gardens',
+      'Julius Caesar', 'Frugality (A)', 'Homer', 'Alexander the Great', 'Moses',
+      'Hammurabi', 'Cultural Heritage (A)', 'Colossus',
+    ],
+  },
+  {
+    label: 'capture B (ipad_screenshot_2360x1640_2026-08-23_b.png)',
+    png: '/Users/pt/tta-ai/analysis/app_samples/ipad_screenshot_2360x1640_2026-08-23_b.png',
+    expected: [
+      'Rich Land (A)', 'Homer', 'Engineering Genius (A)', 'Library of Alexandria', null,
+      'Cultural Heritage (A)', 'Frugality (A)', 'Patriotism (A)', 'Colossus', 'Hanging Gardens',
+      'Alexander the Great', 'Rich Land (A)', 'Moses',
+    ],
+  },
+];
 
-const found = findRowSlots(pixels);
-if (!found || found.slots.length !== 13) {
-  console.log('FAIL: findRowSlots did not return 13 slots');
-  process.exit(1);
+let anyFail = false;
+
+for (const { label, png, expected } of CAPTURES) {
+  console.log(`=== ${label} ===`);
+  const BMP = path.join(require('os').tmpdir(), 'tta_ocr_test_' + path.basename(png) + '.bmp');
+  execSync(`sips -s format bmp "${png}" --out "${BMP}"`, { stdio: 'pipe' });
+  const pixels = loadBMP(BMP);
+  fs.unlinkSync(BMP);
+
+  const found = findRowSlots(pixels);
+  if (!found || found.slots.length !== 13) {
+    console.log('FAIL: findRowSlots did not return 13 slots');
+    anyFail = true;
+    continue;
+  }
+
+  let pass = 0, fail = 0, emptyOk = 0, emptyWrong = 0;
+  found.slots.forEach((slot, i) => {
+    const expectedDisplay = expected[i];
+    if (slot.empty) {
+      const ok = expectedDisplay === null;
+      if (ok) emptyOk++; else emptyWrong++;
+      console.log(`slot ${i + 1}: EMPTY  [${ok ? 'OK' : 'WRONG'}, expected ${expectedDisplay === null ? 'EMPTY' : expectedDisplay}]`);
+      return;
+    }
+    const raw = ocrSlotRaw(pixels, slot);
+    const badgeAge = readAgeBadge(pixels, slot);
+    const resolved = resolveOCRString(raw, cards, badgeAge);
+    const got = resolved ? resolved.display : 'UNKNOWN';
+    const correct = resolved ? resolved.display === expectedDisplay : false;
+    const wrong = resolved && resolved.display !== expectedDisplay;
+    if (correct) pass++;
+    if (wrong) fail++;
+    const tag = correct ? 'OK' : wrong ? 'WRONG' : 'UNKNOWN';
+    console.log(`slot ${i + 1}: ${JSON.stringify(raw)} badge=${badgeAge} -> ${got}  [${tag}, expected ${expectedDisplay}]`);
+  });
+
+  const cardSlots = expected.filter((e) => e !== null).length;
+  const unknownCount = cardSlots - pass - fail;
+  console.log('');
+  console.log(`${pass} passed, ${fail} failed, ${unknownCount} unknown (of ${cardSlots} card slots)` + (emptyWrong ? `; ${emptyWrong} empty slot(s) misread` : ''));
+  console.log('');
+  if (fail > 0 || emptyWrong > 0) anyFail = true;
 }
 
-let pass = 0, fail = 0;
-found.slots.forEach((slot, i) => {
-  const raw = ocrSlotRaw(pixels, slot);
-  const badgeAge = readAgeBadge(pixels, slot);
-  const resolved = resolveOCRString(raw, cards, badgeAge);
-  const got = resolved ? resolved.display : 'UNKNOWN';
-  const expected = EXPECTED[i];
-  const correct = resolved ? resolved.display === expected : false; // UNKNOWN never counts as correct, but is not a wrong-answer failure
-  const wrong = resolved && resolved.display !== expected;
-  if (correct) pass++;
-  if (wrong) fail++;
-  const tag = correct ? 'OK' : wrong ? 'WRONG' : 'UNKNOWN';
-  console.log(`slot ${i + 1}: ${JSON.stringify(raw)} badge=${badgeAge} -> ${got}  [${tag}, expected ${expected}]`);
-});
-
-const unknownCount = 13 - pass - fail;
-console.log('');
-console.log(`${pass} passed, ${fail} failed, ${unknownCount} unknown (of 13 slots)`);
-process.exit(fail ? 1 : 0);
+process.exit(anyFail ? 1 : 0);
