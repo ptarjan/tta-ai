@@ -244,6 +244,11 @@ struct Report {
     opening_leader_r3: HashMap<bool, (u64, u64)>,
     opening_pop_r3: HashMap<bool, (u64, u64)>,
     opening_ca_unused: HashMap<i32, u64>,
+    /// CA price paid for the first Age-A take, so the bot's price
+    /// distribution can be compared against `bin/humanopenings.rs`'s. The bot
+    /// prices a civil action negatively, so it can pick a PRICE rather than a
+    /// card; without this the overpaying claim is unmeasurable.
+    opening_first_take_cost: HashMap<i32, u64>,
     /// Player-games excluded from every win-rate map above because this
     /// game hit `MOVE_CAP` (`play_one`'s `cap_hit`) rather than reaching a
     /// real `state.game_over` -- there is no winner to attribute, matching
@@ -294,6 +299,7 @@ impl Report {
         merge_pair_map(&mut self.opening_leader_r3, other.opening_leader_r3);
         merge_pair_map(&mut self.opening_pop_r3, other.opening_pop_r3);
         merge_count_map(&mut self.opening_ca_unused, other.opening_ca_unused);
+        merge_count_map(&mut self.opening_first_take_cost, other.opening_first_take_cost);
         self.opening_outcome_unknown += other.opening_outcome_unknown;
 
         self.wonders_completed_per_playergame.extend(other.wonders_completed_per_playergame);
@@ -715,6 +721,12 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 None => report.opening_outcome_unknown += 1,
             }
             *report.opening_ca_unused.entry(t.ca_unused_r3).or_insert(0) += 1;
+            // Outside the win/unknown match on purpose: a price is a fact about
+            // the move, not about how the game ended, so it is sampled from
+            // every player-game exactly as `ca_unused_r3` is.
+            if let Some(cost) = t.first_take_cost {
+                *report.opening_first_take_cost.entry(cost).or_insert(0) += 1;
+            }
         }
 
         if let Some(card) = tracks[i as usize].first_take {
@@ -949,6 +961,17 @@ fn print_report(players: u8, r: &Report) {
         print!("{k}->{} ", r.opening_ca_unused[&k]);
     }
     println!();
+
+    let mut cost_keys: Vec<i32> = r.opening_first_take_cost.keys().copied().collect();
+    cost_keys.sort_unstable();
+    let cost_total: u64 = r.opening_first_take_cost.values().sum();
+    print!("First Age-A take, CA price paid (price -> player-games): ");
+    for k in cost_keys {
+        let n = r.opening_first_take_cost[&k];
+        let pct = if cost_total == 0 { 0.0 } else { 100.0 * n as f64 / cost_total as f64 };
+        print!("{k}->{n} ({pct:.1}%) ");
+    }
+    println!("[n={cost_total}]");
 
     println!("\n### Wonders\n");
     println!("Wonders completed per player-game: {}", percentiles_i32(r.wonders_completed_per_playergame.clone()));

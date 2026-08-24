@@ -1,0 +1,235 @@
+THROUGH THE AGES -- OPENING (AGE A / ROUNDS 1-3) DEFECT CENSUS
+Diagnosis only. No code or weights were changed. Read-only measurement.
+Date: 2026-08-24
+
+============================================================
+COMMANDS RUN (all from /private/tmp)
+============================================================
+
+# 1. Freeze the live champion weights before anything else
+mkdir -p /private/tmp/opencensus
+cp /Users/pt/tta-ai/experiments/rust_champion_2p.json /private/tmp/opencensus/champ2p.json
+cp /Users/pt/tta-ai/experiments/rust_champion_3p.json /private/tmp/opencensus/champ3p.json
+cp /Users/pt/tta-ai/experiments/rust_champion_4p.json /private/tmp/opencensus/champ4p.json
+
+Frozen champion generations (read from the JSON's own "gen" field):
+  champ2p.json  gen = 108239   players = 2
+  champ3p.json  gen = 58822    players = 3   (not used below -- task scoped to 2p/4p)
+  champ4p.json  gen = 19761    players = 4
+
+# 2. Pilot runs to learn output shape
+/Users/pt/tta-ai/rust/target/release/behavcensus --help
+/Users/pt/tta-ai/rust/target/release/humanopenings   (no --help; usage from bare invocation)
+/Users/pt/tta-ai/rust/target/release/behavcensus --weights /private/tmp/opencensus/champ2p.json --games 4 --players 2 --seed 1 --threads 2
+
+# 3. Human corpus census (692 2p games in the BGO index; humanopenings restricts itself to 2p)
+/Users/pt/tta-ai/rust/target/release/humanopenings /Users/pt/tta-ai/sources/bgo/index.tsv /private/tmp/bgo-journals/journals > /private/tmp/opencensus/human_openings_raw.tsv
+  -> 1384 lines = 692 games x 2 seats (one line per player-game)
+
+# 4. Full-scale bot self-play censuses against the frozen champions
+/Users/pt/tta-ai/rust/target/release/behavcensus --weights /private/tmp/opencensus/champ2p.json --games 150 --players 2 --seed 100 --threads 2 > bot2p.txt
+  -> 150 games, 300 player-games, 17.7s
+/Users/pt/tta-ai/rust/target/release/behavcensus --weights /private/tmp/opencensus/champ4p.json --games 100 --players 4 --seed 100 --threads 2 > bot4p.txt
+  -> 100 games, 400 player-games, 46.2s
+
+# 5. Analysis of the raw human TSV (humanopenings prints NO aggregate summary --
+#    it is one row per player-game: game_id, seat, first_take_name,
+#    first_take_cost, first_build_kind, first_build_name, leader_by_r3,
+#    pop_by_r3, ca_unused_by_r3, outcome -- aggregation done here with python3,
+#    no engine/weights code touched).
+
+============================================================
+INSTRUMENTATION GAP FOUND (report, not a bot defect)
+============================================================
+`behavcensus` computes `first_take_cost` internally for every player-game
+(bin/behavcensus.rs:381, populated at line 616 via `tta::costs::take_cost`)
+in the exact schema that matches `humanopenings`' column 4, but NEVER PRINTS
+IT anywhere in its report (confirmed by grep: the field is written but never
+read again outside the struct). So there is NO bot-side CA-price-paid number
+obtainable from this build's stdout -- only the human side exists below.
+This is a one-line fix (print `report.opening_take_cost` the same way
+`opening_ca_unused` is printed at line 949) but making that fix is out of
+scope for a read-only diagnosis run.
+
+============================================================
+Q1 -- CIVIL ACTIONS WASTED IN ROUNDS 1-3
+============================================================
+Both tools report "civil actions left unused" the same way: CA balance
+still >0 at the moment a player chooses EndTurn, summed over rounds 1-3.
+
+                                   bot 2p        bot 4p        human (2p corpus)
+n (player-games)                  300           400           1384
+0 unused                          216 (72.0%)   362 (90.5%)   1373 (99.2%)
+1 unused                          35  (11.7%)   34  (8.5%)    9    (0.7%)
+2 unused                          47  (15.7%)   4   (1.0%)    1    (0.1%)
+3 unused                          2   (0.7%)    0             1    (0.1%)
+>=1 unused (any waste)            84/300 = 28.0%  38/400 = 9.5%  11/1384 = 0.8%
+mean unused CA per player-game    0.45          0.105         0.010
+
+Finding: at 2p the bot leaves a CA unspent in the OPENER in 28.0% of
+player-games -- 35x the human rate (0.8%) and higher than the "20.3%
+wasted overall" standing figure quoted in the task, i.e. the opener is
+WORSE than the whole-game average, not better. At 4p the opener waste rate
+(9.5%) is milder but still ~12x the human baseline.
+Caveat: this counts player-games with >=1 unused CA, not a per-CA
+wasted-fraction -- the "20.3%" figure's exact denominator was not re-derived
+here, so the two percentages are of the same order but not proven to be the
+same unit; the >=1-unused-player-game rate and the human comparison are both
+directly printed/derived numbers, not adjusted to match.
+
+============================================================
+Q2 -- WONDERS
+============================================================
+                                              bot 2p         bot 4p
+Wonders completed per player-game (mean)     2.67           2.56
+Wonder-slot fate: Completed                  801/928=86.3%  1026/1221=84.0%
+Wonder-slot fate: Still in progress at end   72/928=7.8%    104/1221=8.5%
+Player-games with NO wonder step by round 4  198/300=66.0%  89/400=22.2%
+Round of first wonder-stage build (median,
+  only among games that ever build one)      5              4
+
+Finding: the task's stated "known defect" -- ZERO wonders completed in 400
+2p player-games, every wonder antiquates -- DOES NOT REPRODUCE against the
+current frozen 2p champion (gen 108239): 86.3% of wonder slots that were
+ever occupied complete, mean 2.67 wonders/game. That defect claim is STALE
+and should not be used to justify further work; report the disagreement,
+which is what actually happened here.
+
+What DOES reproduce as an opening-specific problem: at 2p, two-thirds of
+player-games (66.0%) have made no wonder-stage progress at all by round 4,
+vs only 22.2% at 4p -- a 3x gap between the two player counts under the
+SAME bot. Wonders that do get started at 2p start later (median round 5)
+than at 4p (median round 4).
+Human-side comparison is NOT available for "any wonder step by round 3/4":
+`humanopenings` only records the FIRST build/develop/upgrade action's kind,
+and that is "WonderStage" in 0/1384 human player-games AND 0/300+0/400 bot
+player-games alike (wonders are essentially never literally the very first
+building action for anyone) -- so this specific metric does not discriminate
+and the "started a wonder in the opener at all" question versus humans is
+UNANSWERED by the current tools (another instrumentation gap: humanopenings
+would need a "wonder step by round 3" tracker, matching behavcensus's
+round-4 one, to close this).
+
+============================================================
+Q3 -- CARD TAKING: WHAT AND AT WHAT CA PRICE
+============================================================
+Bot CA-price-paid for the first Age-A take: NOT AVAILABLE (see
+instrumentation gap above). Only the identity of the first card taken is
+printed, not its price.
+
+Human first-take CA price (n=1384, 2 "none" rows excluded from the
+mean/median):
+  cost=1 CA: 1134 (81.9%)
+  cost=2 CA: 247  (17.8%)
+  cost=3 CA: 1    (0.1%)
+  mean = 1.18 CA, median = 1 CA
+This directly confirms "humans overwhelmingly take cheap slots early" --
+but there is no bot number to set beside it. The "prices a PRICE rather
+than a CARD" claim is UNCONFIRMED/UNREFUTED by this run; it needs the
+one-line print fix noted above before it can be measured.
+
+First-card-taken identity, bot vs human (top picks, 2p; behavcensus
+"first card taken by round 3", n=300; humanopenings first_take_name,
+n=1384):
+  bot 2p top picks                          human top picks
+  Julius Caesar        20.7%                Pyramids              17.3%
+  Cultural Heritage(A) 19.7%                 Engineering Genius(A) 16.6%
+  Alexander the Great  16.3%                 Hammurabi             13.2%
+  Hammurabi             8.7%                 Rich Land (A)          9.4%
+  Engineering Genius(A) 6.0%                 Library of Alexandria  8.7%
+  ...                                        ...
+  Cultural Heritage (A) is the bot's #2 pick (19.7%, 59/300) but is taken
+  by humans as their first card in only 0.8% (11/1384) -- a 25x
+  overrepresentation. See ranked defect #2 below.
+
+============================================================
+Q4 -- OTHER SHARP DISAGREEMENTS IN ROUNDS 1-3 (ranked by gap size)
+============================================================
+Metric                          bot 2p    bot 4p    human(2p)   gap (2p bot vs human)
+No build/develop/upgrade by r3   2.0%      0.0%*     31.7%       bot builds far more often
+  (*4p: Mine 93.0%+Military 7.0% = 100.0% -- literally never "none")
+Increased population by r3      97.3%      83.5%     83.8%       13.5pp (2p only; 4p matches human)
+Elected >=1 leader by r3        89.3%      64.5%     83.9%       5.4pp (2p); 4p is 19pp BELOW human
+Cultural Heritage(A) first take 19.7%      4.5%      0.8%        25x (2p)
+
+The "no build at all by round 3" gap is the largest by percentage points
+(29.7pp, 2p) but its direction is ambiguous without a score/win link the
+tools don't provide (does building faster help or hurt?) -- included for
+completeness, ranked low on that basis. The 4p "elected leader by r3" gap
+(64.5% bot vs a human 2p-only baseline) is not apples-to-apples since
+humanopenings is 2p-only; flagged, not ranked.
+
+============================================================
+RANKED DEFECT LIST (worst first)
+============================================================
+
+1. CA WASTE IN THE OPENER, WORST AT 2P.
+   Number: 28.0% of 2p player-games (84/300) leave >=1 civil action unspent
+   in rounds 1-3, vs 0.8% (11/1384) for humans in the same window -- a 35x
+   gap -- and 2p's opener waste rate (28.0%) exceeds the standing
+   whole-game figure (20.3%), i.e. the opener is the WORST part of the
+   game for this defect, not better. 4p is milder (9.5%, still 12x human).
+   Code area: the bot's move-selection / turn-continuation logic in
+   /Users/pt/tta-ai/rust/src/bots/ (greedy.rs, plan.rs, quiescent.rs --
+   whichever decides to call EndTurn instead of spending a remaining CA)
+   -- this is the single most valuable fix per the task's own framing
+   ("wasting a CA is the worst move in this game").
+
+2. OVERPICKING A ONE-SHOT, NO-PRODUCTION CARD AS THE FIRST AGE-A TAKE (2P).
+   Number: "Cultural Heritage (A)" is the bot's 2nd most common first
+   Age-A take at 2p, 19.7% (59/300), with a below-baseline win rate
+   (42.4%, vs the field's ~50%). Humans take it first in 0.8% of games
+   (11/1384) -- 25x overrepresentation. The card itself
+   (card_table.rs:4146-4159) has zero production stats (Production {food:
+   0, resources: 0, culture: 0, science: 0, ...}) and only an immediate
+   one-shot effect (gain_culture: 4, gain_science: 1) -- it cannot
+   contribute to engine growth for the rest of the game. Spending the very
+   first civil action of the game on a card with no lasting effect, when
+   humans essentially never do this, is a strong candidate root cause for
+   "dumb things in the opener."
+   Code area: this is a valuation problem, not an engine bug -- the
+   weights in champ2p.json (gen 108239) plus whatever move-scoring code
+   in /Users/pt/tta-ai/rust/src/bots/ reads those weights is overvaluing
+   immediate one-shot culture/science gain relative to production cards in
+   the first-take decision. Only present at 2p (4.5% at 4p, vs 0.8% human
+   2p baseline -- still elevated but far smaller).
+
+3. DELAYED WONDER STARTS AT 2P (NOT "wonders never complete" -- that claim
+   is stale, see Q2).
+   Number: 66.0% of 2p player-games (198/300) have made NO wonder-stage
+   progress at all by round 4, vs 22.2% at 4p (89/400) under the identical
+   bot architecture -- a 3x gap driven purely by player count. Median
+   first wonder-stage-build round is 5 (2p) vs 4 (4p). Wonders DO
+   eventually complete at a high rate (86.3% of ever-occupied 2p wonder
+   slots), so the defect is a slow START at 2p specifically, not a failure
+   to finish. No human-comparable number exists for this metric (tooling
+   gap: humanopenings has no "any wonder step by round N" tracker).
+   Code area: same opening move-selection code as #1 -- the 2p weights
+   (champ2p.json, gen 108239) or the wonder-priority logic apparently
+   deprioritize starting a wonder stage relative to Mine/Military builds
+   early, worse at 2p than at 4p.
+
+4. INSTRUMENTATION GAP: CA-PRICE-PAID FOR TAKES IS UNMEASURED FOR THE BOT.
+   Not a bot behaviour defect by itself, but it blocks confirming/refuting
+   the "prefers to overpay -- prices a PRICE not a CARD" claim, which is
+   otherwise the most specific complaint on record. `first_take_cost` is
+   already computed at bin/behavcensus.rs:381/616 but never printed
+   (confirmed by grep -- no downstream read of that field exists). Fixing
+   this (print the existing field, one line, symmetric with
+   `opening_ca_unused` at line 949) should be the FIRST follow-up before
+   any further opening-price diagnosis, since the human side is already
+   fully measured and waiting (81.9% of human first-takes cost exactly 1
+   CA; mean 1.18).
+
+5. FASTER-THAN-HUMAN TEMPO ON THE FIRST BUILD (2P), DIRECTION UNCLEAR.
+   Number: bot makes some build/develop/upgrade move within round 3 in
+   98.0% of 2p player-games (294/300) and effectively 100% at 4p, vs only
+   68.3% of humans (945/1384) -- humans skip building entirely in the
+   first 3 rounds 31.7% of the time. Ranked last/lowest-confidence because
+   neither tool ties this to score or win-rate in a way that says which
+   side is "right" -- flagged for follow-up, not asserted as a defect.
+
+============================================================
+DISK
+============================================================
+(see final message / df -h output captured at cleanup time)
