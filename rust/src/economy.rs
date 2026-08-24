@@ -448,7 +448,7 @@ fn production_denom(kind: CardType, prod: &crate::cards::Production) -> i16 {
 /// this is also the value-maximizing allocation, since moving a token to a
 /// lower-level card instead of a higher one still wanting tokens can only
 /// lose value).
-fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
+pub fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
     let (pairs, len) = production_pairs(techs, kind);
     let mut remaining = free;
     let mut value: u16 = 0;
@@ -461,6 +461,30 @@ fn worker_capped_production(techs: &Tableau, kind: CardType, free: u16) -> u16 {
         remaining -= take;
     }
     value
+}
+
+/// The food and resources this player's tableau would produce right now,
+/// worker-capped exactly as `end_of_turn` step 3c/3e credits them, without
+/// mutating anything. This is the production RATE actually realised, not
+/// the uncapped `effects::Stats` rating.
+///
+/// `end_of_turn` reads `blue_available(p)` fresh at each of four
+/// production-adjacent sites -- 3b's corruption payment, 3c's flat bonus
+/// then its worker-capped farm credit, 3d's food consumption, 3e's flat
+/// bonus then its worker-capped mine credit -- and those intervening
+/// mutations (corruption spends bank tokens, food consumption frees them
+/// again) can leave the food-step's `free` and the resources-step's `free`
+/// DIFFERENT by the time 3e runs. This function mutates nothing, so it
+/// cannot replay that drift; it reads `blue_available` exactly once and
+/// worker-caps BOTH food and resources against that single snapshot -- the
+/// closest no-side-effect answer to "what is this tableau producing right
+/// now", not a bit-for-bit replay of one specific future `end_of_turn` call.
+pub fn production_this_turn(state: &GameState, idx: u8) -> (u16, u16) {
+    let p = &state.players[idx as usize];
+    let free = blue_available(p);
+    let food = worker_capped_production(&p.techs, CardType::Farm, free);
+    let resources = worker_capped_production(&p.techs, CardType::Mine, free);
+    (food, resources)
 }
 
 /// (denomination, summed worker count) pairs, one per DISTINCT denomination
@@ -2602,5 +2626,41 @@ mod tests {
         let ix2 = p.food_tokens.denoms[..2].iter().position(|&d| d == 2).unwrap();
         assert_eq!(p.food_tokens.counts[ix1], 1, "exactly one denom-1 token, from Agriculture's own worker");
         assert_eq!(p.food_tokens.counts[ix2], 1, "exactly one denom-2 token, from Irrigation's own worker");
+    }
+
+    /// `production_this_turn` is a side-effect-free snapshot of the same
+    /// worker-capped production `end_of_turn` step 3c/3e commits into the
+    /// token bank. With `blue_total` large enough that neither corruption
+    /// (§6.2, only when `blue_available < 11`) nor the bank cap itself ever
+    /// binds, and `yellow_bank` high enough that consumption is zero (so
+    /// step 3d never touches `p.food` in between), its prediction and
+    /// `end_of_turn`'s own credited food/resources must agree exactly --
+    /// this is what would catch the snapshot's call shape drifting from
+    /// `end_of_turn`'s own `credit_production` sites.
+    #[test]
+    fn production_this_turn_matches_what_end_of_turn_actually_credits_when_the_bank_never_binds() {
+        let mut st = duel();
+        {
+            let p = &mut st.players[0];
+            p.blue_total = 30; // corruption(30) == 0 and never the binding constraint
+            p.yellow_bank = 17; // happy_required(17) == 0, consumption(17) == 0
+            p.techs.insert(card("Agriculture"), TechSlot { workers: 1, stored: 0 }); // farm denom 1
+            p.techs.insert(card("Irrigation"), TechSlot { workers: 1, stored: 0 }); // farm denom 2
+            p.techs.insert(card("Bronze"), TechSlot { workers: 1, stored: 0 }); // mine denom 1
+            p.techs.insert(card("Iron"), TechSlot { workers: 1, stored: 0 }); // mine denom 2
+        }
+        let (predicted_food, predicted_resources) = production_this_turn(&st, 0);
+        assert_eq!(predicted_food, 3, "1 worker * denom 1 + 1 worker * denom 2");
+        assert_eq!(predicted_resources, 3, "1 worker * denom 1 + 1 worker * denom 2");
+
+        assert!(end_of_turn(&mut st, 0));
+        assert_eq!(
+            st.players[0].food, predicted_food,
+            "production_this_turn must match end_of_turn's own 3c credit"
+        );
+        assert_eq!(
+            st.players[0].resources, predicted_resources,
+            "production_this_turn must match end_of_turn's own 3e credit"
+        );
     }
 }

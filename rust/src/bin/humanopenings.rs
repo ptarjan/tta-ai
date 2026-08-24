@@ -507,6 +507,12 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     // pooled (see the "Civil card fate" section's own doc comment above).
     let mut card_fate_stats: BTreeMap<u8, CardFateStats> = BTreeMap::new();
 
+    // Production curve (3-player games only, see the accumulation site
+    // below): (sum food, sum resources, n) per round, the human twin of
+    // `bin/behavcensus.rs`'s `Report::production_by_round`. A `BTreeMap` so
+    // printing needs no separate sort, unlike behavcensus's `HashMap`.
+    let mut production_by_round: BTreeMap<u16, (u64, u64, u64)> = BTreeMap::new();
+
     for meta in games.iter() {
         let n = meta.players as usize;
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -614,6 +620,36 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                 cost_stats.entry(meta.players).or_default().record(take_cost);
             }
             wonder_stats.entry(meta.players).or_default().record(first_wonder_round[seat], outcome);
+        }
+
+        // ---- production curve (3-player games only): mean worker-capped
+        // food/resource production (`economy::production_this_turn`) per
+        // round, one sample per player-round at the START of that player's
+        // turn -- same call and the same print format as
+        // `bin/behavcensus.rs`'s own "Production curve" section, so the two
+        // curves are directly comparable. `result.decisions` already
+        // carries the PRE-move `GameState` behavcensus's live self-play
+        // loop gets for free (see this file's own top doc comment);
+        // `d.state.current` only ever changes at `end_turn`'s
+        // `state.current = nxt` (game.rs), so "actor differs from the last
+        // one sampled" is exactly "this is the first move of a new turn",
+        // the same detection `bin/behavcensus.rs::play_one` uses.
+        if meta.players == 3 {
+            let mut prev_actor: Option<u8> = None;
+            for d in &result.decisions {
+                let seat = d.state.current;
+                if seat as usize >= n {
+                    continue;
+                }
+                if prev_actor != Some(seat) {
+                    prev_actor = Some(seat);
+                    let (food, resources) = tta::economy::production_this_turn(&d.state, seat);
+                    let e = production_by_round.entry(d.state.round).or_insert((0u64, 0u64, 0u64));
+                    e.0 += u64::from(food);
+                    e.1 += u64::from(resources);
+                    e.2 += 1;
+                }
+            }
         }
 
         // ---- civil card fate: see the "Civil card fate" section's own doc
@@ -756,6 +792,15 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     }
     for (players, stats) in &card_fate_stats {
         stats.report(*players);
+    }
+
+    eprintln!("\n### Production curve\n");
+    for (round, (food_sum, resources_sum, n)) in &production_by_round {
+        eprintln!(
+            "round {round}: food mean={:.2} resources mean={:.2} n={n}",
+            *food_sum as f64 / (*n).max(1) as f64,
+            *resources_sum as f64 / (*n).max(1) as f64
+        );
     }
     Ok(())
 }

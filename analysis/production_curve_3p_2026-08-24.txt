@@ -1,0 +1,117 @@
+Production curve, bot vs human corpus, 3 players
+================================================
+Date: 2026-08-24
+Tool: rust/src/bin/behavcensus.rs and rust/src/bin/humanopenings.rs, both
+      calling the SAME new query economy::production_this_turn (economy.rs:482)
+      at the SAME instant -- the first move of a player's turn, detected by
+      state.current changing, which only ever happens in end_turn.
+Runs: ./target/release/behavcensus --games 200 --players 3 \
+        --weights /private/tmp/opencensus/champ3p.json --threads 5
+      ./target/release/humanopenings sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals 2>&1
+      (humanopenings prints its report sections to STDERR; its stdout is the
+      per-player-game TSV. Capture 2>&1 or the section is lost.)
+
+WHAT THIS ANSWERS
+-----------------
+analysis/card_rot_cause_3p_2026-08-24.txt closed with an explicit open
+question: "nothing affordable" is a state with two causes -- the bot
+UNDER-BUILDS production, or its income is fine and its blue tokens are
+committed. This is the discriminating measurement it asked for.
+
+THE CURVES
+----------
+Bot: 200 self-play games at 3p, 600 player-games. Human: the 3-player subset
+of the 1011-game BGO corpus, 399 player-games at round 1.
+
+  round | BOT food | BOT res | BOT n | HUMAN food | HUMAN res | HUMAN n
+      1 |   2.00   |  2.00   |  600  |    2.00    |   2.00    |  399
+      2 |   2.00   |  2.00   |  600  |    2.00    |   2.00    |  399
+      3 |   1.98   |  2.49   |  600  |    2.01    |   2.83    |  399
+      4 |   1.94   |  2.63   |  600  |    2.01    |   2.90    |  399
+      5 |   1.86   |  2.67   |  600  |    2.05    |   3.02    |  399
+      6 |   1.80   |  2.71   |  600  |    2.11    |   3.20    |  399
+      7 |   1.74   |  2.79   |  600  |    2.23    |   3.41    |  399
+      8 |   1.66   |  2.79   |  600  |    2.35    |   3.61    |  397
+      9 |   1.59   |  2.84   |  600  |    2.53    |   3.87    |  391
+     10 |   1.56   |  2.90   |  600  |    2.70    |   4.17    |  382
+     11 |   1.53   |  2.92   |  600  |    2.97    |   4.53    |  378
+     12 |   1.51   |  2.95   |  600  |    3.27    |   4.94    |  378
+     13 |   1.47   |  2.98   |  600  |    3.56    |   5.30    |  377
+     14 |   1.44   |  2.97   |  600  |    3.95    |   5.65    |  370
+     15 |   1.42   |  2.91   |  600  |    4.25    |   6.02    |  363
+     16 |   1.43   |  2.86   |  600  |    4.48    |   6.15    |  363
+     17 |   1.40   |  2.78   |  600  |    4.70    |   6.34    |  334
+     18 |   1.43   |  2.71   |  600  |    4.95    |   6.78    |  203
+     19 |   1.46   |  2.64   |  582  |    5.35    |   5.92    |   26
+     20 |   1.34   |  2.54   |  366  |     --     |    --     |  (n<30)
+     21 |   1.10   |  2.57   |   51  |     --     |    --     |  (n<30)
+
+Rounds 20-21 are bot-only: the human corpus has fewer than 30 player-games
+left there and the round-19 human line (n=26) is already too thin to read.
+
+THE ANSWER: THE BOT UNDER-BUILDS, AND ITS FOOD CURVE RUNS BACKWARDS
+-------------------------------------------------------------------
+Both curves start identical at 2.00/2.00 for rounds 1-2, which is the fixed
+starting tableau before any farm or mine tech can be in play -- the two
+measurements agree exactly where they are forced to, which is the check that
+they are measuring the same thing.
+
+RESOURCES diverge at round 3, the first round a mine tech can exist: 2.49 bot
+against 2.83 human, ~12% low. The gap only widens -- 30% low by round 10
+(2.90 vs 4.17), and by round 15 the bot produces less than half the human
+rate (2.91 vs 6.02).
+
+FOOD is the worse finding, because the two curves differ in DIRECTION and not
+only in size. The human food curve climbs monotonically from 2.00 to 4.95
+through round 18. The bot's food curve DECLINES from round 2 onward, bottoms
+around 1.40-1.50 for the entire midgame, and never recovers. By round 14-15
+the bot is producing roughly a third of the human food rate.
+
+A declining food curve cannot be explained by the human side at all. It says
+the bot's own farms are producing less as its game goes on -- workers moving
+off farms faster than farm levels rise -- while its population, and therefore
+its consumption, keeps growing.
+
+THIS SETTLES THE CARD-ROT CAUSE
+-------------------------------
+The two candidate causes of "had a civil action, could afford nothing" (65.6%
+of a wasted card's blocked decision points) were under-built production versus
+committed blue tokens. It is under-built production.
+
+The committed-token reading is doubly dead. production_this_turn worker-caps
+against blue_available (blue_total minus tokens already sitting on the board
+as stock), so a player holding a large stock has its measured production
+capped DOWNWARD by exactly the mechanism that reading proposes. The humans,
+who are the richer side, therefore have the more binding cap, and they still
+measure far higher. If the cap is biasing this table at all it is biasing it
+in the bot's favour, and the bot still loses on every round after 2.
+
+CORROBORATION FROM THE n COLUMN
+--------------------------------
+The bot's n holds at 600 through round 18 while the human n falls from 399 to
+203 -- human games END sooner. That is the same fact as
+analysis/card_fate_human_2026-08-24.txt's take rate (humans take 26.92 civil
+cards per player-game at 3p, the bot 17.49): humans consume the card row
+faster, so the deck runs out earlier. A bot whose games run LONGER while
+producing LESS per round is not being outpaced on tempo alone.
+
+CAVEATS ON THE MEASUREMENT ITSELF
+---------------------------------
+1. production_this_turn takes ONE blue_available snapshot and caps both food
+   and resources against it. end_of_turn re-reads blue_available at four
+   sites (3b corruption spends bank tokens, 3c credits food, 3d consumption
+   frees tokens back, 3e credits resources), so the real food-step and
+   resource-step caps can differ. A non-mutating query cannot replay that
+   drift. The new test in economy.rs proves exact agreement with what
+   end_of_turn actually credits in the regime where the bank never binds.
+2. The human side is survivorship-filtered after round 8 as games finish;
+   the bot side is not until round 19. This does not touch the early rounds,
+   where the resource gap already opens.
+3. This is a RATE, not a stock: effects::Stats' uncapped rating is a
+   different quantity and is not what is plotted here.
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
+The human census is a diagnostic mirror. Fitting the leaf evaluation on the
+human corpus is on the standing do-not-do list and has lost three times.
+This file names a defect; it does not propose a coefficient.

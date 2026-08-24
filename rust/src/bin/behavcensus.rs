@@ -650,6 +650,15 @@ struct Report {
     n_player_games_no_wonder_by_round4: u64,
     n_player_games: u64,
 
+    // ---- production curve (one sample per player-round, taken at the
+    // START of that player's turn -- before any move of theirs is applied
+    // -- via `economy::production_this_turn`; see `play_one`'s `prev_actor`
+    // sampling). (sum food, sum resources, n) keyed by round, so
+    // `print_report`'s "Production curve" section can print a mean per
+    // round directly comparable against `bin/humanopenings.rs`'s human
+    // curve of the same shape.
+    production_by_round: HashMap<u16, (u64, u64, u64)>,
+
     // ---- opening, human-comparable schema (`bin/humanopenings.rs`'s
     // schema -- see `PlayerTrack`'s own doc). Each map's value is (wins,
     // total) so a win-rate can be printed next to every count, matching
@@ -788,6 +797,7 @@ impl Report {
         self.first_wonder_never_built.1 += other.first_wonder_never_built.1;
         self.n_player_games_no_wonder_by_round4 += other.n_player_games_no_wonder_by_round4;
         self.n_player_games += other.n_player_games;
+        merge_triple_map(&mut self.production_by_round, other.production_by_round);
 
         merge_pair_map(&mut self.opening_first_take, other.opening_first_take);
         merge_pair_map(&mut self.opening_first_build_kind, other.opening_first_build_kind);
@@ -853,6 +863,18 @@ impl Report {
 fn merge_map(a: &mut HashMap<&'static str, u64>, b: HashMap<&'static str, u64>) {
     for (k, v) in b {
         *a.entry(k).or_insert(0) += v;
+    }
+}
+
+/// [`merge_pair_map`]'s twin for [`Report::production_by_round`]'s
+/// (sum food, sum resources, n) accumulator -- same "add the fields
+/// element-wise" merge, just one wider tuple.
+fn merge_triple_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, (u64, u64, u64)>, b: HashMap<K, (u64, u64, u64)>) {
+    for (k, (food, resources, n)) in b {
+        let e = a.entry(k).or_insert((0, 0, 0));
+        e.0 += food;
+        e.1 += resources;
+        e.2 += n;
     }
 }
 
@@ -1107,6 +1129,13 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
     // Round-6 wonder-tempo board snapshot boundary -- mirrors `prev_age`
     // above exactly, just keyed on `state.round` instead of `state.age_civil`.
     let mut prev_round = state.round;
+    // Production-curve boundary: the actor whose start-of-turn sample was
+    // last taken. `state.current` is reassigned exactly once per turn, at
+    // `end_turn`'s `state.current = nxt` (game.rs) -- nothing in a combat/
+    // pending exchange ever reassigns it -- so "the actor differs from the
+    // last one sampled" is exactly "this is the first move of a new turn",
+    // with no confound from Defend/Bid/Choose moves along the way.
+    let mut prev_actor: Option<u8> = None;
 
     while !state.game_over {
         if moves_played >= MOVE_CAP {
@@ -1116,6 +1145,18 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         let mv = bots[state.current as usize].pick(&state);
         let actor = state.current;
         let round_before = state.round;
+
+        // ---- production curve: sample the FIRST move of every new turn,
+        // before `mv` is applied -- see `prev_actor`'s doc comment above for
+        // why "actor changed" is exactly "turn boundary" here.
+        if prev_actor != Some(actor) {
+            prev_actor = Some(actor);
+            let (food, resources) = tta::economy::production_this_turn(&state, actor);
+            let e = report.production_by_round.entry(round_before).or_insert((0, 0, 0));
+            e.0 += u64::from(food);
+            e.1 += u64::from(resources);
+            e.2 += 1;
+        }
 
         // pre-move info needed for classification
         let taken_card = match mv {
@@ -2232,6 +2273,23 @@ fn print_report(players: u8, r: &Report) {
              ({selection_loss_share:.1}%) had at least one turn where something ELSE in hand was developable, \
              and {n_no_blocked_turns} ({no_blocked_share:.1}%) sat through zero decision points of their own \
              before resolving"
+        );
+    }
+
+    // ---- production curve: mean worker-capped food/resource production
+    // (`economy::production_this_turn`) per round, one sample per
+    // player-round at the START of that player's turn -- directly
+    // comparable against `bin/humanopenings.rs`'s identically-formatted
+    // human curve (same print format, same sampling instant).
+    println!("\n### Production curve\n");
+    let mut production_rounds: Vec<u16> = r.production_by_round.keys().copied().collect();
+    production_rounds.sort_unstable();
+    for round in production_rounds {
+        let (food_sum, resources_sum, n) = r.production_by_round[&round];
+        println!(
+            "round {round}: food mean={:.2} resources mean={:.2} n={n}",
+            food_sum as f64 / n.max(1) as f64,
+            resources_sum as f64 / n.max(1) as f64
         );
     }
 }
