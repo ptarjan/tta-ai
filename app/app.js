@@ -1437,8 +1437,7 @@ const STORAGE_KEY = 'ttaapp_state_v3';
 
 function freshFlow() {
   return {
-    step: 'gone', // setup | gone | new | blocked | dupConfirm | thinking | advice | fullrow
-    setupPlayers: 2,
+    step: 'gone', // gone | new | blocked | dupConfirm | thinking | advice | fullrow
     goneSlots: [],
     newCards: [],
     newIndex: 0,
@@ -1619,7 +1618,6 @@ function renderHandPanel() {
  * ------------------------------------------------------------------- */
 function renderStep(container) {
   switch (state.flow.step) {
-    case 'setup': return renderSetupStep(container);
     case 'gone': return renderGoneStep(container);
     case 'new': return renderNewStep(container);
     case 'blocked': return renderBlockedStep(container);
@@ -1716,35 +1714,6 @@ function advanceNew() {
   }
 }
 
-/* STEP 0 — table size only. Seat is NOT asked: the first card row states it
- * (seatFromGoneCount). Table size is the one thing neither the row nor the
- * rules can supply, since 0 or 1 cards gone is consistent with any count. */
-function renderSetupStep(container) {
-  container.appendChild(makeTitle('New game'));
-  container.appendChild(makeSub('How many players? Where you sit is read off the first card row.'));
-
-  const players = state.flow.setupPlayers;
-
-  const pRow = document.createElement('div');
-  pRow.className = 'btnRow';
-  [2, 3, 4].forEach((n) => {
-    pRow.appendChild(makeBtn(`${n} players`, n === players ? 'primary big' : 'big', () => {
-      state.flow.setupPlayers = n;
-      renderAll();
-    }));
-  });
-  container.appendChild(pRow);
-
-  const go = document.createElement('div');
-  go.className = 'btnRow';
-  go.appendChild(makeBtn('Enter the card row →', 'primary big', () => {
-    state = freshState(players);
-    save();
-    openFullRow();
-  }));
-  container.appendChild(go);
-}
-
 // Hard block (Task 1a) — cannot proceed until the row is fixed.
 function renderBlockedStep(container) {
   container.appendChild(makeTitle('That row is not legal.', 'bad'));
@@ -1823,7 +1792,27 @@ function renderAdviceStep(container) {
 function renderAdviceCorrections(container) {
   const box = document.createElement('div');
   box.className = 'corrections';
-  box.appendChild(makeSub('Assuming rival strength and culture are unchanged, and you drew no military card.'));
+  box.appendChild(makeSub(
+    `Assuming ${state.players} players with you in seat ${state.seat + 1}, ` +
+    'rival strength and culture unchanged, and no military card drawn.'));
+
+  /* Table size can only be corrected on the first turn, because it decides
+   * which cards are in the decks at all (RULES_SPEC 1.3) -- changing it later
+   * would mean a different game, not a revised turn. The row already fixed the
+   * floor, so the choices offered are the ones it left open. */
+  if (state.history.length <= 1 && state.players < 4) {
+    const pRow = document.createElement('div');
+    pRow.className = 'btnRow';
+    for (let n = state.seat + 1; n <= 4; n++) {
+      pRow.appendChild(makeBtn(`${n} players`, n === state.players ? 'primary small' : 'small', () => {
+        if (n === state.players) return;
+        state.players = n;
+        setSeat(state.seat);
+        reviseTurn();
+      }));
+    }
+    box.appendChild(pRow);
+  }
 
   state.rivals.forEach((r, i) => {
     const row = document.createElement('div');
@@ -2042,6 +2031,7 @@ function makeAutocompleteRow(placeholder) {
  * are carried across that rollback by hand -- they are the whole point of
  * the revision, and the snapshot predates them. */
 function reviseTurn() {
+  const players = state.players;
   const rivals = state.rivals.map((r) => ({ seat: r.seat, str: r.str, culture: r.culture }));
   const militaryCards = state.flow.militaryCards.slice();
   const militaryDrafted = state.flow.militaryDrafted;
@@ -2053,6 +2043,7 @@ function reviseTurn() {
     state = state.history.pop();
     state.history = prevHistory.slice(0, prevHistory.length - 1);
   }
+  state.players = players;
   state.rivals = rivals;
   state.flow.militaryCards = militaryCards;
   state.flow.militaryDrafted = militaryDrafted;
@@ -2152,19 +2143,22 @@ function proceedToValidation(rowOverride) {
   }
   if (state.seat === null) {
     const gone = newRow.slice(0, 13).filter((c) => !c).length;
-    const seat = seatFromGoneCount(gone, state.players);
+    const seat = seatFromGoneCount(gone, 4);
     if (seat === -1) {
-      const expected = [];
-      for (let k = 0; k < state.players; k++) expected.push((k * (k + 1)) / 2);
       state.flow.step = 'blocked';
       state.flow.blockMessage =
         `${gone} of the 13 spaces are empty. Nobody replenishes the row in the first round, ` +
-        `so an empty space is a card taken by a player before you, and with ${state.players} ` +
-        `players that can only be ${expected.join(', ')} of them. Check the row: a missed card ` +
-        `here seats you in the wrong chair and every later turn is computed on the wrong board.`;
+        `so an empty space is a card taken by a player before you, and that can only be ` +
+        `0, 1, 3 or 6 of them. Check the row: a missed card here seats you in the wrong ` +
+        `chair and every later turn is computed on the wrong board.`;
       renderAll();
       return;
     }
+    // Seats before yours are players, so the row sets a FLOOR on the table
+    // size: 3 cards gone cannot be a two-player game. It sets no ceiling --
+    // 0 or 1 gone is consistent with 2, 3 and 4 -- so the rest is a default
+    // to be corrected on the advice screen, not a question in front of it.
+    if (state.players < seat + 1) state.players = seat + 1;
     setSeat(seat);
   }
   if (result.dupIssue && !state.flow.dupConfirmed) {
@@ -2230,17 +2224,6 @@ function formatPosition(p) {
     `food ${p.food}, res ${p.resources}, sci ${p.science}`;
 }
 
-/* Table size is asked on a scratch state, so that abandoning the setup screen
- * cannot leave a half-built game behind: `freshState` is not called again
- * until the choice is confirmed. */
-function openSetup() {
-  const players = (state && state.players) || 2;
-  state = freshState(players);
-  state.flow.step = 'setup';
-  state.flow.setupPlayers = players;
-  renderAll();
-}
-
 /* ---------------------------------------------------------------------
  * Full-row entry (turn 1 / resync escape hatch)
  * ------------------------------------------------------------------- */
@@ -2264,7 +2247,9 @@ function wireUI() {
 
   el.newGameBtn.addEventListener('click', () => {
     if (!confirm('Start a new game? This clears the current session.')) return;
-    openSetup();
+    state = freshState(state && state.players);
+    save();
+    openFullRow();
   });
 
   el.handToggleBtn.addEventListener('click', () => el.handPanel.classList.toggle('hidden'));
@@ -2284,9 +2269,7 @@ async function boot() {
   renderAll();
   const hasAnyCard = state.row.some((x) => x);
   const freshBoot = !hasAnyCard && !state.moves.length && state.flow.step === 'gone' && !state.flow.goneSlots.length;
-  // A boot with nothing restored has no seat either, so it starts at setup,
-  // not at the row.
-  if (freshBoot) { if (restored) openFullRow(); else openSetup(); }
+  if (freshBoot) openFullRow();
 }
 
 /* ---------------------------------------------------------------------
