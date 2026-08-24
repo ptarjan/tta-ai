@@ -6,16 +6,20 @@
 //! for most games), described the way a human would describe them --
 //! per the "Canonical openings" measurement task.
 //!
-//! Restricted to 2-player games (692/1011 of the corpus, and the only
-//! player count with a champion self-play comparison point available), so
-//! the human/bot comparison this feeds is apples-to-apples.
+//! Covers every player count in the corpus (2p/3p/4p, 692/133/186 of 1011
+//! games). Results are SEGMENTED by player count throughout -- an n-player
+//! game is a structurally different game (card-row width, take-cost
+//! economics, seat count all vary with `players`), so pooling counts into
+//! one undifferentiated number is invalid; see the per-count loop and the
+//! per-count cost-distribution summary below.
 //!
 //! ```text
 //! cargo run --profile difftest --bin humanopenings -- \
 //!     ../sources/bgo/index.tsv /tmp/bgo-journals/journals > openings.tsv
 //! ```
 //!
-//! One TSV line per player-game (two lines per 2p game), columns:
+//! One TSV line per player-game on stdout (N lines per N-player game),
+//! columns:
 //! `game_id  seat  first_take_name  first_take_cost  first_build_kind
 //!  first_build_name  leader_by_r3  pop_by_r3  ca_unused_by_r3  outcome`
 //!
@@ -32,6 +36,7 @@
 //! for every 2p game) -- the same convention `replay_common`'s own
 //! `target_actor_color` and `humanwinners::color_for_seat` already encode.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -39,6 +44,38 @@ use std::process::ExitCode;
 use tta::corpus::{self, parse_winner_line, Color};
 use tta::replay_common::{build_card_index, replay_game};
 use tta::{CardType, Move};
+
+/// First-take civil-action-cost tally for one player count, accumulated
+/// across every player-game at that count.
+#[derive(Default)]
+struct CostStats {
+    /// cost -> number of player-games whose first take had that cost.
+    hist: BTreeMap<i32, u64>,
+    sum: i64,
+    n: u64,
+}
+
+impl CostStats {
+    fn record(&mut self, cost: i32) {
+        *self.hist.entry(cost).or_insert(0) += 1;
+        self.sum += i64::from(cost);
+        self.n += 1;
+    }
+
+    fn report(&self, players: u8) {
+        if self.n == 0 {
+            eprintln!("first-take cost, {players}p: n=0");
+            return;
+        }
+        eprintln!("first-take cost, {players}p (n={}):", self.n);
+        for (cost, count) in &self.hist {
+            let pct = 100.0 * (*count as f64) / (self.n as f64);
+            eprintln!("  cost {cost} = {count}/{} = {pct:.1}%", self.n);
+        }
+        let mean = (self.sum as f64) / (self.n as f64);
+        eprintln!("  mean = {mean:.3}");
+    }
+}
 
 fn build_kind(kind: CardType) -> &'static str {
     match kind {
@@ -73,7 +110,14 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     let card_index = build_card_index();
     let games = corpus::parse_index(index_path)?;
 
-    for meta in games.iter().filter(|g| g.players == 2) {
+    // Cost distributions are segmented by player count (`meta.players`) and
+    // reported separately per count -- never pooled -- because take-cost
+    // economics differ by card-row width, which is itself a function of
+    // player count; a pooled number would silently mix populations.
+    let mut cost_stats: BTreeMap<u8, CostStats> = BTreeMap::new();
+
+    for meta in games.iter() {
+        let n = meta.players as usize;
         let path = format!("{journals_dir}/{}.tsv", meta.id);
         let text = match fs::read_to_string(&path) {
             Ok(t) => t,
@@ -82,19 +126,19 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
         let outcomes_by_color = parse_outcomes(&text);
         let result = replay_game(meta, &text, &card_index, true);
 
-        // Per-seat opening trackers, round <= 3 only.
-        let mut first_take: [Option<(&'static str, i32)>; 2] = [None, None];
-        let mut first_build: [Option<(&'static str, &'static str)>; 2] = [None, None];
-        let mut took_leader: [bool; 2] = [false, false];
-        let mut increased_pop: [bool; 2] = [false, false];
-        let mut ca_unused: [i32; 2] = [0, 0];
+        // Per-seat opening trackers, round <= 3 only, one slot per seat.
+        let mut first_take: Vec<Option<(&'static str, i32)>> = vec![None; n];
+        let mut first_build: Vec<Option<(&'static str, &'static str)>> = vec![None; n];
+        let mut took_leader: Vec<bool> = vec![false; n];
+        let mut increased_pop: Vec<bool> = vec![false; n];
+        let mut ca_unused: Vec<i32> = vec![0; n];
 
         for d in &result.decisions {
             if d.state.round > 3 {
                 continue;
             }
             let seat = d.state.current as usize;
-            if seat >= 2 {
+            if seat >= n {
                 continue;
             }
             match d.human_move {
@@ -133,7 +177,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             }
         }
 
-        for seat in 0..2usize {
+        for seat in 0..n {
             let (take_name, take_cost) = first_take[seat].unwrap_or(("none", -1));
             let (build_kind_s, build_name) = first_build[seat].unwrap_or(("none", "none"));
             let outcome = Color::from_seat(seat as u8)
@@ -153,7 +197,14 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                 ca_unused[seat],
                 outcome,
             );
+            if first_take[seat].is_some() {
+                cost_stats.entry(meta.players).or_default().record(take_cost);
+            }
         }
+    }
+
+    for (players, stats) in &cost_stats {
+        stats.report(*players);
     }
     Ok(())
 }
