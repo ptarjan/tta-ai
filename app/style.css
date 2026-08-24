@@ -158,6 +158,16 @@ body {
   margin: 4px 0;
 }
 
+/* The advice screen's assumptions block: present, editable, and visibly
+   subordinate to the advice above it -- it is a correction, not a question. */
+.corrections {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  opacity: 0.75;
+}
+.corrections:focus-within { opacity: 1; }
+
 .stepperLabel { font-size: 13px; color: var(--dim); display: flex; flex-direction: column; gap: 6px; }
 .stepper { display: flex; align-items: center; gap: 8px; }
 .stepper span { min-width: 24px; text-align: center; font-weight: 700; font-size: 17px; color: var(--text); }

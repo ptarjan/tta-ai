@@ -1430,12 +1430,10 @@ const STORAGE_KEY = 'ttaapp_state_v2';
 
 function freshFlow() {
   return {
-    step: 'gone', // gone | new | rival | military | blocked | dupConfirm | thinking | advice | fullrow
+    step: 'gone', // gone | new | blocked | dupConfirm | thinking | advice | fullrow
     goneSlots: [],
     newCards: [],
     newIndex: 0,
-    rivalStr: 0,
-    rivalCulture: 0,
     militaryDrafted: false,
     militaryCards: [],
     dupConfirmed: false,
@@ -1602,8 +1600,6 @@ function renderStep(container) {
   switch (state.flow.step) {
     case 'gone': return renderGoneStep(container);
     case 'new': return renderNewStep(container);
-    case 'rival': return renderRivalStep(container);
-    case 'military': return renderMilitaryStep(container);
     case 'blocked': return renderBlockedStep(container);
     case 'dupConfirm': return renderDupConfirmStep(container);
     case 'thinking': return renderThinkingStep(container);
@@ -1641,7 +1637,7 @@ function renderGoneStep(container) {
   btnRow.className = 'btnRow';
   btnRow.appendChild(makeBtn(goneCount === 0 ? 'Nothing left the row →' : `Continue (${goneCount} gone) →`, 'primary big', () => {
     if (goneCount === 0) {
-      goToRival();
+      proceedToValidation();
     } else {
       state.flow.newCards = new Array(goneCount).fill(null);
       state.flow.newIndex = 0;
@@ -1694,79 +1690,8 @@ function advanceNew() {
     state.flow.newIndex++;
     renderAll();
   } else {
-    goToRival();
+    proceedToValidation();
   }
-}
-
-// STEP 3 — rival strength + culture, prefilled, one tap through if unchanged.
-function renderRivalStep(container) {
-  container.appendChild(makeTitle('Rival strength and culture.'));
-
-  const unchanged = state.flow.rivalStr === state.rival.str && state.flow.rivalCulture === state.rival.culture;
-
-  const row = document.createElement('div');
-  row.className = 'rivalRow';
-  row.appendChild(makeStepper('Rival strength', state.flow.rivalStr, (v) => { state.flow.rivalStr = v; renderAll(); }));
-  row.appendChild(makeStepper('Rival culture', state.flow.rivalCulture, (v) => { state.flow.rivalCulture = v; renderAll(); }));
-  container.appendChild(row);
-
-  const btnRow = document.createElement('div');
-  btnRow.className = 'btnRow';
-  btnRow.appendChild(makeBtn(unchanged ? 'Unchanged →' : 'Continue →', 'primary big', () => {
-    state.rival.str = state.flow.rivalStr;
-    state.rival.culture = state.flow.rivalCulture;
-    goToMilitary();
-  }));
-  container.appendChild(btnRow);
-
-  const navRow = document.createElement('div');
-  navRow.className = 'btnRow';
-  navRow.appendChild(makeBtn('← Back', 'small', () => {
-    if (state.flow.newCards.length) { state.flow.newIndex = state.flow.newCards.length - 1; state.flow.step = 'new'; }
-    else { state.flow.step = 'gone'; }
-    renderAll();
-  }));
-  container.appendChild(navRow);
-}
-
-// STEP 4 — military draw, default No, type-ahead hidden until Yes.
-function renderMilitaryStep(container) {
-  container.appendChild(makeTitle('Did you draw a military card?'));
-
-  if (!state.flow.militaryDrafted) {
-    const btnRow = document.createElement('div');
-    btnRow.className = 'btnRow';
-    btnRow.appendChild(makeBtn('No', 'primary big', () => proceedToValidation()));
-    btnRow.appendChild(makeBtn('Yes', 'big', () => { state.flow.militaryDrafted = true; renderAll(); }));
-    container.appendChild(btnRow);
-  } else {
-    const { input, suggest } = makeAutocompleteRow('military card drawn this turn');
-    container.appendChild(input.wrap);
-    setupAutocomplete(input.el, suggest, () => MIL_POOL, (c) => { state.flow.militaryCards.push(c.id); renderAll(); });
-    input.el.focus();
-
-    const chips = document.createElement('div');
-    chips.className = 'chips';
-    state.flow.militaryCards.forEach((id, idx) => {
-      const chip = document.createElement('div');
-      chip.className = 'chip mil';
-      chip.innerHTML = `${cardDisplay(id)}<span class="x">×</span>`;
-      chip.addEventListener('click', () => { state.flow.militaryCards.splice(idx, 1); renderAll(); });
-      chips.appendChild(chip);
-    });
-    container.appendChild(chips);
-
-    const btnRow = document.createElement('div');
-    btnRow.className = 'btnRow';
-    btnRow.appendChild(makeBtn('Continue →', 'primary big', () => proceedToValidation()));
-    btnRow.appendChild(makeBtn('Actually, no card', 'small', () => { state.flow.militaryDrafted = false; state.flow.militaryCards = []; renderAll(); }));
-    container.appendChild(btnRow);
-  }
-
-  const navRow = document.createElement('div');
-  navRow.className = 'btnRow';
-  navRow.appendChild(makeBtn('← Back', 'small', () => { state.flow.step = 'rival'; renderAll(); }));
-  container.appendChild(navRow);
 }
 
 // Hard block (Task 1a) — cannot proceed until the row is fixed.
@@ -1798,7 +1723,7 @@ function renderDupConfirmStep(container) {
   container.appendChild(btnRow);
   const navRow = document.createElement('div');
   navRow.className = 'btnRow';
-  navRow.appendChild(makeBtn('← Back', 'small', () => { state.flow.step = 'military'; renderAll(); }));
+  navRow.appendChild(makeBtn('← Back', 'small', () => { state.flow.step = 'gone'; renderAll(); }));
   container.appendChild(navRow);
 }
 
@@ -1837,6 +1762,57 @@ function renderAdviceStep(container) {
   btnRow.className = 'btnRow';
   btnRow.appendChild(makeBtn('Start next turn →', 'primary big', () => { resetFlowForNewTurn(); renderAll(); }));
   container.appendChild(btnRow);
+
+  renderAdviceCorrections(container);
+}
+
+// Everything the advice was computed FROM that a screen capture cannot show,
+// stated as an assumption rather than asked as a question. Touching any of it
+// re-runs the advisor on the same row.
+function renderAdviceCorrections(container) {
+  const box = document.createElement('div');
+  box.className = 'corrections';
+  box.appendChild(makeSub('Assuming rival strength and culture are unchanged, and you drew no military card.'));
+
+  const row = document.createElement('div');
+  row.className = 'rivalRow';
+  row.appendChild(makeStepper('Rival strength', state.rival.str, (v) => { state.rival.str = v; reviseTurn(); }));
+  row.appendChild(makeStepper('Rival culture', state.rival.culture, (v) => { state.rival.culture = v; reviseTurn(); }));
+  box.appendChild(row);
+
+  if (!state.flow.militaryDrafted) {
+    const milRow = document.createElement('div');
+    milRow.className = 'btnRow';
+    milRow.appendChild(makeBtn('I drew a military card', 'small', () => { state.flow.militaryDrafted = true; renderAll(); }));
+    box.appendChild(milRow);
+  } else {
+    const { input, suggest } = makeAutocompleteRow('military card drawn this turn');
+    box.appendChild(input.wrap);
+    setupAutocomplete(input.el, suggest, () => MIL_POOL, (c) => { state.flow.militaryCards.push(c.id); reviseTurn(); });
+
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    state.flow.militaryCards.forEach((id, idx) => {
+      const chip = document.createElement('div');
+      chip.className = 'chip mil';
+      chip.innerHTML = `${cardDisplay(id)}<span class="x">×</span>`;
+      chip.addEventListener('click', () => { state.flow.militaryCards.splice(idx, 1); reviseTurn(); });
+      chips.appendChild(chip);
+    });
+    box.appendChild(chips);
+
+    const milRow = document.createElement('div');
+    milRow.className = 'btnRow';
+    milRow.appendChild(makeBtn('No card after all', 'small', () => {
+      const had = state.flow.militaryCards.length;
+      state.flow.militaryDrafted = false;
+      state.flow.militaryCards = [];
+      if (had) reviseTurn(); else renderAll();
+    }));
+    box.appendChild(milRow);
+  }
+
+  container.appendChild(box);
 }
 
 // Full 13-slot entry — turn 1, or a resync after losing track. Reuses the
@@ -1910,10 +1886,12 @@ function fullRowAdvance() {
   renderAll();
 }
 
+// The full-row path already holds the finished row, so it hands that row
+// straight to validation rather than reconstructing one from gone/new slots.
 function finishFullRow() {
-  state.row = state.flow.fullRowDraft.slice(0, 13);
-  while (state.row.length < 13) state.row.push(null);
-  goToRival();
+  const row = state.flow.fullRowDraft.slice(0, 13);
+  while (row.length < 13) row.push(null);
+  proceedToValidation(row);
 }
 
 function makeTitle(text, cls) {
@@ -1997,16 +1975,35 @@ function makeAutocompleteRow(placeholder) {
 /* ---------------------------------------------------------------------
  * Step transitions between the four questions
  * ------------------------------------------------------------------- */
-function goToRival() {
-  state.flow.rivalStr = state.rival.str;
-  state.flow.rivalCulture = state.rival.culture;
-  state.flow.step = 'rival';
-  renderAll();
-}
+/* The rival's board and your face-down military draw are the two things a
+ * capture of your own screen cannot show. Neither is worth a gate in front
+ * of the advice: the rival's numbers carry over from last turn and are
+ * usually still right, and an unstated military card only costs a move the
+ * advisor won't suggest -- never a wrong instruction. So the turn goes
+ * straight from the row to the advice, and both live under it as
+ * corrections that re-run the advisor.
+ *
+ * Re-running means rolling the applied turn back first, since finalizeTurn
+ * consumes the pre-turn row and engine state. The corrections themselves
+ * are carried across that rollback by hand -- they are the whole point of
+ * the revision, and the snapshot predates them. */
+function reviseTurn() {
+  const rival = { str: state.rival.str, culture: state.rival.culture };
+  const militaryCards = state.flow.militaryCards.slice();
+  const militaryDrafted = state.flow.militaryDrafted;
+  const candidateRow = state.flow.candidateRow;
+  if (!candidateRow) return;
 
-function goToMilitary() {
-  state.flow.step = 'military';
-  renderAll();
+  if (state.history.length) {
+    const prevHistory = state.history;
+    state = state.history.pop();
+    state.history = prevHistory.slice(0, prevHistory.length - 1);
+  }
+  state.rival = rival;
+  state.flow.militaryCards = militaryCards;
+  state.flow.militaryDrafted = militaryDrafted;
+  state.flow.candidateRow = candidateRow;
+  finalizeTurn(candidateRow);
 }
 
 function resetFlowForNewTurn() {
@@ -2067,8 +2064,8 @@ function computeNewRowFromFlow() {
   return combined.slice(0, 13);
 }
 
-function proceedToValidation() {
-  const newRow = computeNewRowFromFlow();
+function proceedToValidation(rowOverride) {
+  const newRow = rowOverride || computeNewRowFromFlow();
   state.flow.candidateRow = newRow;
   const result = validateRow(newRow, CARDS_BY_ID);
 
