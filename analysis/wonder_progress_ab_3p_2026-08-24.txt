@@ -1,0 +1,98 @@
+A/B: raising wonder_progress at 3p to cure the late-wonder pathology. REJECTED.
+==============================================================================
+Measured 2026-08-24, immediately after analysis/wonder_promise_ab_3p_2026-08-24.txt
+rejected the opposite lever. Together these two runs close the wonder-pricing
+subspace as a cure for the 3p late-start defect.
+
+The lever
+---------
+  WonderProgress   features.rs:639, weights.rs:657   champ3p = 6.375
+  WonderPotential  cards.rs:2148                     champ3p = 1.938
+
+`progress` is the sum of the RESOURCE COSTS of stages already BUILT
+(horizon.rs:629), in the same units as WonderRemaining (horizon.rs:630).
+weights.rs:678-680 calls it "a RATE-shaped sunk-cost magnitude tuned to value
+how much a wonder is worth finishing" - the structural complement of
+WonderPromise, which fires at the TAKE and decays as stages are paid.
+It is provably exactly 0.0 until the first stage is paid, pinned by
+features.rs:1148 `wonder_in_progress_flips_to_one_the_instant_a_wonder_is_taken`.
+
+WonderPotential is the identity-aware payoff channel (paid_fraction *
+collect_fraction, cards.rs:2130-2147); also 0.0 at the take, growing as stages
+are paid.
+
+DOMINATES prose check, done BEFORE perturbing
+---------------------------------------------
+eval.rs:853-856 contains exactly one wonder pair, (WonderPotential,
+WonderPromise), repaired by RAISING the dominant side. WonderProgress is not a
+member of DOMINATES at all. So:
+  - cand_a touches neither side of the pair;
+  - cand_b raises only the dominant side, which can only widen an
+    already-satisfied margin over the untouched wonder_promise (0.568).
+Both candidates are DOMINATES-safe by construction, and neither can reproduce
+the previous run's take-but-never-build pathology, which is a property of the
+promise/potential pair.
+
+The identified live risk was different and was written down in advance:
+wonder_progress is already the single largest-magnitude coordinate in the
+160-key vector, so a large multiplier could swamp the rest of the evaluation
+once any wonder is in progress.
+
+The perturbation
+----------------
+Plain doubling, from the frozen /private/tmp/opencensus/champ3p.json. The
+previous run's 3.41x was not a principle - it was the ratio that fell out of
+"raise to the DOMINATES ceiling", and wonder_progress has no such ceiling.
+  cand_a: wonder_progress  6.3745 -> 12.7490            (one coordinate)
+  cand_b: wonder_progress  6.3745 -> 12.7490
+          wonder_potential 1.9377 ->  3.8755            (two coordinates)
+Diff-verified: exactly 1 and exactly 2 keys differ from the base.
+
+Common-opponent duel (kindmatch, 1 A-seat vs 2 B-seats, --players 3)
+--------------------------------------------------------------------
+Reference opponent: frozen champ4p.json, unmodified, identical file for every
+duel. 240 games x 2 seeds each, --threads 2. Null printed by the tool: 33.33%.
+
+  vector    seed   A win rate         null      p        verdict
+  champ3p     1    32.92% +- 5.96    33.33%   0.8893    at par
+  champ3p     2    33.33% +- 6.02    33.33%   1.0000    at par
+  cand_a      1    26.67% +- 4.48    33.33%   0.0030    REJECT
+  cand_a      2    27.50% +- 4.83    33.33%   0.0163    REJECT
+  cand_b      1     6.46% +- 2.98    33.33%   0.0000    REJECT
+  cand_b      2     6.87% +- 3.05    33.33%   0.0000    REJECT
+
+The champ3p control reproduces the previous run's control EXACTLY, same error
+bars - the reference and the method are stable, and champ3p genuinely sits at
+par against champ4p at 3p.
+
+cand_a is ~6.0pp below par; cand_b is ~26.4pp below par, i.e. WORSE than the
+already-rejected wonder_promise candidate (14.79%). The joint move is not a
+milder cand_a, it compounds.
+
+behavcensus was NOT run: it was gated on a candidate reaching par, and neither
+did. Running it anyway would be tuning-to-explain, not measurement.
+
+Verdict
+-------
+HURT, both candidates, both seeds, tight seed agreement, no interval straddling
+the null.
+
+The wonder-pricing subspace is now CLOSED as a cure for the 3p late-start
+defect. Two independent, principled, opposite levers have been tried:
+  reward the TAKE   (wonder_promise)  -> lost, and made starts LATER
+  reward the PAYOFF (wonder_progress) -> lost, worse still when joint
+The champion's wonder coordinates are at a local optimum. Moving either
+direction costs games.
+
+That reframes the defect. The late 3p start is not mispriced wonder value; it
+is the OPPORTUNITY COST of the alternative - "take another card" - being
+priced too attractively, which is exactly what the round 3-9 civil-spend
+crosstab in wonder_tempo_3p_cause_2026-08-24.txt showed the budget being
+reallocated to. The next lever is the take side, not the wonder side.
+
+Do not retry: wonder_promise in either direction; wonder_progress at 2.0x
+alone; wonder_progress and wonder_potential jointly. Untried and cheap if this
+line is ever resumed: a smaller wonder_progress delta (+20-50%).
+
+Raw: /private/tmp/w3pg_notes.txt, /private/tmp/w3pg/{cand_a,cand_b}.json,
+/private/tmp/w3pg/duels.log
