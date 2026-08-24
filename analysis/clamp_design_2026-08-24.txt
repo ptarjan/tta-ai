@@ -1,0 +1,372 @@
+THROUGH THE AGES -- PER-FEATURE WEIGHT CLAMP: DESIGN (NOT LANDED) (2026-08-24)
+================================================================================
+
+STATUS: design only. Implemented and TESTED (cargo check/test/clippy all
+green) inside an isolated `cp -Rc` clone at /private/tmp/clampwork, never
+touched /Users/pt/tta-ai, and was NOT committed or pushed anywhere. The
+patch is /private/tmp/CLAMP_PATCH_20260824.patch, a real `git diff` taken
+inside that clone. Companion source: analysis/feature_audit_2026-08-24.txt
+(read in full, including its appended "PER-KEY DISPOSITION OF THE 56 RETIRE
+KEYS" section) and its own multiplier per-key table. No re-measurement was
+done; every number below is either quoted from that file or arithmetic on
+numbers quoted from it.
+
+--------------------------------------------------------------------------------
+1. THE SCHEME IN ONE SENTENCE
+--------------------------------------------------------------------------------
+
+Replace the single `const CLAMP: f64 = 60.0` in `bin/climb.rs` with a
+per-`WeightKey` bound, `WeightKey::clamp_bound(self) -> f64`
+(`rust/src/bots/weighted/weights.rs`, next to the existing `sign_intent`/
+`group` methods it is structurally identical to -- one big, deliberately
+non-wildcard `match` over all 162 variants), so the MAXIMUM POSSIBLE
+CONTRIBUTION a coordinate can add to `evaluate`'s total
+(`|weight| * that key's typical candidate-set spread`) is comparable across
+keys, instead of every coordinate sharing one magnitude ceiling regardless
+of its feature's natural scale.
+
+For an ordinary coordinate (a key `linear_features` actually writes into
+`out[]`):
+
+    bound(k) = CLAMP_SCALE / max(spread(k), SPREAD_FLOOR)
+
+  - `spread(k)` = the LARGER of the 2p/3p/4p MEAN candidate-set spreads in
+    the audit's per-key table (not per-player-count -- see §4a for why).
+  - `SPREAD_FLOOR = 0.02`, exactly the audit's own RETIRE threshold ("mean
+    spread < 0.02 in every player count" = "cannot move an argmax"), so a
+    structurally-zero-spread coordinate's bound saturates at one shared,
+    generous, deliberately-loose constant (`CLAMP_FLOOR = 500.0`) instead of
+    dividing by zero.
+  - `CLAMP_SCALE = 70.0`, chosen to satisfy the two required invariants
+    (§3): `culture_rate` needs `C > 59.16`, `food_stock` needs `C < 75.79`;
+    70 sits in the middle of that window with margin both ways.
+
+Multipliers (§2) cannot use this formula at all -- their own measured
+spread is 0.0 BY CONSTRUCTION, not by having no effect -- and get a
+separate constant, `CLAMP_MULTIPLIER = 10.0` (derivation and a real
+correction discovered while testing this design are in §2).
+
+--------------------------------------------------------------------------------
+2. THE MULTIPLIER PROBLEM
+--------------------------------------------------------------------------------
+
+31 of the 56 RETIRE keys (`analysis/feature_audit_2026-08-24.txt`'s
+appended appendix, "MULTIPLIER (31)") are never written into the linear
+feature vector at all. `linear_features` leaves their `out[]` slot at 0.0,
+so their measured spread is exactly 0.0 by construction of the audit's
+instrument -- it says nothing about whether they influence a decision.
+Mechanically they are pricing MULTIPLIERS: read via `w.get(k)` inside
+`cards.rs`/`row.rs` helpers (`card_potential_core`, `sum_yields`,
+`tech_value`, `gov_value`, `action_value`, `tactic_value`, `row_pressure`,
+...), and the SCALED RESULT lands in a DIFFERENT coordinate than `k`'s
+own -- one of four documented "family landing coordinates": `HandPotential`,
+`RivalHandPotential`, `RowUrgency`, `RowBargainForgone`. "weight × typical
+spread" is meaningless for a key whose own spread column is a permanent
+artifact of the measurement, not a fact about the key.
+
+FIRST ATTEMPT (wrong, caught by testing, kept here as the record): bound
+every multiplier by "it must not let the landing coordinate it feeds
+exceed THAT coordinate's own contribution cap" -- take the MINIMUM of the
+four family coordinates' own formula bounds and share it across all 31.
+`HandPotential`'s own bound is 0.416 (its measured spread, up to 168.3 at
+3p, is the single largest number anywhere in the audit's whole table --
+`card_potential` sums whole-hand printed yields, an unnormalised scale, not
+a per-card fraction), so that was the shared value.
+
+THIS IS A UNIT ERROR. A multiplier is a dimensionless SCALE on an
+already-priced quantity, not a linear coefficient commensurate with a
+landing coordinate's weight. Proof, found by actually running the patch's
+own tests rather than by inspection: `weight_key_table!`'s AUTHORED
+DEFAULTS put 9 of these 31 keys at exactly `1.0` (`action_board_credit`,
+`bonus_card_credit`, `card_rate_credit`, `gov_board_credit`,
+`rate_horizon`, `restricted_resource_credit`, `tech_board_credit`,
+`territory_credit`, `unit_tech_credit`) -- "no discount/no bonus yet," the
+engine's own neutral starting point, authored long before this task and
+independent of anything the league has measured. A bound of 0.416 clamps
+those DEFAULTS on the very first load, before any training runs at all.
+`runaway_weights_is_empty_for_a_vector_nowhere_near_the_clamp` (an existing
+test, unmodified in intent) caught this immediately: `Weights::defaults()`
+tripped the runaway guard under the first-attempt bound.
+
+FIX: `CLAMP_MULTIPLIER = 10.0` -- 10x the largest authored default (1.0),
+comfortably clear of every multiplier's unmeasured starting point, while
+still 6x tighter than the old flat 60. This is NOT derived from the same
+spread arithmetic as every ordinary coordinate -- it is a judgment call,
+and it is the least rigorously justified constant in this design. A
+proper fix would trace each multiplier's actual reachable magnitude
+through `card_potential`/`row_pressure` (which printed-yield ranges each
+credit can multiply, card by card) rather than pick one shared constant.
+That tracing is future work, explicitly out of scope for this pass (see
+"WHAT I COULD NOT DECIDE" at the end).
+
+`HandPotential` itself IS one of the four family coordinates, so it keeps
+its own formula-derived bound (0.416) as an ORDINARY coordinate, entirely
+separately from `CLAMP_MULTIPLIER` -- the two constants are coincidentally
+close in the first cut but are conceptually unrelated after the fix, and
+the code no longer ties them together (see the patch: `HandPotential` has
+its own `match` arm with a literal, not `CLAMP_MULTIPLIER`).
+
+`FreeCivilAction` (the one DEAD key -- audit confirms it is read nowhere
+outside plumbing/tests) is folded into the multiplier bucket too: any
+finite constant is safe since nothing ever consults it, and reusing
+`CLAMP_MULTIPLIER` avoids inventing a bespoke value for one inert key.
+
+GENUINELY-ZERO-SPREAD COORDINATES (the other kind of RETIRE key, 21 of the
+56 -- "COORDINATE" in the audit appendix, e.g. `attack_cost_doubled`,
+`colonies`, `war_immune`): these ARE written into `out[]` by `features.rs`
+(a real `f.set(...)` call each), they are just root-frozen or otherwise
+structurally unable to vary across a candidate set. Their spread is
+genuinely, not artifactually, ~0, so the ordinary formula naturally hits
+`SPREAD_FLOOR` and they land on `CLAMP_FLOOR = 500.0` -- a large, boring,
+deliberately loose constant, because correctness here never depends on the
+exact number (nothing they do can move an argmax at their measured
+spread), only on staying finite so the climb's mutation arithmetic never
+sees an unbounded coordinate. Also on `CLAMP_FLOOR`: `resource_discount`/
+`restricted_resources` (UNCLEAR in the audit -- the enum variant is a real
+dispatch tag but the audit's exhaustive grep confirms the WEIGHT VALUE
+itself is never read via `w.get` anywhere), and `LeaderReplacement`/
+`WonderPoolRivalClaimed` (two `WeightKey` variants added to the enum AFTER
+this audit ran, so no measured spread exists for them at all yet).
+
+`wonder_promise` (UNCLEAR in the audit) is neither a multiplier nor a
+zero-spread coordinate: it has no `out[]` slot of its own (spread 0.0 by
+the same construction as a multiplier) but reads straight into
+`evaluate`'s `total`, not into another coordinate. `sign_intent` already
+pairs it with `WonderPotential` ("prices the in-progress wonder's
+completion value"), so it inherits that sibling's formula bound (13.6949)
+rather than either extreme.
+
+--------------------------------------------------------------------------------
+3. THE TWO REQUIRED SANITY CHECKS
+--------------------------------------------------------------------------------
+
+culture_rate: max(2p,3p,4p) mean spread = max(0.798, 0.7998, 0.986) = 0.986
+  bound = 70 / 0.986 = 70.97  ->  70.97 > 60. PASS, headroom over the old
+  clamp (confirmed by `clamp_bound_satisfies_the_culture_rate_and_
+  food_stock_invariants`, a passing test in the patch).
+
+food_stock: max(2p,3p,4p) mean spread = max(1.017, 0.6765, 1.263) = 1.263
+  bound = 70 / 1.263 = 55.41  ->  55.41 < 60. PASS, cannot reach 60
+  (same test).
+
+Note the 3p champion's food_stock is CURRENTLY sitting at exactly 60 --
+the audit's own CHANGE-list finding ("level standing in for a need," the
+pinned-at-the-old-rail drift signature). This new bound makes that
+specific value illegal, which is intentional: see §5.
+
+--------------------------------------------------------------------------------
+4. THE FOUR REQUIRED QUESTIONS
+--------------------------------------------------------------------------------
+
+4a. Per-player-count bounds, or one shared table?
+
+ONE SHARED TABLE, keyed by the MAX of the 2p/3p/4p mean spreads.
+
+A per-player-count table was the first instinct (`bin/climb.rs` already has
+exactly this shape for `lead_scale(players: u8)`, so the plumbing precedent
+exists) and looked attractive from `hand_potential`'s numbers: its spread
+swings 39x across counts (4.33 / 168.3 / 13.99), so a shared max-based
+bound crushes the tolerable range in 2p and 4p to whatever 3p's outlier
+demands. But `food_stock` argues the opposite direction, and it is the
+decisive case: its OWN 3p spread (0.68) is small precisely BECAUSE the
+weight is already pinned at the old rail there (the audit's "level
+standing in for a need" drift signature) -- a per-count bound keyed to
+each count's own spread would read that low spread as room to grow the 3p
+bound LOOSER (to ~103, per-count arithmetic), in exactly the player count
+already showing the pathology this whole design exists to stop. The
+shared-max table is the conservative, safe choice: it can never let ANY
+player count's contribution exceed `CLAMP_SCALE`, at the cost of being
+tighter than strictly necessary for player counts where a given key's real
+spread is smaller than its worst-case count. It also needs no new
+plumbing: `clamp`/`clamp_bound`/`parse_weights` stay `WeightKey`-indexed
+only, with no player-count parameter threaded through any of them.
+
+4b. Interaction with `sign_intent`.
+
+`dominance_repair` (`eval.rs`) already runs `sign_intent`'s repairs
+(pinning a `NonNegative`/`NonPositive` violation to 0.0, or raising a
+`DOMINATES` pair) on every load and on every accepted mutation
+(`bin/climb.rs:336`). `clamp_repair` (this design's load-time counterpart,
+§4c) is ORDER-DEPENDENT against it and is applied SECOND, after
+`dominance_repair`, for the same reason `dominance_repair` itself orders
+`ORDERINGS LAST` internally: a `DOMINATES` repair can raise one
+coordinate's value onto another's, so running the magnitude check first
+could pass a since-overwritten value and skip clamping it.
+
+No live conflict exists between a `sign_intent` gate and a `clamp_bound`:
+sign classification restricts the SIGN (or pins to exactly 0.0), magnitude
+restricts the ABSOLUTE VALUE -- an interval like `[-500, 0]` (a
+`NonPositive` key at `CLAMP_FLOOR`) is non-empty for every key in this
+table, since every `clamp_bound` is strictly positive. A conflict could
+only arise from a key `sign_intent` pins to a FIXED nonzero value outside
+its own bound; no such key exists in this codebase today (0.0 is the only
+fixed pin `sign_intent`'s repairs ever write).
+
+4c. Every place `CLAMP` is enforced (grep, `rust/src`, before this patch):
+  - `bin/climb.rs:98`         `const CLAMP: f64 = 60.0;` (the definition)
+  - `bin/climb.rs:201-202`    `fn clamp(x: f64) -> f64` (the enforcement)
+  - `bin/climb.rs:218`        `runaway_weights`'s pinned-coordinate threshold
+  - `bin/climb.rs:1276`       the RUNAWAY log line's printed value
+  - `bin/climb.rs:1566`       `no_weight_escapes_the_clamp` test assertion
+  - `bin/climb.rs:2513-2517`  `runaway_weights` test fixtures/assertions
+  - `bin/climb.rs:381, 419`   the two `mutate_raw` call sites (`rescale`,
+                              scatter/group/kick) -- these are the only
+                              places a weight's value is actually WRITTEN
+                              through `clamp()`.
+
+CLAMP WAS **NOT** ENFORCED AT LOAD TIME. `eval::parse_weights`/
+`load_weights` call `dominance_repair` (sign only) and never touched
+`CLAMP` at all. A champion JSON could already contain -- and, per §5, the
+live files ALREADY DO contain -- a weight beyond the old bound, and
+nothing at load time would catch it; only the next climb mutation that
+happened to touch that exact key would re-clamp it, and a key the climb
+rarely mutates (or one outside `FROZEN`'s complement that a hand-edit
+touched) could sit out of bounds indefinitely. A fix that only edits
+`bin/climb.rs`'s `clamp()` function reproduces this exact gap for the new
+per-key bounds. This patch closes it: `WeightKey::clamp_bound` moved out
+of `bin/climb.rs` into the library (`weights.rs`, alongside `sign_intent`),
+and a new `eval::clamp_repair` (mirroring `dominance_repair`'s shape and
+call site exactly) is wired into `parse_weights`, so every champion load
+-- not just every climb mutation -- enforces the same bound.
+
+4d. On load, silently clamped or an error?
+
+SILENTLY CLAMPED (via `clamp_repair`, matching `dominance_repair`'s
+existing "repair on load, log the violation list, never reject" precedent
+-- same `Violation` struct, same shape, called right alongside it in
+`parse_weights`). This is a direct consequence of §5: the three LIVE
+champion files already contain at least one out-of-bounds coordinate each
+under this design's own bounds. An `Err` here would make `load_weights`
+fail on every champion this repo currently has the moment this patch
+lands, with no migration path -- clearly wrong for a first landing. Silent
+repair matches the repo's own established convention for exactly this
+class of problem (a loaded file that predates or otherwise violates a
+constraint the evaluator now enforces) and gives the same audit trail
+`dominance_repair` already provides: `clamp_repair` returns
+`(Weights, Vec<Violation>)`, so a caller that wants to log loudly (a
+future `bin/climb.rs` load path, or a startup check) can, without the
+"unloadable file" failure mode. `Errors are Result<_, String>` (this
+task's own style rule) still holds for genuine parse failures -- bad JSON,
+an unknown key name, a non-finite number -- `clamp_repair` does not touch
+or weaken any of those; it only extends the existing REPAIR path, not the
+error path.
+
+--------------------------------------------------------------------------------
+5. CHAMPION WEIGHTS OUT OF BOUNDS UNDER THIS PROPOSAL (the important part)
+--------------------------------------------------------------------------------
+
+Checked all three live files, /Users/pt/tta-ai/experiments/rust_champion_
+{2,3,4}p.json, against the champion values already quoted verbatim in
+analysis/feature_audit_2026-08-24.txt's per-key table (not re-read from
+the live files, which the climb rewrites every few minutes -- same
+champion snapshot the audit itself used). 9 weight instances, across 7
+keys, are out of bounds:
+
+  key                     players   champion value      proposed bound
+  ----------------------- --------- ------------------- ---------------
+  food_stock              3p        60.0000              55.41
+  resource_stock          3p        60.0000              32.6491
+  blue_free               3p        60.0000              25.3696
+  tech_board_credit       3p       -27.0717               10.0
+  science_rate_trailing   2p        20.4793               10.0
+  my_event_threat         2p        22.7845                8.729
+  hand_potential          2p         9.2874                0.416
+  hand_potential          3p         0.4344   (barely)      0.416
+  hand_potential          4p        -0.9908                0.416
+
+Three shapes, worth separating:
+
+  (a) food_stock / resource_stock / blue_free (3p, all exactly 60.0000):
+      these are literally PINNED AT THE OLD CLAMP right now. `food_stock`
+      and `resource_stock` are two of the audit's own 5 CHANGE-list keys
+      (the "level standing in for a need" drift signature -- a raw stock
+      LEVEL doing the job an already-built Gap/Surplus hinge should be
+      doing instead). This design's bound making them illegal is not a
+      side effect, it is the mechanism working as intended: a raw level
+      pinned at a magnitude bound has always been the audit's own evidence
+      that the wrong feature is being priced, and the new tighter,
+      key-specific bound simply catches it sooner than the old blanket 60
+      did. `blue_free` (a KEEP key, not on the CHANGE list) pinning at the
+      exact same old rail in the exact same 3p file is new evidence this
+      audit didn't have -- worth a human's attention as a possible sixth
+      CHANGE candidate, not something this design can adjudicate.
+
+  (b) tech_board_credit (3p, -27.07) / science_rate_trailing (2p, 20.48):
+      both multipliers, both dramatically past even the generous,
+      default-driven `CLAMP_MULTIPLIER = 10.0` -- these are not marginal;
+      whatever the climb has done with them looks like genuine runaway,
+      the exact failure `runaway_weights`/the pool veto exist to catch,
+      and neither is close enough to the boundary to be a rounding
+      artifact of this design's own choices the way (a) partly is.
+
+  (c) my_event_threat (2p, 22.78) / hand_potential (all three counts):
+      both real KEEP coordinates, both among the audit's "identity-aware,
+      freeze-priced gate" family (Limitations item 1) -- their measured
+      spread is unusually large because `card_potential`/`event`-pricing
+      helpers sum whole, unnormalised printed effects rather than a single
+      bounded feature. This is the most important finding in this whole
+      section: `hand_potential` is a REAL, actively-priced, nonzero-in-
+      every-champion KEEP key (not a multiplier, not a drift artifact),
+      and its own formula-derived bound (0.416, driven by its own 3p
+      spread of 168.3 -- the single largest number in the entire audit
+      table) is smaller than ALL THREE of its live champion values. Under
+      this design as specified, landing it would force `hand_potential`
+      down by roughly 22x in 2p and 2x in 4p. Whether that is a correct
+      correction (the champion overpriced an unnormalised sum) or a sign
+      the FORMULA mishandles "identity-aware, freeze-priced" coordinates
+      as a class (both `hand_potential` and `my_event_threat` are members
+      of that class, and both are now flagged) is exactly the kind of
+      question this design surfaces rather than answers -- see below.
+
+--------------------------------------------------------------------------------
+WHAT I COULD NOT DECIDE
+--------------------------------------------------------------------------------
+
+- The multiplier bound (`CLAMP_MULTIPLIER = 10.0`) is a judgment call, not
+  a measurement -- §2 explains why the formula-derived approach is a unit
+  error and what a properly-traced fix would need (per-multiplier reach
+  through `card_potential`/`row_pressure`'s actual printed-yield ranges),
+  but that tracing is real work this pass did not do.
+
+- §5(c): whether `hand_potential`'s and `my_event_threat`'s formula bounds
+  are right, or whether the "identity-aware, freeze-priced gate" class
+  (10 keys total per the audit's Limitations item 1: `HandPotential`,
+  `WonderPotential`, `HandMilPotential`, `RivalHandPotential`,
+  `RowUrgency`, `RowBargainForgone`, `RowLastCopy`, `MyEventThreat`,
+  `TacticGain`, `TacticShort`) needs a DIFFERENT organizing principle than
+  ordinary coordinates -- their spread is measured through a helper that
+  sums unnormalised printed effects, not a single bounded feature, which
+  may make "spread" itself a different KIND of quantity for this class
+  than for the other 90-odd KEEP keys. This design applies one formula
+  uniformly and reports where that produces a champion-invalidating
+  answer; it does not re-derive the formula per class.
+
+- `blue_free` pinning at exactly 60 in the 3p champion (§5a) looks like
+  the same drift signature the audit's own CHANGE list already caught for
+  `food_stock`/`resource_stock`, but it is not itself on that list -- a
+  human should decide whether it belongs there before or alongside
+  landing this clamp.
+
+--------------------------------------------------------------------------------
+FILES
+--------------------------------------------------------------------------------
+
+/private/tmp/CLAMP_20260824.txt        -- this document
+/private/tmp/CLAMP_PATCH_20260824.patch -- `git diff` from inside the
+  isolated clone (/private/tmp/clampwork, cp -Rc of /Users/pt/tta-ai,
+  target/ deleted immediately, never committed/pushed). Touches:
+    rust/src/bin/climb.rs              (CLAMP -> WeightKey::clamp_bound,
+                                         clamp()/runaway_weights() rewired,
+                                         3 tests replaced/added)
+    rust/src/bots/weighted/weights.rs  (new WeightKey::clamp_bound method,
+                                         162-arm exhaustive match, no
+                                         wildcard)
+    rust/src/bots/weighted/eval.rs     (new eval::clamp_repair, wired into
+                                         parse_weights after dominance_repair)
+  Verified inside the clone: `cargo check --bin climb --lib` clean, `cargo
+  test --bin climb` 57/57 passed, `cargo test --lib -- weighted::weights
+  weighted::eval` 70/70 passed, `cargo clippy --bin climb --lib -- -D
+  warnings` clean (this repo's real gate). Not run: `cargo clippy
+  --all-targets` (the rest of the workspace, e.g. other bin/ targets),
+  the corpus replay sweep, arena, or the climb itself -- all out of scope
+  per this task's own rules.

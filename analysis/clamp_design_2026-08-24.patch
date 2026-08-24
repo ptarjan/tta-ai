@@ -1,0 +1,504 @@
+diff --git c/rust/src/bin/climb.rs i/rust/src/bin/climb.rs
+index bc232fc..64dc5ba 100644
+--- c/rust/src/bin/climb.rs
++++ i/rust/src/bin/climb.rs
+@@ -93,12 +93,17 @@ use tta::stats;
+ /// nothing and just rescales `sigma` behind the search's back.
+ const FROZEN: &[WeightKey] = &[WeightKey::Culture];
+ 
+-/// Python's `_clamp`: no weight may exceed this magnitude. A coordinate that
+-/// runs away takes over the evaluation regardless of what the others say.
+-const CLAMP: f64 = 60.0;
+-
+-/// How close to `CLAMP` counts as "pinned" for [`runaway_weights`]. `0.95`
+-/// (57.0 at the current `CLAMP`) is tight enough that a healthy vector
++/// The per-key magnitude bound replacing the old flat `CLAMP = 60.0`.
++/// [`WeightKey::clamp_bound`] (`weights.rs`, next to [`WeightKey::
++/// sign_intent`] and [`WeightKey::group`]) carries the actual derivation and
++/// per-key table; it lives in the library, not here, because [`eval::
++/// parse_weights`] needs it too (a champion loaded from disk gets the same
++/// per-key repair the climb's own mutation enforces -- see that function's
++/// doc comment for why a load-time magnitude violation is repaired rather
++/// than rejected).
++///
++/// How close to a weight's own [`WeightKey::clamp_bound`] counts as "pinned" for
++/// [`runaway_weights`]. `0.95` is tight enough that a healthy vector
+ /// bouncing around mid-range never trips it, loose enough to catch a
+ /// coordinate a couple of mutation steps short of the wall rather than only
+ /// one sitting exactly on it -- a pinned coordinate is the signature of the
+@@ -197,25 +202,27 @@ fn movable(key: WeightKey) -> bool {
+     !FROZEN.contains(&key)
+ }
+ 
+-fn clamp(x: f64) -> f64 {
+-    if x.abs() > CLAMP {
+-        CLAMP.copysign(x)
++fn clamp(k: WeightKey, x: f64) -> f64 {
++    let bound = k.clamp_bound();
++    if x.abs() > bound {
++        bound.copysign(x)
+     } else {
+         x
+     }
+ }
+ 
+-/// Every movable weight sitting at or very near `CLAMP` -- logged loudly by
+-/// the caller rather than silently clamped-and-continued, because a pinned
+-/// coordinate is exactly what let the 3p arm's gen1384 champion beat its one
+-/// sparring partner while collapsing against everyone else.
++/// Every movable weight sitting at or very near its OWN [`clamp_bound`] --
++/// logged loudly by the caller rather than silently clamped-and-continued,
++/// because a pinned coordinate is exactly what let the 3p arm's gen1384
++/// champion beat its one sparring partner while collapsing against everyone
++/// else.
+ fn runaway_weights(w: &Weights) -> Vec<(WeightKey, f64)> {
+     WeightKey::ALL
+         .iter()
+         .copied()
+         .filter(|k| movable(*k))
+         .map(|k| (k, w.get(k)))
+-        .filter(|(_, v)| v.abs() >= CLAMP * RUNAWAY_FRACTION)
++        .filter(|(k, v)| v.abs() >= k.clamp_bound() * RUNAWAY_FRACTION)
+         .collect()
+ }
+ 
+@@ -378,7 +385,7 @@ fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mu
+         let factor = s.gauss(sigma.max(0.20)).exp();
+         let picks: Vec<WeightKey> = g.keys().into_iter().filter(|k| movable(*k)).collect();
+         for k in &picks {
+-            out.set(*k, clamp(out.get(*k) * factor));
++            out.set(*k, clamp(*k, out.get(*k) * factor));
+         }
+         return Mutation {
+             weights: out,
+@@ -416,7 +423,7 @@ fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mu
+         // would creep slowest of all.
+         let s_k = scale * if s.random() < 0.10 { 4.0 } else { 1.0 };
+         let old = out.get(*k);
+-        out.set(*k, clamp(old + s.gauss(s_k) * (old.abs() + 0.15)));
++        out.set(*k, clamp(*k, old + s.gauss(s_k) * (old.abs() + 0.15)));
+     }
+     Mutation { weights: out, label, moved: picks.len() }
+ }
+@@ -1268,12 +1275,12 @@ fn main() -> ExitCode {
+                 runaway = runaway_weights(&args.cfg.champion);
+                 for (k, v) in &runaway {
+                     eprintln!(
+-                        "climb: RUNAWAY [{}p] gen {} {} = {:.3} (clamp {:.1}) -- pinned coordinate",
++                        "climb: RUNAWAY [{}p] gen {} {} = {:.3} (clamp {:.4}) -- pinned coordinate",
+                         args.cfg.players,
+                         progress.gen,
+                         k.name(),
+                         v,
+-                        CLAMP,
++                        (*k).clamp_bound(),
+                     );
+                 }
+                 accepted = true;
+@@ -1553,17 +1560,56 @@ mod tests {
+         assert!(m.weights != w, "nothing moved off zero");
+     }
+ 
++    /// `clamp` is the one function that turns `clamp_bound` into an actual
++    /// guarantee; test it directly rather than only through many rounds of
++    /// mutation, which proves the same thing far less legibly.
++    #[test]
++    fn clamp_saturates_every_key_at_exactly_its_own_bound() {
++        for &k in WeightKey::ALL {
++            let bound = k.clamp_bound();
++            assert_eq!(clamp(k, bound + 1.0), bound, "{} did not saturate positive", k.name());
++            assert_eq!(clamp(k, -bound - 1.0), -bound, "{} did not saturate negative", k.name());
++            // A value already inside the bound must pass through unchanged.
++            assert_eq!(clamp(k, bound * 0.5), bound * 0.5, "{} was clamped while in bounds", k.name());
++        }
++    }
++
++    /// The invariants this file's replacement for the old flat `CLAMP` is
++    /// required to hold (this task's own brief): `culture_rate` must end up
++    /// with MORE headroom than the old 60, and `food_stock` -- pinned
++    /// exactly at 60 in the live 3p champion, the audit's own "level
++    /// standing in for a need" drift signature -- must NOT be able to reach
++    /// it.
++    #[test]
++    fn clamp_bound_satisfies_the_culture_rate_and_food_stock_invariants() {
++        assert!(WeightKey::CultureRate.clamp_bound() > 60.0);
++        assert!(WeightKey::FoodStock.clamp_bound() < 60.0);
++    }
++
++    /// No movable weight may drift past its OWN bound no matter how many
++    /// mutation rounds run -- the regression guard for both `clamp` call
++    /// sites (`rescale` and the scatter/group/kick path) staying wired to
++    /// `clamp_bound` correctly. Seeded from an all-zero vector (inside every
++    /// key's bound, since every bound is positive) rather than a single
++    /// magic starting magnitude, so the test needs no knowledge of what any
++    /// individual bound is.
+     #[test]
+-    fn no_weight_escapes_the_clamp() {
++    fn no_weight_escapes_its_own_bound_across_two_hundred_mutation_rounds() {
+         let mut w = Weights::defaults();
+         for &k in WeightKey::ALL {
+-            w.set(k, 55.0);
++            w.set(k, 0.0);
+         }
+         let mut s = Search::new(11);
+         for _ in 0..200 {
+             w = mutate(&w, &mut s, 0.8, None).weights;
+             for &k in WeightKey::ALL {
+-                assert!(w.get(k).abs() <= CLAMP, "{} ran to {}", k.name(), w.get(k));
++                assert!(
++                    w.get(k).abs() <= k.clamp_bound(),
++                    "{} ran to {}, past its own bound {}",
++                    k.name(),
++                    w.get(k),
++                    k.clamp_bound()
++                );
+             }
+         }
+     }
+@@ -2504,17 +2550,17 @@ mod tests {
+ 
+     /// `runaway_weights` is the logged-loudly half of the runaway guard
+     /// (this file's module doc, "the failure this pool veto exists to
+-    /// catch"): a coordinate at or very near `CLAMP` must be reported by
+-    /// name and value, and the frozen numeraire must never be reported even
+-    /// if it were somehow set that high.
++    /// catch"): a coordinate at or very near its OWN `clamp_bound` must be
++    /// reported by name and value, and the frozen numeraire must never be
++    /// reported even if it were somehow set that high.
+     #[test]
+-    fn runaway_weights_flags_only_movable_keys_at_or_near_the_clamp() {
++    fn runaway_weights_flags_only_movable_keys_at_or_near_their_own_bound() {
+         let mut w = Weights::defaults();
+-        w.set(WeightKey::Workers, CLAMP); // pinned exactly at the wall
+-        w.set(WeightKey::Culture, CLAMP); // frozen; must never be flagged
++        w.set(WeightKey::Workers, WeightKey::Workers.clamp_bound()); // pinned exactly at the wall
++        w.set(WeightKey::Culture, WeightKey::Culture.clamp_bound()); // frozen; must never be flagged
+         let got = runaway_weights(&w);
+         let keys: Vec<WeightKey> = got.iter().map(|(k, _)| *k).collect();
+-        assert!(keys.contains(&WeightKey::Workers), "a weight pinned at CLAMP must be flagged");
++        assert!(keys.contains(&WeightKey::Workers), "a weight pinned at its own bound must be flagged");
+         assert!(!keys.contains(&WeightKey::Culture), "the frozen key must never be reported as runaway");
+     }
+ 
+diff --git c/rust/src/bots/weighted/eval.rs i/rust/src/bots/weighted/eval.rs
+index 8d9645e..5544726 100644
+--- c/rust/src/bots/weighted/eval.rs
++++ i/rust/src/bots/weighted/eval.rs
+@@ -1013,6 +1013,47 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
+     (out, viol)
+ }
+ 
++/// Return `(weights, violations)` with every movable coordinate pulled back
++/// inside its own [`WeightKey::clamp_bound`].
++///
++/// `bin/climb.rs`'s mutation operators enforce this on every step, but a
++/// champion loaded from disk never went through them -- it may have been
++/// hand-edited, carried over from before this bound existed, or (as of this
++/// bound landing) simply pre-date it: the three live champions in
++/// `experiments/` each already have at least one coordinate sitting at the
++/// OLD flat `CLAMP = 60.0` (`food_stock`/`resource_stock`/`blue_free` in the
++/// 3p file), which is now out of bounds for those specific keys. Repairing
++/// silently rather than returning an `Err` matches [`dominance_repair`]'s
++/// existing precedent immediately above (same "repair on load, don't
++/// reject" philosophy, same `Violation` list for the caller to log loudly)
++/// and, unlike a hard error, does not brick every champion this repo
++/// currently has the moment this bound lands. Pure and idempotent, same as
++/// `dominance_repair`: a coordinate already inside its own bound is
++/// returned unchanged.
++///
++/// `FROZEN` (`bin/climb.rs`) is a mutation-time concept, not a load-time
++/// one -- `Culture` gets the same repair as every other key here, so a
++/// corrupt or hand-edited file cannot smuggle in a numeraire that rescales
++/// the whole evaluation.
++pub fn clamp_repair(w: &Weights) -> (Weights, Vec<Violation>) {
++    let mut out = *w;
++    let mut viol = Vec::new();
++    for &k in WeightKey::ALL {
++        let bound = k.clamp_bound();
++        let v = out.get(k);
++        if v.abs() > bound {
++            viol.push(Violation {
++                weight: k,
++                value: v,
++                default: k.default_weight(),
++                rule: format!("|{}| <= {bound} (WeightKey::clamp_bound)", k.name()),
++            });
++            out.set(k, bound.copysign(v));
++        }
++    }
++    (out, viol)
++}
++
+ // ------------------------------------------------------------------- io
+ 
+ /// Parse a champion vector out of already-read JSON text.
+@@ -1027,9 +1068,13 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
+ /// `d.get("weights", d)`. Missing keys keep their default, [`RETIRED_KEYS`]
+ /// are dropped, [`LEGACY_PHASE_EARLY_FOLD`] names are losslessly folded into
+ /// their T1-A/C/D collapse target (see that constant's own doc comment),
+-/// unknown keys are an error, and [`dominance_repair`] is applied on the way
+-/// out -- see this module's top doc comment for why the repair belongs here
+-/// rather than only in the trainer.
++/// unknown keys are an error, and [`dominance_repair`] then [`clamp_repair`]
++/// are applied on the way out -- see this module's top doc comment for why
++/// the repair belongs here rather than only in the trainer, and
++/// `clamp_repair`'s own doc comment for why a magnitude violation is
++/// repaired rather than rejected. Order matters: a `DOMINATES` repair inside
++/// `dominance_repair` can raise one coordinate to another's value, so
++/// running the magnitude check first could pass a since-overwritten value.
+ pub fn parse_weights(text: &str) -> Result<Weights, String> {
+     let doc = crate::fixtures::parse_json(text).map_err(|e| format!("{e:?}"))?;
+     let map = match doc.get("weights") {
+@@ -1085,7 +1130,7 @@ pub fn parse_weights(text: &str) -> Result<Weights, String> {
+     // in the source JSON.
+     legacy_early.apply(&mut w);
+ 
+-    Ok(dominance_repair(&w).0)
++    Ok(clamp_repair(&dominance_repair(&w).0).0)
+ }
+ 
+ /// The three legacy `_early` field names T1-A/C/D's collapse retired as
+diff --git c/rust/src/bots/weighted/weights.rs i/rust/src/bots/weighted/weights.rs
+index f95ce8c..7ffbab3 100644
+--- c/rust/src/bots/weighted/weights.rs
++++ i/rust/src/bots/weighted/weights.rs
+@@ -1486,6 +1486,239 @@ impl WeightKey {
+             | MilitaryActionSurplus | WorkerSurplus => Free,
+         }
+     }
++
++    /// The per-key magnitude bound replacing `bin/climb.rs`'s old flat
++    /// `CLAMP = 60.0`. One global bound applied to every coordinate was a
++    /// straitjacket for some weights and no constraint at all for others,
++    /// because the weights multiply features with wildly different natural
++    /// scales. This derives a PER-KEY bound instead, so the MAXIMUM POSSIBLE
++    /// CONTRIBUTION a coordinate can make to `evaluate`'s total (`|weight| *
++    /// that key's typical feature spread`) is comparable across keys, not
++    /// the raw weight magnitude.
++    ///
++    /// Lives here rather than in `bin/climb.rs` so [`super::eval::
++    /// parse_weights`] can enforce the SAME bound at load time that the
++    /// climb enforces at mutation time -- see that function's own doc
++    /// comment for why a load-time violation is repaired, not rejected.
++    ///
++    /// `CLAMP_SCALE / max(spread, SPREAD_FLOOR)`, where `spread` is the
++    /// LARGER of the 2p/3p/4p mean candidate-set spreads in
++    /// `analysis/feature_audit_2026-08-24.txt`'s per-key table (measured by
++    /// `bin/featspread.rs` over 253,906 real self-play decisions under each
++    /// player count's own champion). Taking the max across player counts
++    /// rather than keeping a separate bound per count is deliberate:
++    /// `food_stock`'s own 3p spread (0.68) is small precisely BECAUSE the
++    /// weight is already pinned at the old rail there (the audit's own
++    /// "level standing in for a need" finding) -- a per-count bound would
++    /// read that as room to grow looser in exactly the count already
++    /// showing the pathology. The max is the conservative, safe choice: a
++    /// bound derived from it can never let ANY player count's contribution
++    /// exceed `CLAMP_SCALE`, and one shared table needs no per-key
++    /// player-count plumbing through `mutate`/`clamp`/`parse_weights`.
++    ///
++    /// `CLAMP_SCALE = 70.0` is picked to satisfy the two invariants this
++    /// replacement is required to hold: `CultureRate` (max spread 0.986)
++    /// must end up with MORE headroom than the old flat 60
++    /// (70/0.986 ≈ 71.0), and `FoodStock` (max spread 1.263) must NOT be
++    /// able to reach 60 (70/1.263 ≈ 55.4) -- any `C` in the open interval
++    /// (59.16, 75.79) clears both; 70 sits comfortably inside with margin
++    /// either way.
++    ///
++    /// Multipliers (`w.get(k)` read inside `cards.rs`/`row.rs`, scaling a
++    /// helper's result that lands in a DIFFERENT coordinate than `k`'s own)
++    /// cannot use the per-key formula at all: their own measured spread is
++    /// 0.0 by construction of the audit's instrument, not by having no
++    /// effect. The first cut of this bound tried "must not let the LANDING
++    /// coordinate exceed ITS OWN contribution cap" -- take the minimum of
++    /// the four documented family landing coordinates' bounds
++    /// (`HandPotential`, `RivalHandPotential`, `RowUrgency`,
++    /// `RowBargainForgone`) and share it across all 31. That is a UNIT
++    /// ERROR: a multiplier is a dimensionless scale on an already-priced
++    /// quantity (this table's own AUTHORED defaults put nine of the 31 at
++    /// exactly `1.0`, "no discount/no bonus yet" -- see `weight_key_table!`
++    /// below), not a linear coefficient commensurate with a landing
++    /// coordinate's weight. `HandPotential`'s own formula bound is `0.416`
++    /// (its measured spread, up to 168.3 at 3p, is the largest number
++    /// anywhere in the audit's table), so that first cut would clamp the
++    /// engine's own authored `1.0` defaults to `0.416` on the very first
++    /// load, before the league ever measures them --
++    /// `clamp_saturates_every_key_at_exactly_its_own_bound`'s sibling test,
++    /// `runaway_weights_is_empty_for_a_vector_nowhere_near_the_clamp`, is
++    /// what actually caught this (`Weights::defaults()` tripped the
++    /// runaway guard). `CLAMP_MULTIPLIER` instead sits comfortably above
++    /// every multiplier's authored default (max `1.0`) while staying far
++    /// tighter than the old flat 60 -- correct in KIND, not derived from
++    /// the same spread arithmetic as every coordinate above. This is the
++    /// part of this scheme least backed by measurement: a proper fix would
++    /// trace each multiplier's actual reachable magnitude through
++    /// `cards::card_potential`/`row::row_pressure` rather than pick one
++    /// shared constant, which is future work, not this pass.
++    ///
++    /// Deliberately no wildcard `_ =>` arm, for the same reason
++    /// [`Self::sign_intent`] and [`Self::group`] have none: a 163rd variant
++    /// is a compile error here until a human decides which bucket it
++    /// belongs in, rather than silently inheriting whatever the last arm
++    /// happened to be.
++    pub const fn clamp_bound(self) -> f64 {
++        // `CLAMP_SCALE = 70.0` and `SPREAD_FLOOR = 0.02` (see the doc
++        // comment above for both derivations) are not live `const`s here:
++        // every arm below is `CLAMP_SCALE / max(that key's measured
++        // spread, SPREAD_FLOOR)`, precomputed once from
++        // `analysis/feature_audit_2026-08-24.txt`'s table rather than
++        // divided out at compile time, exactly like every other per-key
++        // literal in this match -- there is no live spread measurement to
++        // divide by at runtime, only the frozen audit snapshot.
++
++        /// The bound every coordinate whose divisor hits `SPREAD_FLOOR`
++        /// gets (the 21 "COORDINATE" RETIRE keys, `ResourceDiscount`/
++        /// `RestrictedResources` -- the audit's appendix confirms their own
++        /// weight is never read by `w.get` anywhere -- and the two keys
++        /// added to this enum after the audit ran and so have no measured
++        /// spread yet: `LeaderReplacement`, `WonderPoolRivalClaimed`). None
++        /// of these can move a real decision at their measured/assumed
++        /// spread, so correctness never depends on this constant -- it
++        /// exists only so the climb's mutation arithmetic never sees an
++        /// unbounded coordinate, and so a future measurement that finds
++        /// real spread here has somewhere to tighten FROM rather than
++        /// starting at infinity.
++        const CLAMP_FLOOR: f64 = 500.0;
++        /// See [`WeightKey::clamp_bound`]'s "Multipliers" paragraph: 10x
++        /// the largest authored default among the 31 multiplier keys
++        /// (`1.0`), so a fresh `Weights::defaults()` -- and every
++        /// multiplier's unmeasured starting point -- sits well inside it,
++        /// while still six times tighter than the old flat 60.
++        const CLAMP_MULTIPLIER: f64 = 10.0;
++
++        use WeightKey::*;
++        match self {
++            // 31 pricing MULTIPLIERS plus `FreeCivilAction` (DEAD: read
++            // nowhere outside plumbing/tests, per the audit appendix --
++            // treated the same as a multiplier rather than inventing a
++            // bespoke constant for one inert key).
++            ActionBoardCredit | AggressionBoardCredit | BonusCardCredit | BuildFreshCredit
++            | CardBoardBonus | CardBoardCredit | CardBoardLeader | CardRateCredit
++            | CultureRateTrailing | DefenseBonus | EventBoardCredit | FreeActionCredit
++            | FreeCivilAction | GovActionCost | GovBoardCredit | HandSwapExtra
++            | PactBoardCredit | RateHorizon | RestrictedResourceCredit | RivalDesire
++            | RivalTakeShare | ScienceRateTrailing | TacticBoardCredit | TacticReachCredit
++            | TacticShortfallCost | TechBoardCredit | TechRedundancyDiscount
++            | TerritoryCredit | UnitStrengthCredit | UnitTechCredit | WarBoardCredit
++            | WonderBoardCredit => CLAMP_MULTIPLIER,
++
++            // `WonderPromise` has no `out[]` slot of its own --
++            // `linear_features` never prices it, so its measured spread is
++            // 0.0 by the identical construction as a multiplier -- but
++            // unlike a multiplier it adds straight into `evaluate`'s
++            // `total`, not into another coordinate (see
++            // `analysis/feature_audit_2026-08-24.txt`'s "UNCLEAR" section).
++            // `Self::sign_intent` already pairs it with `WonderPotential`
++            // ("prices the in-progress wonder's completion value"), so it
++            // inherits that sibling's formula-derived bound rather than
++            // `CLAMP_FLOOR`.
++            WonderPotential | WonderPromise => 13.6949,
++
++            // Structurally zero/near-zero measured spread -- see
++            // `CLAMP_FLOOR`'s doc for exactly which keys and why each is
++            // here.
++            AttackCostDoubled | AuctionBid | AuctionCommitted | BestArena | BestLab
++            | BestLibrary | BestMine | BestTemple | BestTheater | BestUnit | BuildDiscount
++            | CivilActions | Colonies | ColonizeBonus | Discontent | GovLevel | HandLimit
++            | HasColony | Leader | LeaderReplacement | MilitaryActions | NoAggression
++            | PactBlocksAttack | Pacts | PopCost | ResourceDiscount | RestrictedResources
++            | RivalBuildingWonder | RivalColonies | RivalCultureRate | RivalFoodStock
++            | RivalFreeCa | RivalFreeWorkers | RivalHandCivil | RivalMilActions
++            | RivalResourceStock | RivalScienceRate | RivalScienceStock | RivalStrength
++            | RivalWonders | RivalYellowBank | SpecialTechs | TechLevels | UrbanLimit
++            | WarImmune | WonderAgeOverrun | WonderOverrun | WonderPoolRivalClaimed
++            | WonderStagesPerAction | Wonders => CLAMP_FLOOR,
++
++            // Ordinary coordinates: `CLAMP_SCALE / max(measured
++            // candidate-set spread across 2p/3p/4p, SPREAD_FLOOR)`, from
++            // `analysis/feature_audit_2026-08-24.txt`'s per-key table.
++            // `Culture` is here too (its own formula value, unused in
++            // practice: `bin/climb.rs`'s `FROZEN` means `mutate` never
++            // touches it, but this match must still supply something to
++            // stay exhaustive without a wildcard arm).
++            HandPotential => 0.4160,
++            RowUrgency => 6.0409,
++            MyEventThreat => 8.729,
++            HandMilPotential => 11.031,
++            HandMilValue => 16.9615,
++            Culture => 19.3967,
++            AttackTargetLead => 22.8176,
++            BlueFree => 25.3696,
++            CaLeft => 28.0161,
++            PactPartnerLead => 29.5233,
++            ResourceSurplus => 30.918,
++            ResourceStock => 32.6491,
++            ScienceSurplus => 33.0663,
++            CivilActionGap => 34.8233,
++            RowBargainForgone => 35.7619,
++            CultureSurplus => 35.7943,
++            RowLastCopy => 38.4535,
++            ScienceGap => 38.8733,
++            WonderRemaining => 39.0009,
++            Science => 39.6819,
++            HandValueLate => 43.9605,
++            CultureGap => 44.4577,
++            CivilActionSurplus => 45.6496,
++            HandMilitary => 49.5127,
++            ResourceRate => 50.1303,
++            CorruptionHeadroom => 50.2397,
++            TakeCostPaid => 51.9558,
++            MaLeft => 53.9811,
++            FoodStock => 55.41,
++            Strength => 57.0548,
++            StrengthRel => 58.4776,
++            MilitaryActionGap => 60.8029,
++            RivalHandPotential => 65.1903,
++            EventScoringMargin => 70.5467,
++            CultureRate => 70.968,
++            FoodRate => 73.5578,
++            HandCivil => 78.3769,
++            HandValue => 80.7338,
++            StrengthDeficit => 80.9913,
++            ResourceGap => 82.2905,
++            FreeWorkers => 85.2931,
++            StrengthRelLate => 92.8351,
++            EndTurnBias => 96.1681,
++            FoodGap => 98.0372,
++            ProdWorkers => 102.8524,
++            UnitWorkers => 103.4933,
++            WonderTurnsToFinish => 106.6455,
++            UrbanWorkers => 107.4261,
++            FoodSurplus => 109.9714,
++            HappySurplus => 112.1189,
++            ScienceRate => 112.1874,
++            WorkerGap => 112.6668,
++            MilitaryActionSurplus => 118.5432,
++            Uprising => 119.2935,
++            WonderStagesLeft => 119.624,
++            AttackTargetWeakness => 121.6025,
++            TacticShort => 121.8831,
++            WorkersLate => 123.9941,
++            WonderProgress => 125.2411,
++            StrengthRelEarly => 131.6814,
++            StrengthLead => 133.1832,
++            HappyMargin => 143.3806,
++            WorkerSurplus => 151.9387,
++            ConsumptionHeadroom => 164.676,
++            HandPerishable => 165.5105,
++            TacticLevel => 173.8889,
++            Workers => 193.105,
++            RivalCulture => 205.3424,
++            TacticGain => 205.9175,
++            HasUnit => 231.6247,
++            RivalMeanCulture => 235.9476,
++            TakeCostShare => 252.1305,
++            YellowBank => 252.6155,
++            BestFarm => 301.7124,
++            TechLevelsLate => 305.7062,
++            MySeededPending => 318.3714,
++            NumTechs => 345.3107,
++            WonderInProgress => 438.6844,
++        }
++    }
+ }
+ 
+ /// What [`WeightKey::sign_intent`] concludes about one coefficient's legal
