@@ -35,7 +35,7 @@
 //! `culture` too) -- there is nothing to decompose without inventing new
 //! instrumentation, which the task instructions say not to do for this pass.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -285,6 +285,177 @@ impl CivilSpendCounts {
 }
 
 // ---------------------------------------------------------------------
+// Card fate: are the LATE group's extra taken civil cards WASTED, or a
+// real investment that pays off later?
+// ---------------------------------------------------------------------
+//
+// analysis/wonder_tempo_2026-08-24.txt's follow-up: the LATE group's
+// take-share of civil-action spend is higher than EARLY's in 5 of 7
+// rounds (see the "Wonder tempo" report section below), and LATE ends
+// round 6 holding more civil cards. This section tracks every civil card
+// a `Move::Take` ever puts into a player's `hand_civil` to its eventual
+// resolution -- played, discarded at an age transition, or still sitting
+// in hand at game end -- so that question is answerable directly instead
+// of guessed at from the round-6 hand-size snapshot alone.
+//
+// Card IDENTITY (not just counts) is tracked: `PlayerTrack::taken_rounds`
+// is keyed by `CardId`, one FIFO queue of "round taken" per distinct card
+// a player has held. A queue, not a single value, because a player can
+// hold more than one physical copy of the same-named card in hand at
+// once, and `CardList::remove_first` (every production site that takes a
+// card OUT of `hand_civil` -- `apply::h_play_leader`, the `Develop`
+// handler, `apply::h_revolution`, `apply::h_play_action`) removes the
+// EARLIEST matching instance, exactly the semantics a FIFO queue gives
+// `pop_front`.
+//
+// A wonder taken by `Move::Take` never reaches this tracking at all: per
+// `apply::take_card_impl`, a wonder card goes straight into the `.wonder`
+// slot, never through `hand_civil` -- the same fact `WonderFate`'s own
+// section above depends on.
+//
+// Item 4 of the requested measurements ("cards lost to an age transition
+// OR hand-limit discard") only has one live half: age-transition
+// antiquation (`game::antiquate_hands`, RULES_SPEC.md line 252/299) is a
+// real discard event and is tracked below via a pre/post `hand_civil`
+// diff on the move that advances `state.age_civil` (mirroring `WonderFate
+// ::DestroyedByAntiquation`'s own detection). A civil HAND-LIMIT discard
+// event does not exist in this engine: `civil_hand_limit` only blocks an
+// illegal `Move::Take` (see `game::force_civil_age_at_least`'s doc
+// comment) -- it never forces a player to discard down to it on its own.
+// That half of item 4 is therefore not counted, because there is nothing
+// to count; see cardfate_notes.txt for this stated explicitly rather than
+// left implicit.
+
+/// The three fates a distinct taken civil card (one `taken_rounds` queue
+/// entry) resolves to by game end. Every entry resolves to exactly one --
+/// `CardFateCounts::taken` is the sum of the other three, checked by
+/// construction (each entry is pushed once by a `Take` and popped by
+/// exactly one of the two event sites below, or never popped at all).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardFate {
+    /// Left `hand_civil` via `Develop`/`PlayLeader`/`Revolution`/
+    /// `PlayAction` -- see [`played_civil_card`].
+    Played,
+    /// Culled by age-transition antiquation before ever being played.
+    Antiquated,
+    /// Neither of the above by game end.
+    StillInHand,
+}
+
+/// Tallies of [`CardFate`] across many player-games. A struct of named
+/// counters for the same reason [`WonderFateCounts`]/[`CivilSpendCounts`]
+/// are: a fate nobody hit prints as `0`, not as a missing key.
+/// `record`'s `n` parameter (rather than always-1) matches
+/// [`CivilSpendCounts::record`]'s shape: the caller already knows how many
+/// of a player-game's taken cards resolved to a given fate and records the
+/// whole count in one call.
+#[derive(Default, Clone, Copy)]
+struct CardFateCounts {
+    taken: u64,
+    played: u64,
+    antiquated: u64,
+    still_in_hand: u64,
+}
+
+impl CardFateCounts {
+    fn record(&mut self, fate: CardFate, n: u64) {
+        self.taken += n;
+        match fate {
+            CardFate::Played => self.played += n,
+            CardFate::Antiquated => self.antiquated += n,
+            CardFate::StillInHand => self.still_in_hand += n,
+        }
+    }
+
+    fn total(&self) -> u64 {
+        self.taken
+    }
+
+    fn merge(&mut self, other: CardFateCounts) {
+        self.taken += other.taken;
+        self.played += other.played;
+        self.antiquated += other.antiquated;
+        self.still_in_hand += other.still_in_hand;
+    }
+}
+
+/// The `CardId` a civil card was played AS, if `mv` is one of the four
+/// sites that ever call `hand_civil.remove_first` in production code
+/// (`apply::h_play_leader`, the `Develop` handler, `apply::h_revolution`,
+/// `apply::h_play_action` -- confirmed by grep, there are no others).
+/// `Move::Build`/`Move::Upgrade` do NOT touch `hand_civil` at all: both
+/// operate on a card already sitting in `PlayerState::techs` (`apply::
+/// do_build`'s own `p.techs.get_mut(id).expect("...must already be
+/// developed...")`), so a built/upgraded card's hand-departure already
+/// happened, earlier, at whichever `Develop` move put it in the tableau --
+/// this function's "played" is that Develop moment, not the later build.
+/// Exhaustive over every `Move` variant, matching this file's own
+/// `civil_move_kind`, so a future `Move` variant that also drains
+/// `hand_civil` cannot silently fall through unclassified.
+fn played_civil_card(mv: Move) -> Option<CardId> {
+    match mv {
+        Move::Develop { card, .. } => Some(card),
+        Move::PlayLeader { card } => Some(card),
+        Move::Revolution { card } => Some(card),
+        Move::PlayAction { card } => Some(card),
+        Move::Take { .. }
+        | Move::Build { .. }
+        | Move::Upgrade { .. }
+        | Move::WonderStep { .. }
+        | Move::Pop { .. }
+        | Move::PopFree
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::Churchill { .. }
+        | Move::EndTurn
+        | Move::PolPass
+        | Move::Resign => None,
+    }
+}
+
+/// Cards present in `pre` but not matched one-for-one in `post` -- a plain
+/// multiset difference (not a set difference: `hand_civil` can hold more
+/// than one copy of the same `CardId`, so a naive "seen in post" boolean
+/// check would under-count a hand that lost one of two identical copies).
+/// `O(pre.len() * post.len())`, fine at real `hand_civil` sizes (a handful
+/// of cards, gated by `MAX_HAND`), called at most once per game per player
+/// (only on the single move that advances `state.age_civil`).
+fn hand_multiset_diff(pre: &[CardId], post: &[CardId]) -> Vec<CardId> {
+    let mut remaining: Vec<CardId> = post.to_vec();
+    let mut removed = Vec::new();
+    for &card in pre {
+        match remaining.iter().position(|&c| c == card) {
+            Some(pos) => {
+                remaining.swap_remove(pos);
+            }
+            None => removed.push(card),
+        }
+    }
+    removed
+}
+
+// ---------------------------------------------------------------------
 // Per-age snapshot bucket
 // ---------------------------------------------------------------------
 
@@ -485,6 +656,42 @@ struct Report {
     // as the rest of this file).
     round6_early: Vec<AgeSample>,
     round6_late: Vec<AgeSample>,
+
+    // ---- card fate: are LATE's extra taken civil cards wasted, or a real
+    // investment that pays off later? Same EARLY/LATE grouping as the
+    // wonder-tempo fields above (see the "Card fate" section for the
+    // fate classification and its `hand_civil.remove_first`/antiquation
+    // detection).
+    card_fate_early: CardFateCounts,
+    card_fate_late: CardFateCounts,
+    /// A `Move::Develop`/`PlayLeader`/`Revolution`/`PlayAction`, or an
+    /// antiquation cull, that could not be matched back to a `taken_rounds`
+    /// entry (should stay 0 -- see `play_one`'s card-fate blocks; the same
+    /// "a nonzero count here is a real bug, not a census gap" reasoning as
+    /// `n_wonder_fate_mismatches`).
+    n_card_fate_mismatches: u64,
+    /// Civil cards taken over the whole game, one sample per player-game.
+    cards_taken_per_playergame_early: Vec<i32>,
+    cards_taken_per_playergame_late: Vec<i32>,
+    /// Civil cards still sitting in `hand_civil` at game end, one sample
+    /// per player-game (a player-game that took 0 civil cards still
+    /// contributes a `0` -- same "no fabricated sample, but no silent
+    /// exclusion of a real zero either" rule the rest of this file uses).
+    cards_still_in_hand_per_playergame_early: Vec<i32>,
+    cards_still_in_hand_per_playergame_late: Vec<i32>,
+    /// Rounds a taken card sat in hand before being played -- one sample
+    /// per PLAYED card (not per player-game), the played population of
+    /// item 5's dwell measurement.
+    played_dwell_early: Vec<i32>,
+    played_dwell_late: Vec<i32>,
+    /// The same dwell measurement for cards NEVER played by game end --
+    /// still in hand (censored at the final round) or antiquated (censored
+    /// at the round it was culled) -- kept as a SEPARATE population from
+    /// `played_dwell_*` above, never blended with it, because "rounds held
+    /// so far" and "rounds held before being played" answer different
+    /// questions.
+    censored_dwell_early: Vec<i32>,
+    censored_dwell_late: Vec<i32>,
 }
 
 impl Report {
@@ -537,6 +744,18 @@ impl Report {
         self.n_player_games_late += other.n_player_games_late;
         self.round6_early.append(&mut other.round6_early);
         self.round6_late.append(&mut other.round6_late);
+
+        self.card_fate_early.merge(other.card_fate_early);
+        self.card_fate_late.merge(other.card_fate_late);
+        self.n_card_fate_mismatches += other.n_card_fate_mismatches;
+        self.cards_taken_per_playergame_early.extend(other.cards_taken_per_playergame_early);
+        self.cards_taken_per_playergame_late.extend(other.cards_taken_per_playergame_late);
+        self.cards_still_in_hand_per_playergame_early.extend(other.cards_still_in_hand_per_playergame_early);
+        self.cards_still_in_hand_per_playergame_late.extend(other.cards_still_in_hand_per_playergame_late);
+        self.played_dwell_early.extend(other.played_dwell_early);
+        self.played_dwell_late.extend(other.played_dwell_late);
+        self.censored_dwell_early.extend(other.censored_dwell_early);
+        self.censored_dwell_late.extend(other.censored_dwell_late);
     }
 }
 
@@ -614,6 +833,26 @@ struct PlayerTrack {
     /// snapshots above) -- `None` if the game ended before round 6 was
     /// reached.
     round6_sample: Option<AgeSample>,
+
+    /// Card-fate tracking (see the "Card fate" section above): a FIFO
+    /// queue of "round taken" per distinct `CardId` this player has ever
+    /// held in `hand_civil`, so a card's eventual fate can be matched back
+    /// to the specific take that put it in hand. An entry is pushed by a
+    /// `Move::Take` and popped by exactly one of the "played" or
+    /// "antiquated" event blocks in `play_one`'s move loop; whatever is
+    /// left in the queues at game end is `StillInHand`.
+    taken_rounds: HashMap<CardId, VecDeque<u16>>,
+    n_taken: u32,
+    n_played: u32,
+    n_antiquated: u32,
+    /// See `n_card_fate_mismatches` on [`Report`].
+    n_card_fate_mismatch: u32,
+    played_dwell: Vec<i32>,
+    /// Antiquation-censored dwell only (rounds held before being culled) --
+    /// the still-in-hand-at-game-end half of the censored population is
+    /// computed once, at game end, from whatever is left in `taken_rounds`
+    /// (see `play_one`'s end-of-game card-fate block), not accumulated here.
+    censored_dwell: Vec<i32>,
 }
 
 impl PlayerTrack {
@@ -636,6 +875,13 @@ impl PlayerTrack {
             ca_unused_r3: 0,
             civil_spend_by_round: [CivilSpendCounts::default(); 7],
             round6_sample: None,
+            taken_rounds: HashMap::new(),
+            n_taken: 0,
+            n_played: 0,
+            n_antiquated: 0,
+            n_card_fate_mismatch: 0,
+            played_dwell: Vec::new(),
+            censored_dwell: Vec::new(),
         }
     }
 }
@@ -771,10 +1017,25 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         let ca_before_move = state.players[actor as usize].civil_actions;
         let pre_govt = state.players[actor as usize].government;
         let pre_age = state.age_civil;
+        // Card-fate: the CardId this move plays out of hand_civil, if any
+        // (see played_civil_card's doc comment) -- computed pre-move
+        // because it only reads `mv` itself, and is needed both after
+        // game::step (to resolve the "played" fate) and inside the
+        // antiquation hand-diff below (to avoid double-counting the same
+        // card as both played and antiquated on the one move that could
+        // ever coincide with an age transition).
+        let played_this_move = played_civil_card(mv);
 
         // pre-move snapshot for every player, used only if this move is the
         // one that advances state.age_civil.
         let pre_snapshots: Vec<AgeSample> = (0..players).map(|i| sample_player(&state, i)).collect();
+        // pre-move hand_civil snapshot for every player, used only if this
+        // move is the one that advances state.age_civil -- same "compute
+        // for every player, use conditionally" idiom as pre_snapshots just
+        // above, so antiquation's hand-diff (see hand_multiset_diff) can
+        // read what left EVERY player's hand this move, not just the actor's.
+        let pre_hands: Vec<Vec<CardId>> =
+            (0..players).map(|i| state.players[i as usize].hand_civil.as_slice().to_vec()).collect();
 
         // pre-move wonder-fate inputs: who holds what wonder right now, how
         // many each has completed so far, and whether `mv` might be about
@@ -807,6 +1068,67 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 state.players[i as usize].completed_wonders.len() > before_completed_len[i as usize];
             let fate = classify_wonder_change(completed_this_move, pending_infiltrate_victim, i, age_changed_this_move);
             tracks[i as usize].wonder_fate.entry(before).or_insert(fate);
+        }
+
+        // ---- card fate: TAKEN -- every non-wonder card a Move::Take put
+        // into hand_civil this move (a wonder goes straight to the
+        // `.wonder` slot, never hand_civil -- see apply::take_card_impl,
+        // same fact the wonder-fate section above depends on).
+        if let Some(card) = taken_card {
+            if !card.is_none() && card.get().kind != CardType::Wonder {
+                tracks[actor as usize].taken_rounds.entry(card).or_default().push_back(round_before);
+                tracks[actor as usize].n_taken += 1;
+            }
+        }
+
+        // ---- card fate: PLAYED -- the card played_this_move named, if
+        // any, matched back to the take that put it in hand (see
+        // played_civil_card's doc comment for which four Move variants
+        // this can ever be non-None for).
+        if let Some(card) = played_this_move {
+            let t = &mut tracks[actor as usize];
+            match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
+                Some(taken_round) => {
+                    t.n_played += 1;
+                    t.played_dwell.push(round_before as i32 - taken_round as i32);
+                }
+                None => t.n_card_fate_mismatch += 1,
+            }
+        }
+
+        // ---- card fate: ANTIQUATED -- civil cards culled from a hand by
+        // the same age-transition this move already detected for
+        // WonderFate::DestroyedByAntiquation above. Read as a pre/post
+        // hand_civil multiset diff (see hand_multiset_diff) rather than
+        // reimplementing game::antiquate_hands's own age-cutoff test,
+        // because that keeps this census reading what the engine actually
+        // did rather than a second, potentially-drifting copy of the rule.
+        // The actor's OWN played card this move (if any) is excluded from
+        // the diff first: it already left hand_civil via the PLAYED branch
+        // above, on the very same move, and must not be double-counted as
+        // antiquated too.
+        if age_changed_this_move {
+            for i in 0..players {
+                let post_hand = state.players[i as usize].hand_civil.as_slice();
+                let mut removed = hand_multiset_diff(&pre_hands[i as usize], post_hand);
+                if i == actor {
+                    if let Some(played) = played_this_move {
+                        if let Some(pos) = removed.iter().position(|&c| c == played) {
+                            removed.remove(pos);
+                        }
+                    }
+                }
+                let t = &mut tracks[i as usize];
+                for card in removed {
+                    match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
+                        Some(taken_round) => {
+                            t.n_antiquated += 1;
+                            t.censored_dwell.push(round_before as i32 - taken_round as i32);
+                        }
+                        None => t.n_card_fate_mismatch += 1,
+                    }
+                }
+            }
         }
 
         // ---- wonder tempo: civil-action spend by move kind, rounds 3-9
@@ -926,6 +1248,9 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
     let final_idx = age_index(Age::IV);
     let final_snapshots: Vec<AgeSample> = (0..players).map(|i| sample_player(&state, i)).collect();
     report.age_samples[final_idx].extend(final_snapshots);
+    // Card fate: the round every still-in-hand taken card's censored dwell
+    // (rounds held so far, never played) is measured against.
+    let final_round = state.round;
 
     // Win/loss for the opening win-rate maps below: the STRICT max of
     // `PlayerState::culture` (this file's own final-score field, see
@@ -1055,6 +1380,48 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 }
             }
         }
+
+        // ---- card fate EARLY/LATE cross-tab: same grouping as the
+        // wonder-tempo block just above. "Still in hand at game end" and
+        // its censored dwell are resolved HERE, from whatever is left in
+        // `taken_rounds` after every PLAYED/ANTIQUATED pop during the move
+        // loop -- the same "whatever never resolved during play is
+        // resolved at game end" shape `WonderFate::StillInProgress` uses.
+        if let Some(group) = wonder_tempo_group(tracks[i as usize].first_wonder_round) {
+            let mut still_in_hand: u64 = 0;
+            let mut censored_dwell_this_game: Vec<i32> = tracks[i as usize].censored_dwell.clone();
+            for rounds in tracks[i as usize].taken_rounds.values() {
+                for &taken_round in rounds {
+                    still_in_hand += 1;
+                    censored_dwell_this_game.push(final_round as i32 - taken_round as i32);
+                }
+            }
+            let n_taken = tracks[i as usize].n_taken;
+            let n_played = tracks[i as usize].n_played;
+            let n_antiquated = tracks[i as usize].n_antiquated;
+            let played_dwell_this_game = tracks[i as usize].played_dwell.clone();
+            match group {
+                WonderTempoGroup::Early => {
+                    report.card_fate_early.record(CardFate::Played, n_played as u64);
+                    report.card_fate_early.record(CardFate::Antiquated, n_antiquated as u64);
+                    report.card_fate_early.record(CardFate::StillInHand, still_in_hand);
+                    report.cards_taken_per_playergame_early.push(n_taken as i32);
+                    report.cards_still_in_hand_per_playergame_early.push(still_in_hand as i32);
+                    report.played_dwell_early.extend(played_dwell_this_game);
+                    report.censored_dwell_early.extend(censored_dwell_this_game);
+                }
+                WonderTempoGroup::Late => {
+                    report.card_fate_late.record(CardFate::Played, n_played as u64);
+                    report.card_fate_late.record(CardFate::Antiquated, n_antiquated as u64);
+                    report.card_fate_late.record(CardFate::StillInHand, still_in_hand);
+                    report.cards_taken_per_playergame_late.push(n_taken as i32);
+                    report.cards_still_in_hand_per_playergame_late.push(still_in_hand as i32);
+                    report.played_dwell_late.extend(played_dwell_this_game);
+                    report.censored_dwell_late.extend(censored_dwell_this_game);
+                }
+            }
+        }
+        report.n_card_fate_mismatches += tracks[i as usize].n_card_fate_mismatch as u64;
 
         let completed: Vec<CardId> = p.completed_wonders.as_slice().to_vec();
         let started_count = tracks[i as usize].wonder_started.len();
@@ -1483,6 +1850,65 @@ fn print_report(players: u8, r: &Report) {
         println!("  military strength:   {}", percentiles_i32(samples.iter().map(|s| s.strength).collect()));
         println!("  cards in civil hand: {}", percentiles_u32(samples.iter().map(|s| s.hand_civil).collect()));
         println!("  buildings on board:  {}", percentiles_u32(samples.iter().map(|s| s.buildings).collect()));
+    }
+
+    // ---- card fate: are LATE's extra taken civil cards WASTED, or a real
+    // investment that pays off later? See the "Card fate" section near
+    // CivilMoveKind above for the fate classification and its detection.
+    println!("\n### Card fate: are LATE's extra taken civil cards wasted, or a real investment paying off later?\n");
+    println!(
+        "Same EARLY/LATE grouping as the wonder-tempo tables above (see analysis/wonder_tempo_2026-08-24.txt). \
+         PLAYED = left hand_civil via Develop/PlayLeader/Revolution/PlayAction (see played_civil_card's doc \
+         comment) -- Move::Build/Move::Upgrade never touch hand_civil at all, so they cannot be this event. \
+         ANTIQUATED = culled from hand at an age transition (RULES_SPEC.md \u{a7}12.2). There is no separate \
+         hand-LIMIT discard event in this engine to measure -- civil_hand_limit only blocks an illegal Take \
+         (game::force_civil_age_at_least's doc comment), it never forces a discard -- so item 4's hand-limit \
+         half is not reported because it does not exist, not because it was skipped."
+    );
+    if r.n_card_fate_mismatches > 0 {
+        println!(
+            "WARNING  {} card(s) played or antiquated with no matching taken_rounds entry -- a real bug in \
+             this census's own tracking, not a sample gap (see Report::n_card_fate_mismatches's doc comment)",
+            r.n_card_fate_mismatches
+        );
+    }
+    for (label, counts, taken_v, hand_v, played_dwell_v, censored_dwell_v, n_pg) in [
+        (
+            "EARLY",
+            &r.card_fate_early,
+            &r.cards_taken_per_playergame_early,
+            &r.cards_still_in_hand_per_playergame_early,
+            &r.played_dwell_early,
+            &r.censored_dwell_early,
+            r.n_player_games_early,
+        ),
+        (
+            "LATE",
+            &r.card_fate_late,
+            &r.cards_taken_per_playergame_late,
+            &r.cards_still_in_hand_per_playergame_late,
+            &r.played_dwell_late,
+            &r.censored_dwell_late,
+            r.n_player_games_late,
+        ),
+    ] {
+        println!("\n{label} (n={n_pg} player-games):");
+        let total = counts.total();
+        let pct = |n: u64| 100.0 * n as f64 / total.max(1) as f64;
+        println!("  civil cards taken over the whole game: {}", percentiles_i32(taken_v.clone()));
+        println!(
+            "  fate of every taken card ({total} total): played {} ({:.1}%), antiquated {} ({:.1}%), \
+             still in hand at game end {} ({:.1}%)",
+            counts.played,
+            pct(counts.played),
+            counts.antiquated,
+            pct(counts.antiquated),
+            counts.still_in_hand,
+            pct(counts.still_in_hand)
+        );
+        println!("  cards still in hand at game end:       {}", percentiles_i32(hand_v.clone()));
+        println!("  dwell (rounds in hand), PLAYED cards:              {}", percentiles_i32(played_dwell_v.clone()));
+        println!("  dwell (rounds in hand), NEVER played (censored):   {}", percentiles_i32(censored_dwell_v.clone()));
     }
 }
 

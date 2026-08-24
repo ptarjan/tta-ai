@@ -1,0 +1,81 @@
+Card fate at 3p: the "late starters hoard cards" story is FALSIFIED.
+But 39% of every card the bot takes is never played.
+====================================================================
+Measured 2026-08-24, 200 games of 3p self-play against the frozen
+/private/tmp/opencensus/champ3p.json. Prerequisites:
+analysis/wonder_tempo_3p_cause_2026-08-24.txt (the EARLY/LATE split and the
+civil-spend crosstab) and analysis/wonder_progress_ab_3p_2026-08-24.txt (which
+closed the wonder-pricing subspace and pointed at the take side).
+
+The hypothesis under test
+-------------------------
+The late-wonder group reallocates its civil-action budget to `take` and ends
+round 6 holding median 2 civil cards against the early group's 1. If those
+extra cards are never played, the take is overpriced and the reallocation is
+waste. If they are played, it is a real investment and the tempo difference is
+a plan, not a defect.
+
+Definitions
+-----------
+PLAYED     = the card left hand_civil via Develop / PlayLeader / Revolution /
+             PlayAction. Move::Build and Move::Upgrade never touch hand_civil,
+             so they cannot be this event.
+ANTIQUATED = culled from hand at an age transition (RULES_SPEC.md §12.2).
+Dwell is tracked per CARD IDENTITY through a FIFO queue of take-rounds, because
+a hand can hold more than one copy of a card and the engine removes the
+earliest first. Played and never-played dwell are separate populations; the
+never-played one is censored at game end and is never blended with the other.
+
+There is NO hand-limit forced discard in this engine to measure. civil_hand_limit
+only blocks an illegal Take; it never forces a discard. That half of the
+question does not exist, rather than having been skipped.
+
+Result
+------
+                                        EARLY (n=192)   LATE (n=157)
+  civil cards taken, whole game, mean       17.49          17.95
+  ... median                                   18             18
+  of every taken card: played               61.0%          61.7%
+                       antiquated           16.9%          18.8%
+                       in hand at end       22.1%          19.5%
+  cards in hand at game end, mean            3.87           3.50
+  dwell, PLAYED, median / mean              1 / 1.48       1 / 1.50
+  dwell, NEVER played, median / mean        5 / 5.19       5 / 5.32
+
+Finding 1: THE HYPOTHESIS IS FALSIFIED. The two groups are indistinguishable on
+every card-fate measure. Over a whole game LATE takes 0.46 more cards than
+EARLY - and plays the same fraction of them, at the same dwell, with the same
+antiquation rate. The higher LATE take SHARE in rounds 3-9 is therefore a
+TIMING difference, not a volume difference: LATE front-loads the same total
+number of takes into the early rounds. Card hoarding does not discriminate the
+two groups and is not the mechanism behind the late wonder start.
+
+Finding 2, and it is the bigger one: 39% OF EVERY CARD THE BOT TAKES IS NEVER
+PLAYED, in BOTH groups. Per player-game that is ~17.5 cards taken, ~10.7
+played, ~3.0 destroyed by antiquation and ~3.7 stranded in hand at game end.
+A take costs a civil action, and civil actions are the currency of this game.
+The ~3 antiquated cards per player-game are unambiguous: a CA was paid and the
+card was destroyed having done nothing.
+
+This is a UNIVERSAL defect, not a property of the late-wonder group, which is
+exactly why it did not show up in a conditional split. A within-population
+crosstab can only find within-population variation.
+
+What this does NOT establish
+----------------------------
+Whether 39% is actually bad. Human players also take cards they never play -
+you take to deny a rival, or to hold an option. The number is meaningless until
+it is compared against the same statistic computed over the 1011-game BGO human
+corpus. THAT is the next measurement, and it is a diagnostic mirror only: a
+divergence from humans is evidence about where to look, never a licence to fit
+weights to human play.
+
+Known defect in this census's own tracking
+------------------------------------------
+3 cards out of 6177 were played or antiquated with no matching take recorded
+(0.05%). The census reports this as a WARNING rather than swallowing it. It
+means at least one path puts a civil card into hand without a Move::Take. It is
+too small to move any number above, but it should be found before this
+instrumentation is trusted for anything finer-grained.
+
+Raw: /private/tmp/cf_bot3p.txt, /private/tmp/cardfate_notes.txt
