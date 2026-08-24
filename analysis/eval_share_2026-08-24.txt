@@ -1,0 +1,725 @@
+THROUGH THE AGES -- EVAL SHARE: SIZING A PER-KEY CLAMP AGAINST THE DECISION
+ITSELF (2026-08-24)
+================================================================================
+MEASUREMENT ONLY. Answers "how big should SCALE be" for a clamp of the form
+`bound(k) = SCALE / p95_spread_when_firing(k)`, by anchoring SCALE on the
+size of the decision the clamp protects, rather than picking it by hand.
+Picking it by hand failed: at SCALE=70 (analysis/clamp_design_2026-08-24.txt)
+the design's own two sanity cases pulled in opposite directions (see
+analysis/spread_quantiles_2026-08-24.txt's SANITY CHECKS section: culture_rate
+needed bound > 60, food_stock needed bound < 60, and 70/p95 gave 17.74 and
+10.00 respectively -- both FAIL/PASS the wrong way for a single flat SCALE to
+satisfy both).
+
+================================================================================
+METHOD
+================================================================================
+Extends analysis/spread_quantiles_2026-08-24.txt's own method (itself matching
+analysis/feature_audit_2026-08-24.txt's method) with one more quantity measured
+at the SAME decisions: the FULL evaluation score spread, not just each
+feature's own spread.
+
+At every real self-play decision (`filter_resign`d legal-move count > 1)
+reached by WeightedBot::choose under a given player count's FROZEN champion
+weights (a COPY of experiments/rust_champion_{2,3,4}p.json, taken at the start
+of this run -- the live climb rewrites those files every few minutes and this
+measurement never reads them directly), every legal move is applied to a
+scratch clone and eval::candidate_features() is read for each resulting state.
+Per decision:
+  total_spread = max(dot(w, phi)) - min(dot(w, phi))   over the candidate set
+  spread(k)    = max(phi[k]) - min(phi[k])              over the candidate set
+`dot` and `candidate_features` are read directly from rust/src/bots/weighted/
+eval.rs (`candidate_features` returns one Vec<f64> per candidate, aligned to
+WeightKey::ALL -- the same array `dot` sums against, so `total_spread` and
+each key's `spread` come from the identical per-candidate vectors, no
+re-derivation). The move actually walked is chosen separately by
+WeightedBot::choose on the same state (not re-derived from these scores), so
+self-play visits the same decisions the champion actually reaches.
+
+TOOLING: wrote rust/src/bin/evalshare.rs inside this task's own isolated
+clone (/private/tmp/evalshare, deleted at the end of this run), reusing
+eval::candidate_features/dot and WeightedBot::choose exactly as the prior
+spread report's featspread.rs did, adding the total_spread accumulation
+alongside the existing per-key fire_rate/mean_spread/mean_spread_when_firing/
+p95_spread/max_spread. Ran single-threaded (no --threads flag needed, unlike
+the prior run's featspread) specifically so as not to compete with the three
+climb arms live on this machine.
+
+COMMAND RUN (from rust/, in the isolated clone):
+  cargo build --profile difftest --bin evalshare
+  ./target/difftest/evalshare
+(games/seed/player counts are compiled in: 40 games/count, seed 0, 2p/3p/4p,
+matching the prior spread report's own choice and rationale for both.)
+
+Percentiles are nearest-rank, same convention as the prior report.
+
+SAMPLE SIZE: 40 self-play games per player count (120 games total), producing
+10,136 (2p) + 15,255 (3p) + 25,155 (4p) = 50,546 real decision points, each
+with its full legal-move candidate set scored -- effectively the same
+population as the prior spread_quantiles run (50,818 decisions, same 40/seed-0
+protocol; the small per-count differences, e.g. 10,136 vs 10,101 at 2p, come
+from the live champion having moved between the two runs' freezes, which
+changes WeightedBot::choose's actual path through each game).
+
+eval_share(k, players) = abs(champion_weight(k)) * p95_spread_when_firing(k)
+                          / p95(total_spread at that player count)
+-- "what fraction of a typical decision's whole score range this one
+coordinate commands," using the SAME p95_spread_when_firing the earlier
+report already computed as "how bad does it get when it fires" (that report's
+own LIMITATIONS #2 applies here identically: the rarest-firing keys' p95
+rests on a few hundred firing samples, so single-digit-percent movement is
+expected on a re-run).
+
+================================================================================
+SECTION A -- total_spread: max(dot(w,phi)) - min(dot(w,phi)) over the
+candidate set, per decision, per player count
+================================================================================
+count   n_decisions   mean        p50         p95         max
+2p      10,136        116.477     89.108      330.676     1993.021
+3p      15,255        170.674     152.080     503.371     2660.899
+4p      25,155        158.658    139.494      414.408     2165.413
+
+A typical (p50) 2p decision separates its best from its worst legal move by
+~89 evaluation points; a typical 3p decision by ~152; a typical 4p decision by
+~139. The p95 decision (one in twenty) separates them by 330-500+ points.
+3p decisions run consistently bigger than 2p/4p at every percentile measured
+here -- not investigated further, out of scope for this task.
+
+================================================================================
+SECTION B -- eval_share(k, players), top 30 by eval_share descending
+================================================================================
+eval_share(k) = abs(champ_weight(k)) * p95_spread_when_firing(k) / p95(total_spread)
+
+key                          count  eval_share  fire_rate  champ_w      p95_spread_firing  p95_total
+event_scoring_margin         2p     1.8189      0.2637     30.0726      20.0000            330.676
+auction_bid                  2p     1.6643      0.0242     42.3330      13.0000            330.676
+attack_target_weakness       3p     1.1920      0.0954     60.0000      10.0000            503.371
+event_scoring_margin         3p     0.8720      0.1942     34.6535      12.6667            503.371
+event_scoring_margin         4p     0.8547      0.2609     31.8775      11.1111            414.408
+blue_free                    3p     0.8344      0.3912     60.0000      7.0000             503.371
+my_event_threat               2p     0.7534      0.0969     18.0174      13.8279            330.676
+rival_culture                 2p     0.7500      0.0260     10.7834      23.0000            330.676
+resource_stock                3p     0.7152      0.3558     60.0000      6.0000             503.371
+strength                      4p     0.6745      0.5615     55.9012      5.0000             414.408
+uprising                      2p     0.6387      0.0182     -10.5607     20.0000            330.676
+hand_potential                3p     0.5738      0.4893     0.3401       849.2627           503.371
+culture_rate                  4p     0.5415      0.5857     56.8523      3.9469             414.408
+wonder_potential               3p     0.5399      0.1878     2.3340       116.4413           503.371
+science_gap                   4p     0.5159      0.3907     -19.4354     11.0000            414.408
+rival_hand_potential           3p     0.4928      0.1339     -2.5283      98.1069            503.371
+food_stock                    3p     0.4768      0.2547     60.0000      4.0000             503.371
+science                       3p     0.4683      0.2342     -39.2906     6.0000             503.371
+culture_rate                  3p     0.4598      0.4926     60.0000      3.8577             503.371
+hand_potential                 2p     0.4552      0.6873     9.2874       16.2085            330.676
+best_library                   4p     0.4344      0.0095     60.0000      3.0000             414.408
+strength                      3p     0.4339      0.5225     54.6062      4.0000             503.371
+culture_rate                  2p     0.4308      0.6329     43.8978      3.2455             330.676
+rival_culture                 3p     0.4282      0.0264     -6.5309      33.0000            503.371
+attack_target_weakness         4p     0.3475      0.0889     8.9995       16.0000            414.408
+best_theater                   4p     0.3403      0.0097     47.0040      3.0000             414.408
+unit_workers                   4p     0.2896      0.4895     -60.0000     2.0000             414.408
+tactic_level                   4p     0.2589      0.2711     -53.6527     2.0000             414.408
+best_unit                      4p     0.2503      0.0018     34.5817      3.0000             414.408
+attack_target_lead             4p     0.2466      0.0610     0.6551       156.0000           414.408
+
+Keys (key, player-count) pairs with eval_share > 1.0 -- ONE coordinate
+commanding MORE than the entire typical (p95) decision's whole score range:
+3 out of 486 (key, count) pairs measured:
+  event_scoring_margin   2p  eval_share=1.819  fire_rate=0.2637  champ_w=30.0726  p95_spread_firing=20.0000
+  auction_bid             2p  eval_share=1.664  fire_rate=0.0242  champ_w=42.3330  p95_spread_firing=13.0000
+  attack_target_weakness  3p  eval_share=1.192  fire_rate=0.0954  champ_w=60.0000  p95_spread_firing=10.0000
+
+All three are at (or, for event_scoring_margin, near) the +-60 weight rail the
+live climb has driven those keys to -- consistent with
+analysis/spread_quantiles_2026-08-24.txt's own "LIVE CHAMPION WEIGHTS THAT
+VIOLATE A p95-BASED BOUND" list, which already flagged event_scoring_margin
+(all three counts), attack_target_weakness (3p), blue_free/resource_stock/
+food_stock (3p, all pinned at 60.0) as the worst overshoots under a flat
+SCALE=70. This eval_share measurement confirms those specific five keys are
+not just "big relative to a constant" but structurally big relative to the
+decision itself, at more than one player count in event_scoring_margin's and
+attack_target_weakness's case.
+
+================================================================================
+SECTION C -- SCALE implied by "no coordinate should command more than T times
+the p95 total spread", T in {0.5, 1.0, 2.0}
+================================================================================
+SCALE = T * p95_total_spread(count); bound(k, count) = SCALE(count) /
+p95_spread_when_firing(k, count); a champion (key, count) pair VIOLATES if
+abs(champ_weight(k, count)) > bound(k, count). SCALE differs per player count
+(p95_total_spread differs by count, see Section A) -- each key's bound is
+checked against SCALE for ITS OWN player count, never a cross-count SCALE.
+Keys that never fired anywhere in this run (p95_spread_when_firing = 0) are
+excluded from the violation count -- their bound is undefined, matching the
+prior spread report's own footnote-only "floor=500" treatment rather than
+silently admitting a divide-by-zero.
+
+T = 0.5  (a coordinate may command at most HALF a typical big decision)
+  2p SCALE=165.338  3p SCALE=251.685  4p SCALE=207.204
+  TOTAL violating pairs: 15
+    2p (5): event_scoring_margin 3.64x, auction_bid 3.33x, my_event_threat 1.51x,
+            rival_culture 1.50x, uprising 1.28x
+    3p (6): attack_target_weakness 2.38x, event_scoring_margin 1.74x,
+            blue_free 1.67x, resource_stock 1.43x, hand_potential 1.15x,
+            wonder_potential 1.08x
+    4p (4): event_scoring_margin 1.71x, strength 1.35x, culture_rate 1.08x,
+            science_gap 1.03x
+
+T = 1.0  (a coordinate may command at most the ENTIRE typical big decision)
+  2p SCALE=330.676  3p SCALE=503.371  4p SCALE=414.408
+  TOTAL violating pairs: 3
+    2p (2): event_scoring_margin 1.82x, auction_bid 1.66x
+    3p (1): attack_target_weakness 1.19x
+    4p (0): none
+
+T = 2.0  (a coordinate may command at most TWICE the typical big decision)
+  2p SCALE=661.351  3p SCALE=1006.741  4p SCALE=828.816
+  TOTAL violating pairs: 0 (all three player counts clean)
+
+Reading: T=1.0 (SCALE = p95_total_spread itself) already clears all but 3 of
+486 (key, count) pairs, and those 3 are exactly the keys Section B's
+eval_share > 1.0 list already flagged -- event_scoring_margin (2p),
+auction_bid (2p), attack_target_weakness (3p). T=0.5 is materially tighter
+(15 violations, touching event_scoring_margin/strength/culture_rate/
+science_gap/hand_potential/wonder_potential/blue_free/resource_stock/
+my_event_threat/rival_culture/uprising -- names Section B's top-30 list
+mostly overlaps). T=2.0 is a no-op against the CURRENT champion (0
+violations) -- it would not force any live weight to move, which makes it a
+weak choice if the point of the clamp is to actually constrain the climb
+going forward rather than only flag what has already happened.
+
+================================================================================
+CAVEATS
+================================================================================
+1. Sample size matches the prior spread report's own choice and inherits its
+   LIMITATIONS #2 verbatim: p95 for the rarest-firing keys (e.g. auction_bid,
+   fire_rate ~0.02-0.03) rests on roughly 200-450 firing decisions per count,
+   so a re-run with a different seed could move THOSE keys' p95 (and hence
+   their eval_share / violation status) by double-digit percent. The keys
+   Section B/C's headline numbers turn on -- event_scoring_margin,
+   attack_target_weakness, auction_bid -- fire on 2-26% of decisions, giving
+   them between ~250 and several thousand firing samples; less shaky than the
+   rarest keys but not as solid as the always-firing majority.
+
+2. Champion weights were frozen at run start (see METHOD); the live climb
+   moves them continuously, so a live weight for e.g. event_scoring_margin
+   could already differ from the 30.07/34.65/31.88 (2p/3p/4p) used here by
+   the time this file is read. The SCALE figures (which depend only on
+   candidate-set geometry, not on any one weight) are far more stable across
+   time than the specific violation lists in Section C, which depend on both.
+
+3. total_spread and each key's spread are read from the SAME per-candidate
+   Vec<f64> in one pass (see METHOD) -- there is no risk of the two numbers
+   coming from different champion snapshots or different decision samples
+   within this run, unlike a comparison across two separately-run files.
+
+4. This is a measurement, not a landed clamp. No change to
+   rust/src/bots/weighted/weights.rs or any live champion file was made.
+
+================================================================================
+RAW PER-KEY / PER-COUNT DATA (all 162 WeightKeys, at 2p/3p/4p)
+================================================================================
+Columns: key | n | fire_rate | mean_spread | mean_spread_when_firing | p95_spread | max_spread
+(mean_spread is over ALL decisions, firing or not; the other three are over
+FIRING decisions only, exactly as in analysis/spread_quantiles_2026-08-24.txt)
+
+EVALSHARE RAW MEASUREMENT
+Columns match analysis/spread_quantiles_2026-08-24.txt's per-key table, plus a
+TOTAL_SPREAD line per player count (max-min of dot(w,phi) over the candidate
+set at each decision).
+
+-- 2p -- decisions=10136 games=40 elapsed=18.1s
+TOTAL_SPREAD mean=116.476515 p50=89.107519 p95=330.675721 max=1993.020950
+key                          n       fire_rate  mean_spread    mean_spread_when_firing  p95_spread     max_spread
+rate_horizon                 10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+culture                      10136   0.5591     3.225434     5.769014                  12.000000      47.000000
+culture_rate                 10136   0.6329     0.755982     1.194487                  3.245478       10.164572
+science                      10136   0.4600     1.218824     2.649367                  7.000000       19.000000
+science_rate                 10136   0.5024     0.516344     1.027821                  2.705564       4.058346
+food_rate                    10136   0.6677     0.725057     1.085871                  3.023916       4.192784
+resource_rate                10136   0.6946     1.328201     1.912308                  4.848056       7.284397
+food_stock                   10136   0.4348     1.042522     2.397776                  4.000000       12.000000
+resource_stock               10136   0.5830     1.955110     3.353698                  6.000000       13.000000
+blue_free                    10136   0.6083     2.650059     4.356309                  8.000000       12.000000
+corruption_headroom          10136   0.5554     1.334550     2.402664                  4.000000       4.000000
+consumption_headroom         10136   0.2261     0.422060     1.866492                  3.000000       3.000000
+pop_cost                     10136   0.1048     0.106748     1.018832                  1.000000       2.000000
+yellow_bank                  10136   0.2282     0.267660     1.172936                  2.000000       8.000000
+free_workers                 10136   0.6979     0.792472     1.135496                  2.000000       2.000000
+workers                      10136   0.6687     0.345051     0.515998                  1.381579       2.684211
+prod_workers                 10136   0.5822     0.669890     1.150652                  2.000000       2.000000
+urban_workers                10136   0.5838     0.653019     1.118641                  2.000000       2.000000
+unit_workers                 10136   0.5830     0.666338     1.143002                  2.000000       6.000000
+happy_margin                 10136   0.3993     0.484412     1.213244                  2.000000       5.000000
+discontent                   10136   0.0697     0.076657     1.100567                  2.000000       3.000000
+uprising                     10136   0.0182     0.277427     15.282609                 20.000000      31.000000
+civil_actions                10136   0.0202     0.023481     1.160976                  2.000000       3.000000
+military_actions             10136   0.0470     0.058110     1.237395                  2.000000       3.000000
+ca_left                      10136   0.6715     2.299526     3.424625                  5.000000       8.000000
+ma_left                      10136   0.7238     1.286306     1.777263                  3.000000       3.000000
+take_cost_paid               10136   0.4760     1.213398     2.549016                  4.000000       6.000000
+row_urgency                  10136   0.6085     0.439327     0.721956                  2.293613       10.403330
+row_bargain_forgone          10136   0.5768     1.922060     3.332535                  6.000000       9.000000
+row_last_copy                10136   0.5887     1.794906     3.048964                  7.000000       11.000000
+rival_desire                 10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_take_share             10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_free_ca                10136   0.0005     0.000691     1.400000                  2.000000       2.000000
+rival_hand_civil             10136   0.0165     0.029992     1.820359                  3.000000       4.000000
+rival_wonders                10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_hand_potential         10136   0.3613     0.052922     0.146483                  0.977579       6.112217
+rival_science_stock          10136   0.0091     0.019534     2.152174                  6.000000       6.000000
+rival_food_stock             10136   0.0174     0.039266     2.261364                  5.000000       7.000000
+rival_resource_stock         10136   0.0194     0.054163     2.786802                  7.000000       9.000000
+rival_free_workers           10136   0.0078     0.007794     1.000000                  1.000000       1.000000
+rival_yellow_bank            10136   0.0380     0.071231     1.875325                  2.000000       8.000000
+rival_colonies               10136   0.0037     0.003650     1.000000                  1.000000       1.000000
+rival_mil_actions            10136   0.0042     0.004440     1.046512                  1.000000       2.000000
+rival_building_wonder        10136   0.0037     0.003749     1.000000                  1.000000       1.000000
+my_seeded_pending            10136   0.0806     0.119376     1.481028                  3.000000       3.000000
+my_event_threat              10136   0.0969     0.435343     4.493516                  13.827935      20.557026
+attack_target_lead           10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+attack_target_weakness       10136   0.0927     0.333465     3.595745                  9.000000       23.000000
+pact_partner_lead            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+strength                     10136   0.6217     1.260754     2.027769                  4.000000       14.000000
+strength_rel                 10136   0.6217     1.216726     1.956955                  4.000000       14.000000
+strength_deficit             10136   0.3960     0.630919     1.593174                  3.000000       8.000000
+strength_lead                10136   0.2853     0.532755     1.867220                  4.000000       6.000000
+tactic_level                 10136   0.2390     0.344909     1.442839                  2.000000       2.000000
+tactic_gain                  10136   0.2179     0.335931     1.541421                  3.000000       6.000000
+tactic_short                 10136   0.4857     0.568962     1.171440                  2.000000       3.000000
+has_unit                     10136   0.2782     0.278216     1.000000                  1.000000       1.000000
+colonies                     10136   0.0107     0.010655     1.000000                  1.000000       1.000000
+has_colony                   10136   0.0068     0.006807     1.000000                  1.000000       1.000000
+pacts                        10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+pact_blocks_attack           10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+war_immune                   10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+attack_cost_doubled          10136   0.0024     0.002368     1.000000                  1.000000       1.000000
+auction_committed            10136   0.0242     0.017413     0.720408                  1.000000       1.000000
+auction_bid                  10136   0.0242     0.127368     5.269388                  13.000000      28.000000
+tech_levels                  10136   0.3892     0.104590     0.268726                  0.730263       1.131579
+gov_level                    10136   0.0073     0.010655     1.459459                  3.000000       3.000000
+best_farm                    10136   0.1237     0.158051     1.277512                  2.000000       3.000000
+best_mine                    10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+best_lab                     10136   0.0141     0.017660     1.251748                  2.000000       3.000000
+best_temple                  10136   0.0341     0.050217     1.471098                  2.000000       2.000000
+best_theater                 10136   0.0030     0.002960     1.000000                  1.000000       1.000000
+best_library                 10136   0.0404     0.050513     1.248780                  2.000000       3.000000
+best_arena                   10136   0.0183     0.026342     1.443243                  2.000000       3.000000
+best_unit                    10136   0.0019     0.003650     1.947368                  3.000000       3.000000
+num_techs                    10136   0.1649     0.164858     1.000000                  1.000000       1.000000
+special_techs                10136   0.0509     0.050908     1.000000                  1.000000       1.000000
+wonders                      10136   0.0367     0.036701     1.000000                  1.000000       1.000000
+wonder_progress              10136   0.1216     0.554361     4.557178                  10.000000      12.000000
+wonder_remaining             10136   0.2771     2.084353     7.521182                  16.000000      16.000000
+wonder_stages_left           10136   0.2771     0.683504     2.466358                  5.000000       5.000000
+wonder_turns_to_finish       10136   0.4016     0.650700     1.620116                  3.666667       8.000000
+wonder_overrun               10136   0.0276     0.051980     1.881681                  5.720670       8.000000
+wonder_stages_per_action     10136   0.0315     0.035912     1.141066                  2.000000       3.000000
+wonder_potential             10136   0.2346     0.708042     3.017962                  13.090380      22.720990
+wonder_promise               10136   0.4154     1.601413     3.855563                  12.987066      36.889158
+wonder_age_overrun           10136   0.0403     0.064696     1.607245                  4.861304       8.000000
+leader                       10136   0.0601     0.060083     1.000000                  1.000000       1.000000
+wonder_in_progress           10136   0.1939     0.193863     1.000000                  1.000000       1.000000
+hand_limit                   10136   0.0004     0.000789     2.000000                  2.000000       2.000000
+colonize_bonus               10136   0.0094     0.016575     1.768421                  3.000000       4.000000
+build_discount               10136   0.0315     0.101914     3.238245                  5.000000       6.000000
+free_civil_action            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+resource_discount            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+defense_bonus                10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+urban_limit                  10136   0.0073     0.008386     1.148649                  2.000000       2.000000
+gov_action_cost              10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+no_aggression                10136   0.0024     0.002368     1.000000                  1.000000       1.000000
+restricted_resources         10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_board_credit            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+event_scoring_margin         10136   0.2637     0.803955     3.048592                  20.000000      27.000000
+card_board_leader            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_board_bonus             10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+hand_swap_extra              10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_rate_credit             10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+unit_strength_credit         10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+unit_tech_credit             10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+tech_board_credit            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+action_board_credit          10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+gov_board_credit             10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+wonder_board_credit          10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+build_fresh_credit           10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+restricted_resource_credit   10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+free_action_credit           10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+territory_credit             10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+bonus_card_credit            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_board_credit          10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+aggression_board_credit      10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+war_board_credit             10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+pact_board_credit            10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+event_board_credit           10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_shortfall_cost        10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_reach_credit          10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+hand_civil                   10136   0.5304     0.799230     1.506882                  2.000000       4.000000
+hand_value                   10136   0.5941     0.820869     1.381655                  2.789474       3.269737
+hand_potential               10136   0.6873     3.359075     4.887681                  16.208479      182.634484
+hand_military                10136   0.6977     1.341900     1.923289                  4.000000       5.000000
+hand_mil_value               10136   0.7252     3.881511     5.352061                  12.000000      20.000000
+hand_mil_potential           10136   0.7106     0.586500     0.825318                  2.397111       6.107623
+hand_perishable              10136   0.5630     0.372116     0.660902                  1.425935       3.740597
+rival_culture                10136   0.0260     0.270126     10.371212                 23.000000      59.000000
+rival_mean_culture           10136   0.0260     0.270126     10.371212                 23.000000      59.000000
+rival_culture_rate           10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_science_rate           10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_strength               10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+end_turn_bias                10136   0.7062     0.706196     1.000000                  1.000000       1.000000
+culture_rate_trailing        10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+science_rate_trailing        10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+workers_late                 10136   0.7172     0.545298     0.760268                  1.355263       4.000000
+strength_rel_early           10136   0.6507     0.538092     0.826881                  2.006579       4.473684
+strength_rel_late            10136   0.6875     0.746814     1.086197                  3.190789       14.000000
+tech_levels_late             10136   0.3901     0.158707     0.406843                  1.697368       3.000000
+hand_value_late              10136   0.6285     1.330071     2.116421                  6.157895       12.888158
+food_gap                     10136   0.3930     0.721093     1.835049                  4.000000       7.000000
+food_surplus                 10136   0.1941     0.403907     2.081342                  4.000000       11.000000
+resource_gap                 10136   0.3385     0.749605     2.214515                  4.000000       9.000000
+resource_surplus             10136   0.6047     1.949586     3.224180                  6.000000       12.000000
+science_gap                  10136   0.3066     0.826411     2.695142                  7.000000       12.000000
+science_surplus              10136   0.3851     1.205061     3.129516                  7.000000       16.000000
+culture_gap                  10136   0.2987     1.412638     4.728699                  11.000000      32.000000
+culture_surplus              10136   0.2964     1.685428     5.686917                  13.000000      30.000000
+happy_surplus                10136   0.4811     0.655781     1.363208                  3.000000       6.000000
+civil_action_gap             10136   0.6507     1.778611     2.733172                  5.000000       8.000000
+civil_action_surplus         10136   0.4659     0.988753     2.122406                  4.000000       6.000000
+take_cost_share              10136   0.4774     0.278611     0.583592                  0.833333       1.000000
+military_action_gap          10136   0.6949     1.230219     1.770481                  3.000000       6.000000
+military_action_surplus      10136   0.3154     0.466160     1.477948                  3.000000       6.000000
+worker_gap                   10136   0.4531     0.546616     1.206292                  2.000000       2.000000
+worker_surplus               10136   0.3222     0.355564     1.103491                  2.000000       2.000000
+tech_redundancy_discount     10136   0.0000     0.000000     0.000000                  0.000000       0.000000
+leader_replacement           10136   0.0942     0.094219     1.000000                  1.000000       1.000000
+wonder_pool_rival_claimed    10136   0.0080     0.007991     1.000000                  1.000000       1.000000
+-- 3p -- decisions=15255 games=40 elapsed=26.8s
+TOTAL_SPREAD mean=170.674200 p50=152.079548 p95=503.370699 max=2660.899374
+key                          n       fire_rate  mean_spread    mean_spread_when_firing  p95_spread     max_spread
+rate_horizon                 15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+culture                      15255   0.2561     1.180957     4.611083                  13.000000      61.000000
+culture_rate                 15255   0.4926     0.849882     1.725209                  3.857716       8.964136
+science                      15255   0.2342     0.428373     1.829461                  6.000000       16.000000
+science_rate                 15255   0.4143     0.421387     1.017131                  2.287992       3.312635
+food_rate                    15255   0.4844     0.536234     1.106935                  2.578486       7.111475
+resource_rate                15255   0.5366     0.918214     1.711136                  3.884126       5.480638
+food_stock                   15255   0.2547     0.686900     2.697211                  4.000000       12.000000
+resource_stock               15255   0.3558     1.044073     2.934832                  6.000000       11.000000
+blue_free                    15255   0.3912     1.437660     3.675465                  7.000000       11.000000
+corruption_headroom          15255   0.3647     0.892691     2.447520                  4.000000       4.000000
+consumption_headroom         15255   0.1685     0.258145     1.532296                  3.000000       3.000000
+pop_cost                     15255   0.0439     0.044248     1.007463                  1.000000       2.000000
+yellow_bank                  15255   0.1700     0.180979     1.064315                  1.500000       7.000000
+free_workers                 15255   0.5383     0.607812     1.129100                  2.000000       2.000000
+workers                      15255   0.5093     0.279529     0.548876                  1.435294       2.047059
+prod_workers                 15255   0.4397     0.501344     1.140131                  2.000000       2.000000
+urban_workers                15255   0.4405     0.488561     1.109077                  2.000000       2.000000
+unit_workers                 15255   0.4743     0.538119     1.134623                  2.000000       7.000000
+happy_margin                 15255   0.3442     0.401093     1.165238                  2.000000       4.000000
+discontent                   15255   0.0922     0.095269     1.033665                  1.000000       2.000000
+uprising                     15255   0.0269     0.254802     9.457421                  20.000000      29.000000
+civil_actions                15255   0.0133     0.016323     1.226601                  2.000000       3.000000
+military_actions             15255   0.0450     0.052343     1.163994                  2.000000       4.000000
+ca_left                      15255   0.4935     1.521993     3.083809                  5.000000       9.000000
+ma_left                      15255   0.5552     0.894526     1.611098                  3.000000       3.000000
+take_cost_paid               15255   0.3795     0.981711     2.586975                  4.000000       7.000000
+row_urgency                  15255   0.3137     15.427172    49.172902                 131.319284     1290.449327
+row_bargain_forgone          15255   0.3924     0.481957     1.228241                  2.924418       8.143635
+row_last_copy                15255   0.3980     0.566215     1.422531                  3.115385       6.130435
+rival_desire                 15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_take_share             15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_free_ca                15255   0.0003     0.000524     1.600000                  4.000000       4.000000
+rival_hand_civil             15255   0.0041     0.006555     1.587302                  3.000000       3.000000
+rival_wonders                15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_hand_potential         15255   0.1339     1.267085     9.461270                  98.106854      442.690568
+rival_science_stock          15255   0.0246     0.045297     1.837766                  5.000000       6.000000
+rival_food_stock             15255   0.0219     0.040184     1.835329                  5.000000       8.000000
+rival_resource_stock         15255   0.0187     0.034677     1.856140                  5.000000       8.000000
+rival_free_workers           15255   0.0130     0.012979     1.000000                  1.000000       1.000000
+rival_yellow_bank            15255   0.0118     0.017371     1.472222                  2.000000       3.000000
+rival_colonies               15255   0.0007     0.000656     1.000000                  1.000000       1.000000
+rival_mil_actions            15255   0.0016     0.001835     1.166667                  2.000000       2.000000
+rival_building_wonder        15255   0.0016     0.001573     1.000000                  1.000000       1.000000
+my_seeded_pending            15255   0.1046     0.174500     1.667920                  3.000000       3.000000
+my_event_threat              15255   0.0693     6.398015     92.338433                 353.615179     540.000000
+attack_target_lead           15255   0.0713     2.942380     41.293468                 130.000000     260.000000
+attack_target_weakness       15255   0.0954     0.454736     4.764423                  10.000000      20.000000
+pact_partner_lead            15255   0.0613     3.107702     50.703743                 152.000000     342.000000
+strength                     15255   0.5225     1.071802     2.051485                  4.000000       18.000000
+strength_rel                 15255   0.5223     1.047893     2.006226                  4.000000       18.000000
+strength_deficit             15255   0.3929     0.665246     1.693364                  3.000000       10.000000
+strength_lead                15255   0.1771     0.358407     2.024250                  4.000000       6.000000
+tactic_level                 15255   0.2970     0.417634     1.406091                  2.000000       3.000000
+tactic_gain                  15255   0.1978     0.298263     1.507621                  3.000000       6.000000
+tactic_short                 15255   0.3953     0.462275     1.169292                  2.000000       4.000000
+has_unit                     15255   0.2184     0.218420     1.000000                  1.000000       1.000000
+colonies                     15255   0.0066     0.006621     1.000000                  1.000000       1.000000
+has_colony                   15255   0.0061     0.006096     1.000000                  1.000000       1.000000
+pacts                        15255   0.0910     0.078696     0.864914                  1.500000       2.500000
+pact_blocks_attack           15255   0.0407     0.029564     0.726248                  1.500000       1.500000
+war_immune                   15255   0.0052     0.005244     1.000000                  1.000000       1.000000
+attack_cost_doubled          15255   0.0020     0.001967     1.000000                  1.000000       1.000000
+auction_committed            15255   0.0137     0.008926     0.651515                  1.000000       1.000000
+auction_bid                  15255   0.0137     0.076314     5.570175                  14.000000      21.000000
+tech_levels                  15255   0.1240     0.021562     0.173948                  0.741176       1.011765
+gov_level                    15255   0.0102     0.013242     1.294872                  3.000000       3.000000
+best_farm                    15255   0.0014     0.003474     2.523810                  3.000000       3.000000
+best_mine                    15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+best_lab                     15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+best_temple                  15255   0.0001     0.000131     2.000000                  2.000000       2.000000
+best_theater                 15255   0.0134     0.017765     1.328431                  2.000000       3.000000
+best_library                 15255   0.0008     0.002032     2.583333                  3.000000       3.000000
+best_arena                   15255   0.0004     0.001049     2.666667                  3.000000       3.000000
+best_unit                    15255   0.0001     0.000066     1.000000                  1.000000       1.000000
+num_techs                    15255   0.0246     0.024582     1.000000                  1.000000       1.000000
+special_techs                15255   0.0085     0.008522     1.000000                  1.000000       1.000000
+wonders                      15255   0.0243     0.024254     1.000000                  1.000000       1.000000
+wonder_progress              15255   0.1335     0.443723     3.323024                  9.000000       12.000000
+wonder_remaining             15255   0.2441     1.711242     7.011818                  16.000000      16.000000
+wonder_stages_left           15255   0.2441     0.547755     2.244427                  5.000000       5.000000
+wonder_turns_to_finish       15255   0.3108     0.499349     1.606404                  4.000000       16.000000
+wonder_overrun               15255   0.0184     0.040010     2.172051                  6.000000       15.000000
+wonder_stages_per_action     15255   0.0019     0.004195     2.206897                  3.000000       3.000000
+wonder_potential             15255   0.1878     5.170767     27.532306                 116.441290     222.903498
+wonder_promise               15255   0.3396     8.577099     25.259391                 78.496147      232.882579
+wonder_age_overrun           15255   0.0347     0.057401     1.652161                  5.000000       15.000000
+leader                       15255   0.0734     0.073353     1.000000                  1.000000       1.000000
+wonder_in_progress           15255   0.1354     0.135365     1.000000                  1.000000       1.000000
+hand_limit                   15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+colonize_bonus               15255   0.0059     0.008587     1.455556                  4.000000       4.000000
+build_discount               15255   0.0019     0.009898     5.206897                  6.000000       6.000000
+free_civil_action            15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+resource_discount            15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+defense_bonus                15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+urban_limit                  15255   0.0092     0.009767     1.064286                  2.000000       2.000000
+gov_action_cost              15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+no_aggression                15255   0.0020     0.001967     1.000000                  1.000000       1.000000
+restricted_resources         15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_board_credit            15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+event_scoring_margin         15255   0.1942     0.681276     3.508731                  12.666667      24.400000
+card_board_leader            15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_board_bonus             15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+hand_swap_extra              15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_rate_credit             15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+unit_strength_credit         15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+unit_tech_credit             15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+tech_board_credit            15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+action_board_credit          15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+gov_board_credit             15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+wonder_board_credit          15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+build_fresh_credit           15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+restricted_resource_credit   15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+free_action_credit           15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+territory_credit             15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+bonus_card_credit            15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_board_credit          15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+aggression_board_credit      15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+war_board_credit             15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+pact_board_credit            15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+event_board_credit           15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_shortfall_cost        15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_reach_credit          15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+hand_civil                   15255   0.4195     0.594756     1.417656                  2.000000       5.000000
+hand_value                   15255   0.4302     0.597770     1.389454                  2.823529       4.058824
+hand_potential               15255   0.4893     169.020894   345.400367                849.262671     2964.575230
+hand_military                15255   0.6168     0.910412     1.476069                  4.000000       5.000000
+hand_mil_value               15255   0.6822     2.608915     3.824253                  11.000000      21.000000
+hand_mil_potential           15255   0.7740     4.390721     5.672464                  20.290949      140.308529
+hand_perishable              15255   0.3910     0.236526     0.604997                  1.302123       3.777424
+rival_culture                15255   0.0264     0.279318     10.599502                 33.000000      49.000000
+rival_mean_culture           15255   0.0337     0.230547     6.842412                  25.500000      41.500000
+rival_culture_rate           15255   0.0208     0.017044     0.820189                  1.500000       1.500000
+rival_science_rate           15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_strength               15255   0.0078     0.013766     1.764706                  2.000000       2.000000
+end_turn_bias                15255   0.5497     0.549656     1.000000                  1.000000       1.000000
+culture_rate_trailing        15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+science_rate_trailing        15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+workers_late                 15255   0.5476     0.354693     0.647773                  1.117647       6.629412
+strength_rel_early           15255   0.5038     0.457367     0.907771                  2.082353       4.941176
+strength_rel_late            15255   0.5407     0.627953     1.161283                  3.000000       17.047059
+tech_levels_late             15255   0.1259     0.036157     0.287276                  1.670588       3.000000
+hand_value_late              15255   0.4612     1.050399     2.277732                  7.294118       15.835294
+food_gap                     15255   0.1947     0.394778     2.027722                  4.000000       5.000000
+food_surplus                 15255   0.1499     0.334470     2.231016                  4.000000       12.000000
+resource_gap                 15255   0.2342     0.538676     2.300532                  4.000000       10.000000
+resource_surplus             15255   0.4032     1.143286     2.835447                  6.000000       11.000000
+science_gap                  15255   0.3085     1.239506     4.017991                  10.000000      12.000000
+science_surplus              15255   0.3323     0.840260     2.528737                  6.000000       13.000000
+culture_gap                  15255   0.1906     0.738119     3.872077                  12.000000      30.000000
+culture_surplus              15255   0.0882     0.360505     4.085810                  14.000000      20.000000
+happy_surplus                15255   0.3225     0.398820     1.236837                  2.000000       5.000000
+civil_action_gap             15255   0.4588     1.070665     2.333619                  4.000000       9.000000
+civil_action_surplus         15255   0.3161     0.794494     2.513480                  4.000000       8.000000
+take_cost_share              15255   0.3797     0.214803     0.565750                  0.800000       1.000000
+military_action_gap          15255   0.6312     1.113755     1.764496                  3.000000       6.000000
+military_action_surplus      15255   0.1260     0.185054     1.468783                  3.000000       4.000000
+worker_gap                   15255   0.2979     0.315831     1.060066                  2.000000       2.000000
+worker_surplus               15255   0.2516     0.274544     1.091237                  2.000000       2.000000
+tech_redundancy_discount     15255   0.0000     0.000000     0.000000                  0.000000       0.000000
+leader_replacement           15255   0.0937     0.093674     1.000000                  1.000000       1.000000
+wonder_pool_rival_claimed    15255   0.0018     0.002229     1.214286                  2.000000       2.000000
+-- 4p -- decisions=25155 games=40 elapsed=35.9s
+TOTAL_SPREAD mean=158.657635 p50=139.493972 p95=414.407762 max=2165.413344
+key                          n       fire_rate  mean_spread    mean_spread_when_firing  p95_spread     max_spread
+rate_horizon                 25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+culture                      25155   0.3906     2.257427     5.779703                  15.000000      99.000000
+culture_rate                 25155   0.5857     0.995921     1.700312                  3.946870       12.962334
+science                      25155   0.3715     1.086106     2.923283                  8.000000       27.000000
+science_rate                 25155   0.4930     0.590348     1.197405                  2.836833       9.476626
+food_rate                    25155   0.6002     0.967375     1.611651                  3.924267       9.584429
+resource_rate                25155   0.6333     1.229710     1.941709                  3.981155       16.154815
+food_stock                   25155   0.4056     1.291639     3.184472                  7.000000       21.000000
+resource_stock               25155   0.4565     1.654939     3.625675                  7.000000       42.000000
+blue_free                    25155   0.5187     2.190459     4.222622                  8.000000       15.000000
+corruption_headroom          25155   0.4743     1.147287     2.419111                  4.000000       4.000000
+consumption_headroom         25155   0.2642     0.436295     1.651121                  3.000000       3.000000
+pop_cost                     25155   0.0918     0.098350     1.071460                  2.000000       3.000000
+yellow_bank                  25155   0.2681     0.286328     1.067840                  2.000000       8.000000
+free_workers                 25155   0.6307     0.708378     1.123180                  2.000000       2.000000
+workers                      25155   0.6042     0.309633     0.512457                  1.273743       2.391061
+prod_workers                 25155   0.5393     0.612006     1.134906                  2.000000       2.000000
+urban_workers                25155   0.5370     0.593043     1.104464                  2.000000       2.000000
+unit_workers                 25155   0.4895     0.558179     1.140247                  2.000000       8.000000
+happy_margin                 25155   0.3468     0.474405     1.367755                  3.000000       6.000000
+discontent                   25155   0.0840     0.095064     1.131724                  2.000000       5.000000
+uprising                     25155   0.0387     0.491950     12.705339                 33.000000      54.000000
+civil_actions                25155   0.0244     0.036732     1.507341                  3.000000       3.000000
+military_actions             25155   0.0731     0.087080     1.191136                  2.000000       4.000000
+ca_left                      25155   0.5975     2.161916     3.618297                  6.000000       10.000000
+ma_left                      25155   0.6062     1.027589     1.695016                  3.000000       3.000000
+take_cost_paid               25155   0.5181     1.360684     2.626458                  4.000000       7.000000
+row_urgency                  25155   0.4574     5.959762     13.029534                 65.308489      399.529069
+row_bargain_forgone          25155   0.4583     0.579686     1.264920                  3.000000       6.000000
+row_last_copy                25155   0.5222     0.693536     1.328199                  3.000000       8.000000
+rival_desire                 25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_take_share             25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_free_ca                25155   0.0000     0.000040     1.000000                  1.000000       1.000000
+rival_hand_civil             25155   0.0043     0.006957     1.620370                  3.000000       6.000000
+rival_wonders                25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_hand_potential         25155   0.0830     0.003007     0.036221                  0.071267       3.785986
+rival_science_stock          25155   0.0149     0.038402     2.569149                  6.000000       7.000000
+rival_food_stock             25155   0.0172     0.055178     3.205543                  7.000000       12.000000
+rival_resource_stock         25155   0.0112     0.027430     2.446809                  5.000000       12.000000
+rival_free_workers           25155   0.0106     0.010614     1.003759                  1.000000       2.000000
+rival_yellow_bank            25155   0.0148     0.024488     1.651475                  2.000000       9.000000
+rival_colonies               25155   0.0009     0.000914     1.000000                  1.000000       1.000000
+rival_mil_actions            25155   0.0163     0.016975     1.044010                  1.000000       2.000000
+rival_building_wonder        25155   0.0020     0.002027     1.000000                  1.000000       1.000000
+my_seeded_pending            25155   0.0907     0.160207     1.766769                  3.000000       3.000000
+my_event_threat              25155   0.0693     0.483149     6.968816                  23.015989      28.523984
+attack_target_lead           25155   0.0610     3.294554     53.989902                 156.000000     252.000000
+attack_target_weakness       25155   0.0889     0.586325     6.596154                  16.000000      28.000000
+pact_partner_lead            25155   0.0415     2.448778     59.059444                 172.500000     252.000000
+strength                     25155   0.5615     1.254303     2.233928                  5.000000       20.000000
+strength_rel                 25155   0.5615     1.223452     2.178981                  5.000000       20.000000
+strength_deficit             25155   0.4594     0.875989     1.906845                  4.000000       12.000000
+strength_lead                25155   0.1467     0.310859     2.119725                  4.000000       6.000000
+tactic_level                 25155   0.2711     0.380879     1.404839                  2.000000       3.000000
+tactic_gain                  25155   0.2259     0.339893     1.504752                  3.000000       6.000000
+tactic_short                 25155   0.4202     0.475929     1.132532                  2.000000       3.000000
+has_unit                     25155   0.1836     0.183582     1.000000                  1.000000       1.000000
+colonies                     25155   0.0091     0.009064     1.000000                  1.000000       1.000000
+has_colony                   25155   0.0066     0.006599     1.000000                  1.000000       1.000000
+pacts                        25155   0.0997     0.102803     1.030690                  1.500000       2.500000
+pact_blocks_attack           25155   0.0277     0.020413     0.736729                  1.000000       1.500000
+war_immune                   25155   0.0043     0.004293     1.000000                  1.000000       1.000000
+attack_cost_doubled          25155   0.0077     0.007712     1.000000                  1.000000       1.000000
+auction_committed            25155   0.0217     0.012284     0.564899                  1.000000       1.000000
+auction_bid                  25155   0.0217     0.104091     4.786868                  15.000000      24.000000
+tech_levels                  25155   0.2969     0.054352     0.183052                  0.765363       1.150838
+gov_level                    25155   0.0197     0.024210     1.227823                  2.000000       3.000000
+best_farm                    25155   0.0098     0.014550     1.481781                  3.000000       3.000000
+best_mine                    25155   0.0050     0.010217     2.023622                  3.000000       3.000000
+best_lab                     25155   0.0039     0.006997     1.795918                  3.000000       3.000000
+best_temple                  25155   0.0268     0.036931     1.380386                  2.000000       2.000000
+best_theater                 25155   0.0097     0.012602     1.299180                  3.000000       3.000000
+best_library                 25155   0.0095     0.012681     1.329167                  3.000000       3.000000
+best_arena                   25155   0.0068     0.011171     1.652941                  3.000000       3.000000
+best_unit                    25155   0.0018     0.004055     2.217391                  3.000000       3.000000
+num_techs                    25155   0.0682     0.068217     1.000000                  1.000000       1.000000
+special_techs                25155   0.0106     0.010574     1.000000                  1.000000       1.000000
+wonders                      25155   0.0245     0.024488     1.000000                  1.000000       1.000000
+wonder_progress              25155   0.0853     0.349314     4.096503                  9.000000       12.000000
+wonder_remaining             25155   0.1893     1.606162     8.482679                  16.000000      16.000000
+wonder_stages_left           25155   0.1893     0.487219     2.573168                  5.000000       5.000000
+wonder_turns_to_finish       25155   0.3403     0.530626     1.559515                  4.000000       8.500000
+wonder_overrun               25155   0.0261     0.040345     1.544703                  3.597421       8.500000
+wonder_stages_per_action     25155   0.0058     0.008746     1.506849                  3.000000       3.000000
+wonder_potential             25155   0.2098     0.489952     2.335559                  8.797551       34.471870
+wonder_promise               25155   0.3542     0.949307     2.680113                  9.822541       29.550613
+wonder_age_overrun           25155   0.0351     0.048944     1.392753                  3.500000       8.500000
+leader                       25155   0.0394     0.039435     1.000000                  1.000000       1.000000
+wonder_in_progress           25155   0.1292     0.129239     1.000000                  1.000000       1.000000
+hand_limit                   25155   0.0024     0.004770     2.000000                  2.000000       2.000000
+colonize_bonus               25155   0.0060     0.010972     1.815789                  4.000000       4.000000
+build_discount               25155   0.0058     0.020592     3.547945                  6.000000       6.000000
+free_civil_action            25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+resource_discount            25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+defense_bonus                25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+urban_limit                  25155   0.0143     0.014669     1.027855                  1.000000       2.000000
+gov_action_cost              25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+no_aggression                25155   0.0077     0.007712     1.000000                  1.000000       1.000000
+restricted_resources         25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_board_credit            25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+event_scoring_margin         25155   0.2609     1.024943     3.929052                  11.111111      60.000000
+card_board_leader            25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_board_bonus             25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+hand_swap_extra              25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+card_rate_credit             25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+unit_strength_credit         25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+unit_tech_credit             25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+tech_board_credit            25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+action_board_credit          25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+gov_board_credit             25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+wonder_board_credit          25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+build_fresh_credit           25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+restricted_resource_credit   25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+free_action_credit           25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+territory_credit             25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+bonus_card_credit            25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_board_credit          25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+aggression_board_credit      25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+war_board_credit             25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+pact_board_credit            25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+event_board_credit           25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_shortfall_cost        25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+tactic_reach_credit          25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+hand_civil                   25155   0.5440     0.754800     1.387431                  2.000000       5.000000
+hand_value                   25155   0.5511     0.746200     1.353914                  2.837989       4.692737
+hand_potential               25155   0.5950     13.819683    23.225155                 79.200427      350.837393
+hand_military                25155   0.6464     1.091433     1.688499                  4.000000       6.000000
+hand_mil_value               25155   0.6720     3.188710     4.744868                  12.000000      21.000000
+hand_mil_potential           25155   0.5992     1.511477     2.522639                  7.170485       63.355426
+hand_perishable              25155   0.4770     0.252268     0.528861                  1.374853       3.941213
+rival_culture                25155   0.0180     0.227470     12.631347                 51.000000      102.000000
+rival_mean_culture           25155   0.0212     0.177500     8.377111                  44.000000      68.333333
+rival_culture_rate           25155   0.0116     0.010336     0.890411                  1.500000       2.500000
+rival_science_rate           25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+rival_strength               25155   0.0031     0.005367     1.730769                  2.000000       2.000000
+end_turn_bias                25155   0.6407     0.640668     1.000000                  1.000000       1.000000
+culture_rate_trailing        25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+science_rate_trailing        25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+workers_late                 25155   0.6414     0.434914     0.678045                  1.385475       6.843575
+strength_rel_early           25155   0.5897     0.506922     0.859621                  2.212291       6.424581
+strength_rel_late            25155   0.6220     0.762343     1.225586                  3.418994       17.597765
+tech_levels_late             25155   0.3016     0.110803     0.367419                  1.921788       3.000000
+hand_value_late              25155   0.5830     1.427077     2.447711                  7.329609       15.888268
+food_gap                     25155   0.3414     0.726996     2.129187                  4.000000       8.000000
+food_surplus                 25155   0.2475     0.652379     2.635392                  7.000000       20.000000
+resource_gap                 25155   0.3074     0.662741     2.155858                  3.000000       11.000000
+resource_surplus             25155   0.3990     1.237955     3.102595                  7.000000       42.000000
+science_gap                  25155   0.3907     1.881256     4.815120                  11.000000      12.000000
+science_surplus              25155   0.5218     2.108010     4.039537                  10.000000      27.000000
+culture_gap                  25155   0.2993     1.434983     4.795032                  13.000000      58.000000
+culture_surplus              25155   0.1165     0.732760     6.288838                  17.000000      49.000000
+happy_surplus                25155   0.4047     0.633098     1.564399                  3.000000       6.000000
+civil_action_gap             25155   0.5065     1.084476     2.140951                  4.000000       9.000000
+civil_action_surplus         25155   0.5117     1.564103     3.056635                  5.000000       9.000000
+take_cost_share              25155   0.5182     0.281421     0.543087                  0.800000       1.200000
+military_action_gap          25155   0.6415     1.117614     1.742074                  3.000000       6.000000
+military_action_surplus      25155   0.2101     0.301150     1.433652                  3.000000       6.000000
+worker_gap                   25155   0.5284     0.631853     1.195686                  2.000000       2.000000
+worker_surplus               25155   0.1164     0.128722     1.106252                  2.000000       2.000000
+tech_redundancy_discount     25155   0.0000     0.000000     0.000000                  0.000000       0.000000
+leader_replacement           25155   0.0739     0.073902     1.000000                  1.000000       1.000000
+wonder_pool_rival_claimed    25155   0.0055     0.007156     1.304348                  3.000000       3.000000
