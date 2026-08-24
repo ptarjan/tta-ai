@@ -10735,10 +10735,14 @@ fn apply_one(
             // never a bare `Move::Build`, which the engine plainly charges
             // full price (found by testing against a real 2p game;
             // `docs/REPLAY.md`).
+            // Before the ordered-action branch, not after: an ordered line
+            // ("builds X using <Card>") returns early, so a synthesis placed
+            // below it never fills Churchill's pool and the line is priced at
+            // full cost. See the function's own doc comment.
+            maybe_synthesize_churchill_military(r, actor, raw_text)?;
             if free_civil_action_move(r, actor, rest, Move::Build { card }, card)? {
                 return Ok(());
             }
-            maybe_synthesize_churchill_military(r, actor, raw_text)?;
             if let (Some(want), Some(got)) = (
                 stated_build_payment(raw_text),
                 costs::build_cost_for(&r.state, &r.state.players[actor as usize], card),
@@ -11128,10 +11132,12 @@ fn apply_one(
             // "using" clause (no `FreeCivilActionValue` covers unit
             // upgrades), so this is always `Ok(false)` for that arm and the
             // bare `Move::Upgrade` below fires as before.
+            // Above the ordered-action branch for the same reason as the
+            // Build arm: "upgrades X to Y using Rich Land" returns early.
+            maybe_synthesize_churchill_military(r, actor, raw_text)?;
             if free_civil_action_move(r, actor, rest, Move::Upgrade { from, to }, to)? {
                 return Ok(());
             }
-            maybe_synthesize_churchill_military(r, actor, raw_text)?;
             // Same Trade Routes fold as `ActionClass::BuildBuilding`'s Build
             // arm (`convert_trade_food_shortfall`'s own doc) -- an upgrade is
             // priced in resources exactly like a build, and BGO folds the
@@ -11169,10 +11175,12 @@ fn apply_one(
             // the reconstructed civil-hand size past the true one and
             // blocking a LATER, unrelated `Take` on a phantom hand-limit
             // wall).
+            // Above the ordered-action branch for the same reason as the
+            // Build arm: "discovers X using Breakthrough" returns early.
+            maybe_synthesize_churchill_military(r, actor, raw_text)?;
             if free_civil_action_move(r, actor, rest, Move::Develop { card, full: None }, card)? {
                 return Ok(());
             }
-            maybe_synthesize_churchill_military(r, actor, raw_text)?;
             // Development of Civil Life's banked `develop_science` grant,
             // USED for this develop (the mirror of the `IncreasePopulation`
             // arm's pop reconciliation): BGO's stated science loss is the
