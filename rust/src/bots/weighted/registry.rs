@@ -363,7 +363,6 @@ mod tests {
         (WeightKey::ResourceDiscount, "cards.rs static/board card valuation"),
         (WeightKey::DefenseBonus, "cards.rs static/board card valuation"),
         (WeightKey::GovActionCost, "cards.rs government valuation (feature_key); docs/OPEN_ITEMS.md item 1"),
-        (WeightKey::RestrictedResources, "cards.rs static/board card valuation"),
         (WeightKey::HandSwapExtra, "cards.rs hand-swap valuation"),
         // Rival-row pricing, read directly in row.rs/rivals.rs.
         (WeightKey::RivalDesire, "row.rs/rivals.rs rival-row pricing"),

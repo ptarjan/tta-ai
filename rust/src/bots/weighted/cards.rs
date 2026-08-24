@@ -612,17 +612,15 @@ pub fn swap_type(id: CardId) -> Option<CardType> {
 
 // ---------------------------------------------- the two ring-fenced yields
 
-/// `_RESTRICTED_TO_FEATURE`: `resource_discount`/`restricted_resources` are
-/// not live `evaluate` coordinates (`features()` emits neither), so no game
-/// the league plays can put a gradient on them directly. Both are RESOURCES
-/// though, so [`yield_marginal`] reroutes them through `resource_stock`'s
-/// marginal instead, each scaled by a credit weight: what fraction of a whole
-/// resource this ring-fenced one is actually worth. `resource_discount` is
-/// credited at its OWN coordinate -- a discount is worth a whole resource
-/// only when the build was going to happen anyway, which is a judgement the
-/// climb is entitled to make, so 1.0 is its authored default and not a law.
-/// `restricted_resources` is credited at `restricted_resource_credit`, an
-/// upper bound a player who builds no units this turn realises none of.
+/// `_RESTRICTED_TO_FEATURE`: `resource_discount` is not a live `evaluate`
+/// coordinate (`features()` never emits it), so no game the league plays can
+/// put a gradient on it directly. It IS a resource though, so
+/// [`yield_marginal`] reroutes it through `resource_stock`'s marginal
+/// instead, scaled by a credit weight: what fraction of a whole resource
+/// this ring-fenced one is actually worth. `resource_discount` is credited
+/// at its OWN coordinate -- a discount is worth a whole resource only when
+/// the build was going to happen anyway, which is a judgement the climb is
+/// entitled to make, so 1.0 is its authored default and not a law.
 ///
 /// Crediting `resource_discount` at a hardcoded 1.0 made its own coordinate
 /// unreadable, and a coordinate nothing reads is a coordinate the climb
@@ -630,39 +628,38 @@ pub fn swap_type(id: CardId) -> Option<CardType> {
 /// 4.04 and 0.32 with no gradient anywhere in the league to have put it
 /// there.
 ///
-/// `#[allow(clippy::wildcard_enum_match_arm)]`: only two `WeightKey`
-/// variants reroute anywhere here; spelling out the rest as an explicit
-/// or-pattern would literally name the seven phase-suffixed keys
-/// `registry.rs`'s `every_weight_key_is_named_by_production_source_outside_
-/// its_own_declaration` ratchets as reachable only via `.early()`/`.late()`
-/// indirection (see that test's `PHASE_SUFFIXED_NO_LITERAL_READER` doc
-/// comment) -- a false "this is read directly now" signal for a fallback
-/// that reads nothing. Reviewed exception, not a swallowed variant: a new
-/// `WeightKey` still can't silently gain a reroute here, it just also
-/// doesn't get one, same as every other key not named above.
-#[allow(clippy::wildcard_enum_match_arm)]
+/// `restricted_resources` used to reroute here too, keyed off a second
+/// `WeightKey` variant that existed ONLY so this function had something to
+/// match on -- a coordinate nothing but this dispatch ever read, and
+/// therefore a coordinate the climb was free to random-walk exactly like
+/// `resource_discount` used to be before the fix above. That variant is
+/// retired outright (`weights::RETIRED_KEYS`); [`Priced::RestrictedResources`]
+/// is the tag that survives it, and [`priced_marginal`]/[`priced_weight`]
+/// carry the same `resource_stock` * `restricted_resource_credit` formula
+/// this function used to run for it, clamp and all -- see those functions'
+/// own doc comments.
 fn restricted_to_feature(key: WeightKey) -> Option<(WeightKey, WeightKey)> {
-    match key {
-        WeightKey::ResourceDiscount => Some((WeightKey::ResourceStock, WeightKey::ResourceDiscount)),
-        WeightKey::RestrictedResources => {
-            Some((WeightKey::ResourceStock, WeightKey::RestrictedResourceCredit))
-        }
-        _ => None,
+    if key == WeightKey::ResourceDiscount {
+        Some((WeightKey::ResourceStock, WeightKey::ResourceDiscount))
+    } else {
+        None
     }
 }
 
-/// `_yield_marginal`: [`rivals::feature_marginal`], plus the two ring-fenced
-/// pseudo-features above. `idx: u8`/`late: Option<f64>` match `rivals::
-/// feature_marginal`'s own signature exactly (see this module's top doc
-/// comment on the `idx` width mismatch with `board_yields.rs`); `ctx` is
-/// always `None` here, matching Python's `_yield_marginal(key, state, idx,
-/// w, late)` -- it never threads a `RivalContext` through, unlike
-/// `strength_marginal`'s other callers.
+/// `_yield_marginal`: [`rivals::feature_marginal`], plus the ring-fenced
+/// `resource_discount` pseudo-feature above. `idx: u8`/`late: Option<f64>`
+/// match `rivals::feature_marginal`'s own signature exactly (see this
+/// module's top doc comment on the `idx` width mismatch with
+/// `board_yields.rs`); `ctx` is always `None` here, matching Python's
+/// `_yield_marginal(key, state, idx, w, late)` -- it never threads a
+/// `RivalContext` through, unlike `strength_marginal`'s other callers.
 ///
-/// Both ring-fenced branches clamp their `feature_marginal` read to
+/// The ring-fenced branch clamps its `feature_marginal` read to
 /// `max(0.0, ...)` for the same reason [`YieldKind::Cost`] does: a GAIN
-/// (a discount, a ring-fenced resource) must never read as a loss because a
-/// hill climb drove `resource_stock` negative.
+/// (a discount) must never read as a loss because a hill climb drove
+/// `resource_stock` negative. [`priced_marginal`]'s `RestrictedResources`
+/// arm repeats the same clamp for the other ring-fenced route, now that it
+/// has no `WeightKey` to reach this function through.
 pub fn yield_marginal(key: WeightKey, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
     match restricted_to_feature(key) {
         None => rivals::feature_marginal(key, state, idx, w, late, None),
@@ -674,6 +671,74 @@ pub fn yield_marginal(key: WeightKey, state: &GameState, idx: u8, w: &Weights, l
                 c * rivals::feature_marginal(feat, state, idx, w, late, None).max(0.0)
             }
         }
+    }
+}
+
+/// [`feature_key`]'s return type. Every [`board_yields::Feature`] names a
+/// live [`WeightKey`] EXCEPT `RestrictedResources`, which used to be one
+/// (see `restricted_to_feature`'s doc comment for why that was a hazard):
+/// a coordinate read ONLY as a dispatch tag by `restricted_to_feature`,
+/// never as a number, could still be indexed and mutated by a hill climb
+/// like any other weight. `Priced::RestrictedResources` is the same
+/// dispatch tag with no `WeightKey` behind it, so there is no longer a slot
+/// for a climb to random-walk.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Priced {
+    Key(WeightKey),
+    RestrictedResources,
+}
+
+/// State-aware reader for a [`Priced`] key -- [`feature_key`]'s marginal,
+/// wherever a `GameState` is in scope. `Priced::Key(k)` is exactly
+/// [`yield_marginal`] (so `ResourceDiscount`'s own ring-fenced route still
+/// runs whenever `feature_key` happens to reach it, though in practice it
+/// never does -- `board_yields::Feature` has no `ResourceDiscount`
+/// variant). `Priced::RestrictedResources` runs the SAME clamp-and-multiply
+/// formula [`restricted_to_feature`] used to run for it when it was still a
+/// `WeightKey`: `restricted_resource_credit` gates it (a zero credit reads
+/// as a flat 0.0, never a divide-by-zero or a sign flip), and the
+/// `resource_stock` marginal it scales is clamped to `max(0.0, ...)` so a
+/// hill climb that has driven `resource_stock` negative can never make a
+/// ring-fenced resource read as a loss.
+fn priced_marginal(key: Priced, state: &GameState, idx: u8, w: &Weights, late: Option<f64>) -> f64 {
+    match key {
+        Priced::Key(k) => yield_marginal(k, state, idx, w, late),
+        Priced::RestrictedResources => {
+            let c = w.get(WeightKey::RestrictedResourceCredit);
+            if c == 0.0 {
+                0.0
+            } else {
+                c * rivals::feature_marginal(WeightKey::ResourceStock, state, idx, w, late, None).max(0.0)
+            }
+        }
+    }
+}
+
+/// Stateless reader for a [`Priced`] key -- [`sum_board_triples`]/
+/// [`gains_only_board_sum`] have no `GameState` in scope (they price a
+/// SWAP diff's flat triples, already board-derived, at a plain `w.get`) so
+/// they cannot run [`priced_marginal`]'s marginal formula. `Priced::Key(k)`
+/// is the ordinary `w.get(k)` those two functions always did.
+/// `Priced::RestrictedResources` reads `0.0`: it cannot honestly compute the
+/// ring-fenced marginal with no state to read `resource_stock` from, and it
+/// does not need to -- `board_yields::board_extra` is the ONLY producer of a
+/// `Feature::RestrictedResources` triple, its output reaches exactly two
+/// call sites (`cards::action_value`, which prices it correctly through
+/// [`priced_marginal`], and `card_potential_core`'s generic fallback, which
+/// reaches this function instead), and that fallback is gated on
+/// `action_board_credit == 0.0`, the SAME "dead on every trained champion by
+/// construction" default `weights::RETIRED_KEYS`'s `card_board_action` entry
+/// already documents (`action_board_credit` defaults to a nonzero 1.0, and
+/// no trained hill climb has ever landed on exactly 0.0). Reading `0.0` here
+/// is therefore provably identical, on every real weight vector, to the
+/// flat `w.get(WeightKey::RestrictedResources)` this arm replaces -- that
+/// coordinate's own default was `0.0` and nothing in this codebase's
+/// history ever measured a trained champion where this branch executed at
+/// all.
+fn priced_weight(key: Priced, w: &Weights) -> f64 {
+    match key {
+        Priced::Key(k) => w.get(k),
+        Priced::RestrictedResources => 0.0,
     }
 }
 
@@ -931,62 +996,65 @@ pub const UNPRICED_VALUES: &[(&str, &str, &str)] = &[
 // `rival_hand_potential`): what a card in hand, a wonder in progress, or a
 // whole hand is worth ON A BOARD, built on the yield-plumbing layer above.
 
-/// [`board_yields::Feature`] -> [`WeightKey`]: the two enums name the same
-/// features by construction ([`board_yields::Feature::python_key`] and
-/// [`WeightKey::name`] agree on every variant -- `tests::
-/// feature_key_agrees_with_both_enums_printed_names` below pins it), so
-/// [`action_value`]/[`tech_value`]/[`gov_value`] can price a board-derived
-/// triple through the SAME weight vector `evaluate` uses. An exhaustive
-/// `match` rather than a string round-trip through the two `name`/
-/// `python_key` methods: DESIGN.md prefers an enum-to-enum `match` over a
-/// stringly-typed lookup, and a `Feature` variant added later without a
-/// matching arm here is a compile error, not a silent `panic!` at eval time.
-fn feature_key(f: board_yields::Feature) -> WeightKey {
+/// [`board_yields::Feature`] -> [`Priced`]: the two enums name the same
+/// features by construction (`tests::
+/// feature_key_agrees_with_both_enums_printed_names` below pins
+/// [`board_yields::Feature::python_key`] against this function's own
+/// output), so [`action_value`]/[`tech_value`]/[`gov_value`] can price a
+/// board-derived triple through the SAME weight vector `evaluate` uses (via
+/// [`priced_marginal`]/[`priced_weight`]). An exhaustive `match` rather than
+/// a string round-trip through the two `name`/`python_key` methods:
+/// DESIGN.md prefers an enum-to-enum `match` over a stringly-typed lookup,
+/// and a `Feature` variant added later without a matching arm here is a
+/// compile error, not a silent `panic!` at eval time. `Priced`, not
+/// `WeightKey`, because `F::RestrictedResources` has no `WeightKey` to name
+/// any more -- see `Priced`'s own doc comment.
+fn feature_key(f: board_yields::Feature) -> Priced {
     use board_yields::Feature as F;
     match f {
-        F::CultureRate => WeightKey::CultureRate,
-        F::ScienceRate => WeightKey::ScienceRate,
-        F::FoodRate => WeightKey::FoodRate,
-        F::ResourceRate => WeightKey::ResourceRate,
-        F::Strength => WeightKey::Strength,
-        F::HappyMargin => WeightKey::HappyMargin,
-        F::CivilActions => WeightKey::CivilActions,
-        F::MilitaryActions => WeightKey::MilitaryActions,
-        F::ColonizeBonus => WeightKey::ColonizeBonus,
-        F::UrbanLimit => WeightKey::UrbanLimit,
-        F::WonderStagesPerAction => WeightKey::WonderStagesPerAction,
-        F::HandLimit => WeightKey::HandLimit,
-        F::BuildDiscount => WeightKey::BuildDiscount,
-        F::PopCost => WeightKey::PopCost,
-        F::NoAggression => WeightKey::NoAggression,
-        F::Leader => WeightKey::Leader,
-        F::GovLevel => WeightKey::GovLevel,
-        F::TechLevels => WeightKey::TechLevels,
-        F::GovActionCost => WeightKey::GovActionCost,
-        F::Science => WeightKey::Science,
-        F::CaLeft => WeightKey::CaLeft,
-        F::MaLeft => WeightKey::MaLeft,
-        F::Culture => WeightKey::Culture,
-        F::FreeWorkers => WeightKey::FreeWorkers,
-        F::BlueFree => WeightKey::BlueFree,
-        F::Wonders => WeightKey::Wonders,
-        F::ResourceStock => WeightKey::ResourceStock,
-        F::NumTechs => WeightKey::NumTechs,
-        F::SpecialTechs => WeightKey::SpecialTechs,
-        F::BestFarm => WeightKey::BestFarm,
-        F::BestMine => WeightKey::BestMine,
-        F::BestLab => WeightKey::BestLab,
-        F::BestTemple => WeightKey::BestTemple,
-        F::BestTheater => WeightKey::BestTheater,
-        F::BestLibrary => WeightKey::BestLibrary,
-        F::BestArena => WeightKey::BestArena,
-        F::BestUnit => WeightKey::BestUnit,
-        F::Workers => WeightKey::Workers,
-        F::ProdWorkers => WeightKey::ProdWorkers,
-        F::UrbanWorkers => WeightKey::UrbanWorkers,
-        F::UnitWorkers => WeightKey::UnitWorkers,
-        F::Uprising => WeightKey::Uprising,
-        F::RestrictedResources => WeightKey::RestrictedResources,
+        F::CultureRate => Priced::Key(WeightKey::CultureRate),
+        F::ScienceRate => Priced::Key(WeightKey::ScienceRate),
+        F::FoodRate => Priced::Key(WeightKey::FoodRate),
+        F::ResourceRate => Priced::Key(WeightKey::ResourceRate),
+        F::Strength => Priced::Key(WeightKey::Strength),
+        F::HappyMargin => Priced::Key(WeightKey::HappyMargin),
+        F::CivilActions => Priced::Key(WeightKey::CivilActions),
+        F::MilitaryActions => Priced::Key(WeightKey::MilitaryActions),
+        F::ColonizeBonus => Priced::Key(WeightKey::ColonizeBonus),
+        F::UrbanLimit => Priced::Key(WeightKey::UrbanLimit),
+        F::WonderStagesPerAction => Priced::Key(WeightKey::WonderStagesPerAction),
+        F::HandLimit => Priced::Key(WeightKey::HandLimit),
+        F::BuildDiscount => Priced::Key(WeightKey::BuildDiscount),
+        F::PopCost => Priced::Key(WeightKey::PopCost),
+        F::NoAggression => Priced::Key(WeightKey::NoAggression),
+        F::Leader => Priced::Key(WeightKey::Leader),
+        F::GovLevel => Priced::Key(WeightKey::GovLevel),
+        F::TechLevels => Priced::Key(WeightKey::TechLevels),
+        F::GovActionCost => Priced::Key(WeightKey::GovActionCost),
+        F::Science => Priced::Key(WeightKey::Science),
+        F::CaLeft => Priced::Key(WeightKey::CaLeft),
+        F::MaLeft => Priced::Key(WeightKey::MaLeft),
+        F::Culture => Priced::Key(WeightKey::Culture),
+        F::FreeWorkers => Priced::Key(WeightKey::FreeWorkers),
+        F::BlueFree => Priced::Key(WeightKey::BlueFree),
+        F::Wonders => Priced::Key(WeightKey::Wonders),
+        F::ResourceStock => Priced::Key(WeightKey::ResourceStock),
+        F::NumTechs => Priced::Key(WeightKey::NumTechs),
+        F::SpecialTechs => Priced::Key(WeightKey::SpecialTechs),
+        F::BestFarm => Priced::Key(WeightKey::BestFarm),
+        F::BestMine => Priced::Key(WeightKey::BestMine),
+        F::BestLab => Priced::Key(WeightKey::BestLab),
+        F::BestTemple => Priced::Key(WeightKey::BestTemple),
+        F::BestTheater => Priced::Key(WeightKey::BestTheater),
+        F::BestLibrary => Priced::Key(WeightKey::BestLibrary),
+        F::BestArena => Priced::Key(WeightKey::BestArena),
+        F::BestUnit => Priced::Key(WeightKey::BestUnit),
+        F::Workers => Priced::Key(WeightKey::Workers),
+        F::ProdWorkers => Priced::Key(WeightKey::ProdWorkers),
+        F::UrbanWorkers => Priced::Key(WeightKey::UrbanWorkers),
+        F::UnitWorkers => Priced::Key(WeightKey::UnitWorkers),
+        F::Uprising => Priced::Key(WeightKey::Uprising),
+        F::RestrictedResources => Priced::RestrictedResources,
     }
 }
 
@@ -1005,7 +1073,7 @@ fn feature_key(f: board_yields::Feature) -> WeightKey {
 pub fn sum_board_triples(triples: &[board_yields::Triple], w: &Weights) -> f64 {
     let mut total = 0.0;
     for &(feat, amt, kind) in triples {
-        let mut wk = w.get(feature_key(feat));
+        let mut wk = priced_weight(feature_key(feat), w);
         if kind == board_yields::Kind::Cost && wk < 0.0 {
             wk = 0.0;
         }
@@ -1063,7 +1131,7 @@ fn gains_only_board_sum(triples: &[board_yields::Triple], w: &Weights) -> f64 {
         if kind == board_yields::Kind::Cost {
             continue;
         }
-        let wk = w.get(feature_key(feat));
+        let wk = priced_weight(feature_key(feat), w);
         if wk != 0.0 && amt != 0.0 {
             total += wk * amt;
         }
@@ -1077,14 +1145,16 @@ fn gains_only_board_sum(triples: &[board_yields::Triple], w: &Weights) -> f64 {
 /// worth ON THIS BOARD. `tech_value`'s sibling, for the one civil type left
 /// on the static table -- see `engine/bots/weighted.py:2528`'s extensive doc
 /// comment (not reproduced here) for the five-point derivation: a one-shot
-/// gain is worth [`yield_marginal`], not `w[key]`; a free civil action is
+/// gain is worth [`priced_marginal`], not `w[key]`; a free civil action is
 /// worth a civil action times `free_action_credit`, whose default is 0.0
 /// because playing the action card already spends the one it grants back (a
 /// wash, RB 3.11); the two ring-fenced resources ride the same
-/// `yield_marginal`; a choice ([`card_choice`]) is a `max`, not a sum; and the
-/// three per-table-size cards (Endowment for the Arts, Wave of Nationalism,
-/// Military Build-Up) are priced by [`board_yields::board_extra`] rather than
-/// reimplemented.
+/// `priced_marginal` (`resource_discount` through its `WeightKey` route,
+/// `restricted_resources` through the `Priced::RestrictedResources` tag that
+/// survives it no longer having one); a choice ([`card_choice`]) is a `max`,
+/// not a sum; and the three per-table-size cards (Endowment for the Arts,
+/// Wave of Nationalism, Military Build-Up) are priced by
+/// [`board_yields::board_extra`] rather than reimplemented.
 ///
 /// Walks `card.effects` directly rather than reusing [`card_yields`]'s
 /// output: the two are NOT the same walk. [`card_yields`] feeds
@@ -1093,7 +1163,7 @@ fn gains_only_board_sum(triples: &[board_yields::Triple], w: &Weights) -> f64 {
 /// own credit weight) and also prices `production`, the two costs and
 /// `card.special`'s `BuildDiscount`. `action_value` prices NONE of those --
 /// it walks only the `effects` dict Python's own `_EFF_TO_FEATURE` table
-/// covers, treats every entry identically through [`yield_marginal`]
+/// covers, treats every entry identically through [`priced_marginal`]
 /// regardless of kind, and has its own bespoke `freeCivilAction` handling
 /// (`free_action_credit`). `card_yields` used to have its OWN, disagreeing
 /// `resource_discount`/`restricted_resources`/`freeCivilAction` handling --
@@ -1112,28 +1182,28 @@ pub fn action_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: O
     let late = late.unwrap_or_else(|| horizon::lateness(state));
     let mut total = 0.0;
     {
-        let mut add = |key: WeightKey, amt: i16| {
+        let mut add = |key: Priced, amt: i16| {
             if amt != 0 {
-                total += f64::from(amt) * yield_marginal(key, state, idx, w, Some(late));
+                total += f64::from(amt) * priced_marginal(key, state, idx, w, Some(late));
             }
         };
-        add(WeightKey::Culture, eff.gain_culture);
-        add(WeightKey::Science, eff.gain_science);
-        add(WeightKey::FoodStock, eff.gain_food);
-        add(WeightKey::ResourceStock, eff.gain_resources);
-        add(WeightKey::CivilActions, eff.civil_actions);
-        add(WeightKey::MilitaryActions, eff.military_actions);
-        add(WeightKey::CultureRate, eff.culture);
-        add(WeightKey::ScienceRate, eff.science);
-        add(WeightKey::Strength, eff.strength);
-        add(WeightKey::HappyMargin, eff.happy);
-        add(WeightKey::YellowBank, eff.yellow_tokens);
-        add(WeightKey::BlueFree, eff.blue_tokens);
-        add(WeightKey::HandLimit, eff.civil_hand_limit);
-        add(WeightKey::HandLimit, eff.military_hand_limit);
-        add(WeightKey::ColonizeBonus, eff.colonize_bonus);
-        add(WeightKey::ResourceDiscount, eff.resource_discount);
-        add(WeightKey::RestrictedResources, eff.resources_for_military_units);
+        add(Priced::Key(WeightKey::Culture), eff.gain_culture);
+        add(Priced::Key(WeightKey::Science), eff.gain_science);
+        add(Priced::Key(WeightKey::FoodStock), eff.gain_food);
+        add(Priced::Key(WeightKey::ResourceStock), eff.gain_resources);
+        add(Priced::Key(WeightKey::CivilActions), eff.civil_actions);
+        add(Priced::Key(WeightKey::MilitaryActions), eff.military_actions);
+        add(Priced::Key(WeightKey::CultureRate), eff.culture);
+        add(Priced::Key(WeightKey::ScienceRate), eff.science);
+        add(Priced::Key(WeightKey::Strength), eff.strength);
+        add(Priced::Key(WeightKey::HappyMargin), eff.happy);
+        add(Priced::Key(WeightKey::YellowBank), eff.yellow_tokens);
+        add(Priced::Key(WeightKey::BlueFree), eff.blue_tokens);
+        add(Priced::Key(WeightKey::HandLimit), eff.civil_hand_limit);
+        add(Priced::Key(WeightKey::HandLimit), eff.military_hand_limit);
+        add(Priced::Key(WeightKey::ColonizeBonus), eff.colonize_bonus);
+        add(Priced::Key(WeightKey::ResourceDiscount), eff.resource_discount);
+        add(Priced::RestrictedResources, eff.resources_for_military_units);
     }
 
     // `_card_choices`: a choice is a `max`, not a sum -- Reserves' "gain N
@@ -1148,7 +1218,7 @@ pub fn action_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: O
     }
 
     for &(feat, amt, _kind) in &board_yields::board_extra(id, &Baseline::at(state, idx)) {
-        total += amt * yield_marginal(feature_key(feat), state, idx, w, Some(late));
+        total += amt * priced_marginal(feature_key(feat), state, idx, w, Some(late));
     }
 
     // `eff.get("freeCivilAction")` in Python reads the RAW effects dict,
@@ -1192,7 +1262,7 @@ pub fn tech_value(id: CardId, state: &GameState, idx: u8, w: &Weights, dev_credi
     let late = late.unwrap_or_else(|| horizon::lateness(state));
     let mut net = -res * w.get(WeightKey::ResourceStock).max(0.0);
     for &(feat, amt, _kind) in &staff {
-        net += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+        net += amt * priced_marginal(feature_key(feat), state, idx, w, Some(late));
     }
     if net < 0.0 {
         net = 0.0;
@@ -1206,7 +1276,7 @@ pub fn tech_value(id: CardId, state: &GameState, idx: u8, w: &Weights, dev_credi
         if !b_triples.is_empty() {
             let mut b_net = -b_res * w.get(WeightKey::ResourceStock).max(0.0);
             for &(feat, amt, _kind) in &b_triples {
-                b_net += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+                b_net += amt * priced_marginal(feature_key(feat), state, idx, w, Some(late));
             }
             b_net *= build_credit;
             if b_net > net {
@@ -1217,7 +1287,7 @@ pub fn tech_value(id: CardId, state: &GameState, idx: u8, w: &Weights, dev_credi
     if dev_credit != 0.0 {
         let mut gain = 0.0;
         for &(feat, amt, _kind) in &dev {
-            gain += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+            gain += amt * priced_marginal(feature_key(feat), state, idx, w, Some(late));
         }
         net += dev_credit * gain;
     }
@@ -1245,13 +1315,13 @@ pub fn gov_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Opti
     let late = late.unwrap_or_else(|| horizon::lateness(state));
     let mut total = 0.0;
     for &(feat, amt, _kind) in &gains {
-        total += amt * rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+        total += amt * priced_marginal(feature_key(feat), state, idx, w, Some(late));
     }
     let mut best: Option<f64> = None;
     for route in &routes {
         let mut cost = 0.0;
         for &(feat, amt, kind) in route {
-            let m = rivals::feature_marginal(feature_key(feat), state, idx, w, Some(late), None);
+            let m = priced_marginal(feature_key(feat), state, idx, w, Some(late));
             cost += amt * if kind == board_yields::Kind::Cost { m.max(0.0) } else { m };
         }
         // costs are negative: the cheapest route is the max.
@@ -2573,16 +2643,22 @@ mod tests {
         assert_eq!(yield_marginal(WeightKey::ResourceDiscount, &state, 0, &w, None), 0.0);
     }
 
+    // `Priced::RestrictedResources` has no `WeightKey` behind it any more
+    // (see that variant's own doc comment), so the two tests below pin its
+    // arithmetic through `priced_marginal` -- the direct successor of the
+    // `yield_marginal(WeightKey::RestrictedResources, ...)` call these used
+    // to make -- rather than through `yield_marginal` itself. Same
+    // assertions, same numbers, ported spelling only.
     #[test]
-    fn yield_marginal_gates_restricted_resources_on_its_own_credit_weight() {
+    fn priced_marginal_gates_restricted_resources_on_its_own_credit_weight() {
         let state = crate::game::new_game(2, 1);
         let mut w = Weights::default();
         w.set(WeightKey::ResourceStock, 8.0);
         w.set(WeightKey::RestrictedResourceCredit, 0.0);
-        assert_eq!(yield_marginal(WeightKey::RestrictedResources, &state, 0, &w, None), 0.0);
+        assert_eq!(priced_marginal(Priced::RestrictedResources, &state, 0, &w, None), 0.0);
 
         w.set(WeightKey::RestrictedResourceCredit, 0.25);
-        assert_eq!(yield_marginal(WeightKey::RestrictedResources, &state, 0, &w, None), 2.0);
+        assert_eq!(priced_marginal(Priced::RestrictedResources, &state, 0, &w, None), 2.0);
     }
 
     #[test]
@@ -2592,7 +2668,7 @@ mod tests {
         w.set(WeightKey::ResourceStock, -5.0);
         assert_eq!(yield_marginal(WeightKey::ResourceDiscount, &state, 0, &w, None), 0.0);
         w.set(WeightKey::RestrictedResourceCredit, 1.0);
-        assert_eq!(yield_marginal(WeightKey::RestrictedResources, &state, 0, &w, None), 0.0);
+        assert_eq!(priced_marginal(Priced::RestrictedResources, &state, 0, &w, None), 0.0);
     }
 
     // --------------------------------------------------------- CardType
@@ -3303,11 +3379,15 @@ mod tests {
     // ============================================== the valuation layer
 
     /// [`feature_key`]'s exhaustive `match` names the same feature
-    /// [`board_yields::Feature::python_key`] and [`WeightKey::name`] do, for
-    /// a representative sample spanning every group of the match (not all 42
-    /// -- the differential test drives every real triple `board_yields.rs`
-    /// emits through this function on sampled boards, which is the
-    /// exhaustive check; this is a fast, readable pin of a few).
+    /// [`board_yields::Feature::python_key`] does, for a representative
+    /// sample spanning every group of the match (not all 42 -- the
+    /// differential test drives every real triple `board_yields.rs` emits
+    /// through this function on sampled boards, which is the exhaustive
+    /// check; this is a fast, readable pin of a few). `Priced::Key(k).name()
+    /// == k.name()` for the ordinary arm; `Priced::RestrictedResources` has
+    /// no `WeightKey`/`.name()` of its own any more (see that variant's own
+    /// doc comment), so this test names it inline instead of through a
+    /// production-code method that would exist for no other reason.
     #[test]
     fn feature_key_agrees_with_both_enums_printed_names() {
         use board_yields::Feature;
@@ -3319,7 +3399,11 @@ mod tests {
             Feature::Wonders,
             Feature::BestUnit,
         ] {
-            assert_eq!(f.python_key(), feature_key(f).name(), "{f:?}");
+            let got = match feature_key(f) {
+                Priced::Key(k) => k.name(),
+                Priced::RestrictedResources => "restricted_resources",
+            };
+            assert_eq!(f.python_key(), got, "{f:?}");
         }
     }
 
@@ -3386,9 +3470,13 @@ mod tests {
     /// (`action_board_credit != 0.0` on all three) and the board-aware one
     /// is what the league actually trains against. This test is the
     /// tripwire: walk every card in the base game and fail the moment
-    /// `card_yields` prices either surviving coordinate again, however it got
+    /// `card_yields` prices the surviving coordinate again, however it got
     /// reintroduced. `free_civil_action` needs no tripwire anymore -- it was
-    /// retired outright on 2026-08-24, so there is no variant left to push.
+    /// retired outright on 2026-08-24, so there is no variant left to push;
+    /// `restricted_resources` needs none either, for the same reason -- it
+    /// followed `free_civil_action` into `weights::RETIRED_KEYS` the same
+    /// day, and `card_yields` never had an arm that could name it once it
+    /// stopped being a `WeightKey` at all.
     #[test]
     fn card_yields_never_reprices_the_action_boards_ring_fenced_coordinates() {
         let mut buf = Vec::new();
@@ -3398,7 +3486,7 @@ mod tests {
             card_yields(id, &mut buf);
             for &(key, amount, _kind) in &buf {
                 assert!(
-                    !matches!(key, WeightKey::ResourceDiscount | WeightKey::RestrictedResources),
+                    key != WeightKey::ResourceDiscount,
                     "{id:?} priced {amount} of {key:?} through the static table -- \
                      action_value must be the only pricer of this coordinate"
                 );
