@@ -1081,19 +1081,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
 
     if let Some(p) = &start {
-        // AFTER the flag loop, so `a.cfg.players` is final: the bounds are
-        // per player count and repairing a 2p champion against 3p bounds
-        // would be worse than not repairing at all.
-        let (repaired, moved) = repair_to_bounds(&load_weights(p)?, a.cfg.players);
-        for (k, before, after) in moved {
-            println!(
-                "[{}p] clamp-repair {} {before:.4} -> {after:.4} (bound {:.4})",
-                a.cfg.players,
-                k.name(),
-                effective_bound(k, a.cfg.players)
-            );
-        }
-        a.cfg.champion = repaired;
+        a.cfg.champion = load_weights(p)?;
     }
     // Resolve every gauntlet member now that `a.cfg.kind` is final: a member
     // with no `--gauntlet-kind` override plays the champion's own kind
@@ -1227,6 +1215,21 @@ fn main() -> ExitCode {
         progress = p;
         println!("resumed from {} at gen {}", args.out.display(), progress.gen);
     }
+    // ONE repair site, after BOTH loaders. `--start` and `resume` each install
+    // a champion and `resume` wins when the output file exists, so repairing
+    // beside either one alone covers the case that does not actually happen in
+    // the league -- which is exactly what the first version of this did.
+    // Here, `args.cfg.players` is final and every incoming vector has passed.
+    let (repaired, moved) = repair_to_bounds(&args.cfg.champion, args.cfg.players);
+    for (k, before, after) in moved {
+        println!(
+            "[{}p] clamp-repair {} {before:.4} -> {after:.4} (bound {:.4})",
+            args.cfg.players,
+            k.name(),
+            effective_bound(k, args.cfg.players)
+        );
+    }
+    args.cfg.champion = repaired;
     progress.sigma = progress.sigma.max(args.sigma_floor);
 
     // The run seed folds in the player count and the generation reached, so a
