@@ -1046,6 +1046,31 @@ impl WeightKey {
             // the same sentence that gates `FreeCivilAction`, which prices
             // the identical printed ability through the typed-field path.
             FreeActionCredit => NonNegative("scales a printed benefit"),
+            // The four `*BoardCredit`-family keys whose pricing function is
+            // provably non-negative WITHOUT auditing it for gains-only-ness:
+            // each multiplies a magnitude that is already floored at zero, so
+            // a negative credit could only invert an established gain.
+            //
+            // `pact_value`'s `best` starts at 0.0 and is only ever replaced by
+            // a strictly bigger candidate -- `max(0, ...)` by construction --
+            // and the credit is applied outside that floor.
+            PactBoardCredit => NonNegative("scales a max(0, ..)-floored pact candidate value"),
+            // Every return path of `tactic_value` is a literal 0.0 or is
+            // `.max(0.0)` as the return expression itself.
+            TacticBoardCredit => NonNegative("scales tactic_value, floored at 0 on every path"),
+            // The one term this scales is SUBTRACTED from that value, against
+            // a rules-derived shortfall count that is itself `max(0, ..)` per
+            // unit type. Mirror image of the `*Gap` keys, which are
+            // `NonPositive` because they are ADDED: a bigger shortfall has to
+            // reduce a tactic's value, never inflate it.
+            TacticShortfallCost => NonNegative("prices a shortfall count that is subtracted, never added"),
+            // `yield_marginal`'s restricted-resource reroute clamps the
+            // marginal `.max(0.0)` before this credit multiplies it --
+            // structurally identical to the `ResourceDiscount` /
+            // `RestrictedResources` gate above, through the same function.
+            RestrictedResourceCredit => {
+                NonNegative("scales an already-clamped marginal, same reroute as the gates above")
+            }
             // Raw board STOCKS the rules only ever ADD effects for, cited
             // chapter and verse (RULES_SPEC, see `eval::dominance_repair`'s
             // own doc comment on this bucket): an available civil action, its
@@ -1266,13 +1291,18 @@ impl WeightKey {
             // function (`tech_value`/`action_value`/`gov_value`/...) is
             // provably gains-only the way `wonder_potential` is, and so
             // deserves a `NonNegative` gate of its own, was NOT verified
-            // within this audit's budget -- flagged in SIGNAUDIT.txt as the
-            // top follow-up candidate, not guessed at here.
+            // within this audit's budget. The follow-up audit resolved four of
+            // them (gated above); these thirteen it confirmed genuinely free.
+            // `tech_value`/`gov_value`/`sum_board_triples` compute NET values
+            // -- gains minus real printed and rules costs, unclamped -- so a
+            // bad card can legitimately price negative, and `TerritoryCredit`
+            // has a card-content counterexample outright: Vast Territory (I)
+            // and (II) print `blue_tokens: -1` inside their Territory yields.
             CardRateCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
-            | GovBoardCredit | WonderBoardCredit | BuildFreshCredit | RestrictedResourceCredit
-            | TerritoryCredit | BonusCardCredit | TacticBoardCredit
-            | AggressionBoardCredit | WarBoardCredit | PactBoardCredit | EventBoardCredit
-            | TacticShortfallCost | TacticReachCredit => Free,
+            | GovBoardCredit | WonderBoardCredit | BuildFreshCredit
+            | TerritoryCredit | BonusCardCredit
+            | AggressionBoardCredit | WarBoardCredit | EventBoardCredit
+            | TacticReachCredit => Free,
             // Hand-content magnitudes other than `HandValue` (handled above)
             // -- plausible `NonNegative` candidates by the same "a card in
             // hand is never a rules-level cost" logic, but not individually
@@ -1801,6 +1831,39 @@ mod tests {
     fn both_keys_pricing_a_free_civil_action_are_gated_non_negative() {
         assert!(matches!(WeightKey::FreeCivilAction.sign_intent(), SignIntent::NonNegative(_)));
         assert!(matches!(WeightKey::FreeActionCredit.sign_intent(), SignIntent::NonNegative(_)));
+    }
+
+    /// The four `*BoardCredit`-family keys the follow-up audit could prove
+    /// non-negative: each scales a magnitude already floored at zero, so the
+    /// only thing a negative value can buy is an inverted gain.
+    /// `TacticShortfallCost` is the odd one by name -- it is `NonNegative`
+    /// precisely BECAUSE it is subtracted, so a bigger shortfall must cost
+    /// more, not less. Their thirteen bucket-mates stay `Free` on purpose:
+    /// those price NET values that a bad card can legitimately drive below
+    /// zero, and gating them would be a guess.
+    #[test]
+    fn the_four_board_credits_with_a_zero_floored_magnitude_are_gated_non_negative() {
+        for key in [
+            WeightKey::PactBoardCredit,
+            WeightKey::TacticBoardCredit,
+            WeightKey::TacticShortfallCost,
+            WeightKey::RestrictedResourceCredit,
+        ] {
+            assert!(
+                matches!(key.sign_intent(), SignIntent::NonNegative(_)),
+                "{key:?} must be gated non-negative"
+            );
+        }
+        for key in [
+            WeightKey::TechBoardCredit,
+            WeightKey::GovBoardCredit,
+            WeightKey::TerritoryCredit,
+        ] {
+            assert!(
+                matches!(key.sign_intent(), SignIntent::Free),
+                "{key:?} prices a net value and must stay free to go negative"
+            );
+        }
     }
 
     /// `card_board_government`/`card_board_action`/`card_board_wonder` are
