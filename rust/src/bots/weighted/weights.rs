@@ -689,7 +689,7 @@ weight_key_table! {
     ColonizeBonus => "colonize_bonus", 0.0;
     BuildDiscount => "build_discount", 0.0;
     FreeCivilAction => "free_civil_action", 0.0;
-    ResourceDiscount => "resource_discount", 0.0;
+    ResourceDiscount => "resource_discount", 1.0;
     DefenseBonus => "defense_bonus", 0.0;
     UrbanLimit => "urban_limit", 0.0;
     GovActionCost => "gov_action_cost", 0.0;

@@ -615,12 +615,19 @@ pub fn swap_type(id: CardId) -> Option<CardType> {
 /// not live `evaluate` coordinates (`features()` emits neither), so no game
 /// the league plays can put a gradient on them directly. Both are RESOURCES
 /// though, so [`yield_marginal`] reroutes them through `resource_stock`'s
-/// marginal instead, at a credit that is 1.0 (a discount is worth a whole
-/// resource: the build was already going to happen) for the first and a
-/// weight (`restricted_resource_credit`, an upper bound a player who builds
-/// no units this turn realises none of) for the second. See the Python
-/// source's own extensive derivation on `_RESTRICTED_TO_FEATURE`, not
-/// reproduced here.
+/// marginal instead, each scaled by a credit weight: what fraction of a whole
+/// resource this ring-fenced one is actually worth. `resource_discount` is
+/// credited at its OWN coordinate -- a discount is worth a whole resource
+/// only when the build was going to happen anyway, which is a judgement the
+/// climb is entitled to make, so 1.0 is its authored default and not a law.
+/// `restricted_resources` is credited at `restricted_resource_credit`, an
+/// upper bound a player who builds no units this turn realises none of.
+///
+/// Crediting `resource_discount` at a hardcoded 1.0 made its own coordinate
+/// unreadable, and a coordinate nothing reads is a coordinate the climb
+/// random-walks for free: the three live champions had drifted it to 0.05,
+/// 4.04 and 0.32 with no gradient anywhere in the league to have put it
+/// there.
 ///
 /// `#[allow(clippy::wildcard_enum_match_arm)]`: only two `WeightKey`
 /// variants reroute anywhere here; spelling out the rest as an explicit
@@ -633,24 +640,14 @@ pub fn swap_type(id: CardId) -> Option<CardType> {
 /// `WeightKey` still can't silently gain a reroute here, it just also
 /// doesn't get one, same as every other key not named above.
 #[allow(clippy::wildcard_enum_match_arm)]
-fn restricted_to_feature(key: WeightKey) -> Option<(WeightKey, RestrictedCredit)> {
+fn restricted_to_feature(key: WeightKey) -> Option<(WeightKey, WeightKey)> {
     match key {
-        WeightKey::ResourceDiscount => Some((WeightKey::ResourceStock, RestrictedCredit::Fixed(1.0))),
+        WeightKey::ResourceDiscount => Some((WeightKey::ResourceStock, WeightKey::ResourceDiscount)),
         WeightKey::RestrictedResources => {
-            Some((WeightKey::ResourceStock, RestrictedCredit::Weight(WeightKey::RestrictedResourceCredit)))
+            Some((WeightKey::ResourceStock, WeightKey::RestrictedResourceCredit))
         }
         _ => None,
     }
-}
-
-/// Whether a ring-fenced feature's credit is the constant `1.0`
-/// (`resource_discount`) or itself a weight to look up
-/// (`restricted_resource_credit`) -- mirrors Python's `credit` being either a
-/// bare `float` or a dict key string, disambiguated there by `isinstance
-/// (credit, float)`.
-enum RestrictedCredit {
-    Fixed(f64),
-    Weight(WeightKey),
 }
 
 /// `_yield_marginal`: [`rivals::feature_marginal`], plus the two ring-fenced
@@ -669,10 +666,7 @@ pub fn yield_marginal(key: WeightKey, state: &GameState, idx: u8, w: &Weights, l
     match restricted_to_feature(key) {
         None => rivals::feature_marginal(key, state, idx, w, late, None),
         Some((feat, credit)) => {
-            let c = match credit {
-                RestrictedCredit::Fixed(v) => v,
-                RestrictedCredit::Weight(k) => w.get(k),
-            };
+            let c = w.get(credit);
             if c == 0.0 {
                 0.0
             } else {
@@ -2552,9 +2546,30 @@ mod tests {
         let state = crate::game::new_game(2, 1);
         let mut w = Weights::default();
         w.set(WeightKey::ResourceStock, 3.0);
-        // credit is the fixed constant 1.0 -- the whole `resource_stock`
-        // marginal passes through unscaled.
+        // 1.0 is `resource_discount`'s authored default, so an untuned vector
+        // passes the whole `resource_stock` marginal through unscaled -- the
+        // behaviour the hardcoded credit used to give unconditionally.
         assert_eq!(yield_marginal(WeightKey::ResourceDiscount, &state, 0, &w, None), 3.0);
+    }
+
+    /// `resource_discount` is credited at its OWN coordinate, which is the
+    /// only thing that reads that weight at all. While the credit was a
+    /// hardcoded `1.0` the value was pure dead storage: the climb mutated it
+    /// like any other movable key and no game could ever prefer one setting
+    /// to another, so the three live champions held 0.05, 4.04 and 0.32 for
+    /// no reason. Move the coordinate and the yield must move with it.
+    #[test]
+    fn yield_marginal_scales_resource_discount_by_its_own_coordinate() {
+        let state = crate::game::new_game(2, 1);
+        let mut w = Weights::default();
+        w.set(WeightKey::ResourceStock, 8.0);
+        w.set(WeightKey::ResourceDiscount, 0.25);
+        assert_eq!(yield_marginal(WeightKey::ResourceDiscount, &state, 0, &w, None), 2.0);
+
+        // and zero really means zero, the same gate `restricted_resources`
+        // gets from `restricted_resource_credit`.
+        w.set(WeightKey::ResourceDiscount, 0.0);
+        assert_eq!(yield_marginal(WeightKey::ResourceDiscount, &state, 0, &w, None), 0.0);
     }
 
     #[test]
