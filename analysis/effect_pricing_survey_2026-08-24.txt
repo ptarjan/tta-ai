@@ -1,0 +1,219 @@
+EFFECT-PRICING SURVEY -- 2026-08-24
+Read-only investigation of rust/src for the "per-card effect pricing" mechanism.
+Scope: /Users/pt/tta-ai, no edits made, no git/cargo commands run.
+
+TOP-LINE FINDING (contradicts the task's premise as stated):
+There is no single dead-code "effect pricing" mechanism sitting inert in the
+current build. There is a well-documented PATTERN of ~20 "*_credit" WeightKeys
+that each gate a dedicated, board-aware, per-CARD (not per-type) pricing
+function -- action_value/tech_value/gov_value/tactic_value/aggression_value in
+rust/src/bots/weighted/cards.rs -- around the generic per-type static table
+(card_yields). Every one of these credits defaults to 0.0 in DEFAULT_WEIGHTS,
+but by 2026-08-24 every single one of them has been climbed away from 0.0 in
+ALL THREE live champion JSONs except for a handful pinned at exactly 0.0 in
+the 4p champion only (free_action_credit, restricted_resource_credit,
+tactic_board_credit). So "inert" is real, but champion-scoped, not global.
+docs/OPEN_ITEMS.md item 29 describes a case (card_board_credit/wonder_potential
+gating wonder-completion-culture pricing) that WAS globally inert on 3p/4p
+when written, but is STALE now -- both keys are nonzero on all three current
+champions, so that inertness has since been resolved by training.
+
+===========================================================================
+Q1: WHERE is the effect-pricing code?
+===========================================================================
+The generic ("one scalar per type") baseline:
+  rust/src/bots/weighted/cards.rs:221  pub fn card_yields(id, out: &mut Vec<CardYield>)
+    -- turns a card's typed CardEffects fields into (WeightKey, amount, kind)
+       triples, board-independent, summed via yield_marginal against a flat
+       WeightKey scalar. This is the "one scalar per type" the task describes.
+
+The per-CARD, board-aware override layer (this is "the effect-pricing code"):
+  rust/src/bots/weighted/cards.rs:1108 pub fn action_value(id, state, idx, w, late)
+  rust/src/bots/weighted/cards.rs:1186 pub fn tech_value(id, state, idx, w, dev_credit, late)
+  gov_value / tactic_value / aggression_value -- same file, same pattern
+  rust/src/bots/weighted/cards.rs:1781 pub fn card_potential() / 1792 card_potential_core()
+    -- the ONE dispatcher eval.rs/row.rs call. Per CardType it checks a
+       dedicated "*BoardCredit" WeightKey; if nonzero it calls the matching
+       *_value() function instead of falling back to the static card_yields
+       table (see the if/else-if chain starting cards.rs:1799).
+  rust/src/bots/weighted/cards.rs:1160-1166 -- the clearest single per-CARD
+    (not per-type) special case: prices Special::FreeCivilAction (18 base-game
+    cards, e.g. Rich Land) individually, scaled by WeightKey::FreeActionCredit.
+  rust/src/bots/board_yields.rs:636-700 on_build_culture()/government_plans()
+    -- prices Special::OnBuildCulture/OnBuildCulturePerTechLevelSum per card by
+       calling crate::apply::wonder_completion_culture (the SAME function that
+       actually applies the effect -- "one implementation" pattern), pinned by
+       tests/test_card_pricing.py:TestOneImplementation (Python side) per the
+       Rust doc comment at board_yields.rs:42-49.
+  card_table.rs:88 pub enum Special -- ~90 variants, one per printed card
+    "special" text effect that doesn't fit CardEffects' typed numeric fields;
+    this is the payload the *_value() functions above match on.
+
+===========================================================================
+Q2: WHY is it inert (where it is)?
+===========================================================================
+Mechanism: a dedicated WeightKey ("*Credit"/"*BoardCredit") gates the call.
+Concrete example, the FreeCivilAction path:
+  rust/src/bots/weighted/weights.rs:728   FreeActionCredit => "free_action_credit", 0.0;
+  rust/src/bots/weighted/weights.rs:1673  WeightKey::FreeActionCredit => [0.000000, 0.000000, 0.000000],
+  rust/src/bots/weighted/cards.rs:1160-1163:
+        if card.special.iter().any(|sp| matches!(sp, Special::FreeCivilAction(_))) {
+            let fc = w.get(WeightKey::FreeActionCredit);
+            if fc != 0.0 {
+                total += fc * rivals::feature_marginal(WeightKey::CivilActions, ...);
+  So: default weight is exactly 0.0 -> the `if fc != 0.0` branch never fires ->
+  the per-card FreeCivilAction bonus prices at nothing, UNLESS training (hill
+  climbing) has moved free_action_credit off 0.0 for a given champion.
+  This is "a weight authored at 0.0" gating "a branch never taken", exactly
+  the task's third bullet -- but it is a TRAINABLE parameter, not a
+  structurally-dead branch: nothing prevents it from being nonzero, and in
+  fact it already is nonzero in 2 of 3 live champions (see Q3).
+
+Same shape repeats for every other *_value()/*BoardCredit pair (action_board_
+credit gates action_value entirely at cards.rs:1815-1818; tech_board_credit/
+gov_board_credit/wonder_board_credit/tactic_board_credit/aggression_board_
+credit/... the same). tech_value's own doc comment says it plainly:
+  rust/src/bots/weighted/cards.rs:1180 "... a `max`, not a sum:
+    `build_fresh_credit` gates it, default 0.0, so this is inert until the
+    league is told to look."
+docs/OPEN_ITEMS.md:642-650 (item 29) documents the historically-inert
+wonder case: card_board_credit and wonder_potential both default 0.0 and,
+as of that doc's writing, were 0.0 on 3p/4p (only 2p had climbed them:
+0.361 / 0.115) -- STALE as of today, see Q3.
+
+===========================================================================
+Q3: WeightKeys used, and CURRENT values in the three live champions
+===========================================================================
+Read directly from experiments/rust_champion_{2,3,4}p.json (2026-08-24):
+
+  key                          2p              3p              4p
+  free_action_credit           0.02255826      0.09309820      0.0          <- exactly 0 (inert) at 4p only
+  action_board_credit          0.17662530      0.05995845      0.00701874
+  build_fresh_credit           0.01306162      2.32667373     -0.66701250
+  restricted_resource_credit   0.17829723      0.45115550      0.0          <- exactly 0 (inert) at 4p only
+  territory_credit             0.04389316     -0.05412682     -0.24315087
+  bonus_card_credit           -0.10975332      3.05651825     -0.93116712
+  tactic_board_credit          0.04276217      0.02015305      0.0          <- exactly 0 (inert) at 4p only
+  aggression_board_credit      0.01725375     -0.17584756     -0.14935207
+  war_board_credit             0.20000304     -0.30938599      0.18071848
+  pact_board_credit            0.00168640      0.06425646      0.09925423
+  event_board_credit          -0.34335228     -1.88764070     -0.41767803
+  card_rate_credit             0.18441579     -8.06177995     -0.34083461
+  unit_strength_credit         0.04225627      0.00160979      0.02334878
+  unit_tech_credit            -0.00884576      2.16782959      0.13497639
+  tech_board_credit           -0.55256220    -27.05287149     -0.12528463
+  gov_board_credit             0.09073698      1.04155047     -0.02132382
+  wonder_board_credit          0.03268823      0.44966053      0.07197313
+  card_board_credit            0.12936817      0.64226157      0.10172635
+  wonder_potential             2.53195697      2.23142558      7.30524978
+  hand_swap_extra             -0.09264655      1.27684947     -0.07680983
+  tactic_reach_credit         -0.57292864     -0.05702534      0.29118972
+
+Only 3 of these 20 credits are exactly 0.0 in any current champion, and only
+ever in the 4p one: free_action_credit, restricted_resource_credit,
+tactic_board_credit. Everything else -- including card_board_credit and
+wonder_potential, the two keys docs/OPEN_ITEMS.md item 29 cites as 0.0 on
+3p/4p -- is now nonzero across all three arms. That item is stale.
+
+===========================================================================
+Q4: What would turning it on change, and is there a double-count risk?
+===========================================================================
+Call path (FreeCivilAction example, most concrete one):
+  eval.rs/row.rs -> card_potential() (cards.rs:1781)
+    -> card_potential_core() (cards.rs:1792), CardType::is_action() branch
+       (cards.rs ~1815-1818): gated by ActionBoardCredit (nonzero on all 3
+       champions already, so action_value() IS being called today)
+    -> action_value() (cards.rs:1108) -> the FreeCivilAction special case
+       (cards.rs:1160-1166), gated by FreeActionCredit.
+Turning FreeActionCredit on (nonzero) for the 4p champion specifically would
+only affect the ~18 base-game cards carrying Special::FreeCivilAction (e.g.
+Rich Land) when action_value() is reached for them at 4p -- a narrow, already-
+wired path.
+
+Double-count check: NO, not for this specific key today. There used to be a
+double-count bug -- the static card_yields table AND action_value both
+attempted to price ResourceDiscount/RestrictedResources/FreeCivilAction, and
+they measurably disagreed (comment at cards.rs:3376-3390: "0.0 static vs 1.82
+board-aware pricing Rich Land (A)'s resourceDiscount at the live 2p Rust
+champion's weights"). The fix DELETED the static formula for those three
+WeightKeys rather than trying to keep them in sync, and it is now pinned by a
+regression test:
+  rust/src/bots/weighted/cards.rs:3391 fn card_yields_never_reprices_the_
+    action_boards_ring_fenced_coordinates() -- walks every card, asserts
+    card_yields() never emits WeightKey::ResourceDiscount |
+    WeightKey::RestrictedResources | WeightKey::FreeCivilAction.
+So the FreeCivilAction/ResourceDiscount/RestrictedResources triple has
+exactly ONE live pricing path (action_value, gated by ActionBoardCredit +
+FreeActionCredit), not two. Turning on the currently-0.0 keys (at 4p) is a
+pure activation of an already-single-path mechanism, not a risk of double
+counting.
+
+Caveat: this "single path, safe to turn on" property is true because a prior
+lane already excised the duplicate. It does NOT generalize automatically to
+every *_credit gate without checking each one's own history the same way
+(e.g. board_yields.rs:42-49's doc comment on wonder_completion_culture single-
+implementation guard, tests/test_card_pricing.py:TestOneImplementation on the
+Python side, is the analogous guard for the OnBuildCulture path).
+
+===========================================================================
+Q5: Tests / docs pinning it as inert or explaining why it's off
+===========================================================================
+Tests (Rust, #[cfg(test)] in cards.rs):
+  cards.rs:3336 card_potential_dispatch_credits_are_real_weight_keys() --
+    pins that every *_credit name used in the dispatch (including
+    FreeActionCredit/"free_action_credit") is a real WeightKey, so a typo
+    can't silently zero a branch forever.
+  cards.rs:3359 action_value_prices_the_free_civil_action_special_not_the_
+    dead_field() -- sets WeightKey::FreeActionCredit to 1.0 then 0.0 and
+    asserts with_credit > without_credit; this is the test that PROVES the
+    mechanism is wired (not dead code) and shows the 0.0 default is what
+    makes it inert absent training, not a broken code path.
+  cards.rs:3391 card_yields_never_reprices_the_action_boards_ring_fenced_
+    coordinates() -- the double-count guard (see Q4).
+  cards.rs:3365 assert_eq!(id.get().effects.free_civil_action, 0, "the typed
+    field is dead, see this module's top doc comment") -- a DIFFERENT, truly-
+    dead thing (the typed CardEffects.free_civil_action field, always 0 by
+    codegen) that must not be confused with Special::FreeCivilAction, which is
+    live. cards.rs:78 module doc comment: "effects.free_civil_action and
+    effects.on_build_culture are dead ... Special::OnBuildCulture (board-
+    priced, board_yields.rs's concern, not this file's)".
+
+Docs:
+  docs/OPEN_ITEMS.md:633-651 item 29 "Wonders are the one civil type that
+    never got the *_board_credit-defaults-to-1.0 treatment" -- the fullest
+    prose explanation of an inert-by-default credit gate (card_board_credit /
+    wonder_potential), with completion-rate numbers (1.53/0.24/0.16 per
+    seat-game at 2p/3p/4p) proving it was behaviourally inert on 3p/4p when
+    written. Confirmed STALE against today's champion JSONs (Q3): both keys
+    are now nonzero on all three arms.
+  docs/OPEN_ITEMS.md:601-621 item 31 "Why does the build-fresh plan LOSE
+    5.5pp when it is turned on?" -- build_fresh_credit was deliberately
+    shipped at 0.0 because turning it to 1.0 was a MEASURED REGRESSION
+    (44.1%/44.5% win rate vs 50% null, 400 paired games), not an oversight.
+    This is the one credit gate in the whole survey where "inert" was a
+    considered decision with an experiment behind it, not just "never
+    climbed yet." (Today's champion JSONs show build_fresh_credit nonzero on
+    all three anyway -- 0.013/2.33/-0.667 -- so either a later lane revisited
+    this or the switch-vs-level framing in the item allowed climbing past it;
+    not chased further under this budget.)
+  docs/AUDIT_HISTORY.md:172,195,258,265 -- general prose on how "inert" claims
+    about weights have been wrong before ("a fix predicted inert moved a
+    metric") -- a standing caution against assuming 0.0-by-default means
+    behaviourally inert without checking the live champion.
+
+===========================================================================
+OPINION
+===========================================================================
+Turning "it" on is a SMALL, safe change for the one candidate that actually
+matches "wired but currently reads as literally 0" today (FreeActionCredit /
+Special::FreeCivilAction, restricted_resource_credit, tactic_board_credit --
+all three exactly 0.0 in the 4p champion only): flip the weight, rerun
+training/eval for 4p, done -- the call path is single, tested, and the
+double-count hazard was already closed by a prior lane (cards.rs:3391).
+It is NOT a small change in the sense the task's premise implies (flip one
+switch and unlock a whole unused subsystem): the "subsystem" is already live
+in production on 2p and 3p, and on most of its 20 credit keys at 4p too. The
+real, currently-true gap is narrow: three credits pinned at exactly 0.0 on
+one arm (4p), plus docs/OPEN_ITEMS.md item 31's build_fresh_credit, which was
+tested and found to be a genuine regression, not an oversight -- turning that
+one on is not free and should not be done without redoing that A/B.
