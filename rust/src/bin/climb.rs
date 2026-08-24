@@ -81,7 +81,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use tta::arena::{loader_for, Match, Summary};
+use tta::arena::{loader_for, Duel, Match, Summary};
 use tta::bots::greedy::{BotKind, Search as SeatSearch, Seat};
 use tta::bots::weighted::eval::{dominance_repair, load_weights, save_weights};
 use tta::bots::weighted::weights::{WeightGroup, WeightKey, Weights};
@@ -122,6 +122,76 @@ const RUNAWAY_FRACTION: f64 = 0.95;
 /// what 60 pool games can produce from a genuinely fine candidate, so it
 /// triggers on real drift without triggering on every generation.
 const POOL_CONFIRM_TRIGGER: f64 = -0.05;
+
+/// Which per-game signal the accept gate (`challenge`, `Config::null`)
+/// reduces over. `Win` is the original binary win share -- untouched, and
+/// the default, so leaving `--fitness` off reproduces every existing run
+/// bit-for-bit. `Margin` reads each game's culture lead over the best
+/// opponent instead, because a continuous number has lower per-game variance
+/// than a 0/1 share, so the same accept/reject decision needs fewer games to
+/// reach a tight enough interval.
+///
+/// **Margin is not the objective and must never be treated as one.** Winning
+/// by 1 culture point is worth exactly the same as winning by 50 -- the game
+/// has exactly one win condition, and it is binary. `Margin` exists ONLY to
+/// shrink the sample size a decision needs, by substituting a
+/// lower-variance, rank-correlated proxy for the quantity that actually
+/// matters. It is not free: a margin-maximiser can rationally trade away win
+/// probability for surplus points nobody is paying for, favouring a mutant
+/// that wins less often but by more when it does. `--fitness margin` is
+/// opt-in and off by default for exactly this reason -- it is a real risk
+/// this file does not hide behind the variance win, not a strictly better
+/// setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum Fitness {
+    #[default]
+    Win,
+    Margin,
+}
+
+impl std::str::FromStr for Fitness {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Fitness, String> {
+        match s {
+            "win" => Ok(Fitness::Win),
+            "margin" => Ok(Fitness::Margin),
+            other => Err(format!("--fitness: {other:?} is not win or margin")),
+        }
+    }
+}
+
+/// `docs/LEAGUE_OBJECTIVE.md` §1's `LEAD_SCALE`: 2.5x the standard deviation
+/// of the per-seat culture lead over an external 1,011-game human BGO
+/// corpus, indexed by player count. Reused verbatim rather than re-derived,
+/// for the same reason that document gives for it: a scale FITTED to this
+/// climb's own self-play would go stale on every improvement (the exact
+/// failure the deleted `CULTURE_CENTRE` constant that document replaces
+/// shows), and re-deriving it honestly would need exactly the self-play
+/// measurement batch this change is not allowed to run. An external,
+/// player-count-indexed reference cannot go stale that way.
+fn lead_scale(players: u8) -> f64 {
+    match players {
+        2 => 145.0,
+        3 => 115.0,
+        4 => 135.0,
+        other => unreachable!("players validated to 2..=4 by Match::validate, got {other}"),
+    }
+}
+
+/// Turn a raw culture lead into a share-shaped `[0, 1]` number so `Fitness::
+/// Margin`'s `Challenge.share`/`.lo` stay the same KIND of quantity
+/// `Fitness::Win`'s do: bounded, printable next to a win share in the same
+/// JSONL field, and centred where win and lose actually divide. `0` is the
+/// rule-derived centre -- `lead >= 0` iff the seat won or tied, the same
+/// identity `docs/LEAGUE_OBJECTIVE.md` §1 pins for the retired Python
+/// league's own `lead_share` -- so the squash needs no fitted midpoint, only
+/// a scale, and `lead_scale` supplies that without measuring anything. `tanh`
+/// also bounds one huge blowout from swamping a whole batch's mean, which
+/// matters more here than it does for a plain win share: an unsquashed
+/// margin has no such ceiling.
+fn margin_share(lead: f64, players: u8) -> f64 {
+    0.5 * (1.0 + (lead / lead_scale(players)).tanh())
+}
 
 fn movable(key: WeightKey) -> bool {
     !FROZEN.contains(&key)
@@ -356,11 +426,48 @@ fn mutate_raw(w: &Weights, s: &mut Search, sigma: f64, forced: Option<Op>) -> Mu
 /// The verdict on one mutant.
 #[derive(Clone, Copy, Debug)]
 struct Challenge {
-    /// The mutant's win share against the champion.
+    /// The mutant's fitness against the champion, in whatever unit
+    /// `Config::fitness` selects: `Fitness::Win`'s raw win share, or
+    /// `Fitness::Margin`'s squashed culture-margin share (`margin_share`) --
+    /// always `[0, 1]` and always the same field either way, so nothing
+    /// downstream (printing, the JSONL log, `Config::null`) has to know
+    /// which one produced it.
     share: f64,
     /// One-sided lower bound on that share at `accept_z`.
     lo: f64,
     games: usize,
+}
+
+/// One game's fitness observation, or `None` if this game must be excluded
+/// outright rather than folded in as a number -- `stats::paired`'s own
+/// contract for "this game did not finish" (its doc comment), reused here
+/// rather than invented fresh.
+///
+/// `Fitness::Win` reads every game unconditionally, exactly as before this
+/// flag existed -- `Fitness::Win` never excludes a game the old code did not
+/// already count, which is what keeps `--fitness win` (the default)
+/// bit-identical to every run before this flag existed.
+///
+/// `Fitness::Margin` excludes a game whose margin cannot be trusted: a
+/// move-cap-out (`Duel::cap_hit`) stopped the game before it would have
+/// ended on its own, so `Duel::lead()` reflects an arbitrary partial state,
+/// not a result -- `Summary::cap_hits`'s own doc comment calls this "always
+/// a bug when non-zero". Folding that in as margin `0.0` would be
+/// indistinguishable from an honestly-played dead-even game and would
+/// quietly bias every mean this flag produces; the non-finite guard beside
+/// it is the same rule applied to any OTHER reason a lead might not be a
+/// real number, not just this one known cause.
+fn per_game_value(d: &Duel, cfg: &Config) -> Option<f64> {
+    match cfg.fitness {
+        Fitness::Win => Some(d.share),
+        Fitness::Margin => {
+            if d.cap_hit || !d.lead().is_finite() {
+                None
+            } else {
+                Some(margin_share(d.lead(), cfg.players))
+            }
+        }
+    }
 }
 
 /// Play `mutant` against `champion` in growing batches up to `max_games`,
@@ -380,7 +487,7 @@ struct Challenge {
 /// stopping rule stays the one for LOSERS only.
 fn challenge(mutant: &Weights, cfg: &Config, seed: u64) -> Challenge {
     let players = cfg.players as usize;
-    let null = 1.0 / players as f64;
+    let null = cfg.null();
     let mut shares: Vec<Option<f64>> = Vec::new();
     let mut batch = cfg.screen;
 
@@ -400,7 +507,7 @@ fn challenge(mutant: &Weights, cfg: &Config, seed: u64) -> Challenge {
         if duel.validate().is_err() {
             break;
         }
-        shares.extend(duel.play().iter().map(|d| Some(d.share)));
+        shares.extend(duel.play().iter().map(|d| per_game_value(d, cfg)));
 
         let est = stats::paired(&shares, players);
         if est.mean < null && shares.len() >= cfg.screen {
@@ -687,6 +794,15 @@ struct Config {
     /// disables stage 2 outright -- the pre-fix behaviour, kept only so a
     /// run can A/B against it.
     pool_confirm_games: usize,
+    /// What `challenge` (the per-mutant accept/reject signal) reduces over --
+    /// see [`Fitness`]'s own doc comment for the win-vs-margin trade-off.
+    /// Deliberately NOT consulted by the pool veto (`measure_against`,
+    /// `play_pool`, `worst_case_verdict`): that veto is the anti-drift safety
+    /// net (module doc, section 2), and stays on the well-understood,
+    /// tightly-bounded win share regardless of what the accept gate is
+    /// exploring with, exactly the same way it already stays on win share
+    /// regardless of `--gauntlet`.
+    fitness: Fitness,
 }
 
 #[derive(Clone, Debug)]
@@ -747,6 +863,7 @@ impl Default for Args {
                 // "resolves a real -0.05 to -0.30 deficit", which is the
                 // measured range this whole change exists to catch.
                 pool_confirm_games: 300,
+                fitness: Fitness::Win,
             },
             out: PathBuf::from("champion.json"),
             log: None,
@@ -812,6 +929,10 @@ usage: climb --out PATH [options]
   --sigma-floor X    smallest step the 1/5th rule may shrink to (default 0.08)
   --stall-kick N     rejections before a forced big jump; 0 disables (default 15)
   --accept-z X       strictness of the accept gate (default 1.2816 = 90% one-sided)
+  --fitness win|margin  what challenge's accept/reject signal reduces over:
+                     the binary win share, or a squashed culture-margin share
+                     that needs fewer games for the same decision -- margin is
+                     NOT the objective, see Fitness's doc comment (default win)
   --help
 ";
 
@@ -868,6 +989,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--sigma-floor" => a.sigma_floor = parse_num(&value(flag)?, flag)?,
             "--stall-kick" => a.stall_kick = parse_num(&value(flag)?, flag)?,
             "--accept-z" => a.cfg.accept_z = parse_num(&value(flag)?, flag)?,
+            "--fitness" => a.cfg.fitness = value(flag)?.parse::<Fitness>()?,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -1328,8 +1450,33 @@ fn main() -> ExitCode {
 }
 
 impl Config {
+    /// The value a mutant indistinguishable from the champion is expected to
+    /// land on -- the accept gate's floor (`c.lo > null`). Exhaustive over
+    /// [`Fitness`] with no wildcard arm: a future fitness signal has to
+    /// supply its own null rather than silently inheriting one it was never
+    /// checked against.
+    ///
+    /// `Fitness::Win`'s `1 / players` is exact by symmetry -- `players`
+    /// interchangeable seats split the win evenly. `Fitness::Margin`'s `0.5`
+    /// is [`margin_share`] evaluated at `lead == 0`, the rule-derived
+    /// win/lose boundary, and is exact at 2p for the same symmetry reason --
+    /// but at 3p/4p it is a deliberate APPROXIMATION: the TRUE expected
+    /// margin share of two identical vectors sits measurably below 0.5,
+    /// because the best of several equally-strong rivals beats their own
+    /// average (the same reason `Fitness::Win`'s null itself shrinks as
+    /// `players` grows). Getting that exact number needs measuring it by
+    /// self-play, which this change does not do. `0.5` errs on the
+    /// conservative side of that gap -- a neutral mutant is slightly LESS
+    /// likely to clear it than a perfectly calibrated threshold would allow
+    /// -- and a spuriously rejected neutral mutant costs one generation
+    /// where a spuriously accepted harmful one costs a permanent regression,
+    /// so this is the same asymmetric bet the pool veto's whole design
+    /// already makes (module doc, section 2).
     fn null(&self) -> f64 {
-        1.0 / self.players as f64
+        match self.fitness {
+            Fitness::Win => 1.0 / self.players as f64,
+            Fitness::Margin => 0.5,
+        }
     }
 }
 
@@ -1684,6 +1831,202 @@ mod tests {
 
         assert_eq!(r.games, c.max_games, "stopped early at lo={} instead of playing every game", r.lo);
         assert!(r.lo > c.null(), "the matchup was not actually lopsided: lo={}", r.lo);
+    }
+
+    // ============================================================== fitness
+
+    #[test]
+    fn the_default_config_selects_win_fitness() {
+        // The floor under every other test in this section: if the default
+        // ever silently became `Margin`, every run since would have changed
+        // what it accepts without anyone passing a new flag.
+        assert_eq!(cfg().fitness, Fitness::Win);
+        assert_eq!(parse_args(&[]).unwrap().unwrap().cfg.fitness, Fitness::Win);
+    }
+
+    #[test]
+    fn the_fitness_flag_parses_both_spellings_and_rejects_anything_else() {
+        let win = parse_args(&["--fitness".into(), "win".into()]).unwrap().unwrap();
+        assert_eq!(win.cfg.fitness, Fitness::Win);
+        let margin = parse_args(&["--fitness".into(), "margin".into()]).unwrap().unwrap();
+        assert_eq!(margin.cfg.fitness, Fitness::Margin);
+        assert!(parse_args(&["--fitness".into(), "share".into()]).is_err());
+    }
+
+    /// `per_game_value` under `Fitness::Win` must be `Some(d.share)` for
+    /// every `Duel`, unconditionally -- this is the substitution that keeps
+    /// `challenge` bit-identical to its pre-`Fitness` self on the default
+    /// path: swapping `Some(d.share)` for `per_game_value(d, cfg)` changes
+    /// nothing as long as this holds.
+    #[test]
+    fn win_fitness_reads_every_duels_share_unconditionally() {
+        let win_cfg = cfg();
+        assert_eq!(win_cfg.fitness, Fitness::Win);
+        for (share, cap_hit) in [(1.0, false), (0.0, false), (0.5, false), (1.0, true), (0.0, true)] {
+            let d = Duel { share, culture_a: 40.0, culture_best_other: 40.0, moves: 10, cap_hit };
+            assert_eq!(
+                per_game_value(&d, &win_cfg),
+                Some(share),
+                "win fitness must not exclude or transform a game, cap_hit={cap_hit}"
+            );
+        }
+    }
+
+    /// Bit-identical proof that leaving `--fitness` unset reproduces the
+    /// exact prior accept decision: replay `challenge`'s own batching loop
+    /// by hand -- same seed arithmetic, same early-exit rule -- reading
+    /// `Duel::share` straight off each played game, with no `per_game_value`
+    /// or `Fitness` anywhere in it, and demand `challenge` itself (under the
+    /// default `Config`) produces the SAME `Challenge` numbers for the same
+    /// seed. If `Fitness::Win`'s wiring ever introduced so much as a
+    /// rounding difference from the pre-`Fitness` code, this would catch it.
+    #[test]
+    fn the_default_fitness_reproduces_the_win_share_challenge_bit_for_bit() {
+        let mut c = cfg();
+        c.players = 3;
+        c.screen = 9;
+        c.max_games = 18;
+        c.threads = 1;
+        assert_eq!(c.fitness, Fitness::Win);
+
+        let mutant = mutate(&c.champion, &mut Search::new(4), 0.3, None).weights;
+        let seed = 909u64;
+
+        // `challenge`'s own loop, inlined, reading `d.share` directly instead
+        // of going through `per_game_value`/`Fitness`.
+        let null = 1.0 / c.players as f64;
+        let mut shares: Vec<Option<f64>> = Vec::new();
+        let mut batch = c.screen;
+        while shares.len() < c.max_games {
+            let want = batch.min(c.max_games - shares.len());
+            let mut duel = Match {
+                a: Seat { kind: c.kind, weights: mutant, search: SeatSearch::None },
+                b: Seat { kind: c.kind, weights: c.champion, search: SeatSearch::None },
+                games: want,
+                players: c.players,
+                seed: seed.wrapping_add(shares.len() as u64),
+                threads: c.threads,
+            };
+            if duel.validate().is_err() {
+                break;
+            }
+            shares.extend(duel.play().iter().map(|d| Some(d.share)));
+            let est = stats::paired(&shares, c.players as usize);
+            if est.mean < null && shares.len() >= c.screen {
+                break;
+            }
+            batch = c.screen;
+        }
+        let want = stats::paired(&shares, c.players as usize);
+
+        let got = challenge(&mutant, &c, seed);
+        assert_eq!(got.share, want.mean, "mean diverged from the hand-rolled win-share computation");
+        assert_eq!(got.lo, want.mean - c.accept_z * want.se, "lo diverged from the hand-rolled computation");
+        assert_eq!(got.games, shares.len());
+    }
+
+    /// The whole reason a continuous signal helps: the same win/loss record
+    /// can carry a bigger or smaller margin, and margin fitness must
+    /// actually use that -- win fitness, by construction, cannot, because
+    /// every game here is an equally clean win under both records.
+    #[test]
+    fn margin_fitness_accepts_the_bigger_margin_and_rejects_the_smaller_one_at_an_identical_win_count() {
+        let players = 3u8;
+        let mut win_cfg = cfg();
+        win_cfg.players = players;
+        let mut margin_cfg = cfg();
+        margin_cfg.players = players;
+        margin_cfg.fitness = Fitness::Margin;
+
+        // Two complete deals' worth of games (3 seats x 2), every one a clean
+        // win (share 1.0) at BOTH records -- only the lead differs.
+        let record = |lead: f64| -> Vec<Duel> {
+            (0..(players as usize * 2))
+                .map(|_| Duel { share: 1.0, culture_a: 100.0 + lead, culture_best_other: 100.0, moves: 30, cap_hit: false })
+                .collect()
+        };
+        let small_margin = record(2.0);
+        let big_margin = record(20.0);
+
+        // Win fitness cannot see the difference: every game is share 1.0
+        // either way, so the reduced mean is identical.
+        let win_small: Vec<Option<f64>> = small_margin.iter().map(|d| per_game_value(d, &win_cfg)).collect();
+        let win_big: Vec<Option<f64>> = big_margin.iter().map(|d| per_game_value(d, &win_cfg)).collect();
+        assert_eq!(
+            stats::paired(&win_small, players as usize).mean,
+            stats::paired(&win_big, players as usize).mean,
+            "win fitness must be blind to a margin difference on an identical win record"
+        );
+
+        // Margin fitness strictly prefers the bigger lead, and the gap is
+        // decisive: a null between the two accepts the bigger-margin record
+        // and rejects the smaller one, on IDENTICAL win counts -- exactly
+        // the distinction win fitness alone can never make.
+        let margin_small: Vec<Option<f64>> = small_margin.iter().map(|d| per_game_value(d, &margin_cfg)).collect();
+        let margin_big: Vec<Option<f64>> = big_margin.iter().map(|d| per_game_value(d, &margin_cfg)).collect();
+        let mean_small = stats::paired(&margin_small, players as usize).mean;
+        let mean_big = stats::paired(&margin_big, players as usize).mean;
+        assert!(mean_big > mean_small, "bigger margin ({mean_big}) did not score above the smaller one ({mean_small})");
+        let threshold = (mean_small + mean_big) / 2.0;
+        assert!(mean_big > threshold, "the bigger-margin record must clear a null between the two");
+        assert!(mean_small < threshold, "the smaller-margin record must not clear that same null");
+    }
+
+    /// A game that hit the move cap has no trustworthy margin: the game
+    /// stopped before it would have ended on its own, so `Duel::lead()`
+    /// reflects an arbitrary partial state, not a result. It must be
+    /// EXCLUDED from the margin average (a `None`, not folded in as `0.0`,
+    /// which would be indistinguishable from an honestly-played dead-even
+    /// game and would quietly bias the mean), while still being COUNTED --
+    /// it keeps its slot in the per-game vector rather than vanishing from
+    /// it, which is what keeps a later game's (deal, seat) recoverable by
+    /// position (`stats::paired`'s own doc comment).
+    #[test]
+    fn an_unfinished_game_is_excluded_from_margin_not_scored_as_zero() {
+        let players = 2u8;
+        let mut c = cfg();
+        c.players = players;
+        c.fitness = Fitness::Margin;
+
+        let finished = Duel { share: 1.0, culture_a: 150.0, culture_best_other: 100.0, moves: 40, cap_hit: false };
+        let capped_out = Duel { share: 1.0, culture_a: 150.0, culture_best_other: 100.0, moves: 500, cap_hit: true };
+
+        assert!(per_game_value(&finished, &c).is_some(), "a finished game must have a margin");
+        assert_eq!(
+            per_game_value(&capped_out, &c),
+            None,
+            "a move-cap-out must be excluded outright, not scored as margin 0.0"
+        );
+
+        let per_game: Vec<Option<f64>> = vec![per_game_value(&finished, &c), per_game_value(&capped_out, &c)];
+        assert_eq!(per_game.len(), 2, "the excluded game must still occupy a counted slot, not vanish");
+        let est = stats::paired(&per_game, players as usize);
+        assert_eq!(est.n_games, 1, "the cap-out must not be counted as a scored game");
+        assert_eq!(est.n_deals, 0, "a deal missing a seat's value must be dropped whole, not half-counted");
+    }
+
+    /// `margin_share` must be monotonic in the lead (bigger lead, bigger
+    /// share) and centred at `lead == 0` -- the rule-derived win/lose
+    /// boundary `Config::null`'s `Fitness::Margin` arm is built on.
+    #[test]
+    fn margin_share_is_centred_at_zero_lead_and_increases_with_the_lead() {
+        for players in [2u8, 3, 4] {
+            assert_eq!(margin_share(0.0, players), 0.5, "{players}p: zero lead must map to 0.5");
+            assert!(margin_share(20.0, players) > 0.5, "{players}p: a positive lead must score above 0.5");
+            assert!(margin_share(-20.0, players) < 0.5, "{players}p: a negative lead must score below 0.5");
+            assert!(
+                margin_share(50.0, players) > margin_share(5.0, players),
+                "{players}p: a bigger lead must score higher"
+            );
+            // `tanh` of a huge argument rounds to exactly 1.0 in `f64`, so an
+            // extreme blowout is bounded AT, not strictly below, 1.0 -- the
+            // property worth pinning is the bound itself, not an inequality
+            // floating-point cannot actually keep.
+            assert!(
+                (0.0..=1.0).contains(&margin_share(1e9, players)),
+                "{players}p: an extreme lead must stay within [0, 1]"
+            );
+        }
     }
 
     #[test]
