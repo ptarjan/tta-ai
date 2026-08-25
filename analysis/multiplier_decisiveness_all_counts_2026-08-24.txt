@@ -1,0 +1,167 @@
+MULTIPLIER DECISIVENESS -- ALL THREE PLAYER COUNTS
+==================================================
+Instrument: rust/src/bin/multcheck.rs (counterfactual argmax flip).
+Runs, all seed 1001, threads 5, against a FROZEN champion copy:
+  2p  120 games  31846 decisions  /private/tmp/opencensus/champ2p.json
+  3p   80 games  31088 decisions  /private/tmp/opencensus/champ3p.json
+  4p   48 games  27392 decisions  /private/tmp/opencensus/champ4p.json
+Total 90326 real decisions. The 3p table with full METHOD and CAVEATS is in
+analysis/multiplier_decisiveness_3p_2026-08-24.txt; this file is the join.
+
+Both perturbations are a COPY of the champion vector used as BOTH the freeze
+argument to a fresh candidate_features call AND the vector dot is taken
+against, because a multiplier can change the feature it multiplies. That is
+why a key can show term_nonzero_n = 0 (the quantity is zero at the champion
+weight) and still show flips under ABS (a different weight reaches a
+different branch) -- build_fresh_credit at 4p and rival_take_share at 4p are
+exactly that.
+
+term_nz = term_nonzero_n, the count of decisions where at least one
+candidate's score moved when the key was zeroed. maxflip = the larger of
+flip_rate_zero and flip_rate_abs.
+
+WHY THIS FILE EXISTS
+--------------------
+A key is a prune candidate only if its term is zero in ALL THREE counts. A
+3p-only scan is what produced the previous prune list, 36 of whose 38 entries
+were wrong. Every "dead key" claim below is a three-count claim.
+
+THE PRUNE LIST -- 4 of 32 multiplier keys
+-----------------------------------------
+Zero term and zero flips at 2p AND 3p AND 4p, i.e. the multiplied quantity is
+identically zero in 90326 decisions:
+
+key                     w2p      w3p      w4p     informative counts
+gov_action_cost      -0.4807  -2.0240  -0.9631   3 of 3  (weight nonzero everywhere)
+card_board_bonus      0.2033   0.0653   0.2103   3 of 3  (weight nonzero everywhere)
+unit_strength_credit  0.2304   0.0095   0.0000   2 of 3  (4p weight is 0.0, so 4p proves nothing)
+tactic_shortfall_cost 0.0045   0.0000   0.0000   1 of 3  (only 2p is informative)
+
+"Informative" matters: zeroing a key that is already 0.0 is a no-op, and
+abs() of a positive is a no-op, so those cells carry no evidence either way.
+gov_action_cost and card_board_bonus are the two clean kills. The other two
+rest on fewer counts and should be traced in source before retirement.
+
+gov_action_cost carrying -2.0240 at 3p while multiplying an identically-zero
+quantity is the clearest picture of what an unreachable key does to a climb:
+the coefficient drifts freely because nothing ever penalises it. card_rate_credit
+at -11.2057 (3p) is the same story with one live count.
+
+THE FULL JOIN, ordered by max flip rate across counts
+-----------------------------------------------------
+key                          w2p       w3p       w4p    maxflip2p maxflip3p maxflip4p   term_nz 2p/3p/4p
+tech_board_credit         -0.3168  -25.4575   -0.1055    0.4448    0.2786    0.0698    30122/29285/26121
+unit_tech_credit          -0.0241    1.9276    0.0405    0.2698    0.0005    0.0050    24019/ 7472/17284
+card_board_credit          0.1698    0.5837    0.0988    0.2200    0.1660    0.1096    26763/25092/21629
+rate_horizon               1.0866    0.4911    0.0536    0.1559    0.0170    0.0018    31846/31084/27392
+action_board_credit        0.1719    0.0677   -0.0716    0.0966    0.1002    0.0496    31833/31061/26229
+territory_credit           0.0654   -0.0685   -0.2751    0.0065    0.0989    0.0449     6819/14001/11238
+event_board_credit        -0.1844   -1.9751   -0.3518    0.0281    0.0947    0.0521    19060/18743/18748
+card_board_leader         -0.1502    0.0278   -0.0988    0.0849    0.0007    0.0467    16133/18613/11735
+war_board_credit           0.3165   -0.4611    0.4321    0.0083    0.0401    0.0041     8215/ 7667/ 5494
+resource_discount          0.8416    0.6050    0.8424    0.0425    0.0216    0.0026    31671/30271/20054
+gov_board_credit           0.1128    0.8554   -0.1722    0.0262    0.0148    0.0362    17363/21024/23574
+tactic_board_credit        0.0000    0.0415    0.0000    0.0000    0.0277    0.0000        0/13771/    0
+bonus_card_credit         -0.1709    3.5085   -0.9299    0.0151    0.0000    0.0269    15628/    0/ 9943
+build_fresh_credit        -0.0517    1.3948   -0.6728    0.0266    0.0010    0.0261      137/  964/    0
+tactic_reach_credit       -0.4116   -0.0711    0.1971    0.0000    0.0256    0.0000        0/12861/    0
+pact_board_credit          0.0129    0.0571    0.0654    0.0000    0.0188    0.0051        0/10504/ 5781
+wonder_board_credit        0.0248    0.5253    0.0895    0.0142    0.0000    0.0000     7326/    0/ 1856
+aggression_board_credit    0.1125   -0.0667   -0.2452    0.0062    0.0129    0.0063     7531/ 4592/ 4641
+tech_redundancy_discount   0.6687    1.8832    0.4937    0.0001    0.0090    0.0000     6218/11216/  149
+restricted_resource_credit 0.3972    0.4881    0.0000    0.0087    0.0075    0.0000    15734/11910/    0
+rival_take_share           0.3689    3.8927   -7.8582    0.0056    0.0034    0.0059    22537/16826/    0
+hand_swap_extra            0.1860    1.5788   -0.0586    0.0011    0.0050    0.0045     3482/ 4992/ 3963
+card_rate_credit           0.1559  -11.2057   -0.1571    0.0000    0.0000    0.0040        0/    0/ 1197
+science_rate_trailing     20.6190    0.5413   -0.7103    0.0023    0.0000    0.0000     5015/  742/ 1289
+rival_desire               0.0638    0.3290   -0.2874    0.0005    0.0009    0.0000    22374/16252/    0
+culture_rate_trailing     -0.1458    0.0303   -0.0685    0.0002    0.0002    0.0003     4632/ 8360/ 5602
+defense_bonus              0.1472    0.0000    0.0969    0.0001    0.0000    0.0001    15628/    0/ 9943
+free_action_credit         0.0023    0.1199    0.0000    0.0000    0.0002    0.0000    31708/30830/    0
+gov_action_cost           -0.4807   -2.0240   -0.9631    0.0000    0.0000    0.0000        0/    0/    0
+card_board_bonus           0.2033    0.0653    0.2103    0.0000    0.0000    0.0000        0/    0/    0
+unit_strength_credit       0.2304    0.0095    0.0000    0.0000    0.0000    0.0000        0/    0/    0
+tactic_shortfall_cost      0.0045    0.0000    0.0000    0.0000    0.0000    0.0000        0/    0/    0
+
+28 of the 32 flip at least one decision somewhere. The family is LIVE. A
+spread scan reports every one of these as dead, at every player count, by
+construction -- they have no f.set slot in features.rs.
+
+FINDING 1 -- THE SIGN, NOT THE MAGNITUDE
+----------------------------------------
+Keys where flip_rate_abs > flip_rate_zero: correcting only the SIGN, with the
+magnitude held at the champion's own value, changes more decisions than
+switching the key off entirely.
+
+  3p  tech_board_credit    0.2786 abs vs 0.1382 zero   (w = -25.4575)
+      territory_credit     0.0989 abs vs 0.0524 zero
+      event_board_credit   0.0947 abs vs 0.0612 zero
+      war_board_credit     0.0401 abs vs 0.0174 zero
+  2p  card_board_leader    0.0849 abs vs 0.0664 zero
+      build_fresh_credit   0.0266 abs vs 0.0001 zero
+  4p  territory_credit     0.0449 abs vs 0.0164 zero
+      card_board_leader    0.0467 abs vs 0.0357 zero
+      bonus_card_credit    0.0269 abs vs 0.0265 zero
+      rival_take_share     0.0059 abs vs 0.0000 zero  (w = -7.8582)
+
+These coefficients scale a value function that ALREADY carries its own sign.
+A negative scale does not let a bad card price negative -- the inner function
+does that -- it inverts good and bad. dominance_repair in eval.rs already
+accepts precisely this argument for CardBoardCredit's per-type offsets, added
+after the leadersign investigation priced Hammurabi at -13.28 on a +0.885 raw
+board benefit; the same argument was declined twenty lines away in weights.rs
+for this family.
+
+FINDING 2 -- TWO KEYS ARE 3p-ONLY, WITH LIVE WEIGHTS ELSEWHERE
+--------------------------------------------------------------
+tactic_board_credit and tactic_reach_credit have term_nonzero_n = 0 at BOTH
+2p and 4p while carrying nonzero weights there (tactic_reach_credit is
+-0.4116 at 2p and 0.1971 at 4p), yet both are live at 3p (13771 and 12861
+decisions, 2.8% and 2.6% flip). Tactics are not a 3p-only mechanic. This is a
+reachability defect to trace, NOT a prune candidate -- retiring them would
+delete a channel that demonstrably works at one table size.
+
+Same shape, one count each: restricted_resource_credit and rival_desire and
+rival_take_share and free_action_credit all read zero at 4p only;
+card_rate_credit reads zero at 2p and 3p and live at 4p; bonus_card_credit
+and wonder_board_credit and defense_bonus read zero at 3p only.
+
+FINDING 3 -- SCALE IS NOT COMPARABLE ACROSS COUNTS
+--------------------------------------------------
+science_rate_trailing is 20.6190 at 2p, 0.5413 at 3p, -0.7103 at 4p, and its
+flip rate is under 0.25% in all three. tech_board_credit is -25.4575 at 3p
+and -0.3168 at 2p for the SAME key. These are three independently climbed
+vectors that never see each other; a magnitude in one says nothing about the
+same key in another. Do not reason about a key's importance from its weight.
+
+CAVEATS
+-------
+1. Every number is measured against ONE frozen champion per count. A key that
+   never fires under this vector may fire under another. The prune claim is
+   "unreachable under the shipped champion in 90326 decisions", which is the
+   strongest statement this instrument can make, and it is not the same as
+   "dead code".
+2. Sample sizes differ by count because game length does; the decision counts
+   are within 15% of each other, which is close enough to compare rates.
+3. flip_rate_abs is identically 0.0 for every key with a positive champion
+   weight, because abs() of a positive is a no-op. That is the harness's
+   built-in sanity check -- it confirms the comparison is not firing on float
+   noise -- and it means a positive key's row carries no sign evidence.
+4. The 32-key set is derived at runtime from features.rs via include_str!, so
+   no WeightKey variant name appears as a string literal anywhere (registry.rs
+   forbids it). 54 of 160 keys have no f.set slot; the other 22 of those are
+   written directly by eval::linear_features or reached through the
+   .early()/.late() phase suffixes.
+
+WHAT TO DO WITH THIS
+--------------------
+Retire gov_action_cost and card_board_bonus via RETIRED_KEYS in eval.rs --
+never by deleting the variant, since parse_weights hard-errors on an unknown
+name and would break every champion JSON including the weights baked into the
+wasm advisor. Verify the retirement is a same-seed identity no-op rather than
+duelling it.
+
+Gate the family NonNegative in WeightKey::sign_intent. Note that the gate
+RAISES a violator to 0, it does not flip it, so gating alone buys the "zero
+it" column and not the "correct it" column; the validation is a re-climb
+under the constraint, not a patch to the champion.

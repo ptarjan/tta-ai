@@ -1,0 +1,35 @@
+players=2 games=120 seed=1001 threads=5 champion=/private/tmp/opencensus/champ2p.json decisions=31846
+not_in_fset=54 mult_keys=32
+key                               champ_w flip_rate_zero flip_rate_abs   flips_zero      flips_abs
+tech_board_credit                 -0.3168       0.444828      0.131288        14166           4181 term_nonzero_rate=0.945864 term_nonzero_n=30122
+unit_tech_credit                  -0.0241       0.269798      0.039942         8592           1272 term_nonzero_rate=0.754223 term_nonzero_n=24019
+card_board_credit                  0.1698       0.220028      0.000000         7007              0 term_nonzero_rate=0.840388 term_nonzero_n=26763
+rate_horizon                       1.0866       0.155938      0.000000         4966              0 term_nonzero_rate=1.000000 term_nonzero_n=31846
+action_board_credit                0.1719       0.096621      0.000000         3077              0 term_nonzero_rate=0.999592 term_nonzero_n=31833
+card_board_leader                 -0.1502       0.066413      0.084940         2115           2705 term_nonzero_rate=0.506594 term_nonzero_n=16133
+resource_discount                  0.8416       0.042517      0.000000         1354              0 term_nonzero_rate=0.994505 term_nonzero_n=31671
+event_board_credit                -0.1844       0.024964      0.028104          795            895 term_nonzero_rate=0.598505 term_nonzero_n=19060
+build_fresh_credit                -0.0517       0.000094      0.026565            3            846 term_nonzero_rate=0.004302 term_nonzero_n=137
+gov_board_credit                   0.1128       0.026220      0.000000          835              0 term_nonzero_rate=0.545218 term_nonzero_n=17363
+bonus_card_credit                 -0.1709       0.014131      0.015104          450            481 term_nonzero_rate=0.490737 term_nonzero_n=15628
+wonder_board_credit                0.0248       0.014225      0.000000          453              0 term_nonzero_rate=0.230045 term_nonzero_n=7326
+restricted_resource_credit         0.3972       0.008667      0.000000          276              0 term_nonzero_rate=0.494065 term_nonzero_n=15734
+war_board_credit                   0.3165       0.008290      0.000000          264              0 term_nonzero_rate=0.257960 term_nonzero_n=8215
+territory_credit                   0.0654       0.006469      0.000000          206              0 term_nonzero_rate=0.214124 term_nonzero_n=6819
+aggression_board_credit            0.1125       0.006249      0.000000          199              0 term_nonzero_rate=0.236482 term_nonzero_n=7531
+rival_take_share                   0.3689       0.005621      0.000000          179              0 term_nonzero_rate=0.707687 term_nonzero_n=22537
+science_rate_trailing             20.6190       0.002324      0.000000           74              0 term_nonzero_rate=0.157477 term_nonzero_n=5015
+hand_swap_extra                    0.1860       0.001099      0.000000           35              0 term_nonzero_rate=0.109339 term_nonzero_n=3482
+rival_desire                       0.0638       0.000534      0.000000           17              0 term_nonzero_rate=0.702569 term_nonzero_n=22374
+culture_rate_trailing             -0.1458       0.000157      0.000188            5              6 term_nonzero_rate=0.145450 term_nonzero_n=4632
+tech_redundancy_discount           0.6687       0.000126      0.000000            4              0 term_nonzero_rate=0.195252 term_nonzero_n=6218
+defense_bonus                      0.1472       0.000094      0.000000            3              0 term_nonzero_rate=0.490737 term_nonzero_n=15628
+gov_action_cost                   -0.4807       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+card_board_bonus                   0.2033       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+card_rate_credit                   0.1559       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+unit_strength_credit               0.2304       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+free_action_credit                 0.0023       0.000000      0.000000            0              0 term_nonzero_rate=0.995667 term_nonzero_n=31708
+tactic_board_credit                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+pact_board_credit                  0.0129       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_shortfall_cost              0.0045       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_reach_credit               -0.4116       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
