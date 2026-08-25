@@ -60,8 +60,9 @@ use crate::economy;
 use crate::effects;
 use crate::state::{CardList, GameState, Pending, PlayerState, Tableau, MAX_HAND, MAX_PLAYERS, ROW_SIZE};
 
+use super::features;
 use super::horizon;
-use super::weights::{WeightKey, Weights, PHASE_KEYS, STANDING_KEYS};
+use super::weights::{WeightKey, Weights, NEED_KEYS, PHASE_KEYS, STANDING_KEYS};
 
 // =========================================================== rival_board
 
@@ -892,6 +893,52 @@ fn trailing_fraction(key: WeightKey, state: &GameState, idx: u8) -> f64 {
     f64::from(best - mine) / f64::from(best)
 }
 
+/// How far SHORT of its rulebook threshold one of the four [`NEED_KEYS`]
+/// stocks is, as a dimensionless fraction in `[0, 1]`.
+///
+/// The need-axis twin of [`trailing_fraction`], and deliberately the same
+/// shape: `(threshold - have) / threshold`, exactly `0.0` for a player at or
+/// above the threshold, so the hinge is strictly an ADDITION for a player who
+/// is short and never a penalty for one who is not. Being a FRACTION rather
+/// than a level is what keeps it from double-counting: `eval::evaluate`
+/// already prices the raw shortfall through the trained `FoodGap`-style
+/// coordinates, and it makes the term scale-free, so "half a population
+/// increase short" reads 0.5 whether that increase costs 2 food or 8.
+///
+/// A zero threshold reads `0.0`, not infinity: no rule is asking this player
+/// for anything on that axis right now (an empty civil hand needs no science,
+/// a fully staffed tableau needs no workers), which is the definition of not
+/// being short.
+///
+/// The thresholds come from `features::marginal_needs`, the same single
+/// computation `features()` builds its gap/surplus coordinates from -- a
+/// second copy of a rules formula is what that sharing exists to prevent.
+///
+/// `#[allow(clippy::wildcard_enum_match_arm)]`: as in [`trailing_fraction`],
+/// the match is gated to `NEED_KEYS` by its caller, so the fallback arm is a
+/// real "must be one of the four I handle" guard rather than a swallowed
+/// variant -- and spelling it out would name a `_needed` key literally in
+/// production source, which is precisely the false "someone reads it
+/// directly" signal `registry.rs`'s naming ratchet is built to detect. See
+/// `trailing_fraction`'s own doc comment for the full argument.
+#[allow(clippy::wildcard_enum_match_arm)]
+fn need_fraction(key: WeightKey, state: &GameState, idx: u8) -> f64 {
+    let p = &state.players[idx as usize];
+    let s = effects::state_stats(state, p);
+    let needs = features::marginal_needs(p, &s, &features::sweep_tableau(p));
+    let (need, have) = match key {
+        WeightKey::FoodStock => (needs.food, f64::from(p.food)),
+        WeightKey::ResourceStock => (needs.resource, f64::from(p.resources)),
+        WeightKey::Science => (needs.science, f64::from(p.science)),
+        WeightKey::FreeWorkers => (needs.worker, f64::from(p.workers_free)),
+        _ => panic!("need_fraction called on a key outside NEED_KEYS"),
+    };
+    if need <= 0.0 || have >= need {
+        return 0.0;
+    }
+    (need - have) / need
+}
+
 pub fn feature_marginal(
     key: WeightKey,
     state: &GameState,
@@ -925,6 +972,25 @@ pub fn feature_marginal(
         // about to be multiplied by zero.
         if hinge != 0.0 {
             m += hinge * trailing_fraction(key, state, idx);
+        }
+    }
+    // THE NEED HINGE. The second conditioning axis: the standing hinge above
+    // asks where this player stands relative to the FIELD, this one asks how
+    // far they are from a RULEBOOK THRESHOLD. A flat `w.get(key)` prices a
+    // unit of food identically for a player who cannot feed their population
+    // and one sitting on a full granary, which no rulebook reading supports:
+    // food, resources, science and free workers are all spent at known prices
+    // (`NEED_KEYS`), and being short of the price is what makes the next unit
+    // worth something extra. Same guarantee as above -- this is the single
+    // definition of a unit's worth, so every card, hand and wonder pricer
+    // picks it up and none of them can disagree with `evaluate` about it.
+    if NEED_KEYS.contains(&key) {
+        let hinge = w.get(key.needed());
+        // Gated at 0.0 by default, and the lookup below re-sweeps the tableau
+        // -- skip it entirely rather than pay for a number that is about to
+        // be multiplied by zero.
+        if hinge != 0.0 {
+            m += hinge * need_fraction(key, state, idx);
         }
     }
     if PHASE_KEYS.contains(&key) {
@@ -968,6 +1034,83 @@ mod tests {
 
     fn card(name: &str) -> CardId {
         CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    /// Two boards identical except for the food stock, one below the
+    /// population-increase price and one well above it. The starting yellow
+    /// bank is emptied to 1 token so `economy::pop_food_cost` asks a real,
+    /// positive price -- a board with no population left to raise has no food
+    /// threshold at all and would make the assertion vacuous.
+    fn food_boards() -> (GameState, GameState) {
+        let mut short = G::new_game(2, 51);
+        short.players[0].yellow_bank = 1;
+        short.players[0].food = 0;
+        let mut flush = short.clone();
+        flush.players[0].food = 40;
+        (short, flush)
+    }
+
+    /// Food is spent at a price the rulebook prints (§3.1's population
+    /// increase), so a unit of it is worth more to a player who cannot pay
+    /// that price than to one holding several times it. A flat `w.get(key)`
+    /// cannot say that, and until this hinge existed every card, hand and
+    /// wonder pricer in the crate priced food identically on both boards.
+    #[test]
+    fn a_player_short_of_food_values_a_unit_of_food_above_a_player_holding_plenty() {
+        let (short, flush) = food_boards();
+        let mut w = Weights::default();
+        w.set(WeightKey::FoodStockNeeded, 3.0);
+
+        let short_m = feature_marginal(WeightKey::FoodStock, &short, 0, &w, None, None);
+        let flush_m = feature_marginal(WeightKey::FoodStock, &flush, 0, &w, None, None);
+
+        assert!(
+            short_m > flush_m,
+            "a food-short board must price a unit of food above a flush one: \
+             short={short_m} flush={flush_m}"
+        );
+    }
+
+    /// THE LANDING GUARANTEE, and the more important half. The hinge weights
+    /// default to 0.0, so adding them must leave every marginal in the crate
+    /// bit-for-bit where it was until the league prices them -- a new
+    /// coordinate that moves games on the commit that introduces it makes its
+    /// own measurement unreadable.
+    #[test]
+    fn the_need_hinge_prices_both_boards_identically_at_its_zero_default() {
+        let (short, flush) = food_boards();
+        let w = Weights::default();
+        assert_eq!(
+            w.get(WeightKey::FoodStockNeeded),
+            0.0,
+            "the need hinge must ship gated at 0.0"
+        );
+
+        let short_m = feature_marginal(WeightKey::FoodStock, &short, 0, &w, None, None);
+        let flush_m = feature_marginal(WeightKey::FoodStock, &flush, 0, &w, None, None);
+
+        assert_eq!(
+            short_m, flush_m,
+            "at the 0.0 default the need hinge must contribute nothing on either \
+             board: short={short_m} flush={flush_m}"
+        );
+    }
+
+    /// The hinge is bounded and one-directional: a player at or above the
+    /// threshold reads exactly 0.0 and is never penalised, and the deepest
+    /// possible shortfall reads exactly 1.0, so the weight is the whole term's
+    /// range. A raw gap level would be unbounded and would double-count
+    /// against `FoodGap`, which `eval::evaluate` already prices.
+    #[test]
+    fn the_need_fraction_stays_within_zero_and_one_and_reads_zero_when_not_short() {
+        let (short, flush) = food_boards();
+        let f_short = need_fraction(WeightKey::FoodStock, &short, 0);
+        let f_flush = need_fraction(WeightKey::FoodStock, &flush, 0);
+        assert_eq!(f_flush, 0.0, "a player above the threshold is not short");
+        assert!(
+            f_short > 0.0 && f_short <= 1.0,
+            "the need fraction is dimensionless and bounded: {f_short}"
+        );
     }
 
     /// A trailing player must value the yield they are behind in MORE than a

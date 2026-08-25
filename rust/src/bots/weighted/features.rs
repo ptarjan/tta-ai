@@ -245,6 +245,71 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
     }
 }
 
+/// The four marginal-need THRESHOLDS: how much food, how many resources, how
+/// much science and how many free workers a rule actually demands of this
+/// player right now. Rulebook quantities, one per axis, computed once.
+///
+/// Two readers, and that is the point. [`features`] turns each threshold into
+/// its `*Gap`/`*Surplus` raw-level pair for `eval::evaluate`'s dot product;
+/// `rivals::feature_marginal` divides the shortfall by the threshold to get a
+/// dimensionless fraction and hinges the per-unit marginal on it. A second
+/// copy of any of these four formulas is the defect this struct exists to
+/// prevent -- both readers must agree on what "need" means or the pricer and
+/// the evaluator disagree about the same board.
+///
+/// THRESHOLDS ONLY, never the "have" side. [`features`] adds its pending-gain
+/// adjustments ([`GainFeature`]) to every stock it reads and
+/// `feature_marginal` prices the board as it stands, so the two readers
+/// legitimately differ on "have" and must not share it.
+pub struct MarginalNeed {
+    /// Food to raise population once, [`economy::pop_food_cost`]. 8 is that
+    /// function's "cannot increase population at all" sentinel (empty yellow
+    /// bank); `one_time` is deliberately not passed -- see below.
+    pub food: f64,
+    /// Resources for the cheapest unstaffed tableau slot, `0.0` with none --
+    /// [`TableauSweep::unbuilt_min_resource_cost`].
+    pub resource: f64,
+    /// Science for the cheapest developable card in the civil hand, `0.0`
+    /// with none. `Develop` is what science pays for (see `costs::tech_cost`),
+    /// so a hand with nothing developable left has no science need at all.
+    pub science: f64,
+    /// Free workers for the unstaffed tableau slots --
+    /// [`TableauSweep::unbuilt_slots`].
+    pub worker: f64,
+}
+
+/// [`MarginalNeed`] for one player. Takes the already-computed [`effects::
+/// Stats`] and [`TableauSweep`] rather than recomputing them: both are
+/// expensive and both callers already hold one.
+pub fn marginal_needs(
+    p: &crate::state::PlayerState,
+    s: &effects::Stats,
+    sweep: &TableauSweep,
+) -> MarginalNeed {
+    // `pop_food_cost`'s `one_time` is deliberately NOT passed here: closing
+    // that (small) blind spot changes what the bot plays and belongs in its
+    // own measured change. The formula itself lives in exactly one place,
+    // `economy::pop_food_cost`.
+    let food = f64::from(economy::pop_food_cost(s.pop_food_discount, p.yellow_bank, 0).unwrap_or(8));
+
+    // One more pass over the same bounded hand `features`'s `hand_value`
+    // already walks, not a scan of the tableau or the row.
+    let mut science: Option<u8> = None;
+    for &c in p.hand_civil.as_slice() {
+        if crate::bots::board_yields::is_levelled_type(c.kind()) {
+            let cost = c.get().science_cost;
+            science = Some(science.map_or(cost, |m: u8| m.min(cost)));
+        }
+    }
+
+    MarginalNeed {
+        food,
+        resource: f64::from(sweep.unbuilt_min_resource_cost.unwrap_or(0)),
+        science: f64::from(science.unwrap_or(0)),
+        worker: f64::from(sweep.unbuilt_slots),
+    }
+}
+
 /// `features(state, idx, ctx=None, w=None, priced_only=False)`.
 ///
 /// `ctx`, when `Some`, MUST be a [`RivalContext`] built for this exact `idx`
@@ -290,6 +355,12 @@ pub fn features(
     // encode`, which is why the government-level addition below stays a
     // separate line rather than folding into the shared function.
     let sweep = sweep_tableau(p);
+    // The four marginal-need thresholds, shared verbatim with `rivals::
+    // feature_marginal`'s need hinge -- see `MarginalNeed`. `unbuilt_slots`
+    // and `unbuilt_min_resource_cost` are therefore read through `needs`
+    // below rather than destructured here: they have exactly one consumer
+    // and it is that struct.
+    let needs = marginal_needs(p, &s, &sweep);
     let TableauSweep {
         workers,
         prod_workers,
@@ -299,8 +370,7 @@ pub fn features(
         special_techs,
         best_unit,
         best,
-        unbuilt_slots,
-        unbuilt_min_resource_cost,
+        ..
     } = sweep;
     tech_levels += p.government.level() as i32;
 
@@ -331,16 +401,6 @@ pub fn features(
     let discontent = (-margin).max(0.0);
     let blue_have = economy::blue_available(p);
     let blue_free = f64::from(blue_have) + g(GainFeature::BlueFree);
-    // `pop_food_cost`'s `one_time` is deliberately NOT passed here, matching
-    // Python's `economy.pop_food_cost(s, p.yellow_bank)` call exactly -- see
-    // that function's own docstring: both evaluator callers preserve this
-    // known (small) blind spot on purpose, because closing it changes what
-    // the bot plays and belongs in its own measured change, not a port.
-    // 8 is the "cannot increase population at all" sentinel (empty yellow
-    // bank); the formula itself lives in exactly one place, `economy::
-    // pop_food_cost`.
-    let pop_cost = economy::pop_food_cost(s.pop_food_discount, p.yellow_bank, 0).unwrap_or(8);
-
     // --------------------------------------------------------- wonders
     // How far in, and whether it can possibly be finished -- see Python's
     // own extensive comment on this block (`engine/bots/weighted.py:1530`)
@@ -359,22 +419,6 @@ pub fn features(
 
     let hand_value: f64 = p.hand_civil.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();
     let hand_mil_value: f64 = p.hand_military.as_slice().iter().map(|&c| f64::from(c.level()) + 1.0).sum();
-
-    // The science marginal-need axis's "need": the cheapest developable
-    // technology sitting in the civil hand right now, by printed
-    // `science_cost` -- `Develop` is what science pays for (see
-    // `costs::tech_cost`'s own doc comment), so a hand with nothing
-    // developable left has no science need at all (`None` below, read as
-    // 0.0 with the rest of the marginal-need block further down). One more
-    // pass over the same bounded hand `hand_value` above already walks, not
-    // a scan of the tableau or the row.
-    let mut science_need: Option<u8> = None;
-    for &c in p.hand_civil.as_slice() {
-        if crate::bots::board_yields::is_levelled_type(c.kind()) {
-            let cost = c.get().science_cost;
-            science_need = Some(science_need.map_or(cost, |m: u8| m.min(cost)));
-        }
-    }
 
     // ----------------------------------------------------------- rivals
     // Public rival board facts the evaluator was blind to (GAP 3). `max`
@@ -497,7 +541,7 @@ pub fn features(
     // independently, and the league is left to price the pair.
     f.set(WeightKey::CorruptionHeadroom, f64::from(economy::corruption_headroom(proj_blue)));
     f.set(WeightKey::ConsumptionHeadroom, f64::from(economy::consumption_headroom(proj_yellow)));
-    f.set(WeightKey::PopCost, f64::from(pop_cost));
+    f.set(WeightKey::PopCost, needs.food);
     f.set(WeightKey::YellowBank, yellow_bank);
     f.set(WeightKey::FreeWorkers, f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
     f.set(WeightKey::Workers, f64::from(workers));
@@ -752,19 +796,16 @@ pub fn features(
     // coordinate this function already set above rather than recomputing the
     // same expression a second time -- one true computation, not restated.
     let food_have = f.get(WeightKey::FoodStock);
-    let food_need = f64::from(pop_cost);
-    f.set(WeightKey::FoodGap, (food_need - food_have).max(0.0));
-    f.set(WeightKey::FoodSurplus, (food_have - food_need).max(0.0));
+    f.set(WeightKey::FoodGap, (needs.food - food_have).max(0.0));
+    f.set(WeightKey::FoodSurplus, (food_have - needs.food).max(0.0));
 
     let resource_have = f.get(WeightKey::ResourceStock);
-    let resource_need = f64::from(unbuilt_min_resource_cost.unwrap_or(0));
-    f.set(WeightKey::ResourceGap, (resource_need - resource_have).max(0.0));
-    f.set(WeightKey::ResourceSurplus, (resource_have - resource_need).max(0.0));
+    f.set(WeightKey::ResourceGap, (needs.resource - resource_have).max(0.0));
+    f.set(WeightKey::ResourceSurplus, (resource_have - needs.resource).max(0.0));
 
     let science_have = f.get(WeightKey::Science);
-    let science_need_f = f64::from(science_need.unwrap_or(0));
-    f.set(WeightKey::ScienceGap, (science_need_f - science_have).max(0.0));
-    f.set(WeightKey::ScienceSurplus, (science_have - science_need_f).max(0.0));
+    f.set(WeightKey::ScienceGap, (needs.science - science_have).max(0.0));
+    f.set(WeightKey::ScienceSurplus, (science_have - needs.science).max(0.0));
 
     // Culture has no absolute threshold a rule ever converts into a cost --
     // the live pressure is competitive, so "need" is the strongest rival's
@@ -797,9 +838,8 @@ pub fn features(
     f.set(WeightKey::MilitaryActionSurplus, (ma_have - ma_need).max(0.0));
 
     let worker_have = f.get(WeightKey::FreeWorkers);
-    let worker_need = f64::from(unbuilt_slots);
-    f.set(WeightKey::WorkerGap, (worker_need - worker_have).max(0.0));
-    f.set(WeightKey::WorkerSurplus, (worker_have - worker_need).max(0.0));
+    f.set(WeightKey::WorkerGap, (needs.worker - worker_have).max(0.0));
+    f.set(WeightKey::WorkerSurplus, (worker_have - needs.worker).max(0.0));
 
     f
 }

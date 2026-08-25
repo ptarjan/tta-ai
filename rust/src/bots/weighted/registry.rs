@@ -164,6 +164,13 @@ mod tests {
         // exemption exists.
         WeightKey::CultureRateTrailing,
         WeightKey::ScienceRateTrailing,
+        // The need hinges are reached the same indirect way: `rivals::
+        // feature_marginal` calls `key.needed()` over `NEED_KEYS` and never
+        // names any of the four literally.
+        WeightKey::FoodStockNeeded,
+        WeightKey::ResourceStockNeeded,
+        WeightKey::ScienceNeeded,
+        WeightKey::FreeWorkersNeeded,
         WeightKey::WorkersLate,
         WeightKey::StrengthRelEarly,
         WeightKey::StrengthRelLate,
@@ -302,6 +309,13 @@ mod tests {
         // exactly as it has nothing to write for the `_early`/`_late` pairs.
         (WeightKey::CultureRateTrailing, "rivals.rs standing-hinge marginal"),
         (WeightKey::ScienceRateTrailing, "rivals.rs standing-hinge marginal"),
+        // Need hinges: multipliers on the BASE key's marginal (which
+        // `features()` does set), never coordinates of the feature vector
+        // themselves -- the same shape as the standing hinges above.
+        (WeightKey::FoodStockNeeded, "rivals.rs need-hinge marginal"),
+        (WeightKey::ResourceStockNeeded, "rivals.rs need-hinge marginal"),
+        (WeightKey::ScienceNeeded, "rivals.rs need-hinge marginal"),
+        (WeightKey::FreeWorkersNeeded, "rivals.rs need-hinge marginal"),
         // Multipliers the card-in-hand valuation layer (cards.rs) applies
         // to a static/board yield-table ROW -- "how much to trust this
         // kind of estimate", not a board fact, so there is nothing for
