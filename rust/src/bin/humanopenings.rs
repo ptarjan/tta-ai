@@ -42,7 +42,6 @@ use std::fs;
 use std::process::ExitCode;
 
 use tta::corpus::{self, parse_winner_line, Color};
-use tta::game;
 use tta::replay_common::{build_card_index, replay_game};
 use tta::{CardId, CardType, Move};
 
@@ -952,11 +951,17 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                 let pre_hands: Vec<Vec<CardId>> =
                     (0..n).map(|i| d.state.players[i].hand_civil.as_slice().to_vec()).collect();
 
-                // Recovers a genuine post-move `GameState` -- see the
-                // section doc comment above for why `replay_game`'s own
-                // `Decision` list doesn't already carry one.
-                let mut post_state = d.state.clone();
-                game::step(&mut post_state, d.human_move);
+                // The genuine post-move `GameState`, stored on the
+                // `Decision` by `replay_common::Replayer::apply_move` (see
+                // `Decision::state_after`'s own doc). The old workaround --
+                // re-running `game::step` on a clone of the pre-state --
+                // was blind to the replayer's own age force (it happens on
+                // the NEXT journal line, not inside this decision's move)
+                // and is what made this census's antiquation count read 0.
+                let post_state = match &d.state_after {
+                    Some(s) => s,
+                    None => continue,
+                };
                 final_round = post_state.round;
 
                 if let Some(card) = taken_card {
@@ -974,6 +979,31 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                             t.played_dwell.push(round_before as i32 - taken_round as i32);
                         }
                         None => t.n_mismatch += 1,
+                    }
+                }
+
+                // A card that LEFT the actor's own hand this move for a
+                // reason OTHER than the tracked play above is a real
+                // untracked hand-population path (or an untracked removal) --
+                // counted in `n_mismatch`, not silently swallowed: the old
+                // code only diffed hands across an age change, so a
+                // same-age removal was invisible to both the played and
+                // antiquated counters.
+                if let Some(played) = played_this_move {
+                    let removed = hand_multiset_diff(&pre_hands[actor], post_state.players[actor].hand_civil.as_slice());
+                    let extra: Vec<CardId> = removed
+                        .into_iter()
+                        .filter(|c| *c != played)
+                        .collect();
+                    let t = &mut fate_tracks[actor];
+                    for card in extra {
+                        match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
+                            Some(taken_round) => {
+                                t.n_antiquated += 1;
+                                t.censored_dwell.push(round_before as i32 - taken_round as i32);
+                            }
+                            None => t.n_mismatch += 1,
+                        }
                     }
                 }
 

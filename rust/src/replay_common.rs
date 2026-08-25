@@ -357,6 +357,20 @@ pub struct Decision {
     /// silently mixed in with clean decision points, so a later analysis can
     /// filter on it.
     pub after_arbitrary_discard: bool,
+    /// The POST-move `GameState` -- the position after `human_move` has been
+    /// applied (and everything it synchronously triggers: an age change and
+    /// its antiquation, a turn hand-off, ...). A flat `Clone` like the
+    /// pre-move state. Recorded ONLY while `record_decisions` is on (the
+    /// corpus censuses), because it doubles the memory of a recorded
+    /// decision list. It exists so a census can diff pre/post hands for the
+    /// ONE move that actually advanced the age -- the pre-state-only list
+    /// made that diff require a second full `game::step` per decision
+    /// (`bin/humanopenings`'s own workaround), which is also where its
+    /// antiquation detection went blind (the age force happens on the NEXT
+    /// line, not inside this decision's applied move) and where its
+    /// no-matching-take count was inflated by this replayer's own
+    /// hand-correcting pushes (`correct_hand_family`, `h_resign`'s wipe).
+    pub state_after: Option<GameState>,
 }
 
 // ---------------------------------------------------------------------
@@ -1390,6 +1404,19 @@ impl<'a> Replayer<'a> {
                 self.colonize_sacrifices.pop_front();
             }
         }
+        // Fill in the post-move hand snapshot for the decision this move
+        // closes. Taken AFTER `apply::apply`, so it is the real post-move
+        // hands -- including any antiquation cull this very move triggered
+        // (`catch_up_civil_age` runs on the NEXT journal line, so a cull
+        // that happens there is NOT in this snapshot; the census diffs the
+        // pre-state hands against this pair and attributes each removed
+        // card to the move that closed it).
+        if self.record_decisions && !self.decisions.is_empty() {
+            let last = self.decisions.last_mut();
+            if let Some(dec) = last {
+                dec.state_after = Some(self.state.clone());
+            }
+        }
         let mut after: Vec<CardId> = self.state.current_events.as_slice().to_vec();
         for card in before {
             match after.iter().position(|&c| c == card) {
@@ -1411,6 +1438,11 @@ impl<'a> Replayer<'a> {
         let before: Vec<CardId> = self.state.current_events.as_slice().to_vec();
         let idx = self.state.current;
         crate::apply::do_wonder_step_named(&mut self.state, idx, mv.steps().unwrap(), 0, false, named);
+        if self.record_decisions && !self.decisions.is_empty() {
+            if let Some(dec) = self.decisions.last_mut() {
+                dec.state_after = Some(self.state.clone());
+            }
+        }
         let mut after: Vec<CardId> = self.state.current_events.as_slice().to_vec();
         for card in before {
             match after.iter().position(|&c| c == card) {
@@ -4352,6 +4384,7 @@ impl<'a> Replayer<'a> {
                 legal_moves: legal.as_slice().to_vec(),
                 human_move: mv,
                 after_arbitrary_discard,
+                state_after: None,
             });
         }
         let actor = self.state.current;
@@ -4419,6 +4452,7 @@ impl<'a> Replayer<'a> {
                 legal_moves: legal.as_slice().to_vec(),
                 human_move: mv,
                 after_arbitrary_discard,
+                state_after: None,
             });
         }
         let actor = self.state.current;
@@ -4511,6 +4545,7 @@ impl<'a> Replayer<'a> {
                     legal_moves: legal.as_slice().to_vec(),
                     human_move: mv,
                     after_arbitrary_discard,
+                    state_after: None,
                 });
             }
             self.apply_move(mv);
