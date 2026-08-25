@@ -52,11 +52,13 @@
 //! * `CardEffects.strength` is Python's top-level `card["strength"]` on a
 //!   unit card (per-worker rate), a genuine `effects.strength` key on
 //!   everything else, AND the top-level `strength` a TACTIC also prints
-//!   (`effects.tacticBonus`'s duplicate spelling, DELIBERATELY_UNPRICED
-//!   bucket 5) -- three different meanings sharing one field. [`card_yields`]
-//!   dispatches on [`crate::cards::CardType::is_unit`] first (unit ->
-//!   `YieldKind::Unit`), skips `CardType::Tactic` entirely (never priced,
-//!   matching Python), and prices everything else as a flat gain.
+//!   (its per-army bonus) -- three different meanings sharing one field.
+//!   [`card_yields`] dispatches on [`crate::cards::CardType::is_unit`] first
+//!   (unit -> `YieldKind::Unit`) and prices everything else, Tactic
+//!   included, as a flat gain -- every card type has a flat-gain fallback
+//!   here, Tactic's own dedicated pricer (`tactic_value`) intercepting
+//!   before this function is ever called whenever its board credit is
+//!   nonzero (see `card_potential_core`'s dispatch).
 //! * `CardEffects.strength`/`.happy`/`.civil_actions`/`.military_actions`/
 //!   `.blue_tokens`/`.yellow_tokens` are ALSO where a territory's
 //!   `permanentEffects` land (a territory's own `effects` dict is `{}` in
@@ -304,18 +306,23 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
         push(out, WeightKey::CultureRate, eff.culture as i32, YieldKind::Rate);
         push(out, WeightKey::ScienceRate, eff.science as i32, YieldKind::Rate);
 
-        // `strength`: skip entirely for a Tactic, and skip here for a unit
-        // (already priced above as `YieldKind::Unit` -- pushing it again
-        // here would double-count the exact same field). A tactic's
-        // top-level `strength` (its per-army bonus) is folded into this same
-        // field -- see this module's top doc comment -- but it is
-        // DELIBERATELY UNPRICED: `effects.tacticBonus`/`tacticBonusObsolete`
-        // are a duplicate spelling of it, board-scaled (armies you can
-        // FORM), and priced instead by `tactic_gain`/`tactic_short` off
-        // `effects::tactic_outlook` (the valuation layer, not this file).
-        // Every other type's `effects.strength` (special-tech, wonder,
-        // leader) is a genuine flat gain.
-        if kind != CardType::Tactic && !kind.is_unit() {
+        // `strength`: skip here for a unit (already priced above as
+        // `YieldKind::Unit` -- pushing it again here would double-count the
+        // exact same field). Every other type's `effects.strength` --
+        // special-tech, wonder, leader, AND a Tactic's own top-level
+        // `strength` (its per-army bonus, folded into this same field -- see
+        // this module's top doc comment) -- is a genuine flat gain here.
+        // A Tactic's dedicated pricer (`tactic_value`, gated on
+        // `card_potential_core`'s own tactic board credit) intercepts and
+        // `return`s before `card_yields` is ever called whenever that credit
+        // is nonzero, so this flat gain and `tactic_value` never both price
+        // the same card -- this is the fallback for when that credit is
+        // exactly 0.0, the same shape every other card type already had. A
+        // tactic's printed strength is a per-army bonus, so this flat price
+        // overstates a tactic the player cannot yet field an army for; that
+        // is an accepted trade against the alternative of pricing it at
+        // zero, and the credit that multiplies it is what the climb tunes.
+        if !kind.is_unit() {
             push(out, WeightKey::Strength, eff.strength as i32, YieldKind::Gain);
         }
         push(out, WeightKey::HappyMargin, eff.happy as i32, YieldKind::Gain);
@@ -895,8 +902,8 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
     ("theaterScienceDiscountIfLibrary", "trigger: pays per future event, not on play; needs a measured firing rate"),
     // 5. tactic bonus: board-scaled, and a duplicate spelling of the
     // top-level strength `card_yields` already prices through `YieldKind::
-    // Unit`/the flat-strength branch for every OTHER type -- see this
-    // module's top doc comment and `tactic_outlook`.
+    // Unit`/the flat-strength branch -- see this module's top doc comment
+    // and `tactic_outlook`.
     (
         "tacticBonus",
         "tactic bonus: board-scaled, and a duplicate spelling of the top-level strength the engine reads",
@@ -1354,17 +1361,18 @@ pub fn gov_value(id: CardId, state: &GameState, idx: u8, w: &Weights, late: Opti
 
 // ------------------------------------------------- the military-deck classes
 //
-// docs/OPEN_ITEMS.md item 2: Tactic/Aggression/War/Pact/Event priced at
-// exactly 0.0 on every live champion -- `board_credit_key` (above) returns
-// `None` for all five, and the static yield-plumbing table cannot see any of
-// them either (Tactic's own `strength` is explicitly skipped in
-// `card_yields`; the other four's real effects live in nested A/B/
-// allPlayers/gain/lose/takeFromOpponent blocks `CardEffects` has no fields
-// for -- see this module's top doc comment). Five dedicated functions below,
-// one per class, each dispatched from `card_potential` behind its own credit
-// weight -- the same shape `tech_value`/`gov_value`/`action_value` already
-// established for the three civil types the static table alone priced
-// badly. Closed 2026-08-06.
+// docs/OPEN_ITEMS.md item 2: `board_credit_key` (above) returns `None` for
+// all five of Tactic/Aggression/War/Pact/Event, and the static yield-
+// plumbing table cannot see most of what they print either -- Aggression/
+// War/Pact/Event's real effects live in nested A/B/allPlayers/gain/lose/
+// takeFromOpponent blocks `CardEffects` has no fields for (see this module's
+// top doc comment); Tactic's printed `strength` DOES have a field and a
+// flat-gain fallback in `card_yields`, but only a board-aware price -- one
+// that knows whether the player can actually field the army -- prices it
+// correctly. Five dedicated functions below, one per class, each dispatched
+// from `card_potential` behind its own credit weight -- the same shape
+// `tech_value`/`gov_value`/`action_value` already established for the three
+// civil types the static table alone priced badly. Closed 2026-08-06.
 
 /// `tactic_value`: eval-points playing THIS SPECIFIC tactic card from hand
 /// would add, over the tactic already in play, given the player's CURRENT
@@ -2403,12 +2411,14 @@ mod tests {
     }
 
     /// A tactic's top-level `strength` (its army bonus, fused into the same
-    /// field a unit's per-worker strength uses) must never surface as a
-    /// yield at all -- DELIBERATELY_UNPRICED bucket 5.
+    /// field a unit's per-worker strength uses) surfaces as a flat gain, the
+    /// same fallback every other non-unit type gets -- this is the
+    /// board-unaware price a tactic falls back to when its dedicated
+    /// board-aware pricer is not gated on.
     #[test]
-    fn a_tactic_never_prices_its_own_strength() {
+    fn a_tactics_own_strength_prices_as_a_flat_gain() {
         let ys = yields_of("Heavy Cavalry");
-        assert!(!ys.iter().any(|&(k, _, _)| k == WeightKey::Strength), "{ys:?}");
+        assert!(ys.contains(&(WeightKey::Strength, 4.0, YieldKind::Gain)), "{ys:?}");
     }
 
     /// A government's top-level action counts (fused into the same fields a
@@ -2533,6 +2543,32 @@ mod tests {
         let swap = board_yields::board_yields(fsf, &Baseline::at(&state, 0)).expect("First Space Flight is a swap type");
         let expected = sum_board_triples(&swap, &w);
         assert_eq!(board_price, expected, "wonder_board_credit=1.0 must price exactly the board-yields swap diff");
+    }
+
+    /// Every OTHER card type whose dedicated board credit is 0.0 still falls
+    /// back to a real, board-independent price off `card_yields` -- a Tactic
+    /// must too, rather than collapsing to a literal 0.0 that makes every
+    /// tactic in hand indistinguishable. Two tactics printing different
+    /// strength must also price differently, not just both above zero.
+    #[test]
+    fn a_tactic_prices_above_zero_through_the_generic_fallback_when_its_board_credit_is_zero() {
+        let state = crate::game::new_game(2, 57);
+        let mut w = Weights::default();
+        w.set(WeightKey::TacticBoardCredit, 0.0);
+        let mut scratch = Vec::new();
+
+        let heavy_cavalry =
+            card_potential(CardId::by_name("Heavy Cavalry").unwrap(), &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
+        let mobile_artillery =
+            card_potential(CardId::by_name("Mobile Artillery").unwrap(), &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
+
+        assert!(heavy_cavalry > 0.0, "heavy_cavalry={heavy_cavalry}");
+        assert!(mobile_artillery > 0.0, "mobile_artillery={mobile_artillery}");
+        assert_ne!(
+            heavy_cavalry, mobile_artillery,
+            "two tactics with different printed strength must not price identically: \
+             heavy_cavalry={heavy_cavalry} mobile_artillery={mobile_artillery}"
+        );
     }
 
     #[test]
@@ -2831,8 +2867,7 @@ mod tests {
             ("science", "card_yields: eff.science -> WeightKey::ScienceRate (YieldKind::Rate)"),
             (
                 "strength",
-                "card_yields: eff.strength -> WeightKey::Strength (Gain/Unit/Territory by type; \
-                 skipped only for Tactic, whose duplicate spelling tacticBonus is declared instead)",
+                "card_yields: eff.strength -> WeightKey::Strength (Gain/Unit/Territory by type)",
             ),
             ("happy", "card_yields: eff.happy -> WeightKey::HappyMargin"),
             ("civilActions", "card_yields: eff.civil_actions -> WeightKey::CivilActions (every non-Government type; a government's own count is gov_value's board-aware job)"),
