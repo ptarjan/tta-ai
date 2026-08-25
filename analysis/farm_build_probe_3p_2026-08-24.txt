@@ -1,0 +1,350 @@
+FARM BUILD PROBE, 3 players, 2026-08-24
+========================================
+
+QUESTION (task framing): at 3p the champion TAKES Farm cards (0.24/player-game,
+tier III/Mechanized Agriculture 0.195 taken) and almost never BUILDS them (tier
+III 0.018 built). Where does the card die between TAKE and BUILD, and why is
+Move::Build illegal when it is illegal?
+
+METHOD
+------
+Extended rust/src/bin/takeprobe.rs (the ONLY file modified) with a `--build`
+mode that mirrors the existing Mine-TAKE probe's four-stage discipline, but
+for `Move::Build` on the three non-starting Farm technologies:
+
+  FARM_NAMES = ["Irrigation", "Selective Breeding", "Mechanized Agriculture"]
+
+(Agriculture, age A, is the starting technology printed on the player board --
+excluded for the same reason the Mine probe excludes Bronze.)
+
+Key method decision, made by reading legal.rs directly rather than guessing:
+`legal::action_moves`'s build loop only ever generates `Move::Build{card}` out
+of `tableau_names_sorted(&p.techs)` -- i.e. off the player's DEVELOPED
+technology tableau, never off `p.hand_civil`. A Farm card that has been Taken
+but not yet Move::Develop'd is never offered a build move at all, by
+construction of that loop. So this probe's SEEN stage is
+`p.techs.has(id)` (the Farm tech is already developed) at a decision point
+where `state.phase == Phase::Actions && state.pending.is_empty()` -- the exact
+precondition site the real build loop reads from, mirroring the Mine-TAKE
+probe's own SEEN definition ("sitting in card_row" is the precondition site
+`action_moves`'s take loop reads from).
+
+Four stages, same semantics as the Mine-TAKE probe:
+  1. SEEN    -- Farm tech developed (`p.techs.has(id)`) at a decision point
+                where a build is structurally possible.
+  2. LEGAL   -- `Move::Build{card: id}` is present in `legal::legal_moves`'
+                output for that exact card.
+  3. SCORED  -- it survives into `candidate_features`'s own candidate set
+                (structurally identical to LEGAL for a plain WeightedBot, per
+                the Mine-TAKE probe's own doc comment; checked independently
+                here too, not assumed).
+  4. RANK    -- 1-based rank and score gap to the winner, via the same
+                `candidate_features`/`dot` re-derivation of the argmax the
+                Mine-TAKE probe uses (never trusts `WeightedBot::choose`
+                directly; re-derives the same pick from the same feature
+                vectors, confirmed identical by construction).
+
+ILLEGALITY CLASSIFIER
+----------------------
+For every SEEN-but-not-LEGAL occurrence, `classify_build_illegal` replays
+`legal.rs`'s own build-loop checks (legal.rs, the `p.workers_free > 0` gate
+through the non-unit affordability/CA checks) IN THE SAME ORDER and with the
+SAME short-circuit semantics the real `||` expression uses, so the bucket a
+card lands in is the actual reason `legal_moves` rejected it:
+
+  1. NoFreeWorker       -- `p.workers_free == 0`. This is the OUTER gate,
+                            checked once per decision point, before ANY card
+                            (Farm, Mine, urban or unit) is even considered --
+                            if it fires, every build is illegal simultaneously,
+                            not just Farm's.
+  2. NoCostPrinted      -- `costs::build_cost_net` returned `None` (no
+                            printed resource cost). Never fires for a Farm
+                            card in practice (every farm tech prints a
+                            nonzero resourceCost) -- kept for exhaustiveness.
+  3. CannotPayResources -- resources on hand (plus any live Trade Routes
+                            Agreement food-as-resource conversion) fall short
+                            of net cost.
+  4. NoCivilAction      -- no spare civil action and no live Civil-Life-style
+                            CA-free grant.
+  5. Other              -- residual bucket; a Farm card is never a unit and
+                            never urban, so the unit/urban-limit branches of
+                            the real loop are never replayed here and never
+                            attributed to Farm. `Other` firing at all would
+                            mean this probe's replay diverged from legal.rs
+                            itself -- it did not (see RESULTS: always 0).
+
+COMMANDS RUN
+------------
+  export PATH="$HOME/.cargo/bin:$PATH"
+  cd /Users/pt/tta-ai/rust
+  touch src/bin/takeprobe.rs
+  cargo clippy --all-targets -- -D warnings
+  cargo test
+  cargo build --release --bin takeprobe
+
+  ./target/release/takeprobe --build --games 600 --players 3 \
+      --weights /private/tmp/opencensus/champ3p.json --threads 6 --seed 1
+
+  ./target/release/takeprobe --build --games 600 --players 3 \
+      --weights /Users/pt/tta-ai/analysis/frozen/human_weights.json \
+      --threads 6 --seed 1
+
+GATE
+----
+  STEP: touch takeprobe.rs -> EXIT 0
+  STEP: cargo clippy --all-targets -- -D warnings -> EXIT 0
+  STEP: cargo test -> EXIT 0
+  STEP: cargo build --release --bin takeprobe -> EXIT 0
+
+RESULTS -- CHAMPION (/private/tmp/opencensus/champ3p.json), 600 games, 3p
+==========================================================================
+
+Four-stage funnel:
+
+card                    seen    legal   scored   L-rate S-rate     mean_gap best_rank
+Irrigation               173        4        4    0.023  1.000     108.0273         3
+Selective Breeding      2048       39       39    0.019  1.000     106.4177         1
+Mechanized Agriculture    542        9        9    0.017  1.000     123.7737         1
+
+combined: seen=2763 legal=52 (0.019) scored=52 (1.000) mean_rank=4.83
+          mean_gap=109.5454 best_rank=1
+
+So: LEGAL rate is 1.9% of SEEN occurrences (98.1% die before LEGAL). Whenever
+a Farm build IS legal, it is ALSO scored 100% of the time (no narrowing stage
+between generation and evaluation, matching the Mine-TAKE probe's own finding
+for this bot kind) -- SCORED is not where this card dies.
+
+Illegality-reason breakdown (n=2711 SEEN-but-not-LEGAL occurrences):
+  NoFreeWorker         2393  (0.883)
+  NoCostPrinted           0  (0.000)
+  CannotPayResources     313  (0.115)
+  NoCivilAction            5  (0.002)
+  Other                    0  (0.000)
+
+-> 88.3% of the illegal-Farm-build occurrences are because the player has ZERO
+   free workers at that decision point -- the leading hypothesis, confirmed by
+   direct measurement, not assumed. 11.5% are a resource shortfall. Civil
+   action scarcity (0.2%) is negligible. Other/NoCostPrinted are exactly 0,
+   confirming the classifier's replay of legal.rs never diverged from the
+   real move generator for any Farm occurrence in 600 games.
+
+Illegality-reason breakdown by round (champion):
+  round  NoFreeWork   NoCostPrint  CannotPayResrc  NoCivilActn  Other  total
+      5           3            0               1            0      0      4
+      6           9            0               0            0      0      9
+      7          13            0               0            0      0     13
+      8          13            0               0            0      0     13
+      9          40            0              16            0      0     56
+     10         121            0              15            0      0    136
+     11         153            0               8            0      0    161
+     12         158            0              13            1      0    172
+     13         203            0              12            0      0    215
+     14         205            0              16            1      0    222
+     15         204            0              22            0      0    226
+     16         208            0              13            1      0    222
+     17         244            0              18            0      0    262
+     18         263            0              31            0      0    294
+     19         300            0              75            2      0    377
+     20         224            0              69            0      0    293
+     21          32            0               4            0      0     36
+
+NoFreeWorker dominates in EVERY round with a meaningful sample, not just late
+game -- it is already 100% of the reason mass through round 8, and stays
+75-90% of the mass through the rest of the game. This is a standing
+worker-availability defect in the champion's play, not a late-game-only
+squeeze.
+
+Rank/gap table (n=52 scored occurrences, the 1.9% that clear LEGAL):
+  mean_rank=4.83, mean_gap=109.5454, best_rank achieved=1 (both Selective
+  Breeding and Mechanized Agriculture reach rank 1 at least once; Irrigation's
+  best is rank 3, off only 4 scored occurrences).
+
+What beats a scored Farm build (n=52):
+  Build     50  (0.962)
+  Develop    1  (0.019)
+  Take       1  (0.019)
+
+-- almost always another Build wins instead (the champion, on the rare turns
+it CAN build a Farm, is usually choosing to build something else that same
+turn, not choosing to do something unrelated).
+
+Top WeightKey terms by mean |contribution| to the winner-vs-Farm-build gap
+(n=52, ranked list only, no raw weight values, per the method's own
+constraint):
+   1. ResourceStock            favors_winner
+   2. BlueFree                 favors_take
+   3. CultureRate              favors_winner
+   4. Strength                 favors_winner
+   5. Uprising                 favors_winner
+   6. EventScoringMargin       favors_winner
+   7. ResourceRate             favors_take
+   8. Science                  favors_winner
+   9. WonderPromise            favors_winner
+  10. MaLeft                   favors_take
+  11. WorkersLate              favors_take
+  12. AttackTargetWeakness     favors_winner
+  13. StrengthRel              favors_take
+  14. StrengthRelEarly         favors_take
+  15. ResourceSurplus          favors_take
+
+(n=52 is thin -- see CAVEATS. This ranking is included per the task's
+instructions but should not be over-read given the sample size.)
+
+RESULTS -- HUMAN VECTOR (/Users/pt/tta-ai/analysis/frozen/human_weights.json), 600 games, 3p
+===============================================================================================
+
+Four-stage funnel:
+
+card                    seen     legal   scored   L-rate S-rate     mean_gap best_rank
+Irrigation                 0         0        0    0.000  0.000       0.0000       n/a
+Selective Breeding     18383      5105     5105    0.278  1.000      39.2058         1
+Mechanized Agriculture   5419       883      883    0.163  1.000      51.1152         1
+
+combined: seen=23802 legal=5988 (0.252) scored=5988 (1.000) mean_rank=16.54
+          mean_gap=40.9620 best_rank=1
+
+Illegality-reason breakdown (n=17814 SEEN-but-not-LEGAL occurrences):
+  NoFreeWorker         8019  (0.450)
+  NoCostPrinted           0  (0.000)
+  CannotPayResources    8953  (0.503)
+  NoCivilAction          842  (0.047)
+  Other                   0  (0.000)
+
+Illegality-reason breakdown by round (human vector):
+  round  NoFreeWork   NoCostPrint  CannotPayResrc  NoCivilActn  Other  total
+     10          23            0               0            0      0     23
+     11         185            0               0            0      0    185
+     12         518            0               2            6      0    526
+     13         602            0              86           10      0    698
+     14         687            0             335           15      0   1037
+     15         666            0             388           69      0   1123
+     16         470            0             535          109      0   1114
+     17         530            0             621          101      0   1252
+     18         693            0             910           74      0   1677
+     19         752            0            1026           74      0   1852
+     20         791            0            1188           62      0   2041
+     21         904            0            1351          108      0   2363
+     22         918            0            1675          169      0   2762
+     23         266            0             793           44      0   1103
+     24          14            0              43            1      0     58
+
+What beats a scored Farm build (n=5988):
+  Build     1606  (0.268)
+  Pop       1327  (0.222)
+  Take      1051  (0.176)
+  Develop    642  (0.107)
+  Upgrade    548  (0.092)
+  EndTurn    255  (0.043)
+  Destroy    228  (0.038)
+  PlayLeader 167  (0.028)
+  PlayAction 100  (0.017)
+  Revolution  36  (0.006)
+  Churchill   18  (0.003)
+  BachTheater  5  (0.001)
+  WonderStep   3  (0.001)
+  CopyTactic   2  (0.000)
+
+Top WeightKey terms by mean |contribution| to the winner-vs-Farm-build gap
+(n=5988):
+   1. Uprising                 favors_winner
+   2. FoodRate                 favors_take
+   3. ResourceStock            favors_winner
+   4. BlueFree                 favors_take
+   5. FoodStock                favors_winner
+   6. ResourceRate             favors_take
+   7. FreeWorkers              favors_winner
+   8. Science                  favors_winner
+   9. ProdWorkers              favors_take
+  10. WorkersLate              favors_take
+  11. TakeCostPaid             favors_winner
+  12. Leader                   favors_winner
+  13. StrengthRel              favors_winner
+  14. ScienceRate              favors_winner
+  15. CultureRate              favors_winner
+
+CHAMPION VS HUMAN VECTOR, SIDE BY SIDE
+=======================================
+
+                          champion         human vector
+  SEEN (per 600 games)      2763              23802
+  LEGAL rate                1.9%              25.2%      (13x higher)
+  SCORED rate (of legal)    100%              100%       (identical -- never the gate)
+  NoFreeWorker share of
+    illegal occurrences     88.3%             45.0%
+  CannotPayResources share  11.5%             50.3%
+  NoCivilAction share        0.2%              4.7%
+  mean rank when scored     4.83              16.54
+  mean gap when scored      109.55            40.96
+  Irrigation ever SEEN?     yes (173)         NO (0 occurrences in 600 games)
+
+This is decisive in the same shape the task's method note describes: it
+separates "the code cannot build a Farm" (false -- both vectors reach LEGAL,
+SCORED and even rank-1 at points) from "this weight vector will not build a
+Farm" (largely true for the champion specifically). Under the SAME engine,
+SAME legal.rs, SAME cost path, a differently-weighted policy reaches a 13x
+higher Farm-build legality rate and, when illegal, is rejected for
+CannotPayResources about as often as for NoFreeWorker (50/45) rather than the
+champion's heavily worker-skewed 88/12 split.
+
+Read together with the illegality-reason breakdown, the finding is: the
+champion's Farm-build defect is NOT a Farm-pricing problem (build_cost_net
+never returns None for a Farm card; CannotPayResources is a real but minority
+reason) and it is NOT a code-level illegality bug (both vectors clear LEGAL/
+SCORED/rank-1 under the identical engine). It is a policy-shaped scarcity of
+free workers under the champion vector specifically: the champion's play
+(worker allocation across takes/develops/pops/upgrades over the course of a
+game) leaves `p.workers_free == 0` at the overwhelming majority (88.3%) of the
+decision points where a developed Farm tech sits unbuilt, in every round from
+round 5 onward, not just late game. A different weight vector (human_weights)
+playing the identical engine reaches a dramatically higher build-legality rate
+with a much less worker-skewed reason mix. This points the defect upstream, at
+whatever champion-vector behavior is consuming/never-freeing workers, rather
+than at Farm's own build cost or at legal.rs's build-loop code.
+
+CAVEATS
+-------
+
+1. SEEN is defined as "developed" (`p.techs.has(id)`), not "in hand"
+   literally (`p.hand_civil`). This is a deliberate reading, not the task
+   prompt's literal wording: `legal.rs`'s build loop only ever draws
+   candidates from the developed tableau (`tableau_names_sorted(&p.techs)`),
+   never from hand, so a Farm card sitting in hand but not yet Developed
+   would never be offered a build move regardless of workers/resources/CA --
+   grounding SEEN there (rather than in hand_civil) is what makes the
+   illegality classifier's checks the actual reasons `legal_moves` rejects a
+   candidate, instead of always reporting "not developed yet" for every
+   hand-only occurrence. This probe does NOT separately measure the prior
+   Take-to-Develop step; a Farm card that is Taken but never Developed is
+   invisible to this probe entirely (never counted in SEEN at all), and that
+   gap is not measured here.
+
+2. The champion and human-vector self-play games are NOT the same
+   trajectories -- each vector plays its own game, so the games differ in
+   length, pacing, and how often/when a Farm tech gets developed at all. The
+   champion's much lower SEEN count (2763 vs 23802 over the same 600 games)
+   and complete absence of Irrigation from the champion's SEEN set are most
+   simply read as "the champion's own play rarely reaches a state where a
+   Farm tech is both developed and it's the champion's action-phase turn,"
+   which is itself evidence for the same worker/economy story (a policy that
+   starves free workers plausibly also under-invests in developing Farm techs
+   in the first place) -- but this probe does not isolate that from other
+   differences between the two vectors' games (game length, age reached,
+   etc.), so treat the SEEN-count gap as suggestive, not a separately proven
+   claim.
+
+3. RANK/gap tables and the WeightKey contribution ranking are thin for the
+   champion (n=52 scored occurrences across 600 games) -- individual key
+   rankings there should not be treated as precise; they are included because
+   the task asks for them when the funnel reaches SCORED, not because n=52 is
+   a confident sample. The human-vector ranking (n=5988) is much better
+   powered.
+
+4. The illegality classifier replays legal.rs's checks; it does not call
+   legal.rs itself, so a future change to the build loop's checks/order (or a
+   new gate added there) would silently desync this classifier from the real
+   legality path until this probe is updated to match. `Other` reading
+   exactly 0 in both runs is the check that they agree today, not a guarantee
+   they will keep agreeing after a legal.rs change.
+
+5. Per this task's own instruction, this file reports what was measured and
+   does not propose a weight change or code fix.
