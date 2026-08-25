@@ -1,0 +1,165 @@
+INERT MODES / SWITCHED-OFF-CAPABILITIES AUDIT -- 2026-08-24
+Scope: whole capabilities that exist as selectable BotKind/Search modes or CLI
+flags but are never selected in the play path the bot ships with. Two sibling
+audits cover WeightKey coefficients and inert effect code; this one stays off
+both topics.
+
+================================================================
+RANKED ACTION LIST (max 8, most actionable first)
+================================================================
+
+1. `--fitness margin` has never been run in a real climb, and the closest
+   analogue (margin-scored gate tiers) was proven to fix a real degeneracy.
+   `Fitness::Margin` (rust/src/bin/climb.rs) is fully implemented and unit
+   tested; `experiments/rust_league.sh` never passes `--fitness`, so all
+   three live arms run the default `Fitness::Win`. Zero hits for
+   "Fitness::Margin" or "--fitness margin" anywhere under analysis/ or docs/
+   -- UNMEASURED, not merely deliberately skipped. The adjacent, since
+   superseded gate-tier mechanism (docs/LEAGUE_TRAINING.md line ~709-739)
+   found win-share was dead-zero-signal on 27/32 4p gate rows while a margin
+   metric gave real gradient on all of them -- that is direct evidence the
+   same failure mode (degenerate win share when a mutant is barely
+   distinguishable from champion) could be live in the main accept/reject
+   test today, and nobody has checked.
+
+2. The Rust climb's training pool has zero opponent-kind diversity.
+   `play_pool`/`push_league` in climb.rs draw only from past *accepted
+   self-play champions* (same kind, same lineage) -- there is no flag or
+   code path anywhere in rust/src/bin/climb.rs to seat a `book`, `variant`,
+   or `quiescent` opponent in the pool. The Python-era predecessor
+   (docs/DEEPER_SEARCH.md sec 6.1) explicitly reasoned through this exact
+   gap -- "the current champions have been trained in a game with no
+   military layer... do this first" -- rated it GO, unreserved, and even
+   THAT was never flipped on by any live arm before the Python engine was
+   deleted (2026-08-15). The Rust port carried forward no equivalent
+   mechanism at all. Whether this blind spot still costs anything is
+   unverified (see CAVEATS), but the gap itself is real and undebated in any
+   post-port doc.
+
+3. `SearchMode::Beam` (plain beam search, no human-plausibility shortlist)
+   is reachable from `bin/advisor.rs --search beam` and is baked into the
+   wasm advisor's dependency graph, but nothing automated ever passes it --
+   `app/build.sh`/`ttawasm` default to `SearchMode::Human`, and no
+   experiments/*.sh script touches the advisor at all. Its likely strength
+   is already covered by the CLOSED "greedy beats beam" finding below, so
+   this is low-priority bookkeeping, not a new capability worth chasing --
+   listed only because #4 below made the same claim for a genuinely
+   different reason and the two are easy to conflate.
+
+4. `kindmatch`'s policy/search plumbing (`--a-policy`, `--a-policy-invert`,
+   `--a-search`/`--b-search`, `--policy-checkpoint`) is fully wired,
+   documented, and never invoked by any script under experiments/ or app/
+   (confirmed: zero occurrences of the literal string "kindmatch" in any
+   .sh file). This is expected -- kindmatch is a manual research tool, not
+   part of the shipped path -- but flagging it because it is the ONLY way
+   to reach `Bot::HumanPlan`/`Bot::PlanWithPolicy`/
+   `Search::HumanShortlistBeam` outside the advisor's own default, and a
+   future reader could mistake "reachable via kindmatch" for "exercised in
+   production."
+
+================================================================
+WHAT THE SHIPPED BOT ACTUALLY RUNS
+================================================================
+
+Two different things ship, and they run different configurations:
+
+- TRAINING/SELECTION (`experiments/rust_league.sh` -> `climb`, cron
+  */10 min + @reboot): `climb`'s `Args::default` sets `kind:
+  BotKind::Weighted`; `rust_league.sh` never passes `--kind`, so the
+  champion arm plays `Seat { kind: cfg.kind, search: SeatSearch::None }`
+  (climb.rs:580) -- a plain one-ply linear evaluator, NO beam, NO
+  quiescence, NO policy head, at every generation this machine has ever
+  run. The pool is same-kind self-play history only (finding #2 above).
+  The three gauntlet panels it also plays (human, human+beam-hybrid,
+  frozen past champions) are purely observational and cannot accept or
+  veto a generation.
+
+- THE ADVISOR (`app/build.sh` -> `ttawasm` -> `app/tta.wasm`, and the
+  identical logic in `bin/advisor.rs`): bakes in the SAME champion vector
+  the climb above produced (`experiments/rust_champion_{2,3,4}p.json`,
+  `include_str!`'d at compile time), but layers `SearchMode::Human` on top
+  by DEFAULT -- `human_policy` narrows the root to the 8 most
+  human-plausible candidates, then `plan::pick`'s ordinary beam
+  (width 8, max_plies 16, max_nodes 4000, all `PlanConfig::default()`)
+  picks among the survivors, scored by the same champion weights. This is
+  not an oversight: rust_league.sh's own comment records it was measured
+  at 65.6% +/- 4.2% against the 2p champion over 480 games (2026-08-08),
+  "the only bot in the 13-kind census that clears its baseline anywhere."
+
+So: the vector is EVOLVED with zero lookahead, but SHIPPED (in the
+human-facing advisor) with a human-shortlist-then-beam layer on top. Those
+are two distinct, both-deliberate design points, not one config reused
+everywhere -- worth knowing if you ever go looking for "the" champion
+config and find two different answers in two different binaries.
+
+================================================================
+SWITCHED-OFF-SILENTLY (never tested in the shipped/production path)
+================================================================
+
+* `Fitness::Margin` (climb.rs) -- see ranked item 1. Unit-tested only.
+* Training-pool opponent diversity (Quiescent/Book/variant kinds as pool
+  members in the Rust climb) -- see ranked item 2. Never implemented in
+  the Rust port; a documented pre-port GO decision for the equivalent
+  Python mechanism was itself never flipped on before that code was
+  deleted.
+* `SearchMode::Beam` never invoked by anything automated -- see ranked
+  item 3 (low priority, likely covered by the CLOSED beam-loses finding).
+
+================================================================
+SWITCHED-OFF-DELIBERATELY -- CLOSED, do not reopen
+================================================================
+
+* Every search layer atop the champion (beam, shortlist+beam, policy
+  ordering) loses to the plain champion in play: greedy beats beam 39.5%,
+  beam beats shortlist+beam 15.2%, policy 0%. (Given fact; source data for
+  the beam-family numbers is docs/DEEPER_SEARCH.md's search A/B tables,
+  e.g. the "+15.23" qp row at line ~805.) This is WHY the climb's own
+  champion arm plays `Search::None`/`BotKind::Weighted` -- deliberate, not
+  an oversight.
+
+* `BotKind::Quiescent` as the training CHALLENGER (not just an opponent):
+  tried in the Python-era trainer, reverted 2026-07-30 in commit `1fbf128`
+  after ~1300 (3p) / ~370 (4p) generations. Reservation 3 in
+  docs/DEEPER_SEARCH.md sec 6.2 is the disqualifying one: quiescence
+  resolves a rival's hidden `hand_military` to answer pending defence
+  decisions, which a real human opponent's hand the shipped bot will never
+  see -- every generation trained under it optimized against information
+  the ship policy cannot have. CLOSED, with named commit and named
+  discarded champions (3p gen1315, 4p gen370, backed up outside the repo).
+
+* `allow_resign` is `false` by default in EVERY bot kind
+  (Random/Weighted/Quiescent/Neural/NeuralPlan) and no caller anywhere
+  varies it outside unit tests (`rust/src/bots/neural/spec.rs` says so
+  explicitly in comment). This looks like an inert flag but is a
+  deliberately shared guard (`bots::mod::filter_resign`) against a
+  measured pathology: a fitted weighted vector resigned turn 3 of 3 in
+  12/12 sampled games, and `QuiescentBot` without the guard resigned in
+  43%/67%/75% of 2p/3p/4p games (win rate ~1% against `WeightedBot` on
+  shared deals). CLOSED.
+
+* Node budgets / beam width / plan depth (`PlanConfig::default`:
+  width 8, max_plies 16, max_nodes 4000; `QuiescenceConfig::default`:
+  levels 1, max_depth 12, max_nodes 600) -- per this audit's brief, the
+  node budget never binding and move ordering are CLOSED topics from a
+  sibling investigation; not re-measured here.
+
+================================================================
+CAVEATS
+================================================================
+
+* Training-pool diversity (ranked item 2): I did not measure whether the
+  current Rust champions actually suffer the "no military layer" blind
+  spot the Python-era doc worried about -- I only confirmed the mechanism
+  to fix it does not exist in the current code. Whether it is worth
+  building is a cost/benefit call outside this audit's evidence.
+* `BotKind::Book`'s `BookBot::new` defaults to `version: 1` while the
+  surrounding doc comments describe `version: 2` as what the roster/
+  VariantBot family actually plays; I did not trace whether `version: 1`
+  is reachable from anywhere live or is itself dead. Flagged but
+  unexamined -- out of budget for this pass.
+* I did not run any binary; all findings are static (grep + targeted Read)
+  against source and shell scripts as of this checkout's HEAD.
+* Crontab was read directly (`crontab -l`); the only two TTA-relevant
+  entries are `rust_league.sh` (active) and a disabled `proxy_watch.sh`
+  (2026-08-05, monitors the deleted Python hill climber). No other
+  automated entry point into the engine exists on this machine.

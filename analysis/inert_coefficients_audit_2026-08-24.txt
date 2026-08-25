@@ -1,0 +1,397 @@
+INERT COEFFICIENTS AUDIT -- 2026-08-24
+================================================================================
+
+SCOPE AND RE-FRAMING (read this first)
+
+This started as "which weights are zero or absent" and was corrected mid-run
+by the coordinator: a zero weight is NOT the target. The target is a
+coefficient that CANNOT AFFECT PLAY, whatever its magnitude. The sharpest
+proof that these are different questions is workers_late: it carries 60.0 in
+both the 3p and 4p champions -- tied for one of the three largest magnitudes
+in the entire 160-key vector -- and two independent play-tests (real
+win-rate A/B, 240 games each, both seat arrangements) moving it to 30 and to
+120 both came back statistically indistinguishable from leaving it at 60.
+Sources: analysis/ceiling_playtest_3p_2026-08-24.txt lines 122-131 (30, both
+arrangements p=0.696/0.603) and analysis/ceiling_up_sweep_3p_2026-08-24.txt
+lines 105-119 (120, both arrangements p=0.573/0.406). A big number is not
+evidence of usefulness. This report ranks on USELESSNESS, in this order:
+
+  1. CANDIDATE-INVARIANT -- the feature never varies across the candidate
+     set at a real decision (zero_frac = 1.0 in the 3p decisiveness table).
+     Unreachable at ANY weight, by construction.
+  2. NULL-IN-PLAY -- the feature does vary, but capable_frac sits at or
+     below the 0.0924 tie floor: it has never once been able to be the
+     deciding factor at a real, non-tied decision.
+  3. REDUNDANT -- flagged where cheaply visible (no correlation matrix
+     computed; see SUSPECTED-REDUNDANT section). Two keys carrying the same
+     information can never be separately identified by the climb, and one
+     is prunable.
+
+Whether a key is zero/absent from the champion files is reported as a
+SEPARATE COLUMN, never as the ranking axis -- it answers "what was never
+trained," a different question from "what can never matter," and belongs to
+a sibling audit.
+
+All decisiveness numbers (zero_frac, fire_rate, capable_frac) are read
+verbatim from analysis/feature_decisiveness_3p_2026-08-24.txt (85,404
+decisions, 220 games, seed 12345, 3p only) -- nothing here was re-measured.
+capable_frac's 0.0924 floor is a TIE ARTIFACT (9.24% of decisions are exact
+ties where every key trivially "beats" a zero margin): read every
+capable_frac as RANK, never as an absolute rate. See CAVEATS.
+
+================================================================================
+RANKED -- WHAT TO ACT ON FIRST (max 12, ranked by uselessness not magnitude)
+================================================================================
+
+ 1. workers_late -- PLAY-TESTED NULL. Statistically "LIVE" by the candidate-
+    decisiveness table (capable_frac 0.4200, well above the tie floor -- it
+    genuinely can flip decisions) but two independent real-game A/B tests
+    (30 and 120 against the champion's 60) both came back inconclusive in
+    BOTH seat arrangements. Carries max|w|=60.0 (3p, 4p) / 45.9 (2p) -- one
+    of the largest magnitudes in the vector. The single clearest proof that
+    "capable of flipping a decision" and "moving the win rate" are
+    different claims.
+
+ 2. has_colony -- carries 60.0 in the 2p champion (a clamp-ceiling value)
+    yet capable_frac is 0.0926, two ten-thousandths above the 0.0924 tie
+    floor and fires on only 0.96% of decisions. Structurally alive, but a
+    60.0 riding a feature that is functionally never decisive.
+
+ 3. science_rate_trailing -- CANDIDATE-INVARIANT (zero_frac = 1.0: never
+    varies across a candidate set) yet carries 20.619 in the 2p champion.
+    This is a *_trailing standing-hinge key (weights.rs:899) -- it reads
+    the PLAYER'S POSITION, not the move being evaluated, so by construction
+    it cannot differ across candidates within one decision. Structurally
+    unreachable at any weight, not merely untrained.
+
+ 4. colonies -- 47.073 (3p), capable_frac 0.0942 -- 0.0018 above the tie
+    floor. A near-50 magnitude riding a feature that fires on 1.1% of
+    decisions and is decisive on essentially none of them.
+
+ 5. best_theater -- 45.091 (4p), capable_frac 0.0951, fires on 1.4% of
+    decisions. Same shape as colonies: large weight, floor-adjacent
+    decisiveness.
+
+ 6. leader -- NULL-IN-PLAY (capable_frac exactly at the 0.0924 floor).
+    Swings from 45.084 (2p) to -18.939 (4p) to -0.007 (3p) across the three
+    champions -- the climb is moving this coefficient hard in opposite
+    directions between player counts while never once measurably deciding
+    a game with it. That instability on a dead lever is itself a signal.
+
+ 7. tech_board_credit -- CANDIDATE-INVARIANT, carries -25.458 (3p), the
+    largest magnitude of any structurally-invariant key.
+
+ 8. best_library -- NULL-IN-PLAY, 43.004 (4p), fires on 0.1% of decisions.
+
+ 9. special_techs -- NULL-IN-PLAY, 41.364 (4p), fires on 0.87% of decisions.
+
+10. attack_cost_doubled -- 41.171 (3p), capable_frac 0.0931 (near-floor),
+    NonNegative-gated so at least its sign can't invert, but the magnitude
+    is doing essentially nothing.
+
+11. war_immune -- NULL-IN-PLAY, 23.793 (4p).
+
+12. best_farm -- NULL-IN-PLAY, 20.488 (4p). Named explicitly in the source
+    decisiveness report as firing (0.08% of decisions) but never deciding --
+    the same shape as best_mine, which that report additionally found DEAD
+    (mean level 0.0 -- never even reached, not merely unpriced).
+
+--------------------------------------------------------------------------------
+SUSPECTED-REDUNDANT (cheap evidence only -- no correlation matrix computed,
+confidence stated per item, "not assessed" where the evidence runs out)
+--------------------------------------------------------------------------------
+
+* hand_value vs hand_potential (MODERATE confidence). Same WeightGroup
+  (Cards), overlapping semantics (hand_value = raw Sigma level+1 over the
+  civil hand; hand_potential = a derived potential estimate over the same
+  hand). hand_value is NULL-IN-PLAY (capable_frac pinned at the 0.0924
+  floor) DESPITE firing on 41.6% of decisions -- it varies constantly but
+  never decides, while hand_potential is one of the most decisive keys in
+  the whole table (capable_frac 0.4457). Consistent with the climb having
+  already routed the hand-value signal through hand_potential, leaving
+  hand_value alive-but-carried. Not proven -- could equally be a pure
+  under-pricing problem (champion weight on hand_value is 0.0/0.0/0.778,
+  tiny by itself), which is the same "pricing problem, not structural"
+  failure mode the source decisiveness report already found for food_rate.
+
+* rival_culture vs rival_mean_culture (LOW-MODERATE confidence). Same
+  Rivals group, nearly identical zero_frac (0.977 / 0.973) and both sit
+  right at the tie floor (capable_frac 0.1049 / 0.0953) -- a specific
+  rival's culture and the mean of all rivals' culture are likely carrying
+  overlapping information in 3p/4p specifically (in 2p there is only one
+  rival, so the two features are IDENTICAL by construction whenever
+  players=2, which this table does not separate out).
+
+* The four *_late/*_early phase-hinge keys (workers_late, tech_levels_late,
+  hand_value_late, strength_rel_late/_early) all multiply the SAME
+  per-decision lateness scalar L (weights.rs:32-66). Not classically
+  redundant with their own base key -- the PHASECUT.txt collapse already
+  proved the old 3-parameter {base,early,late} blend WAS redundant and
+  removed the redundant direction, leaving a genuine 2-df {start,end}
+  basis. But whether the four *_late keys are redundant WITH EACH OTHER
+  (all four move together as the game clock advances) is not assessed here
+  -- flagging only as a candidate for a follow-up, not a finding.
+
+================================================================================
+BUCKET COUNTS (of 160 WeightKeys)
+================================================================================
+
+CANDIDATE-INVARIANT :  38
+NULL-IN-PLAY        :  23
+LIVE                :  99
+                      ----
+                       160
+
+(No key qualifies as NEVER-TRAINED under this report's original definition
+"absent from a champion file": all three champion JSONs -- champ2p, champ3p,
+champ4p -- contain byte-identical key SETS to WeightKey::ALL, all 160 of
+them, confirmed by direct set comparison. Current champion snapshots always
+serialize the full vector; a sparser file predating a key's introduction
+would show it, but none of the three on disk right now does. See CAVEATS.)
+
+FROZEN (excluded from the climb regardless of usefulness): 1 key --
+Culture, per rust/src/bin/climb.rs:94 (`FROZEN = &[WeightKey::Culture]`).
+Culture is itself LIVE by the decisiveness table (capable_frac 0.1444, well
+above the tie floor) -- it is a boundary case this report's three buckets
+don't cover: a useful coefficient the climb is barred from ever touching,
+the opposite failure mode from everything ranked above.
+
+DOMINATES pairs (eval.rs:853, sign/ordering constraints, not usefulness
+gates): (ResourceStock, BlueFree), (WonderPotential, WonderPromise). Neither
+pair's members appear in the top-12 ranked list above.
+
+================================================================================
+FULL PER-KEY TABLE (160 rows, sorted CANDIDATE-INVARIANT, then NULL-IN-PLAY,
+then LIVE; within each bucket, descending by max|weight| across the three
+champions -- the uselessness bucket is the ranking axis, magnitude orders
+within it per the coordinator's steer)
+
+Columns: name | bucket | compiled default | champ2p | champ3p | champ4p |
+max|w| across the three | frozen (climb.rs) | sign_intent (weights.rs) |
+zero_frac | fire_rate | capable_frac  (all four decisiveness columns read
+verbatim from the 3p 85,404-decision table; not re-measured for 2p/4p)
+================================================================================
+
+name                         bucket              default        2p        3p        4p    max|w|  frozen         sign zero_frac fire_rate  capable
+--------------------------------------------------------------------------------------------------------------------------------------------------
+tech_board_credit            CANDIDATE-INVARIANT    1.000    -0.317   -25.458    -0.106    25.458   False         Free    1.0000    0.0000   0.0924
+science_rate_trailing        CANDIDATE-INVARIANT    0.000    20.619     0.541    -0.710    20.619   False         Free    1.0000    0.0000   0.0924
+rival_science_rate           CANDIDATE-INVARIANT   -0.600    -0.115     5.940    11.465    11.465   False         Free    1.0000    0.0000   0.0924
+card_rate_credit             CANDIDATE-INVARIANT    1.000     0.156   -11.206    -0.157    11.206   False         Free    1.0000    0.0000   0.0924
+best_lab                     CANDIDATE-INVARIANT    0.800    -0.015     8.261     3.828     8.261   False         Free    1.0000    0.0000   0.0924
+rival_take_share             CANDIDATE-INVARIANT    0.500     0.369     3.893    -7.858     7.858   False         Free    1.0000    0.0000   0.0924
+best_mine                    CANDIDATE-INVARIANT    0.500     0.335     5.604    -0.122     5.604   False         Free    1.0000    0.0000   0.0924
+bonus_card_credit            CANDIDATE-INVARIANT    1.000    -0.171     3.508    -0.930     3.508   False         Free    1.0000    0.0000   0.0924
+gov_action_cost              CANDIDATE-INVARIANT    0.000    -0.481    -2.024    -0.963     2.024   False         Free    1.0000    0.0000   0.0924
+event_board_credit           CANDIDATE-INVARIANT    0.300    -0.184    -1.975    -0.352     1.975   False         Free    1.0000    0.0000   0.0924
+unit_tech_credit             CANDIDATE-INVARIANT    1.000    -0.024     1.928     0.041     1.928   False         Free    1.0000    0.0000   0.0924
+tech_redundancy_discount     CANDIDATE-INVARIANT    0.000     0.669     1.883     0.494     1.883   False  NonNegative    1.0000    0.0000   0.0924
+hand_swap_extra              CANDIDATE-INVARIANT    0.000     0.186     1.579    -0.059     1.579   False         Free    1.0000    0.0000   0.0924
+build_fresh_credit           CANDIDATE-INVARIANT    0.000    -0.052     1.395    -0.673     1.395   False         Free    1.0000    0.0000   0.0924
+rate_horizon                 CANDIDATE-INVARIANT    1.000     1.087     0.491     0.054     1.087   False         Free    1.0000    0.0000   0.0924
+best_temple                  CANDIDATE-INVARIANT    0.600    -0.044     0.938    -0.069     0.938   False         Free    1.0000    0.0000   0.0924
+gov_board_credit             CANDIDATE-INVARIANT    1.000     0.113     0.855    -0.172     0.855   False         Free    1.0000    0.0000   0.0924
+resource_discount            CANDIDATE-INVARIANT    1.000     0.842     0.605     0.842     0.842   False  NonNegative    1.0000    0.0000   0.0924
+rival_wonders                CANDIDATE-INVARIANT    0.000    -0.176     0.673    -0.280     0.673   False         Free    1.0000    0.0000   0.0924
+card_board_credit            CANDIDATE-INVARIANT    0.000     0.170     0.584     0.099     0.584   False  NonNegative    1.0000    0.0000   0.0924
+wonder_board_credit          CANDIDATE-INVARIANT    0.000     0.025     0.525     0.089     0.525   False         Free    1.0000    0.0000   0.0924
+restricted_resource_credit   CANDIDATE-INVARIANT    1.000     0.397     0.488     0.000     0.488   False  NonNegative    1.0000    0.0000   0.0924
+war_board_credit             CANDIDATE-INVARIANT    0.300     0.317    -0.461     0.432     0.461   False         Free    1.0000    0.0000   0.0924
+tactic_reach_credit          CANDIDATE-INVARIANT    0.300    -0.412    -0.071     0.197     0.412   False         Free    1.0000    0.0000   0.0924
+rival_desire                 CANDIDATE-INVARIANT    0.000     0.064     0.329    -0.287     0.329   False         Free    1.0000    0.0000   0.0924
+territory_credit             CANDIDATE-INVARIANT    1.000     0.065    -0.069    -0.275     0.275   False         Free    1.0000    0.0000   0.0924
+aggression_board_credit      CANDIDATE-INVARIANT    0.300     0.112    -0.067    -0.245     0.245   False         Free    1.0000    0.0000   0.0924
+unit_strength_credit         CANDIDATE-INVARIANT    0.000     0.230     0.009     0.000     0.230   False  NonNegative    1.0000    0.0000   0.0924
+card_board_bonus             CANDIDATE-INVARIANT    0.000     0.203     0.065     0.210     0.210   False         Free    1.0000    0.0000   0.0924
+action_board_credit          CANDIDATE-INVARIANT    1.000     0.172     0.068    -0.072     0.172   False         Free    1.0000    0.0000   0.0924
+card_board_leader            CANDIDATE-INVARIANT    0.000    -0.150     0.028    -0.099     0.150   False         Free    1.0000    0.0000   0.0924
+defense_bonus                CANDIDATE-INVARIANT    0.000     0.147     0.000     0.097     0.147   False  NonNegative    1.0000    0.0000   0.0924
+culture_rate_trailing        CANDIDATE-INVARIANT    0.000    -0.146     0.030    -0.068     0.146   False         Free    1.0000    0.0000   0.0924
+free_action_credit           CANDIDATE-INVARIANT    0.000     0.002     0.120     0.000     0.120   False  NonNegative    1.0000    0.0000   0.0924
+pact_board_credit            CANDIDATE-INVARIANT    0.300     0.013     0.057     0.065     0.065   False  NonNegative    1.0000    0.0000   0.0924
+hand_limit                   CANDIDATE-INVARIANT    0.000     0.054     0.000     0.013     0.054   False  NonNegative    1.0000    0.0000   0.0924
+tactic_board_credit          CANDIDATE-INVARIANT    0.300     0.000     0.041     0.000     0.041   False  NonNegative    1.0000    0.0000   0.0924
+tactic_shortfall_cost        CANDIDATE-INVARIANT    0.100     0.004     0.000     0.000     0.004   False  NonNegative    1.0000    0.0000   0.0924
+leader                       NULL-IN-PLAY          1.500    45.084    -0.007   -18.939    45.084   False         Free    0.9323    0.0677   0.0924
+best_library                 NULL-IN-PLAY          0.500    -0.038    -0.256    43.004    43.004   False         Free    0.9990    0.0010   0.0924
+special_techs                NULL-IN-PLAY          0.800    -0.402    -0.803    41.364    41.364   False         Free    0.9913    0.0087   0.0924
+war_immune                   NULL-IN-PLAY          0.000     0.251     0.006    23.793    23.793   False  NonNegative    0.9945    0.0055   0.0924
+best_farm                    NULL-IN-PLAY          0.500    -0.132    -0.186    20.488    20.488   False         Free    0.9992    0.0008   0.0924
+no_aggression                NULL-IN-PLAY          0.000    -0.029    -0.100   -20.134    20.134   False  NonPositive    0.9974    0.0026   0.0924
+rival_culture_rate           NULL-IN-PLAY         -1.000     1.338     0.016   -11.951    11.951   False         Free    0.9803    0.0197   0.0924
+best_unit                    NULL-IN-PLAY          0.500    -0.003     0.725    11.745    11.745   False         Free    0.9999    0.0001   0.0924
+rival_hand_civil             NULL-IN-PLAY          0.000    -2.035     0.019     0.747     2.035   False         Free    0.9967    0.0033   0.0924
+gov_level                    NULL-IN-PLAY          2.000    -0.618    -1.546    -0.238     1.546   False         Free    0.9896    0.0104   0.0924
+wonder_age_overrun           NULL-IN-PLAY          0.000    -1.173     0.000    -0.020     1.173   False  NonPositive    0.9433    0.0567   0.0924
+auction_committed            NULL-IN-PLAY          2.000    -0.162     0.892    -0.352     0.892   False         Free    0.9794    0.0206   0.0924
+hand_value                   NULL-IN-PLAY          0.450     0.000     0.000     0.778     0.778   False  NonNegative    0.5840    0.4160   0.0924
+colonize_bonus                NULL-IN-PLAY         0.000     0.769     0.000     0.618     0.769   False  NonNegative    0.9941    0.0059   0.0924
+urban_limit                  NULL-IN-PLAY          0.000     0.264     0.094     0.498     0.498   False         Free    0.9908    0.0092   0.0924
+civil_actions                NULL-IN-PLAY          2.000     0.401     0.010     0.025     0.401   False  NonNegative    0.9870    0.0130   0.0924
+wonder_stages_per_action     NULL-IN-PLAY          0.000     0.065     0.396     0.269     0.396   False  NonNegative    0.9975    0.0025   0.0924
+leader_replacement           NULL-IN-PLAY          0.000     0.061     0.000     0.344     0.344   False         Free    0.9036    0.0964   0.0924
+build_discount                NULL-IN-PLAY         0.000     0.014     0.271     0.086     0.271   False  NonNegative    0.9975    0.0025   0.0924
+best_arena                   NULL-IN-PLAY          0.300     0.098    -0.117    -0.237     0.237   False         Free    0.9999    0.0001   0.0924
+rival_free_ca                NULL-IN-PLAY          0.000    -0.204    -0.033    -0.076     0.204   False         Free    0.9998    0.0002   0.0924
+wonder_pool_rival_claimed    NULL-IN-PLAY          0.000     0.114     0.015    -0.006     0.114   False         Free    0.9987    0.0013   0.0924
+civil_action_surplus         NULL-IN-PLAY          0.000     0.073     0.000     0.061     0.073   False  NonNegative    0.7132    0.2868   0.0924
+culture_rate                 LIVE                  5.000    48.748    60.000    60.000    60.000   False         Free    0.5418    0.4582   0.4645
+food_stock                   LIVE                  0.200     0.203    60.000     0.102    60.000   False         Free    0.7383    0.2617   0.3321
+resource_stock               LIVE                  0.300     0.797    60.000     0.049    60.000   False         Free    0.6631    0.3369   0.4032
+blue_free                    LIVE                  0.150    -0.036    60.000    -0.335    60.000   False         Free    0.6259    0.3741   0.4391
+unit_workers                 LIVE                  0.100     0.236    -0.946   -60.000    60.000   False         Free    0.5328    0.4672   0.1351
+strength                     LIVE                  0.350    14.263    53.486    60.000    60.000   False         Free    0.4828    0.5172   0.5294
+has_colony                   LIVE                  0.000    60.000     0.879     0.633    60.000   False         Free    0.9904    0.0096   0.0926
+workers_late                 LIVE                  0.800    45.877    60.000    60.000    60.000   False         Free    0.4596    0.5404   0.4200
+workers                      LIVE                  2.200     0.267    21.253    55.693    55.693   False         Free    0.4948    0.5052   0.2723
+colonies                     LIVE                  2.000    -0.809    47.073    -6.701    47.073   False         Free    0.9891    0.0109   0.0942
+best_theater                 LIVE                  0.600     0.098    -7.949    45.091    45.091   False         Free    0.9864    0.0136   0.0951
+tactic_level                 LIVE                  0.500    -0.293   -27.594   -43.218    43.218   False         Free    0.6743    0.3257   0.2969
+science                      LIVE                  0.500    -1.319   -42.755    -0.470    42.755   False         Free    0.7827    0.2173   0.2523
+attack_cost_doubled           LIVE                 0.000     0.146    41.171     0.000    41.171   False  NonNegative    0.9974    0.0026   0.0931
+event_scoring_margin         LIVE                  0.000    21.461    38.268    37.297    38.268   False         Free    0.8070    0.1930   0.2407
+attack_target_weakness       LIVE                  0.000     6.465    32.222    10.279    32.222   False         Free    0.9067    0.0933   0.1748
+end_turn_bias                 LIVE                -3.000    -9.595    -7.451   -29.494    29.494   False         Free    0.4622    0.5378   0.2790
+ma_left                      LIVE                  0.050     0.086    27.505    -0.420    27.505   False         Free    0.4766    0.5234   0.4286
+pacts                        LIVE                  0.500    -0.412   -22.020    -0.115    22.020   False         Free    0.9098    0.0902   0.1366
+my_event_threat               LIVE                 0.000    18.778     0.092     0.063    18.778   False         Free    0.9379    0.0621   0.1088
+science_gap                  LIVE                  0.000    -1.199    -0.424   -18.272    18.272   False  NonPositive    0.6970    0.3030   0.1393
+rival_free_workers           LIVE                  0.000     0.023     0.444    14.130    14.130   False         Free    0.9872    0.0128   0.0943
+auction_bid                  LIVE                 -0.400    13.781     1.360     1.496    13.781   False         Free    0.9794    0.0206   0.1015
+rival_building_wonder        LIVE                  0.000    -0.012    13.445     1.799    13.445   False         Free    0.9970    0.0030   0.0939
+resource_rate                LIVE                  1.600     0.402    13.411     3.687    13.411   False         Free    0.4883    0.5117   0.3858
+rival_colonies                LIVE                 0.000    -0.927   -12.514    -1.407    12.514   False         Free    0.9984    0.0016   0.0933
+hand_civil                   LIVE                  0.300    -0.259     0.112   -11.614    11.614   False         Free    0.5906    0.4094   0.1038
+free_workers                  LIVE                 0.400     0.390     0.352   -11.508    11.508   False         Free    0.4713    0.5287   0.1151
+strength_rel_early            LIVE                -0.100   -10.968    -4.127     7.986    10.968   False         Free    0.4985    0.5015   0.1978
+uprising                     LIVE                -12.000    -9.105    -6.888     0.000     9.105   False  NonPositive    0.9671    0.0329   0.1109
+rival_mil_actions            LIVE                  0.000     0.129     7.991     0.493     7.991   False         Free    0.9982    0.0018   0.0928
+consumption_headroom         LIVE                  0.250    -0.092     7.559    -1.414     7.559   False         Free    0.8183    0.1817   0.1678
+rival_resource_stock          LIVE                 0.000    -0.197     7.205     0.713     7.205   False         Free    0.9809    0.0191   0.0991
+strength_rel_late            LIVE                  0.500    -0.160    -0.697     7.129     7.129   False         Free    0.4669    0.5331   0.1273
+science_surplus               LIVE                 0.000    -0.029    -6.477     0.063     6.477   False         Free    0.7362    0.2638   0.2124
+wonder_potential              LIVE                 0.000     2.066     1.938     6.407     6.407   False  NonNegative    0.8043    0.1957   0.2111
+wonder_progress               LIVE                 1.000     0.151     6.375    -0.102     6.375   False         Free    0.8656    0.1344   0.1545
+rival_hand_potential          LIVE                 0.000    -0.671    -0.392     6.186     6.186   False         Free    0.8726    0.1274   0.0993
+rival_yellow_bank            LIVE                  0.000    -6.104    -0.455     1.005     6.104   False         Free    0.9878    0.0122   0.0933
+wonders                      LIVE                  3.000     0.057     5.696     0.000     5.696   False  NonNegative    0.9832    0.0168   0.0934
+rival_culture                 LIVE                -0.350     4.918    -5.325     0.376     5.325   False         Free    0.9772    0.0228   0.1049
+yellow_bank                  LIVE                 -0.100    -5.286    -3.001     0.092     5.286   False         Free    0.8162    0.1838   0.1377
+hand_perishable               LIVE                 0.000    -0.008    -5.012    -1.875     5.012   False  NonPositive    0.6211    0.3789   0.1824
+hand_potential                LIVE                 0.125     4.622     0.461    -1.196     4.622   False         Free    0.5196    0.4804   0.4457
+my_seeded_pending             LIVE                 0.000     4.373    -0.163     0.095     4.373   False         Free    0.8962    0.1038   0.0948
+happy_surplus                 LIVE                 0.000     4.149     0.402     0.282     4.149   False         Free    0.7050    0.2950   0.1077
+row_bargain_forgone           LIVE                 0.000     2.181     0.790     4.016     4.016   False         Free    0.6118    0.3882   0.1348
+strength_lead                 LIVE                 0.300    -3.987    -0.066    -2.621     3.987   False         Free    0.8187    0.1813   0.0961
+row_last_copy                 LIVE                 0.000    -0.245     0.384     2.994     2.994   False         Free    0.6046    0.3954   0.1216
+pact_blocks_attack             LIVE                0.500     2.035     2.818     1.570     2.818   False         Free    0.9621    0.0379   0.0958
+wonder_promise                 LIVE                0.000     1.039     0.568     2.790     2.790   False  NonNegative    0.6507    0.3493   0.2341
+num_techs                     LIVE                 0.300    -0.111     2.666     2.051     2.666   False         Free    0.9762    0.0238   0.0934
+prod_workers                  LIVE                 0.300     2.656    -0.047     0.211     2.656   False         Free    0.5709    0.4291   0.0972
+worker_gap                    LIVE                 0.000    -2.259    -0.769    -1.800     2.259   False  NonPositive    0.6662    0.3338   0.1189
+hand_mil_value                 LIVE                0.150     0.255     1.043     2.155     2.155   False  NonNegative    0.2956    0.7044   0.3007
+ca_left                       LIVE                 0.050    -0.204    -2.064     1.631     2.064   False         Free    0.5263    0.4737   0.2450
+worker_surplus                 LIVE                0.000     0.508     0.339     2.046     2.046   False         Free    0.7704    0.2296   0.1025
+happy_margin                  LIVE                 1.200    -0.055    -0.573    -1.877     1.877   False         Free    0.6548    0.3452   0.1154
+tech_levels_late               LIVE                0.600     0.030    -0.693     1.858     1.858   False         Free    0.8861    0.1139   0.0932
+strength_deficit               LIVE               -0.600    -1.783    -0.058    -0.636     1.783   False  NonPositive    0.6242    0.3758   0.0970
+food_surplus                   LIVE                0.000    -1.757    -1.086    -0.592     1.757   False         Free    0.8425    0.1575   0.1271
+resource_gap                   LIVE                0.000    -1.716    -0.241    -1.175     1.716   False  NonPositive    0.7628    0.2372   0.1100
+strength_rel                   LIVE                0.350     0.572    -1.662    -0.035     1.662   False         Free    0.4830    0.5170   0.1957
+wonder_in_progress              LIVE               0.000     0.052     0.973     1.542     1.542   False         Free    0.8756    0.1244   0.1029
+rival_mean_culture              LIVE              -0.100    -0.025    -0.183     1.443     1.443   False         Free    0.9726    0.0274   0.0953
+tech_levels                    LIVE                1.500    -0.065    -0.316     1.342     1.342   False         Free    0.8871    0.1129   0.0928
+take_cost_paid                  LIVE               0.000    -0.334    -1.306     0.218     1.306   False         Free    0.6329    0.3671   0.1914
+rival_food_stock                LIVE               0.000     0.006    -0.083     1.303     1.303   False         Free    0.9786    0.0214   0.0927
+culture_gap                    LIVE                0.000     0.000    -1.146    -0.088     1.146   False  NonPositive    0.8313    0.1687   0.1271
+food_gap                       LIVE                0.000    -1.106    -0.113    -0.037     1.106   False  NonPositive    0.7974    0.2026   0.1014
+wonder_remaining                LIVE              -0.300    -0.130    -1.044    -0.650     1.044   False  NonPositive    0.7592    0.2408   0.1672
+civil_action_gap                LIVE               0.000    -0.203    -1.018     0.000     1.018   False  NonPositive    0.5480    0.4520   0.1827
+culture                        LIVE                1.000     1.000     1.000     1.000     1.000    True         Free    0.7627    0.2373   0.1444
+tactic_gain                    LIVE                0.000     0.966     0.047     0.464     0.966   False  NonNegative    0.7997    0.2003   0.0946
+food_rate                      LIVE                1.200    -0.085     0.067     0.965     0.965   False         Free    0.5318    0.4682   0.0989
+rival_science_stock             LIVE               0.000    -0.005     0.962    -0.847     0.962   False         Free    0.9755    0.0245   0.0938
+attack_target_lead              LIVE               0.000     0.691     0.246     0.952     0.952   False         Free    0.9309    0.0691   0.1096
+culture_surplus                 LIVE               0.000    -0.206    -0.909     0.477     0.909   False         Free    0.9134    0.0866   0.1129
+wonder_stages_left              LIVE               0.000    -0.871    -0.120    -0.533     0.871   False  NonPositive    0.7592    0.2408   0.1007
+military_actions               LIVE                0.700     0.075     0.259     0.818     0.818   False  NonNegative    0.9472    0.0528   0.0935
+discontent                      LIVE               -3.000    -0.246    -0.765    -0.718     0.765   False  NonPositive    0.8897    0.1103   0.1003
+wonder_turns_to_finish           LIVE              0.000    -0.024    -0.233    -0.739     0.739   False  NonPositive    0.6653    0.3347   0.1119
+hand_mil_potential               LIVE              0.000     0.715     0.393     0.077     0.715   False         Free    0.2356    0.7644   0.3024
+tactic_short                    LIVE               0.000    -0.625    -0.055     0.000     0.625   False  NonPositive    0.6016    0.3984   0.0994
+hand_military                   LIVE               0.300     0.016    -0.315    -0.615     0.615   False         Free    0.3753    0.6247   0.1226
+row_urgency                     LIVE               0.000    -0.583    -0.062    -0.244     0.583   False         Free    0.6754    0.3246   0.1256
+take_cost_share                  LIVE              0.000     0.017     0.538     0.088     0.538   False         Free    0.6326    0.3674   0.1101
+resource_surplus                 LIVE              0.000    -0.245    -0.503    -0.469     0.503   False         Free    0.6423    0.3577   0.1381
+has_unit                         LIVE              0.000     0.037    -0.498    -0.084     0.498   False         Free    0.8532    0.1468   0.1018
+hand_value_late                  LIVE              0.050     0.454     0.113     0.050     0.454   False  NonNegative    0.5551    0.4449   0.1068
+rival_strength                   LIVE             -0.150    -0.007    -0.417     0.030     0.417   False         Free    0.9922    0.0078   0.0927
+pact_partner_lead                LIVE              0.000     0.185    -0.250    -0.397     0.397   False         Free    0.9424    0.0576   0.1159
+science_rate                     LIVE              4.000    -0.111     0.378    -0.247     0.378   False         Free    0.6184    0.3816   0.1143
+corruption_headroom              LIVE              0.250    -0.335     0.118     0.258     0.335   False         Free    0.6460    0.3540   0.1060
+military_action_gap               LIVE             0.000    -0.293    -0.250    -0.150     0.293   False  NonPositive    0.3809    0.6191   0.1164
+wonder_overrun                    LIVE             0.000    -0.107    -0.076    -0.231     0.231   False  NonPositive    0.9744    0.0256   0.0928
+urban_workers                     LIVE             0.500     0.088     0.117     0.028     0.117   False         Free    0.5706    0.4294   0.1004
+pop_cost                          LIVE            -0.400    -0.010    -0.088     0.000     0.088   False  NonPositive    0.9541    0.0459   0.0929
+military_action_surplus            LIVE            0.000     0.056     0.034     0.077     0.077   False         Free    0.8844    0.1156   0.0948
+
+================================================================================
+CAVEATS
+================================================================================
+
+1. TIE-FLOOR ARTIFACT. capable_frac's 0.0924 floor comes from the 9.24% of
+   decisions in the source table that are exact ties (margin == 0), where
+   every key trivially "beats" that margin, including keys that never fire
+   at all. Every capable_frac number in this report should be read as
+   RANK/comparison against 0.0924, never as an absolute decisive rate.
+   "LIVE" items sitting within a few thousandths of 0.0924 (has_colony
+   0.0926, colonies 0.0942, best_theater 0.0951, attack_cost_doubled
+   0.0931, and several others in the 0.092-0.095 band -- see the full
+   table) are functionally indistinguishable from NULL-IN-PLAY at this
+   sample size; the bucket boundary is exact but the underlying signal is
+   noisy right at the floor. Treat the top-12 ranked list, not the strict
+   bucket label, as the actionable signal for these borderline keys.
+
+2. STRUCTURAL vs STATISTICAL is a real distinction this report does not
+   collapse. workers_late is the clearest case: statistically LIVE
+   (capable_frac 0.42) but empirically null under real play (item 1 in the
+   ranked list). The reverse direction (statistically CANDIDATE-INVARIANT
+   but the RULE governing it is obviously correct, e.g. the *_trailing
+   standing-hinge keys, which are candidate-invariant BY DESIGN since they
+   read player position, not the candidate move) does not mean those keys
+   are bugs -- it means the mechanism they participate in (a standing
+   multiplier on a DIFFERENT candidate-varying key, e.g. CultureRate x
+   CultureRateTrailing) is where the real signal has to live, and the
+   trailing coefficient itself genuinely cannot move a decision alone. That
+   is exactly why science_rate_trailing (item 3) is worth flagging even
+   though nothing here suggests the mechanism is broken.
+
+3. NEVER-TRAINED (as originally defined -- absent from a champion file) is
+   VACUOUS for the three files actually available: all 160 WeightKey names
+   appear, with a value, in champ2p.json, champ3p.json AND champ4p.json,
+   confirmed by direct Python set comparison (zero missing, zero extra in
+   either direction, for all three files). This does not mean every key has
+   been meaningfully trained -- see CANDIDATE-INVARIANT and NULL-IN-PLAY
+   above for that -- only that the champion serialization format writes the
+   full vector rather than a sparse diff, so "presence in the file" cannot
+   distinguish a trained key from a key that has sat at its compiled
+   default since it was added.
+
+4. This report reused the EXISTING 3p 85,404-decision table
+   (feature_decisiveness_3p_2026-08-24.txt) rather than re-measuring.
+   zero_frac/fire_rate/capable_frac are 3p-only; the champ2p/champ4p
+   columns are weight VALUES only, with no decisiveness measurement behind
+   them at this player count. A key ranked LIVE or NULL-IN-PLAY here is a
+   3p verdict; its 2p/4p decisiveness is unmeasured and could differ.
+
+5. SUSPECTED-REDUNDANT flags are exactly that -- suspected, on cheap
+   evidence (same WeightGroup, overlapping zero_frac/capable_frac,
+   overlapping semantics from the source doc comments), not a computed
+   correlation. Per instruction, no correlation matrix was built; treat
+   those three flags as leads for a follow-up, not settled findings.
+
+6. This is diagnosis only. No weight was changed, no game was played by
+   this worker, and no champion or corpus file was touched. The workers_late
+   play-test evidence cited in item 1 was performed by prior workers
+   (ceiling_playtest_3p_2026-08-24.txt, ceiling_up_sweep_3p_2026-08-24.txt)
+   and is cited, not reproduced.

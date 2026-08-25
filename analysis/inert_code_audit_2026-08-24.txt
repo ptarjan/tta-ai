@@ -1,0 +1,276 @@
+INERT CODE AUDIT -- tta-ai rust/src -- 2026-08-24 (read-only worker)
+======================================================================
+
+SCOPE NOTE: this is the CODE half of "how many fixes are in and switched
+off". While working I found a same-day parallel WEIGHTS audit already on
+disk -- analysis/feature_audit_2026-08-24.txt (993 lines) and
+analysis/champion_audit_2026-08-24.txt -- which independently measured, by
+running 253,906 real self-play decisions under the live champion weights
+and diffing candidate_features() across every legal move at each decision,
+which WeightKeys NEVER move the argmax (56 of 160 keys: 37 "exact null",
+19 "near-zero"). That is the authoritative empirical signal for "does this
+code path currently affect a decision" and I lean on it below rather than
+re-deriving it. My own contribution is: (a) reading the CODE shape behind
+a sample of those keys so each is classified into one of the five
+requested categories with a file:line and a rules cross-check, (b) hunting
+for code-only inertness that weight audit cannot see (no-op dispatch arms,
+unread struct fields, early returns), and (c) one correction to that
+audit's own self-flagged uncertainty (WonderPromise).
+
+All findings below are reachable to the compiler (clippy -D warnings would
+already have caught true dead code) and inert only at RUNTIME -- stated
+once here rather than repeated per item.
+
+======================================================================
+RANKED ACTION LIST (top 10, one-clause reason each)
+======================================================================
+
+1. The `*_credit`/`*_board_credit` gate family (~20 WeightKeys: action_,
+   aggression_, card_, event_, gov_, pact_, tactic_, tech_, war_
+   board_credit; card_board_bonus/leader; bonus_card_credit;
+   build_fresh_credit; card_rate_credit; free_action_credit;
+   restricted_resource_credit; tactic_reach_credit; territory_credit;
+   unit_strength_credit; unit_tech_credit; tech_redundancy_discount;
+   hand_swap_extra) -- widest blast radius: these gates sit inside
+   cards.rs/row.rs feature helpers covering pact play, tactic pricing,
+   tech/gov/war-card pricing and card-swap pricing, i.e. most of the
+   bot's move classes, and every one is confirmed exact-null across all
+   253,906 sampled decisions in all 3 player counts.
+
+2. `wonder_potential`'s early return at `paid_fraction == 0.0` -- the
+   ONE decision (which wonder to take) where the identity term this
+   whole mechanism exists for is switched off is proven by a pinned test
+   (`two_wonders_with_different_powers_score_identically_at_the_moment_
+   they_are_taken`); real, frequent, high-stakes decision class.
+
+3. `TacticShortfallCost` (cards.rs:1386) -- confirmed both by code
+   reading (its only use is a subtracted penalty inside `tactic_value`'s
+   gain-now branch) and by the weight audit's independent candidate-spread
+   measurement: exact-null in all 3 counts, so switching it on is a live,
+   isolated, easily-measured single-line change.
+
+4. `HasUnit` (referenced by `unit_workers`'s own CHANGE-list writeup) --
+   its doc comment names the exact cliff it exists to price (unit #1 worth
+   far more than unit #5) but the weight is Free/0.0 in all 3 champions,
+   so the linear `unit_workers` proxy is left standing in for a cliff
+   nothing prices; touches every military-building decision.
+
+5. `FreeCivilAction` WeightKey -- fully orphaned (no feature computation
+   anywhere writes it a value; cards.rs:392-403 documents why nothing
+   pushes it anymore), so it is pure dead weight, not a live-but-off
+   mechanism -- lowest risk, cleanest one-line deletion, worth doing
+   alongside #1-3 while in that code.
+
+6. `card_table.rs` KNOWN_TOP_KEYS "target"/"sides"/"urbanLimitCategory"
+   (line 4842-4853) -- three JSON card-data keys parsed tolerantly but
+   modeled by nothing (combat.rs/actions.rs targeting not ported); breadth
+   unknown without a census of how many cards actually print them.
+
+7. `events.rs:1290` blue-token loss branch -- deliberately documented,
+   corpus-verified-unreachable (owner's-choice "strip from a farm/mine"
+   sub-branch); already self-monitoring, lowest priority of anything here.
+
+8. Colonization `Special` variants (`ColonyImmediateBonusApplies`,
+   `ColonyPermanentBonusTransfers`, `StealColony`, etc.) fall into the
+   big documented "belongs to combat.rs" catch-all no-op arms in
+   effects.rs/combat.rs -- UNVERIFIED whether combat.rs actually
+   implements them elsewhere; flagged, not confirmed (see CAVEATS).
+
+9. `resource_discount`/`gov_action_cost` (RETIRE list, exact-null) --
+   real production dispatch keys per the weight audit's own per-key
+   detail, narrower blast radius than #1 but same shape.
+
+10. `restricted_resources` (distinct from `restricted_resource_credit`,
+    also RETIRE/exact-null) -- narrow, single-purpose gate, lowest of the
+    confirmed-live-code items.
+
+======================================================================
+FINDINGS BY SHAPE
+======================================================================
+
+--- Shape 5: feature-computation code whose output goes nowhere (scaled
+    to zero by its own gate) ---
+
+* The `*_credit` family (item 1 above). Representative code:
+  - cards.rs:1887 `let ab = w.get(WeightKey::ActionBoardCredit);` --
+    multiplies a computed action-board magnitude.
+  - cards.rs:521 and :1113 `YieldKind::Territory => amt *= w.get(WeightKey::
+    TerritoryCredit)` -- territory yield zeroed at the multiply.
+  - cards.rs:707 `let c = w.get(WeightKey::RestrictedResourceCredit);`
+  All ~20 keys share the same shape: a raw feature magnitude is computed
+  correctly, then multiplied by its own gate weight, which is 0.0 in
+  every current champion (registry.rs documents these as
+  NOT_SET_BY_FEATURES / weights.rs comments them "trust nothing until
+  the league finds it" -- i.e. deliberately-off, awaiting a league
+  measurement, not a bug someone forgot). Whether turning any one on
+  would change play cannot be answered without training a champion with
+  it unlocked -- that is exactly what the weight audit's LIMITATIONS
+  section says it cannot tell either. My estimate: HIGH likelihood for
+  the board_credit family specifically, because their raw features
+  (pact/tactic/tech/war board magnitudes) are large, frequently nonzero
+  quantities across many move classes -- a nonzero gate would very
+  plausibly move some argmaxes, unlike a gate on a feature that itself
+  is rarely nonzero.
+
+* `TacticShortfallCost` -- cards.rs:1372-1396 `tactic_value`. Verified
+  independently: RULES_SPEC does not require this specific pricing
+  refinement (it's an evaluator heuristic, not a rule), but the function's
+  own doc comment (cards.rs:1398-1404) states it exists to fix a named gap
+  in docs/OPEN_ITEMS.md (a tactic missing one unit type scored the same
+  whether the missing tech was one upgrade away or nowhere on the board).
+  Default weight is 0.1 (weights.rs:741) but every current champion has
+  trained it to ~0 (2p 0.0045, 3p/4p exactly 0) -- and the weight audit
+  confirms candidate-set spread is exactly 0 too, i.e. it is not merely a
+  small weight, the term never differs between candidate moves in
+  practice at this weight. Likely cure: raise/refit the weight, or verify
+  whether `short` ever actually varies across a real candidate set before
+  spending league time on it.
+
+* `FreeCivilAction` -- weights.rs:213 (enum), :691 (0.0 default), several
+  plumbing match arms, cards.rs:392-403 (comment explaining why nothing
+  pushes it anymore). Distinct from the others: this is not a live
+  gate-to-zero, it is a WeightKey with NO producer at all -- every reader
+  sees the champion-file default because no code ever calls `.set()` on
+  it before evaluation. Confirmed by the parallel audit's own "SAFE TO
+  DELETE" section. Cure: delete the key; zero behavioural risk since it
+  is provably never written or read as a live feature.
+
+--- Shape 4: early return hides a whole branch at exactly the decision
+    that matters ---
+
+* `wonder_potential` (cards.rs:2148) / `wonder_value_scaled`'s
+  `earned_share = paid_fraction * collect_fraction`. `paid_fraction` is
+  exactly 0.0 the instant a wonder is taken off the row, so
+  `wonder_potential` -- "the sole channel through which a wonder's
+  IDENTITY reaches the evaluator" per its own doc comment -- contributes
+  nothing at all on the one move that chooses WHICH wonder to build.
+  Pinned test: cards.rs `two_wonders_with_different_powers_score_
+  identically_at_the_moment_they_are_taken` proves Pyramids [3,2,1] and
+  Hanging Gardens [2,2,2] score bit-identically at take time.
+  `wonder_promise` (cards.rs:2197) was purpose-built as the fix, priced
+  through `promise_share` instead of `earned_share`.
+  CORRECTION to the parallel weight audit: that audit's own RETIRE table
+  lists `wonder_promise` as exact-null (spread 0 across all 253,906
+  decisions) and flags this as suspicious in its own write-up (lines
+  949-973) -- it found WonderPromise is read directly in eval.rs:344-346
+  (`if wpr != 0.0 { total += wpr * cards::wonder_promise(...) }`) with a
+  currently-nonzero weight in every champion (0.76/0.60/2.01), but has NO
+  corresponding `out[]` slot in `eval::linear_features`, the function its
+  own measurement tool (`candidate_features`) uses to compute spread. I
+  read eval.rs:328-357 directly: the real `evaluate()` path calls
+  `cards::wonder_promise` fresh per candidate exactly like its live
+  siblings (HandPotential, WonderPotential, etc.), so its zero-spread
+  reading is very likely an ARTIFACT of a missing `linear_features`
+  wiring line, not evidence the real bot ignores it. Net effect: the
+  `wonder_potential` early return is a confirmed, still-live blind spot
+  at wonder-take time (WonderPromise's DECAY only reaches 0 as a stage is
+  paid off, not at take time when paid_fraction is already 0 for the
+  freshly-taken wonder -- re-read the doc comment chain before trusting
+  either audit's spread number at face value here without also checking
+  eval.rs directly, exactly as I had to). Likely cure: add the missing
+  `out[WeightKey::WonderPromise as usize] = cards::wonder_promise(...)`
+  line to `linear_features` so future audits of this class measure it
+  correctly, independent of whether the underlying blind spot itself
+  needs a design fix.
+
+--- Shape 1: explicit no-op dispatch arms (all found to be deliberately
+    documented, not silent) ---
+
+* effects.rs:1358-1373 and combat.rs:205/522, effects.rs:410/961/985 --
+  a large catch-all `=> {}` / `=> None` / `=> return 0` arm list across
+  dozens of `Special` variants, each one individually commented at the
+  top of `apply_special` (effects.rs:993-1013) as belonging to
+  actions.rs / combat.rs / events.rs / "handled elsewhere" with a named
+  alternate reader. Spot-checked several (Genghis Khan's
+  InfantryCountsAsCavalryForTactics, the three pact-block keys, Barbarians'
+  targeting keys) and each has a real alternate reader cited and verified
+  to exist. NOT a silent no-op class as a whole.
+  EXCEPTION / unverified: `ColonyImmediateBonusApplies`,
+  `ColonyPermanentBonusTransfers`, `StealColony` and several other
+  colonization-only Special variants are labeled "belongs to combat.rs"
+  but I did not have time to confirm combat.rs actually implements them
+  (as opposed to combat.rs itself deferring them again in its own
+  catch-all, which the same comment convention would also produce). Flagged
+  as CAVEAT #1, not a confirmed finding -- see below.
+
+* events.rs:1290 `block.blue_tokens != 0` branch -- the CoL p.17
+  owner's-choice "also strip a token from a farm/mine" sub-branch for an
+  empty blue bank is real per RULES_SPEC but genuinely unreachable by any
+  game in the current 1011-game corpus (blue_available is never below 1
+  at either card's firing, confirmed by the comment's own 2026-08-14
+  census of all 241 firings). This is the one case in the whole `TODO/
+  deferred` grep sweep that is an honestly-labeled, self-monitoring dead
+  branch rather than a silently-abandoned one -- it names the exact
+  trigger condition (corpus showing blue_available==0) that would need to
+  fire before it's worth building. Lowest priority: doing nothing about
+  it is the documented-correct choice until that trigger fires.
+
+--- Shape 3: struct fields computed/stored but never read ---
+
+* card_table.rs:4830-4853 `KNOWN_TOP_KEYS` -- "target", "sides",
+  "urbanLimitCategory" are explicitly carved out as "present in the data,
+  read by nothing this port implements yet (combat.rs/actions.rs) -- not
+  modeled". This is the parse-time analogue of shape 3: the JSON->struct
+  build recognizes these keys exist (so an unrecognized new key still
+  fails a test) but nothing downstream stores or reads them into any
+  `Card`/`Special` field. I did not have time to census how many printed
+  cards carry each key or what rule they encode, so I cannot size the
+  blast radius -- see CAVEATS.
+
+--- Shape 2: implemented+tested functions never called from a decision
+    path ---
+
+* No new instance found beyond the `TacticShortfallCost`/`*_credit`
+  items above (those ARE called from the live decision path, just
+  multiplied by a zero gate -- shape 5, not shape 2). I did not find a
+  function that is fully implemented, unit-tested, and has ZERO callers
+  outside `#[cfg(test)]` or `bin/`; see CAVEATS for what I did not check
+  here (this needs a call-graph pass I did not have budget for).
+
+======================================================================
+CAVEATS -- what I did not have time or evidence to check
+======================================================================
+
+1. Colonization `Special` variants (`ColonyImmediateBonusApplies`,
+   `ColonyPermanentBonusTransfers`, `StealColony`, `RemoveAsPoliticalAction
+   FreeColonize`, `CultureFirstColony`, `CulturePerAdditionalColony`) are
+   routed to combat.rs by the effects.rs dispatch comment, but I never
+   opened combat.rs far enough to confirm they are actually implemented
+   there rather than deferred again. This is the single biggest open
+   question in this report -- colonization is a real, if infrequent,
+   decision class, and if these are ALSO no-ops in combat.rs that would
+   be a genuine shape-1 finding I only got halfway to.
+
+2. Shape 2 (implemented-but-never-called functions) got essentially no
+   dedicated search -- it needs a call-graph / cross-reference pass
+   (e.g. `cargo +nightly udeps` or a manual "grep every `pub fn`, count
+   non-test/non-bin callers" sweep) that I did not have budget for within
+   ~50 tool calls once the weights cross-reference turned up as much as
+   it did. Everything reported under shape 2 above is really shape 5.
+
+3. I did not verify the actual card-data breadth of the "target"/"sides"/
+   "urbanLimitCategory" gap (item 6/shape 3) -- how many printed cards use
+   each key, or what rule each encodes -- so its ranking (#6) is a guess
+   at plausible frequency, not a measured one.
+
+4. I did not independently re-run the weight audit's methodology or
+   re-verify its 253,906-decision sweep; I took its RETIRE/CHANGE
+   classification as given except where I could directly contradict it by
+   reading eval.rs myself (the WonderPromise case). Any other
+   instrumentation gaps of that same shape in that audit are unchecked.
+
+5. I did not check `apply.rs`, `interact.rs`, or `arena.rs` in comparable
+   depth to `cards.rs`/`eval.rs`/`effects.rs` -- those three account for
+   most of the findings above; the other large files (apply.rs 3988 lines,
+   interact.rs 2941 lines) got only a keyword grep pass, not targeted
+   reads, so a shape-1 or shape-4 instance could be sitting there
+   unfound.
+
+6. The champion JSON snapshot I diffed was read live at audit time
+   (2026-08-24), same day as the parallel weight audit's own frozen copy
+   (2026-08-24T11:09:10Z) -- I did not re-freeze my own copy, so if the
+   climb moved a weight across the near-zero boundary between the two
+   reads, a numeric value quoted above could be stale by the time this is
+   read. The STRUCTURAL findings (early return, missing out[] wiring,
+   orphaned WeightKey, gate-multiplies-feature code shape) do not depend
+   on the exact numbers and are not at risk from this.
