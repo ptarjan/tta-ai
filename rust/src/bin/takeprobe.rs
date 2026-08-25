@@ -904,6 +904,437 @@ fn print_build_report(games: usize, players: u8, weights_path: &str, totals: &[C
     }
 }
 
+// =====================================================================
+// `--pop`: does the champion vector starve `p.workers_free` because it
+// never GROWS the population (`Move::Pop`/`Move::PopFree` illegal or
+// outranked), or because it grows normally and over-commits every worker
+// the moment it arrives (builds/develops/upgrades draining the pool as
+// fast as `Move::Pop` fills it)? See this file's `--build` doc comment
+// block for the funnel discipline this mirrors.
+//
+// SEEN, defined WITHOUT any champion-specific state (unlike `--build`'s
+// `p.techs.has(id)`, which made the champion's SEEN count 8.6x smaller
+// than the human vector's and confounded that comparison -- see
+// `farm_build_probe_3p_2026-08-24.txt` caveat 2): a decision point is
+// SEEN whenever `legal.rs::action_moves` could structurally have
+// generated a `Move::Pop`/`Move::PopFree` at all, i.e. `state.phase ==
+// Phase::Actions && state.pending.is_empty() && state.round > 1` --
+// `action_moves` itself returns before reaching the pop block on round 1
+// ("§1.9: taking cards is the only legal action", `legal.rs:425-427`).
+// This depends only on the phase/pending/round fields every game reaches
+// regardless of policy, never on what either vector chose to develop or
+// build -- the one residual confound (total decision-point COUNT still
+// depends on how many turns a policy's own games run) is called out in
+// the report's CAVEATS, not hidden.
+// =====================================================================
+
+/// The variant-name test [`move_kind`] already uses, specialised to "is
+/// this an increase-population move at all" -- true for `Move::Pop{full:
+/// _}` (both the ordinary and replay-reconciliation shapes) and
+/// `Move::PopFree` (Ocean Liners / Civil Life's zero-cost pop), the two
+/// variants `legal.rs`'s pop block (`legal.rs:432-517`) can ever push.
+fn is_pop_move(mv: &Move) -> bool {
+    let k = move_kind(mv);
+    k == "Pop" || k == "PopFree"
+}
+
+/// Why NEITHER `Move::Pop{full: None}` nor `Move::PopFree` was in
+/// `legal_moves`' output at a SEEN decision point, classified by
+/// replaying `legal.rs:432-517`'s own checks in the SAME order and with
+/// the SAME short-circuit semantics that code uses:
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PopIllegalReason {
+    /// `economy::pop_cost` returned `None` -- `p.yellow_bank == 0`, the
+    /// Population Bank is empty (`economy::pop_cost_base`'s own doc
+    /// comment). `action_moves` never even enters its pop `if let Some`
+    /// block in this case, so neither the CA nor the food check below is
+    /// ever reached -- checked FIRST here for the same reason.
+    EmptyYellowBank,
+    /// The bank has a cost, but neither a spare civil action nor a live
+    /// Civil-Life-style CA-free grant is available
+    /// (`costs::spare_ca(p) >= 1 || costs::civil_life_ca_free(..)` is
+    /// false) -- the LEFT half of `legal.rs`'s `&&`, checked before food
+    /// by the real short-circuit, so checked before food here too.
+    NoCivilAction,
+    /// A civil action is available but `p.food` falls short of
+    /// `economy::pop_cost`'s result -- the RIGHT half of the same `&&`,
+    /// only ever reached (in the real code) once the CA half already
+    /// passed.
+    InsufficientFood,
+    /// Neither of the above fired, yet no pop move was legal -- would
+    /// mean this classifier's replay of `legal.rs` diverged from the real
+    /// move generator (a bug in THIS probe, not a fourth real reason).
+    /// See `BuildIllegalReason::Other`'s doc comment for the same
+    /// residual-bucket role in the `--build` mode this mirrors.
+    Other,
+}
+
+const POP_ILLEGAL_REASONS: [PopIllegalReason; 4] =
+    [PopIllegalReason::EmptyYellowBank, PopIllegalReason::NoCivilAction, PopIllegalReason::InsufficientFood, PopIllegalReason::Other];
+
+fn pop_illegal_reason_idx(r: PopIllegalReason) -> usize {
+    match r {
+        PopIllegalReason::EmptyYellowBank => 0,
+        PopIllegalReason::NoCivilAction => 1,
+        PopIllegalReason::InsufficientFood => 2,
+        PopIllegalReason::Other => 3,
+    }
+}
+
+/// Classifies why no pop move was legal at a SEEN decision point -- see
+/// [`PopIllegalReason`]'s own doc comment for the exact order this
+/// mirrors from `legal.rs:432-517`. Uses [`tta::economy::pop_cost`]
+/// directly (the `pub` single-sourced formula `legal.rs`'s own private
+/// wrapper also calls -- `economy.rs:199-211`'s own doc comment), so this
+/// never duplicates the cost math, only the legality ORDER.
+fn classify_pop_illegal(state: &GameState, p: &PlayerState) -> PopIllegalReason {
+    let Some(cost) = economy::pop_cost(state, p) else {
+        return PopIllegalReason::EmptyYellowBank;
+    };
+    let ca_ok = costs::spare_ca(p) >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food);
+    if !ca_ok {
+        return PopIllegalReason::NoCivilAction;
+    }
+    if (p.food as i32) < cost {
+        return PopIllegalReason::InsufficientFood;
+    }
+    PopIllegalReason::Other
+}
+
+/// Per-round illegality-reason tally for `--pop` mode, mirroring
+/// [`BuildIllegalStats`] exactly (4 reasons instead of 5 -- see
+/// [`PopIllegalReason`]).
+struct PopIllegalStats {
+    by_round: HashMap<u16, [u64; 4]>,
+    total: [u64; 4],
+}
+
+impl PopIllegalStats {
+    fn new() -> PopIllegalStats {
+        PopIllegalStats { by_round: HashMap::new(), total: [0; 4] }
+    }
+
+    fn record(&mut self, round: u16, reason: PopIllegalReason) {
+        let idx = pop_illegal_reason_idx(reason);
+        self.total[idx] += 1;
+        let entry = self.by_round.entry(round).or_insert([0; 4]);
+        entry[idx] += 1;
+    }
+
+    fn merge(&mut self, other: &PopIllegalStats) {
+        self.total.iter_mut().zip(other.total.iter()).for_each(|(a, b)| *a += b);
+        for (&round, counts) in &other.by_round {
+            let entry = self.by_round.entry(round).or_insert([0; 4]);
+            entry.iter_mut().zip(counts.iter()).for_each(|(a, b)| *a += b);
+        }
+    }
+}
+
+/// Settles cause (b) directly: a simple worker-pool balance, per round,
+/// summed over every player-game in the run. Read straight off
+/// `apply.rs`'s own effect on `p.workers_free` (confirmed by reading the
+/// handlers, not guessed):
+///   - `h_pop`/`h_pop_free` (`Move::Pop`/`Move::PopFree`) call
+///     `economy::increase_population`, which always does `p.workers_free
+///     += 1` (`economy.rs`, pinned by
+///     `increase_population_pays_cost_and_moves_a_token`) -- an ENTER.
+///   - `h_destroy` (`Move::Destroy`) does `p.workers_free += 1`
+///     (`apply.rs:893`) -- a worker returns to the pool -- also an ENTER.
+///   - `do_build` (`Move::Build`, civil OR unit) does `p.workers_free -=
+///     1` (`apply.rs:881`) -- a LEAVE.
+///   - `do_upgrade` (`Move::Upgrade`) moves a worker from the low card to
+///     the high card (`apply.rs:923-924`) -- net ZERO on `workers_free`,
+///     never touched.
+///   - `h_develop` (`Move::Develop`) inserts the new tech at zero workers
+///     (`apply.rs`'s own test name) -- never touches `workers_free`
+///     either.
+///
+/// So, contrary to this task's own working hypothesis in its prompt,
+/// Develop and Upgrade are NOT drains on the free-worker pool at all --
+/// only Build is. This struct counts exactly the two real ENTER sources
+/// and the one real LEAVE source; see [`play_one_pop`]'s use of
+/// [`move_kind`] for how each applied move is classified.
+struct WorkerBalance {
+    enters_by_round: HashMap<u16, u64>,
+    leaves_by_round: HashMap<u16, u64>,
+    enters_total: u64,
+    leaves_total: u64,
+}
+
+impl WorkerBalance {
+    fn new() -> WorkerBalance {
+        WorkerBalance { enters_by_round: HashMap::new(), leaves_by_round: HashMap::new(), enters_total: 0, leaves_total: 0 }
+    }
+
+    fn record_enter(&mut self, round: u16) {
+        *self.enters_by_round.entry(round).or_insert(0) += 1;
+        self.enters_total += 1;
+    }
+
+    fn record_leave(&mut self, round: u16) {
+        *self.leaves_by_round.entry(round).or_insert(0) += 1;
+        self.leaves_total += 1;
+    }
+
+    fn merge(&mut self, other: &WorkerBalance) {
+        for (&round, &n) in &other.enters_by_round {
+            *self.enters_by_round.entry(round).or_insert(0) += n;
+        }
+        for (&round, &n) in &other.leaves_by_round {
+            *self.leaves_by_round.entry(round).or_insert(0) += n;
+        }
+        self.enters_total += other.enters_total;
+        self.leaves_total += other.leaves_total;
+    }
+}
+
+/// Plays one self-play game to completion (or to [`MOVE_CAP`]), tracking
+/// the [`CardStats`] funnel and [`Diag`] for `Move::Pop`/`Move::PopFree`
+/// exactly the way [`play_one_build`] tracks a Farm build (reused as-is
+/// -- `CardStats`'s fields are not Farm-specific, only its doc comments
+/// were written with Farm in mind), PLUS [`PopIllegalStats`] for every
+/// SEEN-but-not-LEGAL occurrence and [`WorkerBalance`] for every applied
+/// move regardless of whether a pop was SEEN this turn (a `Move::Build`
+/// on round 1 still drains the pool; round-1 has no pop block but is not
+/// exempt from the balance). Never mutates anything outside its own
+/// locals, and never applies anything but the move the bot itself already
+/// chose -- see [`play_one`]'s own doc comment for why that reproduces an
+/// ordinary self-play trajectory exactly.
+fn play_one_pop(players: u8, weights: Weights, seed: u64) -> (CardStats, Diag, PopIllegalStats, WorkerBalance) {
+    let bot = WeightedBot::new(weights);
+    let mut state = game::new_game(players, seed);
+    let mut stats = CardStats::default();
+    let mut diag = Diag::new();
+    let mut illegal = PopIllegalStats::new();
+    let mut balance = WorkerBalance::new();
+    let mut moves_played = 0usize;
+
+    while !state.game_over {
+        if moves_played >= MOVE_CAP {
+            break;
+        }
+        moves_played += 1;
+
+        let moves = legal::legal_moves(&state);
+        if moves.as_slice().is_empty() {
+            break;
+        }
+
+        // See this file's `--pop` doc comment block for why SEEN is
+        // this condition and nothing champion-specific.
+        let pop_seen = state.phase == Phase::Actions && state.pending.is_empty() && state.round > 1;
+
+        let mv = if !pop_seen {
+            bot.choose(&state, moves.as_slice())
+        } else {
+            // Same argmax re-derivation `play_one`/`play_one_build` use --
+            // see `play_one`'s own inline comment.
+            let feats = candidate_features(&state, moves.as_slice(), false, &weights);
+            let vals: Vec<f64> = feats.iter().map(|(_, f)| dot(&weights, f)).collect();
+            let mut best_idx = 0usize;
+            for (i, &v) in vals.iter().enumerate().skip(1) {
+                if v > vals[best_idx] {
+                    best_idx = i;
+                }
+            }
+            let winner_val = vals[best_idx];
+            let round = state.round;
+            stats.seen += 1;
+
+            let pop_positions: Vec<usize> =
+                feats.iter().enumerate().filter(|(_, (m, _))| is_pop_move(m)).map(|(i, _)| i).collect();
+            if pop_positions.is_empty() {
+                let p = state.me();
+                let reason = classify_pop_illegal(&state, p);
+                illegal.record(round, reason);
+            } else {
+                stats.legal += 1;
+                // If more than one pop-family move is legal at once (rare
+                // -- see `legal.rs`'s own doc comment on `Pop{full:None}`
+                // and `PopFree` coexisting), report the BEST-ranked one:
+                // "is pop competitive" should credit the pop the bot would
+                // actually have picked among pop-family options, not
+                // whichever variant happens first in the candidate list.
+                let mut best_pop = pop_positions[0];
+                for &pos in &pop_positions {
+                    if vals[pos] > vals[best_pop] {
+                        best_pop = pos;
+                    }
+                }
+                let pop_val = vals[best_pop];
+                let rank = vals.iter().filter(|&&v| v > pop_val).count() as u64 + 1;
+                stats.record_scored(rank, winner_val - pop_val);
+                for (ki, contrib) in diag.key_contrib_sum.iter_mut().enumerate() {
+                    let w = weights.get(WeightKey::ALL[ki]);
+                    *contrib += w * (feats[best_idx].1[ki] - feats[best_pop].1[ki]);
+                }
+                diag.key_contrib_n += 1;
+                *diag.winner_kinds.entry(move_kind(&feats[best_idx].0)).or_insert(0) += 1;
+            }
+            feats[best_idx].0
+        };
+
+        // Worker-pool balance: classified off the move actually about to
+        // be applied, independent of `pop_seen` (round 1 has no pop block
+        // but a round-1 Build/Destroy still moves the pool) -- see
+        // `WorkerBalance`'s own doc comment for which kinds are which.
+        let round = state.round;
+        let kind = move_kind(&mv);
+        if kind == "Pop" || kind == "PopFree" || kind == "Destroy" {
+            balance.record_enter(round);
+        } else if kind == "Build" {
+            balance.record_leave(round);
+        }
+
+        apply::apply(&mut state, mv);
+    }
+    (stats, diag, illegal, balance)
+}
+
+/// Plays `games` self-play `--pop` games across up to `threads` threads
+/// and merges every thread's [`play_one_pop`] output -- the `--pop`
+/// mirror of [`run_all_build`].
+fn run_all_pop(games: usize, players: u8, seed: u64, threads: usize, weights: Weights) -> (CardStats, Diag, PopIllegalStats, WorkerBalance, std::time::Duration) {
+    let start = Instant::now();
+    let next = AtomicUsize::new(0);
+    let threads = threads.min(games).max(1);
+    let totals: Mutex<CardStats> = Mutex::new(CardStats::default());
+    let diag_totals: Mutex<Diag> = Mutex::new(Diag::new());
+    let illegal_totals: Mutex<PopIllegalStats> = Mutex::new(PopIllegalStats::new());
+    let balance_totals: Mutex<WorkerBalance> = Mutex::new(WorkerBalance::new());
+
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            handles.push(scope.spawn(|| {
+                let mut local = CardStats::default();
+                let mut local_diag = Diag::new();
+                let mut local_illegal = PopIllegalStats::new();
+                let mut local_balance = WorkerBalance::new();
+                loop {
+                    let g = next.fetch_add(1, Ordering::Relaxed);
+                    if g >= games {
+                        break;
+                    }
+                    let this_seed = seed + g as u64;
+                    let (s, d, il, bal) = play_one_pop(players, weights, this_seed);
+                    local.merge(&s);
+                    local_diag.merge(&d);
+                    local_illegal.merge(&il);
+                    local_balance.merge(&bal);
+                }
+                totals.lock().expect("totals mutex poisoned").merge(&local);
+                diag_totals.lock().expect("diag mutex poisoned").merge(&local_diag);
+                illegal_totals.lock().expect("illegal mutex poisoned").merge(&local_illegal);
+                balance_totals.lock().expect("balance mutex poisoned").merge(&local_balance);
+            }));
+        }
+        for h in handles {
+            let _ = h.join();
+        }
+    });
+
+    (
+        totals.into_inner().expect("totals mutex poisoned"),
+        diag_totals.into_inner().expect("diag mutex poisoned"),
+        illegal_totals.into_inner().expect("illegal mutex poisoned"),
+        balance_totals.into_inner().expect("balance mutex poisoned"),
+        start.elapsed(),
+    )
+}
+
+/// [`run_all_pop`]'s four accumulated outputs, bundled so
+/// [`print_pop_report`] stays under clippy's `too_many_arguments` rather
+/// than folding unrelated concerns together -- mirrors [`ProbeConfig`]'s
+/// own reason for existing.
+struct PopReportData<'a> {
+    totals: &'a CardStats,
+    diag: &'a Diag,
+    illegal: &'a PopIllegalStats,
+    balance: &'a WorkerBalance,
+}
+
+/// Prints the `--pop` report: the [`CardStats`] funnel, the
+/// illegality-reason breakdown (overall and per round), the winner-kind/
+/// [`WeightKey`] diagnosis when anything scored, and the [`WorkerBalance`]
+/// per-round net -- mirroring [`print_build_report`]'s shape.
+fn print_pop_report(games: usize, players: u8, weights_path: &str, data: &PopReportData, elapsed: std::time::Duration) {
+    let PopReportData { totals: s, diag, illegal, balance } = data;
+    println!("takeprobe --pop: {games} games, {players} players, weights={weights_path}");
+    println!("elapsed: {elapsed:.1?}");
+    println!("SEEN = state.phase==Actions && state.pending.is_empty() && state.round>1 (never champion-specific -- see file doc comment)");
+    println!();
+    let legal_rate = if s.seen > 0 { s.legal as f64 / s.seen as f64 } else { 0.0 };
+    let scored_rate = if s.legal > 0 { s.scored as f64 / s.legal as f64 } else { 0.0 };
+    let mean_rank = if s.scored > 0 { s.rank_sum as f64 / s.scored as f64 } else { 0.0 };
+    let mean_gap = if s.scored > 0 { s.gap_sum / s.scored as f64 } else { 0.0 };
+    println!(
+        "combined: seen={} legal={} ({legal_rate:.3}) scored={} ({scored_rate:.3}) mean_rank={mean_rank:.2} mean_gap={mean_gap:.4} best_rank={}",
+        s.seen,
+        s.legal,
+        s.scored,
+        s.best_rank.map_or("n/a".to_string(), |r| r.to_string())
+    );
+
+    println!();
+    let illegal_count: u64 = s.seen - s.legal;
+    println!("Illegality-reason breakdown (n={illegal_count} SEEN-but-not-LEGAL occurrences):");
+    for &reason in &POP_ILLEGAL_REASONS {
+        let c = illegal.total[pop_illegal_reason_idx(reason)];
+        let rate = if illegal_count > 0 { c as f64 / illegal_count as f64 } else { 0.0 };
+        println!("  {reason:?}  {c:>8}  ({rate:.3})");
+    }
+
+    println!();
+    println!("Illegality-reason breakdown by round:");
+    let mut rounds: Vec<&u16> = illegal.by_round.keys().collect();
+    rounds.sort_unstable();
+    println!("  {:>5}  {:>14} {:>13} {:>16} {:>7} {:>7}", "round", "EmptyBank", "NoCivilActn", "InsuffFood", "Other", "total");
+    for round in rounds {
+        let counts = &illegal.by_round[round];
+        let row_total: u64 = counts.iter().sum();
+        println!("  {round:>5}  {:>14} {:>13} {:>16} {:>7} {row_total:>7}", counts[0], counts[1], counts[2], counts[3]);
+    }
+
+    println!();
+    println!("Winning move kind at every SCORED Pop decision point (what beats a legal-but-not-chosen Pop):");
+    let mut kinds: Vec<(&String, &u64)> = diag.winner_kinds.iter().collect();
+    kinds.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let kind_total: u64 = diag.winner_kinds.values().sum();
+    for (kind, count) in &kinds {
+        let rate = if kind_total > 0 { **count as f64 / kind_total as f64 } else { 0.0 };
+        println!("  {kind:<14} {count:>6}  ({rate:.3})");
+    }
+
+    println!();
+    println!("Top WeightKey terms by mean |contribution| to the winner-vs-Pop gap (n={}):", diag.key_contrib_n);
+    if diag.key_contrib_n > 0 {
+        let n = diag.key_contrib_n as f64;
+        let mut ranked: Vec<(WeightKey, f64)> =
+            WeightKey::ALL.iter().enumerate().map(|(i, &k)| (k, diag.key_contrib_sum[i] / n)).collect();
+        ranked.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap_or(std::cmp::Ordering::Equal));
+        for (rank, (key, mean)) in ranked.iter().take(15).enumerate() {
+            let sign = if *mean > 0.0 { "favors_winner" } else if *mean < 0.0 { "favors_pop" } else { "neutral" };
+            println!("  {:>2}. {:<24} {sign}", rank + 1, format!("{key:?}"));
+        }
+    } else {
+        println!("  (no scored Pop occurrences to rank)");
+    }
+
+    println!();
+    println!("Worker-pool balance (ENTER = Pop/PopFree/Destroy succeed, LEAVE = Build succeeds -- see WorkerBalance doc comment):");
+    println!("  totals: enters={} leaves={} net={}", balance.enters_total, balance.leaves_total, balance.enters_total as i64 - balance.leaves_total as i64);
+    println!("  {:>5}  {:>8} {:>8} {:>8}", "round", "enters", "leaves", "net");
+    let mut brounds: Vec<u16> = balance.enters_by_round.keys().chain(balance.leaves_by_round.keys()).copied().collect();
+    brounds.sort_unstable();
+    brounds.dedup();
+    for round in brounds {
+        let e = balance.enters_by_round.get(&round).copied().unwrap_or(0);
+        let l = balance.leaves_by_round.get(&round).copied().unwrap_or(0);
+        println!("  {round:>5}  {e:>8} {l:>8} {:>8}", e as i64 - l as i64);
+    }
+}
+
 /// Everything about a `play_one` call that is fixed for the whole run
 /// (shared read-only across every game thread) rather than varying per
 /// game -- bundled so `play_one` stays under clippy's `too_many_arguments`
@@ -1109,6 +1540,11 @@ struct Args {
     /// with `--sensitivity`/`--interpolate`/`--normalize`, which are all
     /// Mine-TAKE-probe-specific machinery this mode does not share.
     build: bool,
+    /// `--pop`: run the increase-Population probe (see this file's
+    /// `--pop` doc comment block) instead of the Mine-TAKE probe.
+    /// Mutually exclusive with every other mode's own flags for the same
+    /// reason `--build` is.
+    pop: bool,
 }
 
 impl Default for Args {
@@ -1123,6 +1559,7 @@ impl Default for Args {
             interpolate_path: None,
             normalize: false,
             build: false,
+            pop: false,
         }
     }
 }
@@ -1151,6 +1588,11 @@ usage: takeprobe --weights PATH [options]
                        already developed) instead of the Mine-TAKE probe --
                        see this file's `--build` doc comment block. Mutually
                        exclusive with --sensitivity/--interpolate/--normalize.
+  --pop              run the increase-Population probe (SEEN=any action-phase
+                       decision point past round 1, never champion-specific)
+                       instead of the Mine-TAKE probe -- see this file's
+                       `--pop` doc comment block. Mutually exclusive with
+                       every other mode.
   --help
 ";
 
@@ -1171,6 +1613,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--interpolate" => a.interpolate_path = Some(value(flag)?),
             "--normalize" => a.normalize = true,
             "--build" => a.build = true,
+            "--pop" => a.pop = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -1190,8 +1633,11 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     if a.normalize && a.interpolate_path.is_none() {
         return Err("--normalize requires --interpolate PATH".to_string());
     }
-    if a.build && (a.sensitivity || a.interpolate_path.is_some() || a.normalize) {
-        return Err("--build is mutually exclusive with --sensitivity/--interpolate/--normalize".to_string());
+    if a.build && (a.sensitivity || a.interpolate_path.is_some() || a.normalize || a.pop) {
+        return Err("--build is mutually exclusive with --sensitivity/--interpolate/--normalize/--pop".to_string());
+    }
+    if a.pop && (a.sensitivity || a.interpolate_path.is_some() || a.normalize || a.build) {
+        return Err("--pop is mutually exclusive with --sensitivity/--interpolate/--normalize/--build".to_string());
     }
     if a.threads == 0 {
         a.threads = 1;
@@ -1304,6 +1750,13 @@ fn main() -> ExitCode {
         let (totals, diag, illegal, elapsed) =
             run_all_build(args.games, args.players, args.seed, args.threads, weights, &farm_ids);
         print_build_report(args.games, args.players, &args.weights_path, &totals, &diag, &illegal, elapsed);
+        return ExitCode::SUCCESS;
+    }
+
+    if args.pop {
+        let (totals, diag, illegal, balance, elapsed) = run_all_pop(args.games, args.players, args.seed, args.threads, weights);
+        let data = PopReportData { totals: &totals, diag: &diag, illegal: &illegal, balance: &balance };
+        print_pop_report(args.games, args.players, &args.weights_path, &data, elapsed);
         return ExitCode::SUCCESS;
     }
 

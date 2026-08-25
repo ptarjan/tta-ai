@@ -1,0 +1,498 @@
+POP PROBE, 3 players, 2026-08-24
+=================================
+
+QUESTION (task framing): `analysis/farm_build_probe_3p_2026-08-24.txt` found the
+champion reaches a legal `Move::Build` on a developed Farm only 1.9% of the
+time it is SEEN, 88.3% of the failures being `p.workers_free == 0`. This probe
+asks WHY the champion has zero free workers, distinguishing two structurally
+different causes:
+  (a) it never GROWS the population (`Move::Pop` illegal, or legal-but-
+      routinely-outranked), vs.
+  (b) it grows normally and OVER-COMMITS (workers produced are immediately
+      consumed by other actions, so the free pool never accumulates).
+
+METHOD
+------
+Extended `rust/src/bin/takeprobe.rs` (the ONLY file modified) with a `--pop`
+mode, reusing the same self-play harness and four-stage discipline (SEEN ->
+LEGAL -> SCORED -> RANK) the `--build`/Mine-TAKE probes already use, plus a
+worker-pool balance tracker.
+
+SEEN DEFINITION (stated explicitly, per this task's own instruction)
+----------------------------------------------------------------------
+`farm_build_probe_3p_2026-08-24.txt` (caveat 2) hit a trap: its SEEN was
+"the Farm tech is developed" -- state that itself depends on how much a given
+weight vector chooses to develop Farm techs, which made the champion's SEEN
+count 8.6x smaller than the human vector's and confounded the LEGAL-rate
+comparison.
+
+This probe's SEEN is defined WITHOUT any champion-specific state:
+
+    SEEN := state.phase == Phase::Actions
+            && state.pending.is_empty()
+            && state.round > 1
+
+This is exactly `legal.rs::action_moves`'s own precondition for possibly
+generating a pop move: `action_moves` returns immediately on round 1
+("legal.rs:425-427, `§1.9: taking cards is the only legal action`"),
+before it ever reaches the pop block. Every decision point counted here is
+one where `action_moves` COULD structurally have pushed a `Move::Pop`/
+`Move::PopFree`, regardless of what either vector's own policy chose to do,
+develop, or build beforehand. Round-1 decision points (where a pop is never
+structurally possible, by construction of the code) are correctly excluded
+from SEEN, not miscounted as illegal-for-some-reason.
+
+Residual confound (see CAVEATS): the TOTAL number of SEEN decision points
+still depends on how many turns a given weight vector's own games run
+(different vectors play different-length trajectories) -- this is much
+smaller than the 8.6x farm-build gap (130271 vs 110829 here, a 1.18x ratio)
+because the definition no longer depends on a champion-specific gate, but it
+is not exactly zero and is called out below rather than compared silently.
+
+Four stages, same semantics as the Mine-TAKE/Farm-BUILD probes:
+  1. SEEN    -- as defined above.
+  2. LEGAL   -- `Move::Pop{full:_}` or `Move::PopFree` present in
+                `legal::legal_moves`' output at that decision point.
+  3. SCORED  -- survives into `candidate_features`'s own candidate set
+                (structurally identical to LEGAL for a plain WeightedBot,
+                confirmed again here, not assumed -- see prior probes' own
+                doc comments).
+  4. RANK    -- 1-based rank and score gap to the winner, via the same
+                `candidate_features`/`dot` argmax re-derivation the other
+                probes use. When more than one pop-family move is legal at
+                once (rare -- `legal.rs`'s own doc comment on `Pop{full:
+                None}`/`PopFree` coexisting), the BEST-ranked pop-family
+                candidate is reported, since the question is "is pop
+                competitive," not "which specific variant."
+
+ILLEGALITY CLASSIFIER
+----------------------
+For every SEEN-but-not-LEGAL occurrence, `classify_pop_illegal` replays
+`legal.rs:432-517`'s own checks IN THE SAME ORDER and with the SAME
+short-circuit semantics the real `&&`/`if let Some` uses:
+
+  1. EmptyYellowBank    -- `economy::pop_cost` returns `None`
+                            (`p.yellow_bank == 0`, the Population Bank is
+                            empty). `action_moves` never even enters its
+                            `if let Some(cost) = pop_cost(...)` block in this
+                            case, so NEITHER the CA nor the food check below
+                            is ever reached -- checked first here too.
+  2. NoCivilAction      -- no spare civil action AND no live Civil-Life-style
+                            CA-free grant (`costs::spare_ca(p) >= 1 ||
+                            costs::civil_life_ca_free(...)` false). This is
+                            the LEFT half of `legal.rs`'s `&&`.
+  3. InsufficientFood   -- a civil action is available, but `p.food` falls
+                            short of `economy::pop_cost`'s result. The RIGHT
+                            half of the same `&&`, only reached (in the real
+                            code) once the CA half already passed.
+  4. Other              -- residual bucket; firing at all would mean this
+                            classifier's replay of `legal.rs` diverged from
+                            the real move generator. It read exactly 0 in
+                            both 600-game runs below -- the classifier never
+                            diverged.
+
+WORKER-POOL BALANCE (settles cause (b) directly)
+--------------------------------------------------
+Read straight off `apply.rs`'s own effect on `p.workers_free` (confirmed by
+reading the handlers, not guessed):
+  - `h_pop`/`h_pop_free` (`Move::Pop`/`Move::PopFree`) call
+    `economy::increase_population`, which always does `p.workers_free += 1`
+    -- an ENTER.
+  - `h_destroy` (`Move::Destroy`) does `p.workers_free += 1` (`apply.rs:893`)
+    -- a worker returns to the pool -- also an ENTER.
+  - `do_build` (`Move::Build`, civil OR unit) does `p.workers_free -= 1`
+    (`apply.rs:881`) -- the only LEAVE.
+  - `do_upgrade` (`Move::Upgrade`) moves a worker from the low card to the
+    high card (`apply.rs:923-924`) -- net ZERO on `workers_free`, never
+    touched.
+  - `h_develop` (`Move::Develop`) inserts the new tech at zero workers
+    (confirmed by `apply.rs`'s own test name) -- never touches
+    `workers_free` either.
+
+This CORRECTS this task's own working hypothesis in its prompt ("takes/
+develops/upgrades" consuming the pool): reading the actual handlers, Develop
+and Upgrade never touch `p.workers_free` at all. Only Build does. The balance
+below counts exactly ENTER = successful Pop/PopFree/Destroy, LEAVE =
+successful Build, tallied per round from the move the bot actually applied
+(independent of whether a pop was itself SEEN that turn -- a round-1 Build
+still moves the pool even though pop is never SEEN there).
+
+COMMANDS RUN
+------------
+  export PATH="$HOME/.cargo/bin:$PATH"
+  cd /Users/pt/tta-ai/rust
+  touch src/bin/takeprobe.rs
+  cargo clippy --all-targets -- -D warnings
+  cargo test
+  cargo build --release --bin takeprobe
+
+  ./target/release/takeprobe --pop --games 600 --players 3 \
+      --weights /private/tmp/opencensus/champ3p.json --threads 6 --seed 1
+
+  ./target/release/takeprobe --pop --games 600 --players 3 \
+      --weights /Users/pt/tta-ai/analysis/frozen/human_weights.json \
+      --threads 6 --seed 1
+
+GATE
+----
+  STEP: touch takeprobe.rs -> EXIT 0
+  STEP: cargo clippy --all-targets -- -D warnings -> EXIT 0
+  STEP: cargo test -> EXIT 0
+  STEP: cargo build --release --bin takeprobe -> EXIT 0
+
+RESULTS -- CHAMPION (/private/tmp/opencensus/champ3p.json), 600 games, 3p
+==========================================================================
+
+Four-stage funnel:
+  combined: seen=130271 legal=34790 (0.267) scored=34790 (1.000)
+            mean_rank=4.34 mean_gap=52.6586 best_rank=1
+
+LEGAL rate is 26.7% of SEEN decision points -- 14x higher than the Farm
+build's 1.9% LEGAL rate under the same vector. Whenever Pop IS legal, it is
+ALSO scored 100% of the time (no narrowing stage, matching every prior probe
+in this series).
+
+Illegality-reason breakdown (n=95481 SEEN-but-not-LEGAL occurrences):
+  EmptyYellowBank         9  (0.000)
+  NoCivilAction       29265  (0.307)
+  InsufficientFood    66207  (0.693)
+  Other                   0  (0.000)
+
+-> Food shortage is the dominant illegality reason (69.3%), civil-action
+   scarcity is real but secondary (30.7%), and the population bank is
+   essentially NEVER empty when a pop attempt fails (9 occurrences across
+   600 games) -- the champion is not blocked by having already maxed
+   population, it is blocked by not being able to AFFORD the next increase.
+
+Illegality-reason breakdown by round (champion, selected):
+  round  EmptyBank  NoCivilActn  InsuffFood  total
+      2          0         1885         125   2010
+      6          0         2143        2385   4528
+     10          0         1559        4449   6008
+     14          0         1374        4641   6015
+     18          6          762        3721   4489
+     20          1          730        3255   3986
+
+NoCivilAction is highest early (round 2: 94% of illegal reasons) and falls
+off through the game as InsufficientFood rises to dominate from round 4
+onward -- consistent with the already-established finding that champion food
+production DECLINES over the game (2.00 -> ~1.10) while human food production
+CLIMBS (2.00 -> ~5.35, `farm_build_probe_3p_2026-08-24.txt`'s own background).
+
+Rank/gap table (n=34790 scored occurrences, the 26.7% that clear LEGAL):
+  mean_rank=4.34, mean_gap=52.6586, best_rank achieved=1.
+
+What beats a scored Pop (n=34790, champion):
+  Pop           9585  (0.276)
+  Take          9313  (0.268)
+  Build         5747  (0.165)
+  WonderStep    2195  (0.063)
+  PlayAction    1947  (0.056)
+  PlayLeader    1879  (0.054)
+  Develop       1696  (0.049)
+  Revolution     986  (0.028)
+  EndTurn        702  (0.020)
+  (+ 8 more kinds, each <=1%)
+
+-> Pop wins OUTRIGHT 27.6% of the time it is scored -- far more often than a
+   Farm build ever won (0% of 52 in the build probe's "what beats it" table,
+   since a Farm build losing to another Build dominated there). Pop is a
+   genuinely COMPETITIVE candidate under the champion vector when it clears
+   LEGAL. This is evidence AGAINST cause (a) (never-grows / routinely-
+   outranked): the champion is not refusing to pop out of poor valuation.
+
+Top WeightKey terms by mean |contribution| to the winner-vs-Pop gap (n=34790,
+ranked list only, no raw weight values, per this task's own constraint):
+   1. FoodStock                favors_winner
+   2. BlueFree                 favors_pop
+   3. ResourceStock            favors_pop
+   4. CultureRate              favors_winner
+   5. Science                  favors_winner
+   6. Strength                 favors_winner
+   7. HandPotential             favors_winner
+   8. WorkersLate              favors_winner
+   9. Workers                  favors_winner
+  10. EventScoringMargin       favors_winner
+  11. YellowBank               favors_pop
+  12. ConsumptionHeadroom      favors_winner
+  13. ResourceRate             favors_pop
+  14. ScienceSurplus           favors_winner
+  15. FoodSurplus              favors_pop
+
+Worker-pool balance (champion, 600 games, all rounds):
+  totals: enters=11649 leaves=15305 net=-3656
+
+  round  enters  leaves    net
+      2     457    1801  -1344
+      3    1743    1381    362
+      4     899    1423   -524
+      5    1003    1168   -165
+      6     962    1125   -163
+      7     966    1109   -143
+      8     675     919   -244
+      9     480     700   -220
+     10     354     548   -194
+     11     358     548   -190
+     12     396     565   -169
+     13     360     535   -175
+     14     308     434   -126
+     15     340     457   -117
+     16     391     456    -65
+     17     386     499   -113
+     18     423     522    -99
+     19     533     578    -45
+     20     511     452     59
+     21     103      84     19
+     22       1       1      0
+
+-> NET NEGATIVE in 18 of 21 rounds (all but round 3 and the very-late
+   rounds 20-21, which have a tiny sample -- most games have ended by then).
+   Leaves (Build) outrun enters (Pop/PopFree/Destroy) in every meaningfully
+   sampled round from round 4 through round 19. The pool never gets a chance
+   to accumulate: whatever population growth happens is absorbed by Build
+   at least as fast, round after round.
+
+RESULTS -- HUMAN VECTOR (/Users/pt/tta-ai/analysis/frozen/human_weights.json), 600 games, 3p
+===============================================================================================
+
+Four-stage funnel:
+  combined: seen=110829 legal=12279 (0.111) scored=12279 (1.000)
+            mean_rank=1.18 mean_gap=0.7170 best_rank=1
+
+Illegality-reason breakdown (n=98550 SEEN-but-not-LEGAL occurrences):
+  EmptyYellowBank      3225  (0.033)
+  NoCivilAction       16652  (0.169)
+  InsufficientFood    78673  (0.798)
+  Other                   0  (0.000)
+
+What beats a scored Pop (n=12279, human):
+  Pop          10970  (0.893)
+  PlayLeader     600  (0.049)
+  Develop        283  (0.023)
+  Destroy        180  (0.015)
+  Build          133  (0.011)
+  Upgrade         51  (0.004)
+  Revolution      43  (0.004)
+  PlayAction      18  (0.001)
+  BachTheater      1  (0.000)
+
+Top WeightKey terms by mean |contribution| to the winner-vs-Pop gap (n=12279):
+   1. Uprising                 favors_winner
+   2. FoodStock                favors_pop
+   3. Leader                   favors_winner
+   4. ConsumptionHeadroom      favors_pop
+   5. Science                  favors_winner
+   6. FreeWorkers              favors_pop
+   7. FoodRate                 favors_winner
+   8. Discontent               favors_winner
+   9. CorruptionHeadroom       favors_pop
+  10. ResourceStock            favors_pop
+  11. BlueFree                 favors_pop
+  12. MaLeft                   favors_winner
+  13. HandCivil                favors_winner
+  14. HappyMargin              favors_winner
+  15. StrengthRel              favors_winner
+
+Worker-pool balance (human, 600 games, all rounds):
+  totals: enters=13483 leaves=13246 net=+237
+
+  round  enters  leaves   net
+      2    1800    1800      0
+      3    1769    1851    -82
+      4     165    1663  -1498
+      5     165     326   -161
+      6    1566    1599    -33
+      7     230     233     -3
+      8     290     281      9
+      9    1369    1388    -19
+     10     188     128     60
+     11      53      52      1
+     12     117      93     24
+     13     236     156     80
+     14     304     177    127
+     15     893     497    396
+     16     828     470    358
+     17     359     331     28
+     18     433     383     50
+     19     431     381     50
+     20     488     388    100
+     21     940     552    388
+     22     776     447    329
+     23      83      50     33
+
+-> NET POSITIVE overall (+237), and decisively positive from round 13 onward
+   (13 of the last 14 sampled rounds are net-positive, several strongly so:
+   round 15 +396, round 21 +388, round 22 +329). The human vector's worker
+   pool ACCUMULATES a growing surplus in exactly the range where the champion
+   probe shows the deepest, most sustained deficit.
+
+CHAMPION VS HUMAN VECTOR, SIDE BY SIDE
+=======================================
+
+                            champion        human vector
+  SEEN (per 600 games)       130271             110829     (1.18x, see CAVEATS)
+  LEGAL rate                  26.7%              11.1%      (champion 2.4x HIGHER)
+  SCORED rate (of legal)       100%               100%      (identical -- never the gate)
+  mean rank when scored        4.34               1.18      (human FAR more dominant when legal)
+  mean gap when scored        52.66               0.72
+  Pop wins outright            27.6%              89.3%      (human's legal pop almost always chosen)
+  EmptyYellowBank share of
+    illegal occurrences         0.0%               3.3%      (human actually empties the bank; champion almost never does)
+  NoCivilAction share          30.7%              16.9%
+  InsufficientFood share       69.3%              79.8%      (dominant reason for BOTH vectors)
+  Worker balance, total net   -3656               +237
+  Worker balance, rounds 13-19 all negative (-126..-175)   6 of 7 positive (+24..+396)
+
+VERDICT: (a) vs (b)
+--------------------
+This is NOT primarily cause (a). Under the champion vector, `Move::Pop` clears
+LEGAL 26.7% of the time it is SEEN -- 14x higher than the Farm build's 1.9%
+LEGAL rate from the prior probe -- and when it IS legal, it is genuinely
+competitive: mean rank 4.34 among all candidates, and it wins outright 27.6%
+of the time. That is not "illegal" and it is not "routinely outranked" in the
+way the Farm build was (where another Build won 96.2% of the time a Farm
+build was scored). Pop is a move the champion is both able to make and
+willing to make, reasonably often.
+
+This IS cause (b): over-commitment. The worker-pool balance is net NEGATIVE
+in 18 of 21 rounds under the champion (total -3656 across 600 games), and the
+deficit is not concentrated in one phase -- it holds from round 4 straight
+through round 19, the entire midgame-to-lategame span the Farm-build probe
+found `NoFreeWorker` dominating (round 5 onward). Every worker the champion
+grows into the pool via Pop is, on average, consumed by Build faster than
+Pop replenishes it. The human vector, by contrast, nets POSITIVE overall
+(+237) and swings decisively positive from round 13 onward, which is exactly
+the window in which its Farm-build LEGAL rate (25.2%, prior probe) so
+outpaced the champion's (1.9%): a policy that lets its worker pool
+accumulate a standing surplus has free workers on hand when a Farm (or any
+other) build becomes available; a policy whose pool is perpetually near-zero
+or negative-pressured does not, regardless of how well it values Pop itself
+when Pop is on the table.
+
+A secondary, real contributor for BOTH vectors: `InsufficientFood` is the
+dominant illegality reason (69.3% champion, 79.8% human) -- neither vector is
+mostly blocked by civil-action scarcity or an empty population bank. This
+ties back to the already-established finding that champion food production
+declines over the game (2.00 -> ~1.10) while human food production climbs
+(2.00 -> ~5.35): the champion's Pop-legality rate is itself constrained by
+its own collapsing food economy, on top of (and likely contributing to) the
+worker-pool over-commitment above. This is a plausible causal chain --
+declining food -> fewer legal Pops -> a thinner worker pool that Build still
+drains at the same rate -> more decision points at workers_free==0 -- but
+this probe measures the Pop funnel and the balance, not the food-production
+mechanism itself, and does not prove the causal direction between them (see
+CAVEATS).
+
+CAVEATS
+-------
+
+1. SEEN-count denominators still differ between vectors (130271 champion vs
+   110829 human, a 1.18x ratio) even though SEEN's definition no longer
+   depends on any champion-specific gate (see the SEEN DEFINITION section
+   above). This residual gap is the champion and human vector playing
+   different-length games (different numbers of action-phase turns across
+   600 self-play games each), not a definitional artifact -- flagged here
+   per this task's own instruction, rather than comparing the LEGAL/mean-
+   rank/balance numbers as if the two funnels ran over identical decision-
+   point sets. It is far smaller than the 8.6x gap the farm-build probe's
+   SEEN definition produced, but it is not zero.
+
+2. The champion and human-vector self-play games are NOT the same
+   trajectories -- each vector plays its own game (own seeds' outcomes
+   diverge as soon as a single decision differs), so the two runs' round-by-
+   round tables are not literally comparable turn-for-turn, only in
+   aggregate shape. Round 22-23 rows in particular have very small samples
+   (most games have ended) and should not be over-read.
+
+3. The worker-pool balance is a SIMPLE per-round net (enters minus leaves,
+   summed over every player-game in the run) -- it is not a running
+   STOCK/level of `p.workers_free` over time, and it does not distinguish
+   "always near zero" from "swings widely but averages near zero." A
+   negative net in a round means Build outpaced Pop/PopFree/Destroy THAT
+   round, aggregated across every player and every game; it does not by
+   itself prove `p.workers_free` was 0 at every decision point in that round
+   (though the Farm-build probe's own direct measurement of
+   `p.workers_free == 0` at 88.3% of illegal-build occurrences is independent
+   corroborating evidence that it usually was, for the champion specifically).
+
+4. This task's own working hypothesis named Develop and Upgrade as possible
+   worker-consuming actions alongside Build. Reading `apply.rs`'s actual
+   handlers (`h_develop`, `do_upgrade`) directly, in this same investigation,
+   found that only `Move::Build` ever changes `p.workers_free` --
+   `h_develop` inserts a new tech at zero workers and `do_upgrade` moves an
+   existing on-card worker from the low card to the high card, net zero on
+   the free pool. The worker-pool balance in this report reflects that
+   correction (ENTER = Pop/PopFree/Destroy, LEAVE = Build only), not the
+   task prompt's original three-way guess; stated here so the discrepancy is
+   visible rather than silently resolved.
+
+5. The illegality classifier replays `legal.rs`'s checks; it does not call
+   `legal.rs` itself, so a future change to the pop block's checks/order (or
+   a new gate added there) would silently desync this classifier from the
+   real legality path until this probe is updated to match. `Other` reading
+   exactly 0 in both runs is the check that they agree today, not a
+   guarantee they will keep agreeing after a `legal.rs` change.
+
+6. The causal link drawn in the VERDICT section between declining champion
+   food production and the Pop-legality/worker-balance findings here is
+   plausible and consistent with both this probe's numbers and the prior
+   Farm-build probe's own background section, but it is not independently
+   proven by this probe -- this probe measures the Pop funnel and the worker
+   balance, not the food-production mechanism (what produces/consumes food
+   turn to turn). A dedicated food-production probe would be needed to
+   settle that link on its own terms.
+
+7. Per this task's own instruction, this file reports what was measured and
+   does not propose a weight change or code fix.
+
+================================================================================
+COORDINATOR NOTES 2026-08-24: THE (a)-vs-(b) VERDICT ABOVE IS TOO STRONG
+================================================================================
+
+The report concludes "cause (b), not (a) -- the champion is neither illegally
+blocked from Pop nor routinely outranking it away". Its own numbers contradict
+the second half of that sentence.
+
+Pop wins outright 27.6% of the occurrences on which it is SCORED. The
+complement is the finding: **something else beats a legal, scored Pop 72.4% of
+the time.** That is routinely outranking it away, by any reading. Mean rank
+4.34 with a mean gap of 52.66 evaluator units says the same thing -- Pop is
+competitive, not chosen.
+
+Set the two vectors side by side over the same 600 games and the difference is
+symmetric, and it is a difference in POLICY, not in what the engine permits:
+
+    ENTERS (Pop/PopFree/Destroy)      champion 11649     human 13483
+    LEAVES (Build)                    champion 15305     human 13246
+    net                               champion  -3656    human   +237
+    Pop chosen, as a fraction
+      of the times it is scored       champion  27.6%    human   89.3%
+
+The champion builds 15.5% MORE and pops 13.6% LESS. The human vector holds its
+pool flat; the champion spends down its starting endowment (-3656 over 1800
+player-games is -2.03 each, i.e. the initial free workers, drained and never
+rebuilt) and then runs at a floor of zero for the rest of the game. That floor
+is what the Farm-build probe measured from the other side as NoFreeWorker 88.3%.
+
+One corroborating detail the report has but does not use: EmptyYellowBank is
+3.3% of the human vector's illegal pops and 0.0% (nine occurrences in 600
+games) of the champion's. The human vector pops hard enough to occasionally
+exhaust the population bank. The champion never comes near it.
+
+SO THE VERDICT IS BOTH, WITH (a) THE PART THAT IS ACTIONABLE:
+  - (b) is real: Build does drain the pool and Develop/Upgrade genuinely never
+    touch it (that handler correction is right and is worth keeping).
+  - (a) is ALSO real and was mis-scored: Pop reaches the evaluator constantly
+    and loses the argmax nearly three times out of four. InsufficientFood
+    (69.3%) gates the other side, and food is itself downstream of the builds
+    the bot is making instead.
+
+CAVEAT ON THE 89.3%. The human vector's Pop clears LEGAL only 11.1% of the
+time versus the champion's 26.7%, so its high chosen-fraction is partly a
+selection effect: it reaches the decision less often and in more clear-cut
+spots. The ABSOLUTE counts (11649 vs 13483 enters) do not suffer from that and
+point the same way, which is why the verdict rests on them.
+
+STATUS: this names a mechanism. It does not license a weight change. The last
+vector built off a static ranking on this investigation won 0.00% of 240 games.
+Any fix is validated by PLAYING.
