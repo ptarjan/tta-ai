@@ -1891,6 +1891,17 @@ fn card_potential_core(
     late: Option<f64>,
     scratch: &mut Vec<CardYield>,
 ) -> f64 {
+    // Additive bonus layered onto the shared fallback tail below, rather
+    // than an early return -- currently only the Tactic arm ever sets this
+    // nonzero. See that arm's own comment for why: `tactic_board_credit`
+    // used to gate the WHOLE term, so whenever it was trained to exactly
+    // 0.0 the flat `card_yields` fallback priced a Tactic like any other
+    // card type would, but whenever it was trained nonzero the fallback was
+    // skipped entirely -- so a board state where `tactic_value` itself
+    // bottoms out at 0.0 (e.g. `tactic_reach_credit` dominance-clamped to
+    // 0.0 with nothing on the board yet reachable) priced the card at a
+    // flat 0.0, strictly worse than the credit-off case ever did.
+    let mut tactic_bonus = 0.0;
     if let Some(b) = board {
         let (st, ix) = (b.state(), b.idx());
         let kind = id.kind();
@@ -1944,11 +1955,13 @@ fn card_potential_core(
             }
         } else if kind == CardType::Tactic {
             // docs/OPEN_ITEMS.md item 2, closed 2026-08-06 -- see
-            // `tactic_value`'s own doc comment.
+            // `tactic_value`'s own doc comment. No early `return` here (see
+            // this function's own top comment): `tactic_board_credit` scales
+            // only this board-aware bonus, stashed for the shared fallback
+            // tail below to add to the flat printed-strength price every
+            // other credit-gated type already falls back to.
             let tc = w.get(WeightKey::TacticBoardCredit);
-            if tc != 0.0 {
-                return tc * tactic_value(id, st, ix, w);
-            }
+            tactic_bonus = tc * tactic_value(id, st, ix, w);
         } else if kind == CardType::Aggression {
             let ac = w.get(WeightKey::AggressionBoardCredit);
             if ac != 0.0 {
@@ -1983,14 +1996,17 @@ fn card_potential_core(
         // paired.
         scratch.clear();
         card_yields(id, scratch);
-        return sum_yields(scratch, w, credit);
+        return sum_yields(scratch, w, credit) + tactic_bonus;
     }
     if let (Some(b), true) = (board, credit_board != 0.0) {
         // A swap card (leader/government/wonder) is priced ONLY by the diff
         // -- `card_yields` would count a leader's printed gain a second time
-        // on top of the delta that already contains it.
+        // on top of the delta that already contains it. `tactic_bonus` is
+        // always 0.0 here in practice (Tactic is not a swap type
+        // `board_yields::board_yields` recognises), added anyway so this
+        // stays correct if that ever changes.
         if let Some(swap) = board_yields::board_yields(id, b) {
-            return credit_board * sum_board_triples(&swap, w);
+            return credit_board * sum_board_triples(&swap, w) + tactic_bonus;
         }
     }
     scratch.clear();
@@ -2008,7 +2024,7 @@ fn card_potential_core(
         let extra = board_yields::board_extra(id, b);
         total += credit_board * sum_board_triples(&extra, w);
     }
-    total
+    total + tactic_bonus
 }
 
 // --------------------------------------------------------------- hand terms
@@ -4106,6 +4122,35 @@ mod tests {
         let three = unit_type_reach_cost(&state, p, CardType::Cavalry, 3, &w).expect("owned route");
         assert!(one > 0.0 && two > one && three > two, "one={one} two={two} three={three}");
         assert!((two - one - (three - two)).abs() < 1e-9, "per-worker step must be constant: one={one} two={two} three={three}");
+    }
+
+    /// The gap this fix closes (measured 2026-08-25, see
+    /// `analysis/tactic_price_2026-08-25.txt`): a fresh board has no army of
+    /// ANY tactic's composition reachable yet, so `tactic_value` legitimately
+    /// bottoms out at exactly 0.0 through its own `tactic_reach_credit`-gated
+    /// branch -- and with `tactic_reach_credit` trained negative at 3p and
+    /// dominance-clamped to 0.0 on load (`dominance_repair`'s `NonNegative`
+    /// gate, unrelated to and untouched by this fix), that branch returns
+    /// 0.0 regardless of how real the shortfall-to-close cost was. With
+    /// `tactic_board_credit` nonzero (unlike the sibling test just above,
+    /// where it is 0.0 on purpose), the OLD code `return`ed that 0.0
+    /// outright, discarding the very fallback the sibling test proves every
+    /// credit-off tactic still gets. `tactic_board_credit` must scale an
+    /// ADDITIVE bonus on top of that fallback, not gate the whole term.
+    #[test]
+    fn a_tactic_still_prices_above_zero_when_tactic_value_bottoms_out_at_zero_with_board_credit_nonzero() {
+        let state = crate::game::new_game(3, 57);
+        let mut w = Weights::default();
+        w.set(WeightKey::TacticBoardCredit, 1.0);
+        w.set(WeightKey::TacticReachCredit, 0.0);
+        let heavy_cavalry = CardId::by_name("Heavy Cavalry").unwrap();
+
+        let tv = tactic_value(heavy_cavalry, &state, 0, &w);
+        assert_eq!(tv, 0.0, "precondition: tactic_value itself must bottom out at 0.0 for this test to mean anything, got {tv}");
+
+        let mut scratch = Vec::new();
+        let got = card_potential(heavy_cavalry, &w, Some(&Baseline::at(&state, 0)), None, &mut scratch);
+        assert!(got > 0.0, "got={got}");
     }
 
     /// `card_potential` must actually reach `tactic_value` once

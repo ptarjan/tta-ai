@@ -1,0 +1,302 @@
+Tactic pricing investigation -- 2026-08-25
+===========================================
+
+Scope: rust/src/bots/weighted/cards.rs, card_potential_core's Tactic arm
+(was ~line 1945). Probe binary: rust/src/bin/tacticprice.rs (kept, not
+deleted -- see CLEANUP note at bottom; delete it if you don't want it).
+
+State construction used for every number below: `game::new_game(n, 42)`,
+then `RandomBot::new(1)` (allow_resign = false) picks every move via
+`legal::legal_moves`, applied with `game::step`, until 40 `Move::EndTurn`s
+have happened or the game ends first. Same recipe for n = 2, 3, 4, so the
+comparison across player counts is apples-to-apples. All prices below are
+`card_potential(id, w, Some(&Baseline::at(&state, 0)), None, &mut scratch)`
+for player 0. Not claimed "typical", just deterministic and reproducible
+(re-run `cargo run --profile difftest --bin tacticprice` from rust/).
+
+
+PHASE 1 -- MEASUREMENT (before the fix)
+----------------------------------------
+
+tactic_board_credit       2p=0                 3p=0.041454484564639016   4p=0
+aggression_board_credit   2p=0.11249433226618052 3p=0                    4p=0
+war_board_credit          2p=0.3165439074460085  3p=0                    4p=0.43212068172443385
+
+=== Tactic (all 15 cards) ===
+card                 id     price@2p     price@3p     price@4p
+Fighting Band         94    14.262915     0.000000    60.000000
+Legion                95    28.525831     0.000000   120.000000
+Medieval Army         96    28.525831     0.000000   120.000000
+Phalanx               97    42.788746     0.000000   180.000000
+Heavy Cavalry         98    57.051661     0.000000   240.000000
+Mobile Artillery       99    71.314577     0.000000   300.000000
+Fortifications        100    71.314577     0.000000   300.000000
+Conquistadors         101    71.314577     0.000000   300.000000
+Defensive Army        102    85.577492     0.000000   360.000000
+Napoleonic Army       103    99.840407     0.000000   420.000000
+Classic Army          104   114.103323     0.000000   480.000000
+Entrenchments         105   128.366238     0.000000   540.000000
+Mechanized Army       106   142.629153     0.000000   600.000000
+Shock Troops          107   156.892069     0.000000   660.000000
+Modern Army           108   185.417899     0.000000   780.000000
+
+=== Aggression (first 6 of the type) ===
+card                       id     price@2p     price@3p     price@4p
+Aggression: Plunder (I)   109     0.089603     0.000000     0.000000
+Aggression: Raid (I)      110     0.000000     0.000000     0.000000
+Aggression: Enslave       111     0.074970   240.000000     0.300309
+Aggression: Plunder (II)  112     0.149339     0.000000     0.000000
+Aggression: Raid (II)     113     0.000000     0.000000     0.000000
+Aggression: Spy           114    -0.247373     0.000000     0.000000
+
+=== War (first 3 of the type) ===
+card                    id     price@2p     price@3p     price@4p
+War over Territory      120    -0.286861     0.000000     0.006782
+War over Technology     121    -0.059664     0.000000    -0.116162
+War over Culture        122    -0.813970     0.000000     0.370389
+
+Diagnostic (why is every Tactic price exactly 0.0 at 3p?):
+  tactic_reach_credit, AFTER dominance_repair's NonNegative clamp (i.e. the
+  value the bot actually uses, per load_weights):
+    2p=0   3p=0   4p=0.19708420131293677
+  (raw JSON, for reference: 2p=-0.41164145984898737, 3p=-0.07110897586662696,
+  4p=0.19708420131293677 -- both 2p and 3p are trained NEGATIVE and get
+  clamped to 0.0 on load; 2p's clamp is currently masked because
+  tactic_board_credit is *also* 0.0 at 2p, so tactic_value is never called
+  there at all.)
+
+  army_strength(player0) at the 3p baseline = 0. For all 5 sampled Tactic
+  cards: val=0, armies=0, gain=0 -- i.e. this player has not deployed a
+  single military unit of any relevant type yet at this board state, for
+  every one of these cards. Example rows (tactic_shortfall's raw output):
+    Fighting Band   val=0 armies=0 short=[2,0,0,0] gain=0 tactic_value=0.000000
+    Legion          val=0 armies=0 short=[3,0,0,0] gain=0 tactic_value=0.000000
+    Medieval Army   val=0 armies=0 short=[1,1,0,0] gain=0 tactic_value=0.000000
+    Phalanx         val=0 armies=0 short=[2,1,0,0] gain=0 tactic_value=0.000000
+    Heavy Cavalry   val=0 armies=0 short=[0,3,0,0] gain=0 tactic_value=0.000000
+
+  With gain=0 and armies=0, `tactic_value` always falls into its third
+  branch (cards.rs ~1422-1447, "not formable at all yet"), which returns
+  `(reach_credit * (potential*strength_m - cost)).max(0.0)`. Since
+  reach_credit is clamped to exactly 0.0 at 3p, this is 0.0 * anything =
+  0.0, REGARDLESS of how real `potential` and `cost` were. That is why
+  every single Tactic card prices to exactly 0.0 at 3p -- not because the
+  reachability estimate says "not worth it", but because the knob gating it
+  is structurally zeroed.
+
+
+ANSWERS
+-------
+
+(1) Is every Tactic card's price exactly 0.0 at 2p and 4p?
+
+    NO. The original suspicion is REFUTED. Every Tactic card prices
+    strongly POSITIVE at 2p (14.26 to 185.42) and even more strongly at 4p
+    (60 to 780), scaling linearly with the card's printed
+    `effects.strength`. This is NOT the dedicated `tactic_value` path (that
+    branch never fires at 2p/4p -- tactic_board_credit is 0.0 there) -- it
+    is the SAME generic "both credits zero" fallback every other
+    credit-gated card type (tech/gov/action/wonder/aggression/war/pact/
+    event) already has: `card_yields(id)` + `sum_yields(..., CardRateCredit)`.
+    `card_yields` (cards.rs ~305-315) explicitly, and deliberately, pushes a
+    Tactic's own top-level `effects.strength` as a flat `WeightKey::Strength`
+    Gain yield when it is not a Unit card, with a comment already stating
+    this is the intended fallback for `tactic_board_credit == 0.0`.
+
+    Instead, the actual blackout is at 3p, where tactic_board_credit IS
+    nonzero (0.0415) -- see answer (2).
+
+(2) What is the spread of Tactic prices at 3p?
+
+    EXACTLY 0.0 for all 15 cards, no spread at all -- the true blackout.
+    Mechanism: at 3p tactic_board_credit != 0.0, so `card_potential_core`
+    takes the dedicated `tc * tactic_value(...)` branch and `return`s its
+    result directly, WITHOUT ever falling back to the flat `card_yields`
+    price 2p/4p get. In the sampled 3p board state `tactic_value` itself
+    legitimately returns 0.0 for every card (see diagnostic above:
+    `tactic_reach_credit` dominance-clamped to 0.0 combined with a board
+    where no tactic composition is close to formable yet) -- so the "more
+    sophisticated" board-aware pricing path is *strictly worse* than what a
+    credit of exactly 0.0 would have given the same card at this exact
+    board state. That is the real, confirmed defect: `tactic_board_credit`
+    was gating the WHOLE term (flat fallback included) rather than just its
+    own board-aware bonus.
+
+(3) Aggression/War comparison at 2p (same "if credit != 0.0" shape) --
+    is Tactic uniquely switched off, or is this a whole-family problem?
+
+    Whole-family PATTERN, but Tactic is the odd one out for a different
+    reason than assumed. At 2p, aggression_board_credit=0.1125 (on) and
+    war_board_credit=0.3165 (on), so BOTH go through their dedicated
+    `aggression_value`/`war_hand_value` functions, not the generic
+    fallback -- and both give real, varied, sometimes-negative numbers
+    (Aggression: 0.09, 0.00, 0.07, 0.15, 0.00, -0.25; War: -0.29, -0.06,
+    -0.81), unlike Tactic's clean linear-in-strength numbers.
+
+    The comparison that actually answers the question is the credit==0.0
+    case: at 3p, aggression_board_credit=0 and war_board_credit=0 too, and
+    their generic fallback IS mostly exactly 0.0 (Aggression: 0, 0, 240.0
+    [Enslave -- has a flat non-strength printed effect], 0, 0, 0; War: 0, 0,
+    0) -- because most Aggression/War cards carry no printed *economic*
+    yield `card_yields` recognises (their payload is combat/plunder
+    effects, not `effects.strength`/culture/science/etc.), so their
+    fallback genuinely is close to the original "priced at 0.0" hypothesis.
+    Tactic is different only because a Tactic's printed `effects.strength`
+    happens to already be a `card_yields` entry, so ITS fallback is not
+    blank. So: the "credit == 0.0 sometimes collapses to a near-zero
+    fallback" issue is real and general (Aggression/War's fallback is
+    genuinely weak for most cards), but that is a *pre-existing, accepted*
+    design (`card_yields` documents this on purpose) and out of this task's
+    scope. Tactic's specific, confirmed bug is the INVERSE: its dedicated
+    ON-branch (3p) can be worse than its OFF-branch (2p/4p) fallback,
+    because the ON-branch fully replaces the fallback instead of adding to
+    it.
+
+
+PHASE 2 -- FIX
+--------------
+
+File touched: rust/src/bots/weighted/cards.rs (only).
+No new WeightKey. No epsilon floor on tactic_board_credit. No hardcoded
+formula -- both terms are the exact same trained-marginal functions every
+other pricing path in this file already uses (`card_yields`/`sum_yields`
+for the flat term, `tactic_value` -- itself built entirely off
+`yield_marginal`/`unit_type_reach_cost` -- for the bonus).
+
+Shape chosen: mirror the generic fallback's own `base` + `credit_board`
+split (cards.rs ~1988-1992: `base` is unconditional, `credit_board` scales
+only the board-aware swap-diff on top). Concretely:
+
+  - `card_potential_core` gained one new local, `tactic_bonus: f64`,
+    initialized to 0.0 *before* the `if let Some(b) = board` block (so it
+    is visible at the shared fallback tail below that block, which runs
+    unconditionally).
+  - The Tactic arm no longer `return`s. It now does:
+        let tc = w.get(WeightKey::TacticBoardCredit);
+        tactic_bonus = tc * tactic_value(id, st, ix, w);
+    and falls through, same as every OTHER kind whose credit is 0.0
+    already does.
+  - The three exit points of the shared tail (the "both credits zero" early
+    return, the swap-diff return, and the final `total`) each now add
+    `+ tactic_bonus`. For every non-Tactic card `tactic_bonus` is always
+    exactly 0.0 (only the Tactic arm ever sets it), so this is a byte-for-
+    byte no-op for every other card type.
+
+Net effect: a Tactic card's price is now
+    (flat card_yields fallback, unconditional)
+  + tactic_board_credit * tactic_value(...)   (board-aware bonus, additive)
+instead of the old
+    tactic_board_credit != 0.0 ? tactic_board_credit * tactic_value(...)
+                                : (flat card_yields fallback)
+which is exactly the "additive bonus, not a gate on the whole term"
+shape the task asked for, and exactly parallel to how `base`/`credit_board`
+already split in the generic fallback just below it.
+
+Effect at 2p and 4p (tactic_board_credit == 0.0 there): BYTE-IDENTICAL to
+before -- `tactic_bonus = 0.0 * tactic_value(...) = 0.0` regardless of what
+`tactic_value` returns, confirmed by re-running the probe (see "AFTER"
+table below, 2p/4p columns unchanged to the printed precision).
+
+Effect at 3p (tactic_board_credit == 0.0415): every Tactic card now prices
+above zero, using the SAME flat card_yields term 2p/4p already had (since
+`tactic_value` itself was still 0.0 in this sampled state, the bonus added
+0.0 on top -- so this run only demonstrates the fallback restoration, not
+the bonus; the bonus is exercised separately by the added test, using a
+state where `tactic_value` is forced to bottom out at 0.0 by construction
+rather than by chance).
+
+=== AFTER: Tactic (all 15 cards) ===
+card                 id     price@2p     price@3p     price@4p
+Fighting Band         94    14.262915    53.486267    60.000000
+Legion                95    28.525831   106.972533   120.000000
+Medieval Army         96    28.525831   106.972533   120.000000
+Phalanx               97    42.788746   160.458800   180.000000
+Heavy Cavalry         98    57.051661   213.945066   240.000000
+Mobile Artillery       99    71.314577   267.431333   300.000000
+Fortifications        100    71.314577   267.431333   300.000000
+Conquistadors         101    71.314577   267.431333   300.000000
+Defensive Army        102    85.577492   320.917599   360.000000
+Napoleonic Army       103    99.840407   374.403866   420.000000
+Classic Army          104   114.103323   427.890132   480.000000
+Entrenchments         105   128.366238   481.376399   540.000000
+Mechanized Army       106   142.629153   534.862665   600.000000
+Shock Troops          107   156.892069   588.348932   660.000000
+Modern Army           108   185.417899   695.321465   780.000000
+
+2p and 4p columns: identical to the BEFORE table above, to the printed
+precision (confirms the fix is a pure no-op there).
+3p column: moved from a flat 0.000000 for all 15 cards to 53.49 .. 695.32,
+tracking each card's printed strength exactly the way 2p/4p already did
+(e.g. 3p/4p ratio is a constant ~0.8914 across every row, 3p/2p ~3.75 --
+both just the ratio of each champion's own CardRateCredit/Strength
+marginal, since tactic_bonus was 0.0 in this sampled state, so the whole
+3p AFTER column here is purely the restored flat fallback).
+
+
+TEST ADDED
+----------
+
+rust/src/bots/weighted/cards.rs, inside the file's single
+`#[cfg(test)] mod tests` at the bottom (not mid-file):
+
+  fn a_tactic_still_prices_above_zero_when_tactic_value_bottoms_out_at_zero_with_board_credit_nonzero()
+
+Builds a 3p fresh-ish board (`game::new_game(3, 57)`), sets
+`tactic_board_credit = 1.0` (nonzero -- takes the dedicated branch, not the
+credit==0.0 fallback the PRE-EXISTING neighbour test
+`a_tactic_prices_above_zero_through_the_generic_fallback_when_its_board_credit_is_zero`
+already covers) and `tactic_reach_credit = 0.0` (the exact dominance-clamp
+value measured at 3p above). Asserts `tactic_value(...) == 0.0` as a
+precondition (so the test is self-checking against a wrong assumption
+about the state), then asserts `card_potential(...) > 0.0`.
+
+NOTE ON DEVIATION FROM THE LITERAL TASK WORDING: the task asked for a test
+"asserting a Tactic card prices nonzero under a weight vector whose
+tactic_board_credit is 0.0" -- that is written assuming the ORIGINAL
+(refuted) hypothesis. Phase 1 measurement shows the credit==0.0 case was
+never broken (it already uses the flat fallback, and there is already a
+passing test for exactly that, `a_tactic_prices_above_zero_through_the_
+generic_fallback_when_its_board_credit_is_zero`, added before this task).
+Reverting my fix does NOT turn that existing test red. The test I added
+instead targets the mechanism the measurement actually found broken:
+tactic_board_credit NONZERO, tactic_value() degenerate. This is what I
+verified goes RED.
+
+RED CONFIRMATION: reverted only the enforcement (restored the Tactic arm's
+`if tc != 0.0 { return tc * tactic_value(...); }` early-return shape,
+leaving the rest of the additive scaffolding -- the `tactic_bonus` local
+and the three `+ tactic_bonus` tail sites -- untouched) and re-ran:
+
+  $ cargo test --lib bots::weighted::cards::tests::a_tactic_still_prices_above_zero_when_tactic_value_bottoms_out_at_zero_with_board_credit_nonzero
+  ---- ...bottoms_out_at_zero_with_board_credit_nonzero stdout ----
+  thread '...' panicked at src/bots/weighted/cards.rs:4155:9:
+  got=0
+  test result: FAILED. 0 passed; 1 failed; ...
+
+Then restored the fix (verified identical to the committed version) and
+re-ran green (see gate log below).
+
+
+GATES
+-----
+
+  cargo clippy --all-targets -- -D warnings   EXIT 0
+  cargo test                                  EXIT 0 (all suites green,
+                                               0 failures, including the
+                                               73/73 in
+                                               bots::weighted::cards::tests)
+
+Files left modified (not committed -- per instructions, no git commands
+were run):
+  rust/src/bots/weighted/cards.rs   -- the fix + the new test
+  rust/src/bin/tacticprice.rs       -- new throwaway probe binary (kept;
+                                        delete it if you don't want it kept
+                                        in the tree -- it is not referenced
+                                        by anything else)
+
+
+CLEANUP
+-------
+No scratch files were created outside the repo except this notes file,
+which the task asked to keep:
+  /private/tmp/tacticfix_notes.txt
