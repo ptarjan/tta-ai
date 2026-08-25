@@ -1,0 +1,190 @@
+CEILING UP SWEEP -- 3-PLAYER -- 2026-08-24
+
+QUESTION
+Champion /private/tmp/opencensus/champ3p.json has five weights pinned at
+exactly 60.000 (CLAMP_BLIND): blue_free, culture_rate, food_stock,
+resource_stock, workers_late. A prior worker (analysis/
+ceiling_playtest_3p_2026-08-24.txt) moved all five UP to 120 as one bundle
+and it lost decisively (18.54% as A; champion 49.17% as A). That same
+worker's per-key DOWN sweep (to 30) showed the bundle hides huge variation
+by key: blue_free 3.33% (catastrophic), culture_rate 27.71%, food_stock
+23.12%, workers_late 32.92% (exactly neutral), resource_stock inexpressible
+(dominance_repair silently reverts it to 60 whenever blue_free stays at 60).
+Because the bundled UP result mixes five keys of very different
+sensitivity, it tells us nothing about any individual key's UP direction.
+This sweep isolates the UP direction per key (per group, for the
+blue_free/resource_stock pair, which cannot be split -- see below) to ask:
+does any one of the five pinned keys want to be ABOVE 60?
+
+METHOD
+Binary freshness check (not rebuilt):
+  target/release/kindmatch mtime 1787622407
+  src/bin/kindmatch.rs mtime  1786824906
+  binary is newer -> proceeded without rebuilding.
+
+All duels: 240 games, 3 players, seed 1001, 5 threads, from
+/Users/pt/tta-ai/rust, run in both seat arrangements (variant as A, one
+rotating seat vs two champion seats; then champion as A, mirrored, variant
+holding two seats). The tool's own printed null for 3p is 33.33% every
+time -- quoted verbatim below, never assumed.
+
+DOMINANCE_REPAIR REASONING (rust/src/bots/weighted/eval.rs:853-856,1008-1020)
+Read directly from source before running anything:
+  DOMINATES = [(hi=ResourceStock, lo=BlueFree), (hi=WonderPotential,
+  lo=WonderPromise)]. The repair loop: for each (hi, lo) pair, if
+  lo's value > hi's value, hi is silently raised to match lo. So if
+  blue_free (lo) exceeds resource_stock (hi), resource_stock gets dragged
+  up to blue_free's value -- raising blue_free alone above resource_stock
+  is inexpressible by construction, matching what the DOWN-sweep worker
+  already found in the opposite direction. This is why blue_free and
+  resource_stock are moved TOGETHER in this sweep as a single "stockpair"
+  variant rather than tested individually.
+
+Four variants built from champ3p.json, changing ONLY what is named:
+
+  1. stockpair_up: blue_free 60->120 AND resource_stock 60->120 together.
+     Repair check: a=120 (hi=resource_stock), b=120 (lo=blue_free).
+     b > a + 1e-12 is FALSE (equal) -- NO repair fires. Both values stand
+     exactly as written.
+  2. culture_rate_up: culture_rate 60->120 only. blue_free and
+     resource_stock stay untouched at 60==60 (no repair). culture_rate is
+     not a member of DOMINATES at all, so it could never trigger the rule
+     regardless of its own value.
+  3. food_stock_up: food_stock 60->120 only. Same reasoning as #2 --
+     blue_free/resource_stock untouched at 60==60, food_stock not in
+     DOMINATES.
+  4. workers_late_up: workers_late 60->120 only. Same reasoning as #2/#3.
+
+  In all four variants dominance_repair is a confirmed no-op: each plays
+  exactly the written value, with no silent alteration by the repair pass.
+  (WonderPotential/WonderPromise are also untouched in every variant, so
+  that DOMINATES pair is likewise never engaged here.)
+
+RESULTS
+
+1. stockpair_up (blue_free=120, resource_stock=120)
+
+   A=variant, B=champion:
+     A win rate 7.92% +/- 3.18  (null 33.33%)  p = 0.0000
+     verdict: reject -- variant is WORSE than champion
+
+   A=champion, B=variant (mirror):
+     A win rate 64.37% +/- 5.83  (null 33.33%)  p = 0.0000
+     verdict: accept -- champion beats variant, interval clear of the null
+
+   LOSES DECISIVELY in both arrangements.
+
+2. culture_rate_up (culture_rate=120)
+
+   A=variant, B=champion:
+     A win rate 38.12% +/- 5.64  (null 33.33%)  p = 0.0906
+     verdict: inconclusive -- interval still straddles the null
+
+   A=champion, B=variant (mirror):
+     A win rate 32.71% +/- 5.97  (null 33.33%)  p = 0.8350
+     verdict: inconclusive -- interval still straddles the null
+
+   INCONCLUSIVE in both arrangements -- this is NOT a loss. Champion sits
+   essentially exactly on its own null against this variant (32.71% vs
+   33.33%), and the variant itself trends mildly above null as A (38.12%,
+   p=0.09, borderline but not significant).
+
+3. food_stock_up (food_stock=120)
+
+   A=variant, B=champion:
+     A win rate 4.17% +/- 2.47  (null 33.33%)  p = 0.0000
+     verdict: reject -- variant is WORSE than champion
+
+   A=champion, B=variant (mirror):
+     A win rate 76.46% +/- 5.17  (null 33.33%)  p = 0.0000
+     verdict: accept -- champion beats variant, interval clear of the null
+
+   LOSES DECISIVELY in both arrangements -- the largest UP effect measured
+   in this sweep.
+
+4. workers_late_up (workers_late=120)
+
+   A=variant, B=champion:
+     A win rate 32.50% +/- 2.94  (null 33.33%)  p = 0.5733
+     verdict: inconclusive -- interval still straddles the null
+
+   A=champion, B=variant (mirror):
+     A win rate 34.58% +/- 3.00  (null 33.33%)  p = 0.4063
+     verdict: inconclusive -- interval still straddles the null
+
+   INCONCLUSIVE in both arrangements, both numbers sitting right on top of
+   the 33.33% null -- essentially neutral, matching this same key's
+   DOWN-direction result (32.92%/33.96%, also neutral) from the prior
+   report. workers_late looks flat across the whole 30-120 range tested
+   so far, not merely at 60.
+
+VERDICT
+None of the four UP variants beat the champion in both arrangements, so
+this sweep does not overturn the prior report's headline: nothing tested
+so far shows a key that wants to be above 60. But "all four lose" is not
+quite what happened, and the bundle-hides-variation finding from the DOWN
+sweep repeats here in the UP direction too:
+
+  - stockpair_up (blue_free+resource_stock) and food_stock_up both lose
+    decisively and by a wide margin in both arrangements -- for these,
+    120 is clearly worse than 60. Combined with the DOWN sweep (blue_free
+    alone at 30 was catastrophic at 3.33%; food_stock alone at 30 lost
+    23.12%/39.17%), both directions away from 60 lose for these two
+    coordinates. That is evidence 60 sits near a genuine optimum for
+    blue_free/resource_stock and for food_stock, not evidence of a
+    ceiling suppressing them.
+
+  - culture_rate_up and workers_late_up are BOTH inconclusive in both
+    arrangements -- moving them to 120 is statistically indistinguishable
+    from leaving them at 60. This is a real asymmetry for culture_rate:
+    the DOWN sweep found culture_rate at 30 to be a clear, significant
+    loss (27.71%/41.46%, both p<0.05), while UP to 120 here shows no
+    significant effect either way. That pattern -- clear loss below 60,
+    no measurable change above 60 -- is consistent with 60 sitting at or
+    near the top of a plateau for culture_rate, not with 60 suppressing a
+    higher optimum. It is NOT proof the key is capped; a single point at
+    120 cannot distinguish "60 is optimal and 120 is an unpunished
+    plateau" from "the true optimum is somewhere between 60 and 120 and
+    this test lacks the power to see it." workers_late is flat in both
+    directions (30 and 120 both neutral against 60), the same conclusion
+    the DOWN sweep already reached for that key on its own.
+
+  Plainly: no key in this sweep shows a statistically significant WIN from
+  going above 60, so nothing here demonstrates that any of the five pinned
+  keys is pinned below its optimum. Two keys (the blue_free/resource_stock
+  pair, food_stock) actively want to stay at or near 60 in both tested
+  directions. Two keys (culture_rate, workers_late) show no measurable
+  preference for 120 over 60 -- flat, not winning -- which for culture_rate
+  in particular leaves open (but does not establish) that the optimum
+  could sit somewhere in the untested 60-120 interior. Combined with the
+  original bundled-UP loss and the full DOWN sweep, this closes the
+  "ceiling is suppressing something" question for blue_free,
+  resource_stock, food_stock and (with lower confidence) workers_late;
+  culture_rate is the one key left with a genuinely open, not closed,
+  question about values strictly between 60 and 120.
+
+CAVEATS
+- Single fixed seed (1001) per duel throughout, same as the prior report;
+  no seed-repeat variance estimate exists beyond the tool's own printed
+  binomial CI, so a seed-dependent artifact cannot be ruled out for any
+  individual number above.
+- blue_free and resource_stock could only be tested as a bundled pair at
+  120, never in isolation: dominance_repair makes "blue_free above
+  resource_stock" inexpressible by construction (see reasoning above), the
+  same limitation the prior DOWN sweep hit in the opposite direction for
+  resource_stock alone. Whether blue_free specifically (as opposed to the
+  pair) wants to be above 60 remains untested and untestable by this
+  method without also raising resource_stock.
+- 120 is a single point, not a curve -- for culture_rate and workers_late,
+  "inconclusive at 120" does not rule out a real, measurable optimum
+  strictly between 60 and 120 (or beyond 120 for culture_rate specifically,
+  though that direction was not probed and is not suggested by any result
+  here). No intermediate values were tested.
+- All duels used --players 3 only, matching the assignment; nothing here
+  speaks to 2p or 4p behavior of these five keys.
+- Games-per-duel was 240, matching the assignment and the prior report;
+  culture_rate_up's A-as-variant result (p=0.0906) sits close enough to the
+  conventional 0.05 line that more games could tip it either way -- it is
+  reported here as inconclusive, not as a confirmed null result.
+- This sweep only tested +100% (60->120) as the UP magnitude, matching the
+  prior report's bundle. Smaller or larger UP steps were not tried.
