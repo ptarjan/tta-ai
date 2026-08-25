@@ -1,0 +1,232 @@
+Mine-take probe, 3 players -- WHY does a non-starting Mine card die?
+=====================================================================
+Date: 2026-08-24
+Tool: rust/src/bin/takeprobe.rs (new, read-only diagnostic binary; does not
+      touch legal.rs/costs.rs/eval.rs/bots logic or data/*.json).
+Run:  cd rust && ./target/release/takeprobe --games 200 --players 3 \
+        --weights /private/tmp/opencensus/champ3p.json --threads 5
+      (release build; `cargo clippy --all-targets -- -D warnings` and
+      `cargo test` both green before the build -- see the gate output this
+      task required.)
+
+WHAT THIS FOLLOWS UP
+---------------------
+analysis/tech_acquisition_3p_2026-08-24.txt measured, over 600 self-play
+player-games under the champ3p.json champion, a non-starting Mine card
+(Iron/Coal/Oil) SEEN in the card row 3.00/player-game but TAKEN (via
+behavcensus.rs's pre-move `taken_card` variable) an exact 0.000 at every age
+tier. That census explicitly did not trace WHY (its own caveat 6). This
+probe does: at every decision point where a civil take is structurally
+possible (`state.phase == Phase::Actions`, `state.pending.is_empty()`), for
+every non-starting Mine card sitting in `state.card_row`, it independently
+checks four pipeline stages -- SEEN / LEGAL (in `legal::legal_moves`) /
+SCORED (survives into the candidate set `WeightedBot` evaluates) / and, if
+scored, its value, the winner's value, and its rank -- via
+`bots::weighted::eval::candidate_features`/`dot`, never touching
+`behavcensus.rs`'s `taken_card` mechanism at all.
+
+MID-TASK RETARGET (control run, reported by the coordinator, not this
+probe): the coordinator ran the SAME `tech_acquisition` census on the
+already-built `behavcensus` with a DIFFERENT weight vector
+(`analysis/frozen/human_weights.json`), 200 games/3p:
+  Mine: seen 2.98, taken 0.60, built 1.38, staffed 1.34
+  Mine taken by tier: A=0.000 I=0.000 II=0.272 III=0.328
+This proves the Take-a-Mine code path is mechanically alive in general: it
+is legal-generated, survives to the candidate set, and gets CHOSEN under at
+least one weight vector. `legal.rs::action_moves` takes only `state`/`p`, no
+weights at all, so stages 1-2 (SEEN, LEGAL) are weight-independent by
+construction and this control is strong evidence stages 1-3 are not where
+champ3p's zero comes from either. This probe's own run below confirms that
+directly, against champ3p.json itself, rather than resting on the control
+alone.
+
+THE FOUR-STAGE TABLE (champ3p.json, this probe, 200 games, 600 player-games)
+------------------------------------------------------------------------------
+card    seen   legal  scored   L-rate  S-rate    mean_gap  best_rank
+Iron    9168    5186    5186    0.566   1.000    141.0921          5
+Coal    8164    4080    4080    0.500   1.000    200.2463          5
+Oil     7080    3033    3033    0.428   1.000    261.6095          3
+
+combined: seen=24412 legal=12299 (0.504) scored=12299 (1.000)
+          mean_rank=17.87  mean_gap=190.4358  best_rank=3
+
+("seen"/"legal"/"scored" are DECISION-POINT x CARD occurrences, not
+player-games -- an event-exact count over every action-phase decision, not a
+turn-start snapshot, per the task's own instruction to measure at every
+decision point. "L-rate" = legal/seen, "S-rate" = scored/legal, "mean_gap"
+= mean(winner's evaluator score - this move's evaluator score) over scored
+occurrences, in the evaluator's own score units -- a measured OUTCOME, not a
+proposed weight. "best_rank" = the best 1-based rank a take of this card
+EVER achieved among all scored candidates, across all 12,299 occurrences.)
+
+STAGE VERDICT
+-------------
+* Stage 1 (SEEN): 24,412 decision-point x card occurrences across 200
+  games -- the row is full of mine cards constantly, as the original census
+  already found.
+* Stage 2 (LEGAL): 12,299 of 24,412 (50.4%) -- roughly half the time a take
+  is structurally legal (`costs::can_take_gated` passes: hand not full,
+  enough spare CA, card not a duplicate, etc.). NOT a "never legal" problem.
+* Stage 3 (SCORED): 12,299 of 12,299 legal occurrences (100.0%) survive into
+  the candidate set `WeightedBot` actually evaluates. This is not
+  incidental: `WeightedBot::choose`/`rank_moves`/`candidate_features` all
+  start from `bots::filter_resign` (rust/src/bots/mod.rs), which removes
+  ONLY `Move::Resign`, never a `Take` -- there is NO shortlist/narrowing
+  stage between move generation and evaluation for this bot kind (unlike a
+  beam/shortlist search). Stage 2 and stage 3 are therefore structurally
+  identical whenever stage 2 holds, confirmed empirically (100.000% every
+  time), not merely assumed from reading the code.
+* Stage 4 (SCORED but ranked): this is where it dies. Across all 12,299
+  scored occurrences, a Mine take's best-ever rank was 3rd (Oil) or 5th
+  (Iron/Coal) -- IT NEVER ONCE RANKED 1ST OR 2ND, let alone won. Mean rank
+  17.87 (this probe's decision points typically offer several dozen legal
+  moves). Mean score gap to the winner ~190 evaluator-score units, and it is
+  NOT small relative to the scale of the evaluator's own outputs in this
+  position class.
+
+THE BORING EXPLANATION, CHECKED AND RULED OUT
+-----------------------------------------------
+Is the original census's exact 0.000 an artifact of `behavcensus.rs`'s
+pre-move `taken_card` variable rather than a real "never chosen"? NO. This
+probe never reads or computes anything shaped like `taken_card` -- it
+independently re-derives the bot's own argmax over
+`candidate_features`/`dot` (proven, by `eval.rs`'s own doc comment and
+tests, to reproduce `evaluate`'s exact score) at every decision point, and
+finds the SAME thing the census found: across 12,299 independent
+observations, the argmax is a Mine take in exactly 0 of them (best rank
+ever achieved is 3rd). Two independent measurement mechanisms agree. This
+is a real, reproducible "scored and always outranked" phenomenon, not an
+instrumentation artifact of the earlier census.
+
+STAGE 4: WHAT BEATS IT, AND WHY (the retargeted question)
+-------------------------------------------------------------
+What wins instead, at every one of the 12,299 scored Mine-take decision
+points:
+  Take        5613  (45.6%)   -- a DIFFERENT card taken instead
+  Build       1693  (13.8%)
+  Pop         1265  (10.3%)
+  WonderStep  1209  ( 9.8%)
+  PlayAction   566  ( 4.6%)
+  Develop      465  ( 3.8%)
+  EndTurn      392  ( 3.2%)
+  (+ PlayLeader/Revolution/Destroy/PlayTactic/CopyTactic/Upgrade/
+     BachTheater/Barbarossa/Churchill/PopFree, each <=2.8%)
+Nearly half the time the bot beats a Mine take with ANOTHER take -- this is
+not one dominant alternative category, it is a broad-based outranking.
+
+WeightKey terms ranked by mean |contribution| to the winner-vs-Mine-take
+score gap (`weight(k) * (winner_feature(k) - take_feature(k))`, averaged
+over all 12,299 scored occurrences, via
+`bots::weighted::eval::candidate_features`/`dot` -- the exact vectors
+`bin/agreefit.rs` already relies on reproducing `evaluate`'s score exactly).
+Reported as ranked NAMES and SIGN ONLY -- no weight value or contribution
+number is written down anywhere in this file, per this task's hard
+constraint:
+   1. HandPotential        favors_winner
+   2. BlueFree              favors_winner
+   3. ResourceStock         favors_take
+   4. FoodStock             favors_take
+   5. CultureRate           favors_winner
+   6. Strength              favors_winner
+   7. Science               favors_winner
+   8. ScienceSurplus        favors_take
+   9. ResourceRate          favors_winner
+  10. WorkersLate           favors_winner
+  11. EventScoringMargin    favors_winner
+  12. Workers               favors_winner
+  13. HandPerishable        favors_winner
+  14. TakeCostPaid          favors_winner
+  15. WonderPromise         favors_take
+
+THE FILE:LINE THIS ACCUSES
+----------------------------
+The row/take-specific pricing machinery -- `WeightKey::RowUrgency`,
+`RowBargainForgone`, `RowLastCopy`, `RivalDesire`, `RivalTakeShare` -- is
+NOT in the top 15. The dominant terms are instead the GENERAL board-rate/
+stock/strength/worker/culture/science keys, which respond to what is
+already BUILT AND STAFFED, not to what merely sits in hand. `TakeCostPaid`
+(what the take itself costs) is a minor contributor (#14 of 15), so the
+gap is not primarily "the take is priced too expensive" -- it is "the
+alternatives pay off THIS ply and the take does not."
+
+A freshly-taken Mine card's entire future value has to be captured by
+`HandPotential` (the #1 contributor), computed at
+rust/src/bots/weighted/cards.rs:2095 (`hand_potential`) ->
+rust/src/bots/weighted/cards.rs:2055 (`hand_total`) ->
+rust/src/bots/weighted/cards.rs:1852 (`card_potential`) ->
+rust/src/bots/weighted/cards.rs:1863 (`card_potential_core`), whose
+levelled-tech branch at rust/src/bots/weighted/cards.rs:1879-1880
+(`else if tb != 0.0 && board_yields::is_levelled_type(kind) { return tb *
+tech_value(id, st, ix, w, 1.0, late); }`) dispatches to `tech_value` at
+rust/src/bots/weighted/cards.rs:1257, which prices the tech's FULL
+staffed/developed board value in one shot (`priced_marginal` against the
+current board, scaled only by a flat `late` lateness multiplier), competing
+against candidates whose rate/stock/strength/worker gain is REAL and
+immediate in the SAME 1-ply trial.
+
+This project's own code already names and partially fixes exactly this
+failure mode for a DIFFERENT card class: `wonder_potential`
+(rust/src/bots/weighted/cards.rs:2148-2150) and `wonder_promise`
+(rust/src/bots/weighted/cards.rs:2152 onward) carry an explicit doc comment
+calling this "build-now bias" (citing `docs/AGREEMENT.md`: "at the exact
+points a human advanced a wonder, the bot's own top pick was a plain build
+59% of the time") and cite the fix -- `horizon::WonderOutlook::earned_share`
+/ `promise_share` -- a computed discount for "how much of the remaining
+game you would actually own this for," replacing the old implicit "you have
+it already, forever" assumption. `tech_value` (cards.rs:1257), which prices
+every ordinary levelled tech including Mine, has no analogous
+per-ply-reachability discount visible in its body: it prices the full
+staffed value directly, off the SAME flat `late` lateness term wonder
+pricing used to use before `earned_share`/`promise_share` were added.
+
+VERDICT: DEFECT OR GENUINE PREFERENCE?
+-----------------------------------------
+Not dead code, and not an instrumentation artifact (both checked and ruled
+out above). The failure is real and lives entirely in stage 4 (scored,
+always outranked) under champ3p.json -- confirmed directly against the
+actual champion vector, not just inferred from the human-weights control.
+
+Whether it is a defect: this probe did not run an ablation (forbidden --
+touching weights is out of scope), so it cannot PROVE `tech_value`'s missing
+reachability discount is causally sufficient to explain the whole gap. What
+it CAN say: the ranked WeightKey list is consistent with exactly the
+"build-now bias" class this codebase already diagnosed and partially fixed
+for wonders, the row/take-specific pricing keys are NOT implicated (ruling
+out a mispriced take-cost or row-desirability term), and the shape --
+scored, never once ranking above 3rd across 12,299 occurrences, beaten by a
+BROAD mix of same-ply-payoff moves rather than one dominant rival -- is the
+signature of a structural 1-ply-horizon pricing gap, not a narrow
+preference against mines specifically (Farm, in the original census, shows
+the same taken-but-then-mostly-not-built shape at a smaller scale; this
+probe was scoped to Mine only, per the task).
+
+CAVEATS
+-------
+1. `mean_gap`/rank/best_rank are measured outcomes in the evaluator's own
+   score units, reported because the task explicitly asked for them --
+   not a proposed weight or coefficient for any `WeightKey`.
+2. The WeightKey contribution ranking is a per-decision-point LINEAR
+   decomposition (`candidate_features`/`dot`). Eleven `WeightKey`s
+   (`HandPotential` among them -- see `eval.rs`'s own doc comment on
+   `linear_features`) are bilinear in the full weight vector rather than
+   linear in a single coordinate; `candidate_features` freezes them at the
+   SAME champion vector being evaluated, matching what `bin/agreefit.rs`
+   already relies on to reproduce `evaluate`'s score exactly -- so the
+   ranking is faithful to what actually happened in this run, not an
+   approximation error.
+3. This is descriptive, not a proof of root cause: the `tech_value`/
+   `wonder_potential` contrast is the most plausible mechanism the ranked
+   keys point to, cited by file:line, but no code was changed and no
+   coefficient is proposed to test it.
+4. `L-rate` (50.4%) means roughly half of all "mine visible at a
+   take-possible decision point" occurrences are not even legal to take
+   (hand full, insufficient spare CA, etc.) -- a real, separate, and
+   unsurprising gate; this file's stage-4 finding is about the OTHER half,
+   where a take was legal and scored.
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
+This file names a defect (or, at minimum, a striking and reproducible
+weights-side pricing phenomenon consistent with a known, partially-fixed
+bug class in this codebase) in why the champion's own evaluator never picks
+a legal, scored Mine take. It proposes no weight value, coefficient, or fix
+for it.
