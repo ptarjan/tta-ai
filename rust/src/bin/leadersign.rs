@@ -45,13 +45,15 @@ fn main() {
     let base = w.get(WeightKey::CardBoardCredit);
     println!("card_board_credit (base)   = {base}");
     println!("card_board_leader           = {}", w.get(WeightKey::CardBoardLeader));
-    println!("card_board_bonus            = {}", w.get(WeightKey::CardBoardBonus));
     // `card_board_wonder`/`card_board_government`/`card_board_action` were
-    // retired 2026-08-13 (SIGNAUDIT.txt) -- see `weights::RETIRED_KEYS`.
-    // Their pricing now flows entirely through `wonder_board_credit`/
-    // `gov_board_credit`/`action_board_credit`'s own dedicated functions,
-    // which this tool never priced (it is specifically about the swap-diff
-    // path `board_credit_key` still covers: Leader and Bonus).
+    // retired 2026-08-13 (SIGNAUDIT.txt); `card_board_bonus` was retired
+    // 2026-08-24 for a stronger reason (structurally unreachable, not merely
+    // shadowed) -- see `weights::RETIRED_KEYS`. Their pricing now flows
+    // entirely through `wonder_board_credit`/`gov_board_credit`/
+    // `action_board_credit`'s own dedicated functions (or, for Bonus,
+    // nowhere at all), which this tool never priced (it is specifically
+    // about the swap-diff path `board_credit_key` still covers: Leader
+    // alone now).
     println!(
         "wonder_board_credit         = {}",
         w.get(WeightKey::WonderBoardCredit)

@@ -794,17 +794,19 @@ pub const NET_NONNEG_PHASE: &[WeightKey] = &[];
 /// The per-type "board credit" keys `cards::card_potential`'s generic
 /// swap-pricing path can ADD to [`WeightKey::CardBoardCredit`] before scaling
 /// a computed board-swap diff (`cards.rs`'s `credit_board = base +
-/// board_credit_key(id).map_or(0.0, |k| w.get(k))`) -- today
-/// `CardBoardLeader`/`CardBoardBonus`, one per [`cards::board_credit_key`]
-/// match arm that returns `Some`. `CardBoardGovernment`/`CardBoardAction`/
-/// `CardBoardWonder` used to be three more such arms; all three were
-/// RETIRED 2026-08-13 (SIGNAUDIT.txt) for being permanently shadowed by a
-/// dedicated board-aware pricing function that intercepts first -- see
-/// `weights::RETIRED_KEYS`'s own entry for the full account. Because this
+/// board_credit_key(id).map_or(0.0, |k| w.get(k))`) -- today just
+/// `CardBoardLeader`, the sole remaining [`cards::board_credit_key`] match
+/// arm that returns `Some`. `CardBoardGovernment`/`CardBoardAction`/
+/// `CardBoardWonder` used to be three more such arms, RETIRED 2026-08-13
+/// (SIGNAUDIT.txt) for being permanently shadowed by a dedicated
+/// board-aware pricing function that intercepts first; `CardBoardBonus`
+/// was a fifth, RETIRED 2026-08-24 for a stronger reason -- not shadowed,
+/// structurally unreachable for every weight vector (see `weights::
+/// RETIRED_KEYS`'s own entry for the full account of each). Because this
 /// list is DERIVED from `board_credit_key` rather than hand-copied (next
-/// paragraph), that retirement needed no edit here at all: the function
-/// simply stopped returning `Some` for those three `CardType`s and this
-/// list shrank from five entries to two automatically.
+/// paragraph), none of the four retirements needed an edit here at all: the
+/// function simply stopped returning `Some` for those `CardType`s and this
+/// list shrank from five entries to one automatically.
 ///
 /// Deliberately NOT hand-copied: this calls [`cards::board_credit_key`] over
 /// every real card in [`crate::card_table::CARDS`] and collects the distinct
@@ -2578,6 +2580,26 @@ mod tests {
         let (key, _) = non_negative_gates().next().expect("at least one NonNegative-classified key exists");
         let text = format!(r#"{{"{}": -3.0}}"#, key.name());
         assert_eq!(parse_weights(&text).unwrap().get(key), 0.0);
+    }
+
+    /// The 2026-08-24 trust-multiplier audit's positive claim, exercised
+    /// through the real champion-JSON load path rather than only
+    /// `sign_intent`'s own match (`weights.rs` already pins the
+    /// classification itself in `the_eleven_trust_multiplier_keys_the_
+    /// 2026_08_24_audit_proved_signed_are_gated_non_negative`): a champion
+    /// file authored with a negative value on one of the ELEVEN newly gated
+    /// keys must load repaired to 0.0, the same as any other
+    /// `NonNegative`-gated key. `territory_credit` specifically, because it
+    /// is the key the PRIOR version of `sign_intent`'s comment cited its own
+    /// signed-value counterexample for (Vast Territory (I)/(II) print
+    /// `blue_tokens: -1` inside their `YieldKind::Territory` yields) and
+    /// left `Free` on that basis -- the exact category error this audit
+    /// corrected. This is a load-path regression pin, not a re-derivation:
+    /// see `sign_intent`'s own doc comment for the per-key proof.
+    #[test]
+    fn a_champion_with_a_negative_territory_credit_is_repaired_to_zero_on_load() {
+        let text = r#"{"territory_credit": -4.0}"#;
+        assert_eq!(parse_weights(text).unwrap().get(WeightKey::TerritoryCredit), 0.0, "a negative territory_credit must be repaired to 0.0, not left inverting every Territory card's ranking");
     }
 
     #[test]

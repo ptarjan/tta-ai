@@ -493,6 +493,21 @@ fn rider_delta(state: &GameState, p: &PlayerState, name: CardId, out: &mut Vec<T
 /// it. Quoting the revolution price unconditionally makes an illegal
 /// discount look available; the port did that because the Python it came
 /// from did, with no gate anywhere in the function.
+///
+/// Briefly RETIRED 2026-08-24 (`weights::RETIRED_KEYS`) on the reasoning
+/// that this function is only ever reached through [`board_yields`]'s
+/// generic swap-diff dispatch, which `cards::card_potential_core` only falls
+/// through to for a Government card when `gov_board_credit == 0.0` exactly
+/// -- true on none of the three SAMPLED champions at the time. Un-retired
+/// the same day: `WeightKey::GovBoardCredit` was gated `NonNegative` in the
+/// same change, and `dominance_repair` REPAIRS a negative violator by
+/// raising it to exactly `0.0` -- the live 4p champion's `gov_board_credit =
+/// -0.17219470312801052` now lands precisely on the condition that reaches
+/// this function on every load, so deleting its cost term would have priced
+/// every government card CA-free at 4p. See `weights::WeightKey::
+/// GovActionCost`'s own doc comment (in the enum declaration) and
+/// `weights::WeightKey::sign_intent`'s doc comment on the trust-multiplier
+/// `NonNegative` block for the general hazard this surfaced.
 fn government_cost(state: &GameState, p: &PlayerState, name: CardId, out: &mut Vec<Triple>) {
     let card = name.get();
     let revolution_available = card.revolution_cost != 0 && legal::can_revolt(state, p, name);

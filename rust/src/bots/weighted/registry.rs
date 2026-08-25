@@ -309,8 +309,8 @@ mod tests {
         (WeightKey::CardBoardCredit, "cards.rs board-credit multiplier"),
         (WeightKey::CardBoardLeader, "cards.rs board-credit multiplier"),
         // `CardBoardGovernment`/`CardBoardAction`/`CardBoardWonder` retired
-        // 2026-08-13 (SIGNAUDIT.txt) -- see `weights::RETIRED_KEYS`.
-        (WeightKey::CardBoardBonus, "cards.rs board-credit multiplier"),
+        // 2026-08-13 (SIGNAUDIT.txt); `CardBoardBonus` retired 2026-08-24 --
+        // see `weights::RETIRED_KEYS`.
         (WeightKey::CardRateCredit, "cards.rs static-table rate multiplier"),
         (WeightKey::UnitStrengthCredit, "cards.rs static-table unit multiplier"),
         (WeightKey::UnitTechCredit, "cards.rs unit-tech multiplier"),
@@ -359,7 +359,12 @@ mod tests {
         // `government_cost`/`feature_key`), it is just multiplied by a
         // weight nobody has climbed off its 0.0 default yet -- a VALUE bug,
         // not a missing-reader one, which is exactly why this probe does
-        // not (and should not) flag it.
+        // not (and should not) flag it. (Briefly retired 2026-08-24 on the
+        // belief `gov_board_credit` could never repair to exactly `0.0` on
+        // a trained champion; un-retired the same day once
+        // `WeightKey::sign_intent` gated `GovBoardCredit` `NonNegative`,
+        // which makes that state reachable at load time -- see
+        // `weights::WeightKey::GovActionCost`'s own doc comment.)
         (WeightKey::ResourceDiscount, "cards.rs static/board card valuation"),
         (WeightKey::DefenseBonus, "cards.rs static/board card valuation"),
         (WeightKey::GovActionCost, "cards.rs government valuation (feature_key); docs/OPEN_ITEMS.md item 1"),

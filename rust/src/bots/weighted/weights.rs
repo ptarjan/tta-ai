@@ -213,14 +213,25 @@ pub enum WeightKey {
     ResourceDiscount,
     DefenseBonus,
     UrbanLimit,
+    // This key looks unreachable and is not. Its sole production reader,
+    // `board_yields::government_cost`, is on the generic fallback that
+    // `cards::card_potential_core` takes only when `gov_board_credit == 0.0`
+    // EXACTLY -- a value no trained champion carries. But `GovBoardCredit`
+    // is one of the keys `sign_intent` gates `NonNegative`, and
+    // `dominance_repair` repairs a violator by RAISING it to EXACTLY 0.0, so
+    // any champion trained to a negative `gov_board_credit` (the 4p one is)
+    // lands on that condition on every load and prices its government cards
+    // through here. See `sign_intent`'s trust-multiplier block for the
+    // general shape: 0.0 is a DISPATCH SWITCH for that family, not a neutral
+    // "drop the term" value.
     GovActionCost,
     NoAggression,
     CardBoardCredit,
     EventScoringMargin,
     CardBoardLeader,
     // `CardBoardGovernment`/`CardBoardAction`/`CardBoardWonder` retired
-    // 2026-08-13 -- see `RETIRED_KEYS`'s own entry for why.
-    CardBoardBonus,
+    // 2026-08-13 (SIGNAUDIT.txt); `CardBoardBonus` retired 2026-08-24 -- see
+    // `RETIRED_KEYS`'s own entry for why.
     HandSwapExtra,
     CardRateCredit,
     UnitStrengthCredit,
@@ -694,18 +705,6 @@ weight_key_table! {
     CardBoardCredit => "card_board_credit", 0.0;
     EventScoringMargin => "event_scoring_margin", 0.0;
     CardBoardLeader => "card_board_leader", 0.0;
-    // `CardBoardLeader`'s sibling for the OTHER type with no dedicated
-    // board-aware pricing function of its own -- see `cards.rs::
-    // board_credit_key`'s own doc comment for why a Military Bonus card
-    // (`defenseBonus`/`colonizationBonus`) needed one. 0.0, matching
-    // `CardBoardLeader`'s own default. (Government/Action/Wonder used to
-    // have the identical per-type shape here; all three were retired
-    // 2026-08-13 -- their dedicated `gov_board_credit`/`action_board_credit`/
-    // `wonder_board_credit` branches in `card_potential_core` unconditionally
-    // intercept before this per-type path is ever reached whenever nonzero,
-    // which is every trained champion sampled, so the per-type key was a
-    // live-looking knob wired to nothing. See `RETIRED_KEYS`.)
-    CardBoardBonus => "card_board_bonus", 0.0;
     HandSwapExtra => "hand_swap_extra", 0.0;
     CardRateCredit => "card_rate_credit", 1.0;
     UnitStrengthCredit => "unit_strength_credit", 0.0;
@@ -857,7 +856,7 @@ impl WeightKey {
     pub const fn early(self) -> WeightKey {
         match self {
             WeightKey::StrengthRel => WeightKey::StrengthRelEarly,
-            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::CultureRate | WeightKey::Science | WeightKey::ScienceRate | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::Workers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::TechLevels | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::CardBoardBonus | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandValue | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount | WeightKey::LeaderReplacement | WeightKey::WonderPoolRivalClaimed => panic!("WeightKey::early called on a key with no _early partner (only StrengthRel has one post PHASECUT.txt's T1-A/C/D collapse)"),
+            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::CultureRate | WeightKey::Science | WeightKey::ScienceRate | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::Workers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::TechLevels | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandValue | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount | WeightKey::LeaderReplacement | WeightKey::WonderPoolRivalClaimed => panic!("WeightKey::early called on a key with no _early partner (only StrengthRel has one post PHASECUT.txt's T1-A/C/D collapse)"),
         }
     }
 
@@ -874,7 +873,7 @@ impl WeightKey {
             WeightKey::StrengthRel => WeightKey::StrengthRelLate,
             WeightKey::TechLevels => WeightKey::TechLevelsLate,
             WeightKey::HandValue => WeightKey::HandValueLate,
-            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::CultureRate | WeightKey::Science | WeightKey::ScienceRate | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::CardBoardBonus | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount | WeightKey::LeaderReplacement | WeightKey::WonderPoolRivalClaimed => panic!("WeightKey::late called on a key outside PHASE_KEYS"),
+            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::CultureRate | WeightKey::Science | WeightKey::ScienceRate | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount | WeightKey::LeaderReplacement | WeightKey::WonderPoolRivalClaimed => panic!("WeightKey::late called on a key outside PHASE_KEYS"),
         }
     }
 
@@ -900,7 +899,7 @@ impl WeightKey {
         match self {
             WeightKey::CultureRate => WeightKey::CultureRateTrailing,
             WeightKey::ScienceRate => WeightKey::ScienceRateTrailing,
-            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::Science | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::Workers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthRel | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::TechLevels | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::CardBoardBonus | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandValue | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount | WeightKey::LeaderReplacement | WeightKey::WonderPoolRivalClaimed => panic!("WeightKey::trailing called on a key outside STANDING_KEYS"),
+            WeightKey::RateHorizon | WeightKey::Culture | WeightKey::Science | WeightKey::FoodRate | WeightKey::ResourceRate | WeightKey::FoodStock | WeightKey::ResourceStock | WeightKey::BlueFree | WeightKey::CorruptionHeadroom | WeightKey::ConsumptionHeadroom | WeightKey::PopCost | WeightKey::YellowBank | WeightKey::FreeWorkers | WeightKey::Workers | WeightKey::ProdWorkers | WeightKey::UrbanWorkers | WeightKey::UnitWorkers | WeightKey::HappyMargin | WeightKey::Discontent | WeightKey::Uprising | WeightKey::CivilActions | WeightKey::MilitaryActions | WeightKey::CaLeft | WeightKey::MaLeft | WeightKey::TakeCostPaid | WeightKey::RowUrgency | WeightKey::RowBargainForgone | WeightKey::RowLastCopy | WeightKey::RivalDesire | WeightKey::RivalTakeShare | WeightKey::RivalFreeCa | WeightKey::RivalHandCivil | WeightKey::RivalWonders | WeightKey::RivalHandPotential | WeightKey::RivalScienceStock | WeightKey::RivalFoodStock | WeightKey::RivalResourceStock | WeightKey::RivalFreeWorkers | WeightKey::RivalYellowBank | WeightKey::RivalColonies | WeightKey::RivalMilActions | WeightKey::RivalBuildingWonder | WeightKey::MySeededPending | WeightKey::MyEventThreat | WeightKey::AttackTargetLead | WeightKey::AttackTargetWeakness | WeightKey::PactPartnerLead | WeightKey::Strength | WeightKey::StrengthRel | WeightKey::StrengthDeficit | WeightKey::StrengthLead | WeightKey::TacticLevel | WeightKey::TacticGain | WeightKey::TacticShort | WeightKey::HasUnit | WeightKey::Colonies | WeightKey::HasColony | WeightKey::Pacts | WeightKey::PactBlocksAttack | WeightKey::WarImmune | WeightKey::AttackCostDoubled | WeightKey::AuctionCommitted | WeightKey::AuctionBid | WeightKey::TechLevels | WeightKey::GovLevel | WeightKey::BestFarm | WeightKey::BestMine | WeightKey::BestLab | WeightKey::BestTemple | WeightKey::BestTheater | WeightKey::BestLibrary | WeightKey::BestArena | WeightKey::BestUnit | WeightKey::NumTechs | WeightKey::SpecialTechs | WeightKey::Wonders | WeightKey::WonderProgress | WeightKey::WonderRemaining | WeightKey::WonderStagesLeft | WeightKey::WonderTurnsToFinish | WeightKey::WonderOverrun | WeightKey::WonderStagesPerAction | WeightKey::WonderPotential | WeightKey::WonderPromise | WeightKey::WonderAgeOverrun | WeightKey::Leader | WeightKey::WonderInProgress | WeightKey::HandLimit | WeightKey::ColonizeBonus | WeightKey::BuildDiscount | WeightKey::ResourceDiscount | WeightKey::DefenseBonus | WeightKey::UrbanLimit | WeightKey::GovActionCost | WeightKey::NoAggression | WeightKey::CardBoardCredit | WeightKey::EventScoringMargin | WeightKey::CardBoardLeader | WeightKey::HandSwapExtra | WeightKey::CardRateCredit | WeightKey::UnitStrengthCredit | WeightKey::UnitTechCredit | WeightKey::TechBoardCredit | WeightKey::ActionBoardCredit | WeightKey::GovBoardCredit | WeightKey::WonderBoardCredit | WeightKey::BuildFreshCredit | WeightKey::RestrictedResourceCredit | WeightKey::FreeActionCredit | WeightKey::TerritoryCredit | WeightKey::BonusCardCredit | WeightKey::TacticBoardCredit | WeightKey::AggressionBoardCredit | WeightKey::WarBoardCredit | WeightKey::PactBoardCredit | WeightKey::EventBoardCredit | WeightKey::TacticShortfallCost | WeightKey::TacticReachCredit | WeightKey::HandCivil | WeightKey::HandValue | WeightKey::HandPotential | WeightKey::HandMilitary | WeightKey::HandMilValue | WeightKey::HandMilPotential | WeightKey::HandPerishable | WeightKey::RivalCulture | WeightKey::RivalMeanCulture | WeightKey::RivalCultureRate | WeightKey::RivalScienceRate | WeightKey::RivalStrength | WeightKey::EndTurnBias | WeightKey::CultureRateTrailing | WeightKey::ScienceRateTrailing | WeightKey::WorkersLate | WeightKey::StrengthRelEarly | WeightKey::StrengthRelLate | WeightKey::TechLevelsLate | WeightKey::HandValueLate | WeightKey::FoodGap | WeightKey::FoodSurplus | WeightKey::ResourceGap | WeightKey::ResourceSurplus | WeightKey::ScienceGap | WeightKey::ScienceSurplus | WeightKey::CultureGap | WeightKey::CultureSurplus | WeightKey::HappySurplus | WeightKey::CivilActionGap | WeightKey::CivilActionSurplus | WeightKey::TakeCostShare | WeightKey::MilitaryActionGap | WeightKey::MilitaryActionSurplus | WeightKey::WorkerGap | WeightKey::WorkerSurplus | WeightKey::TechRedundancyDiscount | WeightKey::LeaderReplacement | WeightKey::WonderPoolRivalClaimed => panic!("WeightKey::trailing called on a key outside STANDING_KEYS"),
         }
     }
 
@@ -941,7 +940,7 @@ impl WeightKey {
             }
 
             UrbanLimit | GovActionCost | NoAggression
-            | CardBoardCredit | CardBoardLeader | CardBoardBonus => WeightGroup::Board,
+            | CardBoardCredit | CardBoardLeader => WeightGroup::Board,
 
             HandCivil | HandValue | HandValueLate | HandPotential
             // `HandPerishable` is a property OF the hand (how much of it is
@@ -1198,28 +1197,38 @@ impl WeightKey {
             // would be WRONG (over-constraining a coordinate whose base term
             // is legally allowed to be negative as long as the SUM is not):
             //
-            // * `CardBoardLeader`/`CardBoardBonus`: the effective multiplier
-            //   `cards::card_potential` scales a leader/bonus swap diff by is
+            // * `CardBoardLeader`: the effective multiplier
+            //   `cards::card_potential` scales a leader swap diff by is
             //   `CardBoardCredit + <this key>`, not either term alone --
             //   `eval::dominance_repair`'s `card_board_credit_keys()` loop
             //   (itself derived from `cards::board_credit_key`, not hand
             //   copied) gates the SUM. `CardBoardGovernment`/`CardBoardAction`/
-            //   `CardBoardWonder` used to sit alongside these two here; all
-            //   three are RETIRED as of this audit (`RETIRED_KEYS`) --
-            //   `cards::card_potential_core`'s dedicated
-            //   `gov_value`/`action_value`/wonder swap-diff branches
-            //   unconditionally intercept and `return` before the generic
-            //   per-type path is ever reached whenever their own
-            //   `GovBoardCredit`/`ActionBoardCredit`/`WonderBoardCredit` is
-            //   nonzero -- which is every trained champion sampled, since
-            //   the first two default nonzero and are "measured effective"
-            //   -- so the three retired keys were live-looking knobs wired
-            //   to nothing, the same shape `card_yields`'s own deleted
-            //   static action formula was retired for (see
-            //   `cards.rs::tests::card_yields_never_reprices_the_action_
-            //   boards_ring_fenced_coordinates`'s doc comment for that
-            //   precedent). See SIGNAUDIT.txt.
-            CardBoardLeader | CardBoardBonus => Free,
+            //   `CardBoardWonder` used to sit alongside this key here; all
+            //   three are RETIRED (`RETIRED_KEYS`) -- `cards::
+            //   card_potential_core`'s dedicated `gov_value`/`action_value`/
+            //   wonder swap-diff branches unconditionally intercept and
+            //   `return` before the generic per-type path is ever reached
+            //   whenever their own `GovBoardCredit`/`ActionBoardCredit`/
+            //   `WonderBoardCredit` is nonzero -- which is every trained
+            //   champion sampled, since the first two default nonzero and are
+            //   "measured effective" -- so the three retired keys were
+            //   live-looking knobs wired to nothing, the same shape
+            //   `card_yields`'s own deleted static action formula was retired
+            //   for (see `cards.rs::tests::card_yields_never_reprices_the_
+            //   action_boards_ring_fenced_coordinates`'s doc comment for that
+            //   precedent). `CardBoardBonus` used to sit alongside
+            //   `CardBoardLeader` in this SAME composite-constraint bucket;
+            //   it is RETIRED too as of 2026-08-24 (`RETIRED_KEYS`) for a
+            //   different, stronger reason than the government/action/wonder
+            //   trio -- not merely shadowed by a dedicated function, but
+            //   structurally unreachable: `cards::board_credit_key(Bonus)`
+            //   now answers `None`, the same bucket Government/Action/Wonder
+            //   already sit in, because `credit_board`'s only two consumers
+            //   (`board_yields::board_yields`'s swap diff, and
+            //   `board_yields::board_extra`) never produce a nonzero result
+            //   for a `CardType::Bonus` card -- see that retirement's own
+            //   `RETIRED_KEYS` entry for the full proof.
+            CardBoardLeader => Free,
             // `HandValue`/`HandValueLate`: the feature `hand_value` (`Σ
             // level()+1` over the civil hand) is always >= 0, so the
             // coefficient `evaluate` actually applies at ANY lateness must
@@ -1401,7 +1410,16 @@ impl WeightKey {
             // `docs/OPEN_ITEMS.md` item 1: a real, live-reading coordinate
             // whose drift is documented as "signal vs noise, not yet
             // determined" -- explicitly not concluded to be rules-forced
-            // either way.
+            // either way. Briefly RETIRED 2026-08-24 on the reasoning that
+            // its only reader is unreachable whenever `gov_board_credit !=
+            // 0.0`, true on every SAMPLED champion; un-retired the same day
+            // once gating `GovBoardCredit` itself `NonNegative` a few lines
+            // below made `gov_board_credit == 0.0` a live, reachable POST-
+            // REPAIR state (the 4p champion's `-0.1722` gets raised to
+            // exactly `0.0` on every load) -- see the enum declaration's own
+            // comment on this variant for the full account, and
+            // `NonNegative`'s doc comment on the trust-multiplier block
+            // below for the general hazard.
             GovActionCost => Free,
             // A scoring MARGIN -- signed by construction (ahead of or behind
             // the field), not a one-directional magnitude.
@@ -1413,24 +1431,96 @@ impl WeightKey {
             HandSwapExtra => Free,
             // The "how much to trust this dedicated function's board-aware
             // estimate" multiplier family (`registry.rs`'s own
-            // characterization) -- NOT a printed-benefit magnitude the way
-            // `BuildDiscount`'s siblings are, so `BENEFIT_GATES`'s reasoning
-            // does not automatically transfer. Whether each dedicated
-            // function (`tech_value`/`action_value`/`gov_value`/...) is
-            // provably gains-only the way `wonder_potential` is, and so
-            // deserves a `NonNegative` gate of its own, was NOT verified
-            // within this audit's budget. The follow-up audit resolved four of
-            // them (gated above); these thirteen it confirmed genuinely free.
+            // characterization). A PRIOR pass here reasoned that because
             // `tech_value`/`gov_value`/`sum_board_triples` compute NET values
-            // -- gains minus real printed and rules costs, unclamped -- so a
-            // bad card can legitimately price negative, and `TerritoryCredit`
-            // has a card-content counterexample outright: Vast Territory (I)
-            // and (II) print `blue_tokens: -1` inside their Territory yields.
-            CardRateCredit | UnitTechCredit | TechBoardCredit | ActionBoardCredit
-            | GovBoardCredit | WonderBoardCredit | BuildFreshCredit
-            | TerritoryCredit | BonusCardCredit
+            // -- gains minus real printed and rules costs, unclamped -- "a
+            // bad card can legitimately price negative", and left all
+            // thirteen `Free` on that basis. That reasoning is a category
+            // error: these keys are not the value, they are the SCALE
+            // multiplying it. A signed inner function is exactly why the
+            // scale must be constrained, not a reason to free it -- a
+            // negative scale does not let a bad card price negative (the
+            // inner function already does that), it INVERTS good and bad,
+            // scrambling the ranking among every card the dedicated function
+            // prices. `eval::dominance_repair` already accepts precisely
+            // this argument one family over, for `CardBoardCredit`'s
+            // per-type offsets: "a negative EFFECTIVE scale ... does not
+            // mis-price one card, it inverts the entire ranking of that card
+            // TYPE", added after the leadersign investigation priced
+            // Hammurabi at -13.28 on a +0.885 raw board benefit.
+            //
+            // Re-audited 2026-08-24 (analysis/multiplier_decisiveness_all_
+            // counts_2026-08-24.txt) per key, not by category: eleven of the
+            // thirteen are a pure `w.get(key) * <dedicated function's
+            // signed output>` scale with no other role and are gated
+            // `NonNegative` below. The remaining two are NOT: `CardRateCredit`
+            // scales `CardEffects.culture`/`.science` (`sum_yields`'s
+            // `YieldKind::Rate` branch), and `BonusCardCredit` scales
+            // `CardEffects.defense_bonus - 1`/`.colonization_bonus`
+            // (`sum_yields`'s `YieldKind::Bonus` branch) -- both printed,
+            // per-card magnitudes that are never negative anywhere in
+            // `card_table.rs`'s base-game data (checked directly, not
+            // inferred), so gating them would be a guess this audit's
+            // measurement does not support. They stay `Free`.
+            CardRateCredit | BonusCardCredit => Free,
+            // The eleven PROVEN multipliers: each is `w.get(key) *
+            // <dedicated function's signed output>` with no other use site.
+            // `UnitTechCredit`/`TechBoardCredit`/`ActionBoardCredit`/
+            // `GovBoardCredit`/`WonderBoardCredit` scale
+            // `tech_value`/`action_value`/`gov_value`/the wonder swap diff
+            // directly (`cards::card_potential_core`'s dispatch, each an
+            // unconditional `return credit * dedicated_fn(...)`).
+            // `AggressionBoardCredit`/`WarBoardCredit`/`EventBoardCredit`
+            // scale `aggression_value`/`war_hand_value`/
+            // `event_prepare_value` the identical way. `TacticReachCredit`
+            // scales `(potential * strength_marginal - cost)` in
+            // `tactic_value`'s reach branch -- clamped to `>= 0.0` only
+            // AFTER the scale is applied, so a negative credit still lets a
+            // reach-cost-exceeds-benefit tactic (which should price at 0)
+            // read as a fabricated positive. `BuildFreshCredit` scales
+            // `b_net` (`tech_value`'s build-fresh alternative, itself signed:
+            // a resource cost term minus staffing gains) before a `max`
+            // against the other staffing plan -- a negative credit can make
+            // the WORSE plan win the max. `TerritoryCredit` scales every
+            // `YieldKind::Territory` triple's printed amount
+            // (`sum_yields`/`gains_only_sum`) -- the previous version of
+            // this very comment cited its own counterexample (Vast
+            // Territory (I)/(II) print `blue_tokens: -1`) as a reason to
+            // leave it `Free`; that signed printed amount is exactly what
+            // makes the scale need gating, not what excuses it.
+            //
+            // THE HAZARD THIS GATE CARRIES: in `cards::card_potential_core`,
+            // `UnitTechCredit`/`TechBoardCredit`/`ActionBoardCredit`/
+            // `GovBoardCredit`/`WonderBoardCredit`/`AggressionBoardCredit`/
+            // `WarBoardCredit`/`EventBoardCredit` are dispatched as `if
+            // credit != 0.0 { return credit * <dedicated function>(...) }`.
+            // `0.0` is therefore NOT a neutral value for these eight the way
+            // it is for an ordinary additive term -- it is a DISPATCH
+            // SWITCH. Raising a negative violator to exactly `0.0` (what
+            // `dominance_repair` does for a `NonNegative` gate) does not
+            // merely drop the dedicated function's contribution to zero; it
+            // routes that entire card TYPE to a DIFFERENT pricing
+            // implementation (the generic `card_board_credit` fallback, or
+            // the static `card_yields` table). A repair is only safe if
+            // that fallback independently prices everything the dedicated
+            // function priced. `GovBoardCredit` is the one to watch: its
+            // fallback runs through `board_yields::government_cost`, and a
+            // champion carrying a negative `gov_board_credit` (the 4p one
+            // does) is repaired to exactly `0.0` on every load, so that
+            // fallback is REACHED IN PRODUCTION and its civil-action cost
+            // term has to stay live -- see `GovActionCost`'s own doc comment
+            // above. `BuildFreshCredit`/`TerritoryCredit`/
+            // `TacticReachCredit` do NOT share this dispatch-switch shape --
+            // each is a plain multiplicative scale inline in its own
+            // function (no alternate code path to lose), so `0.0` there is
+            // an ordinary, safe "no credit" state, the same as their own
+            // authored defaults.
+            UnitTechCredit | TechBoardCredit | ActionBoardCredit | GovBoardCredit
+            | WonderBoardCredit | BuildFreshCredit | TerritoryCredit
             | AggressionBoardCredit | WarBoardCredit | EventBoardCredit
-            | TacticReachCredit => Free,
+            | TacticReachCredit => {
+                NonNegative("scales a dedicated function's signed output; a negative scale inverts good and bad rather than repricing one card")
+            }
             // The exact military twin of the `HandValue` gate above:
             // `features.rs` sums `level + 1` over the military hand, so every
             // term is >= 1 and the feature can never go below zero. A card
@@ -1657,7 +1747,6 @@ impl WeightKey {
         WeightKey::CardBoardCredit => [0.000000, 0.000000, 0.000000],
         WeightKey::EventScoringMargin => [14.000000, 12.692308, 11.111111],
         WeightKey::CardBoardLeader => [0.000000, 0.000000, 0.000000],
-        WeightKey::CardBoardBonus => [0.000000, 0.000000, 0.000000],
         WeightKey::HandSwapExtra => [0.000000, 0.000000, 0.000000],
         WeightKey::CardRateCredit => [0.000000, 0.000000, 0.000000],
         WeightKey::UnitStrengthCredit => [0.000000, 0.000000, 0.000000],
@@ -1930,8 +2019,8 @@ pub const STANDING_KEYS: &[WeightKey] = &[WeightKey::CultureRate, WeightKey::Sci
 /// 2. A coordinate-registry check elsewhere in this project flags any key a
 ///    loaded vector carries that this module does not recognise. A
 ///    deliberate retirement is neither a typo nor an orphan, and listing
-///    twelve keys here (once) is what keeps that check from being unable to
-///    tell the two apart.
+///    every retired key here (once) is what keeps that check from being
+///    unable to tell the two apart.
 ///
 /// Bare `&'static str`s, not [`WeightKey`] variants -- giving a retired key a
 /// variant would make it indexable again, which is the opposite of retired.
@@ -1977,10 +2066,14 @@ pub const RETIRED_KEYS: &[&str] = &[
     // card_yields_never_reprices_the_action_boards_ring_fenced_
     // coordinates`'s doc comment) -- a provably-unreachable pricing path is
     // deleted, not pinned or left live for a future mutation to rediscover.
-    // `CardBoardLeader`/`CardBoardBonus` are NOT retired alongside these:
-    // Leader and Bonus have no dedicated top-level branch in
-    // `card_potential_core` at all, so their per-type offset is the ONLY
-    // board-aware pricing channel either type has.
+    // `CardBoardLeader` is NOT retired alongside these: Leader has no
+    // dedicated top-level branch in `card_potential_core` at all, so its
+    // per-type offset is the ONLY board-aware pricing channel it has.
+    // `CardBoardBonus` was in the same boat at the time of THIS retirement
+    // (2026-08-13) -- Bonus had no dedicated top-level branch either -- but
+    // it is retired separately below (2026-08-24), for a different reason:
+    // not a dedicated function shadowing it, but its two possible consumers
+    // being structurally unreachable/zero for a Bonus card regardless.
     "card_board_government",
     "card_board_action",
     "card_board_wonder",
@@ -2008,6 +2101,29 @@ pub const RETIRED_KEYS: &[&str] = &[
     // to another, since the number itself was never multiplied by
     // anything) no longer exists to walk.
     "restricted_resources",
+    // Retired 2026-08-24 (analysis/multiplier_decisiveness_all_counts_
+    // 2026-08-24.txt). The proof is STRUCTURAL -- it holds for every weight
+    // vector, not merely "no trained champion happens to reach it", which is
+    // the bar a retirement has to clear (contrast `GovActionCost`, whose
+    // reachability turns on another key's value). It only ever entered
+    // `cards::
+    // card_potential_core`'s `credit_board` sum for a `CardType::Bonus`
+    // card, and `credit_board` there has exactly two consumers --
+    // `board_yields::board_yields`'s swap diff, which requires
+    // `is_swap_type` (Leader/Government/Wonder, never Bonus), and
+    // `board_yields::board_extra`, which only ever emits a triple for a card
+    // carrying `Special::CulturePerCivilizationWithMoreCulture` or
+    // `Special::ResourcesForMilitaryUnitsPerStrongerCivilization` -- the
+    // three cards with either special (Endowment for the Arts, Wave of
+    // Nationalism, Military Build-Up) are all `CardType::Action`, never
+    // Bonus. So both consumers are unreachable/zero for every real Bonus
+    // card for EVERY weight vector, not conditioned on any other key's
+    // value the way `gov_action_cost`'s reachability turned out to be --
+    // `cards::board_credit_key` answers `None` for `Bonus` now, joining
+    // Government/Action/Wonder in that bucket, and `eval::
+    // card_board_credit_keys()` (derived from it, not hand-copied) shrinks
+    // accordingly with no edit needed there.
+    "card_board_bonus",
 ];
 
 /// [`WeightKey::ALL`]'s length -- every [`Weights`] array is exactly this
@@ -2195,7 +2311,10 @@ mod tests {
     fn rust_grouping_agrees_with_python_groups() {
         let pairs: &[(&str, &str)] = &[
             ("civil_actions", "actions"),                 // GROUPS["actions"]
-            ("card_board_bonus", "board"),                 // GROUPS["board"]
+            // `card_board_bonus` was this row's pin until it was retired
+            // 2026-08-24 (`RETIRED_KEYS`); `card_board_leader` is its
+            // still-live `WeightGroup::Board` sibling.
+            ("card_board_leader", "board"),                // GROUPS["board"]
             ("hand_mil_value", "cards"),                   // GROUPS["cards"]
             ("rate_horizon", "economy"),                   // GROUPS["economy"]
             ("my_event_threat", "events"),                 // GROUPS["events"]
@@ -2285,9 +2404,21 @@ mod tests {
     /// only thing a negative value can buy is an inverted gain.
     /// `TacticShortfallCost` is the odd one by name -- it is `NonNegative`
     /// precisely BECAUSE it is subtracted, so a bigger shortfall must cost
-    /// more, not less. Their thirteen bucket-mates stay `Free` on purpose:
-    /// those price NET values that a bad card can legitimately drive below
-    /// zero, and gating them would be a guess.
+    /// more, not less.
+    ///
+    /// The "thirteen bucket-mates stay `Free`" claim this test originally
+    /// pinned is gone: a LATER audit (2026-08-24,
+    /// analysis/multiplier_decisiveness_all_counts_2026-08-24.txt) found
+    /// eleven of those thirteen are provable `w.get(key) * <dedicated
+    /// function's signed output>` scales -- see `sign_intent`'s own doc
+    /// comment on that match arm for the full per-key proof -- and gated
+    /// them `NonNegative` too, including `TechBoardCredit`/`GovBoardCredit`/
+    /// `TerritoryCredit` this test used to assert stayed `Free`. Only
+    /// `CardRateCredit`/`BonusCardCredit` remain genuinely free: both scale
+    /// a printed `CardEffects` magnitude confirmed non-negative on every
+    /// base-game card, so a negative scale would not invert anything (there
+    /// is nothing signed to invert) -- gating them would be an unsupported
+    /// guess, not a repair.
     #[test]
     fn the_four_board_credits_with_a_zero_floored_magnitude_are_gated_non_negative() {
         for key in [
@@ -2301,14 +2432,36 @@ mod tests {
                 "{key:?} must be gated non-negative"
             );
         }
-        for key in [
-            WeightKey::TechBoardCredit,
-            WeightKey::GovBoardCredit,
-            WeightKey::TerritoryCredit,
-        ] {
+        for key in [WeightKey::CardRateCredit, WeightKey::BonusCardCredit] {
             assert!(
                 matches!(key.sign_intent(), SignIntent::Free),
-                "{key:?} prices a net value and must stay free to go negative"
+                "{key:?} scales a printed magnitude confirmed non-negative on every base-game card and must stay free"
+            );
+        }
+    }
+
+    /// The 2026-08-24 trust-multiplier audit's own positive claim: all
+    /// eleven keys it reclassified from `Free` to `NonNegative` (see
+    /// `sign_intent`'s doc comment on that match arm) actually landed there,
+    /// not merely that the two survivors stayed `Free` (checked above).
+    #[test]
+    fn the_eleven_trust_multiplier_keys_the_2026_08_24_audit_proved_signed_are_gated_non_negative() {
+        for key in [
+            WeightKey::UnitTechCredit,
+            WeightKey::TechBoardCredit,
+            WeightKey::ActionBoardCredit,
+            WeightKey::GovBoardCredit,
+            WeightKey::WonderBoardCredit,
+            WeightKey::BuildFreshCredit,
+            WeightKey::TerritoryCredit,
+            WeightKey::AggressionBoardCredit,
+            WeightKey::WarBoardCredit,
+            WeightKey::EventBoardCredit,
+            WeightKey::TacticReachCredit,
+        ] {
+            assert!(
+                matches!(key.sign_intent(), SignIntent::NonNegative(_)),
+                "{key:?} must be gated non-negative"
             );
         }
     }

@@ -532,11 +532,17 @@ pub fn sum_yields(triples: &[CardYield], w: &Weights, credit: f64) -> f64 {
 
 /// `_BOARD_CREDIT_KEYS`/`_board_credit_key`: the per-type offset on top of
 /// `card_board_credit` for a card whose pricing is board-aware and has NO
-/// dedicated board-aware pricing function of its own (leader, plus the
-/// military-deck's Bonus class). `None` for every other type -- either there
-/// is nothing to offset, or (Government/Action/Wonder, see below) a
-/// dedicated function already owns the pricing and a second, generic offset
-/// would be dead weight.
+/// dedicated board-aware pricing function of its own (leader). `None` for
+/// every other type -- either there is nothing to offset, or (Government/
+/// Action/Wonder, see below) a dedicated function already owns the pricing
+/// and a second, generic offset would be dead weight. Bonus used to have one
+/// too (`CardBoardBonus`); RETIRED 2026-08-24 (`weights::RETIRED_KEYS`) --
+/// not shadowed by a dedicated function the way Government/Action/Wonder
+/// are, but structurally dead: `credit_board`'s two consumers below
+/// (`board_yields::board_yields`'s swap diff, gated on `is_swap_type`, and
+/// `board_yields::board_extra`, which never emits a triple for a
+/// `CardType::Bonus` card) are unreachable/zero for a Bonus card for every
+/// possible weight vector. See that retirement's own `RETIRED_KEYS` entry.
 ///
 /// Deliberately exhaustive over every [`CardType`] variant, NOT a `match`
 /// with a trailing `_ => None` -- docs/OPEN_ITEMS.md's own account of why
@@ -553,7 +559,6 @@ pub fn board_credit_key(id: CardId) -> Option<WeightKey> {
     use CardType::*;
     match id.get().kind {
         Leader => Some(WeightKey::CardBoardLeader),
-        Bonus => Some(WeightKey::CardBoardBonus),
 
         // No board-aware pricing concept exists in THIS table for these --
         // not "unpriced", just priced a different way. A build (Farm/Mine/
@@ -593,9 +598,24 @@ pub fn board_credit_key(id: CardId) -> Option<WeightKey> {
         // same way once trained. All three retired (`WeightKey::
         // RETIRED_KEYS`) rather than left as live-looking knobs wired to
         // nothing.
+        //
+        // `Bonus` joined this bucket 2026-08-24, moving OUT of its own
+        // `Some(WeightKey::CardBoardBonus)` arm -- a DIFFERENT shape than
+        // Government/Action/Wonder above (no dedicated function shadows it;
+        // it never had one). `credit_board`'s two consumers in
+        // `card_potential_core` are `board_yields::board_yields`'s swap diff
+        // (requires `is_swap_type`: Leader/Government/Wonder, never Bonus)
+        // and `board_yields::board_extra` (only ever emits a triple for a
+        // card carrying `Special::CulturePerCivilizationWithMoreCulture` or
+        // `Special::ResourcesForMilitaryUnitsPerStrongerCivilization` --
+        // checked against `card_table.rs`: the three cards with either
+        // special are all `CardType::Action`, never Bonus). So both
+        // consumers are unreachable/zero for a Bonus card regardless of this
+        // weight's value -- structurally dead, not merely unreached on the
+        // sampled champions. See `weights::RETIRED_KEYS`'s own entry.
         Farm | Mine | Lab | Temple | Library | Arena | Theater | Infantry | Cavalry | Artillery
         | Air | SpecialTech | Tactic | Aggression | War | Pact | Territory | Event | Government
-        | Action | Wonder => None,
+        | Action | Wonder | Bonus => None,
     }
 }
 
@@ -2530,12 +2550,8 @@ mod tests {
     // ------------------------------------------------------- board plumbing
 
     #[test]
-    fn board_credit_key_covers_exactly_the_two_types_with_no_dedicated_pricer() {
+    fn board_credit_key_covers_exactly_the_one_type_with_no_dedicated_pricer() {
         assert_eq!(board_credit_key(CardId::by_name("Julius Caesar").unwrap()), Some(WeightKey::CardBoardLeader));
-        assert_eq!(
-            board_credit_key(CardId::by_name("Military Bonus (defense 2 / colonization 1)").unwrap()),
-            Some(WeightKey::CardBoardBonus)
-        );
         // Government/Action/Wonder each have their OWN dedicated board-aware
         // pricing function now (`gov_value`/`action_value`/the wonder
         // swap-diff branch, `card_potential_core`) -- their per-type offset
@@ -2546,6 +2562,15 @@ mod tests {
         assert_eq!(board_credit_key(CardId::by_name("Reserves (I)").unwrap()), None);
         assert_eq!(board_credit_key(CardId::by_name("Colossus").unwrap()), None);
         assert_eq!(board_credit_key(CardId::by_name("Warriors").unwrap()), None);
+        // `Bonus` joined the `None` bucket 2026-08-24 (`weights::
+        // RETIRED_KEYS`): `credit_board`'s two consumers are unreachable/
+        // zero for a Bonus card for every weight vector, not merely
+        // permanently shadowed the way Government/Action/Wonder are -- see
+        // `board_credit_key`'s own doc comment.
+        assert_eq!(
+            board_credit_key(CardId::by_name("Military Bonus (defense 2 / colonization 1)").unwrap()),
+            None
+        );
     }
 
     /// The structural guarantee `board_credit_key`'s own doc comment
@@ -2565,9 +2590,9 @@ mod tests {
     fn every_card_types_board_credit_key_membership_is_pinned() {
         fn expects_some(kind: CardType) -> bool {
             // Government/Action/Wonder no longer expect `Some` -- see
-            // `board_credit_key_covers_exactly_the_two_types_with_no_
-            // dedicated_pricer`'s own comment.
-            matches!(kind, CardType::Leader | CardType::Bonus)
+            // `board_credit_key_covers_exactly_the_one_type_with_no_
+            // dedicated_pricer`'s own comment. Bonus joined them 2026-08-24.
+            matches!(kind, CardType::Leader)
         }
         for card in crate::card_table::CARDS {
             let id = CardId::by_name(card.name).unwrap();
