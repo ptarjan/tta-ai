@@ -2379,7 +2379,7 @@ pub static CARDS: [Card; NUM_CARDS] = [
         military_action_cost: 2,
         composition: Composition { infantry: 0, cavalry: 0, artillery: 0, air: 0 },
         obsolete_strength: 0,
-        special: &[Special::StealColony(1), Special::ColonyPermanentBonusTransfers, Special::ColonyImmediateBonusApplies],
+        special: &[Special::StealColony(1), Special::ColonyPermanentBonusTransfers],
         stages: &[],
         peaceful_cost: 0,
         revolution_cost: 0,
@@ -5445,6 +5445,17 @@ mod baked_table_matches_source_data {
                 continue;
             }
             if key == "tacticBonus" || key == "tacticBonusObsolete" {
+                continue;
+            }
+            // A JSON `false` is the card printing the flag OFF, and the
+            // bool-flag arms below are payload-less: they turn the KEY into a
+            // unit variant without ever looking at the value, so without this
+            // guard `"flag": false` produces exactly the same `Special` as
+            // `"flag": true`. Skipping the pair here is the only place that can
+            // hold the line for all of them at once -- a per-arm check would
+            // have to be repeated on every bool key that is ever added, and the
+            // one that got missed would read as its own opposite.
+            if matches!(val, Json::Bool(false)) {
                 continue;
             }
             if key == "allPlayers" && scoring_event {
