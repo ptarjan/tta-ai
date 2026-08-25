@@ -1201,7 +1201,23 @@ pub fn load_weights(path: &std::path::Path) -> Result<Weights, String> {
 /// in `experiments/`, so a champion rewritten by the native trainer produces
 /// a readable diff against the one the Python league wrote rather than
 /// reformatting the whole file.
+///
+/// [`dominance_repair`] runs HERE, on every call, rather than being left to
+/// each caller's own copy of the vector: `bin/climb.rs`'s `mutate` already
+/// repairs before this is reached, but a checkpoint written right after
+/// `resume`, a future caller, or a test constructing a `Weights` by hand has
+/// no such guarantee, and a file this function writes is read back by
+/// [`parse_weights`] (which repairs again, silently) either way. A gated
+/// coordinate stored negative and loaded as `0.0` is not wasted search --
+/// [`dominance_repair`] already ran on every mutation this vector passed
+/// through -- but the FILE then lies about the number the bot actually used.
+/// Repairing at the one place every champion vector funnels through on its
+/// way to text closes that gap structurally: no caller of this function, now
+/// or in the future, can produce a champion JSON whose stored value differs
+/// from what a fresh load of that same file would evaluate with.
 pub fn weights_json(w: &Weights, extra: &[(&str, f64)]) -> String {
+    let repaired = dominance_repair(w).0;
+    let w = &repaired;
     let mut names: Vec<&'static str> = WeightKey::ALL.iter().map(|k| k.name()).collect();
     names.sort_unstable();
 
@@ -2666,6 +2682,30 @@ mod tests {
             !matches!(chosen, Move::EndTurn),
             "a heavy food/resource-gap penalty must not make passing with a civil action \
              and an affordable Take in hand look better than actually taking it, got {chosen:?}"
+        );
+    }
+
+    /// `weights_json` must never write the number a `NonNegative`/
+    /// `NonPositive`-gated coordinate happens to hold in memory -- it must
+    /// write what `dominance_repair` says that coordinate actually means, so
+    /// a champion file always matches what a fresh load of that same file
+    /// evaluates with. Parses the raw JSON text directly (not through
+    /// `parse_weights`, which would repair a second time and hide a broken
+    /// serializer) to check the STORED number, not the round-tripped one.
+    #[test]
+    fn weights_json_stores_the_dominance_repaired_value_not_the_raw_one() {
+        let mut w = Weights::default();
+        w.set(WeightKey::TechBoardCredit, -25.457502); // NonNegative-gated
+        let text = weights_json(&w, &[]);
+        let doc = crate::fixtures::parse_json(&text).unwrap();
+        let stored = doc
+            .get("weights")
+            .and_then(|w| w.get("tech_board_credit"))
+            .and_then(|v| v.as_f64())
+            .expect("tech_board_credit present in the serialized weights");
+        assert_eq!(
+            stored, 0.0,
+            "weights_json wrote the raw negative value instead of the repaired one"
         );
     }
 }

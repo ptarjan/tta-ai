@@ -1,0 +1,209 @@
+CHAMPION JSON GHOSTS -- 2026-08-25
+====================================
+Two related champion-JSON cleanups: (A) stored-negative sign-gate ghosts,
+(B) a stale RETIRED_KEYS entry. Diagnosed both first; only (A) needed a code
+change.
+
+
+TASK A -- stored-negative ghosts
+=================================
+
+FILE + FUNCTION CHANGED
+------------------------
+rust/src/bots/weighted/eval.rs, function `weights_json` (the JSON-rendering
+function; the only two call sites in the whole crate are `save_weights`,
+also in eval.rs, and one round-trip test).
+
+WHY THIS LOCATION, NOT climb.rs's point of promotion
+------------------------------------------------------
+`dominance_repair` already runs at two points before this change:
+  1. Load time -- `parse_weights` (eval.rs ~1099) applies it to every vector
+     read from disk.
+  2. Mutation time -- `bin/climb.rs`'s `mutate()` (~408-412) applies it to
+     every mutant before it is ever evaluated or considered for promotion.
+So the in-memory champion `climb` promotes and checkpoints is *already*
+repaired in the common case. Repairing a THIRD time at climb's point of
+promotion would only restate a guarantee climb already has; it would do
+nothing for a caller outside climb.rs -- a test that hand-builds a `Weights`
+and calls `save_weights` directly (several already exist in eval.rs's own
+test module), or any future binary that writes a champion file. The
+serializer (`weights_json`) is the one choke point every `Weights -> JSON
+text` conversion in the crate passes through, so repairing there is the only
+location that makes "write an unrepaired file" structurally impossible for
+every caller, present and future, not just the one caller (climb) that
+happened to already behave.
+
+THE CHANGE
+----------
+`weights_json`'s first two lines now read:
+    let repaired = dominance_repair(w).0;
+    let w = &repaired;
+before any field is formatted. Everything downstream is untouched -- it
+still reads `w.get(key)` for every `WeightKey::ALL` entry, just now off the
+repaired copy instead of the raw one.
+
+BEFORE/AFTER, ONE CONCRETE KEY
+-------------------------------
+`WeightKey::TechBoardCredit` is gated `NonNegative` ("scales tech_value,
+floored... never a downside", weights.rs sign_intent match). The live 3p
+champion held it at -25.457502.
+  BEFORE this change: `weights_json` wrote `"tech_board_credit":
+  -25.457502` verbatim -- the exact value on disk today.
+  AFTER this change: `weights_json` writes `"tech_board_credit": 0.0`,
+  because `dominance_repair` clamps a `NonNegative` violator to exactly
+  0.0 -- matching the value `parse_weights` already produces when ANYONE
+  (the bot, `climb`, an analysis binary) loads this file today. The file
+  now says what the bot actually uses.
+
+NO CALLER CAN NOW WRITE AN UNREPAIRED FILE
+--------------------------------------------
+`grep -rn "weights_json(" rust/src` finds exactly two call sites:
+  - `save_weights` (eval.rs ~1257), the only function that ever writes a
+    champion file to disk (climb.rs's `checkpoint()` calls only this).
+  - one test (`a_champion_round_trips_through_text`, eval.rs), which asserts
+    a round trip on `Free`-classified keys only (Culture, Science) so is
+    unaffected by the repair but is now itself covered by it.
+Both paths in the whole crate that turn a `Weights` into JSON text now go
+through the repair. There is no way to reach `std::fs::write` for a
+champion file (`save_weights`'s only write) without going through
+`weights_json` first.
+
+
+TASK B -- stale RETIRED_KEYS entry (card_board_bonus)
+=======================================================
+
+LOADER BEHAVIOUR, QUOTED
+--------------------------
+rust/src/bots/weighted/eval.rs:1069-1071, inside `parse_weights`:
+    if RETIRED_KEYS.contains(&name.as_str()) {
+        continue;
+    }
+A RETIRED_KEYS entry found in a file is SILENTLY DROPPED during the parse
+loop -- it never reaches `WeightKey::by_name`, never calls `w.set`, and
+therefore never touches any live `Weights` coordinate. This is confirmed by
+the module's own top doc comment, eval.rs:86-87: "[`RETIRED_KEYS`] stay
+silently dropped -- every champion on disk predates their removal, so they
+are expected, not a mistake."
+
+DOES THE VALUE REACH ANY EVALUATION?
+--------------------------------------
+`grep -n "CardBoardBonus" rust/src -r` returns nothing -- there is no
+`WeightKey::CardBoardBonus` variant. `card_board_bonus` exists ONLY as a
+bare `&'static str` inside the `RETIRED_KEYS` array (weights.rs:2236),
+which is, by that array's own doc comment (weights.rs:2135), the ONE
+sanctioned place a retired key's name may appear as a string literal --
+"giving a retired key a variant would make it indexable again, which is the
+opposite of retired." With no `WeightKey` variant, nothing in
+`cards::card_potential_core`, `eval::evaluate`, or `eval::dominance_repair`
+can index it, read it, or price it. Structurally unreachable, not merely
+unreached on the sampled champions -- the same class of proof
+weights.rs:2214-2235's own retirement comment for this exact key already
+gives for why it was retired in the first place (its only two possible
+consumers, `board_yields::board_yields`'s swap diff and
+`board_yields::board_extra`, are unreachable/zero for every `CardType::Bonus`
+card, for every weight vector).
+
+SAVER BEHAVIOUR
+-----------------
+`weights_json` (eval.rs ~1205) builds its emitted key list from
+`WeightKey::ALL.iter().map(|k| k.name())` -- exclusively. `RETIRED_KEYS`
+names have no `WeightKey` variant to be enumerated from `ALL`, so the saver
+was ALREADY structurally incapable of emitting `card_board_bonus` (or any
+other retired name) before any change made today.
+
+VERDICT: NO CODE CHANGE
+--------------------------
+`card_board_bonus` in `experiments/rust_champion_{2,3,4}p.json` is stale
+text left over from before its 2026-08-24 retirement (dated by the
+retirement's own comment at weights.rs:2214). The loader already drops it
+inertly on load; the saver already cannot re-emit it. The very next
+checkpoint any running `climb` process writes (climb rewrites its champion
+file every few minutes; see `bin/dump_selfplay.rs`'s own doc comment) drops
+the stale key from the file with zero code changes required. This is a
+"no fix warranted, here is the proof" outcome, not an oversight.
+
+
+RAW LIST -- all 18 stored-negative key-instances (before Task A's fix)
+==========================================================================
+All 18 are `NonNegative`-gated keys stored negative on disk and clamped to
+exactly 0.0 by `dominance_repair` at every load. Zero `NonPositive`
+violations were found. Captured via a temporary diagnostic test
+(`scratch_census_stored_sign_violations`, added, run, and removed -- not
+part of the landed change) that parsed each champion file's raw JSON text
+directly (bypassing `parse_weights`'s own repair) and checked every field
+against `non_negative_gates()`/`non_positive_gates()`.
+
+2p (5 instances):
+  build_fresh_credit    = -0.05174462031471022
+  event_board_credit    = -0.18441579809417896
+  tactic_reach_credit   = -0.41164145984898737
+  tech_board_credit     = -0.3168182658483543
+  unit_tech_credit      = -0.02407769857448125
+
+3p (6 instances):
+  aggression_board_credit = -0.06672551663385082
+  event_board_credit      = -1.9750801754184268
+  tactic_reach_credit     = -0.07110897586662696
+  tech_board_credit       = -25.45750231270339
+  territory_credit        = -0.06853265426705338
+  war_board_credit        = -0.4611142942115333
+
+4p (7 instances):
+  action_board_credit     = -0.07156524285048321
+  aggression_board_credit = -0.24519786767468477
+  build_fresh_credit      = -0.6728192930469457
+  event_board_credit      = -0.3518360789304213
+  gov_board_credit        = -0.17219470312801052
+  tech_board_credit       = -0.10553500732969152
+  territory_credit        = -0.27507421189222975
+
+Total: 5 + 6 + 7 = 18.
+
+Note: these files are NOT rewritten by this change (they are gitignored,
+climb-owned live state -- CLAUDE.md: "experiments/rust_champion_*.json are
+deliberately untracked"). The fix is in the code path that produces them;
+the currently-running `climb` process will overwrite these stale values
+with the repaired ones on its very next checkpoint once restarted on the
+new binary.
+
+
+TEST ADDED
+============
+rust/src/bots/weighted/eval.rs, bottom `#[cfg(test)] mod tests`:
+`weights_json_stores_the_dominance_repaired_value_not_the_raw_one` -- sets
+`WeightKey::TechBoardCredit` to -25.457502 (the live 3p champion's actual
+stored value) on a `Weights::default()`, calls `weights_json` directly, and
+parses the resulting text with `crate::fixtures::parse_json` (not
+`parse_weights`, which would repair a second time and hide a broken
+serializer) to assert the STORED `tech_board_credit` field is exactly 0.0.
+
+RED/GREEN confirmation: reverted only the two enforcement lines (`let
+repaired = dominance_repair(w).0; let w = &repaired;`) inside `weights_json`,
+re-ran the test alone -- it failed with `left: -25.457502, right: 0.0`
+(nonzero exit, correct RED). Restored the two lines -- test passes (exit 0,
+GREEN). No task B test: Task B landed no enforcement code, so there is
+nothing to revert-and-confirm; its diagnosis is proven by grep (quoted
+above), not by a test.
+
+
+GATES -- all EXIT lines
+==========================
+EXIT red_confirm_a=101
+EXIT green_confirm_a=0
+EXIT clippy=0
+EXIT fasttest=0
+
+(Task B has no red_confirm_b: no enforcement code was added for it.)
+
+Nothing touched in this change reads a replay path -- `weights_json` is
+JSON-serialization-only, exercised at champion-checkpoint time, never
+during a replay/corpus sweep. A corpus sweep was correctly not required and
+was not run.
+
+
+FILES MODIFIED
+=================
+rust/src/bots/weighted/eval.rs (weights_json repair + new test only)
+
+No other file touched. No scratch files or backups left on disk besides
+/private/tmp/jsonghost_notes.txt (working notes) and this deliverable.
