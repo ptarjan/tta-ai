@@ -629,6 +629,24 @@ fn percentiles_u32(v: Vec<u32>) -> String {
 // Per-run tally
 // ---------------------------------------------------------------------
 
+/// One player-round's contribution to the "Worker allocation curve" --
+/// summed here, divided by `n` in `print_report`. Sampled at the exact
+/// same instant as `Report::production_by_round` (see that field's doc);
+/// `bin/humanopenings.rs` accumulates the identically-named/-shaped
+/// quantity so the two curves are directly diffable line-for-line.
+#[derive(Default, Clone, Copy)]
+struct AllocAccum {
+    farm_workers: u64,
+    mine_workers: u64,
+    urban_workers: u64,
+    mil_workers: u64,
+    free_workers: u64,
+    staffed_workers: u64,
+    best_farm_sum: u64,
+    best_mine_sum: u64,
+    n: u64,
+}
+
 #[derive(Default)]
 struct Report {
     games: u64,
@@ -658,6 +676,10 @@ struct Report {
     // round directly comparable against `bin/humanopenings.rs`'s human
     // curve of the same shape.
     production_by_round: HashMap<u16, (u64, u64, u64)>,
+
+    // ---- worker allocation curve (same sample instant as
+    // `production_by_round` above, see its doc and `AllocAccum`'s) ----
+    alloc_by_round: HashMap<u16, AllocAccum>,
 
     // ---- opening, human-comparable schema (`bin/humanopenings.rs`'s
     // schema -- see `PlayerTrack`'s own doc). Each map's value is (wins,
@@ -798,6 +820,7 @@ impl Report {
         self.n_player_games_no_wonder_by_round4 += other.n_player_games_no_wonder_by_round4;
         self.n_player_games += other.n_player_games;
         merge_triple_map(&mut self.production_by_round, other.production_by_round);
+        merge_alloc_map(&mut self.alloc_by_round, other.alloc_by_round);
 
         merge_pair_map(&mut self.opening_first_take, other.opening_first_take);
         merge_pair_map(&mut self.opening_first_build_kind, other.opening_first_build_kind);
@@ -875,6 +898,23 @@ fn merge_triple_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, (u64, u64, u64)>
         e.0 += food;
         e.1 += resources;
         e.2 += n;
+    }
+}
+
+/// [`merge_triple_map`]'s twin for [`Report::alloc_by_round`]'s
+/// [`AllocAccum`] -- same "add every field element-wise" merge.
+fn merge_alloc_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, AllocAccum>, b: HashMap<K, AllocAccum>) {
+    for (k, v) in b {
+        let e = a.entry(k).or_default();
+        e.farm_workers += v.farm_workers;
+        e.mine_workers += v.mine_workers;
+        e.urban_workers += v.urban_workers;
+        e.mil_workers += v.mil_workers;
+        e.free_workers += v.free_workers;
+        e.staffed_workers += v.staffed_workers;
+        e.best_farm_sum += v.best_farm_sum;
+        e.best_mine_sum += v.best_mine_sum;
+        e.n += v.n;
     }
 }
 
@@ -1156,6 +1196,61 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             e.0 += u64::from(food);
             e.1 += u64::from(resources);
             e.2 += 1;
+
+            // ---- worker allocation: SAME instant, same player, additionally
+            // classifying every placed worker by `CardType` and reading the
+            // printed per-worker production of every Farm/Mine tech held
+            // (whether staffed or not -- a level "held" is a tech OWNED, not
+            // a worker placed on it). Exhaustive match, no wildcard arm
+            // (`wildcard_enum_match_arm` is denied repo-wide).
+            let p = &state.players[actor as usize];
+            let mut farm_workers = 0u32;
+            let mut mine_workers = 0u32;
+            let mut urban_workers = 0u32;
+            let mut mil_workers = 0u32;
+            let mut best_farm = 0i16;
+            let mut best_mine = 0i16;
+            for (id, slot) in p.techs.iter() {
+                let workers = u32::from(slot.workers);
+                match id.get().kind {
+                    CardType::Farm => {
+                        farm_workers += workers;
+                        best_farm = best_farm.max(id.get().production.food);
+                    }
+                    CardType::Mine => {
+                        mine_workers += workers;
+                        best_mine = best_mine.max(id.get().production.resources);
+                    }
+                    CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater => {
+                        urban_workers += workers;
+                    }
+                    CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => {
+                        mil_workers += workers;
+                    }
+                    CardType::Government
+                    | CardType::SpecialTech
+                    | CardType::Wonder
+                    | CardType::Leader
+                    | CardType::Action
+                    | CardType::Tactic
+                    | CardType::Aggression
+                    | CardType::War
+                    | CardType::Pact
+                    | CardType::Bonus
+                    | CardType::Territory
+                    | CardType::Event => {}
+                }
+            }
+            let a = report.alloc_by_round.entry(round_before).or_default();
+            a.farm_workers += u64::from(farm_workers);
+            a.mine_workers += u64::from(mine_workers);
+            a.urban_workers += u64::from(urban_workers);
+            a.mil_workers += u64::from(mil_workers);
+            a.free_workers += u64::from(p.workers_free);
+            a.staffed_workers += u64::from(farm_workers + mine_workers + urban_workers + mil_workers);
+            a.best_farm_sum += u64::from(best_farm.max(0) as u16);
+            a.best_mine_sum += u64::from(best_mine.max(0) as u16);
+            a.n += 1;
         }
 
         // pre-move info needed for classification
@@ -2290,6 +2385,31 @@ fn print_report(players: u8, r: &Report) {
             "round {round}: food mean={:.2} resources mean={:.2} n={n}",
             food_sum as f64 / n.max(1) as f64,
             resources_sum as f64 / n.max(1) as f64
+        );
+    }
+
+    // ---- worker allocation curve: mean workers by CardType bucket, mean
+    // free/staffed workers, and mean of each player's OWN best farm/mine
+    // tech level, per round -- same sample instant as the production curve
+    // above (see `AllocAccum`'s doc), same print format as
+    // `bin/humanopenings.rs`'s so the two are directly diffable.
+    println!("\n### Worker allocation curve\n");
+    let mut alloc_rounds: Vec<u16> = r.alloc_by_round.keys().copied().collect();
+    alloc_rounds.sort_unstable();
+    for round in alloc_rounds {
+        let a = &r.alloc_by_round[&round];
+        let n = a.n.max(1) as f64;
+        println!(
+            "round {round}: farmW={:.2} mineW={:.2} urbanW={:.2} milW={:.2} free={:.2} staffed={:.2} bestFarm={:.2} bestMine={:.2} n={}",
+            a.farm_workers as f64 / n,
+            a.mine_workers as f64 / n,
+            a.urban_workers as f64 / n,
+            a.mil_workers as f64 / n,
+            a.free_workers as f64 / n,
+            a.staffed_workers as f64 / n,
+            a.best_farm_sum as f64 / n,
+            a.best_mine_sum as f64 / n,
+            a.n
         );
     }
 }

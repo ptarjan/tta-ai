@@ -1,0 +1,207 @@
+Worker allocation curve, bot vs human corpus, 3 players
+=========================================================
+Date: 2026-08-24
+Tool: rust/src/bin/behavcensus.rs and rust/src/bin/humanopenings.rs, both
+      extended with a "Worker allocation curve" section that reuses the
+      EXACT SAME sample instant and hook as the existing "Production
+      curve" section (added in de5f526) -- the first move of a player's
+      turn, detected by `state.current` changing (`prev_actor` in both
+      files). No new hook was added; the new accumulator sits in the same
+      `if prev_actor != Some(actor)` block as the existing
+      `production_by_round` sample, reading the SAME pre-move `GameState`
+      and the SAME player.
+Runs: ./target/release/behavcensus --games 200 --players 3 \
+        --weights /private/tmp/opencensus/champ3p.json --threads 5
+      ./target/release/humanopenings ../sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals 2>&1
+      (humanopenings prints its report sections to STDERR; its stdout is
+      the per-player-game TSV. Capture 2>&1 or the section is lost. Note
+      the path is `../sources/bgo/index.tsv` -- relative to `rust/`, the
+      binary's own working directory when invoked from there.)
+
+WHAT THIS ANSWERS
+------------------
+analysis/production_curve_3p_2026-08-24.txt found the bot's FOOD
+production DECLINING from round 2 (2.00) to ~1.42 by round 15 while the
+human corpus climbs 2.00 -> 4.25 over the same rounds, and closed with
+three candidate causes that a production-RATE curve alone cannot tell
+apart: (a) workers leave farms, (b) farm levels never rise, (c) the
+tableau grows but farms do not. This census adds, at the identical
+sample instant, workers-by-`CardType` (farm/mine/urban/military/free),
+total staffed workers, and each player's own best-owned farm/mine tech
+level (mean of the per-player max production-per-worker), to separate
+the three.
+
+THE CURVES
+----------
+Bot: 200 self-play games at 3p, up to 600 player-games (falls off after
+round 18 as games finish, matching the production curve's own n column).
+Human: the 3-player subset of the 1011-game BGO corpus, 399 player-games
+at round 1, thinning the same way.
+
+BOT (n=600 through round 18)
+round  farmW  mineW  urbanW  milW  free  staffed  bestFarm  bestMine
+  1    2.00   2.00   1.00    1.00  1.00   6.00     1.00      1.00
+  2    2.00   2.00   1.00    1.00  1.00   6.00     1.00      1.00
+  3    1.98   2.49   1.00    1.51  0.28   6.99     1.00      1.00
+  4    1.95   2.65   1.37    1.84  0.59   7.81     1.00      1.00
+  5    1.88   2.71   1.92    2.10  0.35   8.61     1.00      1.00
+  6    1.83   2.79   2.27    2.29  0.28   9.18     1.00      1.00
+  7    1.76   2.84   2.56    2.41  0.26   9.57     1.00      1.00
+  8    1.67   2.88   2.81    2.46  0.28   9.82     1.00      1.00
+  9    1.61   2.91   3.01    2.42  0.22   9.95     1.00      1.00
+ 10    1.56   2.95   3.16    2.35  0.19  10.03     1.01      1.00
+ 11    1.53   2.98   3.25    2.25  0.16  10.01     1.02      1.00
+ 12    1.50   3.02   3.33    2.17  0.15  10.01     1.03      1.00
+ 13    1.46   3.05   3.39    2.04  0.14   9.94     1.03      1.00
+ 14    1.42   3.05   3.46    2.05  0.13   9.97     1.05      1.00
+ 15    1.39   3.04   3.50    2.00  0.15   9.93     1.07      1.00
+ 16    1.38   3.02   3.62    2.00  0.10  10.02     1.07      1.00
+ 17    1.36   3.02   3.70    1.97  0.10  10.04     1.08      1.00
+ 18    1.36   2.99   3.79    1.99  0.12  10.12     1.12      1.00
+ 19    1.35   2.96   3.86    1.90  0.10  10.08     1.14      1.00 (n=582)
+ 20    1.31   2.93   3.87    1.88  0.10   9.99     1.12      1.00 (n=366)
+ 21    1.12   2.82   3.49    1.53  0.06   8.96     1.04      1.00 (n=51)
+
+HUMAN (n=399 falling to n=26 by round 19, same survivorship as the
+production curve)
+round  farmW  mineW  urbanW  milW  free  staffed  bestFarm  bestMine
+  1    2.00   2.00   1.00    1.00  1.00   6.00     1.00      1.00
+  2    2.00   2.00   1.00    1.00  1.00   6.00     1.00      1.00
+  3    2.01   2.83   1.06    1.03  0.86   6.92     1.00      1.00
+  4    2.02   2.93   1.59    1.15  1.08   7.69     1.01      1.00
+  5    2.03   2.99   1.90    1.44  1.25   8.36     1.04      1.05
+  6    2.04   3.04   2.31    1.72  1.31   9.10     1.10      1.14
+  7    2.05   3.05   2.61    2.12  1.20   9.82     1.16      1.23
+  8    2.06   3.05   2.83    2.45  1.03  10.38     1.24      1.33 (n=397)
+  9    2.06   3.04   3.09    2.57  0.88  10.76     1.35      1.42 (n=391)
+ 10    2.05   3.05   3.28    2.73  0.75  11.12     1.49      1.60 (n=382)
+ 11    2.06   3.04   3.45    2.85  0.72  11.40     1.63      1.79 (n=378)
+ 12    2.06   3.05   3.63    2.92  0.78  11.66     1.84      1.97 (n=378)
+ 13    2.05   3.03   3.88    3.08  0.75  12.04     1.99      2.10 (n=377)
+ 14    2.06   3.02   4.18    3.24  0.69  12.49     2.19      2.25 (n=370)
+ 15    2.06   3.00   4.55    3.36  0.60  12.96     2.35      2.40 (n=363)
+ 16    2.06   2.98   4.89    3.62  0.59  13.54     2.53      2.50 (n=363)
+ 17    2.06   2.93   5.25    3.84  0.55  14.09     2.67      2.64 (n=334)
+ 18    2.10   2.93   5.59    4.03  0.69  14.65     2.68      2.76 (n=203)
+ 19    2.35   2.73   6.27    4.27  0.92  15.62     2.69      2.88 (n=26)
+
+THE ANSWER: (a) AND (b) TOGETHER, NOT (c) ALONE
+-------------------------------------------------
+Both start identical at round 1-2 (2.00/2.00/1.00/1.00, bestFarm/bestMine
+both 1.00) -- the fixed starting tableau (Agriculture + Bronze + one
+urban + one military unit), the same cross-check the production curve
+made.
+
+FARM WORKERS (farmW) THEMSELVES DECLINE, IN ABSOLUTE TERMS, NOT JUST AS A
+SHARE. The bot's farmW falls every round from round 2's 2.00 to 1.39 by
+round 15 and 1.35 by round 19 -- a ~33% absolute drop in workers sitting
+on farm cards, not a dilution by a larger denominator. The human farmW
+never drops: it holds at 2.00-2.10 for the entire 19-round window,
+touching 2.35 only at the very end (n=26, thin). This is candidate (a),
+and it is not a marginal effect -- it is close to the whole story
+numerically. The bot's bestFarm sits at 1.00 flat through round 9 and
+creeps to only 1.03-1.14 by rounds 13-19, so `farmW x bestFarm` (a rough
+reconstruction of the worker-capped food credit, ignoring the rare
+second denomination) tracks the measured food curve in
+production_curve_3p_2026-08-24.txt almost exactly: ~1.98 at round 3,
+~1.46-1.42 at rounds 13-14, ~1.35-1.39 by round 15-19. Because bestFarm
+is nearly constant at 1 for the bot, essentially the ENTIRE decline in
+the bot's food production curve is arithmetically explained by farmW
+declining. That makes (a) the dominant driver of the DECLINE itself.
+
+FARM TECH LEVEL NEVER RISES. Candidate (b) is separately and just as
+clearly true: the bot's bestFarm is 1.00 for 9 straight rounds and only
+reaches 1.14 by round 19, while the human's bestFarm climbs steadily to
+2.69 over the same window. This is why the bot's food production, even
+at its round-1/2 peak of 2.00, never catches the human's climbing curve
+at all -- the human's farm WORKERS stay exactly as flat as the bot's
+(2.00-2.10 the entire game) but the human's farm LEVEL keeps rising, so
+each of those same ~2 workers produces more and more food. (b) is the
+dominant driver of the GAP between the two curves, distinct from (a)'s
+role in the bot's own DECLINE.
+
+(c), "tableau grows but farms do not," is the weakest of the three read
+literally. The bot's staffed (total placed workers) does grow, from 6.00
+to ~10.0-10.1 by round 15-20 -- population is expanding. But farms do not
+merely fail to grow alongside it: they actively SHRINK while urban
+(1.00 -> 3.5-3.9) and, for a while, military (1.00 -> peak 2.46 around
+round 8, then declining) both grow. So (c) is true only in its weaker
+form ("farms are not keeping pace with the tableau"); the stronger and
+better-supported reading is (a) -- farms are actively being drained of
+workers as the rest of the tableau grows, not merely left behind by it.
+
+RANKING: (a) and (b) are both fully supported and are the two real
+causes; (a) explains the SHAPE (why the curve falls after round 2), (b)
+explains the LEVEL (why it never gets anywhere near the human's rate even
+where it doesn't fall). (c) is a restatement of (a) once staffed is read
+alongside farmW rather than a separate mechanism -- it is not disproven,
+it is subsumed.
+
+CORROBORATION FROM THE MINE SIDE
+---------------------------------
+Mine gives a clean contrast, because the bot's mine BEHAVIOUR differs
+from its farm behaviour along one axis but matches it along the other.
+mineW RISES for the bot, from 2.00 to a plateau around 2.9-3.05 --
+unlike farmW, workers are not leaving mines. But bestMine is 1.00 for
+literally every one of the 21 rounds sampled (600 player-rounds each) --
+the bot never once upgrades mine tech beyond the starting level, an even
+more extreme version of the farm-tech stagnation in (b). The human
+bestMine climbs from 1.00 to 2.88, mirroring bestFarm's climb almost
+exactly. So the resource curve's gap in production_curve_3p_2026-08-24.txt
+(2.49 bot vs 2.83 human at round 3, widening to 2.91 vs 6.02 by round 15)
+is ALL (b) -- worker count on mines is not falling and even rises a
+little for the bot -- while the food curve's gap is BOTH (a) and (b)
+stacked: workers leaving AND the level never rising. This is why food is
+the worse of the two findings in the production-curve file: it has two
+compounding defects where resources has one.
+
+At round 3, the first round a mine tech can exist, bestMine is already
+1.00 for BOTH bot and human -- the round-3 resource gap (2.49 vs 2.83)
+is not a tech-level gap at that specific point, it is a worker-count gap
+(mineW 2.49 bot vs 2.83 human), i.e. more humans have already built and
+staffed a second mine slot by round 3 than the bot has.
+
+CAVEATS ON THE MEASUREMENT ITSELF
+-----------------------------------
+1. bestFarm/bestMine are the mean of each player's OWN maximum
+   production-per-worker among owned Farm/Mine cards, counted whether or
+   not a worker is currently placed on that card (a level "held" is a
+   tech OWNED, matching the task's request to separate "workers moved
+   off" from "level never rose" -- if levels were only counted when
+   staffed, a level rise coinciding with a worker leaving it would look
+   identical to the level never having risen at all).
+2. staffed = farmW + mineW + urbanW + milW, i.e. workers on Farm, Mine,
+   Lab/Temple/Arena/Library, and Infantry/Cavalry/Artillery/AirForce
+   cards; Government/SpecialTech/Wonder/Leader/Action/Tactic/
+   Aggression/War/Pact/Bonus/Territory/Event never hold a worker in this
+   game and are excluded by construction (exhaustive match, not a
+   filter).
+3. Same survivorship caveat as production_curve_3p_2026-08-24.txt: the
+   human n thins from 399 to 26 by round 19 as games finish; the bot n
+   holds near 600 through round 18. Round 19's human line (n=26) is
+   thin; rounds 20-21 are bot-only and are not tabulated on the human
+   side above for the same reason the production curve stopped there.
+4. This is a census of a snapshot (the max level HELD, and the workers
+   PLACED, at one instant per round), not a trace of any single player's
+   trajectory -- it cannot distinguish "this player never upgraded" from
+   "this player upgraded late," only report the round-by-round mean.
+
+A GENUINE BUG CAUGHT BY THIS MEASUREMENT'S OWN CROSS-CHECK
+-------------------------------------------------------------
+behavcensus.rs merges per-thread partial `Report`s through an explicit
+`Report::merge` (not a derive) when run with --threads > 1. The first
+version of this change added the new `alloc_by_round` field to `Report`
+but not to `merge`, so with --threads 5 the section printed its header
+and then nothing -- every per-thread partial was silently dropped at the
+merge step while the (correctly merged) production curve printed fine
+next to it. Caught by comparing sections in the same run rather than
+trusting a clean compile; fixed by adding `merge_alloc_map` alongside
+the existing `merge_triple_map` and calling it from `Report::merge`.
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
+The human census is a diagnostic mirror. Fitting the leaf evaluation on
+the human corpus is on the standing do-not-do list and has lost three
+times. This file names two defects (workers draining off farms, and
+farm/mine tech level stagnating) with the numbers that separate them; it
+does not propose a coefficient or a weight change for either.

@@ -48,6 +48,24 @@ use tta::{CardId, CardType, Move};
 
 /// First-take civil-action-cost tally for one player count, accumulated
 /// across every player-game at that count.
+/// One player-round's contribution to the "Worker allocation curve" --
+/// summed here, divided by `n` when printed. The human twin of
+/// `bin/behavcensus.rs`'s `AllocAccum`, same fields, same sample instant
+/// (see the accumulation site below), so the two curves are directly
+/// diffable line-for-line.
+#[derive(Default, Clone, Copy)]
+struct AllocAccum {
+    farm_workers: u64,
+    mine_workers: u64,
+    urban_workers: u64,
+    mil_workers: u64,
+    free_workers: u64,
+    staffed_workers: u64,
+    best_farm_sum: u64,
+    best_mine_sum: u64,
+    n: u64,
+}
+
 #[derive(Default)]
 struct CostStats {
     /// cost -> number of player-games whose first take had that cost.
@@ -513,6 +531,11 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     // printing needs no separate sort, unlike behavcensus's `HashMap`.
     let mut production_by_round: BTreeMap<u16, (u64, u64, u64)> = BTreeMap::new();
 
+    // Worker allocation curve (3-player games only, same accumulation site
+    // as `production_by_round` above): the human twin of
+    // `bin/behavcensus.rs`'s `Report::alloc_by_round`.
+    let mut alloc_by_round: BTreeMap<u16, AllocAccum> = BTreeMap::new();
+
     for meta in games.iter() {
         let n = meta.players as usize;
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -648,6 +671,61 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                     e.0 += u64::from(food);
                     e.1 += u64::from(resources);
                     e.2 += 1;
+
+                    // ---- worker allocation: SAME instant, same player,
+                    // classifying every placed worker by `CardType` and
+                    // reading the printed per-worker production of every
+                    // Farm/Mine tech held (whether staffed or not). See
+                    // `bin/behavcensus.rs`'s identical block for the full
+                    // rationale; exhaustive match, no wildcard arm.
+                    let p = &d.state.players[seat as usize];
+                    let mut farm_workers = 0u32;
+                    let mut mine_workers = 0u32;
+                    let mut urban_workers = 0u32;
+                    let mut mil_workers = 0u32;
+                    let mut best_farm = 0i16;
+                    let mut best_mine = 0i16;
+                    for (id, slot) in p.techs.iter() {
+                        let workers = u32::from(slot.workers);
+                        match id.get().kind {
+                            CardType::Farm => {
+                                farm_workers += workers;
+                                best_farm = best_farm.max(id.get().production.food);
+                            }
+                            CardType::Mine => {
+                                mine_workers += workers;
+                                best_mine = best_mine.max(id.get().production.resources);
+                            }
+                            CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater => {
+                                urban_workers += workers;
+                            }
+                            CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => {
+                                mil_workers += workers;
+                            }
+                            CardType::Government
+                            | CardType::SpecialTech
+                            | CardType::Wonder
+                            | CardType::Leader
+                            | CardType::Action
+                            | CardType::Tactic
+                            | CardType::Aggression
+                            | CardType::War
+                            | CardType::Pact
+                            | CardType::Bonus
+                            | CardType::Territory
+                            | CardType::Event => {}
+                        }
+                    }
+                    let a = alloc_by_round.entry(d.state.round).or_default();
+                    a.farm_workers += u64::from(farm_workers);
+                    a.mine_workers += u64::from(mine_workers);
+                    a.urban_workers += u64::from(urban_workers);
+                    a.mil_workers += u64::from(mil_workers);
+                    a.free_workers += u64::from(p.workers_free);
+                    a.staffed_workers += u64::from(farm_workers + mine_workers + urban_workers + mil_workers);
+                    a.best_farm_sum += u64::from(best_farm.max(0) as u16);
+                    a.best_mine_sum += u64::from(best_mine.max(0) as u16);
+                    a.n += 1;
                 }
             }
         }
@@ -800,6 +878,23 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             "round {round}: food mean={:.2} resources mean={:.2} n={n}",
             *food_sum as f64 / (*n).max(1) as f64,
             *resources_sum as f64 / (*n).max(1) as f64
+        );
+    }
+
+    eprintln!("\n### Worker allocation curve\n");
+    for (round, a) in &alloc_by_round {
+        let n = a.n.max(1) as f64;
+        eprintln!(
+            "round {round}: farmW={:.2} mineW={:.2} urbanW={:.2} milW={:.2} free={:.2} staffed={:.2} bestFarm={:.2} bestMine={:.2} n={}",
+            a.farm_workers as f64 / n,
+            a.mine_workers as f64 / n,
+            a.urban_workers as f64 / n,
+            a.mil_workers as f64 / n,
+            a.free_workers as f64 / n,
+            a.staffed_workers as f64 / n,
+            a.best_farm_sum as f64 / n,
+            a.best_mine_sum as f64 / n,
+            a.n
         );
     }
     Ok(())
