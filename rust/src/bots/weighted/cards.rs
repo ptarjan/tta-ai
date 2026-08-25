@@ -357,6 +357,23 @@ pub fn card_yields(id: CardId, out: &mut Vec<CardYield>) {
         // coordinates` below for the regression pin.
     }
 
+    // Preparing an Event card (RULES_SPEC 5.2) banks a guaranteed,
+    // board-independent amount the moment it is prepared -- `apply.rs::
+    // h_prepare_event` credits the placer `card.level()` culture
+    // unconditionally, regardless of what the card itself prints, because
+    // preparing an event does not reveal or resolve THIS card (it reveals
+    // whatever already sits atop the shared current-events deck -- see
+    // `event_prepare_value`'s own doc comment for the same rule stated at
+    // its dedicated, board-aware pricer). That is the one fact about an
+    // Event card this static, board-independent table can honestly state,
+    // and it is an engine-computed rulebook constant, not a guess at the
+    // card's own later resolution: `CardId::level` maps Age A to 0, so a
+    // hypothetical Age-A event (none exist in the base game) would price at
+    // 0.0 here, same as everywhere else on this table.
+    if kind == CardType::Event {
+        push(out, WeightKey::Culture, i32::from(id.level()), YieldKind::Gain);
+    }
+
     // `_BONUS_TO_FEATURE`: the three Military Bonus cards. `defenseBonus` is
     // priced as the INCREMENT over the flat +1 every military card is worth
     // face down (`hand_military` already carries that flat count) --
@@ -525,7 +542,22 @@ pub fn sum_yields(triples: &[CardYield], w: &Weights, credit: f64) -> f64 {
             }
             YieldKind::Rate => amt *= credit,
             YieldKind::Unit => amt *= w.get(WeightKey::UnitStrengthCredit),
-            YieldKind::Territory => amt *= w.get(WeightKey::TerritoryCredit),
+            // `1.0 +` the credit, not the credit alone: the same additive
+            // shape `card_potential_core`'s `type_bonus` uses for its own
+            // six credit-gated dedicated pricers (see that function's top
+            // comment). `wk` above already resolved the SAME weight every
+            // other card type's matching field prices through (`strength`/
+            // `happy_margin`/`civil_actions`/etc.), so the un-credited face
+            // value (the `1.0` term) is a genuine, already-fitted price, not
+            // a guess; `territory_credit` on top of it is the extra the
+            // league is free to climb toward or away from. Before this, a
+            // `territory_credit` clamped to exactly 0.0 by `dominance_repair`
+            // (trained negative -- a territory's numbers are never a
+            // printed COST, so `weights::BENEFIT_GATES` bans a negative
+            // credit) multiplied the ONLY price to nothing, blacking out
+            // every territory card wherever it landed there -- turning the
+            // credit off was worse than never crediting it at all.
+            YieldKind::Territory => amt *= 1.0 + w.get(WeightKey::TerritoryCredit),
             YieldKind::Bonus => amt *= w.get(WeightKey::BonusCardCredit),
         }
         if wk != 0.0 && amt != 0.0 {
@@ -1892,16 +1924,23 @@ fn card_potential_core(
     scratch: &mut Vec<CardYield>,
 ) -> f64 {
     // Additive bonus layered onto the shared fallback tail below, rather
-    // than an early return -- currently only the Tactic arm ever sets this
-    // nonzero. See that arm's own comment for why: `tactic_board_credit`
-    // used to gate the WHOLE term, so whenever it was trained to exactly
-    // 0.0 the flat `card_yields` fallback priced a Tactic like any other
-    // card type would, but whenever it was trained nonzero the fallback was
-    // skipped entirely -- so a board state where `tactic_value` itself
-    // bottoms out at 0.0 (e.g. `tactic_reach_credit` dominance-clamped to
-    // 0.0 with nothing on the board yet reachable) priced the card at a
-    // flat 0.0, strictly worse than the credit-off case ever did.
-    let mut tactic_bonus = 0.0;
+    // than an early return -- every credit-gated dedicated pricer below
+    // (Wonder/Tactic/Aggression/War/Pact/Event) writes this same local
+    // instead of `return`ing straight out of its own arm. The trap an early
+    // `return` sets is general, not Tactic-specific: whichever `*_board_
+    // credit` gates a branch used to gate the WHOLE term, so whenever a
+    // hill climb (or `dominance_repair`'s load-time clamp -- see
+    // `weights.rs`) drove that credit to exactly 0.0, the flat `card_yields`
+    // fallback below priced the card like any other of its type, but
+    // whenever the credit was trained nonzero the fallback was skipped
+    // entirely -- so a board state where the dedicated pricer itself bottoms
+    // out at 0.0 (e.g. `tactic_value` with nothing reachable yet, or
+    // `event_prepare_value`/`war_hand_value` with no live GameState signal)
+    // priced the card at a flat 0.0, strictly worse than the credit-off case
+    // ever did. Stashing the credit-scaled term here and adding it at every
+    // return point below removes that trap: turning a credit ON can only add
+    // to the static price, never erase it.
+    let mut type_bonus = 0.0;
     if let Some(b) = board {
         let (st, ix) = (b.state(), b.idx());
         let kind = id.kind();
@@ -1941,16 +1980,18 @@ fn card_potential_core(
             //
             // `card_board_wonder`, the per-type offset this branch used to
             // compete with through the generic fallback below, was retired
-            // 2026-08-13 (SIGNAUDIT.txt): this branch `return`s
+            // 2026-08-13 (SIGNAUDIT.txt): this branch used to `return`
             // unconditionally whenever `wb != 0.0` and `board_yields`
-            // succeeds, which is every trained champion sampled (`wb`
-            // climbs away from its 0.0 default), so the per-type offset was
-            // a live-looking knob wired to nothing rather than a genuine
-            // second pricing path.
+            // succeeded, which was every trained champion sampled (`wb`
+            // climbs away from its 0.0 default) -- now stashed into
+            // `type_bonus` instead (see this function's own top comment),
+            // so a champion where `wb == 0.0` or `board_yields` returns
+            // `None` still reaches the shared static fallback below rather
+            // than falling out of this whole `if` with nothing priced.
             let wb = w.get(WeightKey::WonderBoardCredit);
             if wb != 0.0 {
                 if let Some(swap) = board_yields::board_yields(id, b) {
-                    return wb * sum_board_triples(&swap, w);
+                    type_bonus = wb * sum_board_triples(&swap, w);
                 }
             }
         } else if kind == CardType::Tactic {
@@ -1961,26 +2002,26 @@ fn card_potential_core(
             // tail below to add to the flat printed-strength price every
             // other credit-gated type already falls back to.
             let tc = w.get(WeightKey::TacticBoardCredit);
-            tactic_bonus = tc * tactic_value(id, st, ix, w);
+            type_bonus = tc * tactic_value(id, st, ix, w);
         } else if kind == CardType::Aggression {
             let ac = w.get(WeightKey::AggressionBoardCredit);
             if ac != 0.0 {
-                return ac * aggression_value(id, st, ix, w, late);
+                type_bonus = ac * aggression_value(id, st, ix, w, late);
             }
         } else if kind == CardType::War {
             let wac = w.get(WeightKey::WarBoardCredit);
             if wac != 0.0 {
-                return wac * war_hand_value(id, st, ix, w, late);
+                type_bonus = wac * war_hand_value(id, st, ix, w, late);
             }
         } else if kind == CardType::Pact {
             let pc = w.get(WeightKey::PactBoardCredit);
             if pc != 0.0 {
-                return pc * pact_value(id, st, ix, w, late);
+                type_bonus = pc * pact_value(id, st, ix, w, late);
             }
         } else if kind == CardType::Event {
             let ec = w.get(WeightKey::EventBoardCredit);
             if ec != 0.0 {
-                return ec * event_prepare_value(id, st, ix, w, late);
+                type_bonus = ec * event_prepare_value(id, st, ix, w, late);
             }
         }
     }
@@ -1996,17 +2037,17 @@ fn card_potential_core(
         // paired.
         scratch.clear();
         card_yields(id, scratch);
-        return sum_yields(scratch, w, credit) + tactic_bonus;
+        return sum_yields(scratch, w, credit) + type_bonus;
     }
     if let (Some(b), true) = (board, credit_board != 0.0) {
         // A swap card (leader/government/wonder) is priced ONLY by the diff
         // -- `card_yields` would count a leader's printed gain a second time
-        // on top of the delta that already contains it. `tactic_bonus` is
-        // always 0.0 here in practice (Tactic is not a swap type
-        // `board_yields::board_yields` recognises), added anyway so this
-        // stays correct if that ever changes.
+        // on top of the delta that already contains it. `type_bonus` can be
+        // nonzero here for a Wonder (the one type above that is both a swap
+        // type and sets `type_bonus`); added anyway for every other type too
+        // so this stays correct regardless of which arm set it.
         if let Some(swap) = board_yields::board_yields(id, b) {
-            return credit_board * sum_board_triples(&swap, w) + tactic_bonus;
+            return credit_board * sum_board_triples(&swap, w) + type_bonus;
         }
     }
     scratch.clear();
@@ -2024,7 +2065,7 @@ fn card_potential_core(
         let extra = board_yields::board_extra(id, b);
         total += credit_board * sum_board_triples(&extra, w);
     }
-    total + tactic_bonus
+    total + type_bonus
 }
 
 // --------------------------------------------------------------- hand terms
@@ -2552,9 +2593,19 @@ mod tests {
             "wonder_board_credit=1.0 must move a row wonder's price off the static-table answer"
         );
 
+        // `type_bonus` (`card_potential_core`'s additive bonus, generalised
+        // off Tactic's own precedent to every credit-gated dedicated pricer
+        // including Wonder) is the swap diff ADDED to the static fallback,
+        // not returned in place of it -- `card_board_credit` defaults 0.0,
+        // so the static `card_yields` fallback still runs underneath.
         let swap = board_yields::board_yields(fsf, &Baseline::at(&state, 0)).expect("First Space Flight is a swap type");
-        let expected = sum_board_triples(&swap, &w);
-        assert_eq!(board_price, expected, "wonder_board_credit=1.0 must price exactly the board-yields swap diff");
+        let mut buf = Vec::new();
+        card_yields(fsf, &mut buf);
+        let expected = sum_board_triples(&swap, &w) + sum_yields(&buf, &w, w.get(WeightKey::CardRateCredit));
+        assert_eq!(
+            board_price, expected,
+            "wonder_board_credit=1.0 must price the board-yields swap diff ADDED to the static card_yields fallback"
+        );
     }
 
     /// Every OTHER card type whose dedicated board credit is 0.0 still falls
@@ -2583,6 +2634,54 @@ mod tests {
         );
     }
 
+    /// An Event card with its dedicated board credit at 0.0 must still price
+    /// above 0.0 through `card_yields`'s guaranteed-seeding-culture push
+    /// (`card.level()` culture, RULES_SPEC 5.2 / `apply.rs::
+    /// h_prepare_event`) -- before that push existed, EVERY Event card
+    /// printed a literal 0.0 here (`card_yields` had no `CardType::Event`
+    /// branch at all), which is exactly the blackout this test pins shut.
+    #[test]
+    fn an_event_prices_above_zero_through_the_generic_fallback_when_its_board_credit_is_zero() {
+        let state = crate::game::new_game(2, 57);
+        let mut w = Weights::default();
+        w.set(WeightKey::EventBoardCredit, 0.0);
+        let mut scratch = Vec::new();
+
+        let got = card_potential(
+            CardId::by_name("Impact of Industry").unwrap(),
+            &w,
+            Some(&Baseline::at(&state, 0)),
+            None,
+            &mut scratch,
+        );
+        assert!(got > 0.0, "got={got}");
+    }
+
+    /// A Territory card with `territory_credit` at 0.0 must still price
+    /// above 0.0 -- `sum_yields`'s `YieldKind::Territory` arm prices the
+    /// FACE VALUE of the card's printed fields unconditionally now (`1.0 +
+    /// credit`, not `credit` alone), so a credit clamped to exactly 0.0
+    /// (`dominance_repair` -- see `sum_yields`'s own arm comment) degrades
+    /// the estimate instead of erasing it. "Historic Territory (I)" prints
+    /// `happiness: 1` and an immediate `culture: 6`, both priced through
+    /// weights (`happy_margin`/`culture`) that default nonzero.
+    #[test]
+    fn a_territory_prices_above_zero_through_its_face_value_when_territory_credit_is_zero() {
+        let state = crate::game::new_game(2, 57);
+        let mut w = Weights::default();
+        w.set(WeightKey::TerritoryCredit, 0.0);
+        let mut scratch = Vec::new();
+
+        let got = card_potential(
+            CardId::by_name("Historic Territory (I)").unwrap(),
+            &w,
+            Some(&Baseline::at(&state, 0)),
+            None,
+            &mut scratch,
+        );
+        assert!(got > 0.0, "got={got}");
+    }
+
     #[test]
     fn sum_yields_scales_each_credited_kind_by_its_own_weight() {
         let mut w = Weights::default();
@@ -2591,8 +2690,27 @@ mod tests {
         w.set(WeightKey::TerritoryCredit, 2.0);
         w.set(WeightKey::BonusCardCredit, 3.0);
         assert_eq!(sum_yields(&[(WeightKey::Strength, 4.0, YieldKind::Unit)], &w, 1.0), 2.0);
-        assert_eq!(sum_yields(&[(WeightKey::Strength, 4.0, YieldKind::Territory)], &w, 1.0), 8.0);
+        // Territory: `1.0 + credit`, not `credit` alone -- 4.0 * (1.0 + 2.0)
+        // = 12.0, the face value (4.0) plus the credit's own additional
+        // multiple of it (8.0), never the credit alone gating the whole
+        // term. See `sum_yields`'s own `YieldKind::Territory` arm comment.
+        assert_eq!(sum_yields(&[(WeightKey::Strength, 4.0, YieldKind::Territory)], &w, 1.0), 12.0);
         assert_eq!(sum_yields(&[(WeightKey::Strength, 4.0, YieldKind::Bonus)], &w, 1.0), 12.0);
+    }
+
+    /// The face-value half of the additive fix: `territory_credit == 0.0`
+    /// (`dominance_repair`'s load-time clamp, or simply an untrained
+    /// default) must still price a territory's printed fields at their bare
+    /// face value, not at 0.0 -- see `YieldKind::Territory`'s arm comment in
+    /// `sum_yields` for the mechanism and `card_yields`'s own doc comment
+    /// for why a territory's numbers ride the SAME weight (`Strength` here)
+    /// every other card type's matching field already uses.
+    #[test]
+    fn sum_yields_prices_a_territory_triple_at_its_face_value_when_territory_credit_is_zero() {
+        let mut w = Weights::default();
+        w.set(WeightKey::Strength, 1.0);
+        w.set(WeightKey::TerritoryCredit, 0.0);
+        assert_eq!(sum_yields(&[(WeightKey::Strength, 4.0, YieldKind::Territory)], &w, 1.0), 4.0);
     }
 
     // ------------------------------------------------------- board plumbing

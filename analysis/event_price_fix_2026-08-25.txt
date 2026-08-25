@@ -1,0 +1,245 @@
+Event/Territory/War price fix -- 2026-08-25
+=============================================
+
+Fixes the blackout measured in analysis/type_price_census_2026-08-25.txt:
+Event blacked out at 2p/3p/4p (all 55 cards), Territory blacked out at 3p/4p
+(all 12 cards), War blacked out at 3p (all 3 cards). Cause: each type's
+dedicated pricer/scaling is gated on a `*_board_credit`/`territory_credit`
+weight that `dominance_repair` clamps to exactly 0.0 at load (trained
+negative in the champion JSON), which either skipped the dedicated branch
+entirely (Event/War) or multiplied the only price to nothing (Territory) --
+and the generic/static fallback behind it produced nothing either.
+
+Code changed: rust/src/bots/weighted/cards.rs only.
+  * card_potential_core: generalised the existing `tactic_bonus` pattern
+    (commit 66588fe) to a single `type_bonus` local written by all six
+    credit-gated dedicated pricers (Wonder/Tactic/Aggression/War/Pact/Event),
+    added at every return point instead of returning through an early
+    `return`. Turning a credit ON can now only ADD to the static price,
+    never erase it.
+  * card_yields: added a `CardType::Event` branch pushing a single
+    `WeightKey::Culture` triple, amount = the card's own age level
+    (`CardId::level`, Age A -> 0), `YieldKind::Gain` -- the guaranteed,
+    unconditional culture `apply.rs::h_prepare_event` banks on preparing ANY
+    event (RULES_SPEC 5.2), independent of which card it is or what it
+    prints. This is the settled rule handed down for this fix; not
+    re-derived here.
+  * sum_yields: `YieldKind::Territory`'s scaling changed from
+    `amt *= w.get(TerritoryCredit)` to `amt *= 1.0 + w.get(TerritoryCredit)`.
+    The underlying weight (`wk`, e.g. Strength/HappyMargin/CivilActions/
+    YellowBank/BlueFree/FoodStock/ResourceStock/Culture/Science/FreeWorkers/
+    HandMilitary -- whichever field a territory's printed effect maps onto)
+    is the SAME weight every other card type's matching field already uses,
+    so the un-credited `1.0` term is a genuine face-value price, not a
+    guess; `territory_credit` on top of it is the extra amount the league is
+    free to climb toward or away from. A credit clamped to 0.0 now leaves
+    the face value standing instead of zeroing it.
+
+No epsilon floor, no new WeightKey, no hardcoded formula replacing a fitted
+parameter, no change to dominance_repair or any sign gate.
+
+RED CONFIRMATIONS (both required tests, per instructions)
+-----------------------------------------------------------
+Both new tests were confirmed RED by reverting ONLY the enforcement line
+(not the test or its helpers), then restored:
+
+  * an_event_prices_above_zero_through_the_generic_fallback_when_its_board_credit_is_zero
+    Reverted: card_yields's `if kind == CardType::Event { push(...) }`
+    block, guarded with `if false &&` so it compiled but never ran.
+    Result: test FAILED, panicked "got=0". EXIT red_confirm_event=101.
+    Enforcement restored; test passes with the real code.
+
+  * a_territory_prices_above_zero_through_its_face_value_when_territory_credit_is_zero
+    Reverted: sum_yields's `YieldKind::Territory` arm back to
+    `amt *= w.get(WeightKey::TerritoryCredit)` (the old formula).
+    Result: test FAILED, panicked "got=0". EXIT red_confirm_territory=101.
+    Enforcement restored; test passes with the real code.
+
+A passing test at either reverted moment would have meant the test wasn't
+actually pinning the fix -- neither did; both were confirmed failing first.
+
+One PRE-EXISTING test also had to change, because it directly encoded the
+exact formula this task instructed be replaced (not because it was made to
+agree with an unrelated change):
+  * sum_yields_scales_each_credited_kind_by_its_own_weight -- its Territory
+    assertion (`... , 8.0)`) was `amount * credit` under the OLD formula;
+    updated to `12.0` (`amount * (1.0 + credit)`), the new formula, with a
+    comment explaining the arithmetic.
+  * wonder_board_credit_prices_a_row_wonder_through_the_board_diff -- see
+    "Wonder moved" below; updated to assert the new additive total
+    (swap diff + static card_yields fallback) instead of the swap diff
+    alone, which the OLD early-`return` produced.
+
+GATES
+-----
+EXIT clippy=0            (cargo clippy --all-targets -- -D warnings)
+EXIT test=0               (cargo test: 1520 passed, 0 failed, 0 ignored)
+EXIT census_rerun=0       (cargo build --release --bin typeprice && ./target/release/typeprice)
+
+PART C -- BEFORE / AFTER
+==========================
+
+Event (WeightKey::EventBoardCredit)
+------------------------------------
+BEFORE (blackout at all three sizes -- all 55 cards priced exactly 0.0):
+  type   size  credit    n   zero  min_nz  median_nz  max_nz  blackout
+  Event   2p  0.00000   55    55     --       --        --      yes
+  Event   3p  0.00000   55    55     --       --        --      yes
+  Event   4p  0.00000   55    55     --       --        --      yes
+
+AFTER (no longer a blackout at any size):
+  type   size  credit    n   zero  min_nz  median_nz  max_nz  blackout
+  Event   2p  0.00000   55    10   1.000000  2.000000  3.000000   no
+  Event   3p  0.00000   55    10   1.000000  2.000000  3.000000   no
+  Event   4p  0.00000   55    10   1.000000  2.000000  3.000000   no
+
+The 10 still-zero cards at every size are the 10 Age-A event cards
+(Development of Settlement/Science/Crafts/Agriculture/Warfare/Religion/
+Politics/Markets/Trade Routes/Civil Life) -- `CardId::level() == 0` for
+Age A by design, so `level * culture_weight == 0.0` is the CORRECT price
+for them, not a residual bug; every Age I/II/III event now prices at
+1.0/2.0/3.0 respectively (culture weight defaults to 1.0 and is untrained
+away from it at every table size, since EventBoardCredit's own post-load
+value is 0.00000 at 2p/3p/4p -- the fallback IS the whole price here).
+
+Territory (WeightKey::TerritoryCredit)
+----------------------------------------
+BEFORE:
+  type       size  credit    n   zero    min_nz     median_nz    max_nz   blackout
+  Territory   2p  0.06540   12    0   -1.327330    -0.176753    3.736026    no
+  Territory   3p  0.00000   12   12       --           --          --      yes
+  Territory   4p  0.00000   12   12       --           --          --      yes
+
+AFTER:
+  type       size  credit    n   zero     min_nz       median_nz      max_nz    blackout
+  Territory   2p  0.06540   12    0   -21.624233     -2.879577      60.865572     no
+  Territory   3p  0.00000   12    0   -99.777239     57.940379     780.000000     no
+  Territory   4p  0.00000   12    0   -22.741313      0.076063     236.923753     no
+
+3p/4p are no longer blacked out (territory_credit is clamped to exactly
+0.0 at both sizes -- the face value now stands on its own). 2p, which was
+never blacked out, also moved: its trained credit is a small 0.0654, so the
+OLD `amt *= credit` scaled everything down to ~6.5% of face value; the NEW
+`amt *= (1.0 + credit)` prices the face value in full and adds only 6.5% on
+top -- roughly a 16x jump in magnitude, not a new phenomenon, the direct
+arithmetic consequence of the formula this fix was told to install.
+
+Per-card raw dump, Territory (price@2p / price@3p / price@4p):
+  card                        BEFORE                          AFTER
+  Vast Territory (I)          -0.994910 / 0.000000 / 0.000000   -16.208605 / 110.996482 / 0.914485
+  Wealthy Territory (I)        0.253395 / 0.000000 / 0.000000     4.128186 / 480.000000 / -0.762359
+  Inhabited Territory (I)     -0.665886 / 0.000000 / 0.000000   -10.848298 / -5.649969 / -11.324877
+  Strategic Territory (I)      1.868523 / 0.000000 / 0.000000    30.441084 / 106.027492 / 118.154252
+  Historic Territory (I)       0.388779 / 0.000000 / 0.000000     6.333802 / 5.426634 / 4.123359
+  Developed Territory (I)     -0.606901 / 0.000000 / 0.000000    -9.887341 / -71.266109 / -1.654830
+  Vast Territory (II)         -1.327330 / 0.000000 / 0.000000   -21.624233 / 167.995309 / 1.107618
+  Wealthy Territory (II)       0.459400 / 0.000000 / 0.000000     7.484325 / 780.000000 / -0.903125
+  Inhabited Territory (II)    -0.986068 / 0.000000 / 0.000000   -16.064553 / -8.298765 / -22.741313
+  Strategic Territory (II)     3.736026 / 0.000000 / 0.000000    60.865572 / 212.369997 / 236.923753
+  Historic Territory (II)      0.712162 / 0.000000 / 0.000000    11.602209 / 9.853267 / 7.246717
+  Developed Territory (II)    -1.127519 / 0.000000 / 0.000000   -18.369009 / -99.777239 / -2.839225
+
+War (WeightKey::WarBoardCredit)
+----------------------------------
+BEFORE:
+  type  size  credit     n   zero  min_nz     median_nz    max_nz    blackout
+  War    2p  0.31654     3    0   -0.813970   -0.286861   -0.059664    no
+  War    3p  0.00000     3    3      --           --          --      yes
+  War    4p  0.43212     3    0   -0.116162    0.006782    0.370389    no
+
+AFTER: BYTE-IDENTICAL to before at every size, including 3p (still all 3
+cards at exactly 0.0):
+  type  size  credit     n   zero  min_nz     median_nz    max_nz    blackout
+  War    2p  0.31654     3    0   -0.813970   -0.286861   -0.059664    no
+  War    3p  0.00000     3    3      --           --          --      yes
+  War    4p  0.43212     3    0   -0.116162    0.006782    0.370389    no
+
+Per-card raw dump, War (price@2p / price@3p / price@4p), unchanged:
+  War over Territory   (id120): -0.286861 / 0.000000 / 0.006782
+  War over Technology  (id121): -0.059664 / 0.000000 / -0.116162
+  War over Culture     (id122): -0.813970 / 0.000000 / 0.370389
+
+WAR (B3) -- deliberately left alone
+--------------------------------------
+All three War cards ("War over Territory"/"Technology"/"Culture") print
+every `CardEffects` field as zero in card_table.rs -- their whole value
+lives in one `Special` variant each (`VictorTakesYellowTokens`/
+`VictorTakesScienceUpTo`/`VictorTakesCulture`), and `card_yields`'s own
+`Special` match treats all three (and every other non-numeric special) as a
+no-op. So `card_yields`'s static fallback for a War card is provably 0.0 at
+every weight vector -- Part A's additive `type_bonus` cannot rescue War@3p
+the way it does nothing-changes-but-adds-a-safety-net for Tactic/Wonder/
+Aggression/Pact/Event, because the trap Part A fixes is "the dedicated
+pricer itself bottoms out to 0.0 on a live board while its credit stays
+nonzero"; War@3p's problem is one level up -- `WarBoardCredit` itself is
+trained to exactly 0.0 there (post-load raw_json = -0.46111, clamped),
+so the dedicated branch never fires and `type_bonus` never gets set at all.
+Unlike Event, there is no flat, board-independent guaranteed fact about a
+War card to push into `card_yields`: RULES_SPEC 5.7/5.8 make a war's very
+outcome and its spoils depend on the CURRENT strength margin against
+whichever rival is weakest at DECLARATION time (`rivals::weakest_rival`)
+and a win probability derived from that margin -- exactly what
+`war_hand_value` already computes with a live `GameState`, and none of it
+is recoverable from the card's own printed data the way Event's guaranteed
+`level * culture` is. Inventing a flat number here (an "average" spoils
+estimate, say) would be exactly the disallowed hardcoded-formula-replacing-
+a-fitted-parameter this task's constraints rule out, so War@3p is left
+blacked out. What it would actually take: either training landing
+`war_board_credit` away from exactly 0.0 at 3p (not a code fix), or -- if
+a genuinely honest board-independent proxy for war value existed -- adding
+it the same way Event's was added; no such proxy exists today, because a
+war's payout is inherently relative to a target chosen and measured on a
+live board, not a property of the card alone.
+
+OTHER TYPES: DID ANY MOVE?
+=============================
+Part A's `type_bonus` generalisation touches all six credit-gated dedicated
+pricers (Wonder/Tactic/Aggression/War/Pact/Event), not just Event, so every
+one of the other five was checked for movement. Two moved; the rest did not.
+Technology/Government/Action are NOT part of Part A's six branches (they
+dispatch through a different mechanism) and were confirmed byte-identical
+before/after, as expected.
+
+  Wonder -- MOVED at all three sizes (WonderBoardCredit is nonzero at 2p/
+  3p/4p: 0.02485/0.52533/0.08945, so the dedicated branch fires at every
+  size). Before/after (min_nz/median_nz/max_nz):
+    2p: -0.315259/1.031167/4.588030      -> -2.469198/8.076390/35.934751
+    3p: -501.325497/-256.161046/-123.087321 -> -1058.378940/-540.797262/-259.857176
+    4p: -0.862168/5.221907/21.745955     -> -1.814723/10.991260/45.771678
+  Cause: `card_yields`'s Wonder fallback is NOT 0.0 (every wonder pushes a
+  flat `WeightKey::Wonders = 1.0` gain plus a negative stage-cost), and
+  `card_board_credit` (the OTHER knob gating Wonder's generic tail) defaults
+  0.0, so the early "base==0 && credit_board==0" branch in
+  `card_potential_core` now ADDS that static fallback on top of the swap
+  diff `type_bonus` carries, where the OLD code `return`ed the swap diff
+  alone and never reached the fallback. This is the exact "a nonzero-credit
+  type's fallback is not 0.0, so its price legitimately moves" case the
+  task asked to be measured rather than assumed away -- confirmed here, not
+  a bug. The one test pinning Wonder's board price
+  (`wonder_board_credit_prices_a_row_wonder_through_the_board_diff`) was
+  updated to assert the new additive total.
+
+  Aggression -- MOVED at 2p only (AggressionBoardCredit is nonzero only at
+  2p: 0.11249; it is exactly 0.0 at 3p/4p, so the dedicated branch never
+  fires there and nothing can move). Before/after at 2p (min_nz/median_nz/
+  max_nz): -0.247373/0.119471/0.262487 -> -0.247373/0.179207/2.074262. Every
+  other 2p Aggression card is byte-identical before/after; the sole mover is
+  "Aggression: Enslave" (id111): 0.074970 -> 2.074262 at 2p, its own
+  dedicated `aggression_value` now plus a newly-added static fallback (was
+  0.0 already at 3p/4p, both unchanged there: 240.000000/240.000000/
+  240.000000 and 0.300309/0.300309/0.300309, byte-identical).
+
+  Tactic -- UNCHANGED at every size (Tactic's own arm was already additive
+  before this fix, per commit 66588fe; nothing about its code changed here).
+
+  Pact -- UNCHANGED at every size, even though PactBoardCredit is nonzero
+  everywhere (0.01290/0.05712/0.06537) and the dedicated branch fires at
+  every size: `card_yields`'s fallback for every Pact card is provably 0.0
+  (Pact cards carry no priced top-level fields the static table reads), so
+  adding a 0.0 fallback to `type_bonus` changes nothing, byte for byte.
+
+  War -- UNCHANGED at 2p/4p (byte-identical, see above) and correctly still
+  blacked out at 3p (see the B3 paragraph above).
+
+  Technology / Government / Action -- UNCHANGED at every size (confirmed by
+  direct row comparison; these three are outside Part A's scope entirely).
