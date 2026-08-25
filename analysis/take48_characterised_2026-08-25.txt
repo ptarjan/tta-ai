@@ -1,0 +1,142 @@
+# take48_characterised -- the 48 uncounted (hand-full-override) takes, characterised
+# generated 2026-08-25 by rust/src/bin/takecharacterise.rs (read-only diagnostic).
+#
+# CAVEAT -- READ FIRST: 'all 48 were rejected by HandFull' is TRUE BY CONSTRUCTION,
+# and cannot have come out any other way. In replay_common::Replayer::try_apply_take
+# ONLY the hand_full override branch records a Decision (with state_after:None); the
+# wonder-in-progress and budget-only branches call apply::h_take / apply::take_card
+# directly and record NOTHING. So any Take that reaches the decision list with
+# state_after:None -- i.e. any 'uncounted' take in agreement.rs's human_rank -- is a
+# hand-full-override take BY DEFINITION. The 48/48 HandFull is therefore a finding about
+# THE INSTRUMENT (which branch records decisions), NOT evidence that the civil hand limit
+# is the problem. Do not quote 48/48 as a bot/rulebook finding.
+#
+# DELTA TABLE -- hand_size_civil vs civil_hand_limit at the moment of each take:
+#   delta = hand_size_civil - civil_hand_limit. Grouped by delta:
+#     delta=+1: 4
+#     delta=+0: 44
+#   By player count:
+#     2p: +1=4  +0=8
+#     3p: +0=17
+#     4p: +0=19
+#
+#   Interpretation (numbers, not a verdict):
+#     delta=+0 (44/48): hand exactly AT the limit when the take was made. BGO allowed a
+#       take that pushed the hand FROM at-limit to over-limit -- the classic hand-full
+#       override shape. This is the replayer's documented, correct behaviour.
+#     delta=+1 (4/48): hand ALREADY 1 over the limit BEFORE this take (all in one game,
+#       7523005, Orange). Two sub-shapes, verified against the raw journal:
+#       - ln124, ln141: two back-to-back takes, the 2nd landing at 5/4. First-push-over.
+#       - ln172, ln190: a take after a NON-TAKE line (ln172 follows two Bronze->Iron
+#         upgrades; ln190 follows 'Orange elects Napoleon Bonaparte'). The hand was
+#         already over-limit before this take -- so either the hand had been over since
+#         an earlier take that this reconstruction also overrode, or the reconstructed
+#         hand drifted several cards earlier. These two need different fixes and are
+#       the ones to chase: a delta=+1 that is NOT the immediate second of a back-to-back
+#       pair (ln172, ln190) is the 'drift' signature the coordinator asked about.
+#
+#   The four delta=+1 rows in full:
+#     7523005 2p r8 ln124 actor Orange slot1 hand=5/4 (delta +1)
+#     7523005 2p r9 ln141 actor Orange slot2 hand=5/4 (delta +1)
+#     7523005 2p r11 ln172 actor Orange slot0 hand=5/4 (delta +1)
+#     7523005 2p r12 ln190 actor Orange slot5 hand=5/4 (delta +1)
+#
+# ============ PER-TAKE DETAIL (tab-separated) ============
+# id  players  round/ln  actor  slot  card(type age)  age  hand H/L  spare_ca  reject
+# (next line is the full card_row at that moment)
+7521776	2p	round 8 ln 115	actor Purple	slot 1	card Monarchy (Government 1) (row_cost 1)	age II	hand 4/4	spare_ca 2	reject=HandFull
+    card_row: . Monarchy1 Reserves (I)1 Reserves (I)1 Breakthrough (I)1 Swordsmen1 Iron1 Taj Mahal1 Irrigation1 Iron1 Journalism2 Cavalrymen2 Transcontinental Railroad2
+7522404	2p	round 8 ln 116	actor Orange	slot 0	card Swordsmen (Infantry 1) (row_cost 1)	age II	hand 5/5	spare_ca 5	reject=HandFull
+    card_row: Swordsmen1 Taj Mahal1 St. Peter's Basilica1 Alchemy1 Monarchy1 Reserves (I)1 Reserves (I)1 Breakthrough (I)1 Swordsmen1 Irrigation1 Iron1 Code of Laws1 Iron1
+7522404	2p	round 13 ln 221	actor Orange	slot 2	card Efficient Upgrade (II) (Action 2) (row_cost 1)	age II	hand 8/8	spare_ca 1	reject=HandFull
+    card_row: . . Efficient Upgrade (II)2 Kremlin2 Republic2 . Wave of Nationalism2 James Cook2 Efficient Upgrade (II)2 Constitutional Monarchy2 J. S. Bach2 Scientific Method2 Revolutionary Idea (II)2
+7523005	2p	round 8 ln 123	actor Orange	slot 0	card Urban Growth (II) (Action 2) (row_cost 1)	age II	hand 4/4	spare_ca 3	reject=HandFull
+    card_row: Urban Growth (II)2 St. Peter's Basilica1 Alchemy1 Monarchy1 Reserves (I)1 Printing Press1 Michelangelo1 Reserves (I)1 Breakthrough (I)1 Swordsmen1 Taj Mahal1 Irrigation1 Iron1
+7523005	2p	round 8 ln 124	actor Orange	slot 1	card Urban Growth (II) (Action 2) (row_cost 1)	age II	hand 5/4	spare_ca 2	reject=HandFull
+    card_row: . Urban Growth (II)2 Alchemy1 Monarchy1 Reserves (I)1 Printing Press1 Michelangelo1 Reserves (I)1 Breakthrough (I)1 Swordsmen1 Taj Mahal1 Irrigation1 Iron1
+7523005	2p	round 9 ln 140	actor Orange	slot 1	card Frugality (II) (Action 2) (row_cost 1)	age II	hand 4/4	spare_ca 2	reject=HandFull
+    card_row: . Frugality (II)2 Breakthrough (I)1 Swordsmen1 Taj Mahal1 Irrigation1 Iron1 Journalism2 Cavalrymen2 Transcontinental Railroad2 Opera2 Urban Growth (II)2 Justice System2
+7523005	2p	round 9 ln 141	actor Orange	slot 2	card Breakthrough (II) (Action 2) (row_cost 1)	age II	hand 5/4	spare_ca 1	reject=HandFull
+    card_row: . . Breakthrough (II)2 Swordsmen1 Taj Mahal1 Irrigation1 Iron1 Journalism2 Cavalrymen2 Transcontinental Railroad2 Opera2 Urban Growth (II)2 Justice System2
+7523005	2p	round 11 ln 172	actor Orange	slot 0	card Napoleon Bonaparte (Leader 2) (row_cost 1)	age II	hand 5/4	spare_ca 1	reject=HandFull
+    card_row: Napoleon Bonaparte2 William Shakespeare2 Team Sports2 James Cook2 Scientific Method2 Organized Religion2 Strategy2 Selective Breeding2 Navigation2 Efficient Upgrade (II)2 Constitutional Monarchy2 Rich Land (II)2 Cannon2
+7523005	2p	round 12 ln 190	actor Orange	slot 5	card Constitutional Monarchy (Government 2) (row_cost 2)	age II	hand 5/4	spare_ca 2	reject=HandFull
+    card_row: Strategy2 Selective Breeding2 Navigation2 Efficient Upgrade (II)2 Constitutional Monarchy2 Constitutional Monarchy2 Cannon2 Coal2 Frugality (II)2 Opera2 Kremlin2 Republic2 Scientific Method2
+7523005	2p	round 17 ln 304	actor Orange	slot 0	card Modern Infantry (Infantry 3) (row_cost 1)	age III	hand 6/6	spare_ca 4	reject=HandFull
+    card_row: Modern Infantry3 Engineering3 Military Theory3 Internet3 Sid Meier3 . Professional Sports3 Tanks3 Fundamentalism3 Efficient Upgrade (III)3 Efficient Upgrade (III)3 Revolutionary Idea (III)3 Reserves (III)3
+7523468	2p	round 13 ln 212	actor Purple	slot 0	card Communism (Government 3) (row_cost 1)	age III	hand 6/6	spare_ca 1	reject=HandFull
+    card_row: Communism3 Republic2 Organized Religion2 Wave of Nationalism2 James Cook2 Efficient Upgrade (II)2 Efficient Upgrade (III)3 Computers3 Charlie Chaplin3 Fundamentalism3 Military Theory3 Oil3 Satellites3
+7523468	2p	round 16 ln 281	actor Purple	slot 0	card Mechanized Agriculture (Farm 3) (row_cost 1)	age III	hand 8/8	spare_ca 4	reject=HandFull
+    card_row: Mechanized Agriculture3 Reserves (III)3 First Space Flight3 Albert Einstein3 Bill Gates3 . . Modern Infantry3 Communism3 Charlie Chaplin3 Computers3 Revolutionary Idea (III)3 Computers3
+7521520	3p	round 8 ln 190	actor Purple	slot 0	card Rich Land (II) (Action 2) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: Rich Land (II)2 Code of Laws1 Irrigation1 Universitas Carolina1 Drama1 . St. Peter's Basilica1 Cultural Heritage (I)1 Masonry1 Reserves (II)2 Scientific Method2 Breakthrough (II)2 Selective Breeding2
+7521520	3p	round 10 ln 242	actor Purple	slot 0	card Constitutional Monarchy (Government 2) (row_cost 1)	age II	hand 4/4	spare_ca 3	reject=HandFull
+    card_row: Constitutional Monarchy2 Republic2 Napoleon Bonaparte2 Selective Breeding2 Coal2 Wave of Nationalism2 Efficient Upgrade (II)2 Riflemen2 Opera2 William Shakespeare2 Maximilien Robespierre2 Efficient Upgrade (II)2 Rich Land (II)2
+7521520	3p	round 13 ln 339	actor Purple	slot 0	card Rich Land (II) (Action 2) (row_cost 1)	age III	hand 6/6	spare_ca 4	reject=HandFull
+    card_row: Rich Land (II)2 Architecture2 Organized Religion2 Efficient Upgrade (II)2 Napoleon Bonaparte2 . Journalism2 Riflemen2 Journalism2 Wave of Nationalism2 Coal2 Modern Infantry3 Albert Einstein3
+7521520	3p	round 14 ln 368	actor Purple	slot 0	card Democracy (Government 3) (row_cost 1)	age III	hand 6/6	spare_ca 3	reject=HandFull
+    card_row: Democracy3 Wave of Nationalism2 Coal2 Modern Infantry3 Albert Einstein3 Tanks3 Mechanized Agriculture3 Hollywood3 Computers3 . Fast Food Chains3 Engineering Genius (III)3 Revolutionary Idea (III)3
+7521520	3p	round 15 ln 399	actor Purple	slot 9	card Oil (Mine 3) (row_cost 3)	age III	hand 6/6	spare_ca 5	reject=HandFull
+    card_row: Mechanized Agriculture3 Hollywood3 Computers3 Revolutionary Idea (III)3 Mechanized Agriculture3 Air Forces3 Internet3 Charlie Chaplin3 Air Forces3 Oil3 Movies3 Engineering3 Urban Growth (III)3
+7521787	3p	round 13 ln 312	actor Green	slot 2	card Cavalrymen (Cavalry 2) (row_cost 1)	age III	hand 7/7	spare_ca 1	reject=HandFull
+    card_row: . . Cavalrymen2 Cannon2 Journalism2 . Coal2 William Shakespeare2 Riflemen2 James Cook2 Opera2 Mechanized Agriculture3 Movies3
+7521787	3p	round 17 ln 425	actor Green	slot 1	card Efficient Upgrade (III) (Action 3) (row_cost 1)	age III	hand 7/7	spare_ca 1	reject=HandFull
+    card_row: . Efficient Upgrade (III)3 Rockets3 Mechanized Agriculture3 Rockets3 Modern Infantry3 Winston Churchill3 Albert Einstein3 Democracy3 Oil3 Democracy3 Mechanized Agriculture3 Albert Einstein3
+7521980	3p	round 14 ln 390	actor Orange	slot 5	card Reserves (III) (Action 3) (row_cost 2)	age III	hand 7/7	spare_ca 3	reject=HandFull
+    card_row: . . Fast Food Chains3 Communism3 First Space Flight3 Reserves (III)3 Movies3 Fundamentalism3 Charlie Chaplin3 Computers3 Satellites3 Hollywood3 Democracy3
+7521980	3p	round 15 ln 417	actor Orange	slot 0	card Modern Infantry (Infantry 3) (row_cost 1)	age III	hand 7/7	spare_ca 6	reject=HandFull
+    card_row: Modern Infantry3 Satellites3 Hollywood3 Democracy3 Oil3 Tanks3 Professional Sports3 Reserves (III)3 Efficient Upgrade (III)3 Civil Service3 Revolutionary Idea (III)3 Internet3 Reserves (III)3
+7522319	3p	round 16 ln 404	actor Orange	slot 2	card Revolutionary Idea (III) (Action 3) (row_cost 1)	age III	hand 8/8	spare_ca 5	reject=HandFull
+    card_row: . . Revolutionary Idea (III)3 Movies3 Engineering3 Urban Growth (III)3 Reserves (III)3 Tanks3 Computers3 Bill Gates3 Modern Infantry3 Military Theory3 Democracy3
+7523014	3p	round 7 ln 159	actor Green	slot 6	card Coal (Mine 2) (row_cost 2)	age II	hand 5/5	spare_ca 3	reject=HandFull
+    card_row: Patriotism (I)1 Code of Laws1 Iron1 Joan of Arc1 Urban Growth (I)1 . Coal2 Universitas Carolina1 Drama1 Theocracy1 St. Peter's Basilica1 Organized Religion2 Republic2
+7523014	3p	round 9 ln 193	actor Orange	slot 6	card Maximilien Robespierre (Leader 2) (row_cost 2)	age II	hand 5/5	spare_ca 2	reject=HandFull
+    card_row: Republic2 Wave of Nationalism2 Justice System2 Coal2 Napoleon Bonaparte2 . Maximilien Robespierre2 Maximilien Robespierre2 Architecture2 Transcontinental Railroad2 Urban Growth (II)2 Cavalrymen2 Architecture2
+7523014	3p	round 11 ln 240	actor Orange	slot 5	card Journalism (Library 2) (row_cost 2)	age II	hand 5/5	spare_ca 3	reject=HandFull
+    card_row: . Constitutional Monarchy2 Journalism2 William Shakespeare2 Coal2 Journalism2 Navigation2 Constitutional Monarchy2 Eiffel Tower2 Wave of Nationalism2 Breakthrough (II)2 Rich Land (II)2 Selective Breeding2
+7523014	3p	round 11 ln 261	actor Green	slot 5	card Architecture (SpecialTech 2) (row_cost 2)	age II	hand 5/5	spare_ca 2	reject=HandFull
+    card_row: . Navigation2 Constitutional Monarchy2 Eiffel Tower2 Breakthrough (II)2 Architecture2 Selective Breeding2 Transcontinental Railroad2 Team Sports2 Reserves (II)2 Isaac Newton2 Napoleon Bonaparte2 Frugality (II)2
+7523210	3p	round 7 ln 164	actor Purple	slot 0	card Alchemy (Lab 1) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: Alchemy1 Knights1 Rich Land (I)1 Frederick Barbarossa1 Printing Press1 . Breakthrough (I)1 Iron1 Joan of Arc1 Irrigation1 Universitas Carolina1 Theocracy1 St. Peter's Basilica1
+7523210	3p	round 10 ln 239	actor Purple	slot 5	card Republic (Government 2) (row_cost 2)	age II	hand 4/4	spare_ca 4	reject=HandFull
+    card_row: Architecture2 Transcontinental Railroad2 Urban Growth (II)2 Efficient Upgrade (II)2 Opera2 Republic2 Constitutional Monarchy2 Journalism2 Organized Religion2 Cannon2 William Shakespeare2 Coal2 Engineering Genius (II)2
+7523210	3p	round 10 ln 243	actor Purple	slot 0	card Patriotism (II) (Action 2) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: Patriotism (II)2 Transcontinental Railroad2 Urban Growth (II)2 Efficient Upgrade (II)2 Opera2 . Constitutional Monarchy2 Journalism2 Organized Religion2 Cannon2 William Shakespeare2 Coal2 Engineering Genius (II)2
+7521213	4p	round 9 ln 262	actor Orange	slot 0	card Riflemen (Infantry 2) (row_cost 1)	age II	hand 4/4	spare_ca 3	reject=HandFull
+    card_row: Riflemen2 Masonry1 St. Peter's Basilica1 Strategy2 Justice System2 J. S. Bach2 Scientific Method2 Opera2 James Cook2 Ocean Liners2 Cavalrymen2 Efficient Upgrade (II)2 Kremlin2
+7521213	4p	round 9 ln 264	actor Orange	slot 1	card Rich Land (II) (Action 2) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: . Rich Land (II)2 St. Peter's Basilica1 Strategy2 Justice System2 J. S. Bach2 Scientific Method2 Opera2 James Cook2 Ocean Liners2 Cavalrymen2 Efficient Upgrade (II)2 Kremlin2
+7521213	4p	round 10 ln 304	actor Orange	slot 5	card Coal (Mine 2) (row_cost 2)	age II	hand 4/4	spare_ca 3	reject=HandFull
+    card_row: J. S. Bach2 Scientific Method2 James Cook2 Efficient Upgrade (II)2 Kremlin2 Coal2 Napoleon Bonaparte2 Eiffel Tower2 Frugality (II)2 Navigation2 Selective Breeding2 Architecture2 Reserves (II)2
+7521213	4p	round 11 ln 340	actor Orange	slot 5	card Selective Breeding (Farm 2) (row_cost 2)	age II	hand 4/4	spare_ca 4	reject=HandFull
+    card_row: Kremlin2 Napoleon Bonaparte2 Eiffel Tower2 Frugality (II)2 Navigation2 Selective Breeding2 Architecture2 Reserves (II)2 Organized Religion2 Rich Land (II)2 Engineering Genius (II)2 Scientific Method2 Efficient Upgrade (II)2
+7521213	4p	round 13 ln 406	actor Orange	slot 9	card Constitutional Monarchy (Government 2) (row_cost 3)	age II	hand 4/4	spare_ca 4	reject=HandFull
+    card_row: Patriotism (II)2 Team Sports2 Cannon2 Cannon2 Constitutional Monarchy2 Riflemen2 Rich Land (II)2 Opera2 Coal2 Constitutional Monarchy2 Scientific Method2 J. S. Bach2 Kremlin2
+7521462	4p	round 9 ln 296	actor Grey	slot 1	card Riflemen (Infantry 2) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: . Riflemen2 Eiffel Tower2 Revolutionary Idea (II)2 Breakthrough (II)2 J. S. Bach2 Organized Religion2 Transcontinental Railroad2 Engineering Genius (II)2 Architecture2 Journalism2 Selective Breeding2 Efficient Upgrade (II)2
+7521462	4p	round 10 ln 328	actor Grey	slot 0	card Cannon (Artillery 2) (row_cost 1)	age II	hand 4/4	spare_ca 2	reject=HandFull
+    card_row: Cannon2 Engineering Genius (II)2 Architecture2 Journalism2 Selective Breeding2 Efficient Upgrade (II)2 Breakthrough (II)2 Cannon2 Maximilien Robespierre2 Team Sports2 Isaac Newton2 Reserves (II)2 Reserves (II)2
+7521462	4p	round 11 ln 354	actor Grey	slot 5	card Strategy (SpecialTech 2) (row_cost 2)	age II	hand 4/4	spare_ca 4	reject=HandFull
+    card_row: Selective Breeding2 Efficient Upgrade (II)2 Breakthrough (II)2 Maximilien Robespierre2 Isaac Newton2 Strategy2 Reserves (II)2 James Cook2 Coal2 Cannon2 Efficient Upgrade (II)2 Cavalrymen2 Patriotism (II)2
+7521462	4p	round 11 ln 356	actor Grey	slot 0	card Republic (Government 2) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: Republic2 Efficient Upgrade (II)2 Breakthrough (II)2 Maximilien Robespierre2 Isaac Newton2 . Reserves (II)2 James Cook2 Coal2 Cannon2 Efficient Upgrade (II)2 Cavalrymen2 Patriotism (II)2
+7521917	4p	round 19 ln 751	actor Grey	slot 5	card Patriotism (III) (Action 3) (row_cost 2)	age IV	hand 6/6	spare_ca 4	reject=HandFull
+    card_row: . Endowment for the Arts3 First Space Flight3 First Space Flight3 Bill Gates3 Patriotism (III)3 First Space Flight3 Civil Service3 . . . . .
+7522146	4p	round 8 ln 259	actor Purple	slot 1	card Urban Growth (II) (Action 2) (row_cost 1)	age II	hand 5/5	spare_ca 1	reject=HandFull
+    card_row: . Urban Growth (II)2 Breakthrough (I)1 Frugality (I)1 Irrigation1 . St. Peter's Basilica1 Frugality (I)1 Urban Growth (I)1 Swordsmen1 St. Peter's Basilica1 Masonry1 Warfare1
+7522146	4p	round 11 ln 379	actor Purple	slot 5	card Journalism (Library 2) (row_cost 2)	age II	hand 5/5	spare_ca 5	reject=HandFull
+    card_row: Opera2 Reserves (II)2 Constitutional Monarchy2 Maximilien Robespierre2 Journalism2 Journalism2 Selective Breeding2 Transcontinental Railroad2 Architecture2 Urban Growth (II)2 Rich Land (II)2 Justice System2 Reserves (II)2
+7522422	4p	round 12 ln 390	actor Green	slot 1	card Scientific Method (Lab 2) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: . Scientific Method2 Reserves (II)2 James Cook2 Coal2 Cannon2 Efficient Upgrade (II)2 Cavalrymen2 Patriotism (II)2 Organized Religion2 Riflemen2 Rich Land (II)2 Opera2
+7522744	4p	round 8 ln 247	actor Purple	slot 0	card Swordsmen (Infantry 1) (row_cost 1)	age II	hand 4/4	spare_ca 3	reject=HandFull
+    card_row: Swordsmen1 Iron1 Urban Growth (I)1 Breakthrough (I)1 Irrigation1 Swordsmen1 Reserves (I)1 Urban Growth (I)1 Swordsmen1 St. Peter's Basilica1 Masonry1 Knights1 Strategy2
+7522744	4p	round 8 ln 250	actor Purple	slot 1	card Urban Growth (II) (Action 2) (row_cost 1)	age II	hand 4/4	spare_ca 1	reject=HandFull
+    card_row: . Urban Growth (II)2 Urban Growth (I)1 Breakthrough (I)1 Irrigation1 Swordsmen1 Reserves (I)1 Urban Growth (I)1 Swordsmen1 St. Peter's Basilica1 Masonry1 Knights1 Strategy2
+7522744	4p	round 9 ln 286	actor Purple	slot 0	card Maximilien Robespierre (Leader 2) (row_cost 1)	age II	hand 4/4	spare_ca 3	reject=HandFull
+    card_row: Maximilien Robespierre2 Reserves (I)1 Urban Growth (I)1 Swordsmen1 St. Peter's Basilica1 Masonry1 Strategy2 Justice System2 J. S. Bach2 Scientific Method2 Opera2 James Cook2 Ocean Liners2
+7522744	4p	round 9 ln 288	actor Purple	slot 5	card Constitutional Monarchy (Government 2) (row_cost 2)	age II	hand 4/4	spare_ca 2	reject=HandFull
+    card_row: . Reserves (I)1 Urban Growth (I)1 Swordsmen1 St. Peter's Basilica1 Constitutional Monarchy2 Strategy2 Justice System2 J. S. Bach2 Scientific Method2 Opera2 James Cook2 Ocean Liners2
+7522744	4p	round 11 ln 370	actor Purple	slot 0	card Revolutionary Idea (II) (Action 2) (row_cost 1)	age II	hand 6/6	spare_ca 5	reject=HandFull
+    card_row: Revolutionary Idea (II)2 Napoleon Bonaparte2 Eiffel Tower2 Frugality (II)2 Selective Breeding2 Architecture2 Organized Religion2 Rich Land (II)2 Engineering Genius (II)2 Scientific Method2 Efficient Upgrade (II)2 Riflemen2 Coal2
+7522744	4p	round 11 ln 374	actor Purple	slot 2	card Riflemen (Infantry 2) (row_cost 1)	age II	hand 6/6	spare_ca 1	reject=HandFull
+    card_row: . . Riflemen2 Frugality (II)2 Selective Breeding2 Architecture2 Organized Religion2 Rich Land (II)2 Engineering Genius (II)2 Scientific Method2 Efficient Upgrade (II)2 Riflemen2 Coal2

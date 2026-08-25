@@ -466,7 +466,18 @@ struct CardFateTrack {
     taken_rounds: HashMap<CardId, VecDeque<u16>>,
     n_taken: u32,
     n_played: u32,
+    /// Genuine age-change antiquation ONLY -- a card cull observed on a
+    /// `Decision` whose post-state has a different `age_civil` than its
+    /// pre-state. Same-age hand-limit discards (a hand-full take that the
+    /// replayer's §2.5 override applied) are counted in `n_same_age_removed`,
+    /// never here.
     n_antiquated: u32,
+    /// A civil card that left a hand on a same-age decision: the replayer's
+    /// hand-full take override applied `Move::Take` past the civil hand
+    /// limit, and BGO's journal shows the oldest card leaving the hand in
+    /// the same breath. Not age-transition antiquation -- a separate named
+    /// quantity so `n_antiquated` stays honest about what it measures.
+    n_same_age_removed: u32,
     /// A Played or Antiquated event that could not be matched back to a
     /// `taken_rounds` entry -- see `CardFateStats::n_mismatch`'s doc
     /// comment; never panics, just counted.
@@ -485,6 +496,7 @@ impl CardFateTrack {
             n_taken: 0,
             n_played: 0,
             n_antiquated: 0,
+            n_same_age_removed: 0,
             n_mismatch: 0,
             played_dwell: Vec::new(),
             censored_dwell: Vec::new(),
@@ -497,6 +509,10 @@ impl CardFateTrack {
 #[derive(Default)]
 struct CardFateGroupStats {
     counts: CardFateCounts,
+    /// Same-age hand-limit discards (see `CardFateTrack::n_same_age_removed`)
+    /// across this group's player-games -- reported as its own line, never
+    /// folded into `counts`' three-way fate split.
+    same_age_removed: u64,
     taken_per_game: Vec<i32>,
     still_in_hand_per_game: Vec<i32>,
     played_dwell: Vec<i32>,
@@ -504,11 +520,17 @@ struct CardFateGroupStats {
 }
 
 impl CardFateGroupStats {
+    // Eight positional scalars is one over clippy's default ceiling; the
+    // counters are a fixed named set (the split-off
+    // `n_same_age_removed` added the eighth), so a struct-arg indirection
+    // would add ceremony without clarity.
+    #[allow(clippy::too_many_arguments)]
     fn record(
         &mut self,
         n_taken: u32,
         n_played: u32,
         n_antiquated: u32,
+        n_same_age_removed: u32,
         still_in_hand: u64,
         played_dwell: &[i32],
         censored_dwell: &[i32],
@@ -516,6 +538,7 @@ impl CardFateGroupStats {
         self.counts.record(CardFate::Played, u64::from(n_played));
         self.counts.record(CardFate::Antiquated, u64::from(n_antiquated));
         self.counts.record(CardFate::StillInHand, still_in_hand);
+        self.same_age_removed += u64::from(n_same_age_removed);
         self.taken_per_game.push(n_taken as i32);
         self.still_in_hand_per_game.push(still_in_hand as i32);
         self.played_dwell.extend_from_slice(played_dwell);
@@ -570,6 +593,15 @@ impl CardFateStats {
         );
         eprintln!("    winners: {}", median_mean(&self.winners.still_in_hand_per_game));
         eprintln!("    losers:  {}", median_mean(&self.losers.still_in_hand_per_game));
+        if self.overall.same_age_removed > 0 {
+            let pct = 100.0 * self.overall.same_age_removed as f64 / self.overall.counts.taken as f64;
+            eprintln!(
+                "  same-age hand-limit discards (NOT age-transition antiquation): {} ({:.1}% of {} taken)",
+                self.overall.same_age_removed,
+                pct,
+                self.overall.counts.taken,
+            );
+        }
         eprintln!(
             "  dwell in rounds, taken -> played (n={}): {}",
             self.overall.played_dwell.len(),
@@ -989,6 +1021,14 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                 // code only diffed hands across an age change, so a
                 // same-age removal was invisible to both the played and
                 // antiquated counters.
+                //
+                // Same-age, so NOT age-transition antiquation: the dominant
+                // shape is the replayer's hand-full take override applying
+                // `Move::Take` past the §2.5 civil hand limit, with BGO's
+                // journal showing the oldest card leaving the hand in the
+                // same breath. Counted in its own named counter,
+                // `n_same_age_removed`, so `n_antiquated` measures only the
+                // genuine age-change cull below.
                 if let Some(played) = played_this_move {
                     let removed = hand_multiset_diff(&pre_hands[actor], post_state.players[actor].hand_civil.as_slice());
                     let extra: Vec<CardId> = removed
@@ -999,7 +1039,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                     for card in extra {
                         match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
                             Some(taken_round) => {
-                                t.n_antiquated += 1;
+                                t.n_same_age_removed += 1;
                                 t.censored_dwell.push(round_before as i32 - taken_round as i32);
                             }
                             None => t.n_mismatch += 1,
@@ -1045,6 +1085,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                 let n_taken = track.n_taken;
                 let n_played = track.n_played;
                 let n_antiquated = track.n_antiquated;
+                let n_same_age_removed = track.n_same_age_removed;
                 let played_dwell_this_game = &track.played_dwell;
                 let outcome = Color::from_seat(seat as u8)
                     .and_then(|c| outcomes_by_color.iter().find(|(oc, _)| *oc == c))
@@ -1057,6 +1098,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                     n_taken,
                     n_played,
                     n_antiquated,
+                    n_same_age_removed,
                     still_in_hand,
                     played_dwell_this_game,
                     &censored_dwell_this_game,
@@ -1066,6 +1108,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                         n_taken,
                         n_played,
                         n_antiquated,
+                        n_same_age_removed,
                         still_in_hand,
                         played_dwell_this_game,
                         &censored_dwell_this_game,
@@ -1074,6 +1117,7 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                         n_taken,
                         n_played,
                         n_antiquated,
+                        n_same_age_removed,
                         still_in_hand,
                         played_dwell_this_game,
                         &censored_dwell_this_game,
