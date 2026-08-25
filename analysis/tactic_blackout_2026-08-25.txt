@@ -1,0 +1,285 @@
+TACTIC BLACKOUT DIAGNOSIS -- TacticShortfallCost / TacticReachCredit read exactly zero
+term_nonzero over 130,180 real self-play decisions (2p/3p/4p), per
+analysis/multiplier_flips_2026-08-25.txt section 4.3, while their sibling
+TacticBoardCredit flips 6.47% of 3p decisions.
+generated 2026-08-25, read-only investigation, no code changed under /Users/pt/tta-ai
+
+BOTTOM LINE
+===========
+Neither read is unreachable code. Both execute constantly -- in a 5-game
+counterfactual sweep at 3p alone, the line at cards.rs:1410 (TacticShortfallCost) fired
+86,480 times and the line at cards.rs:1446 (TacticReachCredit) fired 537,755 times.
+The zero comes from upstream of the code entirely: at 2p and 4p the enclosing function
+is never CALLED because a sibling gate (TacticBoardCredit) is exactly 0.0 in those two
+champions; at 3p, where the function IS called, each weight's own runtime value has
+independently been neutralized to exactly 0.0 before the game ever starts -- one by
+the hill-climb itself, the other by the engine's own load-time sign-repair. Verdict
+per key below. Neither is (a)/(b)/(c)/(d) cleanly; both are closest to (c) ("multiplies
+by a quantity that is always 0"), except the zero quantity is the WEIGHT ITSELF, fixed
+before self-play begins, not a state-derived multiplicand computed during play.
+
+
+SECTION 1 -- THE TWO DEAD READS: ENCLOSING FUNCTION AND GUARD CHAIN
+=====================================================================
+
+Both reads sit in the same function, rust/src/bots/weighted/cards.rs:1396-1448:
+
+  pub fn tactic_value(id: CardId, state: &GameState, idx: u8, w: &Weights) -> f64 {
+      let p = &state.players[idx as usize];
+      let (val, armies, short_by_type) = effects::tactic_shortfall(p, id);   // 1398
+      let current = effects::army_strength(p);                              // 1399
+      let gain = (val - current).max(0) as f64;                             // 1400
+      if gain > 0.0 {                                                       // 1401
+          let strength_m = yield_marginal(WeightKey::Strength, ...);        // 1408
+          let short: i32 = short_by_type.iter().sum();                      // 1409
+          let shortfall_w = w.get(WeightKey::TacticShortfallCost);          // 1410 <-- READ 1
+          return (gain * strength_m - f64::from(short) * shortfall_w).max(0.0); // 1411
+      }
+      if armies > 0 { return 0.0; }                                         // 1413-1419
+      let card = id.get();
+      let potential = (i32::from(card.effects.strength) - current).max(0);  // 1434
+      if potential == 0 { return 0.0; }                                     // 1435-1436
+      let mut cost = 0.0;
+      for (i, &kind) in effects::UNIT_SLOT_TYPES.iter().enumerate() {
+          match unit_type_reach_cost(state, p, kind, short_by_type[i], w) {
+              Some(c) => cost += c,
+              None => return 0.0, // no visible route to this unit type       // 1442
+          }
+      }
+      let strength_m = yield_marginal(WeightKey::Strength, ...);
+      let reach_credit = w.get(WeightKey::TacticReachCredit);                // 1446 <-- READ 2
+      (reach_credit * (f64::from(potential) * strength_m - cost)).max(0.0)   // 1447
+  }
+
+Full guard chain from function entry to each read:
+  * line 1401 `if gain > 0.0` -- the ONLY guard between entry and READ 1 (line 1410).
+    True means: playing this specific hand-tactic card, using units the player already
+    owns, would beat the army currently in play.
+  * line 1413 `if armies > 0` -- returns 0.0 before READ 2 if the candidate is
+    formable now but not an improvement (handled already by the branch above).
+  * line 1435 `if potential == 0` -- returns 0.0 before READ 2 if the card's printed
+    strength does not exceed the current army at all.
+  * lines 1439-1444 -- a loop over up to 3 unit types (composition never needs Air,
+    per cards.rs:591-593 comment); ANY missing visible route (`unit_type_reach_cost`
+    returns `None`) short-circuits to `return 0.0` before READ 2 is ever reached.
+  * READ 2 (line 1446) is reached only if gain<=0, armies==0, potential>0, AND every
+    composition unit type has a visible route (owned tech, or a matching card
+    currently sitting in the CIVIL row -- see Section 4).
+
+VERDICT PER KEY, WITH RUNTIME EVIDENCE (not just static reading):
+I instrumented a throwaway clone (/private/tmp/tacticprobe, deleted after this run)
+with eprintln! at every return point in tactic_value and ran the ACTUAL frozen 3p
+champion (/private/tmp/multfreeze/rust_champion_3p.json, md5 matches the one the
+2026-08-25 flip measurement used) through 5 self-play games under the real multcheck
+counterfactual sweep:
+
+  PROBE_SHORTFALL_BRANCH (line 1401 true, reads line 1410):    86,480 hits
+  PROBE_ARMIES_BRANCH   (line 1413 true):                      19,807 hits
+  PROBE_POTENTIAL_ZERO  (line 1435 true):                      18,056 hits
+  PROBE_NO_ROUTE        (line 1442, None on some unit type):  610,439 hits
+  PROBE_REACH_BRANCH    (reads line 1446, fully computed):    537,755 hits
+  total tactic_value() calls:                                1,272,537
+  (stderr line count 1,272,541 -- consistent, small remainder is other stdout noise)
+
+So the CODE at both 1410 and 1446 is extremely hot -- not (a) enclosing-function-
+never-called and not (b) an early-return-always-fires, for the 3p case. But every
+single one of the 86,480 shortfall-branch hits logged `shortfall_w=0` (100%, `sort
+-u` on the extracted field returns exactly one value: 0) and every single one of the
+537,755 reach-branch hits logged `reach_credit=0` (100%, same check). The trained
+JSON stores shortfall_cost=0 (verbatim, not a repair -- see Section 3) and
+reach_credit=-0.07110897586662696 (negative -- clamped to exactly 0.0 by the
+engine's own load-time sign repair, `dominance_repair`, before self-play ever runs
+-- see Section 3). Zeroing an already-0.0 weight in the counterfactual test is a
+no-op by construction: term_nonzero is 0 not because the arithmetic never differs
+in principle, but because both the trained value and the test's zero ARE the same
+number, always, at 3p.
+
+At 2p and 4p, a separate, simpler mechanism applies and IS answer (a): see Section 2.
+
+
+SECTION 2 -- CALL-SITE CENSUS
+==============================
+
+tactic_value's only non-test, non-bin caller in rust/src:
+
+  rust/src/bots/weighted/cards.rs:1945-1951, inside `card_potential_core`
+  (rust/src/bots/weighted/cards.rs:1887), the dispatch body behind the public
+  `card_potential` (cards.rs:1876), itself gated on `board: Option<&Baseline>`:
+
+      } else if kind == CardType::Tactic {
+          let tc = w.get(WeightKey::TacticBoardCredit);
+          if tc != 0.0 {
+              return tc * tactic_value(id, st, ix, w);
+          }
+      }
+
+  `card_potential_core` is called from many places (row.rs, eval.rs, cards.rs's own
+  hand_total/hand_mil_potential/wonder pricing, bin/leadersign.rs), but `id.kind() ==
+  CardType::Tactic` can only ever be true for a caller that hands it a Tactic-kind
+  CardId. The ONLY non-test, non-bin function that does that is:
+
+  rust/src/bots/weighted/cards.rs:2273-2287, `hand_mil_potential`:
+
+      pub fn hand_mil_potential(state: &GameState, idx: u8, w: &Weights) -> f64 {
+          let hand = &state.players[idx as usize].hand_military;
+          ...
+          for &n in hand.as_slice() {
+              total += card_potential(n, w, Some(&base), Some(late), &mut scratch);
+          }
+          total
+      }
+
+  which iterates `p.hand_military` (state.rs:481) -- Tactic is one of the "military-
+  deck classes" (cards.rs:1358-1371 comment: Tactic/Aggression/War/Pact/Event), so
+  hand_military does contain Tactic CardIds. `hand_total`/`hand_potential`
+  (cards.rs:2079/2119) iterate `hand_civil` only and never see a Tactic card
+  (confirmed: Tactic never appears in `state.card_row` either -- see Section 4).
+
+  hand_mil_potential's only non-test caller is eval.rs:351-354, inside
+  `pub fn evaluate` (eval.rs:133) -- the real WeightedBot scoring path:
+
+      let hmp = w.get(WeightKey::HandMilPotential);
+      if hmp != 0.0 {
+          total += hmp * cards::hand_mil_potential(state, idx, w);
+      }
+
+  So the full call chain to tactic_value on the real evaluation path is:
+    eval::evaluate  --[if hand_mil_potential != 0.0]-->
+    cards::hand_mil_potential  --[for each Tactic id in hand_military]-->
+    cards::card_potential  -->  card_potential_core
+      --[if kind==Tactic and tactic_board_credit != 0.0]--> cards::tactic_value
+
+  TWO independent gates must both be nonzero before tactic_value is ever invoked:
+  hand_mil_potential and tactic_board_credit. Champion values (all three frozen
+  files, matching the flip measurement's own md5s):
+
+                        hand_mil_potential   tactic_board_credit
+      2p champion            0.7154                0.0000  (exact)
+      3p champion            0.3929                0.0415
+      4p champion            0.0766                0.0000  (exact)
+
+  At 2p and 4p, tactic_board_credit is EXACTLY 0.0, so the `if tc != 0.0` gate at
+  cards.rs:1948 never opens -- tactic_value is never called at all, for any
+  candidate, in any decision. This is answer (a), confirmed empirically: I reran
+  the same instrumented binary on 2 self-play games at 2p and separately at 4p
+  (full multcheck counterfactual sweep both times) and got ZERO "PROBE_*" lines in
+  either run -- not one call to tactic_value. This alone fully explains BOTH keys'
+  zero term_nonzero at 2p and 4p, independent of anything about the weights' own
+  values.
+
+  At 3p both gates are nonzero, so tactic_value IS called (confirmed: 1,272,537
+  times across the 5-game sweep) -- the real explanation there is Section 1's
+  weight-neutralization finding, refined with mechanism in Section 3.
+
+
+SECTION 3 -- THE CONTRAST WITH TacticBoardCredit (THE KEY THAT FIRES)
+========================================================================
+
+All three keys -- TacticBoardCredit, TacticShortfallCost, TacticReachCredit -- are
+classified `NonNegative` in `sign_intent` (weights.rs:1184, 1190, and 1595-1597
+respectively). `NonNegative` is enforced by `dominance_repair`
+(rust/src/bots/weighted/eval.rs:923), which runs on every champion load
+(`parse_weights` ends with `Ok(dominance_repair(&w).0)`, eval.rs:1099) -- so
+`multcheck`, `climb`, and every real bot all see the REPAIRED vector, never the raw
+JSON. The clamp itself, eval.rs:988-998:
+
+      for (k, why) in non_negative_gates() {
+          let v = out.get(k);
+          if v < -1e-12 {
+              viol.push(Violation { weight: k, value: v, ... });
+              out.set(k, 0.0);
+          }
+      }
+
+Raw (as-saved-in-JSON) vs. actual-runtime (post-`dominance_repair`) value, all three
+frozen champions:
+
+                     tactic_board_credit   tactic_shortfall_cost   tactic_reach_credit
+  2p  raw:                 0.0000                 0.004455              -0.411641
+      runtime:             0.0000                 0.004455               0.000000 (repaired)
+  3p  raw:                 0.041454               0.000000              -0.071109
+      runtime:             0.041454               0.000000               0.000000 (repaired)
+  4p  raw:                 0.0000                 0.000000               0.197084
+      runtime:             0.0000                 0.000000               0.197084
+
+  (2p/4p runtime values for shortfall/reach are moot: tactic_value is never called
+  there at all, per Section 2, regardless of what these weights individually equal.
+  4p's reach_credit is positive and genuinely un-repaired, but irrelevant for the
+  same reason.)
+
+The concrete, one-sentence contrast: TacticBoardCredit is the outermost of the three
+gates (cards.rs:1948, `if tc != 0.0`) and at 3p the hill-climb happened to leave it
+POSITIVE, so it survives its own `NonNegative` repair with no clamp and nothing
+downstream of it is masked; TacticShortfallCost is a genuinely trained-to-exactly-0.0
+value at 3p (not repaired -- it was never negative, the climb just parked it there),
+and TacticReachCredit is a genuinely NEGATIVE trained value at 3p (and at 2p) that
+`dominance_repair`'s own `NonNegative` gate silently overwrites to exactly 0.0 on
+every load, before any game runs -- confirmed directly: 537,755 runtime reads of
+`WeightKey::TacticReachCredit` in the 3p sweep, one hundred percent of them 0.0,
+against a raw file value of -0.07110897586662696.
+
+
+SECTION 4 -- WHAT GAME STATE WOULD MAKE THE DEAD LINES EXECUTE, AND IS IT REACHABLE
+=======================================================================================
+
+This is the one part of the finding that is NOT about unreachable code: both lines
+already execute, copiously, in real self-play (Section 1). The "state" question is
+really "what would make the CHAMPION carry the weight all the way through to the
+scoreboard instead of the load-time repair or the climb's own convergence erasing
+it first":
+
+  * TacticShortfallCost (3p): needs the hill-climb to walk this weight away from
+    0.0. Nothing in the code prevents it; the climb simply has not (or has walked it
+    back to 0.0, e.g. because the term rarely helped -- `short` was 2 in every
+    sampled hit, so the term is being computed against real, nonzero shortfalls; the
+    climb had genuine signal available and chose ~0 anyway). This is a training
+    outcome, not a code-reachability question, and the state that would change it
+    (a different, better-tuned champion) is fully reachable -- it just is not the
+    state on disk right now.
+
+  * TacticReachCredit (2p and 3p): needs a NON-NEGATIVE trained value to survive
+    `dominance_repair`. The current champions have both walked it negative (2p:
+    -0.4116, 3p: -0.0711). Nothing about game state gates this -- it is purely
+    "what sign did the optimizer converge to", and it is caught by a repair rule
+    whose own doc comment (weights.rs:1551-1554) says a negative reach credit would
+    otherwise "let a reach-cost-exceeds-benefit tactic ... read as a fabricated
+    positive", i.e. the clamp is protecting against a real inversion bug, not an
+    accident -- so the fix is not "let the negative value through", it is "the
+    weight needs to retrain positive, or this term is structurally worth removing/
+    renaming".
+
+  For TacticBoardCredit itself to matter (which it already does, at 3p only): needs
+  ANY hand_military Tactic card to be held while both hand_mil_potential and
+  tactic_board_credit are nonzero in the acting player's own trained vector -- an
+  entirely ordinary mid-game state (holding an un-played tactic card), reachable in
+  a real 2015-base-game game trivially and often (confirmed: 1.27M calls in 5
+  games).
+
+  Confirmation that CardType::Tactic never reaches `card_potential_core` through
+  the ROW path (only the HAND path matters here): `state.card_row` is declared at
+  state.rs:1496 with the doc comment at state.rs:15, "SS2.1 -- the civil card row is
+  thirteen slots" -- it is explicitly the CIVIL row only; Tactic/Aggression/War/
+  Pact/Event cards never sit in it. This is why `hand_total`/`hand_potential`/
+  row.rs's row-pricing functions (all of which read `hand_civil`/`state.card_row`)
+  never see a Tactic card at all, and only `hand_mil_potential` (reading
+  `hand_military`) can reach `card_potential_core`'s Tactic branch.
+
+
+FILES / COMMANDS
+=================
+  Read-only reading: rust/src/bots/weighted/cards.rs (1300-2360), weights.rs
+  (760-800, 900-1000, 1180-1200, 1540-1610, 1840-1860), eval.rs (130-360, 920-1100),
+  state.rs (10-20, 470-485, 1490-1500).
+
+  Instrumented clone (deleted after this run): /private/tmp/tacticprobe, built via
+  `cargo build --release --bin multcheck` (EXIT build=0, 1m23s).
+  Probe runs (all against the exact frozen champions the 2026-08-25 flip measurement
+  used, md5-verified identical to /private/tmp/multfreeze/rust_champion_{2,3,4}p.json):
+    3p, 5 games: EXIT run3p=0 -- 1,272,537 tactic_value() calls, full branch counts
+      above, 100% shortfall_w=0 and 100% reach_credit=0.
+    2p, 2 games: EXIT run2p=0 -- 0 tactic_value() calls.
+    4p, 2 games: EXIT run4p=0 -- 0 tactic_value() calls.
+  Full command log with exit codes: /private/tmp/tacticprobe_notes.txt (notes file
+  kept per instructions; clone itself removed).
+
+No code under /Users/pt/tta-ai was modified. No fix proposed here, per instructions.
