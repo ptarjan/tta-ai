@@ -1,0 +1,261 @@
+mine_take_interpolation_3p_2026-08-24.txt
+===========================================
+
+Follow-up to mine_take_probe_3p_2026-08-24.txt and
+mine_take_sensitivity_3p_2026-08-24.txt. Those established, at 3 players,
+that a scored Mine take (Iron/Coal/Oil) is outranked at EVERY one of 12,299
+decision points by the champion vector (best rank ever 3rd, mean rank
+17.87), and that no single WeightKey's multiplier -- swept 0 to 1e6, both
+directions, individually and jointly for the five clamp-saturated keys --
+ever brings it to rank 1. That leaves open whether a linear evaluator can
+ever want a Mine at all. It can: the SAME code, run against
+analysis/frozen/human_weights.json (read-only, never modified here), takes
+Iron/Coal/Oil at a nonzero rate in independent self-play census data. This
+file measures how far the champion vector has to move toward the human
+vector -- along the straight line between them, and one coordinate at a
+time -- before a scored Mine take starts winning.
+
+Binary: rust/src/bin/takeprobe.rs, extended with two new static-rescoring
+modes (--interpolate and its associated single-key adoption sweep). Only
+this one file was edited; no bot behaviour changed anywhere.
+
+Command (from rust/, release binary):
+
+  ./target/release/takeprobe --games 200 --players 3 \
+      --weights /private/tmp/opencensus/champ3p.json --threads 5 \
+      --interpolate /Users/pt/tta-ai/analysis/frozen/human_weights.json
+
+champion = /private/tmp/opencensus/champ3p.json (160 WeightKey entries)
+human    = /Users/pt/tta-ai/analysis/frozen/human_weights.json (140 entries
+           in the file; missing keys resolve through load_weights the same
+           way for both files)
+keys differing champion vs human (|delta| > 1e-9): 156 of 160
+
+Sample size: 200 self-play games, 3 players, all seats the champion vector
+(mirrors behavcensus.rs's all-Weighted self-play). elapsed 10.0s.
+  seen=24412  legal=12299 (0.504)  scored=12299 (1.000)
+  combined mean_rank=17.87  mean_gap=190.4358  best_rank=3
+These reproduce mine_take_probe_3p_2026-08-24.txt's own numbers exactly (a
+consistency check, not a new claim): this run measures the identical set of
+12,299 scored Mine-take decision points, just rescored under two new
+static perturbations instead of the earlier multiplier sweep.
+
+METHOD (see takeprobe.rs's own doc comments on InterpCtx / rank_gap_at_t /
+ProbeConfig for the implementation)
+-----------------------------------
+dot(w, f) is linear in w for a fixed, already-computed feature vector f (the
+same freeze mine_take_sensitivity_3p_2026-08-24.txt's rank_under_perturbation
+already relies on). So for w(t) = (1-t)*champion + t*human:
+
+    dot(w(t), f) = (1-t)*dot(champion, f) + t*dot(human, f)
+
+Two dot products per candidate, computed once per decision point, then every
+t is a cheap blend -- no replayed self-play per t. Swept t = 0.00 to 1.00 in
+steps of 0.01 (101 points total: this IS the "0.05 coarse plus 0.01 fine"
+grid the task asked for, computed once, sliced two ways at report time,
+since the per-t cost is negligible and there is no need to guess the
+transition interval before running).
+
+The single-key adoption sweep is a SEPARATE measurement: for every WeightKey
+that differs between champion and human, set w[key] = human[key] with every
+other coordinate left at the champion's value, and re-rank the same 12,299
+decision points via the identical rank_under_perturbation identity already
+used by --sensitivity's multiplier sweep. This is a different intervention
+from a multiplier: a multiplier can only rescale a coordinate (it can never
+flip its sign or move it off a clamp fence), whereas adopting the human's
+actual value can do both.
+
+TABLE 1: w(t) = (1-t)*champion + t*human, coarse (every 0.05)
+---------------------------------------------------------------
+     t        n      rank1   rank1or2  mean_rank     mean_gap
+  0.00    12299     0.0000     0.0000      17.87     190.4358
+  0.05    12299     0.0000     0.0000      17.87     180.9528
+  0.10    12299     0.0000     0.0000      17.87     171.4705
+  0.15    12299     0.0000     0.0000      17.86     161.9889
+  0.20    12299     0.0000     0.0000      17.86     152.5084
+  0.25    12299     0.0000     0.0000      17.86     143.0287
+  0.30    12299     0.0000     0.0000      17.86     133.5501
+  0.35    12299     0.0000     0.0000      17.85     124.0730
+  0.40    12299     0.0000     0.0000      17.85     114.5976
+  0.45    12299     0.0000     0.0000      17.85     105.1243
+  0.50    12299     0.0000     0.0000      17.84      95.6545
+  0.55    12299     0.0000     0.0000      17.84      86.1885
+  0.60    12299     0.0000     0.0000      17.83      76.7263
+  0.65    12299     0.0000     0.0000      17.83      67.2682
+  0.70    12299     0.0000     0.0000      17.82      57.8150
+  0.75    12299     0.0000     0.0000      17.80      48.3673
+  0.80    12299     0.0000     0.0000      17.76      38.9308
+  0.85    12299     0.0000     0.0000      17.71      29.5095
+  0.90    12299     0.0000     0.0000      17.59      20.1128
+  0.95    12299     0.0000     0.0000      17.31      10.7765
+  1.00    12299     0.0645     0.1767       6.63       1.8893
+
+Biggest single-step rank1-fraction jump: 0.0645, between t=0.95 and t=1.00.
+
+TABLE 1b: fine (0.01) breakdown of the [0.95, 1.00] interval
+---------------------------------------------------------------
+     t        n      rank1   rank1or2  mean_rank     mean_gap
+  0.95    12299     0.0000     0.0000      17.31      10.7765
+  0.96    12299     0.0000     0.0000      17.15       8.9247
+  0.97    12299     0.0000     0.0000      16.89       7.0900
+  0.98    12299     0.0000     0.0000      16.46       5.2840
+  0.99    12299     0.0000     0.0000      14.93       3.5258
+  1.00    12299     0.0645     0.1767       6.63       1.8893
+
+TABLE 2: single-key champion->human adoption (w[key]=human[key], all else
+champion), ranked by rank1 fraction, n=156 differing keys, n=12299 decision
+points per key
+---------------------------------------------------------------
+   1. HandPotential            rank1_frac=0.0478  (n=12299)
+   2. RateHorizon               rank1_frac=0.0000  (n=12299)
+   3. Culture                   rank1_frac=0.0000  (n=12299)
+   4. CultureRate                rank1_frac=0.0000  (n=12299)
+   5. Science                    rank1_frac=0.0000  (n=12299)
+   6. ScienceRate                rank1_frac=0.0000  (n=12299)
+   7. FoodRate                   rank1_frac=0.0000  (n=12299)
+   8. ResourceRate                rank1_frac=0.0000  (n=12299)
+   9. FoodStock                   rank1_frac=0.0000  (n=12299)
+  10. ResourceStock               rank1_frac=0.0000  (n=12299)
+keys achieving exactly zero rank1 fraction: 155 of 156
+
+FINDING
+-------
+Neither pattern named in the task's "most valuable findings" section is
+what happened. This is not a gradual ramp (rank1 fraction sits at exactly
+0.0000 across the ENTIRE interior of the sweep, t=0.00 through t=0.99 --
+mean_gap does shrink smoothly and monotonically as t rises, from 190.44 to
+3.53 at t=0.99, but that shrinking gap never once crosses zero before the
+endpoint). And it is not an interior abrupt transition at some intermediate
+t either -- the single jump the sweep finds sits at the very last step,
+t=0.99 -> t=1.00, i.e. the unlock requires the FULL joint human vector, not
+any partial blend of it, however close. Even at t=1.00 the Mine take only
+reaches rank 1 on 6.45% of these 12,299 champion-trajectory decision points
+(rank 1-or-2 on 17.67%) -- a real but modest unlock, not a landslide, and
+noticeably lower than the human census's own reported Mine-take rate,
+consistent with caveat 1 below (this measures the human WEIGHTS rescoring
+CHAMPION-reached states, not human self-play).
+
+The single-key adoption sweep rules out that this is a large number of
+small individual differences that only add up in combination: 155 of 156
+differing keys, adopted alone at the human's exact value, achieve EXACTLY
+zero rank-1 fraction -- indistinguishable from --sensitivity's multiplier
+sweep's own finding that 14 of 18 named keys never reach rank 1 at any
+multiplier. The one exception is HandPotential, at 4.78% rank-1 alone --
+matching mine_take_sensitivity_3p_2026-08-24.txt's own finding that
+DELETING HandPotential outright (multiplier 0) also reached 4.78%, to four
+significant figures. That match is itself informative: it says the human
+vector's HandPotential coordinate behaves, for this measurement, almost
+exactly like deleting the champion's -- i.e. adopting the human's actual
+value is not doing anything a multiplier sweep could not already reach,
+so HandPotential is NOT the coordinate the multiplier sweep structurally
+could not have found. No other single-key swap does better than 0.0000,
+including keys like ResourceStock/FoodStock/CultureRate that sit at the
+champion's clamp fence and that a multiplier alone cannot move off of --
+adopting the human's actual (non-clamped) value for any one of them,
+individually, still never flips a single decision point to rank 1.
+
+Put together: the capability the human vector has and the champion vector
+lacks is not concentrated in one coordinate, or even in a small jointly-
+acting handful reachable one substitution at a time. It requires
+(something very close to) the full 156-coordinate joint difference at
+once. This is consistent with, and sharpens, the earlier sensitivity
+sweep's finding that deleting the entire five-key clamp block jointly still
+yields exactly 0.0000: the effect really is distributed across the whole
+vector, not hiding in an interaction the earlier per-key/per-block sweeps
+missed. No single cause is identified; the multi-coordinate/joint-effect
+explanation is what the data supports, and no coefficient is proposed.
+
+CAVEATS
+-------
+1. This is a STATIC rescoring at a FIXED set of 12,299 decision points, all
+   reached by champion-vs-champion self-play. It is not a policy evaluation
+   and not a predicted win rate. A vector that ranks these particular Mine
+   takes first would also have played different earlier moves and reached
+   different states entirely -- states this method cannot see or score.
+   The gap between this run's 6.45% rank-1-at-t=1.00 and the human census's
+   own reported per-player-game Mine-take rate (0.60, tier II 0.272 / tier
+   III 0.328) is exactly this effect: the census is human weights choosing
+   their OWN trajectory; this table is human weights judging the champion's
+   trajectory.
+2. Per candidate_features'/linear_features' own contract, the feature
+   vector f used for every dot product in this file (both t-blends and the
+   single-key swaps) was computed ONCE per decision point with the champion
+   vector as linear_features' `freeze` argument (the same freeze the actual
+   champion-driven game already used to reach that state). freeze feeds
+   horizon::rate_multiplier, which scales every RATE_KEYS-tagged feature.
+   Neither the t-interpolation nor the single-key swap recomputes that
+   scaling with the human vector as freeze -- only the weight side of the
+   dot product changes, never the feature side. A "human-freeze" feature
+   recomputation is a different (unmeasured) question.
+3. The human vector is a diagnostic mirror, not a target. It exists to
+   prove the champion's inability to want a Mine is a property of THIS
+   vector, not of linear evaluators generally -- nothing here says the
+   human vector, or any blend toward it, is a good direction to move the
+   champion.
+4. Single-key adoption swaps exactly one coordinate at a time; it was not
+   re-run for every pair or larger subset, so a joint effect between two
+   specific non-HandPotential keys smaller than the full 156-key set cannot
+   be ruled out by this file alone -- only that no INDIVIDUAL key does it.
+5. As in the sensitivity sweep, no weight's SIGN was flipped independently
+   of what the human's own value happens to be; the single-key sweep
+   inherits whatever sign the human vector carries for that key, it was not
+   swept separately.
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
+
+CORRECTION ADDED 2026-08-24 BY THE COORDINATOR: THE FINDING ABOVE DOES NOT
+FOLLOW. THE ENDPOINT JUMP IS A SCALE ARTIFACT.
+--------------------------------------------------------------------------
+The two vectors are not on the same scale:
+
+  champion  n=160  mean|w|=5.6313  max|w|=60.000  L2=183.357
+  human     n=140  mean|w|=0.2014  max|w|= 2.781  L2=  6.157
+
+A factor of ~30 in norm. In the blend (1-t)*champion + t*human the champion
+term therefore dominates until the two contributions are comparable, which
+happens at 1-t ~= 1/30, i.e. t ~= 0.97. The observed transition sits at
+t=0.99->1.00. That is where the arithmetic puts it regardless of what the
+two vectors mean, so the sweep locates the scale ratio and not a property
+of the vectors' DIRECTIONS.
+
+The file's own numbers corroborate this. mean_gap at t=1.00 is 1.8893 while
+at t=0.00 it is 190.4358 -- the human vector's whole score spread is two
+orders of magnitude below the champion's. The interior of the sweep was
+never a mixture of two policies; it was the champion's policy with a small
+perturbation added, right up to the last step.
+
+THE SAME ARTIFACT INVALIDATES TABLE 2, AND THE FILE CONTAINS THE PROOF.
+Adopting human[key] into the champion replaces a coordinate of typical
+magnitude 5.63 with one of typical magnitude 0.20. That is not "adopting the
+human's value", it is approximately DELETING the coordinate. Hence the
+result the FINDING section flags as informative -- HandPotential adoption
+0.0478 matching HandPotential deletion at m=0 to four significant figures --
+is not a coincidence to be interpreted. It is the signature of the artifact.
+Table 2 is a second, noisier copy of the multiplier sweep's m=0 column, and
+its 155-of-156 zeroes carry no information the sensitivity sweep did not.
+
+WHAT SURVIVES
+  - The t=0.00 column, which reproduces the earlier probe exactly.
+  - The t=1.00 row (rank1 0.0645, rank1or2 0.1767, mean_rank 6.63). A
+    uniform rescaling of a weight vector cannot change an argmax, so the
+    human vector's own ranking behaviour is scale-invariant and this row is
+    unaffected. It stands as an independent confirmation that a linear
+    evaluator CAN rank a Mine take first -- 6.45% of the time even when
+    judging states it did not choose.
+  - The method, the binary, and caveats 1 and 2, which are correct and
+    important.
+
+WHAT DOES NOT SURVIVE
+  The conclusion that the capability "requires the full 156-coordinate joint
+  difference at once" and is "distributed across the whole vector". This
+  measurement cannot support that and no part of it should be cited for it.
+  The question of whether a small set of coordinates is responsible remains
+  OPEN. It was not answered here.
+
+HOW TO REDO IT
+  Interpolate between DIRECTIONS, not raw vectors: normalise each to unit L2
+  first, then sweep. For the adoption sweep, adopt the human's value scaled
+  by ||champion||/||human|| so that "adopt" means "take the human's relative
+  emphasis on this coordinate" rather than "shrink this coordinate ~30x".
+  Any future comparison of two weight vectors in this repo must state both
+  norms before interpreting a blend.

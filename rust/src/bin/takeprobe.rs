@@ -247,6 +247,115 @@ fn rank_under_perturbation(vals: &[f64], feats: &[(Move, Vec<f64>)], take_pos: u
     better + 1
 }
 
+/// `--interpolate`: the number of points swept across `t` in `w(t) = (1-t) *
+/// champion + t * human`, `t = i / 100` for `i` in `0..T_GRID_LEN` -- i.e.
+/// every multiple of 0.01 from 0.00 to 1.00 inclusive. Chosen so the coarse
+/// 0.05 report (every 5th entry) and the finer 0.01 report the task asks
+/// for around any transition are the SAME computed grid, sliced two ways,
+/// rather than two separate sweeps -- the per-`t` work is one blend of two
+/// already-computed dot products (see [`rank_gap_at_t`]), cheap enough that
+/// computing all 101 unconditionally costs nothing worth trimming.
+const T_GRID_LEN: usize = 101;
+
+/// `t` at grid index `i` -- see [`T_GRID_LEN`].
+fn t_at(i: usize) -> f64 {
+    i as f64 / 100.0
+}
+
+/// `--interpolate` inputs shared read-only across every game thread: the
+/// human vector, and the [`WeightKey`]s where it differs from the champion
+/// (beyond float noise) -- the set the single-key adoption sweep iterates.
+struct InterpCtx<'a> {
+    human: Weights,
+    /// Keys where `|champion.get(k) - human.get(k)| > 1e-9`; adopting a key
+    /// NOT in this set would be a no-op perturbation (`delta_weight == 0`),
+    /// so excluding them keeps the report's "top 10" and "exactly zero"
+    /// counts meaningful instead of padded with guaranteed-zero rows.
+    differ_keys: &'a [WeightKey],
+}
+
+/// `w(t) = (1-t) * champion + t * human` outcome counts, one cell per
+/// [`T_GRID_LEN`] grid point, accumulated over every scored Mine-take
+/// decision point exactly like [`SensStats`] -- see [`rank_gap_at_t`] for
+/// the linearity identity this reuses.
+#[derive(Clone)]
+struct InterpStats {
+    /// `by_t[i] = (n, rank1, rank1or2, rank_sum, gap_sum)` at `t = t_at(i)`.
+    by_t: Vec<(u64, u64, u64, u64, f64)>,
+}
+
+impl InterpStats {
+    fn new() -> InterpStats {
+        InterpStats { by_t: vec![(0, 0, 0, 0, 0.0); T_GRID_LEN] }
+    }
+
+    fn merge(&mut self, other: &InterpStats) {
+        for (cell, &o) in self.by_t.iter_mut().zip(other.by_t.iter()) {
+            cell.0 += o.0;
+            cell.1 += o.1;
+            cell.2 += o.2;
+            cell.3 += o.3;
+            cell.4 += o.4;
+        }
+    }
+}
+
+/// Single-key adoption outcome counts: for each key in an [`InterpCtx`]'s
+/// `differ_keys`, `w[key] = human[key]`, every other coordinate left at the
+/// champion's value -- a DIFFERENT intervention from `--sensitivity`'s
+/// multiplier sweep, which can only rescale a coordinate and can never flip
+/// its sign or move it off a clamp fence (this binary's own doc comment /
+/// the task background). `per_key[i]` corresponds to `differ_keys[i]`.
+#[derive(Clone)]
+struct KeyAdoptStats {
+    /// `per_key[i] = (n, rank1)`.
+    per_key: Vec<(u64, u64)>,
+}
+
+impl KeyAdoptStats {
+    fn new(n_keys: usize) -> KeyAdoptStats {
+        KeyAdoptStats { per_key: vec![(0, 0); n_keys] }
+    }
+
+    fn merge(&mut self, other: &KeyAdoptStats) {
+        for (cell, &o) in self.per_key.iter_mut().zip(other.per_key.iter()) {
+            cell.0 += o.0;
+            cell.1 += o.1;
+        }
+    }
+}
+
+/// Re-derives the 1-based rank and score gap the Mine take (`take_pos`)
+/// would have under the blended vector `w(t) = (1-t) * champion + t *
+/// human` at a fixed decision point, given `vals_champ[i] = dot(champion,
+/// feats[i])` and `vals_human[i] = dot(human, feats[i])` over the SAME
+/// `feats` (built once, with the champion vector as `linear_features`'
+/// `freeze` argument, by the actual self-play step -- see this binary's doc
+/// comment on `--interpolate`'s method and the CAVEATS section of the
+/// analysis file this feeds: the horizon rate-multiplier scaling inside
+/// `feats` itself is NOT re-derived per blend, only the dot product is).
+/// Exploits `dot(w(t), f) == (1-t) * dot(champion, f) + t * dot(human, f)`
+/// -- linearity of the dot product in `w` -- exactly the identity
+/// [`rank_under_perturbation`] already relies on, so every `t` is one pass
+/// over two already-computed value arrays, no re-evaluation of
+/// `linear_features`.
+fn rank_gap_at_t(vals_champ: &[f64], vals_human: &[f64], take_pos: usize, t: f64) -> (u64, f64) {
+    let blended = |i: usize| -> f64 { (1.0 - t) * vals_champ[i] + t * vals_human[i] };
+    let take_val = blended(take_pos);
+    let mut best = take_val;
+    let mut better = 0u64;
+    for i in 0..vals_champ.len() {
+        let v = blended(i);
+        if i != take_pos && v > take_val {
+            better += 1;
+        }
+        if v > best {
+            best = v;
+        }
+    }
+    (better + 1, best - take_val)
+}
+
 #[derive(Clone, Copy, Default)]
 struct CardStats {
     /// Stage 1: decision points where this card sat in `card_row` and a
@@ -344,6 +453,23 @@ fn mine_card_ids() -> Result<[CardId; 3], String> {
     Ok(ids)
 }
 
+/// Everything about a `play_one` call that is fixed for the whole run
+/// (shared read-only across every game thread) rather than varying per
+/// game -- bundled so `play_one` stays under clippy's `too_many_arguments`
+/// without folding unrelated concerns (mine IDs, `--sensitivity` inputs,
+/// `--interpolate` inputs) into one another's own structs. Every field is
+/// itself `Copy` (references and a `bool`), so the struct is too --
+/// `play_one` destructures `*cfg` rather than threading a lifetime-tied
+/// borrow through its own body.
+#[derive(Clone, Copy)]
+struct ProbeConfig<'a> {
+    mine_ids: &'a [CardId; 3],
+    sensitivity: bool,
+    sens_keys: &'a [WeightKey; SENS_KEY_NAMES.len()],
+    clamp_keys: &'a [WeightKey; CLAMP_KEY_NAMES.len()],
+    interp: Option<&'a InterpCtx<'a>>,
+}
+
 /// Plays one self-play game to completion (or to [`MOVE_CAP`]), recording
 /// [`CardStats`] for each of [`MINE_NAMES`]. Never mutates anything outside
 /// its own locals -- a fresh `GameState` from `game::new_game` and a fresh
@@ -351,20 +477,15 @@ fn mine_card_ids() -> Result<[CardId; 3], String> {
 /// move the bot itself already chose, so this reproduces an ordinary
 /// self-play trajectory exactly; it only ever ADDS observation, never
 /// changes what gets played.
-fn play_one(
-    players: u8,
-    weights: Weights,
-    seed: u64,
-    mine_ids: &[CardId; 3],
-    sensitivity: bool,
-    sens_keys: &[WeightKey; SENS_KEY_NAMES.len()],
-    clamp_keys: &[WeightKey; CLAMP_KEY_NAMES.len()],
-) -> ([CardStats; 3], Diag, SensStats) {
+fn play_one(players: u8, weights: Weights, seed: u64, cfg: &ProbeConfig) -> ([CardStats; 3], Diag, SensStats, InterpStats, KeyAdoptStats) {
+    let ProbeConfig { mine_ids, sensitivity, sens_keys, clamp_keys, interp } = *cfg;
     let bot = WeightedBot::new(weights);
     let mut state = game::new_game(players, seed);
     let mut stats = [CardStats::default(); 3];
     let mut diag = Diag::new();
     let mut sens = SensStats::new();
+    let mut interp_stats = InterpStats::new();
+    let mut key_adopt = KeyAdoptStats::new(interp.map_or(0, |c| c.differ_keys.len()));
     let mut moves_played = 0usize;
 
     while !state.game_over {
@@ -458,6 +579,41 @@ fn play_one(
                                 sens.joint_clamp.2 += 1;
                             }
                         }
+
+                        // `--interpolate`: reuse this SAME decision point's
+                        // `vals`/`feats` again -- one extra dot product per
+                        // candidate against the human vector, then every
+                        // `t` in `T_GRID_LEN` is a cheap blend
+                        // (`rank_gap_at_t`'s own doc comment), plus the
+                        // single-key adoption sweep via
+                        // `rank_under_perturbation` (already used above by
+                        // `--sensitivity`), one game pass answering both.
+                        if let Some(ctx) = interp {
+                            let vals_human: Vec<f64> = feats.iter().map(|(_, f)| dot(&ctx.human, f)).collect();
+                            for i in 0..T_GRID_LEN {
+                                let (rank, gap) = rank_gap_at_t(&vals, &vals_human, pos, t_at(i));
+                                let cell = &mut interp_stats.by_t[i];
+                                cell.0 += 1;
+                                if rank == 1 {
+                                    cell.1 += 1;
+                                }
+                                if rank <= 2 {
+                                    cell.2 += 1;
+                                }
+                                cell.3 += rank;
+                                cell.4 += gap;
+                            }
+                            for (ki, &key) in ctx.differ_keys.iter().enumerate() {
+                                let key_idx = key as usize;
+                                let delta_weight = ctx.human.get(key) - weights.get(key);
+                                let r = rank_under_perturbation(&vals, &feats, pos, &[(key_idx, delta_weight)]);
+                                let cell = &mut key_adopt.per_key[ki];
+                                cell.0 += 1;
+                                if r == 1 {
+                                    cell.1 += 1;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -465,7 +621,7 @@ fn play_one(
         };
         apply::apply(&mut state, mv);
     }
-    (stats, diag, sens)
+    (stats, diag, sens, interp_stats, key_adopt)
 }
 
 struct Args {
@@ -475,24 +631,38 @@ struct Args {
     seed: u64,
     threads: usize,
     sensitivity: bool,
+    interpolate_path: Option<String>,
 }
 
 impl Default for Args {
     fn default() -> Args {
-        Args { games: 200, players: 3, weights_path: String::new(), seed: 1, threads: 1, sensitivity: false }
+        Args {
+            games: 200,
+            players: 3,
+            weights_path: String::new(),
+            seed: 1,
+            threads: 1,
+            sensitivity: false,
+            interpolate_path: None,
+        }
     }
 }
 
 const USAGE: &str = "\
 usage: takeprobe --weights PATH [options]
 
-  --games N       games to play (default 200)
-  --players N     2, 3 or 4 (default 3)
-  --weights PATH  champion JSON every seat plays (required)
-  --seed N        base seed; game g uses seed+g (default 1)
-  --threads N     games in parallel (default 1)
-  --sensitivity   also sweep SENS_KEY_NAMES x M_SWEEP (static rescoring, see
-                   this binary's doc comment) and the joint clamp-block check
+  --games N          games to play (default 200)
+  --players N        2, 3 or 4 (default 3)
+  --weights PATH     champion JSON every seat plays (required)
+  --seed N           base seed; game g uses seed+g (default 1)
+  --threads N        games in parallel (default 1)
+  --sensitivity      also sweep SENS_KEY_NAMES x M_SWEEP (static rescoring,
+                       see this binary's doc comment) and the joint
+                       clamp-block check
+  --interpolate PATH also sweep w(t) = (1-t)*champion + t*PATH over
+                       T_GRID_LEN points, plus a single-key champion->PATH
+                       adoption sweep over every differing WeightKey (static
+                       rescoring, see InterpCtx's doc comment)
   --help
 ";
 
@@ -510,6 +680,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--seed" => a.seed = value(flag)?.parse().map_err(|_| "bad --seed".to_string())?,
             "--threads" => a.threads = value(flag)?.parse().map_err(|_| "bad --threads".to_string())?,
             "--sensitivity" => a.sensitivity = true,
+            "--interpolate" => a.interpolate_path = Some(value(flag)?),
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -562,12 +733,41 @@ fn main() -> ExitCode {
     let sens_keys = sens_keys();
     let clamp_keys = clamp_keys();
 
+    // `--interpolate`: load the second (human) vector once and compute the
+    // set of `WeightKey`s where it differs from the champion beyond float
+    // noise -- see [`InterpCtx`]'s own doc comment on why only differing
+    // keys are worth sweeping in the single-key adoption measurement.
+    let human_weights = match &args.interpolate_path {
+        Some(path) => match load_weights(std::path::Path::new(path)) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                eprintln!("takeprobe: loading --interpolate {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let differ_keys: Vec<WeightKey> = match human_weights {
+        Some(h) => WeightKey::ALL.iter().copied().filter(|&k| (weights.get(k) - h.get(k)).abs() > 1e-9).collect(),
+        None => Vec::new(),
+    };
+    let interp_ctx: Option<InterpCtx> = human_weights.map(|human| InterpCtx { human, differ_keys: &differ_keys });
+    let cfg = ProbeConfig {
+        mine_ids: &mine_ids,
+        sensitivity: args.sensitivity,
+        sens_keys: &sens_keys,
+        clamp_keys: &clamp_keys,
+        interp: interp_ctx.as_ref(),
+    };
+
     let start = Instant::now();
     let next = AtomicUsize::new(0);
     let threads = args.threads.min(args.games).max(1);
     let totals: Mutex<[CardStats; 3]> = Mutex::new([CardStats::default(); 3]);
     let diag_totals: Mutex<Diag> = Mutex::new(Diag::new());
     let sens_totals: Mutex<SensStats> = Mutex::new(SensStats::new());
+    let interp_totals: Mutex<InterpStats> = Mutex::new(InterpStats::new());
+    let key_adopt_totals: Mutex<KeyAdoptStats> = Mutex::new(KeyAdoptStats::new(differ_keys.len()));
 
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(threads);
@@ -576,19 +776,22 @@ fn main() -> ExitCode {
                 let mut local = [CardStats::default(); 3];
                 let mut local_diag = Diag::new();
                 let mut local_sens = SensStats::new();
+                let mut local_interp = InterpStats::new();
+                let mut local_key_adopt = KeyAdoptStats::new(differ_keys.len());
                 loop {
                     let g = next.fetch_add(1, Ordering::Relaxed);
                     if g >= args.games {
                         break;
                     }
                     let seed = args.seed + g as u64;
-                    let (s, d, sn) =
-                        play_one(args.players, weights, seed, &mine_ids, args.sensitivity, &sens_keys, &clamp_keys);
+                    let (s, d, sn, it, ka) = play_one(args.players, weights, seed, &cfg);
                     for i in 0..3 {
                         local[i].merge(&s[i]);
                     }
                     local_diag.merge(&d);
                     local_sens.merge(&sn);
+                    local_interp.merge(&it);
+                    local_key_adopt.merge(&ka);
                 }
                 let mut t = totals.lock().expect("totals mutex poisoned");
                 for i in 0..3 {
@@ -596,6 +799,8 @@ fn main() -> ExitCode {
                 }
                 diag_totals.lock().expect("diag mutex poisoned").merge(&local_diag);
                 sens_totals.lock().expect("sens mutex poisoned").merge(&local_sens);
+                interp_totals.lock().expect("interp mutex poisoned").merge(&local_interp);
+                key_adopt_totals.lock().expect("key_adopt mutex poisoned").merge(&local_key_adopt);
             }));
         }
         for h in handles {
@@ -606,6 +811,8 @@ fn main() -> ExitCode {
     let totals = totals.into_inner().expect("totals mutex poisoned");
     let diag = diag_totals.into_inner().expect("diag mutex poisoned");
     let sens = sens_totals.into_inner().expect("sens mutex poisoned");
+    let interp = interp_totals.into_inner().expect("interp mutex poisoned");
+    let key_adopt = key_adopt_totals.into_inner().expect("key_adopt mutex poisoned");
     let elapsed = start.elapsed();
 
     println!("takeprobe: {} games, {} players, weights={}", args.games, args.players, args.weights_path);
@@ -721,6 +928,95 @@ fn main() -> ExitCode {
         let f1 = if n > 0 { r1 as f64 / n as f64 } else { 0.0 };
         let f12 = if n > 0 { r12 as f64 / n as f64 } else { 0.0 };
         println!("  n={n} rank1_frac={f1:.4} rank1or2_frac={f12:.4}");
+    }
+
+    // `--interpolate`: `w(t) = (1-t)*champion + t*human`, static rescoring
+    // at the SAME decision points `--sensitivity` measures (this binary's
+    // doc comment / `rank_gap_at_t`'s own doc comment) -- not a policy
+    // replay. Coarse table every 0.05, then a finer 0.01 breakdown of
+    // whichever 0.05-wide coarse interval shows the single biggest jump in
+    // rank1 fraction (the empirical "transition", if any), then the
+    // single-key champion->human adoption sweep.
+    if let (Some(path), Some(ctx)) = (&args.interpolate_path, &interp_ctx) {
+        println!();
+        println!("=== --interpolate: w(t) = (1-t)*champion + t*human, static rescoring, NOT a policy replay ===");
+        println!("champion={} human={path}", args.weights_path);
+        println!("keys differing champion vs human (beyond 1e-9): {}", ctx.differ_keys.len());
+        println!();
+        println!("{:>6} {:>8} {:>10} {:>10} {:>10} {:>12}", "t", "n", "rank1", "rank1or2", "mean_rank", "mean_gap");
+        let mut coarse: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::new(); // (grid_idx, t, n, f1, f12, mean_rank)
+        for i in (0..T_GRID_LEN).step_by(5) {
+            let (n, r1, r12, rsum, gsum) = interp.by_t[i];
+            let f1 = if n > 0 { r1 as f64 / n as f64 } else { 0.0 };
+            let f12 = if n > 0 { r12 as f64 / n as f64 } else { 0.0 };
+            let mean_rank = if n > 0 { rsum as f64 / n as f64 } else { 0.0 };
+            let mean_gap = if n > 0 { gsum / n as f64 } else { 0.0 };
+            println!("{:>6.2} {n:>8} {f1:>10.4} {f12:>10.4} {mean_rank:>10.2} {mean_gap:>12.4}", t_at(i));
+            coarse.push((i, t_at(i), n as f64, f1, f12, mean_rank));
+        }
+
+        // Biggest one-step jump in rank1 fraction between adjacent coarse
+        // points -- the candidate "transition interval", if the sweep has
+        // one at all.
+        let mut best_jump = 0.0f64;
+        let mut best_pair: Option<(usize, usize)> = None; // (grid_idx_lo, grid_idx_hi)
+        for w in coarse.windows(2) {
+            let jump = (w[1].3 - w[0].3).abs();
+            if jump > best_jump {
+                best_jump = jump;
+                best_pair = Some((w[0].0, w[1].0));
+            }
+        }
+        println!();
+        match best_pair {
+            Some((lo, hi)) if best_jump > 1e-9 => {
+                println!(
+                    "Biggest single-step rank1-fraction jump: {best_jump:.4} between t={:.2} and t={:.2} -- fine (0.01) breakdown of that interval:",
+                    t_at(lo),
+                    t_at(hi)
+                );
+                println!(
+                    "{:>6} {:>8} {:>10} {:>10} {:>10} {:>12}",
+                    "t", "n", "rank1", "rank1or2", "mean_rank", "mean_gap"
+                );
+                for i in lo..=hi {
+                    let (n, r1, r12, rsum, gsum) = interp.by_t[i];
+                    let f1 = if n > 0 { r1 as f64 / n as f64 } else { 0.0 };
+                    let f12 = if n > 0 { r12 as f64 / n as f64 } else { 0.0 };
+                    let mean_rank = if n > 0 { rsum as f64 / n as f64 } else { 0.0 };
+                    let mean_gap = if n > 0 { gsum / n as f64 } else { 0.0 };
+                    println!("{:>6.2} {n:>8} {f1:>10.4} {f12:>10.4} {mean_rank:>10.2} {mean_gap:>12.4}", t_at(i));
+                }
+            }
+            _ => {
+                println!(
+                    "No transition observed: rank1 fraction never moves by more than 1e-9 between adjacent t=0.05 steps across the full 0.00..=1.00 sweep."
+                );
+            }
+        }
+
+        println!();
+        println!(
+            "Single-key adoption champion->human (w[key]=human[key], all else champion), ranked by rank1 fraction (n={} differing keys):",
+            ctx.differ_keys.len()
+        );
+        let mut ranked: Vec<(WeightKey, u64, u64)> = ctx
+            .differ_keys
+            .iter()
+            .zip(key_adopt.per_key.iter())
+            .map(|(&k, &(n, r1))| (k, n, r1))
+            .collect();
+        ranked.sort_by(|a, b| {
+            let fa = if a.1 > 0 { a.2 as f64 / a.1 as f64 } else { 0.0 };
+            let fb = if b.1 > 0 { b.2 as f64 / b.1 as f64 } else { 0.0 };
+            fb.partial_cmp(&fa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (rank, (key, n, r1)) in ranked.iter().take(10).enumerate() {
+            let f = if *n > 0 { *r1 as f64 / *n as f64 } else { 0.0 };
+            println!("  {:>2}. {:<24} rank1_frac={f:.4}  (n={n})", rank + 1, format!("{key:?}"));
+        }
+        let zero_count = ranked.iter().filter(|&&(_, n, r1)| n == 0 || r1 == 0).count();
+        println!("keys achieving exactly zero rank1 fraction: {zero_count} of {}", ranked.len());
     }
 
     ExitCode::SUCCESS
