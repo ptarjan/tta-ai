@@ -72,25 +72,31 @@ struct Args {
     /// the report, so the clamp's ~486 constants are never transcribed by
     /// hand out of a text table.
     emit_rust: bool,
+    /// `decisive` mode -- see [`play_decisive`]'s own doc comment. Mutually
+    /// exclusive with `emit_rust`; restricted to 3p only (loads
+    /// `champion_dir/rust_champion_3p.json`, same join `play_count` already
+    /// uses for every other mode -- no new file-naming convention).
+    decisive: bool,
 }
 
-const USAGE: &str = "usage: featspread <games_per_count> <seed> <champion_dir> [emit]";
+const USAGE: &str = "usage: featspread <games_per_count> <seed> <champion_dir> [emit|decisive]";
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     if argv.len() != 3 && argv.len() != 4 {
         return Err(format!("{USAGE}\ngot {} argument(s), expected 3 or 4", argv.len()));
     }
-    let emit_rust = match argv.get(3) {
-        None => false,
-        Some(flag) if flag == "emit" => true,
-        Some(flag) => return Err(format!("{USAGE}\nfourth argument must be \"emit\", got {flag:?}")),
+    let (emit_rust, decisive) = match argv.get(3) {
+        None => (false, false),
+        Some(flag) if flag == "emit" => (true, false),
+        Some(flag) if flag == "decisive" => (false, true),
+        Some(flag) => return Err(format!("{USAGE}\nfourth argument must be \"emit\" or \"decisive\", got {flag:?}")),
     };
     let games: usize = argv[0].parse().map_err(|_| format!("games_per_count: {:?} is not a number", argv[0]))?;
     let seed: u64 = argv[1].parse().map_err(|_| format!("seed: {:?} is not a number", argv[1]))?;
     if games == 0 {
         return Err("games_per_count must be at least 1".to_string());
     }
-    Ok(Args { games, seed, champion_dir: argv[2].clone(), emit_rust })
+    Ok(Args { games, seed, champion_dir: argv[2].clone(), emit_rust, decisive })
 }
 
 /// Nearest-rank percentile (`rank = ceil(p/100 * n)`, 1-indexed) over an
@@ -254,6 +260,246 @@ fn play_count(players: u8, games: usize, base_seed: u64, weights: &Weights) -> C
     }
 }
 
+/// One [`WeightKey`]'s fully reduced `decisive`-mode summary -- see
+/// [`play_decisive`]'s own doc comment for what each field measures.
+struct DecisiveKeySummary {
+    name: &'static str,
+    champ_w: f64,
+    zero_frac: f64,
+    fire_rate: f64,
+    median_spread_firing: f64,
+    p95_spread_firing: f64,
+    mean_abs_level: f64,
+    median_swing_firing: f64,
+    p95_swing_firing: f64,
+    capable_frac: f64,
+}
+
+/// Per-key running totals for `decisive` mode, mirroring [`KeyAgg`] but
+/// carrying the extra distributions [`play_decisive`]'s report needs that
+/// [`KeyAgg`]/[`KeySummary`] do not: the full spread distribution (for a
+/// MEDIAN, not just mean/p95), the mean absolute LEVEL of the feature
+/// itself (to tell an inert-but-alive key apart from a dead/never-populated
+/// one when both show `zero_frac == 1.0`), and the `|w_k| * spread_k`
+/// "swing" compared decision-by-decision against that SAME decision's
+/// actual winning margin (best candidate score minus runner-up score) --
+/// the quantity `p95_total_spread`/`eval_share` in the ordinary report
+/// never computes, since `total_spread` there is max-minus-min over the
+/// WHOLE candidate set, not best-vs-runner-up.
+#[derive(Default)]
+struct DecisiveKeyAgg {
+    zero: u64,
+    firing: u64,
+    firing_spreads: Vec<f64>,
+    firing_swings: Vec<f64>,
+    sum_abs_level: f64,
+    n_level_samples: u64,
+    /// Count of ALL decisions (firing or not) where `|w_k| * spread_k >=
+    /// margin` -- this key's own maximum possible score swing at that
+    /// decision point was AT LEAST the gap between the actual winner and
+    /// runner-up, i.e. this key alone was structurally capable of being the
+    /// deciding factor (not that it WAS -- other keys may have agreed or
+    /// disagreed with it; capability, not attribution).
+    capable: u64,
+}
+
+/// One player count's `decisive`-mode reduced sample, plus the shared
+/// (key-independent) winning-margin distribution every key's `capable_frac`
+/// is compared against.
+struct DecisiveResult {
+    decisions: u64,
+    keys: Vec<DecisiveKeySummary>,
+    margin_mean: f64,
+    margin_median: f64,
+    margin_p95: f64,
+    margin_max: f64,
+}
+
+/// `decisive` mode: at every real 3p self-play decision (same
+/// `candidates.len() > 1` gate [`play_count`] uses), computes per
+/// [`WeightKey`] the candidate-set spread exactly as [`play_count`] does,
+/// PLUS two things [`play_count`]'s own report never computes:
+///
+/// First, `mean_abs_level(k)` -- the mean, over every decision, of the mean
+/// `|candidate feature value|` for `k` at that decision. A key stuck at
+/// `zero_frac == 1.0` with a near-zero level is simply unused; the same
+/// `zero_frac == 1.0` with a large level is a STRUCTURAL constant that is
+/// alive (computed, non-trivial) but cannot move that decision's argmax --
+/// exactly the `BestMine`/`BestFarm` hypothesis this task exists to check,
+/// and the two cases must not be conflated (task's own METHOD REQUIREMENTS
+/// point 1).
+///
+/// Second, `capable_frac(k)` -- the fraction of ALL decisions where
+/// `abs(champ_w(k)) times spread_k >= margin`, `margin` being THAT
+/// decision's own actual winning margin (best candidate's `dot(w, phi)`
+/// minus the runner-up's, both over every scored candidate, every key's
+/// weight included, not just `k`'s). This is the task's "decisive
+/// quantity": the maximum score swing `k` alone could produce at that
+/// decision point, compared against the margin the real winner actually
+/// needed to beat the runner-up. A key with `capable_frac` near 0 is
+/// structurally incapable of having flipped that decision by itself, at ANY
+/// weight on that key -- `spread_k` is fixed by the game state and moves,
+/// only `abs(champ_w(k))` is a free dial, so `capable_frac` is monotonic in
+/// `abs(champ_w(k))` and this reports the number at the CHAMPION's own
+/// weight, not a hypothetical one.
+///
+/// `freeze` (the `horizon::rate_multiplier` input inside
+/// `eval::linear_features`) is pinned to the SAME champion `weights` this
+/// function scores candidates with, exactly like every other caller in this
+/// binary and every real self-play bot -- see this file's top doc comment
+/// and `eval::linear_features`'s own doc comment for why that is not a
+/// second, independently-chosen vector.
+fn play_decisive(games: usize, base_seed: u64, weights: &Weights) -> DecisiveResult {
+    let bot = WeightedBot::new(*weights);
+    let n_keys = WeightKey::ALL.len();
+    let mut key_agg: Vec<DecisiveKeyAgg> = (0..n_keys).map(|_| DecisiveKeyAgg::default()).collect();
+    let mut margins: Vec<f64> = Vec::new();
+    let mut decisions: u64 = 0;
+
+    let mut lo = vec![0.0f64; n_keys];
+    let mut hi = vec![0.0f64; n_keys];
+    let mut abs_sum = vec![0.0f64; n_keys];
+
+    for g in 0..games {
+        let game_seed = base_seed.wrapping_add(g as u64);
+        let mut state = game::new_game(3, game_seed);
+        let outcome = game::play_game(&mut state, MOVE_CAP, |s, legal| {
+            let candidates = eval::candidate_features(s, legal.as_slice(), bot.allow_resign, weights);
+            if candidates.len() > 1 {
+                decisions += 1;
+                lo.iter_mut().for_each(|x| *x = f64::INFINITY);
+                hi.iter_mut().for_each(|x| *x = f64::NEG_INFINITY);
+                abs_sum.iter_mut().for_each(|x| *x = 0.0);
+                let mut dots: Vec<f64> = Vec::with_capacity(candidates.len());
+                for (_, f) in &candidates {
+                    dots.push(eval::dot(weights, f));
+                    for (ki, &v) in f.iter().enumerate() {
+                        if v < lo[ki] {
+                            lo[ki] = v;
+                        }
+                        if v > hi[ki] {
+                            hi[ki] = v;
+                        }
+                        abs_sum[ki] += v.abs();
+                    }
+                }
+                let n_cand = candidates.len() as f64;
+                let mut dots_sorted = dots.clone();
+                dots_sorted.sort_by(|a, b| b.partial_cmp(a).expect("dot values are never NaN"));
+                let margin = dots_sorted[0] - dots_sorted[1];
+                margins.push(margin);
+                for ki in 0..n_keys {
+                    let spread = hi[ki] - lo[ki];
+                    let agg = &mut key_agg[ki];
+                    agg.sum_abs_level += abs_sum[ki] / n_cand;
+                    agg.n_level_samples += 1;
+                    let swing = weights.get(WeightKey::ALL[ki]).abs() * spread;
+                    if spread > 0.0 {
+                        agg.firing += 1;
+                        agg.firing_spreads.push(spread);
+                        agg.firing_swings.push(swing);
+                    } else {
+                        agg.zero += 1;
+                    }
+                    if swing >= margin {
+                        agg.capable += 1;
+                    }
+                }
+            }
+            bot.choose(s, legal.as_slice())
+        });
+        if outcome.move_cap_hit {
+            eprintln!("featspread: WARNING decisive 3p game (seed {game_seed}) hit the {MOVE_CAP}-move cap");
+        }
+    }
+
+    let keys: Vec<DecisiveKeySummary> = WeightKey::ALL
+        .iter()
+        .enumerate()
+        .map(|(ki, &k)| {
+            let agg = &key_agg[ki];
+            let spreads_sorted = sorted(agg.firing_spreads.clone());
+            let swings_sorted = sorted(agg.firing_swings.clone());
+            DecisiveKeySummary {
+                name: k.name(),
+                champ_w: weights.get(k),
+                zero_frac: if decisions > 0 { agg.zero as f64 / decisions as f64 } else { 0.0 },
+                fire_rate: if decisions > 0 { agg.firing as f64 / decisions as f64 } else { 0.0 },
+                median_spread_firing: percentile(&spreads_sorted, 50.0),
+                p95_spread_firing: percentile(&spreads_sorted, 95.0),
+                mean_abs_level: if agg.n_level_samples > 0 { agg.sum_abs_level / agg.n_level_samples as f64 } else { 0.0 },
+                median_swing_firing: percentile(&swings_sorted, 50.0),
+                p95_swing_firing: percentile(&swings_sorted, 95.0),
+                capable_frac: if decisions > 0 { agg.capable as f64 / decisions as f64 } else { 0.0 },
+            }
+        })
+        .collect();
+
+    let margins_sorted = sorted(margins.clone());
+    let margin_mean = if margins.is_empty() { 0.0 } else { margins.iter().sum::<f64>() / margins.len() as f64 };
+
+    DecisiveResult {
+        decisions,
+        keys,
+        margin_mean,
+        margin_median: percentile(&margins_sorted, 50.0),
+        margin_p95: percentile(&margins_sorted, 95.0),
+        margin_max: margins_sorted.last().copied().unwrap_or(0.0),
+    }
+}
+
+/// Prints the `decisive`-mode report: method recap, the shared margin
+/// distribution, then the per-key table sorted by `zero_frac` descending
+/// (the task's own required sort order).
+fn print_decisive_report(args: &Args, result: &DecisiveResult) {
+    println!("================================================================================");
+    println!("THROUGH THE AGES -- FEATURE DECISIVENESS (featspread --decisive, 3p only)");
+    println!("================================================================================");
+    println!("METHOD: at every real 3p self-play decision (candidates.len() > 1) reached by");
+    println!("WeightedBot::choose under the champion vector, every legal move is applied to a");
+    println!("scratch clone and eval::candidate_features()/eval::dot() scored, freeze pinned to");
+    println!("the SAME champion vector. Per WeightKey k, per decision:");
+    println!("  spread_k  = max(candidate value) - min(candidate value)      [same as play_count]");
+    println!("  level_k   = mean(|candidate value|) over the candidate set   [NEW: alive-vs-dead]");
+    println!("  swing_k   = |champ_w(k)| * spread_k                          [max score swing k can cause]");
+    println!("  margin    = best candidate dot(w,phi) - runner-up dot(w,phi) [NEW: actual contest margin]");
+    println!("capable_frac(k) = fraction of ALL decisions where swing_k >= margin, i.e. k ALONE");
+    println!("was structurally capable of flipping that decision's argmax at the CHAMPION's own");
+    println!("|w(k)| (spread_k is fixed by state+moves; only |w(k)| is a free dial, so this is");
+    println!("evaluated at the champion's actual weight, not a hypothetical one).");
+    println!();
+    println!("games={} seed={} champion_dir={} decisions={}", args.games, args.seed, args.champion_dir, result.decisions);
+    println!();
+    println!("WINNING-MARGIN DISTRIBUTION (best - runner-up dot(w,phi), all keys included, per decision):");
+    println!(
+        "  n={} mean={:.4} median={:.4} p95={:.4} max={:.4}",
+        result.decisions, result.margin_mean, result.margin_median, result.margin_p95, result.margin_max
+    );
+    println!();
+    println!("PER-KEY TABLE -- sorted by zero_frac DESCENDING (task's required sort order)");
+    println!(
+        "{:<28} {:>10} {:>9} {:>9} {:>13} {:>10} {:>13} {:>13} {:>10} {:>13}",
+        "key", "champ_w", "zero_frac", "fire_rate", "med_spread", "p95_spread", "mean_level", "med_swing", "p95_swing", "capable_frac"
+    );
+    let mut rows: Vec<&DecisiveKeySummary> = result.keys.iter().collect();
+    rows.sort_by(|a, b| b.zero_frac.partial_cmp(&a.zero_frac).expect("zero_frac is never NaN"));
+    for k in rows {
+        println!(
+            "{:<28} {:>10.4} {:>9.4} {:>9.4} {:>13.6} {:>10.6} {:>13.6} {:>13.6} {:>10.6} {:>13.4}",
+            k.name,
+            k.champ_w,
+            k.zero_frac,
+            k.fire_rate,
+            k.median_spread_firing,
+            k.p95_spread_firing,
+            k.mean_abs_level,
+            k.median_swing_firing,
+            k.p95_swing_firing,
+            k.capable_frac
+        );
+    }
+}
+
 fn print_method_header(args: &Args) {
     println!("================================================================================");
     println!("THROUGH THE AGES -- CANDIDATE-SET SPREAD / EVAL-SHARE (featspread rebuild)");
@@ -408,6 +654,27 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if args.decisive {
+        let path = Path::new(&args.champion_dir).join("rust_champion_3p.json");
+        let weights = match load_weights(&path) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("featspread: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let started = Instant::now();
+        let result = play_decisive(args.games, args.seed, &weights);
+        eprintln!(
+            "featspread: decisive 3p done ({} games, {} decisions, {:.1}s)",
+            args.games,
+            result.decisions,
+            started.elapsed().as_secs_f64()
+        );
+        print_decisive_report(&args, &result);
+        return ExitCode::SUCCESS;
+    }
 
     print_method_header(&args);
 

@@ -1,0 +1,522 @@
+================================================================================
+FEATURE DECISIVENESS AT THE CANDIDATE SET, 3P -- 2026-08-24
+================================================================================
+
+HEADLINE (read this even if you read nothing else): 61 of 160 WeightKeys
+(38%) NEVER once produced a candidate-set score swing large enough to beat
+the actual winning margin at a real decision point, across 85,404 sampled
+3p self-play decisions -- their capable_frac sits EXACTLY on this measure's
+tie-only floor (0.0924, explained in CAVEATS). BestMine is one of them, and
+is additionally DEAD, not merely inert: its mean absolute feature value is
+0.000000 across all 85,404 decisions -- the champion's own self-play never
+once puts a nonzero best.mine value in front of this evaluator. BestFarm is
+also one of the 61: it fires (varies across candidates) on 0.08% of
+decisions but its swing never once exceeded the margin either. FoodRate,
+Workers, FreeWorkers and FoodStock are NOT in the incapable set -- FoodStock
+in particular ranks as one of the most decisive keys in the whole table
+(capable_frac 0.3321, far above the tie floor). This is exactly the
+"feature can be large, correctly signed, and completely inert" hypothesis,
+confirmed for BestMine and BestFarm specifically, and shown to be FALSE for
+several of the other named suspects (FoodRate is only barely above the tie
+floor; Workers and FoodStock are clearly NOT inert).
+
+================================================================================
+COMMANDS RUN
+================================================================================
+export PATH="$HOME/.cargo/bin:$PATH"
+cd /Users/pt/tta-ai/rust
+touch src/bin/featspread.rs
+cargo clippy --all-targets -- -D warnings          # EXIT 0
+cargo test                                          # EXIT 0, 1506+ passed across every target, 0 failed
+cargo build --release --bin featspread              # EXIT 0
+./target/release/featspread 220 12345 ../experiments decisive
+  # -> 220 games, seed 12345, champion dir ../experiments (relative to rust/),
+  #    "decisive" mode (new, 3p only). 85,404 decision points sampled.
+
+Champion file used: /Users/pt/tta-ai/experiments/rust_champion_3p.json (via
+the champion_dir join convention featspread's existing modes already use:
+champion_dir/rust_champion_3p.json). Confirmed byte-IDENTICAL (`diff`, exit
+0) to /private/tmp/opencensus/champ3p.json, the frozen champion path named
+in the task, so this run and "the frozen champion" are the same vector --
+no substitution was needed, only the existing directory+filename convention
+was reused instead of inventing a new one for a one-off file path.
+
+================================================================================
+STEP 1 -- WHAT featspread ALREADY MEASURED, AND WHAT WAS ADDED
+================================================================================
+Read rust/src/bin/featspread.rs (all four existing modes: default, `emit`)
+and rust/src/bin/takeprobe.rs (as the worked example of enumerating legal
+moves via eval::candidate_features and re-deriving the argmax via eval::dot,
+per the task's instruction to imitate its approach).
+
+featspread's existing `play_count` ALREADY measures the correct quantity in
+principle: for every real decision (`candidates.len() > 1`, exactly
+eval::candidate_features' post-filter_resign output), per WeightKey k,
+spread(k) = max(candidate value) - min(candidate value) OVER THE CANDIDATE
+SET AT THAT DECISION POINT -- not a cross-game/cross-state magnitude
+normalisation. `P95_TOTAL_SPREAD`/`total_spread` there is ALSO a
+per-decision, per-candidate-set quantity (max dot - min dot over the same
+candidate set), not a cross-game statistic either. So featspread was
+already answering the right KIND of question (candidate-set spread, which
+decides an argmax), not the wrong one (cross-game spread, a magnitude
+normalisation). No code needed to change to fix a category error, because
+there wasn't one.
+
+What featspread's existing modes did NOT compute, and this task's METHOD
+REQUIREMENTS section needs:
+  1. A MEDIAN of the non-zero-spread distribution (existing modes report
+     mean_spread_when_firing and p95_spread_firing only, no median).
+  2. The feature's mean absolute LEVEL (mean |candidate value|, independent
+     of spread) -- needed to distinguish an inert-but-alive key (zero
+     spread, large level) from a dead/never-populated one (zero spread,
+     zero level) per the task's own METHOD REQUIREMENTS point 1. Neither
+     existing mode computes this at all.
+  3. The DECISIVE quantity itself: |w_k| * spread_k compared, PER DECISION,
+     against that SAME decision's actual winning margin (best candidate's
+     dot(w,phi) minus the RUNNER-UP's). featspread's existing `eval_share`
+     divides by `p95_total_spread`, which is max-minus-min over the WHOLE
+     candidate set (every candidate, not just the top two) -- a different,
+     looser quantity than "the margin the actual winner needed to beat the
+     actual runner-up". A key can have `eval_share < 1` under the existing
+     metric while still never actually being tested against the real
+     competitive margin at any single decision, and vice versa.
+
+Per the task's own instruction ("If it does the second [candidate-set
+spread], use it as-is... If [it lacks needed stats], add a NEW mode... then
+run the FORCED GATE"): added ONE new mode, `decisive` (4th CLI arg
+"decisive", alongside the existing "emit"), restricted to 3p only (the
+count this task asks about), reusing the exact same champion_dir +
+`rust_champion_3p.json` join every other mode already uses -- no new
+file-naming convention. Every existing mode (default report, `emit`) is
+byte-identical: `decisive` is checked first in `main` and returns before
+touching any of the old code paths. New code: `play_decisive`/
+`DecisiveKeyAgg`/`DecisiveResult`/`print_decisive_report` in
+rust/src/bin/featspread.rs. The FORCED GATE (clippy -D warnings, full
+`cargo test`, release build) all exited 0 -- see /private/tmp/spread_notes.txt
+for the exact EXIT lines. One clippy false-positive was fixed along the way:
+a doc-comment line starting "* spread_k >= margin" was parsed by rustdoc as
+a markdown bullet marker, breaking `doc_lazy_continuation`'s indentation
+tracking for the rest of that list item -- reworded to prose, not silenced
+with `#[allow]`.
+
+`decisive` mode's method, per decision (candidates.len() > 1, same gate as
+every other mode): for every WeightKey k,
+  spread_k = max(candidate value) - min(candidate value)     [same as play_count]
+  level_k  = mean(|candidate value|) over the candidate set  [NEW]
+  swing_k  = |champ_w(k)| * spread_k                          [max score swing k alone can cause]
+  margin   = best candidate's dot(w,phi) - runner-up's dot(w,phi)   [NEW, ALL keys' weights included]
+capable_frac(k) = fraction of ALL 85,404 decisions where swing_k >= margin,
+i.e. k ALONE was structurally capable of having been the deciding factor,
+at the CHAMPION's own |w(k)| (spread_k is fixed by the game state and the
+legal moves; only |w(k)| is a free dial, so capable_frac is monotonic in
+|w(k)| and this reports the number at the champion's actual weight, per the
+task's "at the champion's own weight" framing -- not a hypothetical one).
+
+================================================================================
+WINNING-MARGIN DISTRIBUTION (shared context for every key's capable_frac)
+================================================================================
+n=85404  mean=34.7013  median=6.2370  p95=150.8501  max=2163.0330
+
+================================================================================
+FULL RANKED TABLE -- sorted by zero_frac (fraction of decisions with
+EXACTLY zero candidate-set spread) DESCENDING, per the task's required sort
+order. Columns: key | champ_w | zero_frac | fire_rate | median spread when
+firing | p95 spread when firing | mean absolute level (alive-vs-dead) |
+median |w|*spread when firing | p95 |w|*spread when firing | capable_frac.
+================================================================================
+key                             champ_w zero_frac fire_rate    med_spread p95_spread    mean_level     med_swing  p95_swing  capable_frac
+rate_horizon                     0.4911    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+rival_desire                     0.3290    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+rival_take_share                 3.8927    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+rival_wonders                    0.6729    1.0000    0.0000      0.000000   0.000000      1.164641      0.000000   0.000000        0.0924
+best_mine                        5.6037    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+best_lab                         8.2611    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+best_temple                      0.9380    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+resource_discount                0.6050    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+defense_bonus                    0.0000    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+gov_action_cost                 -2.0240    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+card_board_credit                0.5837    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+card_board_leader                0.0278    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+card_board_bonus                 0.0653    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+hand_swap_extra                  1.5788    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+card_rate_credit               -11.2057    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+unit_strength_credit             0.0095    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+unit_tech_credit                 1.9276    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+tech_board_credit              -25.4575    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+action_board_credit              0.0677    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+gov_board_credit                 0.8554    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+wonder_board_credit              0.5253    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+build_fresh_credit               1.3948    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+restricted_resource_credit       0.4881    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+free_action_credit               0.1199    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+territory_credit                -0.0685    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+bonus_card_credit                3.5085    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+tactic_board_credit              0.0415    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+aggression_board_credit         -0.0667    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+war_board_credit                -0.4611    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+pact_board_credit                0.0571    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+event_board_credit              -1.9751    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+tactic_shortfall_cost            0.0000    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+tactic_reach_credit             -0.0711    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+rival_science_rate               5.9400    1.0000    0.0000      0.000000   0.000000      1.130743      0.000000   0.000000        0.0924
+culture_rate_trailing             0.0303    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+science_rate_trailing            0.5413    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+tech_redundancy_discount         1.8832    1.0000    0.0000      0.000000   0.000000      0.000000      0.000000   0.000000        0.0924
+hand_limit                       0.0000    1.0000    0.0000      2.000000   2.000000      0.006375      0.000000   0.000000        0.0924
+best_unit                        0.7252    0.9999    0.0001      1.000000   2.000000      0.004338      0.725174   1.450348        0.0924
+best_arena                      -0.1168    0.9999    0.0001      2.000000   3.000000      0.011753      0.233564   0.350346        0.0924
+rival_free_ca                   -0.0332    0.9998    0.0002      1.000000   2.000000      5.020318      0.033235   0.066471        0.0924
+best_farm                       -0.1860    0.9992    0.0008      2.000000   3.000000      0.060945      0.372087   0.558130        0.0924   <== BEST_FARM
+best_library                    -0.2560    0.9990    0.0010      2.000000   3.000000      0.073804      0.512057   0.768085        0.0924
+wonder_pool_rival_claimed        0.0153    0.9987    0.0013      1.000000   2.000000      0.055437      0.015281   0.030563        0.0924
+rival_colonies                 -12.5141    0.9984    0.0016      1.000000   1.000000      0.524338     12.514060  12.514060        0.0933
+rival_mil_actions                7.9907    0.9982    0.0018      1.000000   2.000000      3.724326      7.990690  15.981379        0.0928
+wonder_stages_per_action         0.3964    0.9975    0.0025      2.000000   3.000000      0.203094      0.792710   1.189065        0.0924
+build_discount                   0.2708    0.9975    0.0025      5.000000   6.000000      0.529042      1.353825   1.624590        0.0924
+attack_cost_doubled             41.1712    0.9974    0.0026      1.000000   1.000000      0.037018     41.171179  41.171179        0.0931
+no_aggression                   -0.0996    0.9974    0.0026      1.000000   1.000000      0.037018      0.099613   0.099613        0.0924
+rival_building_wonder           13.4450    0.9970    0.0030      1.000000   2.000000      1.000655     13.444969  26.889939        0.0939
+rival_hand_civil                 0.0192    0.9967    0.0033      2.000000   4.000000      3.792148      0.038473   0.076946        0.0924
+war_immune                       0.0064    0.9945    0.0055      1.000000   1.000000      0.002861      0.006399   0.006399        0.0924
+colonize_bonus                   0.0000    0.9941    0.0059      1.000000   3.000000      0.529622      0.000000   0.000000        0.0924
+rival_strength                  -0.4174    0.9922    0.0078      1.500000   2.000000      7.641522      0.626161   0.834881        0.0927
+special_techs                   -0.8035    0.9913    0.0087      1.000000   1.000000      0.602119      0.803477   0.803477        0.0924
+urban_limit                      0.0937    0.9908    0.0092      1.000000   1.000000      2.627884      0.093653   0.093653        0.0924
+has_colony                       0.8785    0.9904    0.0096      1.000000   1.000000      0.307514      0.878517   0.878517        0.0926
+gov_level                       -1.5462    0.9896    0.0104      1.000000   2.000000      0.707506      1.546175   3.092350        0.0924
+colonies                        47.0730    0.9891    0.0109      1.000000   1.000000      0.361095     47.072969  47.072969        0.0942
+rival_yellow_bank               -0.4553    0.9878    0.0122      1.000000   2.000000     14.161608      0.455296   0.910592        0.0933
+rival_free_workers               0.4441    0.9872    0.0128      1.000000   1.000000      0.321665      0.444075   0.444075        0.0943
+civil_actions                    0.0098    0.9870    0.0130      1.000000   2.000000      4.705435      0.009796   0.019593        0.0924
+best_theater                    -7.9488    0.9864    0.0136      1.000000   2.000000      0.663496      7.948845  15.897689        0.0951
+wonders                          5.6956    0.9832    0.0168      1.000000   1.000000      0.841682      5.695595   5.695595        0.0934
+rival_resource_stock             7.2050    0.9809    0.0191      2.000000   4.000000      7.187623     14.409985  28.819970        0.0991
+rival_culture_rate               0.0156    0.9803    0.0197      1.000000   1.000000      6.821029      0.015595   0.015595        0.0924
+auction_committed                0.8919    0.9794    0.0206      0.500000   1.000000      0.012095      0.445973   0.891946        0.0924
+auction_bid                      1.3600    0.9794    0.0206      5.000000  15.000000      0.107603      6.799976  20.399928        0.1015
+rival_food_stock                -0.0832    0.9786    0.0214      2.000000   4.000000      3.262254      0.166432   0.332865        0.0927
+rival_culture                   -5.3251    0.9772    0.0228      7.000000  27.000000     47.041479     37.275674 143.777599        0.1049
+num_techs                        2.6664    0.9762    0.0238      1.000000   1.000000      6.284447      2.666373   2.666373        0.0934
+rival_science_stock               0.9617    0.9755    0.0245      2.000000   5.000000      4.240420      1.923336   4.808341        0.0938
+wonder_overrun                  -0.0761    0.9744    0.0256      1.657918   7.000000      0.007940      0.126096   0.532399        0.0928
+rival_mean_culture              -0.1826    0.9726    0.0274      3.500000  22.500000     38.845982      0.639124   4.108654        0.0953
+uprising                        -6.8876    0.9671    0.0329      7.000000  16.000000      0.295413     48.213541 110.202380        0.1109
+pact_blocks_attack               2.8185    0.9621    0.0379      0.500000   1.500000      0.061956      1.409232   4.227697        0.0958
+pop_cost                        -0.0877    0.9541    0.0459      1.000000   1.000000      3.374813      0.087715   0.087715        0.0929
+military_actions                 0.2594    0.9472    0.0528      1.000000   2.000000      3.307741      0.259370   0.518740        0.0935
+wonder_age_overrun               0.0000    0.9433    0.0567      1.163959   5.162196      0.035193      0.000000   0.000000        0.0924
+pact_partner_lead                -0.2500    0.9424    0.0576     26.000000 140.000000      0.605832      6.500352  35.001893        0.1159
+my_event_threat                  0.0919    0.9379    0.0621     16.704753 360.000000     18.647584      1.534583  33.071411        0.1088
+leader                           -0.0072    0.9323    0.0677      1.000000   1.000000      0.654095      0.007232   0.007232        0.0924
+attack_target_lead               0.2455    0.9309    0.0691     22.000000 122.000000      1.440739      5.402094  29.957065        0.1096
+culture_surplus                 -0.9090    0.9134    0.0866      2.000000  14.000000      3.607604      1.817970  12.725791        0.1129
+pacts                          -22.0196    0.9098    0.0902      1.000000   1.500000      0.310475     22.019632  33.029449        0.1366
+attack_target_weakness           32.2223    0.9067    0.0933      4.000000  12.000000      0.335257    128.889174 386.667523        0.1748
+leader_replacement               0.0003    0.9036    0.0964      1.000000   1.000000      0.401963      0.000347   0.000347        0.0924
+my_seeded_pending                -0.1632    0.8962    0.1038      1.000000   3.000000      2.315202      0.163202   0.489605        0.0948
+discontent                      -0.7646    0.8897    0.1103      1.000000   1.000000      0.085450      0.764645   0.764645        0.1003
+tech_levels                     -0.3162    0.8871    0.1129      0.047059   0.752941      0.576863      0.014881   0.238094        0.0928
+tech_levels_late                -0.6926    0.8861    0.1139      0.047059   1.552941      1.778034      0.032593   1.075567        0.0932
+military_action_surplus          0.0336    0.8844    0.1156      1.000000   3.000000      0.126650      0.033561   0.100683        0.0948
+wonder_in_progress               0.9726    0.8756    0.1244      1.000000   1.000000      0.508897      0.972596   0.972596        0.1029
+rival_hand_potential             -0.3920    0.8726    0.1274      0.169089  60.898001    213.111174      0.066288  23.873843        0.0993
+wonder_progress                  6.3745    0.8656    0.1344      3.000000   8.000000      1.022924     19.123551  50.996137        0.1545
+has_unit                        -0.4981    0.8532    0.1468      1.000000   1.000000      0.817992      0.498148   0.498148        0.1018
+food_surplus                    -1.0863    0.8425    0.1575      2.000000   4.000000      0.564703      2.172662   4.345324        0.1271
+culture_gap                     -1.1458    0.8313    0.1687      2.000000  10.000000     13.413696      2.291641  11.458206        0.1271
+strength_lead                   -0.0662    0.8187    0.1813      2.000000   4.000000      0.883686      0.132369   0.264738        0.0961
+consumption_headroom              7.5590    0.8183    0.1817      1.000000   3.000000      1.693441      7.558966  22.676897        0.1678
+yellow_bank                     -3.0012    0.8162    0.1838      1.000000   2.000000     13.211067      3.001173   6.002346        0.1377
+event_scoring_margin             38.2676    0.8070    0.1930      2.000000  11.000000      1.965219     76.535278 420.944029        0.2407
+wonder_potential                  1.9377    0.8043    0.1957     12.559642  78.865601     10.189271     24.337379 152.821396        0.2111
+tactic_gain                      0.0467    0.7997    0.2003      2.000000   3.000000      0.139882      0.093398   0.140097        0.0946
+food_gap                        -0.1134    0.7974    0.2026      2.000000   4.000000      1.853666      0.226878   0.453755        0.1014
+science                        -42.7550    0.7827    0.2173      1.000000   6.000000      2.726984     42.754979 256.529872        0.2523
+worker_surplus                   0.3395    0.7704    0.2296      1.000000   2.000000      0.109946      0.339483   0.678966        0.1025
+resource_gap                    -0.2412    0.7628    0.2372      2.000000   4.000000      0.523714      0.482329   0.964658        0.1100
+culture                           1.0000    0.7627    0.2373      2.000000  11.000000     37.235386      2.000000  11.000000        0.1444
+wonder_remaining                -1.0445    0.7592    0.2408      4.000000  16.000000      3.528391      4.177847  16.711388        0.1672
+wonder_stages_left              -0.1201    0.7592    0.2408      1.000000   5.000000      1.243261      0.120120   0.600598        0.1007
+food_stock                       60.0000    0.7383    0.2617      3.000000   4.000000      2.085849    180.000000 240.000000        0.3321   <== FOOD_STOCK
+science_surplus                 -6.4766    0.7362    0.2638      2.000000   5.000000      0.989185     12.953160  32.382900        0.2124
+civil_action_surplus              0.0000    0.7132    0.2868      2.000000   4.000000      0.702857      0.000000   0.000000        0.0924
+happy_surplus                    0.4023    0.7050    0.2950      1.000000   2.000000      1.562465      0.402265   0.804531        0.1077
+science_gap                     -0.4241    0.6970    0.3030      3.000000   9.000000      2.085558      1.272422   3.817266        0.1393
+row_urgency                     -0.0621    0.6754    0.3246      8.119046 119.289449      8.558352      0.504510   7.412532        0.1256
+tactic_level                   -27.5938    0.6743    0.3257      1.000000   3.000000      0.598033     27.593836  82.781507        0.2969
+worker_gap                      -0.7690    0.6662    0.3338      1.000000   2.000000      0.739093      0.769019   1.538039        0.1189
+wonder_turns_to_finish          -0.2332    0.6653    0.3347      1.500000   5.000000      0.711678      0.349817   1.166055        0.1119
+resource_stock                   60.0000    0.6631    0.3369      3.000000   5.000000      4.792474    180.000000 300.000000        0.4032
+happy_margin                    -0.5734    0.6548    0.3452      1.000000   2.000000      1.390431      0.573366   1.146733        0.1154
+wonder_promise                   0.5681    0.6507    0.3493     16.327535  71.570525     23.276829      9.275451  40.658245        0.2341
+corruption_headroom               0.1178    0.6460    0.3540      3.000000   4.000000      2.101332      0.353470   0.471293        0.1060
+resource_surplus                -0.5028    0.6423    0.3577      3.000000   5.000000      3.205675      1.508483   2.514138        0.1381
+take_cost_paid                  -1.3064    0.6329    0.3671      3.000000   4.000000      1.477676      3.919165   5.225554        0.1914
+take_cost_share                  0.5384    0.6326    0.3674      0.600000   0.800000      0.314791      0.323057   0.430743        0.1101
+blue_free                        60.0000    0.6259    0.3741      3.000000   7.000000      9.455082    180.000000 420.000000        0.4391
+strength_deficit                -0.0575    0.6242    0.3758      2.000000   4.000000      3.221458      0.115059   0.230119        0.0970
+hand_perishable                 -5.0121    0.6211    0.3789      0.622696   1.413965      1.164091      3.121002   7.086902        0.1824
+science_rate                     0.3779    0.6184    0.3816      1.062877   2.246990      0.853734      0.401661   0.849138        0.1143
+row_bargain_forgone               0.7896    0.6118    0.3882      1.105194   4.000000      0.939296      0.872697   3.158528        0.1348
+row_last_copy                    0.3836    0.6046    0.3954      1.000000   4.222222      1.428966      0.383639   1.619809        0.1216
+tactic_short                    -0.0553    0.6016    0.3984      1.000000   2.000000      1.665117      0.055284   0.110568        0.0994
+hand_civil                       0.1123    0.5906    0.4094      1.000000   2.000000      3.224621      0.112317   0.224634        0.1038
+hand_value                       0.0000    0.5840    0.4160      1.411765   2.894118      2.336921      0.000000   0.000000        0.0924
+prod_workers                    -0.0473    0.5709    0.4291      1.000000   2.000000      4.485099      0.047267   0.094534        0.0972
+urban_workers                    0.1173    0.5706    0.4294      1.000000   2.000000      3.061923      0.117336   0.234671        0.1004
+hand_value_late                  0.1130    0.5551    0.4449      1.605882   6.729412      6.958008      0.181425   0.760256        0.1068
+civil_action_gap                -1.0179    0.5480    0.4520      2.000000   4.000000      1.132320      2.035716   4.071433        0.1827
+culture_rate                     60.0000    0.5418    0.4582      1.285591   3.507023      4.627312     77.135449 210.421407        0.4645
+unit_workers                    -0.9460    0.5328    0.4672      1.000000   2.000000      1.964451      0.945955   1.891910        0.1351
+food_rate                        0.0666    0.5318    0.4682      1.032482   2.640373      0.885917      0.068737   0.175782        0.0989   <== FOOD_RATE
+ca_left                         -2.0643    0.5263    0.4737      3.000000   5.000000      2.795158      6.192845  10.321408        0.2450
+hand_potential                    0.4614    0.5196    0.4804    175.339282 662.911276    138.373214     80.905135 305.880837        0.4457
+strength_rel_early               -4.1265    0.4985    0.5015      0.794118   2.294118      1.424412      3.276939   9.466712        0.1978
+workers                          21.2533    0.4948    0.5052      0.505882   1.447059      3.671819     10.751693  30.754842        0.2723   <== WORKERS
+resource_rate                    13.4114    0.4883    0.5117      1.229476   4.110245      1.693097     16.489047  55.124301        0.3858
+strength_rel                    -1.6620    0.4830    0.5170      2.000000   4.000000      4.185501      3.324085   6.648171        0.1957
+strength                         53.4863    0.4828    0.5172      2.000000   4.000000      5.420481    106.972533 213.945066        0.5294
+ma_left                          27.5053    0.4766    0.5234      1.000000   3.000000      2.398963     27.505314  82.515942        0.4286
+free_workers                     0.3524    0.4713    0.5287      1.000000   2.000000      0.354687      0.352376   0.704753        0.1151   <== FREE_WORKERS
+strength_rel_late                -0.6967    0.4669    0.5331      0.870588   3.000000      2.797463      0.606563   2.090183        0.1273
+end_turn_bias                   -7.4512    0.4622    0.5378      1.000000   1.000000      0.064731      7.451175   7.451175        0.2790
+workers_late                     60.0000    0.4596    0.5404      0.600000   1.117647      5.839654     36.000000  67.058824        0.4200
+military_action_gap             -0.2496    0.3809    0.6191      2.000000   3.000000      2.001826      0.499121   0.748681        0.1164
+hand_military                   -0.3150    0.3753    0.6247      1.000000   4.000000      4.596159      0.315014   1.260055        0.1226
+hand_mil_value                   1.0431    0.2956    0.7044      3.000000  11.000000     13.526045      3.129334  11.474224        0.3007
+hand_mil_potential                0.3929    0.2356    0.7644      3.069428  18.663589      5.740380      1.205829   7.332019        0.3024
+
+(160 WeightKeys total; every row above is from the single run, no rows
+omitted or reordered by hand -- this is featspread's own sorted stdout.)
+
+================================================================================
+NAMED-KEY CALLOUTS
+================================================================================
+BestMine   -- rank 5/160 by zero_frac (tied at 1.0000, the maximum). spread
+              is EXACTLY zero at all 85,404 decisions. mean_abs_level =
+              0.000000 -- not just zero spread, the feature's VALUE is
+              literally always zero. In this 220-game 3p self-play sample
+              the champion never once develops a Mine tech (Iron/Coal/Oil)
+              at all -- if it had, EVERY subsequent decision in that game
+              would show best.mine >= 1 for one of the candidates (the game
+              state persists the tech), which would have pulled the mean
+              level off exactly 0.000000. capable_frac = 0.0924, i.e.
+              exactly the tie-only floor (see CAVEATS) -- zero decisive
+              capability above pure chance ties.
+
+BestFarm   -- rank 42/160 by zero_frac (0.9992). NOT permanently zero --
+              fires (varies across candidates) on 0.08% of decisions
+              (68/85,404), with a real median spread of 2.0 and mean level
+              0.061 when it does. But capable_frac = 0.0924, the SAME
+              tie-only floor as BestMine: across every one of those 68
+              firing decisions, |w|*spread never once reached the actual
+              winning margin except where the margin was already zero.
+              BestFarm is alive (occasionally computed, occasionally
+              nonzero) but has never once been capable of deciding a real
+              contested decision at the champion's own weight (-0.186).
+
+FoodRate   -- rank 144/160 (0.5318 zero_frac, fires on 46.8% of decisions
+              -- one of the most frequently-varying features in the whole
+              table). But capable_frac = 0.0989, only marginally above the
+              0.0924 tie floor -- its weight (0.0666) is so small that even
+              though the feature varies constantly, its score swing almost
+              never matters. This is the SAME phenomenon as BestMine/
+              BestFarm (structurally near-incapable) but for a completely
+              different reason: not because the feature never varies, but
+              because the champion prices it too small to matter once it
+              does.
+
+Workers    -- rank 148/160 (0.4948 zero_frac, fires 50.5% of decisions).
+              capable_frac = 0.2723, roughly 3x the tie floor and squarely
+              in the "clearly decisive" tier alongside FoodStock/
+              ResourceStock/CultureRate/Strength/HandPotential. NOT inert.
+
+FoodStock  -- rank 113/160 (0.7383 zero_frac, fires 26.2% of decisions).
+              capable_frac = 0.3321 -- one of the highest in the entire
+              table (11th highest of 160). Clamp-saturated at 60.0 (the
+              champion's own clamp bound) and clearly decisive when it
+              fires: median swing 180.0 against a median margin of 6.24.
+              Definitively NOT inert.
+
+FreeWorkers-- rank 153/160 (0.4713 zero_frac, fires 52.9% of decisions).
+              capable_frac = 0.1151, modestly above the tie floor but well
+              below the "clearly decisive" tier (>0.30). Fires often but
+              rarely decides -- an intermediate case, not structurally dead
+              but not a strong lever either.
+
+================================================================================
+KEYS AT THE TIE-ONLY FLOOR (capable_frac == 0.0924 EXACTLY, 61 of 160 = 38%)
+================================================================================
+These 61 keys never once produced a swing that beat the actual winning
+margin except in the exact-tie case every key trivially satisfies (see
+CAVEATS) -- i.e., NONE of them has ever been individually capable of
+deciding a real, contested 3p decision at the champion's own weight, in
+this 85,404-decision sample:
+
+rate_horizon, rival_desire, rival_take_share, rival_wonders, best_mine,
+best_lab, best_temple, resource_discount, defense_bonus, gov_action_cost,
+card_board_credit, card_board_leader, card_board_bonus, hand_swap_extra,
+card_rate_credit, unit_strength_credit, unit_tech_credit, tech_board_credit,
+action_board_credit, gov_board_credit, wonder_board_credit,
+build_fresh_credit, restricted_resource_credit, free_action_credit,
+territory_credit, bonus_card_credit, tactic_board_credit,
+aggression_board_credit, war_board_credit, pact_board_credit,
+event_board_credit, tactic_shortfall_cost, tactic_reach_credit,
+rival_science_rate, culture_rate_trailing, science_rate_trailing,
+tech_redundancy_discount, hand_limit, best_unit, best_arena, rival_free_ca,
+best_farm, best_library, wonder_pool_rival_claimed,
+wonder_stages_per_action, build_discount, no_aggression, rival_hand_civil,
+war_immune, colonize_bonus, special_techs, urban_limit, gov_level,
+civil_actions, rival_culture_rate, auction_committed, wonder_age_overrun,
+leader, leader_replacement, civil_action_surplus, hand_value.
+
+Of these 61: 38 have zero_frac EXACTLY 1.0000 (permanently zero spread,
+never once varies across a candidate set in this sample). Of THOSE 38, 35
+also have mean_abs_level == 0.000000 -- genuinely dead/never-populated at
+this sample's decision points, not merely constant. The 3 exceptions
+(rival_wonders, rival_science_rate, hand_limit) are alive-but-permanently-
+constant: the feature computes a real nonzero number, but it is IDENTICAL
+across every candidate at every decision (all three read state that a
+single-decision move cannot change -- a rival's own board state, or the
+hand-limit constant -- so this is expected, not a bug). best_mine is in the
+zero-level-AND-zero-spread bucket: dead, not merely constant.
+
+================================================================================
+CLEARLY DECISIVE KEYS (capable_frac > 0.30, well above the tie floor)
+================================================================================
+food_stock (0.3321), resource_stock (0.4032), blue_free (0.4391),
+culture_rate (0.4582), hand_potential (0.4804), resource_rate (0.5117),
+strength (0.5172), ma_left (0.5234), workers_late (0.5404),
+hand_mil_value (0.7044), hand_mil_potential (0.7644).
+
+Five of these (food_stock, resource_stock, blue_free, culture_rate,
+workers_late) are exactly the clamp-saturated keys (champ_w == 60.0, the
+champion's own clamp bound) named in prior investigation reports -- they
+are saturated AND structurally decisive, not saturated-but-inert.
+
+================================================================================
+STEP 3 -- FLAT VERDICT
+================================================================================
+BestMine is structurally incapable of deciding anything at the champion's
+current weight, in this sample: its spread is exactly zero at every one of
+85,404 decisions, its mean level is exactly zero (dead, not just constant),
+and its capable_frac sits at the tie-only floor. A feature that never
+varies AND never takes a nonzero value cannot have moved a single argmax
+this sample reached, at ANY weight the champion could have put on it
+(spread fixed at zero means |w|*spread == 0 regardless of |w|). This
+directly explains, via an INDEPENDENT mechanism (candidate-set feature
+variation, not the take-mechanism census), why the champion takes zero
+higher-tier Mines: the feature that is supposed to reward mine-taking is
+never in a position to distinguish a mine-take candidate from any other
+candidate, because best.mine never departs from its floor value across
+these 220 games.
+
+BestFarm is ALSO structurally incapable in this sample, but for a subtly
+different reason: it is not dead (it fires on 0.08% of decisions, with a
+real nonzero level when it does), but its capable_frac is IDENTICAL to
+BestMine's -- exactly the tie floor. Every one of its ~68 firing
+occurrences produced a swing too small to beat the actual winning margin.
+So BestFarm is "occasionally alive, never decisive" rather than "always
+dead" -- a finer-grained version of the same underlying failure mode the
+task's headline hypothesis describes.
+
+Beyond these two named suspects, 59 OTHER keys (61 total, 38% of the
+160-key vector) sit at the exact same tie-only floor -- the majority of
+them (35 of the 38 permanently-zero-spread keys) are dead/unused rather
+than merely inert, meaning most of this group is not even the interesting
+"large, correctly-signed, completely inert" case the task describes -- it
+is simply an unused coordinate. A handful (best_farm, best_library,
+best_unit, best_arena, rival_hand_civil, urban_limit, gov_level,
+civil_actions, colonize_bonus, war_immune, special_techs and others in the
+0.90-1.00 zero_frac band) DO fire occasionally but never decisively --
+exactly BestFarm's pattern, not BestMine's.
+
+FoodRate, Workers, FreeWorkers and FoodStock are NOT structurally
+incapable, and must not be lumped in with BestMine/BestFarm:
+  - FoodStock is clearly decisive (0.3321, top-11 of 160).
+  - Workers is clearly decisive (0.2723, well above the tie floor).
+  - FreeWorkers is weakly decisive (0.1151) -- above the floor but well
+    below the "clearly decisive" tier; an intermediate case, not inert.
+  - FoodRate is the one near-miss: it varies constantly (fires on 46.8% of
+    decisions, more often than all but a handful of keys) yet is barely
+    above the tie floor (0.0989) because the champion's own weight on it
+    (0.0666) is too small, not because the feature is structurally
+    constant. This is a DIFFERENT failure mode from BestMine/BestFarm
+    (a pricing problem, not a candidate-invariance problem) and this
+    measurement cannot tell those two failure modes apart from
+    capable_frac alone -- see CAVEATS.
+
+Do not overclaim beyond what this table shows: capable_frac measures
+whether a key ALONE could have flipped a decision, not whether it actually
+did, and it says nothing about whether RAISING a key's weight would help --
+that is a weight-tuning question, explicitly out of scope (task's own
+instruction: diagnosis only, no weight change proposed or tested here).
+
+================================================================================
+CAVEATS
+================================================================================
+1. TIE-FLOOR ARTIFACT (important, read this before trusting any
+   capable_frac number): capable_frac(k) counts a decision as "capable"
+   whenever swing_k >= margin. When margin == 0 (an EXACT tie for the top
+   candidate score -- which happens on 9.24% of the 85,404 decisions in
+   this sample, judging by the floor every zero-spread key shares), EVERY
+   key trivially satisfies swing_k (0) >= margin (0), even a key that never
+   fires at all. This produces the 0.0924 floor observed for 61 keys. The
+   RANKING across keys is still meaningful (a key with capable_frac well
+   above 0.0924 really is more decisive than one sitting exactly on it),
+   but the raw capable_frac number for any key should be read as
+   "0.0924 + true decisive rate", not as the true decisive rate itself. A
+   tighter version of this measurement would exclude margin == 0 decisions
+   from the denominator; this run did not, and the report leans on the
+   RANK/floor-comparison rather than the raw fraction for that reason.
+
+2. mean_abs_level distinguishes dead-vs-alive only within the SAMPLE this
+   run actually reached. A key could be alive in principle (a legitimate,
+   non-buggy feature) but simply never reach a nonzero state across 220
+   games at this seed -- best_mine's zero level is consistent with either
+   "the code path is unreachable/buggy" or "220 games of this champion's
+   own policy structurally never develops a mine", and this measurement
+   cannot distinguish those two causes by itself (though the mine_take_probe
+   census's independent SEEN/LEGAL/SCORED funnel, cited in the task
+   background, is strong evidence for the latter: mines are seen and legal
+   constantly, just never taken).
+
+3. RATE_KEYS scaling: per eval::linear_features' own doc comment, every
+   RATE-tagged WeightKey (FoodRate, ResourceRate, ScienceRate, CultureRate,
+   plus the four inside horizon::RATE_KEYS) is scaled by
+   horizon::rate_multiplier(state, freeze, live_count), with freeze pinned
+   to the SAME champion vector these candidates are scored with -- exactly
+   matching real self-play (WeightedBot::choose/rank_moves never recompute
+   this per candidate weight either). This means every number in this
+   report for a RATE-tagged key already reflects the champion's own horizon
+   scaling; it is not a raw, unscaled feature read. This does not change
+   the zero/nonzero-spread verdict for any key (the scaling is a per-
+   decision scalar applied uniformly to that decision's candidates when the
+   underlying raw feature is candidate-invariant, and multiplicatively to a
+   candidate-varying raw feature otherwise) but should be kept in mind when
+   comparing a RATE key's absolute mean_abs_level against a non-RATE key's.
+
+4. Single seed (12345), single run, 3p only, 220 games / 85,404 decisions.
+   Task asked for 200+ games at 3p; this satisfies that but is not a
+   multi-seed replication. The eleven WeightKeys eval::linear_features'
+   own doc comment documents as bilinear-in-w (HandPotential,
+   WonderPotential, WonderPromise, HandMilPotential, RivalHandPotential,
+   RowUrgency, RowBargainForgone, RowLastCopy, MyEventThreat, plus
+   RateHorizon's own scaling of the four RATE_KEYS) are priced by freezing
+   their internal sub-computations at the champion vector, exactly as every
+   other real caller does -- their spread/level/swing numbers here are
+   faithful to what the champion bot itself would have seen, not a
+   different linearization.
+
+5. "Decisions" here means every point where WeightedBot::choose faced 2+
+   scored candidates, across the WHOLE game -- not specifically Mine-take
+   or Farm-build decisions. BestMine/BestFarm's near-zero capable_frac is
+   therefore a statement about their decisiveness ACROSS THE WHOLE GAME,
+   which is the correct scope for "can this feature ever decide anything",
+   not a narrower claim restricted to the specific decision types the prior
+   probes (mine_take_probe, farm_build_probe) already covered in more
+   depth -- this measurement is complementary to those, not a replacement.
+
+6. This is diagnosis only. No weight change was proposed, tested, or run
+   here, per the task's own instruction; the corpus/climb/champion files
+   were not touched.
