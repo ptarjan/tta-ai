@@ -1,0 +1,364 @@
+Type Price Census -- 2026-08-25
+================================
+
+Purpose: for every card type dispatched through card_potential_core's
+per-type credit branches (rust/src/bots/weighted/cards.rs, ~line 1945:
+Wonder/Tactic/Aggression/War/Pact/Event) plus the other three
+credit-gated groups named in the task (Technology = the
+tech_board_credit-gated non-unit levelled types Farm/Mine/Lab/Temple/
+Library/Arena/Theater/SpecialTech, Government, Action) and Territory
+(priced through the static card_yields table, gated on territory_credit),
+measure card_potential(...) for every card of that type, at 2p/3p/4p,
+under the trained champions in experiments/rust_champion_{2,3,4}p.json,
+on the SAME deterministic mid-game state tacticprice.rs uses
+(game::new_game(n, 42) + RandomBot(1) to 40 EndTurns; identical recipe,
+numbers are directly comparable to analysis/tactic_price_2026-08-25.txt).
+
+Produced by: rust/src/bin/typeprice.rs
+  cd rust && ./target/release/typeprice   (or: cargo run --profile difftest --bin typeprice)
+
+"credit" below is the POST-LOAD value of the type's dedicated
+*_board_credit / territory_credit weight (after dominance_repair's
+sign-gated clamp); "raw_json" is the same key read straight out of the
+champion JSON file, unclamped. They differ exactly where dominance_repair
+clamped a negative-trained weight to 0.0.
+
+BLACKOUT = every card of the type prices to EXACTLY 0.0 at that size.
+FLATLINE = every card of the type prices to the exact SAME NONZERO value
+  at that size (n>1 only is meaningful; a flatline with n=1 is a
+  degenerate case, called out below where it occurs).
+
+====================================================================
+HEADLINE -- blackout / flatline cells (full detail in the table below)
+====================================================================
+
+BLACKOUT cells (all cards of the type price to exactly 0.0):
+  * War        @ 3p   (n=3,  all 3 zero)   credit=0.00000 (raw -0.46111, clamped)
+  * Event      @ 2p   (n=55, all 55 zero)  credit=0.00000 (raw -0.18442, clamped)
+  * Event      @ 3p   (n=55, all 55 zero)  credit=0.00000 (raw -1.97508, clamped)
+  * Event      @ 4p   (n=55, all 55 zero)  credit=0.00000 (raw -0.35184, clamped)
+  * Territory  @ 3p   (n=12, all 12 zero)  credit=0.00000 (raw -0.06853, clamped)
+  * Territory  @ 4p   (n=12, all 12 zero)  credit=0.00000 (raw -0.27507, clamped)
+
+No strict FLATLINE cells (n>1, all nonzero, all cards identical) were
+found. Two cells are DEGENERATE near-flatlines worth flagging anyway,
+because only one card in the whole type prices nonzero at all -- the
+eval distinguishes 1 card from 0 others, not from the rest of the type:
+  * Aggression @ 3p  (n=11, 10 zero, the 1 survivor = 240.000000 flat)
+  * Aggression @ 4p  (n=11, 10 zero, the 1 survivor = 0.300309 flat)
+Both have credit clamped to 0.00000 (raw -0.06673 @3p, raw -0.24520 @4p).
+
+Two more cells are PARTIAL blackouts (credit clamped to 0.00000, and a
+large minority of cards go to exactly 0.0, though not all):
+  * Action  @ 4p (n=33, 15/33 = 45% exactly 0.0; credit raw -0.07157)
+  * Pact    @ 2p/3p/4p (n=10, 3/10 zero at every size, but credit is
+    NONZERO at every size here -- these 3 cards (Trade Routes Agreement,
+    Scientific Cooperation, International Tourism) legitimately price
+    to 0.0 in this particular board state; not a dispatch/clamp effect,
+    included for completeness since Pact is one of the six branches.)
+
+By contrast, three credit-clamped-to-0.0 cells do NOT blackout or
+flatline -- the generic card_yields fallback prices them with real
+per-card spread even though the dedicated branch never fires:
+  * Technology @ 2p/3p/4p -- credit is 0.00000 at ALL THREE sizes
+    (raw -0.31682 / -25.45750 / -0.10554), yet prices range widely
+    per card (e.g. 2p: -9.32..186.17, median 6.23; 3p: -658.11..268.21,
+    median -153.64; 4p: -1.77..302.45, median 35.96). The fallback for
+    this type is healthy.
+  * Government @ 4p -- credit 0.00000 (raw -0.17219), prices still
+    spread -11.53..18.79, median -10.98. Healthy fallback.
+  * War @ 2p and 4p -- credit nonzero, not clamped; prices spread
+    normally (included in the table for contrast with War@3p's
+    blackout).
+
+====================================================================
+ANCHOR CHECK (item 4) -- commit 66588fe
+====================================================================
+Spec: Tactic @ 3p should price 53.49-695.32; Tactic @ 2p should price
+14.26-185.42.
+Observed: Tactic @ 2p min/max nonzero = 14.262915 / 185.417899
+          Tactic @ 3p min/max nonzero = 53.486267 / 695.321465
+Both match the spec to the stated 2-decimal precision (695.321465 rounds
+to 695.32, the spec's own rounded figure -- the bin's strict-inequality
+self-check below reads this one as a hair over its literal 695.32
+bound, which is a rounding artifact of the check, not a build problem).
+Build is NOT stale.
+
+====================================================================
+FULL DATA
+====================================================================
+
+=== HEADLINE: blackout / flatline cells ===
+type         size   credit  raw_json         n      zero    min_nz median_nz    max_nz   blackout   flatline
+Wonder          2p  0.02485   0.02485        16         0 -0.315259  1.031167  4.588030         no         no
+Wonder          3p  0.52533   0.52533        16         0 -501.325497 -256.161046 -123.087321         no         no
+Wonder          4p  0.08945   0.08945        16         0 -0.862168  5.221907 21.745955         no         no
+Tactic          2p  0.00000   0.00000        15         0 14.262915 71.314577 185.417899         no         no
+Tactic          3p  0.04145   0.04145        15         0 53.486267 267.431333 695.321465         no         no
+Tactic          4p  0.00000   0.00000        15         0 60.000000 300.000000 780.000000         no         no
+Aggression      2p  0.11249   0.11249        11         5 -0.247373  0.119471  0.262487         no         no
+Aggression      3p  0.00000  -0.06673        11        10 240.000000 240.000000 240.000000         no         no
+Aggression      4p  0.00000  -0.24520        11        10  0.300309  0.300309  0.300309         no         no
+War             2p  0.31654   0.31654         3         0 -0.813970 -0.286861 -0.059664         no         no
+War             3p  0.00000  -0.46111         3         3        --        --        --        yes         no
+  ^^^ BLACKOUT: War @ 3p
+War             4p  0.43212   0.43212         3         0 -0.116162  0.006782  0.370389         no         no
+Pact            2p  0.01290   0.01290        10         3  0.000031  0.003815  0.271857         no         no
+Pact            3p  0.05712   0.05712        10         3  0.007408  1.538268  4.281548         no         no
+Pact            4p  0.06537   0.06537        10         3  0.026729  1.977072  6.935691         no         no
+Event           2p  0.00000  -0.18442        55        55        --        --        --        yes         no
+  ^^^ BLACKOUT: Event @ 2p
+Event           3p  0.00000  -1.97508        55        55        --        --        --        yes         no
+  ^^^ BLACKOUT: Event @ 3p
+Event           4p  0.00000  -0.35184        55        55        --        --        --        yes         no
+  ^^^ BLACKOUT: Event @ 4p
+Technology      2p  0.00000  -0.31682        36         0 -9.316579  6.228981 186.173850         no         no
+Technology      3p  0.00000 -25.45750        36         0 -658.110498 -153.641283 268.209443         no         no
+Technology      4p  0.00000  -0.10554        36         0 -1.771301 35.964638 302.453488         no         no
+Government      2p  0.11275   0.11275         8         1 -1.284917 -1.247225  4.718348         no         no
+Government      3p  0.85536   0.85536         8         1  8.817294 29.076268 237.937864         no         no
+Government      4p  0.00000  -0.17219         8         0 -11.532400 -10.977761 18.789293         no         no
+Action          2p  0.17190   0.17190        33         3 -1.360809  0.230510  0.576298         no         no
+Action          3p  0.06766   0.06766        33         2 -17.356312  5.961269 16.237933         no         no
+Action          4p  0.00000  -0.07157        33        15 -2.822603  0.173906  3.529566         no         no
+Territory       2p  0.06540   0.06540        12         0 -1.327330 -0.176753  3.736026         no         no
+Territory       3p  0.00000  -0.06853        12        12        --        --        --        yes         no
+  ^^^ BLACKOUT: Territory @ 3p
+Territory       4p  0.00000  -0.27507        12        12        --        --        --        yes         no
+  ^^^ BLACKOUT: Territory @ 4p
+
+=== ANCHOR CHECK (commit 66588fe): Tactic 3p in [53.49, 695.32], Tactic 2p in [14.26, 185.42] ===
+Tactic 2p observed min/max nonzero = 14.262915 / 185.417899 (expect within 14.26..185.42)
+Tactic 3p observed min/max nonzero = 53.486267 / 695.321465 (expect within 53.49..695.32)
+ANCHOR_2P_IN_RANGE=true ANCHOR_3P_IN_RANGE=false
+
+=== RAW PER-CARD DUMP ===
+
+--- Wonder (credit=WonderBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Pyramids                             54      -0.107366    -186.121870      -0.023870
+Hanging Gardens                      55       1.091253    -155.209583       5.005270
+Colossus                             56       0.610612    -129.931050      10.763375
+Library of Alexandria                57       1.093906    -154.408646       5.321272
+Great Wall                           58       1.033241    -249.467920       5.160102
+St. Peter's Basilica                 59       2.262987    -186.428224      10.363659
+Universitas Carolina                 60       1.029092    -248.769667       5.283712
+Taj Mahal                            61       3.476146    -123.087321      16.036501
+Transcontinental Railroad            62       1.181575    -262.854172      21.745955
+Eiffel Tower                         63       4.588030    -280.987768      21.243958
+Kremlin                              64       2.199744    -312.065007      10.925240
+Ocean Liners                         65      -0.236089    -375.246105      -0.862168
+First Space Flight                   66      -0.290410    -499.749504       0.019922
+Fast Food Chains                     67      -0.315259    -498.173512       0.467179
+Internet                             68      -0.275674    -438.285801      -0.060838
+Hollywood                            69      -0.315259    -501.325497      -0.069529
+
+--- Tactic (credit=TacticBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Fighting Band                        94      14.262915      53.486267      60.000000
+Legion                               95      28.525831     106.972533     120.000000
+Medieval Army                        96      28.525831     106.972533     120.000000
+Phalanx                              97      42.788746     160.458800     180.000000
+Heavy Cavalry                        98      57.051661     213.945066     240.000000
+Mobile Artillery                     99      71.314577     267.431333     300.000000
+Fortifications                      100      71.314577     267.431333     300.000000
+Conquistadors                       101      71.314577     267.431333     300.000000
+Defensive Army                      102      85.577492     320.917599     360.000000
+Napoleonic Army                     103      99.840407     374.403866     420.000000
+Classic Army                        104     114.103323     427.890132     480.000000
+Entrenchments                       105     128.366238     481.376399     540.000000
+Mechanized Army                     106     142.629153     534.862665     600.000000
+Shock Troops                        107     156.892069     588.348932     660.000000
+Modern Army                         108     185.417899     695.321465     780.000000
+
+--- Aggression (credit=AggressionBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Aggression: Plunder (I)             109       0.089603       0.000000       0.000000
+Aggression: Raid (I)                110       0.000000       0.000000       0.000000
+Aggression: Enslave                 111       0.074970     240.000000       0.300309
+Aggression: Plunder (II)            112       0.149339       0.000000       0.000000
+Aggression: Raid (II)               113       0.000000       0.000000       0.000000
+Aggression: Spy                     114      -0.247373       0.000000       0.000000
+Aggression: Annex                   115       0.000000       0.000000       0.000000
+Aggression: Infiltrate              116       0.000000       0.000000       0.000000
+Aggression: Plunder (III)           117       0.209075       0.000000       0.000000
+Aggression: Raid (III)              118       0.000000       0.000000       0.000000
+Aggression: Armed Intervention      119       0.262487       0.000000       0.000000
+
+--- War (credit=WarBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+War over Territory                  120      -0.286861       0.000000       0.006782
+War over Technology                 121      -0.059664       0.000000      -0.116162
+War over Culture                    122      -0.813970       0.000000       0.370389
+
+--- Pact (credit=PactBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Open Borders Agreement              123       0.000483       0.007408       0.026729
+Trade Routes Agreement              124       0.000000       0.000000       0.000000
+Acceptance of Supremacy             125       0.000031       0.343840       0.121552
+Scientific Cooperation              126       0.000000       0.000000       0.000000
+International Trade Agreement       127       0.000031       0.343840       0.121552
+Promise of Military Protection      128       0.271857       4.170462       6.935691
+Military Alliance                   129       0.206754       4.281548       6.684572
+Peace Treaty                        130       0.003815       1.538268       1.977072
+International Tourism               131       0.000000       0.000000       0.000000
+Loss of Sovereignty                 132       0.007630       3.076537       3.954144
+
+--- Event (credit=EventBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Development of Settlement           148       0.000000       0.000000       0.000000
+Development of Science              149       0.000000       0.000000       0.000000
+Development of Crafts               150       0.000000       0.000000       0.000000
+Development of Agriculture          151       0.000000       0.000000       0.000000
+Development of Warfare              152       0.000000       0.000000       0.000000
+Development of Religion             153       0.000000       0.000000       0.000000
+Development of Politics             154       0.000000       0.000000       0.000000
+Development of Markets              155       0.000000       0.000000       0.000000
+Development of Trade Routes         156       0.000000       0.000000       0.000000
+Development of Civil Life           157       0.000000       0.000000       0.000000
+Rats                                158       0.000000       0.000000       0.000000
+Pestilence                          159       0.000000       0.000000       0.000000
+Raiders                             160       0.000000       0.000000       0.000000
+Barbarians                          161       0.000000       0.000000       0.000000
+Foray                               162       0.000000       0.000000       0.000000
+Reign of Terror                     163       0.000000       0.000000       0.000000
+Immigration                         164       0.000000       0.000000       0.000000
+Uncertain Borders                   165       0.000000       0.000000       0.000000
+Border Conflict                     166       0.000000       0.000000       0.000000
+Crusades                            167       0.000000       0.000000       0.000000
+Rebellion                           168       0.000000       0.000000       0.000000
+Scientific Breakthrough             169       0.000000       0.000000       0.000000
+Good Harvest                        170       0.000000       0.000000       0.000000
+New Deposits                        171       0.000000       0.000000       0.000000
+Cultural Influence                  172       0.000000       0.000000       0.000000
+Iconoclasm                          173       0.000000       0.000000       0.000000
+Ravages of Time                     174       0.000000       0.000000       0.000000
+Terrorism                           175       0.000000       0.000000       0.000000
+Civil Unrest                        176       0.000000       0.000000       0.000000
+National Pride                      177       0.000000       0.000000       0.000000
+Crime Wave                          178       0.000000       0.000000       0.000000
+Independence Declaration            179       0.000000       0.000000       0.000000
+Emigration                          180       0.000000       0.000000       0.000000
+Cold War                            181       0.000000       0.000000       0.000000
+Refugees                            182       0.000000       0.000000       0.000000
+International Agreement             183       0.000000       0.000000       0.000000
+Economic Progress                   184       0.000000       0.000000       0.000000
+Popularization of Science           185       0.000000       0.000000       0.000000
+Politics of Strength                186       0.000000       0.000000       0.000000
+Prosperity                          187       0.000000       0.000000       0.000000
+Impact of Industry                  188       0.000000       0.000000       0.000000
+Impact of Agriculture               189       0.000000       0.000000       0.000000
+Impact of Competition               190       0.000000       0.000000       0.000000
+Impact of Progress                  191       0.000000       0.000000       0.000000
+Impact of Wonders                   192       0.000000       0.000000       0.000000
+Impact of Population                193       0.000000       0.000000       0.000000
+Impact of Colonies                  194       0.000000       0.000000       0.000000
+Impact of Government                195       0.000000       0.000000       0.000000
+Impact of Architecture              196       0.000000       0.000000       0.000000
+Impact of Strength                  197       0.000000       0.000000       0.000000
+Impact of Happiness                 198       0.000000       0.000000       0.000000
+Impact of Science                   199       0.000000       0.000000       0.000000
+Impact of Technology                200       0.000000       0.000000       0.000000
+Impact of Balance                   201       0.000000       0.000000       0.000000
+Impact of Variety                   202       0.000000       0.000000       0.000000
+
+--- Technology (credit=TechBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Agriculture                           0      -1.678049    -119.933425       0.867549
+Irrigation                            1      -3.356098    -239.866851       1.735098
+Selective Breeding                    2      -5.034147    -359.800276       2.602647
+Mechanized Agriculture                3      -6.797214    -479.667127       4.434906
+Bronze                                4      -1.191226    -106.588559       3.589569
+Iron                                  5      -3.178967    -273.177119       7.130557
+Coal                                  6      -5.166708    -439.765678      10.671545
+Oil                                   7      -6.752643    -592.942797      17.899262
+Philosophy                            8      -2.500528    -179.622100      -0.393124
+Alchemy                               9      -5.001057    -359.244199      -0.786249
+Scientific Method                    10      -6.705069    -478.866299      -1.130793
+Computers                            11      -9.316579    -658.110498      -1.771301
+Religion                             12      46.303101    -120.573366      57.977618
+Theology                             13      44.655093    -241.146733      56.003816
+Organized Religion                   14      43.007085    -361.720099      54.030015
+Printing Press                       15      46.247096    -119.622100      59.606876
+Journalism                           16      90.901161    -359.244199     119.116591
+Multimedia                           17     137.148258    -478.866299     178.723467
+Bread and Circuses                   18      11.763415    -127.660466      56.100977
+Team Sports                          19      24.378322    -194.747566     114.127175
+Professional Sports                  20      36.196714    -321.834666     172.104793
+Drama                                21      94.254210    -120.573366     117.929038
+Opera                                22     139.815772    -300.573366     177.734717
+Movies                               23     186.173850    -420.573366     237.588976
+Masonry                              42       0.078713       0.667120       0.354347
+Architecture                         43       0.157426       1.334240       0.708695
+Engineering                          44       0.236139       2.001360       1.063042
+Code of Laws                         45       0.401166       0.009796       0.024636
+Justice System                       46       0.293380     180.009796      -0.980624
+Civil Service                        47       0.694546     180.019593      -0.955988
+Warfare                              48      14.337749      53.745637      60.817829
+Strategy                             49      42.938414     160.977540     181.635659
+Military Theory                      50      71.539078     268.209443     302.453488
+Cartography                          51      15.801343      53.486267      61.236186
+Navigation                           52      30.833472     106.972533     121.854279
+Satellites                           53      45.865601     160.458800     182.472372
+
+--- Government (credit=GovBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Despotism                            34      -1.247225       8.817294     -11.532400
+Monarchy                             35      -1.243413      29.076268     -11.290876
+Theocracy                            36       0.000000     119.158385       0.380714
+Constitutional Monarchy              37      -1.279063      25.728089     -11.098523
+Republic                             38      -1.283413       0.000000     -11.257739
+Communism                            39      -1.284917      22.460017     -10.856999
+Fundamentalism                       40       4.718348     237.937864      18.789293
+Democracy                            41      -1.101658     160.229662       6.770586
+
+--- Action (credit=ActionBoardCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Rich Land (A)                       203       0.115384       2.455915       0.000000
+Urban Growth (A)                    204       0.115384       2.455915       0.000000
+Frugality (A)                       205       0.035073       4.059563       0.101574
+Engineering Genius (A)              206       0.230612       4.911750       0.000000
+Patriotism (A)                      207       0.067250       1.998789       0.817829
+Cultural Heritage (A)               208       0.460793      -2.622087       3.529566
+Stock Pile                          209       0.171838       8.118967       0.150154
+Rich Land (I)                       210       0.230612       4.911750       0.000000
+Urban Growth (I)                    211       0.230612       4.911750       0.000000
+Frugality (I)                       212       0.069991       8.119046       0.203148
+Engineering Genius (I)              213       0.345841       7.367586       0.000000
+Patriotism (I)                      214       0.121636       3.980029       0.817829
+Breakthrough (I)                    215      -0.453448      -5.785358      -0.940868
+Cultural Heritage (I)               216      -0.109806      -5.650121       1.059132
+Reserves (I)                        217       0.273840       8.118967       0.020077
+Rich Land (II)                      218       0.345841       7.367586       0.000000
+Urban Growth (II)                   219       0.345841       7.367586       0.000000
+Frugality (II)                      220       0.104909      12.178530       0.304723
+Engineering Genius (II)             221       0.461069       9.823421       0.000000
+Patriotism (II)                     222       0.176022       5.961269       0.817829
+Breakthrough (II)                   223      -0.680249      -8.678077      -1.411302
+Revolutionary Idea (II)             224      -0.907206     -11.570875      -1.881736
+Efficient Upgrade (II)              225       0.345841       7.367586       0.000000
+Wave of Nationalism                 226       0.000000       0.000000       0.000000
+Reserves (II)                       227       0.410760      12.178450       0.030115
+Urban Growth (III)                  228       0.461069       9.823421       0.000000
+Engineering Genius (III)            229       0.576298      12.279257       0.000000
+Patriotism (III)                    230       0.230408       7.942509       0.817829
+Revolutionary Idea (III)            231      -1.360809     -17.356312      -2.822603
+Efficient Upgrade (III)             232       0.461069       9.823421       0.000000
+Endowment for the Arts              233       0.000000       0.202974       0.197658
+Military Build-Up                   234       0.000000       0.000000       0.000000
+Reserves (III)                      235       0.547680      16.237933       0.040154
+
+--- Territory (credit=TerritoryCredit) ---
+card                                 id       price@2p       price@3p       price@4p
+Vast Territory (I)                  136      -0.994910       0.000000       0.000000
+Wealthy Territory (I)               137       0.253395       0.000000       0.000000
+Inhabited Territory (I)             138      -0.665886       0.000000       0.000000
+Strategic Territory (I)             139       1.868523       0.000000       0.000000
+Historic Territory (I)              140       0.388779       0.000000       0.000000
+Developed Territory (I)             141      -0.606901       0.000000       0.000000
+Vast Territory (II)                 142      -1.327330       0.000000       0.000000
+Wealthy Territory (II)              143       0.459400       0.000000       0.000000
+Inhabited Territory (II)            144      -0.986068       0.000000       0.000000
+Strategic Territory (II)            145       3.736026       0.000000       0.000000
+Historic Territory (II)             146       0.712162       0.000000       0.000000
+Developed Territory (II)            147      -1.127519       0.000000       0.000000
