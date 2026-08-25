@@ -1,0 +1,171 @@
+CEILING PLAYTEST -- 3-PLAYER -- 2026-08-24
+
+QUESTION
+Champion /private/tmp/opencensus/champ3p.json has five weights pinned at
+exactly 60.000 -- blue_free, culture_rate, food_stock, resource_stock,
+workers_late -- which is CLAMP_BLIND in rust/src/bin/climb.rs
+(effective_bound = min(spread-derived, 60.0)). Is that ceiling itself the
+defect: would the champion play better if those five keys could go higher
+or lower than 60? kindmatch and behavcensus load via
+tta::bots::weighted::eval::load_weights (parse_weights + dominance_repair,
+NO clamp), so a value above 60 is played exactly as written -- a
+climb --gens 0 round-trip would clamp it and lie about this, so it was not
+used.
+
+METHOD
+Binary freshness check (not rebuilt):
+  target/release/kindmatch mtime 1787622407
+  src/bin/kindmatch.rs mtime  1786824906
+  binary is newer -> proceeded without rebuilding.
+
+All duels: 240 games, 3 players, seed 1001, 5 threads, from
+/Users/pt/tta-ai/rust, run in both seat arrangements (challenger as A,
+one rotating seat vs two champion seats; then champion as A, mirrored).
+The tool's own printed null for 3p is 33.33% every time -- quoted verbatim
+below, never assumed.
+
+DOMINANCE_REPAIR REASONING (rust/src/bots/weighted/eval.rs)
+DOMINATES = [(ResourceStock, BlueFree), (WonderPotential, WonderPromise)].
+dominance_repair enforces hi >= lo: if BlueFree > ResourceStock, ResourceStock
+is silently raised to match BlueFree. culture_rate, food_stock and
+workers_late appear in no DOMINATES pair and no sign-gate table, so they are
+never touched by repair in either direction.
+
+- Step A variants (all five keys scaled by the same factor together):
+  blue_free and resource_stock move in lockstep and stay equal to each
+  other at every step, so b > a never holds -- dominance_repair is a
+  provable NO-OP for both the UP and DOWN full-vector variants.
+- Step B per-key variants (one key moved, the other four left at 60):
+  - resource_stock alone -> 30, blue_free left at 60: a=30 (hi), b=60 (lo),
+    b > a violates the rule, repair sets ResourceStock back to 60. This
+    variant is INEXPRESSIBLE: kindmatch would silently play resource_stock
+    = 60, not 30, so it would not test what it claims to. SKIPPED, not
+    played, reported here as the finding instead.
+  - blue_free alone -> 30, resource_stock left at 60: a=60 (hi), b=30 (lo),
+    no violation. Expressible, played.
+  - culture_rate, food_stock, workers_late alone -> 30: not in any gate
+    table, always expressible, played.
+  - Per-key UP variants (resource_stock or blue_free alone at 120) were
+    never built: Step A's UP direction lost decisively in both
+    arrangements, which per the test plan skips the entire UP per-key
+    sweep.
+
+STEP A -- FULL FIVE-KEY VECTOR
+
+UP: blue_free=120, culture_rate=120, food_stock=120, resource_stock=120,
+    workers_late=120 (all other weights unchanged from champ3p.json)
+
+  A=variant(UP), B=champion (variant rotates 1 seat, champion holds 2):
+    A win rate 18.54% +/- 4.83  (null 33.33%)  p = 0.0000
+    verdict: reject -- variant is WORSE than champion
+
+  A=champion, B=variant(UP)  (mirror: champion rotates 1 seat, variant holds 2):
+    A win rate 49.17% +/- 6.16  (null 33.33%)  p = 0.0000
+    verdict: accept -- champion beats variant, interval clear of the null
+
+  UP loses decisively in BOTH arrangements. Per plan: SKIP the per-key UP
+  sweep entirely -- not worth 10 more duels chasing a direction that just
+  lost this hard twice.
+
+DOWN: blue_free=30, culture_rate=30, food_stock=30, resource_stock=30,
+      workers_late=30 (all other weights unchanged)
+
+  A=variant(DOWN), B=champion:
+    A win rate 26.67% +/- 5.71  (null 33.33%)  p = 0.0201
+    verdict: reject -- variant is WORSE than champion
+
+  A=champion, B=variant(DOWN)  (mirror):
+    A win rate 36.25% +/- 5.30  (null 33.33%)  p = 0.2737
+    verdict: inconclusive -- interval still straddles the null
+
+  DOWN is the direction that "moves": one arrangement is a mild reject, the
+  mirror is statistically inconclusive (champion barely above its own null
+  against the variant). Per plan, the per-key sweep proceeds in the DOWN
+  direction, since UP was disqualified above.
+
+STEP B -- PER-KEY DOWN SWEEP (one key set to 30, other four left at 60)
+
+resource_stock alone -> 30: SKIPPED, inexpressible (see reasoning above;
+  dominance_repair reverts it to 60, so no games were run).
+
+blue_free alone -> 30:
+  A=variant, B=champion:
+    A win rate 3.33% +/- 2.24  (null 33.33%)  p = 0.0000
+    verdict: reject -- catastrophically WORSE
+  A=champion, B=variant (mirror):
+    A win rate 79.17% +/- 5.36  (null 33.33%)  p = 0.0000
+    verdict: accept -- champion crushes variant, interval clear of the null
+  This is the largest effect measured anywhere in this test, by a wide
+  margin, and much worse than the full five-key DOWN vector above --
+  blue_free at 60 is load-bearing on its own, not an artifact of being
+  bundled with the other four.
+
+culture_rate alone -> 30:
+  A=variant, B=champion:
+    A win rate 27.71% +/- 5.14  (null 33.33%)  p = 0.0295
+    verdict: reject -- WORSE
+  A=champion, B=variant (mirror):
+    A win rate 41.46% +/- 5.69  (null 33.33%)  p = 0.0045
+    verdict: accept -- champion beats variant, interval clear of the null
+  Loses clearly in both arrangements, a moderate effect.
+
+food_stock alone -> 30:
+  A=variant, B=champion:
+    A win rate 23.12% +/- 5.42  (null 33.33%)  p = 0.0002
+    verdict: reject -- WORSE
+  A=champion, B=variant (mirror):
+    A win rate 39.17% +/- 5.93  (null 33.33%)  p = 0.0504
+    verdict: inconclusive -- interval still straddles the null (borderline)
+  Loses clearly in one arrangement; the mirror is a hair on the wrong side
+  of significance but points the same direction.
+
+workers_late alone -> 30:
+  A=variant, B=champion:
+    A win rate 32.92% +/- 2.13  (null 33.33%)  p = 0.6964
+    verdict: inconclusive -- interval still straddles the null
+  A=champion, B=variant (mirror):
+    A win rate 33.96% +/- 2.39  (null 33.33%)  p = 0.6032
+    verdict: inconclusive -- interval still straddles the null
+  Essentially neutral in both arrangements -- both win rates sit right on
+  top of the printed 33.33% null. Lowering workers_late alone from 60 to
+  30 is not measurably different from leaving it at 60.
+
+VERDICT
+The ceiling is not worth raising: the full-vector UP variant (all five
+keys doubled to 120) lost decisively and unambiguously in both seat
+arrangements, and per the test's own stopping rule that closed off any
+further UP investigation. Lowering is not supported either, in the
+uniform sense the test set out to check: the full-vector DOWN variant's
+loss was comparatively mild and one of its two arrangements was not even
+statistically distinguishable from the null, and the per-key breakdown
+shows that "loss" is not spread evenly across the five pinned keys --
+blue_free alone accounts for a far larger, and far more decisive, loss
+than all five moved together, culture_rate and food_stock contribute
+moderate losses, and workers_late contributes nothing measurable at all
+(resource_stock could not be tested in isolation, see caveats). Nothing
+in either direction, full-vector or per-key, won a single duel. CLAMP_BLIND
+at 60.0 does not look like the defect here: every direction this test
+could actually measure was a loss or a wash, never an improvement, which
+is a full and flat close of the "raise or lower the ceiling" question for
+this champion under this method.
+
+CAVEATS
+- Single fixed seed (1001) per duel throughout; no seed-repeat variance
+  estimate exists beyond the tool's own printed binomial CI, so a
+  seed-dependent artifact cannot be ruled out for any individual number
+  above, though the direction is consistent across the many duels run.
+- resource_stock could not be tested in isolation at 30 in the DOWN
+  per-key sweep: dominance_repair silently reverts it to 60 whenever
+  blue_free stays at 60, making that specific variant inexpressible by
+  construction, not by choice. Its per-key DOWN effect is simply unknown.
+- No per-key UP sweep was run at all (skipped per plan after Step A's UP
+  loss), so nothing here rules out blue_free, culture_rate, food_stock,
+  resource_stock or workers_late individually benefiting from a value
+  above 60 -- only that moving all five up together at once loses badly.
+- All duels used --players 3 only, per the assignment; nothing here
+  speaks to 2p or 4p behavior of the same five keys.
+- Games-per-duel was 240, matching the assignment; this is enough to
+  resolve the large blue_free effect cleanly but leaves the food_stock
+  mirror and the DOWN full-vector mirror sitting right at the edge of
+  significance (p = 0.0504, p = 0.2737) rather than cleanly inside or
+  outside it.
