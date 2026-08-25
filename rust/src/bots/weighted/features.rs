@@ -72,6 +72,19 @@ use super::weights::{WeightKey, Weights};
 /// one source of truth either way.
 const N: usize = WeightKey::ALL.len();
 
+/// Where [`WeightKey::StrengthLead`] stops counting. A lead this large already
+/// beats every aggression and war card in the box, so the feature saturates
+/// rather than rewarding overkill.
+///
+/// It lives here, shared, because three files have to agree on it or the
+/// arithmetic stops meaning anything: this file builds the clamped feature,
+/// `rivals::strength_marginal` prices ONE point of strength as that feature's
+/// derivative and so must stop adding `w[strength_lead]` at exactly the same
+/// boundary, and `neural::encode` normalises by it. Written as a literal in
+/// each, a change to one silently turns the marginal into the derivative of a
+/// function nobody computes.
+pub const STRENGTH_LEAD_CAP: f64 = 6.0;
+
 /// The raw feature vector `evaluate` (unowned) prices -- Python's `features()`
 /// return value, as an array. See this module's top doc comment for why.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -615,7 +628,7 @@ pub fn features(
     f.set(WeightKey::Strength, strength);
     f.set(WeightKey::StrengthRel, rel);
     f.set(WeightKey::StrengthDeficit, (-rel).max(0.0));
-    f.set(WeightKey::StrengthLead, rel.clamp(0.0, 6.0));
+    f.set(WeightKey::StrengthLead, rel.clamp(0.0, STRENGTH_LEAD_CAP));
     f.set(WeightKey::TacticLevel, if p.tactic.is_none() { 0.0 } else { f64::from(p.tactic.level()) });
     // RULES_SPEC 11.3 cliff, not a slope -- see `WeightKey::HasUnit`'s own
     // doc comment in `weights.rs`. `unit_workers` (the sweep total above)

@@ -143,7 +143,7 @@ use crate::economy;
 use crate::effects;
 use crate::state::{GameState, MAX_PLAYERS, ROW_SIZE};
 
-use super::super::weighted::features::sweep_tableau;
+use super::super::weighted::features::{self, sweep_tableau};
 use super::super::weighted::horizon;
 
 // ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ fn player_block(state: &GameState, idx: u8, me_idx: u8, best_rival_strength: i32
         pacts / 5.0,
         rel / 30.0,
         (-rel).max(0.0) / 30.0,
-        rel.clamp(0.0, 6.0) / 6.0,
+        rel.clamp(0.0, features::STRENGTH_LEAD_CAP) / features::STRENGTH_LEAD_CAP,
         p.hand_size_civil() as f64 / 12.0,
         p.hand_size_military() as f64 / 12.0,
         f64::from(seeded_n) / 10.0,

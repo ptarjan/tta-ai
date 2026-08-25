@@ -771,9 +771,17 @@ pub fn strength_marginal(state: &GameState, idx: u8, w: &Weights, ctx: Option<&R
         w.get(WeightKey::StrengthRel) + early * w.get(WeightKey::StrengthRel.early()) + late * w.get(WeightKey::StrengthRel.late())
     };
     let mut total = w.get(WeightKey::Strength) + strength_rel_eff;
+    // The exact derivative of the two clamped lead/deficit features, which is
+    // why a lead of `STRENGTH_LEAD_CAP` or more adds NEITHER term: past the
+    // cap `features` cannot show another point of lead at all, so it buys
+    // `evaluate` nothing through this channel. That looks non-monotonic in
+    // the fitted vector -- with `strength_lead` negative, a point of strength
+    // is worth LESS while building a modest lead than after the lead
+    // saturates -- but the shape belongs to the feature and the weight, not
+    // to this arithmetic. Do not "repair" it by extending the branch.
     if rel < 0 {
         total -= w.get(WeightKey::StrengthDeficit);
-    } else if rel < 6 {
+    } else if f64::from(rel) < features::STRENGTH_LEAD_CAP {
         total += w.get(WeightKey::StrengthLead);
     }
     total
