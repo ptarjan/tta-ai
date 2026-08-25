@@ -36,7 +36,7 @@
 //! for every 2p game) -- the same convention `replay_common`'s own
 //! `target_actor_color` and `humanwinners::color_for_seat` already encode.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -191,6 +191,97 @@ impl WonderRoundStats {
         eprintln!("  winners: {}", median_mean(&self.win_rounds));
         eprintln!("  losers:  {}", median_mean(&self.loss_rounds));
     }
+}
+
+// ---------------------------------------------------------------------
+// Tech acquisition -- the human-corpus twin of `bin/behavcensus.rs`'s own
+// "Tech acquisition" section (search that file for `TechKind`). Types and
+// the `tech_kind` mapper copied verbatim so the two definitions cannot
+// drift apart; see that file's doc comment above `TechKind` for the full
+// pipeline rationale (SEEN -> TAKEN -> BUILT -> STAFFED) and why `Move::
+// Upgrade` is never a BUILT event.
+
+/// The coarse card-type buckets this section reports on. Copied verbatim
+/// from `bin/behavcensus.rs`'s own `TechKind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum TechKind {
+    Farm,
+    Mine,
+    Lab,
+    Temple,
+    Arena,
+    Library,
+    Military,
+}
+
+const ALL_TECH_KINDS: [TechKind; 7] = [
+    TechKind::Farm,
+    TechKind::Mine,
+    TechKind::Lab,
+    TechKind::Temple,
+    TechKind::Arena,
+    TechKind::Library,
+    TechKind::Military,
+];
+
+fn tech_kind_label(k: TechKind) -> &'static str {
+    match k {
+        TechKind::Farm => "Farm",
+        TechKind::Mine => "Mine",
+        TechKind::Lab => "Lab",
+        TechKind::Temple => "Temple",
+        TechKind::Arena => "Arena",
+        TechKind::Library => "Library",
+        TechKind::Military => "Military",
+    }
+}
+
+/// Maps an engine `CardType` to this section's [`TechKind`] bucket, or
+/// `None` for a type this section does not report on (Theater and every
+/// non-developable/non-worker type). Exhaustive, no wildcard arm --
+/// `wildcard_enum_match_arm` is denied repo-wide. Copied verbatim from
+/// `bin/behavcensus.rs`'s own `tech_kind`.
+fn tech_kind(k: CardType) -> Option<TechKind> {
+    match k {
+        CardType::Farm => Some(TechKind::Farm),
+        CardType::Mine => Some(TechKind::Mine),
+        CardType::Lab => Some(TechKind::Lab),
+        CardType::Temple => Some(TechKind::Temple),
+        CardType::Arena => Some(TechKind::Arena),
+        CardType::Library => Some(TechKind::Library),
+        CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => Some(TechKind::Military),
+        CardType::Theater
+        | CardType::Government
+        | CardType::SpecialTech
+        | CardType::Wonder
+        | CardType::Leader
+        | CardType::Action
+        | CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => None,
+    }
+}
+
+/// One [`TechKind`]'s tally across the four pipeline stages. Copied
+/// verbatim from `bin/behavcensus.rs`'s own `StageCounts`.
+#[derive(Default, Clone, Copy)]
+struct StageCounts {
+    seen: u64,
+    taken: u64,
+    built: u64,
+    staffed: u64,
+}
+
+/// Farm/Mine age-tier breakdown for TAKEN and BUILT only. Copied verbatim
+/// from `bin/behavcensus.rs`'s own `TierCounts`.
+#[derive(Default, Clone, Copy)]
+struct TierCounts {
+    taken: [u64; 4],
+    built: [u64; 4],
 }
 
 fn build_kind(kind: CardType) -> &'static str {
@@ -536,6 +627,17 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     // `bin/behavcensus.rs`'s `Report::alloc_by_round`.
     let mut alloc_by_round: BTreeMap<u16, AllocAccum> = BTreeMap::new();
 
+    // Tech acquisition (3-player games only, same accumulation site as
+    // `production_by_round`/`alloc_by_round` above): the human twin of
+    // `bin/behavcensus.rs`'s `Report::tech_acq`/`farm_tier`/`mine_tier`.
+    // `tech_acq_player_games` is the denominator for every per-player-game
+    // rate printed below -- every player-game in a 3p replay contributes
+    // exactly one sample, so no separate counter is needed per `TechKind`.
+    let mut tech_acq: HashMap<TechKind, StageCounts> = HashMap::new();
+    let mut farm_tier = TierCounts::default();
+    let mut mine_tier = TierCounts::default();
+    let mut tech_acq_player_games: u64 = 0;
+
     for meta in games.iter() {
         let n = meta.players as usize;
         let path = format!("{journals_dir}/{}.tsv", meta.id);
@@ -659,10 +761,29 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
         // the same detection `bin/behavcensus.rs::play_one` uses.
         if meta.players == 3 {
             let mut prev_actor: Option<u8> = None;
+            // Per-seat running sets for the tech-acquisition pipeline (see
+            // `bin/behavcensus.rs`'s "Tech acquisition" section doc comment
+            // above `TechKind`) -- folded into the file-level `tech_acq`/
+            // `farm_tier`/`mine_tier` accumulators once this game's decision
+            // loop below finishes.
+            let mut seat_seen: Vec<HashSet<CardId>> = (0..n).map(|_| HashSet::new()).collect();
+            let mut seat_taken: Vec<HashSet<CardId>> = (0..n).map(|_| HashSet::new()).collect();
+            let mut seat_built: Vec<HashSet<CardId>> = (0..n).map(|_| HashSet::new()).collect();
+            let mut seat_staffed: Vec<HashSet<CardId>> = (0..n).map(|_| HashSet::new()).collect();
             for d in &result.decisions {
                 let seat = d.state.current;
                 if seat as usize >= n {
                     continue;
+                }
+                // ---- tech acquisition: TAKEN -- every decision point, not
+                // just turn-start (a Take can happen anywhere in a turn).
+                // See `bin/behavcensus.rs`'s identical block for the full
+                // rationale.
+                if let Move::Take { slot } = d.human_move {
+                    let card = d.state.card_row[slot as usize];
+                    if !card.is_none() && tech_kind(card.get().kind).is_some() {
+                        seat_taken[seat as usize].insert(card);
+                    }
                 }
                 if prev_actor != Some(seat) {
                     prev_actor = Some(seat);
@@ -687,6 +808,17 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                     let mut best_mine = 0i16;
                     for (id, slot) in p.techs.iter() {
                         let workers = u32::from(slot.workers);
+                        // ---- tech acquisition: BUILT/STAFFED -- same
+                        // turn-start instant, same `p.techs` walk as the
+                        // alloc classification just below. See
+                        // `bin/behavcensus.rs`'s identical block for the
+                        // full rationale.
+                        if tech_kind(id.get().kind).is_some() {
+                            seat_built[seat as usize].insert(id);
+                            if workers > 0 {
+                                seat_staffed[seat as usize].insert(id);
+                            }
+                        }
                         match id.get().kind {
                             CardType::Farm => {
                                 farm_workers += workers;
@@ -726,7 +858,74 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
                     a.best_farm_sum += u64::from(best_farm.max(0) as u16);
                     a.best_mine_sum += u64::from(best_mine.max(0) as u16);
                     a.n += 1;
+
+                    // ---- tech acquisition: SEEN -- same turn-start
+                    // instant, every distinct tracked-type card visible in
+                    // the card row right now. See `bin/behavcensus.rs`'s
+                    // identical block for the full rationale.
+                    for &card in &d.state.card_row {
+                        if !card.is_none() && tech_kind(card.get().kind).is_some() {
+                            seat_seen[seat as usize].insert(card);
+                        }
+                    }
                 }
+            }
+
+            // ---- tech acquisition: fold this game's per-seat running sets
+            // into the file-level accumulators -- see `bin/behavcensus.rs`'s
+            // end-of-game aggregation for the identical fold, just done once
+            // per game here instead of once per player-game inside a shared
+            // `Report`.
+            for seat in 0..n {
+                for &card in &seat_seen[seat] {
+                    if let Some(kind) = tech_kind(card.get().kind) {
+                        tech_acq.entry(kind).or_default().seen += 1;
+                    }
+                }
+                for &card in &seat_taken[seat] {
+                    if let Some(kind) = tech_kind(card.get().kind) {
+                        tech_acq.entry(kind).or_default().taken += 1;
+                        let tier = card.level() as usize;
+                        match kind {
+                            TechKind::Farm => {
+                                if let Some(s) = farm_tier.taken.get_mut(tier) {
+                                    *s += 1;
+                                }
+                            }
+                            TechKind::Mine => {
+                                if let Some(s) = mine_tier.taken.get_mut(tier) {
+                                    *s += 1;
+                                }
+                            }
+                            TechKind::Lab | TechKind::Temple | TechKind::Arena | TechKind::Library | TechKind::Military => {}
+                        }
+                    }
+                }
+                for &card in &seat_built[seat] {
+                    if let Some(kind) = tech_kind(card.get().kind) {
+                        tech_acq.entry(kind).or_default().built += 1;
+                        let tier = card.level() as usize;
+                        match kind {
+                            TechKind::Farm => {
+                                if let Some(s) = farm_tier.built.get_mut(tier) {
+                                    *s += 1;
+                                }
+                            }
+                            TechKind::Mine => {
+                                if let Some(s) = mine_tier.built.get_mut(tier) {
+                                    *s += 1;
+                                }
+                            }
+                            TechKind::Lab | TechKind::Temple | TechKind::Arena | TechKind::Library | TechKind::Military => {}
+                        }
+                    }
+                }
+                for &card in &seat_staffed[seat] {
+                    if let Some(kind) = tech_kind(card.get().kind) {
+                        tech_acq.entry(kind).or_default().staffed += 1;
+                    }
+                }
+                tech_acq_player_games += 1;
             }
         }
 
@@ -897,6 +1096,55 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             a.n
         );
     }
+
+    // ---- tech acquisition: seen -> taken -> built -> staffed, per
+    // `TechKind` bucket, one sample per player-game. See
+    // `bin/behavcensus.rs`'s identical print block for the full rationale.
+    eprintln!("\n### Tech acquisition\n");
+    let tacq_n = tech_acq_player_games.max(1) as f64;
+    eprintln!("per player-game (n={tech_acq_player_games}):");
+    eprintln!("{:<10} {:>8} {:>8} {:>8} {:>8}", "type", "seen", "taken", "built", "staffed");
+    for kind in ALL_TECH_KINDS {
+        let c = tech_acq.get(&kind).copied().unwrap_or_default();
+        eprintln!(
+            "{:<10} {:>8.2} {:>8.2} {:>8.2} {:>8.2}",
+            tech_kind_label(kind),
+            c.seen as f64 / tacq_n,
+            c.taken as f64 / tacq_n,
+            c.built as f64 / tacq_n,
+            c.staffed as f64 / tacq_n,
+        );
+    }
+    eprintln!("\nFarm/Mine taken by age tier, per player-game:");
+    eprintln!(
+        "  Farm: A={:.3} I={:.3} II={:.3} III={:.3}",
+        farm_tier.taken[0] as f64 / tacq_n,
+        farm_tier.taken[1] as f64 / tacq_n,
+        farm_tier.taken[2] as f64 / tacq_n,
+        farm_tier.taken[3] as f64 / tacq_n,
+    );
+    eprintln!(
+        "  Mine: A={:.3} I={:.3} II={:.3} III={:.3}",
+        mine_tier.taken[0] as f64 / tacq_n,
+        mine_tier.taken[1] as f64 / tacq_n,
+        mine_tier.taken[2] as f64 / tacq_n,
+        mine_tier.taken[3] as f64 / tacq_n,
+    );
+    eprintln!("Farm/Mine built by age tier, per player-game:");
+    eprintln!(
+        "  Farm: A={:.3} I={:.3} II={:.3} III={:.3}",
+        farm_tier.built[0] as f64 / tacq_n,
+        farm_tier.built[1] as f64 / tacq_n,
+        farm_tier.built[2] as f64 / tacq_n,
+        farm_tier.built[3] as f64 / tacq_n,
+    );
+    eprintln!(
+        "  Mine: A={:.3} I={:.3} II={:.3} III={:.3}",
+        mine_tier.built[0] as f64 / tacq_n,
+        mine_tier.built[1] as f64 / tacq_n,
+        mine_tier.built[2] as f64 / tacq_n,
+        mine_tier.built[3] as f64 / tacq_n,
+    );
     Ok(())
 }
 

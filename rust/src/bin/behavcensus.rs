@@ -35,7 +35,7 @@
 //! `culture` too) -- there is nothing to decompose without inventing new
 //! instrumentation, which the task instructions say not to do for this pass.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -647,6 +647,133 @@ struct AllocAccum {
     n: u64,
 }
 
+// ---------------------------------------------------------------------
+// Tech acquisition: where does a production tech die in the pipeline?
+// ---------------------------------------------------------------------
+//
+// analysis/worker_allocation_3p_2026-08-24.txt measured the bot's best-owned
+// MINE tech level flat at the starting Bronze for all 21 sampled rounds, and
+// a follow-up recon pass established the leaf evaluation prices `BestMine`
+// positively -- the champion WANTS a better mine and never gets one. This
+// section instruments the four-stage pipeline a production tech (or any
+// other developable civil card) must survive to reach a worker: appears in
+// the card row (SEEN) -> taken into hand (TAKEN) -> tech cost paid, card
+// enters the tableau via `Move::Develop` (BUILT) -> a worker is placed on it
+// via `Move::Build`/`Move::Pop`/`Move::PopFree` (STAFFED).
+//
+// Reuses the SAME two hooks the "Worker allocation curve" section above
+// already taps at the SAME instant (the `prev_actor` turn-start sample, and
+// the `p.techs.iter()` walk already inside that block) rather than adding a
+// new sample point: SEEN reads `state.card_row` at that instant; BUILT/
+// STAFFED read tech/worker membership off the exact same `p.techs.iter()`
+// loop that already computes `farm_workers`/`mine_workers`/etc. there (BUILT
+// = card present in `techs` at a turn-start sample; STAFFED = present with
+// `workers > 0`). TAKEN is the one event-exact signal, read off the
+// `taken_card` this file already computes pre-move for every decision (see
+// the "openings" block below it) -- no new hook, no new sample instant.
+// `Move::Upgrade` moves a worker between two cards that are BOTH already
+// built (`apply::do_upgrade`'s own `.expect("hi not in tableau")`), so it
+// can never be how a card first reaches BUILT and is not tracked here.
+
+/// The coarse card-type buckets this section reports on: production
+/// (Farm/Mine, the two types under direct suspicion), the four urban types
+/// the task named explicitly (Lab/Temple/Arena/Library -- Theater is NOT in
+/// that list and is deliberately excluded here; it still contributes to the
+/// Worker allocation curve's `urban_workers` aggregate above), and military
+/// units folded into one bucket (matching `opening_build_kind`'s own
+/// "Military" bucket). A closed, named set rather than a filter over
+/// `CardType` at print time, so a type nobody hit still prints an explicit
+/// `0` row -- same "no missing keys" rule `WonderFateCounts` uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum TechKind {
+    Farm,
+    Mine,
+    Lab,
+    Temple,
+    Arena,
+    Library,
+    Military,
+}
+
+const ALL_TECH_KINDS: [TechKind; 7] = [
+    TechKind::Farm,
+    TechKind::Mine,
+    TechKind::Lab,
+    TechKind::Temple,
+    TechKind::Arena,
+    TechKind::Library,
+    TechKind::Military,
+];
+
+fn tech_kind_label(k: TechKind) -> &'static str {
+    match k {
+        TechKind::Farm => "Farm",
+        TechKind::Mine => "Mine",
+        TechKind::Lab => "Lab",
+        TechKind::Temple => "Temple",
+        TechKind::Arena => "Arena",
+        TechKind::Library => "Library",
+        TechKind::Military => "Military",
+    }
+}
+
+/// Maps an engine `CardType` to this section's [`TechKind`] bucket, or
+/// `None` for a type this section does not report on (Theater and every
+/// non-developable/non-worker type). Exhaustive, no wildcard arm --
+/// `wildcard_enum_match_arm` is denied repo-wide.
+fn tech_kind(k: CardType) -> Option<TechKind> {
+    match k {
+        CardType::Farm => Some(TechKind::Farm),
+        CardType::Mine => Some(TechKind::Mine),
+        CardType::Lab => Some(TechKind::Lab),
+        CardType::Temple => Some(TechKind::Temple),
+        CardType::Arena => Some(TechKind::Arena),
+        CardType::Library => Some(TechKind::Library),
+        CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => Some(TechKind::Military),
+        CardType::Theater
+        | CardType::Government
+        | CardType::SpecialTech
+        | CardType::Wonder
+        | CardType::Leader
+        | CardType::Action
+        | CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => None,
+    }
+}
+
+/// One [`TechKind`]'s tally across the four pipeline stages, summed over
+/// many player-games (divided by `n` at print time). A monotone-decreasing
+/// staircase (seen the most, staffed the least) is expected but not
+/// enforced by construction: SEEN and STAFFED are turn-start snapshots (see
+/// this section's own doc comment), so a card built and staffed, or
+/// destroyed, entirely within one of a player's own turns is not guaranteed
+/// to land on the sample instant that would count it -- a small, named
+/// approximation, not a correctness bug.
+#[derive(Default, Clone, Copy)]
+struct StageCounts {
+    seen: u64,
+    taken: u64,
+    built: u64,
+    staffed: u64,
+}
+
+/// Farm/Mine age-tier breakdown for TAKEN and BUILT only (the two stages the
+/// task asked to break down by tier) -- index 0..=3 is Age A/I/II/III, the
+/// only ages Farm/Mine cards occupy in `data/cards_civil.json` (confirmed by
+/// inspection: Agriculture/Irrigation/Selective Breeding/Mechanized
+/// Agriculture and Bronze/Iron/Coal/Oil are the only Farm/Mine cards, one
+/// per age A through III, none in age IV).
+#[derive(Default, Clone, Copy)]
+struct TierCounts {
+    taken: [u64; 4],
+    built: [u64; 4],
+}
+
 #[derive(Default)]
 struct Report {
     games: u64,
@@ -680,6 +807,16 @@ struct Report {
     // ---- worker allocation curve (same sample instant as
     // `production_by_round` above, see its doc and `AllocAccum`'s) ----
     alloc_by_round: HashMap<u16, AllocAccum>,
+
+    // ---- tech acquisition: seen/taken/built/staffed per `TechKind`, one
+    // sample per player-game (see the "Tech acquisition" section above for
+    // the pipeline definition and the hooks reused to measure it). Denominator
+    // for the printed per-player-game rate is `n_player_games` below -- every
+    // player-game contributes exactly one sample to every field here, so no
+    // separate counter is kept.
+    tech_acq: HashMap<TechKind, StageCounts>,
+    farm_tier: TierCounts,
+    mine_tier: TierCounts,
 
     // ---- opening, human-comparable schema (`bin/humanopenings.rs`'s
     // schema -- see `PlayerTrack`'s own doc). Each map's value is (wins,
@@ -821,6 +958,9 @@ impl Report {
         self.n_player_games += other.n_player_games;
         merge_triple_map(&mut self.production_by_round, other.production_by_round);
         merge_alloc_map(&mut self.alloc_by_round, other.alloc_by_round);
+        merge_techacq_map(&mut self.tech_acq, other.tech_acq);
+        merge_tier_counts(&mut self.farm_tier, other.farm_tier);
+        merge_tier_counts(&mut self.mine_tier, other.mine_tier);
 
         merge_pair_map(&mut self.opening_first_take, other.opening_first_take);
         merge_pair_map(&mut self.opening_first_build_kind, other.opening_first_build_kind);
@@ -915,6 +1055,26 @@ fn merge_alloc_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, AllocAccum>, b: H
         e.best_farm_sum += v.best_farm_sum;
         e.best_mine_sum += v.best_mine_sum;
         e.n += v.n;
+    }
+}
+
+/// [`merge_alloc_map`]'s twin for [`Report::tech_acq`]'s [`StageCounts`] --
+/// same "add every field element-wise" merge.
+fn merge_techacq_map(a: &mut HashMap<TechKind, StageCounts>, b: HashMap<TechKind, StageCounts>) {
+    for (k, v) in b {
+        let e = a.entry(k).or_default();
+        e.seen += v.seen;
+        e.taken += v.taken;
+        e.built += v.built;
+        e.staffed += v.staffed;
+    }
+}
+
+/// Element-wise merge for [`Report::farm_tier`]/[`Report::mine_tier`].
+fn merge_tier_counts(a: &mut TierCounts, b: TierCounts) {
+    for i in 0..4 {
+        a.taken[i] += b.taken[i];
+        a.built[i] += b.built[i];
     }
 }
 
@@ -1027,6 +1187,20 @@ struct PlayerTrack {
     /// played_zero_*` at game end, matching how `playable_turns_antiquated`
     /// already blends into `playable_turns_never_played_*`.
     blocked_zero_antiquated: Vec<(u32, u32, u32)>,
+
+    /// Distinct cards ever SEEN in the card row at this player's own
+    /// turn-start samples, TAKEN via `Move::Take`, BUILT into `techs`, and
+    /// STAFFED (workers > 0) at a turn-start sample -- see the "Tech
+    /// acquisition" section's doc comment (above `TechKind`) for exactly
+    /// what each stage measures and which of this file's existing hooks it
+    /// is read from. Resolved into `Report::tech_acq`/`farm_tier`/
+    /// `mine_tier` once at game end (`play_one`'s end-of-game loop),
+    /// matching how `wonder_started` above is also a running set resolved
+    /// once at the end.
+    tech_seen: HashSet<CardId>,
+    tech_taken: HashSet<CardId>,
+    tech_built: HashSet<CardId>,
+    tech_staffed: HashSet<CardId>,
 }
 
 impl PlayerTrack {
@@ -1060,6 +1234,10 @@ impl PlayerTrack {
             blocked_zero_antiquated: Vec::new(),
             playable_turns_played: Vec::new(),
             playable_turns_antiquated: Vec::new(),
+            tech_seen: HashSet::new(),
+            tech_taken: HashSet::new(),
+            tech_built: HashSet::new(),
+            tech_staffed: HashSet::new(),
         }
     }
 }
@@ -1212,6 +1390,17 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             let mut best_mine = 0i16;
             for (id, slot) in p.techs.iter() {
                 let workers = u32::from(slot.workers);
+                // ---- tech acquisition: BUILT/STAFFED -- same turn-start
+                // instant, same `p.techs` walk as the alloc classification
+                // just below; see the "Tech acquisition" section's doc
+                // comment (above `TechKind`) for why these two stages are
+                // read here rather than at a new sample point.
+                if tech_kind(id.get().kind).is_some() {
+                    tracks[actor as usize].tech_built.insert(id);
+                    if workers > 0 {
+                        tracks[actor as usize].tech_staffed.insert(id);
+                    }
+                }
                 match id.get().kind {
                     CardType::Farm => {
                         farm_workers += workers;
@@ -1251,6 +1440,16 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             a.best_farm_sum += u64::from(best_farm.max(0) as u16);
             a.best_mine_sum += u64::from(best_mine.max(0) as u16);
             a.n += 1;
+
+            // ---- tech acquisition: SEEN -- same turn-start instant, every
+            // distinct tracked-type card visible in the card row right now
+            // (see the "Tech acquisition" section's doc comment above
+            // `TechKind`).
+            for &card in &state.card_row {
+                if !card.is_none() && tech_kind(card.get().kind).is_some() {
+                    tracks[actor as usize].tech_seen.insert(card);
+                }
+            }
         }
 
         // pre-move info needed for classification
@@ -1488,6 +1687,16 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 tracks[actor as usize].first_take = Some(card);
             }
         }
+        // ---- tech acquisition: TAKEN -- reuses the same `taken_card` this
+        // file already computes pre-move for the opening block just above,
+        // for every decision point (not just turn-start: a Take can happen
+        // anywhere in a turn). See the "Tech acquisition" section's doc
+        // comment above `TechKind`.
+        if let Some(card) = taken_card {
+            if !card.is_none() && tech_kind(card.get().kind).is_some() {
+                tracks[actor as usize].tech_taken.insert(card);
+            }
+        }
         if let Move::Develop { card, .. } = mv {
             if tracks[actor as usize].first_develop.is_none() {
                 tracks[actor as usize].first_develop = Some((card, round_before));
@@ -1656,6 +1865,61 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         if let Some((card, round)) = tracks[i as usize].first_develop {
             *report.first_develop_card.entry(card.name()).or_insert(0) += 1;
             report.first_develop_round.push(round as i32);
+        }
+
+        // ---- tech acquisition: resolve this player-game's four running
+        // sets into `Report::tech_acq`/`farm_tier`/`mine_tier` -- see the
+        // "Tech acquisition" section's doc comment above `TechKind`.
+        {
+            let t = &tracks[i as usize];
+            for &card in &t.tech_seen {
+                if let Some(kind) = tech_kind(card.get().kind) {
+                    report.tech_acq.entry(kind).or_default().seen += 1;
+                }
+            }
+            for &card in &t.tech_taken {
+                if let Some(kind) = tech_kind(card.get().kind) {
+                    report.tech_acq.entry(kind).or_default().taken += 1;
+                    let tier = card.level() as usize;
+                    match kind {
+                        TechKind::Farm => {
+                            if let Some(slot) = report.farm_tier.taken.get_mut(tier) {
+                                *slot += 1;
+                            }
+                        }
+                        TechKind::Mine => {
+                            if let Some(slot) = report.mine_tier.taken.get_mut(tier) {
+                                *slot += 1;
+                            }
+                        }
+                        TechKind::Lab | TechKind::Temple | TechKind::Arena | TechKind::Library | TechKind::Military => {}
+                    }
+                }
+            }
+            for &card in &t.tech_built {
+                if let Some(kind) = tech_kind(card.get().kind) {
+                    report.tech_acq.entry(kind).or_default().built += 1;
+                    let tier = card.level() as usize;
+                    match kind {
+                        TechKind::Farm => {
+                            if let Some(slot) = report.farm_tier.built.get_mut(tier) {
+                                *slot += 1;
+                            }
+                        }
+                        TechKind::Mine => {
+                            if let Some(slot) = report.mine_tier.built.get_mut(tier) {
+                                *slot += 1;
+                            }
+                        }
+                        TechKind::Lab | TechKind::Temple | TechKind::Arena | TechKind::Library | TechKind::Military => {}
+                    }
+                }
+            }
+            for &card in &t.tech_staffed {
+                if let Some(kind) = tech_kind(card.get().kind) {
+                    report.tech_acq.entry(kind).or_default().staffed += 1;
+                }
+            }
         }
         // Win-rate bucket, same (wins, total) shape and same "unresolvable
         // outcome is excluded" rule as the `opening_first_take` /
@@ -2412,6 +2676,60 @@ fn print_report(players: u8, r: &Report) {
             a.n
         );
     }
+
+    // ---- tech acquisition: seen -> taken -> built -> staffed, per
+    // `TechKind` bucket, one sample per player-game (see the "Tech
+    // acquisition" section's doc comment above `TechKind` for exactly what
+    // each stage measures and which existing hook it is read from). Farm/
+    // Mine additionally broken down by age tier for TAKEN and BUILT -- the
+    // question this section exists to answer is whether the bot ever
+    // acquires a HIGHER-tier production tech than the starting Bronze/
+    // Agriculture.
+    println!("\n### Tech acquisition\n");
+    let tacq_n = r.n_player_games.max(1) as f64;
+    println!("per player-game (n={}):", r.n_player_games);
+    println!("{:<10} {:>8} {:>8} {:>8} {:>8}", "type", "seen", "taken", "built", "staffed");
+    for kind in ALL_TECH_KINDS {
+        let c = r.tech_acq.get(&kind).copied().unwrap_or_default();
+        println!(
+            "{:<10} {:>8.2} {:>8.2} {:>8.2} {:>8.2}",
+            tech_kind_label(kind),
+            c.seen as f64 / tacq_n,
+            c.taken as f64 / tacq_n,
+            c.built as f64 / tacq_n,
+            c.staffed as f64 / tacq_n,
+        );
+    }
+    println!("\nFarm/Mine taken by age tier, per player-game:");
+    println!(
+        "  Farm: A={:.3} I={:.3} II={:.3} III={:.3}",
+        r.farm_tier.taken[0] as f64 / tacq_n,
+        r.farm_tier.taken[1] as f64 / tacq_n,
+        r.farm_tier.taken[2] as f64 / tacq_n,
+        r.farm_tier.taken[3] as f64 / tacq_n,
+    );
+    println!(
+        "  Mine: A={:.3} I={:.3} II={:.3} III={:.3}",
+        r.mine_tier.taken[0] as f64 / tacq_n,
+        r.mine_tier.taken[1] as f64 / tacq_n,
+        r.mine_tier.taken[2] as f64 / tacq_n,
+        r.mine_tier.taken[3] as f64 / tacq_n,
+    );
+    println!("Farm/Mine built by age tier, per player-game:");
+    println!(
+        "  Farm: A={:.3} I={:.3} II={:.3} III={:.3}",
+        r.farm_tier.built[0] as f64 / tacq_n,
+        r.farm_tier.built[1] as f64 / tacq_n,
+        r.farm_tier.built[2] as f64 / tacq_n,
+        r.farm_tier.built[3] as f64 / tacq_n,
+    );
+    println!(
+        "  Mine: A={:.3} I={:.3} II={:.3} III={:.3}",
+        r.mine_tier.built[0] as f64 / tacq_n,
+        r.mine_tier.built[1] as f64 / tacq_n,
+        r.mine_tier.built[2] as f64 / tacq_n,
+        r.mine_tier.built[3] as f64 / tacq_n,
+    );
 }
 
 fn main() -> ExitCode {

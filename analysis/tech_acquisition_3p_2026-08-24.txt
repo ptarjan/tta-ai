@@ -1,0 +1,214 @@
+Tech acquisition pipeline, bot vs human corpus, 3 players
+===========================================================
+Date: 2026-08-24
+Tool: rust/src/bin/behavcensus.rs and rust/src/bin/humanopenings.rs, both
+      extended with a "### Tech acquisition" section that reuses the SAME
+      hooks the pre-existing "Production curve" / "Worker allocation curve"
+      sections already tap -- no new sample instant was added:
+        * SEEN reads `state.card_row` at the identical turn-start instant
+          `prev_actor`'s worker-allocation block already samples (bot) /
+          the identical `d.state` turn-start instant `humanopenings`'s own
+          alloc block already samples (human).
+        * BUILT/STAFFED are read off the exact same `p.techs.iter()` walk
+          that block already runs to compute `farm_workers`/`mine_workers`
+          -- BUILT = card present in `techs` at that sample; STAFFED =
+          present with `workers > 0`.
+        * TAKEN is read off `taken_card`, the pre-move `Move::Take` value
+          both files already compute for their pre-existing "openings"
+          section, at every decision point (not gated to turn-start, since
+          a Take can happen anywhere in a turn).
+      `Move::Upgrade` is not a BUILT event: `apply::do_upgrade` requires
+      BOTH the `from` and `to` card already present in `techs` (it panics
+      "hi not in tableau" otherwise) -- it only ever moves a worker between
+      two ALREADY-BUILT cards of the same family, never a hand -> tableau
+      transition, so it cannot be how a higher-tier tech first appears.
+Runs: ./target/release/behavcensus --games 200 --players 3 \
+        --weights /private/tmp/opencensus/champ3p.json --threads 5
+      ./target/release/humanopenings ../sources/bgo/index.tsv \
+        /private/tmp/bgo-journals/journals 2>&1
+      (humanopenings prints its report sections to STDERR; its stdout is
+      the per-player-game TSV. Capture 2>&1 or the section is lost.)
+
+WHAT THIS ANSWERS
+------------------
+analysis/worker_allocation_3p_2026-08-24.txt measured the bot's best-owned
+MINE tech level flat at the starting Bronze in every one of 21 sampled
+rounds across 200 self-play games at 3p -- it never upgrades a mine, ever
+-- while its best FARM level barely moves either. A follow-up recon pass
+established this is NOT evaluation blindness: the leaf evaluation carries a
+`BestMine` feature and the live 3p champion prices it positively and
+substantially. The bot WANTS a better mine and never gets one, so the
+blockage is upstream of the build decision. This census instruments the
+four-stage pipeline a tech has to survive to reach a worker -- appears in
+the card row (SEEN) -> taken into hand (TAKEN) -> tech cost paid, enters
+the tableau (BUILT) -> a worker placed on it (STAFFED) -- per card TYPE,
+bot vs human, to find where a higher-tier Mine actually dies.
+
+THE TABLES
+----------
+Both runs report one row per player-game (bot: 600 = 200 games x 3 seats;
+human: 399 = the 3-player subset of the BGO corpus, 133 games x 3 seats).
+Every column is a per-player-game MEAN of a per-player-game count of
+DISTINCT CardIds that reached that stage (a card seen/taken/built/staffed
+more than once in one player-game is not double-counted; see caveat 1).
+
+BOT (n=600 player-games)
+type        seen   taken   built  staffed
+Farm        3.00    0.24    1.06     1.05
+Mine        3.00    0.00    1.00     1.00
+Lab         3.00    0.00    1.00     1.00
+Temple      2.00    0.00    1.00     0.94
+Arena       2.98    0.10    0.02     0.01
+Library     3.00    0.36    0.10     0.03
+Military    9.00    0.02    1.01     1.01
+
+Farm/Mine TAKEN by age tier, bot:
+  Farm: A=0.000  I=0.002  II=0.040  III=0.195
+  Mine: A=0.000  I=0.000  II=0.000  III=0.000
+Farm/Mine BUILT by age tier, bot:
+  Farm: A=1.000  I=0.002  II=0.037  III=0.018
+  Mine: A=1.000  I=0.000  II=0.000  III=0.000
+
+HUMAN (n=399 player-games, 3-player subset of the BGO corpus)
+type        seen   taken   built  staffed
+Farm        2.56    1.20    1.95     1.91
+Mine        2.41    1.18    2.01     2.01
+Lab         2.53    1.21    1.99     1.96
+Temple      1.97    0.44    1.38     1.04
+Arena       2.59    0.28    0.17     0.15
+Library     2.00    0.91    0.66     0.61
+Military    7.92    2.67    2.65     2.59
+
+Farm/Mine TAKEN by age tier, human:
+  Farm: A=0.000  I=0.459  II=0.474  III=0.266
+  Mine: A=0.000  I=0.539  II=0.421  III=0.223
+Farm/Mine BUILT by age tier, human:
+  Farm: A=1.000  I=0.426  II=0.421  III=0.100
+  Mine: A=1.000  I=0.521  II=0.373  III=0.115
+
+(The A=1.000 BUILT row for both sides is the starting Bronze/Agriculture,
+present in `techs` from turn 1 -- it was never actually taken via a
+`Move::Take`, which is why TAKEN at tier A is 0.000 on both sides; see
+caveat 2.)
+
+THE ANSWER: A HIGHER-TIER MINE DIES AT TAKEN, NOT AT BUILT OR STAFFED
+------------------------------------------------------------------------
+The bot's Mine row settles the question cleanly, and every number needed to
+settle it is already nonzero except the one that is the finding:
+
+  * SEEN = 3.00 per player-game. All three non-starting mine cards (Iron,
+    Coal, Oil) are visible in the card row at a turn-start sample in
+    essentially every single player-game. The higher-tier mine is not
+    hidden from the bot -- it sees it constantly.
+  * TAKEN = 0.000 at EVERY tier (I/II/III), summed and broken down. Across
+    600 player-games and up to ~21 rounds each, the bot's own `Move::Take`
+    never once put a non-starting Mine card into `hand_civil`. This is an
+    exact zero, not a rounding artifact of the 2-decimal aggregate row --
+    the 3-decimal tier breakdown shows `0.000` at every one of the three
+    tiers.
+  * BUILT/STAFFED at tiers I/II/III are consequently also exactly 0.000 --
+    there is nothing to build or staff because nothing was ever taken.
+
+So the pipeline does not fail midway through -- it fails at the very first
+transition after the card is visible. The bot's own take-side evaluation
+(not its build-side evaluation, which the recon pass already cleared) never
+selects a Mine card over its `Move::Take` competitors, at any tier, in any
+of 600 self-play player-games. This is fully consistent with, and gives the
+mechanism for, worker_allocation_3p_2026-08-24.txt's "bestMine is 1.00 for
+literally every one of the 21 rounds sampled" -- a card that is never taken
+can never be built, and a card that is never built can never be staffed.
+
+The human side shows this is not a structural inevitability of the game:
+humans take a higher-tier mine constantly (1.18 taken per player-game,
+spread across all three tiers: I=0.539, II=0.421, III=0.223) and build most
+of what they take (2.01 built total; I 0.521/0.539 = 97% of takes convert
+to a build, II 0.373/0.421 = 89%, III 0.115/0.223 = 52%). The human BUILT
+column is not a free-standing fact about mine cost being different for
+humans -- it is downstream of TAKEN being nonzero in the first place, the
+same causal order the bot's own zero row already establishes.
+
+A SECOND, DISTINCT DEFECT ON THE FARM SIDE -- TAKEN-BUT-NOT-BUILT
+--------------------------------------------------------------------
+Farm is not the same failure shape as Mine, and this census's four-stage
+split is what separates them. The bot's Farm TAKEN is nonzero (0.24 per
+player-game, almost entirely tier III: 0.195 of the 0.237 total taken-above-
+starting), so the take-side gate is not fully closed for Farm the way it is
+for Mine. But BUILT lags far behind TAKEN at that same tier: 0.018 built
+against 0.195 taken at tier III, a ~91% falloff between taking a
+Mechanized Agriculture and ever developing it. Library (0.36 taken -> 0.10
+built) and Arena (0.10 taken -> 0.02 built) show the same taken-but-not-
+built shape. This is a build-side defect, not a take-side one, and it is a
+different mechanism from Mine's: Mine never clears the TAKEN gate at all;
+Farm/Library/Arena clear TAKEN and then mostly fail at BUILT. Both are real
+defects; they are not the same defect and do not have the same fix.
+
+CAVEATS ON THE MEASUREMENT ITSELF
+------------------------------------
+1. Every count in the main table is DISTINCT CardIds reaching that stage in
+   one player-game (a `HashSet<CardId>` per stage per player-game, folded
+   into the report once at game end) -- a card seen in the row on ten
+   different turns, or re-examined after leaving and re-entering the row,
+   contributes at most 1 to SEEN. This matches the task's own "distinct
+   cards ... present in the card row" phrasing for SEEN and was extended to
+   the other three stages for consistency, since none of these card types
+   can legally have more than one physical copy of the same name in play
+   at once in the base game's civil deck.
+2. SEEN and BUILT/STAFFED are turn-start SNAPSHOTS (the same sampling
+   instant the pre-existing Worker allocation curve section already uses),
+   not an exhaustive per-decision-point scan. A card that entered and left
+   the row, or was built and destroyed, entirely within a single one of a
+   player's own turns (between two of that player's own turn-start
+   samples) would not be counted at that stage. TAKEN is the one
+   event-exact signal (read off `Move::Take` at every decision point, not
+   just turn-start). This is the same "small, named approximation," not
+   invented for this census, that the Production/Worker-allocation curves
+   already accept and document.
+3. The A=1.000 BUILT row on both sides is the two starting production
+   techs (Bronze mine, Agriculture farm), present in `techs` from turn 1
+   and never actually taken via `Move::Take` -- this is why TAKEN at tier A
+   is 0.000 on both sides. It is not a measurement gap; starting techs are
+   printed on the player board, not civil-row cards (RULES_SPEC.md /
+   `data/cards_civil.json`'s own note on Agriculture).
+4. SEEN is scoped to the ACTING player's own turn-start decision points on
+   both the bot and human side (not "every player who could see the row"),
+   matching the per-player-game shape every other column in this table
+   already has. The card row is a shared, public resource, so a player who
+   acts less often (a game that ends early) sees fewer of their own
+   turn-start samples of it -- this is the same survivorship shape the
+   Production/Worker-allocation curves already carry and did not need a
+   new caveat to explain.
+5. The human n (399) thins across the game exactly as it does in
+   production_curve_3p_2026-08-24.txt and worker_allocation_3p_2026-08-24.txt
+   (game-length survivorship); this census reports one number per
+   player-game over the WHOLE game, not a per-round curve, so that thinning
+   does not bias any single number here the way it would a late-round point
+   on a curve -- but it does mean the human sample averages over shorter
+   games than the bot's on average, which is a separate, already-documented
+   fact (production_curve_3p_2026-08-24.txt's "n column" section) about why
+   human games end sooner, not a new confound this file introduces.
+6. This is a census of WHAT HAPPENED, at one player-game granularity, not a
+   trace of WHY the bot's `Move::Take` search rejects a Mine card 600-for-
+   600 times. The `TakenCard`/`legal_moves`-based "playable but never taken"
+   machinery `behavcensus.rs`'s pre-existing Card fate section already has
+   is scoped to cards already IN hand, not to why a still-in-the-row card
+   loses the Take auction -- that is the natural next question this census
+   opens, not one it answers.
+
+VERDICT
+-------
+A higher-tier Mine dies at TAKEN. It is not a "never in the row" problem
+(SEEN = 3.00/game, effectively every non-starting mine card is visible
+across a game) and it is not a "taken but never built" or "built but never
+staffed" problem the way Farm/Library/Arena partly are (once a card clears
+TAKEN, the bot mostly does build and staff it: e.g. Farm's own I/II tiers
+convert TAKEN to BUILT above 90%). For Mine specifically, TAKEN itself is
+an exact 0.000 at every one of the three non-starting tiers across 600
+player-games -- the bot's own move-selection at the Take step never once
+chooses a better mine over its alternatives. The data cleanly decides this
+question for Mine; it is less clean-cut for Farm, where the defect is a mix
+of a nonzero-but-small TAKEN and a much larger falloff at BUILT.
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
+The human census is a diagnostic mirror; this file names a defect in
+where the pipeline breaks for a higher-tier Mine (and a separate one for
+Farm/Library/Arena) and proposes no coefficient, weight, or fix for either.
