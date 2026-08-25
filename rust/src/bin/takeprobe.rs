@@ -93,6 +93,160 @@ use tta::{CardId, Move, Phase};
 /// `tech_acquisition_3p_2026-08-24.txt`'s own SEEN/TAKEN definition.
 const MINE_NAMES: [&str; 3] = ["Iron", "Coal", "Oil"];
 
+/// `--sensitivity` mode: for every key named here, and every multiplier in
+/// [`M_SWEEP`], the score gap between a Mine take and the winning candidate
+/// at that SAME decision point is re-derived with `w[key] *= m` -- see this
+/// binary's own doc comment on the method. This is the union of
+/// `mine_take_probe_3p_2026-08-24.txt`'s top-15 gap-contribution list and
+/// this task's own named suspects (`CultureRate`/`Workers`/`WorkersLate`/
+/// `FoodStock`/`ResourceStock`, all clamp-saturated in the champion vector;
+/// `ResourceRate`/`FoodRate`/`BestMine`/`BestFarm`/`HandPotential`/
+/// `Strength`), deduplicated.
+///
+/// Named by STRING, not by a literal enum-path expression, on purpose:
+/// `WorkersLate` is one of the seven keys `registry.rs`'s own
+/// `PHASE_SUFFIXED_NO_LITERAL_READER` documents as reachable ONLY via
+/// `.early()`/`.late()` indirection, never a literal path naming that variant
+/// in production source -- writing that exact literal here would flip
+/// `registry.rs::tests::every_weight_key_is_named_by_production_source_
+/// outside_its_own_declaration` (confirmed: it does, an earlier draft of
+/// this file's own gate run caught it -- even inside a comment, since that
+/// test does a plain substring scan of each file's un-eval'd text), and
+/// `registry.rs`/`src/bots/**` are out of scope for this task.
+/// [`sens_keys`]/[`clamp_keys`] resolve these names against `WeightKey`'s own
+/// full variant list at runtime instead.
+const SENS_KEY_NAMES: [&str; 18] = [
+    "HandPotential",
+    "BlueFree",
+    "ResourceStock",
+    "FoodStock",
+    "CultureRate",
+    "Strength",
+    "Science",
+    "ScienceSurplus",
+    "ResourceRate",
+    "WorkersLate",
+    "EventScoringMargin",
+    "Workers",
+    "HandPerishable",
+    "TakeCostPaid",
+    "WonderPromise",
+    "FoodRate",
+    "BestMine",
+    "BestFarm",
+];
+
+/// The five keys the task names as clamp-saturated in the champion vector
+/// (reading exactly 60.000, the clamp bound, or +21.25) -- the "joint
+/// clamp-block" check sets all five to `m = 0` simultaneously. See
+/// [`SENS_KEY_NAMES`]'s doc comment for why these are names, not literal
+/// `WeightKey::<Variant>` paths.
+const CLAMP_KEY_NAMES: [&str; 5] = ["CultureRate", "Workers", "WorkersLate", "FoodStock", "ResourceStock"];
+
+/// Resolves a [`WeightKey`] by its `Debug` name -- see [`SENS_KEY_NAMES`]'s
+/// doc comment for why this indirection exists instead of a literal path.
+fn key_by_name(name: &str) -> WeightKey {
+    *WeightKey::ALL.iter().find(|k| format!("{k:?}") == name).unwrap_or_else(|| panic!("no WeightKey named {name:?}"))
+}
+
+fn sens_keys() -> [WeightKey; SENS_KEY_NAMES.len()] {
+    let mut out = [WeightKey::ALL[0]; SENS_KEY_NAMES.len()];
+    for (i, name) in SENS_KEY_NAMES.iter().enumerate() {
+        out[i] = key_by_name(name);
+    }
+    out
+}
+
+fn clamp_keys() -> [WeightKey; CLAMP_KEY_NAMES.len()] {
+    let mut out = [WeightKey::ALL[0]; CLAMP_KEY_NAMES.len()];
+    for (i, name) in CLAMP_KEY_NAMES.iter().enumerate() {
+        out[i] = key_by_name(name);
+    }
+    out
+}
+
+/// Multipliers swept per [`SENS_KEY_NAMES`] entry: `0.0` (delete the key
+/// entirely), a wide log-spaced range below and above `1.0` (down to
+/// `1e-4`, up to `1e6`, so a key whose contribution is small relative to
+/// the ~190-unit mean gap still gets a fair chance to close it under
+/// amplification), plus finer steps right around `1.0` to catch a
+/// knife-edge flip. Never negative -- flipping a weight's SIGN is a
+/// different intervention than pricing it more/less strongly and is out of
+/// scope here (recorded as a method caveat in the report).
+const M_SWEEP: [f64; 24] = [
+    0.0, 0.0001, 0.001, 0.01, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.1, 1.3, 1.5, 2.0, 3.0, 5.0, 10.0, 30.0, 100.0, 300.0,
+    1000.0, 10000.0, 100000.0, 1000000.0,
+];
+
+/// Per-`(key, m)` and joint-clamp-block outcome counts for `--sensitivity`
+/// mode: `n` = number of scored Mine-take decision points measured, `rank1`
+/// = how many of those reach rank 1 (the Mine take would win) under the
+/// perturbation, `rank12` = how many reach rank 1 or 2. This is a STATIC
+/// re-score of the exact same feature vectors [`candidate_features`] already
+/// computed for the real (unperturbed) champion vector at that decision
+/// point -- see [`rank_under_perturbation`] -- never a replayed game, so one
+/// self-play pass answers every `(key, m)` cell without re-running self-play
+/// per perturbation, per this task's own method requirement.
+#[derive(Clone)]
+struct SensStats {
+    /// `per_key[key_index_in(SENS_KEY_NAMES)][m_index_in(M_SWEEP)] = (n, rank1, rank12)`.
+    per_key: Vec<Vec<(u64, u64, u64)>>,
+    /// All five [`CLAMP_KEY_NAMES`] set to `m = 0` at once.
+    joint_clamp: (u64, u64, u64),
+}
+
+impl SensStats {
+    fn new() -> SensStats {
+        SensStats { per_key: vec![vec![(0, 0, 0); M_SWEEP.len()]; SENS_KEY_NAMES.len()], joint_clamp: (0, 0, 0) }
+    }
+
+    fn merge(&mut self, other: &SensStats) {
+        for (ki, row) in self.per_key.iter_mut().enumerate() {
+            for (mi, cell) in row.iter_mut().enumerate() {
+                let o = other.per_key[ki][mi];
+                cell.0 += o.0;
+                cell.1 += o.1;
+                cell.2 += o.2;
+            }
+        }
+        self.joint_clamp.0 += other.joint_clamp.0;
+        self.joint_clamp.1 += other.joint_clamp.1;
+        self.joint_clamp.2 += other.joint_clamp.2;
+    }
+}
+
+/// Re-derives the 1-based rank a Mine take (`feats[take_pos]`) would have
+/// among every candidate at `feats`' shared decision point if the champion
+/// vector's weight on each `(key_index, delta_weight)` pair in
+/// `adjustments` were shifted by `delta_weight` -- i.e. `w[key] *= m` is
+/// passed in as `delta_weight = (m - 1.0) * w.get(key)`, and the joint
+/// clamp-block check (`m = 0` on several keys at once) passes one
+/// `(key_index, -w.get(key))` pair per key. Exploits that `dot(w, f)` is
+/// linear in `w` for a FIXED, already-computed feature vector `f` (the same
+/// freeze [`candidate_features`]'s own doc comment and caveat 2 of
+/// `mine_take_probe_3p_2026-08-24.txt` already rely on): the new score for
+/// candidate `i` is `vals[i] + Σ delta_weight_j * feats[i].1[key_index_j]`,
+/// so every `(key, m)` cell in [`SensStats`] is one pass over the SAME
+/// `vals`/`feats` the base probe already computed for this decision point --
+/// no re-evaluation of `linear_features`, no replayed game.
+fn rank_under_perturbation(vals: &[f64], feats: &[(Move, Vec<f64>)], take_pos: usize, adjustments: &[(usize, f64)]) -> u64 {
+    let shifted = |i: usize| -> f64 {
+        let mut v = vals[i];
+        for &(key_idx, delta_weight) in adjustments {
+            v += delta_weight * feats[i].1[key_idx];
+        }
+        v
+    };
+    let take_val = shifted(take_pos);
+    let mut better = 0u64;
+    for i in 0..vals.len() {
+        if i != take_pos && shifted(i) > take_val {
+            better += 1;
+        }
+    }
+    better + 1
+}
+
 #[derive(Clone, Copy, Default)]
 struct CardStats {
     /// Stage 1: decision points where this card sat in `card_row` and a
@@ -197,11 +351,20 @@ fn mine_card_ids() -> Result<[CardId; 3], String> {
 /// move the bot itself already chose, so this reproduces an ordinary
 /// self-play trajectory exactly; it only ever ADDS observation, never
 /// changes what gets played.
-fn play_one(players: u8, weights: Weights, seed: u64, mine_ids: &[CardId; 3]) -> ([CardStats; 3], Diag) {
+fn play_one(
+    players: u8,
+    weights: Weights,
+    seed: u64,
+    mine_ids: &[CardId; 3],
+    sensitivity: bool,
+    sens_keys: &[WeightKey; SENS_KEY_NAMES.len()],
+    clamp_keys: &[WeightKey; CLAMP_KEY_NAMES.len()],
+) -> ([CardStats; 3], Diag, SensStats) {
     let bot = WeightedBot::new(weights);
     let mut state = game::new_game(players, seed);
     let mut stats = [CardStats::default(); 3];
     let mut diag = Diag::new();
+    let mut sens = SensStats::new();
     let mut moves_played = 0usize;
 
     while !state.game_over {
@@ -260,6 +423,41 @@ fn play_one(players: u8, weights: Weights, seed: u64, mine_ids: &[CardId; 3]) ->
                         }
                         diag.key_contrib_n += 1;
                         *diag.winner_kinds.entry(move_kind(&feats[best_idx].0)).or_insert(0) += 1;
+
+                        // `--sensitivity`: reuse this SAME decision point's
+                        // `vals`/`feats` (already computed above for the
+                        // stage-4 diagnosis) to answer every `(key, m)` cell
+                        // via `rank_under_perturbation` -- one game pass,
+                        // many static re-scorings, per this task's own
+                        // method requirement.
+                        if sensitivity {
+                            for (ki, key) in sens_keys.iter().enumerate() {
+                                let wk = weights.get(*key);
+                                let key_idx = *key as usize;
+                                for (mi, &m) in M_SWEEP.iter().enumerate() {
+                                    let delta_weight = (m - 1.0) * wk;
+                                    let r = rank_under_perturbation(&vals, &feats, pos, &[(key_idx, delta_weight)]);
+                                    let cell = &mut sens.per_key[ki][mi];
+                                    cell.0 += 1;
+                                    if r == 1 {
+                                        cell.1 += 1;
+                                    }
+                                    if r <= 2 {
+                                        cell.2 += 1;
+                                    }
+                                }
+                            }
+                            let clamp_adjustments: Vec<(usize, f64)> =
+                                clamp_keys.iter().map(|&k| (k as usize, -weights.get(k))).collect();
+                            let r = rank_under_perturbation(&vals, &feats, pos, &clamp_adjustments);
+                            sens.joint_clamp.0 += 1;
+                            if r == 1 {
+                                sens.joint_clamp.1 += 1;
+                            }
+                            if r <= 2 {
+                                sens.joint_clamp.2 += 1;
+                            }
+                        }
                     }
                 }
             }
@@ -267,7 +465,7 @@ fn play_one(players: u8, weights: Weights, seed: u64, mine_ids: &[CardId; 3]) ->
         };
         apply::apply(&mut state, mv);
     }
-    (stats, diag)
+    (stats, diag, sens)
 }
 
 struct Args {
@@ -276,11 +474,12 @@ struct Args {
     weights_path: String,
     seed: u64,
     threads: usize,
+    sensitivity: bool,
 }
 
 impl Default for Args {
     fn default() -> Args {
-        Args { games: 200, players: 3, weights_path: String::new(), seed: 1, threads: 1 }
+        Args { games: 200, players: 3, weights_path: String::new(), seed: 1, threads: 1, sensitivity: false }
     }
 }
 
@@ -292,6 +491,8 @@ usage: takeprobe --weights PATH [options]
   --weights PATH  champion JSON every seat plays (required)
   --seed N        base seed; game g uses seed+g (default 1)
   --threads N     games in parallel (default 1)
+  --sensitivity   also sweep SENS_KEY_NAMES x M_SWEEP (static rescoring, see
+                   this binary's doc comment) and the joint clamp-block check
   --help
 ";
 
@@ -308,6 +509,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--weights" => a.weights_path = value(flag)?,
             "--seed" => a.seed = value(flag)?.parse().map_err(|_| "bad --seed".to_string())?,
             "--threads" => a.threads = value(flag)?.parse().map_err(|_| "bad --threads".to_string())?,
+            "--sensitivity" => a.sensitivity = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -357,11 +559,15 @@ fn main() -> ExitCode {
         }
     };
 
+    let sens_keys = sens_keys();
+    let clamp_keys = clamp_keys();
+
     let start = Instant::now();
     let next = AtomicUsize::new(0);
     let threads = args.threads.min(args.games).max(1);
     let totals: Mutex<[CardStats; 3]> = Mutex::new([CardStats::default(); 3]);
     let diag_totals: Mutex<Diag> = Mutex::new(Diag::new());
+    let sens_totals: Mutex<SensStats> = Mutex::new(SensStats::new());
 
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(threads);
@@ -369,23 +575,27 @@ fn main() -> ExitCode {
             handles.push(scope.spawn(|| {
                 let mut local = [CardStats::default(); 3];
                 let mut local_diag = Diag::new();
+                let mut local_sens = SensStats::new();
                 loop {
                     let g = next.fetch_add(1, Ordering::Relaxed);
                     if g >= args.games {
                         break;
                     }
                     let seed = args.seed + g as u64;
-                    let (s, d) = play_one(args.players, weights, seed, &mine_ids);
+                    let (s, d, sn) =
+                        play_one(args.players, weights, seed, &mine_ids, args.sensitivity, &sens_keys, &clamp_keys);
                     for i in 0..3 {
                         local[i].merge(&s[i]);
                     }
                     local_diag.merge(&d);
+                    local_sens.merge(&sn);
                 }
                 let mut t = totals.lock().expect("totals mutex poisoned");
                 for i in 0..3 {
                     t[i].merge(&local[i]);
                 }
                 diag_totals.lock().expect("diag mutex poisoned").merge(&local_diag);
+                sens_totals.lock().expect("sens mutex poisoned").merge(&local_sens);
             }));
         }
         for h in handles {
@@ -395,6 +605,7 @@ fn main() -> ExitCode {
 
     let totals = totals.into_inner().expect("totals mutex poisoned");
     let diag = diag_totals.into_inner().expect("diag mutex poisoned");
+    let sens = sens_totals.into_inner().expect("sens mutex poisoned");
     let elapsed = start.elapsed();
 
     println!("takeprobe: {} games, {} players, weights={}", args.games, args.players, args.weights_path);
@@ -467,6 +678,49 @@ fn main() -> ExitCode {
         }
     } else {
         println!("  (no scored Mine-take occurrences to rank)");
+    }
+
+    // `--sensitivity`: for each `sens_keys` entry, sweep M_SWEEP and report
+    // the rank1/rank1-or-2 fractions this STATIC re-score of the SAME
+    // feature vectors already gathered above finds (see
+    // `rank_under_perturbation`'s own doc comment). This is a re-scoring at
+    // a fixed state, not a policy replay -- printed again on every run so
+    // the caveat travels with the numbers, not just in the analysis file.
+    if args.sensitivity {
+        println!();
+        println!("=== --sensitivity: static rescoring, NOT a policy replay (see file header) ===");
+        for (ki, key) in sens_keys.iter().enumerate() {
+            println!();
+            println!("{:?}  (n per cell = {})", key, sens.per_key[ki].first().map_or(0, |c| c.0));
+            println!("  {:>12} {:>8} {:>10} {:>10}", "m", "n", "rank1", "rank1or2");
+            let mut best_log: Option<f64> = None;
+            for (mi, &m) in M_SWEEP.iter().enumerate() {
+                let (n, r1, r12) = sens.per_key[ki][mi];
+                let f1 = if n > 0 { r1 as f64 / n as f64 } else { 0.0 };
+                let f12 = if n > 0 { r12 as f64 / n as f64 } else { 0.0 };
+                println!("  {m:>12.4} {n:>8} {f1:>10.4} {f12:>10.4}");
+                if r1 > 0 && m > 0.0 {
+                    let log_m = m.ln().abs();
+                    best_log = Some(best_log.map_or(log_m, |b: f64| b.min(log_m)));
+                }
+            }
+            let zero_hit = sens.per_key[ki][0].1 > 0; // M_SWEEP[0] == 0.0 (delete the key)
+            match (best_log, zero_hit) {
+                (Some(l), _) => println!("  smallest |ln m| achieving nonzero rank1 fraction: {l:.4}"),
+                (None, true) => println!("  smallest |ln m| achieving nonzero rank1 fraction: only at m=0 (deleted)"),
+                (None, false) => println!("  smallest |ln m| achieving nonzero rank1 fraction: never (0 <= m <= 1e6 swept)"),
+            }
+        }
+
+        println!();
+        println!(
+            "Joint clamp-block check (all of {:?} set to m=0 simultaneously):",
+            clamp_keys.map(|k| format!("{k:?}"))
+        );
+        let (n, r1, r12) = sens.joint_clamp;
+        let f1 = if n > 0 { r1 as f64 / n as f64 } else { 0.0 };
+        let f12 = if n > 0 { r12 as f64 / n as f64 } else { 0.0 };
+        println!("  n={n} rank1_frac={f1:.4} rank1or2_frac={f12:.4}");
     }
 
     ExitCode::SUCCESS

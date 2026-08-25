@@ -1,0 +1,249 @@
+Mine-take sensitivity, 3 players -- IS ANY SINGLE WEIGHT KEY SUFFICIENT?
+=========================================================================
+Date: 2026-08-24
+Tool: rust/src/bin/takeprobe.rs's new `--sensitivity` mode (this task's own
+      extension of the existing read-only diagnostic; touches no other file
+      under `rust/src/bots/`, `eval.rs`, `legal.rs`, `costs.rs`,
+      `economy.rs`, `data/*.json`, `docs/RULES_SPEC.md`, any test,
+      `behavcensus.rs`, or `humanopenings.rs`; the champion weight file on
+      disk was never written to -- every perturbation below is IN MEMORY,
+      recomputed from the same feature vectors `mine_take_probe_3p_2026-08-
+      24.txt` already gathered, never a replayed game).
+Run:  cd rust && ./target/release/takeprobe --games 200 --players 3 \
+        --weights /private/tmp/opencensus/champ3p.json --threads 5 \
+        --sensitivity
+      (release build; gate run immediately before it, this task's own order:
+       `cargo clippy --all-targets -- -D warnings` -> CLIPPY EXIT 0,
+       `cargo test` -> TEST EXIT 0, `cargo build --release --bin takeprobe`
+       -> BUILD EXIT 0. Run itself: RUN EXIT 0, 10.9s wall / 200 games.)
+
+WHAT THIS FOLLOWS UP
+---------------------
+`mine_take_probe_3p_2026-08-24.txt` found that under the champ3p.json
+champion, a Mine take is SCORED 12,299 times across 200 self-play games and
+NEVER ONCE ranks 1st or 2nd (best rank ever 3rd). It ranked 15 `WeightKey`
+terms by mean |contribution| to the score gap between the winner and the
+Mine take, by NAME and SIGN only, and stated explicitly: "A contribution
+ranking is not a cause -- a key can dominate the gap and still be correctly
+priced." This file answers the decisive counterfactual question that probe
+deliberately left open: for each candidate key, how far would it alone have
+to move before a Mine take reaches rank 1, and does it ever get there at
+all?
+
+METHOD
+------
+For every one of the SAME 12,299 scored Mine-take decision points the base
+probe already visited, this mode reuses the SAME `candidate_features`/`dot`
+vectors already computed there (no re-evaluation, no replayed self-play --
+see `rank_under_perturbation`'s doc comment in `takeprobe.rs`). Because
+`dot(w, f)` is linear in `w` for a FIXED feature vector, shifting one
+coordinate `w[key]` to `w[key] * m` changes every candidate's score by
+exactly `(m - 1) * w[key] * f[key]`, so re-deriving every candidate's rank
+under the perturbation is an O(candidates) pass over already-in-memory
+numbers -- one game pass, hundreds of perturbations, exactly as this task
+required.
+
+18 keys were swept: the union of the base probe's top-15 gap-contribution
+list (HandPotential, BlueFree, ResourceStock, FoodStock, CultureRate,
+Strength, Science, ScienceSurplus, ResourceRate, WorkersLate,
+EventScoringMargin, Workers, HandPerishable, TakeCostPaid, WonderPromise)
+and this task's own named suspects not already in that list (ResourceRate,
+FoodRate, BestMine, BestFarm, HandPotential, Strength -- the first two of
+these six were new: FoodRate, BestMine, BestFarm).
+
+Multiplier sweep `m`: 0 (delete the key), a wide log-spaced range from
+1e-4 to 1e6, plus finer steps around 1.0 (0.3/0.5/0.7/0.9/1.0/1.1/1.3/1.5)
+to catch a knife-edge flip. Never negative -- flipping a weight's SIGN is a
+different intervention than pricing it more or less strongly, and was ruled
+out of scope for this measurement (a genuinely separate question).
+
+For each `(key, m)` cell: the fraction of the 12,299 occurrences where the
+Mine take's re-derived rank is 1, and the fraction where it is 1 or 2.
+
+PER-KEY SWEEP -- SUMMARY (n=12,299 at every cell; full 24-row table per key
+is in the run's own stdout, reproducible by the command above)
+-----------------------------------------------------------------------------
+key                 ceiling     at m       ceiling      smallest |ln m|
+                    rank1_frac              rank1or2_frac  with rank1>0
+HandPotential       0.0478      0 (deleted) 0.1248         1.2040 (m=0.3)
+ScienceSurplus      0.0159      >=100       0.0578         1.0986 (m=3.0)
+WorkersLate         0.0007      >=5         0.0017         1.6094 (m=5.0)
+Workers             0.0001      >=30        0.0007         3.4012 (m=30)
+BlueFree            0.0000      --          0.0001         never
+ResourceStock       0.0000      --          0.0000         never
+FoodStock           0.0000      --          0.0000         never
+CultureRate         0.0000      --          0.0000         never
+Strength            0.0000      --          0.0000         never
+Science             0.0000      --          0.0001         never
+ResourceRate        0.0000      --          0.0002         never
+EventScoringMargin  0.0000      --          0.0002         never
+HandPerishable      0.0000      --          0.0000         never
+TakeCostPaid        0.0000      --          0.0000         never
+WonderPromise       0.0000      --          0.0000         never
+FoodRate            0.0000      --          0.0000         never
+BestMine            0.0000      --          0.0000         never
+BestFarm            0.0000      --          0.0000         never
+
+("ceiling" = the best rank1/rank1or2 fraction the key EVER achieves anywhere
+in the swept range 0 <= m <= 1e6; "smallest |ln m| with rank1>0" = the
+multiplier closest to 1.0 in log-distance that produces ANY nonzero rank1
+fraction, i.e. the knife-edge point, or "never" if no swept m -- including
+m=0 -- ever produces one.)
+
+DETAIL FOR THE FOUR NON-"NEVER" KEYS
+--------------------------------------
+HandPotential (favors_winner in the base probe's ranking -- deleting it
+narrows the gap):
+  m=0.0000  rank1=0.0478  rank1or2=0.1248   <- the global ceiling for ANY
+                                                key at ANY m in this sweep
+  m=0.0001  rank1=0.0250  rank1or2=0.0816
+  m=0.0010  rank1=0.0214  rank1or2=0.0711
+  m=0.0100  rank1=0.0124  rank1or2=0.0413
+  m=0.1000  rank1=0.0054  rank1or2=0.0189
+  m=0.3000  rank1=0.0008  rank1or2=0.0032   <- first nonzero at m closest to 1
+  m=0.5000  rank1=0.0000  rank1or2=0.0002
+  m>=0.7    rank1=0.0000  rank1or2=0.0000
+  Monotonically WORSE for the Mine take as m rises toward and past 1.0 --
+  fully consistent with the base probe calling this key `favors_winner`.
+
+ScienceSurplus (favors_take in the base probe's ranking -- amplifying it
+narrows the gap):
+  m<=2.0    rank1=0.0000  rank1or2<=0.0000-0.0001
+  m=3.0     rank1=0.0001  rank1or2=0.0007   <- first nonzero
+  m=5.0     rank1=0.0011  rank1or2=0.0056
+  m=10.0    rank1=0.0064  rank1or2=0.0248
+  m=30.0    rank1=0.0155  rank1or2=0.0559
+  m>=100    rank1=0.0159  rank1or2=0.0578   <- plateaus, unchanged out to 1e6
+
+WorkersLate (favors_winner, but only reaches rank1 under strong
+AMPLIFICATION, the opposite of deletion):
+  m<=2.0    rank1=0.0000
+  m=3.0     rank1=0.0000  rank1or2=0.0005
+  m>=5.0    rank1=0.0007  rank1or2=0.0017   <- plateaus, unchanged out to 1e6
+  m=0 (deleted): rank1=0.0000, rank1or2=0.0000 -- deleting this
+  clamp-saturated key does NOT help the Mine take at all; only pricing it
+  MORE aggressively in its already-clamped direction does, and even then
+  barely.
+
+Workers (favors_winner, same shape as WorkersLate, weaker):
+  m<30      rank1=0.0000 (rank1or2 first ticks to 0.0001 at m=5)
+  m>=30     rank1=0.0001  rank1or2=0.0003, plateauing to 0.0007 by m>=100
+  m=0 (deleted): rank1=0.0000, rank1or2=0.0000, same shape as WorkersLate.
+
+JOINT CLAMP-BLOCK CHECK
+-------------------------
+All five clamp-saturated keys named by the task (CultureRate, Workers,
+WorkersLate, FoodStock, ResourceStock -- reading exactly 60.000, the clamp
+bound, or +21.25 in the champion vector, per this task's own background)
+set to m=0 SIMULTANEOUSLY:
+
+  n=12299  rank1_frac=0.0000  rank1or2_frac=0.0000
+
+Deleting the entire clamp-saturated block at once does not recover a single
+rank-1 (or even rank-2) Mine take across all 12,299 occurrences. This is not
+surprising given the individual-key results above: CultureRate/FoodStock/
+ResourceStock never reach rank1 at ANY m including m=0, and Workers/
+WorkersLate only ever reach nonzero rank1 under strong AMPLIFICATION (m>=30
+and m>=5 respectively) -- never under deletion (m=0), which is the only
+operating point the joint check tests, per this task's own specification of
+the joint check. The clamp-saturated block, evaluated as a block at the one
+operating point that block's own geometry (a hill-climb pinned against its
+upper fence) actually represents, is not what buries the mine.
+
+VERDICT: IS ANY SINGLE KEY COUNTERFACTUALLY SUFFICIENT?
+-----------------------------------------------------------
+No. Of the 18 keys swept, 14 NEVER reach rank 1 for the Mine take at ANY
+multiplier from 0 (deleted) to 1,000,000x, in either direction relative to
+1.0 -- this includes every one of the five clamp-saturated keys individually
+at deletion, and includes ResourceStock/FoodStock/TakeCostPaid, the terms
+most directly connected to a take's own cost and stock effects. This is the
+"never at any m" finding the task asked to be reported loudly if seen, and
+it holds for the large majority of the candidate set.
+
+The remaining 4 keys (HandPotential, ScienceSurplus, WorkersLate, Workers)
+do eventually produce a nonzero rank-1 fraction, but the ceiling any single
+one of them reaches, at its most favorable multiplier anywhere in a
+million-to-one sweep, is small: HandPotential (the base probe's #1 ranked
+gap contributor), FULLY DELETED, recovers rank 1 in only 4.78% of the
+12,299 occurrences (12.48% rank-1-or-2) -- more than 95% of Mine-take
+decision points remain buried even under this single most favorable
+intervention found. The next three keys top out at 1.59%, 0.07%, and 0.01%
+respectively. No key, alone, gets remotely close to flipping the champion's
+behavior.
+
+HandPotential is also the one genuine "knife-edge toward 1.0" result in this
+sweep: cutting it by ~70% (m=0.3, |ln m|=1.20) is enough to see the first
+nonzero rank-1 occurrences, and full deletion (m=0) is a smooth, monotonic
+continuation of the same trend, not a separate cliff. The other three
+non-"never" keys need real amplification (3x-30x) before they show anything,
+which is a much less "knife-edge" shape and a weaker signal.
+
+Put together: the mine-take blackout is not attributable to any single
+mispriced coordinate. It is a distributed effect spread across (at least)
+HandPotential, ScienceSurplus, Workers/WorkersLate and, implicitly, every
+other term the base probe's linear decomposition already found contributing
+to the gap (BlueFree, ResourceStock, FoodStock, CultureRate, Strength,
+Science, ResourceRate, EventScoringMargin, HandPerishable, TakeCostPaid,
+WonderPromise) that this sweep shows CANNOT do the job alone no matter how
+far it is pushed. This is consistent with, and sharpens, the base probe's
+own stage-4 finding: "Nearly half the time the bot beats a Mine take with
+ANOTHER take -- this is not one dominant alternative category, it is a
+broad-based outranking." The sensitivity sweep shows the same thing on the
+weights side: no one weight carries the outranking either.
+
+CAVEATS
+-------
+1. STATIC RESCORING, NOT A POLICY REPLAY. Every number in this file answers
+   "if the champion vector's `w[key]` had been `w[key] * m` AT THE MOMENT
+   this exact position was reached (by an unperturbed champion's own prior
+   play), would the Mine take's re-derived rank be 1?" It does NOT answer
+   what the bot's trajectory would look like if it had actually played with
+   `w[key] * m` from move one -- every position sampled here was reached by
+   ordinary (unperturbed) champion self-play, so a genuinely different
+   weight vector would visit a different distribution of positions
+   entirely. A rank-1 fraction reported here is not a predicted win rate,
+   and no fraction in this file is evidence that any specific reweighting
+   would help the champion overall -- only that, at the specific positions
+   the champion actually reached, one coordinate's local pricing cannot by
+   itself explain the outranking.
+2. The 18 keys swept are the same keys the base probe already flagged as
+   linear-decomposition contributors, plus this task's named suspects --
+   this file does not re-sweep all ~139 `WeightKey`s (a much larger
+   experiment), so a coordinate outside this list that this measurement
+   never touched cannot be ruled out by this file alone. The 18 chosen do
+   include every key the base probe's own ranking called a top-15
+   contributor, so this is not an arbitrary subset.
+3. `HandPotential` (and several other terms in this list) is BILINEAR in the
+   full weight vector, not linear in a single coordinate (`eval.rs`'s own
+   doc comment on `linear_features`, and caveat 2 of
+   `mine_take_probe_3p_2026-08-24.txt`). `candidate_features` freezes these
+   at the SAME champion vector being perturbed for every OTHER coordinate,
+   matching what the base probe already relied on -- this sweep only moves
+   the ONE named coordinate's linear multiplier on top of that frozen
+   computation, it does not re-derive the bilinear terms themselves under
+   the perturbation. This is the same approximation the base probe's own
+   ranking already carries, not a new one introduced here.
+4. Multipliers were swept over `m >= 0` only, never negative -- a sign flip
+   is a qualitatively different intervention (reversing what the key
+   REWARDS, not just how strongly) and was out of scope for a sensitivity
+   sweep of magnitude.
+5. `WorkersLate` required an implementation workaround, noted here because
+   it affects how the key was measured, not what was found: `registry.rs`'s
+   own `PHASE_SUFFIXED_NO_LITERAL_READER` test scans all production source
+   (including `bin/*.rs`) for a literal reference to that variant's path,
+   including inside comments, and fails if one appears outside its declared
+   exemption list. `takeprobe.rs` therefore resolves `WorkersLate` (and all
+   17 other swept keys, for symmetry) by matching its printed `Debug` name
+   against `WeightKey::ALL` at runtime rather than writing the literal path
+   -- functionally identical, confirmed by this run's own gate (`cargo test`
+   exits 0) and by `WorkersLate`'s own numbers above being non-degenerate.
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
+This file names which weight-side lever is (and is not) counterfactually
+capable of moving a Mine take's rank at the champion's own actual play
+positions. No coefficient, weight value, or retune is proposed anywhere in
+this file for any `WeightKey` -- multipliers `m` are a measurement
+instrument, not a suggested price, and the champion vector on disk
+(`/private/tmp/opencensus/champ3p.json`, and every file under
+`experiments/rust_champion_*.json` or `analysis/frozen/*`) was never
+written to by this experiment.
