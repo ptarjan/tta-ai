@@ -1735,60 +1735,60 @@ impl WeightKey {
     fn p95_candidate_spread(self) -> [f64; 3] {
     match self {
         WeightKey::RateHorizon => [0.000000, 0.000000, 0.000000],
-        WeightKey::Culture => [13.000000, 13.000000, 15.000000],
-        WeightKey::CultureRate => [3.445143, 3.837466, 3.946870],
-        WeightKey::Science => [7.000000, 6.000000, 8.000000],
-        WeightKey::ScienceRate => [2.479157, 2.315004, 2.836833],
-        WeightKey::FoodRate => [3.458470, 2.518726, 3.924267],
-        WeightKey::ResourceRate => [5.281235, 3.885668, 3.981155],
-        WeightKey::FoodStock => [5.000000, 4.000000, 7.000000],
-        WeightKey::ResourceStock => [6.000000, 5.000000, 7.000000],
-        WeightKey::BlueFree => [7.000000, 7.000000, 8.000000],
+        WeightKey::Culture => [9.000000, 8.000000, 8.000000],
+        WeightKey::CultureRate => [2.616341, 2.494558, 2.061760],
+        WeightKey::Science => [11.000000, 6.000000, 8.000000],
+        WeightKey::ScienceRate => [3.032107, 2.322596, 3.054936],
+        WeightKey::FoodRate => [3.638703, 2.583029, 2.939278],
+        WeightKey::ResourceRate => [5.716622, 4.110245, 3.121540],
+        WeightKey::FoodStock => [4.000000, 4.000000, 5.000000],
+        WeightKey::ResourceStock => [6.000000, 5.000000, 6.000000],
+        WeightKey::BlueFree => [7.000000, 7.000000, 6.000000],
         WeightKey::CorruptionHeadroom => [4.000000, 4.000000, 4.000000],
         WeightKey::ConsumptionHeadroom => [3.000000, 3.000000, 3.000000],
         WeightKey::PopCost => [1.000000, 1.000000, 2.000000],
         WeightKey::YellowBank => [2.000000, 2.000000, 2.000000],
         WeightKey::FreeWorkers => [2.000000, 2.000000, 2.000000],
-        WeightKey::Workers => [1.447368, 1.435294, 1.273743],
+        WeightKey::Workers => [1.644737, 1.458824, 1.296089],
         WeightKey::ProdWorkers => [2.000000, 2.000000, 2.000000],
-        WeightKey::UrbanWorkers => [2.000000, 2.000000, 2.000000],
+        WeightKey::UrbanWorkers => [2.000000, 2.000000, 1.000000],
         WeightKey::UnitWorkers => [2.000000, 2.000000, 2.000000],
-        WeightKey::HappyMargin => [2.000000, 2.000000, 3.000000],
-        WeightKey::Discontent => [2.000000, 1.000000, 2.000000],
-        WeightKey::Uprising => [33.000000, 16.000000, 33.000000],
-        WeightKey::CivilActions => [3.000000, 3.000000, 3.000000],
-        WeightKey::MilitaryActions => [2.000000, 2.000000, 2.000000],
-        WeightKey::CaLeft => [5.000000, 5.000000, 6.000000],
-        WeightKey::MaLeft => [3.000000, 2.000000, 3.000000],
+        WeightKey::HappyMargin => [2.000000, 2.000000, 2.000000],
+        WeightKey::Discontent => [1.000000, 1.000000, 2.000000],
+        WeightKey::Uprising => [15.000000, 15.000000, 15.000000],
+        WeightKey::CivilActions => [3.000000, 2.000000, 3.000000],
+        WeightKey::MilitaryActions => [3.000000, 2.000000, 2.000000],
+        WeightKey::CaLeft => [4.000000, 5.000000, 6.000000],
+        WeightKey::MaLeft => [3.000000, 3.000000, 3.000000],
         WeightKey::TakeCostPaid => [4.000000, 4.000000, 4.000000],
-        WeightKey::RowUrgency => [2.975881, 109.220483, 65.308489],
-        WeightKey::RowBargainForgone => [7.000000, 2.728844, 3.000000],
-        WeightKey::RowLastCopy => [7.050000, 3.176471, 3.000000],
+        WeightKey::RowUrgency => [150.624847, 138.595198, 321.148062],
+        WeightKey::RowBargainForgone => [8.000000, 4.440252, 5.000000],
+        WeightKey::RowLastCopy => [9.214286, 5.000000, 7.000000],
         WeightKey::RivalDesire => [0.000000, 0.000000, 0.000000],
         WeightKey::RivalTakeShare => [0.000000, 0.000000, 0.000000],
-        WeightKey::RivalFreeCa => [1.000000, 1.000000, 1.000000],
-        WeightKey::RivalHandCivil => [3.000000, 3.000000, 3.000000],
+        WeightKey::RivalFreeCa => [0.000000, 2.000000, 4.000000],
+        WeightKey::RivalHandCivil => [4.000000, 3.000000, 3.000000],
         WeightKey::RivalWonders => [0.000000, 0.000000, 0.000000],
-        WeightKey::RivalHandPotential => [0.976721, 91.349900, 0.071267],
-        WeightKey::RivalScienceStock => [5.000000, 5.000000, 6.000000],
-        WeightKey::RivalFoodStock => [4.000000, 3.000000, 7.000000],
-        WeightKey::RivalResourceStock => [5.000000, 4.000000, 5.000000],
+        WeightKey::RivalHandPotential => [147.637444, 110.078904, 11.859491],
+        WeightKey::RivalScienceStock => [6.000000, 5.000000, 5.000000],
+        WeightKey::RivalFoodStock => [4.000000, 3.000000, 3.000000],
+        WeightKey::RivalResourceStock => [5.000000, 4.000000, 4.000000],
         WeightKey::RivalFreeWorkers => [1.000000, 1.000000, 1.000000],
-        WeightKey::RivalYellowBank => [2.000000, 2.000000, 2.000000],
+        WeightKey::RivalYellowBank => [4.000000, 2.000000, 2.000000],
         WeightKey::RivalColonies => [1.000000, 1.000000, 1.000000],
-        WeightKey::RivalMilActions => [2.000000, 2.000000, 1.000000],
-        WeightKey::RivalBuildingWonder => [1.000000, 1.000000, 1.000000],
+        WeightKey::RivalMilActions => [2.000000, 2.000000, 2.000000],
+        WeightKey::RivalBuildingWonder => [1.000000, 1.000000, 3.000000],
         WeightKey::MySeededPending => [3.000000, 3.000000, 3.000000],
-        WeightKey::MyEventThreat => [16.000000, 360.000000, 23.015989],
-        WeightKey::AttackTargetLead => [0.000000, 154.000000, 156.000000],
-        WeightKey::AttackTargetWeakness => [10.000000, 13.000000, 16.000000],
-        WeightKey::PactPartnerLead => [0.000000, 172.000000, 172.500000],
-        WeightKey::Strength => [4.000000, 4.000000, 5.000000],
-        WeightKey::StrengthRel => [4.000000, 4.000000, 5.000000],
-        WeightKey::StrengthDeficit => [3.000000, 3.000000, 4.000000],
-        WeightKey::StrengthLead => [4.000000, 4.000000, 4.000000],
-        WeightKey::TacticLevel => [2.000000, 2.000000, 2.000000],
-        WeightKey::TacticGain => [3.000000, 2.000000, 3.000000],
+        WeightKey::MyEventThreat => [16.000000, 368.000000, 23.015989],
+        WeightKey::AttackTargetLead => [0.000000, 92.000000, 108.000000],
+        WeightKey::AttackTargetWeakness => [11.000000, 16.000000, 14.000000],
+        WeightKey::PactPartnerLead => [0.000000, 110.000000, 120.000000],
+        WeightKey::Strength => [6.000000, 5.000000, 6.000000],
+        WeightKey::StrengthRel => [6.000000, 5.000000, 6.000000],
+        WeightKey::StrengthDeficit => [4.000000, 5.000000, 5.000000],
+        WeightKey::StrengthLead => [4.000000, 4.000000, 5.000000],
+        WeightKey::TacticLevel => [2.000000, 3.000000, 2.000000],
+        WeightKey::TacticGain => [4.000000, 4.000000, 4.000000],
         WeightKey::TacticShort => [2.000000, 2.000000, 2.000000],
         WeightKey::HasUnit => [1.000000, 1.000000, 1.000000],
         WeightKey::Colonies => [1.000000, 1.000000, 1.000000],
@@ -1798,41 +1798,41 @@ impl WeightKey {
         WeightKey::WarImmune => [0.000000, 1.000000, 1.000000],
         WeightKey::AttackCostDoubled => [1.000000, 1.000000, 1.000000],
         WeightKey::AuctionCommitted => [1.000000, 1.000000, 1.000000],
-        WeightKey::AuctionBid => [13.000000, 17.000000, 15.000000],
-        WeightKey::TechLevels => [0.717105, 0.752941, 0.765363],
+        WeightKey::AuctionBid => [10.000000, 23.000000, 25.000000],
+        WeightKey::TechLevels => [0.769737, 0.705882, 0.698324],
         WeightKey::GovLevel => [3.000000, 2.000000, 2.000000],
-        WeightKey::BestFarm => [2.000000, 3.000000, 3.000000],
-        WeightKey::BestMine => [0.000000, 0.000000, 3.000000],
-        WeightKey::BestLab => [2.000000, 0.000000, 3.000000],
-        WeightKey::BestTemple => [2.000000, 0.000000, 2.000000],
-        WeightKey::BestTheater => [0.000000, 2.000000, 3.000000],
-        WeightKey::BestLibrary => [2.000000, 2.000000, 3.000000],
-        WeightKey::BestArena => [2.000000, 3.000000, 3.000000],
-        WeightKey::BestUnit => [3.000000, 1.000000, 3.000000],
+        WeightKey::BestFarm => [0.000000, 0.000000, 3.000000],
+        WeightKey::BestMine => [0.000000, 0.000000, 2.000000],
+        WeightKey::BestLab => [0.000000, 0.000000, 2.000000],
+        WeightKey::BestTemple => [2.000000, 0.000000, 0.000000],
+        WeightKey::BestTheater => [3.000000, 0.000000, 0.000000],
+        WeightKey::BestLibrary => [3.000000, 0.000000, 0.000000],
+        WeightKey::BestArena => [3.000000, 0.000000, 0.000000],
+        WeightKey::BestUnit => [3.000000, 2.000000, 3.000000],
         WeightKey::NumTechs => [1.000000, 1.000000, 1.000000],
         WeightKey::SpecialTechs => [1.000000, 1.000000, 1.000000],
         WeightKey::Wonders => [1.000000, 1.000000, 1.000000],
-        WeightKey::WonderProgress => [10.000000, 10.000000, 9.000000],
+        WeightKey::WonderProgress => [9.000000, 8.000000, 8.000000],
         WeightKey::WonderRemaining => [16.000000, 16.000000, 16.000000],
         WeightKey::WonderStagesLeft => [4.000000, 5.000000, 5.000000],
-        WeightKey::WonderTurnsToFinish => [4.000000, 3.666667, 4.000000],
-        WeightKey::WonderOverrun => [7.524590, 3.500000, 3.597421],
-        WeightKey::WonderStagesPerAction => [2.000000, 3.000000, 3.000000],
-        WeightKey::WonderPotential => [14.571754, 117.744221, 8.797551],
-        WeightKey::WonderPromise => [12.894108, 76.692113, 9.822541],
-        WeightKey::WonderAgeOverrun => [5.235935, 3.166667, 3.500000],
+        WeightKey::WonderTurnsToFinish => [5.000000, 5.500000, 5.000000],
+        WeightKey::WonderOverrun => [6.500000, 12.528100, 6.500000],
+        WeightKey::WonderStagesPerAction => [1.000000, 2.000000, 2.000000],
+        WeightKey::WonderPotential => [12.567994, 78.700422, 7.252326],
+        WeightKey::WonderPromise => [14.347283, 71.709601, 9.545458],
+        WeightKey::WonderAgeOverrun => [5.578059, 11.902926, 5.617754],
         WeightKey::Leader => [1.000000, 1.000000, 1.000000],
         WeightKey::WonderInProgress => [1.000000, 1.000000, 1.000000],
-        WeightKey::HandLimit => [2.000000, 0.000000, 2.000000],
-        WeightKey::ColonizeBonus => [3.000000, 3.000000, 4.000000],
-        WeightKey::BuildDiscount => [5.000000, 6.000000, 6.000000],
+        WeightKey::HandLimit => [2.000000, 2.000000, 2.000000],
+        WeightKey::ColonizeBonus => [4.000000, 3.000000, 1.000000],
+        WeightKey::BuildDiscount => [3.000000, 5.000000, 5.000000],
         WeightKey::ResourceDiscount => [0.000000, 0.000000, 0.000000],
         WeightKey::DefenseBonus => [0.000000, 0.000000, 0.000000],
         WeightKey::UrbanLimit => [2.000000, 1.000000, 1.000000],
         WeightKey::GovActionCost => [0.000000, 0.000000, 0.000000],
         WeightKey::NoAggression => [1.000000, 1.000000, 1.000000],
         WeightKey::CardBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::EventScoringMargin => [14.000000, 12.692308, 11.111111],
+        WeightKey::EventScoringMargin => [12.000000, 14.000000, 12.000000],
         WeightKey::CardBoardLeader => [0.000000, 0.000000, 0.000000],
         WeightKey::HandSwapExtra => [0.000000, 0.000000, 0.000000],
         WeightKey::CardRateCredit => [0.000000, 0.000000, 0.000000],
@@ -1855,15 +1855,15 @@ impl WeightKey {
         WeightKey::TacticShortfallCost => [0.000000, 0.000000, 0.000000],
         WeightKey::TacticReachCredit => [0.000000, 0.000000, 0.000000],
         WeightKey::HandCivil => [2.000000, 2.000000, 2.000000],
-        WeightKey::HandValue => [2.763158, 2.870588, 2.837989],
-        WeightKey::HandPotential => [11.523737, 815.007401, 79.200427],
+        WeightKey::HandValue => [2.789474, 2.847059, 2.860335],
+        WeightKey::HandPotential => [197.027878, 674.348432, 304.224789],
         WeightKey::HandMilitary => [4.000000, 4.000000, 4.000000],
-        WeightKey::HandMilValue => [12.000000, 11.000000, 12.000000],
-        WeightKey::HandMilPotential => [2.060114, 25.334188, 7.170485],
-        WeightKey::HandPerishable => [1.473244, 1.278721, 1.374853],
-        WeightKey::RivalCulture => [22.000000, 25.000000, 51.000000],
-        WeightKey::RivalMeanCulture => [22.000000, 23.500000, 44.000000],
-        WeightKey::RivalCultureRate => [0.000000, 1.500000, 1.500000],
+        WeightKey::HandMilValue => [11.000000, 12.000000, 11.000000],
+        WeightKey::HandMilPotential => [185.417899, 240.000000, 780.000000],
+        WeightKey::HandPerishable => [1.431818, 1.392328, 1.393517],
+        WeightKey::RivalCulture => [30.000000, 34.000000, 38.000000],
+        WeightKey::RivalMeanCulture => [30.000000, 26.500000, 27.666667],
+        WeightKey::RivalCultureRate => [0.000000, 1.000000, 1.000000],
         WeightKey::RivalScienceRate => [0.000000, 0.000000, 0.000000],
         WeightKey::RivalStrength => [0.000000, 2.000000, 2.000000],
         WeightKey::EndTurnBias => [1.000000, 1.000000, 1.000000],
@@ -1873,30 +1873,30 @@ impl WeightKey {
         WeightKey::ResourceStockNeeded => [0.000000, 0.000000, 0.000000],
         WeightKey::ScienceNeeded => [0.000000, 0.000000, 0.000000],
         WeightKey::FreeWorkersNeeded => [0.000000, 0.000000, 0.000000],
-        WeightKey::WorkersLate => [1.355263, 1.082353, 1.385475],
-        WeightKey::StrengthRelEarly => [2.072368, 2.094118, 2.212291],
-        WeightKey::StrengthRelLate => [3.000000, 2.982353, 3.418994],
-        WeightKey::TechLevelsLate => [1.578947, 1.529412, 1.921788],
-        WeightKey::HandValueLate => [7.105263, 7.200000, 7.329609],
+        WeightKey::WorkersLate => [1.592105, 1.494118, 1.050279],
+        WeightKey::StrengthRelEarly => [2.157895, 2.523529, 2.636872],
+        WeightKey::StrengthRelLate => [4.769737, 4.000000, 4.055866],
+        WeightKey::TechLevelsLate => [2.980263, 1.129412, 1.430168],
+        WeightKey::HandValueLate => [6.217105, 5.723529, 7.016760],
         WeightKey::FoodGap => [4.000000, 4.000000, 4.000000],
-        WeightKey::FoodSurplus => [5.000000, 4.000000, 7.000000],
-        WeightKey::ResourceGap => [4.000000, 4.000000, 3.000000],
-        WeightKey::ResourceSurplus => [6.000000, 6.000000, 7.000000],
-        WeightKey::ScienceGap => [9.000000, 10.000000, 11.000000],
-        WeightKey::ScienceSurplus => [8.000000, 5.000000, 10.000000],
-        WeightKey::CultureGap => [10.000000, 10.000000, 13.000000],
-        WeightKey::CultureSurplus => [13.000000, 15.000000, 17.000000],
-        WeightKey::HappySurplus => [3.000000, 2.000000, 3.000000],
-        WeightKey::CivilActionGap => [5.000000, 4.000000, 4.000000],
+        WeightKey::FoodSurplus => [4.000000, 4.000000, 5.000000],
+        WeightKey::ResourceGap => [5.000000, 3.000000, 4.000000],
+        WeightKey::ResourceSurplus => [6.000000, 5.000000, 5.000000],
+        WeightKey::ScienceGap => [6.000000, 6.000000, 11.000000],
+        WeightKey::ScienceSurplus => [10.000000, 4.000000, 10.000000],
+        WeightKey::CultureGap => [7.000000, 8.000000, 7.000000],
+        WeightKey::CultureSurplus => [9.000000, 9.000000, 8.000000],
+        WeightKey::HappySurplus => [2.000000, 2.000000, 2.000000],
+        WeightKey::CivilActionGap => [4.000000, 4.000000, 4.000000],
         WeightKey::CivilActionSurplus => [4.000000, 4.000000, 5.000000],
-        WeightKey::TakeCostShare => [0.800000, 0.750000, 0.800000],
+        WeightKey::TakeCostShare => [1.000000, 0.800000, 0.750000],
         WeightKey::MilitaryActionGap => [3.000000, 3.000000, 3.000000],
-        WeightKey::MilitaryActionSurplus => [3.000000, 3.000000, 3.000000],
+        WeightKey::MilitaryActionSurplus => [3.000000, 3.000000, 2.000000],
         WeightKey::WorkerGap => [2.000000, 2.000000, 2.000000],
         WeightKey::WorkerSurplus => [2.000000, 2.000000, 2.000000],
         WeightKey::TechRedundancyDiscount => [0.000000, 0.000000, 0.000000],
         WeightKey::LeaderReplacement => [1.000000, 1.000000, 1.000000],
-        WeightKey::WonderPoolRivalClaimed => [1.000000, 1.000000, 3.000000],
+        WeightKey::WonderPoolRivalClaimed => [1.000000, 2.000000, 1.000000],
     }
     }
 }
@@ -1928,7 +1928,7 @@ pub const CLAMP_BLIND: f64 = 60.0;
 /// MEASURED by `bin/featspread`, which emits this line and the whole body of
 /// [`WeightKey::p95_candidate_spread`] together; regenerate them together or
 /// the ratio compares two different samples.
-pub const P95_TOTAL_SPREAD: [f64; 3] = [300.449105, 485.704661, 414.407762];
+pub const P95_TOTAL_SPREAD: [f64; 3] = [823.689416, 483.787396, 545.274556];
 
 /// Where a player count sits in [`P95_TOTAL_SPREAD`] and in
 /// [`WeightKey::p95_candidate_spread`]'s triples.
@@ -2705,19 +2705,20 @@ mod tests {
         assert!(WeightKey::HandPotential.p95_candidate_spread()[1] > 100.0);
     }
 
-    /// The authored default vector is legal under the measured bounds with
-    /// exactly one exception, and the exception is named here rather than
-    /// smoothed over: `uprising` is authored at -12 while two-player play
-    /// swings it 33 points between candidates, which buys it a bound of 9.1.
-    /// That is not a bug in either number -- an uprising is rare and
-    /// enormous, which is precisely the "seldom-used feature carrying a
-    /// weight fitted to noise" shape this bound exists to catch -- but it
-    /// does mean a freshly defaulted vector starts a shade outside the rail
-    /// and gets pulled in by the first mutation that touches it. If a
-    /// regenerated spread table changes this count, that is a finding, not a
-    /// number to update quietly.
+    /// Every authored default is legal under the measured bounds. The lone
+    /// former exception was `uprising` at 2p, authored at -12 against a bound
+    /// of 9.1, and it came inside at 54.9 when the table was remeasured
+    /// against the current champions: `P95_TOTAL_SPREAD[2p]` rose 300.4 ->
+    /// 823.7 while `uprising`'s own 2p swing fell 33 -> 15. Both ends moved
+    /// because `p95_candidate_spread` measures `phi`, and `phi` is a function
+    /// of the weight vector it was measured under -- so the whole table ages
+    /// out from under a promoted champion and has to be regenerated with it,
+    /// not just topped up. If a regenerated table pushes any default back
+    /// outside, that is a finding, not a number to update quietly: name the
+    /// key here and say why its authored value is worth more than one whole
+    /// typical decision.
     #[test]
-    fn only_one_authored_default_starts_outside_its_measured_bound() {
+    fn no_authored_default_starts_outside_its_measured_bound() {
         let w = Weights::defaults();
         let outside: Vec<(&str, u8)> = WeightKey::ALL
             .iter()
@@ -2725,6 +2726,6 @@ mod tests {
             .filter(|(k, p)| w.get(**k).abs() > k.clamp_bound(*p))
             .map(|(k, p)| (k.name(), p))
             .collect();
-        assert_eq!(outside, vec![("uprising", 2u8)], "authored defaults outside their bounds");
+        assert_eq!(outside, Vec::new(), "authored defaults outside their bounds");
     }
 }

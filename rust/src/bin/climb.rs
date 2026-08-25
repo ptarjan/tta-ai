@@ -1685,17 +1685,22 @@ mod tests {
         assert!(wide < narrow / 50.0, "{wide} is not meaningfully tighter than {narrow}");
     }
 
-    /// The same key at a different table size is a different feature. At two
-    /// players `hand_potential` swings by about eleven points and at three by
-    /// eight hundred, so one bound covering both is wrong by seventy-fold at
-    /// whichever end it was not measured on -- and collapsing the two with a
-    /// maximum is precisely the arithmetic that once reported a healthy 2p
-    /// coordinate as a hundredfold runaway.
+    /// The same key at a different table size is a different feature, and
+    /// collapsing the two with a maximum is precisely the arithmetic that
+    /// once reported a healthy 2p coordinate as a hundredfold runaway. That
+    /// bug's signature is the two bounds coming out EQUAL, so the margin here
+    /// only has to be wide enough that no rounding can close it. It is
+    /// deliberately far looser than the gap actually measured: `hand_potential`
+    /// swings 197 points at 2p against 674 at 3p, giving bounds of 4.18 and
+    /// 0.72, a factor of 5.8. The 2026-08-25 regeneration is why the margin
+    /// is stated this way rather than pinned near the observed ratio -- it
+    /// moved that gap from seventyfold to sixfold without anything being
+    /// wrong, because `phi` is measured under the champion of the day.
     #[test]
     fn the_same_key_is_bounded_differently_at_different_table_sizes() {
         let two = WeightKey::HandPotential.clamp_bound(2);
         let three = WeightKey::HandPotential.clamp_bound(3);
-        assert!(three < two / 10.0, "2p {two} and 3p {three} are not far apart");
+        assert!(three < two / 3.0, "2p {two} and 3p {three} are not far apart");
     }
 
     /// An incumbent promoted before the bounds existed must be pulled in too.

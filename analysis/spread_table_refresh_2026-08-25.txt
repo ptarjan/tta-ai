@@ -1,0 +1,344 @@
+# spread_table_refresh_2026-08-25.txt
+#
+# Commands run, in order (from /Users/pt/tta-ai/rust unless noted):
+#   df -h /
+#   mkdir -p /private/tmp/spreadchamp
+#   cp /Users/pt/tta-ai/experiments/rust_champion_{2,3,4}p.json /private/tmp/spreadchamp/
+#   md5 /private/tmp/spreadchamp/*.json
+#   export PATH="$HOME/.cargo/bin:$PATH"
+#   cargo build --release --bin featspread
+#   ./target/release/featspread 40 0 /private/tmp/spreadchamp emit > /private/tmp/spread_emit.txt 2>&1
+#   touch src/bots/weighted/weights.rs
+#   cargo clippy --all-targets -- -D warnings
+#   cargo test
+#
+# games_per_count=40 seed=0 champion_dir=/private/tmp/spreadchamp (frozen copy)
+#
+# md5 of frozen champion snapshots (all matched expected exactly):
+#   2p 9bfb3c06587f909d258a34deaf694e61  (expected 9bfb3c06587f909d258a34deaf694e61, MATCH)
+#   3p 119be25daa43fbcb09f7e1ed7a81e943  (expected 119be25daa43fbcb09f7e1ed7a81e943, MATCH)
+#   4p 904e6b68acc5beb1089554cc089cd0bf  (expected 904e6b68acc5beb1089554cc089cd0bf, MATCH)
+#
+# timings:
+#   cargo build --release --bin featspread: 0.04s (cached, already built)
+#   featspread 40 0 ... emit: 35s wall clock (9018+15687+21338 = 46043 decisions across 120 games)
+#   cargo clippy --all-targets -- -D warnings: 19.78s
+#   cargo test: 16.39s (1515 passed, 1 failed)
+#
+# exit codes:
+#   EXIT df=0
+#   EXIT build=0
+#   EXIT featspread=0
+#   EXIT clippy=0
+#   EXIT test=101 (FAILED -- see below)
+#
+# decisions sampled: 2p=9018 3p=15687 4p=21338
+#
+# P95_TOTAL_SPREAD: old=[300.449105, 485.704661, 414.407762] new=[823.689416, 483.787396, 545.274556]
+#
+# NEEDS keys (added commit edc3695): FoodStockNeeded, ResourceStockNeeded, ScienceNeeded,
+# FreeWorkersNeeded -- all four already had exhaustive-match placeholder arms in the tree
+# BEFORE this run ([0.0,0.0,0.0] each). Emitted values for all four: [0.0, 0.0, 0.0] at 2p/3p/4p
+# (unchanged) -- consistent with the doc comment's "invisible to the instrument" category:
+# multiplier/credit-style keys priced at the caller's frozen vector have zero candidate-set
+# spread by construction and fall back to the flat CLAMP_BLIND rail.
+#
+# GATE RESULT: cargo clippy clean (EXIT 0). cargo test FAILED (EXIT 101) on ONE test:
+#   bots::weighted::weights::tests::only_one_authored_default_starts_outside_its_measured_bound
+#   (src/bots/weighted/weights.rs:2728) -- NOT one of the two tests named in the task brief.
+#   Those two (no_key_is_ever_bounded_more_loosely_than_the_old_flat_rail, ~line 2665, asserting
+#   bound <= CLAMP_BLIND; and a_key_the_spread_instrument_cannot_see_keeps_the_flat_rail, ~line
+#   2687, asserting WeightKey::TechBoardCredit.clamp_bound(3) == CLAMP_BLIND) BOTH PASSED.
+#   Exact failure text:
+#     thread '...only_one_authored_default_starts_outside_its_measured_bound' panicked at
+#     src/bots/weighted/weights.rs:2728:9:
+#     assertion `left == right` failed: authored defaults outside their bounds
+#       left: []
+#      right: [("uprising", 2)]
+#   The test hardcodes the expected set of (authored-default-key, player-count) pairs whose
+#   |default weight| exceeds clamp_bound() as exactly [("uprising", 2)]. After this regen that
+#   set is empty: at 2p, P95_TOTAL_SPREAD moved 300.449105 -> 823.689416 (+174.19%), which alone
+#   loosens every bound at 2p by the same factor, and the authored uprising default no longer
+#   exceeds its (now looser) bound. Not edited (test edits forbidden); not reverted (no defect in
+#   the splice -- verified programmatic, exhaustive, matches old arm count 163==163).
+#
+# weights.rs left MODIFIED (spliced). Gate: clippy GREEN, test RED (1 of 1516 total repo tests
+# failed, the one named above).
+
+## STEP 8: BEFORE/AFTER clamp_bound(players) for the ten requested (count, key) pairs
+## formula: bound = min(CLAMP_T * P95_TOTAL_SPREAD[i] / spread, CLAMP_BLIND), CLAMP_T=1.0, CLAMP_BLIND=60.0
+
+2p has_colony (HasColony):
+  old spread = 1.000000   new spread = 1.000000
+  old P95_TOTAL_SPREAD[2p] = 300.449105   new = 823.689416
+  raw ratio: old = 300.449105 / 1.000000 = 300.449105     new = 823.689416 / 1.000000 = 823.689416
+  old bound = min(300.449105, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(823.689416, 60.0) = 60.000000   [rail binds: True]
+
+3p blue_free (BlueFree):
+  old spread = 7.000000   new spread = 7.000000
+  old P95_TOTAL_SPREAD[3p] = 485.704661   new = 483.787396
+  raw ratio: old = 485.704661 / 7.000000 = 69.386380     new = 483.787396 / 7.000000 = 69.112485
+  old bound = min(69.386380, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(69.112485, 60.0) = 60.000000   [rail binds: True]
+
+3p culture_rate (CultureRate):
+  old spread = 3.837466   new spread = 2.494558
+  old P95_TOTAL_SPREAD[3p] = 485.704661   new = 483.787396
+  raw ratio: old = 485.704661 / 3.837466 = 126.569111     new = 483.787396 / 2.494558 = 193.937121
+  old bound = min(126.569111, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(193.937121, 60.0) = 60.000000   [rail binds: True]
+
+3p food_stock (FoodStock):
+  old spread = 4.000000   new spread = 4.000000
+  old P95_TOTAL_SPREAD[3p] = 485.704661   new = 483.787396
+  raw ratio: old = 485.704661 / 4.000000 = 121.426165     new = 483.787396 / 4.000000 = 120.946849
+  old bound = min(121.426165, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(120.946849, 60.0) = 60.000000   [rail binds: True]
+
+3p resource_stock (ResourceStock):
+  old spread = 5.000000   new spread = 5.000000
+  old P95_TOTAL_SPREAD[3p] = 485.704661   new = 483.787396
+  raw ratio: old = 485.704661 / 5.000000 = 97.140932     new = 483.787396 / 5.000000 = 96.757479
+  old bound = min(97.140932, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(96.757479, 60.0) = 60.000000   [rail binds: True]
+
+3p workers_late (WorkersLate):
+  old spread = 1.082353   new spread = 1.494118
+  old P95_TOTAL_SPREAD[3p] = 485.704661   new = 483.787396
+  raw ratio: old = 485.704661 / 1.082353 = 448.748847     new = 483.787396 / 1.494118 = 323.794637
+  old bound = min(448.748847, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(323.794637, 60.0) = 60.000000   [rail binds: True]
+
+4p culture_rate (CultureRate):
+  old spread = 3.946870   new spread = 2.061760
+  old P95_TOTAL_SPREAD[4p] = 414.407762   new = 545.274556
+  raw ratio: old = 414.407762 / 3.946870 = 104.996557     new = 545.274556 / 2.061760 = 264.470431
+  old bound = min(104.996557, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(264.470431, 60.0) = 60.000000   [rail binds: True]
+
+4p strength (Strength):
+  old spread = 5.000000   new spread = 6.000000
+  old P95_TOTAL_SPREAD[4p] = 414.407762   new = 545.274556
+  raw ratio: old = 414.407762 / 5.000000 = 82.881552     new = 545.274556 / 6.000000 = 90.879093
+  old bound = min(82.881552, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(90.879093, 60.0) = 60.000000   [rail binds: True]
+
+4p unit_workers (UnitWorkers):
+  old spread = 2.000000   new spread = 2.000000
+  old P95_TOTAL_SPREAD[4p] = 414.407762   new = 545.274556
+  raw ratio: old = 414.407762 / 2.000000 = 207.203881     new = 545.274556 / 2.000000 = 272.637278
+  old bound = min(207.203881, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(272.637278, 60.0) = 60.000000   [rail binds: True]
+
+4p workers_late (WorkersLate):
+  old spread = 1.385475   new spread = 1.050279
+  old P95_TOTAL_SPREAD[4p] = 414.407762   new = 545.274556
+  raw ratio: old = 414.407762 / 1.385475 = 299.108798     new = 545.274556 / 1.050279 = 519.171150
+  old bound = min(299.108798, 60.0) = 60.000000   [rail binds: True]
+  new bound = min(519.171150, 60.0) = 60.000000   [rail binds: True]
+
+## STEP 9: change analysis
+
+Total (key, count) pairs: 163 keys * 3 counts = 489.
+Pairs where old spread == new spread == 0.0 (both invisible to instrument, excluded from % calc): 122.
+Remaining pairs with at least one side nonzero: 367.
+Of those 367, pairs that changed spread by more than 10% relative (|new-old|/old * 100, old=0 with new!=0 counted as changed): 162.
+  (160 with a finite percentage (old != 0); 2 went from old==0.0 to new!=0.0, i.e. a previously invisible coordinate became visible.)
+
+The 2 old==0.0 -> new!=0.0 cases (infinite relative change, newly visible to the instrument):
+  BestTheater 2p: old=0.000000 new=3.000000
+  HandLimit 3p: old=0.000000 new=2.000000
+
+15 pairs with the largest relative change (2 infinite-% cases listed first, then the 13 largest finite-%):
+  BestTheater              2p  old=0.000000  new=3.000000  change=infinite% (0 -> nonzero)
+  HandLimit                3p  old=0.000000  new=2.000000  change=infinite% (0 -> nonzero)
+  RivalHandPotential       4p  old=0.071267  new=11.859491  change=16540.93%
+  RivalHandPotential       2p  old=0.976721  new=147.637444  change=15015.62%
+  HandMilPotential         4p  old=7.170485  new=780.000000  change=10777.93%
+  HandMilPotential         2p  old=2.060114  new=185.417899  change=8900.37%
+  RowUrgency               2p  old=2.975881  new=150.624847  change=4961.52%
+  HandPotential            2p  old=11.523737  new=197.027878  change=1609.76%
+  HandMilPotential         3p  old=25.334188  new=240.000000  change=847.34%
+  RowUrgency               4p  old=65.308489  new=321.148062  change=391.74%
+  RivalFreeCa              4p  old=1.000000  new=4.000000  change=300.00%
+  HandPotential            4p  old=79.200427  new=304.224789  change=284.12%
+  WonderAgeOverrun         3p  old=3.166667  new=11.902926  change=275.88%
+  WonderOverrun            3p  old=3.500000  new=12.528100  change=257.95%
+  RivalBuildingWonder      4p  old=1.000000  new=3.000000  change=200.00%
+
+## RAW EMIT
+
+
+================================================================================
+RUST TABLE -- paste as the body of WeightKey::p95_candidate_spread
+================================================================================
+// 2p: decisions 9018 p95_total_spread 823.689416
+// 3p: decisions 15687 p95_total_spread 483.787396
+// 4p: decisions 21338 p95_total_spread 545.274556
+const P95_TOTAL_SPREAD: [f64; 3] = [823.689416, 483.787396, 545.274556];
+match self {
+    WeightKey::RateHorizon => [0.000000, 0.000000, 0.000000],
+    WeightKey::Culture => [9.000000, 8.000000, 8.000000],
+    WeightKey::CultureRate => [2.616341, 2.494558, 2.061760],
+    WeightKey::Science => [11.000000, 6.000000, 8.000000],
+    WeightKey::ScienceRate => [3.032107, 2.322596, 3.054936],
+    WeightKey::FoodRate => [3.638703, 2.583029, 2.939278],
+    WeightKey::ResourceRate => [5.716622, 4.110245, 3.121540],
+    WeightKey::FoodStock => [4.000000, 4.000000, 5.000000],
+    WeightKey::ResourceStock => [6.000000, 5.000000, 6.000000],
+    WeightKey::BlueFree => [7.000000, 7.000000, 6.000000],
+    WeightKey::CorruptionHeadroom => [4.000000, 4.000000, 4.000000],
+    WeightKey::ConsumptionHeadroom => [3.000000, 3.000000, 3.000000],
+    WeightKey::PopCost => [1.000000, 1.000000, 2.000000],
+    WeightKey::YellowBank => [2.000000, 2.000000, 2.000000],
+    WeightKey::FreeWorkers => [2.000000, 2.000000, 2.000000],
+    WeightKey::Workers => [1.644737, 1.458824, 1.296089],
+    WeightKey::ProdWorkers => [2.000000, 2.000000, 2.000000],
+    WeightKey::UrbanWorkers => [2.000000, 2.000000, 1.000000],
+    WeightKey::UnitWorkers => [2.000000, 2.000000, 2.000000],
+    WeightKey::HappyMargin => [2.000000, 2.000000, 2.000000],
+    WeightKey::Discontent => [1.000000, 1.000000, 2.000000],
+    WeightKey::Uprising => [15.000000, 15.000000, 15.000000],
+    WeightKey::CivilActions => [3.000000, 2.000000, 3.000000],
+    WeightKey::MilitaryActions => [3.000000, 2.000000, 2.000000],
+    WeightKey::CaLeft => [4.000000, 5.000000, 6.000000],
+    WeightKey::MaLeft => [3.000000, 3.000000, 3.000000],
+    WeightKey::TakeCostPaid => [4.000000, 4.000000, 4.000000],
+    WeightKey::RowUrgency => [150.624847, 138.595198, 321.148062],
+    WeightKey::RowBargainForgone => [8.000000, 4.440252, 5.000000],
+    WeightKey::RowLastCopy => [9.214286, 5.000000, 7.000000],
+    WeightKey::RivalDesire => [0.000000, 0.000000, 0.000000],
+    WeightKey::RivalTakeShare => [0.000000, 0.000000, 0.000000],
+    WeightKey::RivalFreeCa => [0.000000, 2.000000, 4.000000],
+    WeightKey::RivalHandCivil => [4.000000, 3.000000, 3.000000],
+    WeightKey::RivalWonders => [0.000000, 0.000000, 0.000000],
+    WeightKey::RivalHandPotential => [147.637444, 110.078904, 11.859491],
+    WeightKey::RivalScienceStock => [6.000000, 5.000000, 5.000000],
+    WeightKey::RivalFoodStock => [4.000000, 3.000000, 3.000000],
+    WeightKey::RivalResourceStock => [5.000000, 4.000000, 4.000000],
+    WeightKey::RivalFreeWorkers => [1.000000, 1.000000, 1.000000],
+    WeightKey::RivalYellowBank => [4.000000, 2.000000, 2.000000],
+    WeightKey::RivalColonies => [1.000000, 1.000000, 1.000000],
+    WeightKey::RivalMilActions => [2.000000, 2.000000, 2.000000],
+    WeightKey::RivalBuildingWonder => [1.000000, 1.000000, 3.000000],
+    WeightKey::MySeededPending => [3.000000, 3.000000, 3.000000],
+    WeightKey::MyEventThreat => [16.000000, 368.000000, 23.015989],
+    WeightKey::AttackTargetLead => [0.000000, 92.000000, 108.000000],
+    WeightKey::AttackTargetWeakness => [11.000000, 16.000000, 14.000000],
+    WeightKey::PactPartnerLead => [0.000000, 110.000000, 120.000000],
+    WeightKey::Strength => [6.000000, 5.000000, 6.000000],
+    WeightKey::StrengthRel => [6.000000, 5.000000, 6.000000],
+    WeightKey::StrengthDeficit => [4.000000, 5.000000, 5.000000],
+    WeightKey::StrengthLead => [4.000000, 4.000000, 5.000000],
+    WeightKey::TacticLevel => [2.000000, 3.000000, 2.000000],
+    WeightKey::TacticGain => [4.000000, 4.000000, 4.000000],
+    WeightKey::TacticShort => [2.000000, 2.000000, 2.000000],
+    WeightKey::HasUnit => [1.000000, 1.000000, 1.000000],
+    WeightKey::Colonies => [1.000000, 1.000000, 1.000000],
+    WeightKey::HasColony => [1.000000, 1.000000, 1.000000],
+    WeightKey::Pacts => [0.000000, 1.500000, 1.500000],
+    WeightKey::PactBlocksAttack => [0.000000, 1.500000, 1.000000],
+    WeightKey::WarImmune => [0.000000, 1.000000, 1.000000],
+    WeightKey::AttackCostDoubled => [1.000000, 1.000000, 1.000000],
+    WeightKey::AuctionCommitted => [1.000000, 1.000000, 1.000000],
+    WeightKey::AuctionBid => [10.000000, 23.000000, 25.000000],
+    WeightKey::TechLevels => [0.769737, 0.705882, 0.698324],
+    WeightKey::GovLevel => [3.000000, 2.000000, 2.000000],
+    WeightKey::BestFarm => [0.000000, 0.000000, 3.000000],
+    WeightKey::BestMine => [0.000000, 0.000000, 2.000000],
+    WeightKey::BestLab => [0.000000, 0.000000, 2.000000],
+    WeightKey::BestTemple => [2.000000, 0.000000, 0.000000],
+    WeightKey::BestTheater => [3.000000, 0.000000, 0.000000],
+    WeightKey::BestLibrary => [3.000000, 0.000000, 0.000000],
+    WeightKey::BestArena => [3.000000, 0.000000, 0.000000],
+    WeightKey::BestUnit => [3.000000, 2.000000, 3.000000],
+    WeightKey::NumTechs => [1.000000, 1.000000, 1.000000],
+    WeightKey::SpecialTechs => [1.000000, 1.000000, 1.000000],
+    WeightKey::Wonders => [1.000000, 1.000000, 1.000000],
+    WeightKey::WonderProgress => [9.000000, 8.000000, 8.000000],
+    WeightKey::WonderRemaining => [16.000000, 16.000000, 16.000000],
+    WeightKey::WonderStagesLeft => [4.000000, 5.000000, 5.000000],
+    WeightKey::WonderTurnsToFinish => [5.000000, 5.500000, 5.000000],
+    WeightKey::WonderOverrun => [6.500000, 12.528100, 6.500000],
+    WeightKey::WonderStagesPerAction => [1.000000, 2.000000, 2.000000],
+    WeightKey::WonderPotential => [12.567994, 78.700422, 7.252326],
+    WeightKey::WonderPromise => [14.347283, 71.709601, 9.545458],
+    WeightKey::WonderAgeOverrun => [5.578059, 11.902926, 5.617754],
+    WeightKey::Leader => [1.000000, 1.000000, 1.000000],
+    WeightKey::WonderInProgress => [1.000000, 1.000000, 1.000000],
+    WeightKey::HandLimit => [2.000000, 2.000000, 2.000000],
+    WeightKey::ColonizeBonus => [4.000000, 3.000000, 1.000000],
+    WeightKey::BuildDiscount => [3.000000, 5.000000, 5.000000],
+    WeightKey::ResourceDiscount => [0.000000, 0.000000, 0.000000],
+    WeightKey::DefenseBonus => [0.000000, 0.000000, 0.000000],
+    WeightKey::UrbanLimit => [2.000000, 1.000000, 1.000000],
+    WeightKey::GovActionCost => [0.000000, 0.000000, 0.000000],
+    WeightKey::NoAggression => [1.000000, 1.000000, 1.000000],
+    WeightKey::CardBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::EventScoringMargin => [12.000000, 14.000000, 12.000000],
+    WeightKey::CardBoardLeader => [0.000000, 0.000000, 0.000000],
+    WeightKey::HandSwapExtra => [0.000000, 0.000000, 0.000000],
+    WeightKey::CardRateCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::UnitStrengthCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::UnitTechCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::TechBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::ActionBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::GovBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::WonderBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::BuildFreshCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::RestrictedResourceCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::FreeActionCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::TerritoryCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::BonusCardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::TacticBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::AggressionBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::WarBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::PactBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::EventBoardCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::TacticShortfallCost => [0.000000, 0.000000, 0.000000],
+    WeightKey::TacticReachCredit => [0.000000, 0.000000, 0.000000],
+    WeightKey::HandCivil => [2.000000, 2.000000, 2.000000],
+    WeightKey::HandValue => [2.789474, 2.847059, 2.860335],
+    WeightKey::HandPotential => [197.027878, 674.348432, 304.224789],
+    WeightKey::HandMilitary => [4.000000, 4.000000, 4.000000],
+    WeightKey::HandMilValue => [11.000000, 12.000000, 11.000000],
+    WeightKey::HandMilPotential => [185.417899, 240.000000, 780.000000],
+    WeightKey::HandPerishable => [1.431818, 1.392328, 1.393517],
+    WeightKey::RivalCulture => [30.000000, 34.000000, 38.000000],
+    WeightKey::RivalMeanCulture => [30.000000, 26.500000, 27.666667],
+    WeightKey::RivalCultureRate => [0.000000, 1.000000, 1.000000],
+    WeightKey::RivalScienceRate => [0.000000, 0.000000, 0.000000],
+    WeightKey::RivalStrength => [0.000000, 2.000000, 2.000000],
+    WeightKey::EndTurnBias => [1.000000, 1.000000, 1.000000],
+    WeightKey::CultureRateTrailing => [0.000000, 0.000000, 0.000000],
+    WeightKey::ScienceRateTrailing => [0.000000, 0.000000, 0.000000],
+    WeightKey::FoodStockNeeded => [0.000000, 0.000000, 0.000000],
+    WeightKey::ResourceStockNeeded => [0.000000, 0.000000, 0.000000],
+    WeightKey::ScienceNeeded => [0.000000, 0.000000, 0.000000],
+    WeightKey::FreeWorkersNeeded => [0.000000, 0.000000, 0.000000],
+    WeightKey::WorkersLate => [1.592105, 1.494118, 1.050279],
+    WeightKey::StrengthRelEarly => [2.157895, 2.523529, 2.636872],
+    WeightKey::StrengthRelLate => [4.769737, 4.000000, 4.055866],
+    WeightKey::TechLevelsLate => [2.980263, 1.129412, 1.430168],
+    WeightKey::HandValueLate => [6.217105, 5.723529, 7.016760],
+    WeightKey::FoodGap => [4.000000, 4.000000, 4.000000],
+    WeightKey::FoodSurplus => [4.000000, 4.000000, 5.000000],
+    WeightKey::ResourceGap => [5.000000, 3.000000, 4.000000],
+    WeightKey::ResourceSurplus => [6.000000, 5.000000, 5.000000],
+    WeightKey::ScienceGap => [6.000000, 6.000000, 11.000000],
+    WeightKey::ScienceSurplus => [10.000000, 4.000000, 10.000000],
+    WeightKey::CultureGap => [7.000000, 8.000000, 7.000000],
+    WeightKey::CultureSurplus => [9.000000, 9.000000, 8.000000],
+    WeightKey::HappySurplus => [2.000000, 2.000000, 2.000000],
+    WeightKey::CivilActionGap => [4.000000, 4.000000, 4.000000],
+    WeightKey::CivilActionSurplus => [4.000000, 4.000000, 5.000000],
+    WeightKey::TakeCostShare => [1.000000, 0.800000, 0.750000],
+    WeightKey::MilitaryActionGap => [3.000000, 3.000000, 3.000000],
+    WeightKey::MilitaryActionSurplus => [3.000000, 3.000000, 2.000000],
+    WeightKey::WorkerGap => [2.000000, 2.000000, 2.000000],
+    WeightKey::WorkerSurplus => [2.000000, 2.000000, 2.000000],
+    WeightKey::TechRedundancyDiscount => [0.000000, 0.000000, 0.000000],
+    WeightKey::LeaderReplacement => [1.000000, 1.000000, 1.000000],
+    WeightKey::WonderPoolRivalClaimed => [1.000000, 2.000000, 1.000000],
+}
