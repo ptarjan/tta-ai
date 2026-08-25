@@ -259,3 +259,20 @@ HOW TO REDO IT
   emphasis on this coordinate" rather than "shrink this coordinate ~30x".
   Any future comparison of two weight vectors in this repo must state both
   norms before interpreting a blend.
+
+AMENDMENT 2026-08-24: THE HandPotential COINCIDENCE HAS A SHARPER CAUSE
+--------------------------------------------------------------------------
+The correction above attributes the exact agreement between adopting
+HandPotential (0.0478) and deleting it (0.0478) to the ~30x scale gap. That
+is not the reason. The human vector's `hand_potential` entry is literally
+0 (verified by reading analysis/frozen/human_weights.json directly), so for
+that ONE key adopt-and-delete are the same operation at ANY scale factor,
+s*0 = 0. It is an identity, not an artifact.
+
+The scale criticism of Table 1 stands unchanged, and the normalised re-run
+confirms the ~30x factor was real and was distorting the blend. But the
+specific HandPotential agreement was over-attributed. Checked keys with
+materially nonzero human values (RateHorizon, Culture, CultureRate, Science)
+have genuinely different adopt-vs-delete interventions and still both land
+at 0.0000, which is the honest evidence that a lone coordinate cannot close
+a ~190-unit gap.

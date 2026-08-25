@@ -262,16 +262,53 @@ fn t_at(i: usize) -> f64 {
     i as f64 / 100.0
 }
 
+/// `sqrt(sum(w.get(k)^2))` over every [`WeightKey`], i.e. the L2 norm of the
+/// FULLY RESOLVED vector [`load_weights`] produces -- every key present,
+/// absent ones already filled with [`WeightKey::default_weight`] by
+/// `Weights::defaults()` before the JSON overlay runs. This is deliberately
+/// NOT "norm over the keys the JSON file happens to spell out": a champion
+/// file with 160 explicit keys and a human file with 140 both resolve to the
+/// same `N = WeightKey::ALL.len()`-wide array before this ever runs, so
+/// "the union of keys, treating an absent key as `load_weights` resolves
+/// it" and "every key" are the same set for a [`Weights`] value -- there is
+/// no narrower vector to take a norm over.
+fn l2_norm(w: &Weights) -> f64 {
+    WeightKey::ALL.iter().map(|&k| w.get(k).powi(2)).sum::<f64>().sqrt()
+}
+
+/// Returns a copy of `w` with every coordinate multiplied by `s`. For `s >
+/// 0` this cannot change any argmax `dot(w, f)` ever produces (`dot(s*w, f)
+/// == s*dot(w, f)`), so scaling a vector by a positive constant is free --
+/// see this binary's own doc comment on `--normalize` / the task background
+/// this flag exists to test.
+fn scale_weights(w: &Weights, s: f64) -> Weights {
+    let mut out = *w;
+    for &k in WeightKey::ALL {
+        out.set(k, s * w.get(k));
+    }
+    out
+}
+
 /// `--interpolate` inputs shared read-only across every game thread: the
-/// human vector, and the [`WeightKey`]s where it differs from the champion
+/// human vector (already scaled by `s = ||champion||/||human||` when
+/// `--normalize` is passed -- see `main`'s construction of this field,
+/// [`l2_norm`] and [`scale_weights`] -- otherwise the raw loaded vector,
+/// unchanged), and the [`WeightKey`]s where it differs from the champion
 /// (beyond float noise) -- the set the single-key adoption sweep iterates.
 struct InterpCtx<'a> {
     human: Weights,
     /// Keys where `|champion.get(k) - human.get(k)| > 1e-9`; adopting a key
     /// NOT in this set would be a no-op perturbation (`delta_weight == 0`),
-    /// so excluding them keeps the report's "top 10" and "exactly zero"
-    /// counts meaningful instead of padded with guaranteed-zero rows.
+    /// so excluding them keeps the report's "top 10"/"top 15" and "exactly
+    /// zero" counts meaningful instead of padded with guaranteed-zero rows.
     differ_keys: &'a [WeightKey],
+    /// The greedy joint-adoption check's already-locked-in `(key_idx,
+    /// delta_weight)` pairs, prepended to every candidate key's own
+    /// `delta_weight` in the single-key adoption sweep below -- empty
+    /// (`&[]`) for the ordinary single-key sweep, so that sweep is
+    /// unaffected. See `main`'s greedy loop for how this is populated one
+    /// key at a time.
+    locked: &'a [(usize, f64)],
 }
 
 /// `w(t) = (1-t) * champion + t * human` outcome counts, one cell per
@@ -322,6 +359,32 @@ impl KeyAdoptStats {
             cell.0 += o.0;
             cell.1 += o.1;
         }
+    }
+}
+
+/// Pairs the single-key ADOPTION sweep (`w[key] = ctx.human.get(key)`,
+/// [`InterpCtx::locked`] prepended -- see [`KeyAdoptStats`]) with a
+/// DELETION sweep (`w[key] = 0`, i.e. `delta_weight = -champion.get(key)`,
+/// never `locked`-prefixed) computed at the SAME decision points in the
+/// SAME game pass -- see `play_one`'s interpolate block. This is
+/// `--normalize`'s cross-check from the task background: scaled adoption
+/// must stop being a copy of deletion once the ~30x scale gap between
+/// champion and the raw human vector is corrected, and `delete` is what
+/// `adopt` gets compared against to show that (or fail to).
+#[derive(Clone)]
+struct AdoptStats {
+    adopt: KeyAdoptStats,
+    delete: KeyAdoptStats,
+}
+
+impl AdoptStats {
+    fn new(n_keys: usize) -> AdoptStats {
+        AdoptStats { adopt: KeyAdoptStats::new(n_keys), delete: KeyAdoptStats::new(n_keys) }
+    }
+
+    fn merge(&mut self, other: &AdoptStats) {
+        self.adopt.merge(&other.adopt);
+        self.delete.merge(&other.delete);
     }
 }
 
@@ -477,7 +540,7 @@ struct ProbeConfig<'a> {
 /// move the bot itself already chose, so this reproduces an ordinary
 /// self-play trajectory exactly; it only ever ADDS observation, never
 /// changes what gets played.
-fn play_one(players: u8, weights: Weights, seed: u64, cfg: &ProbeConfig) -> ([CardStats; 3], Diag, SensStats, InterpStats, KeyAdoptStats) {
+fn play_one(players: u8, weights: Weights, seed: u64, cfg: &ProbeConfig) -> ([CardStats; 3], Diag, SensStats, InterpStats, AdoptStats) {
     let ProbeConfig { mine_ids, sensitivity, sens_keys, clamp_keys, interp } = *cfg;
     let bot = WeightedBot::new(weights);
     let mut state = game::new_game(players, seed);
@@ -485,7 +548,7 @@ fn play_one(players: u8, weights: Weights, seed: u64, cfg: &ProbeConfig) -> ([Ca
     let mut diag = Diag::new();
     let mut sens = SensStats::new();
     let mut interp_stats = InterpStats::new();
-    let mut key_adopt = KeyAdoptStats::new(interp.map_or(0, |c| c.differ_keys.len()));
+    let mut key_adopt = AdoptStats::new(interp.map_or(0, |c| c.differ_keys.len()));
     let mut moves_played = 0usize;
 
     while !state.game_over {
@@ -605,12 +668,32 @@ fn play_one(players: u8, weights: Weights, seed: u64, cfg: &ProbeConfig) -> ([Ca
                             }
                             for (ki, &key) in ctx.differ_keys.iter().enumerate() {
                                 let key_idx = key as usize;
-                                let delta_weight = ctx.human.get(key) - weights.get(key);
-                                let r = rank_under_perturbation(&vals, &feats, pos, &[(key_idx, delta_weight)]);
-                                let cell = &mut key_adopt.per_key[ki];
-                                cell.0 += 1;
-                                if r == 1 {
-                                    cell.1 += 1;
+                                // ADOPTION: `w[key] = ctx.human.get(key)`
+                                // (already `s`-scaled by `main` when
+                                // `--normalize` is set), with `ctx.locked`'s
+                                // already-chosen greedy keys applied first
+                                // -- see `InterpCtx::locked`'s doc comment.
+                                let adopt_delta = ctx.human.get(key) - weights.get(key);
+                                let mut adopt_adj: Vec<(usize, f64)> = ctx.locked.to_vec();
+                                adopt_adj.push((key_idx, adopt_delta));
+                                let r_adopt = rank_under_perturbation(&vals, &feats, pos, &adopt_adj);
+                                let adopt_cell = &mut key_adopt.adopt.per_key[ki];
+                                adopt_cell.0 += 1;
+                                if r_adopt == 1 {
+                                    adopt_cell.1 += 1;
+                                }
+                                // DELETION cross-check: `w[key] = 0`, never
+                                // `locked`-prefixed -- a fixed baseline
+                                // independent of the greedy state, so
+                                // `--normalize`'s report can compare
+                                // adoption against it key-for-key (see
+                                // `AdoptStats`'s doc comment).
+                                let delete_delta = -weights.get(key);
+                                let r_delete = rank_under_perturbation(&vals, &feats, pos, &[(key_idx, delete_delta)]);
+                                let delete_cell = &mut key_adopt.delete.per_key[ki];
+                                delete_cell.0 += 1;
+                                if r_delete == 1 {
+                                    delete_cell.1 += 1;
                                 }
                             }
                         }
@@ -632,6 +715,7 @@ struct Args {
     threads: usize,
     sensitivity: bool,
     interpolate_path: Option<String>,
+    normalize: bool,
 }
 
 impl Default for Args {
@@ -644,6 +728,7 @@ impl Default for Args {
             threads: 1,
             sensitivity: false,
             interpolate_path: None,
+            normalize: false,
         }
     }
 }
@@ -663,6 +748,11 @@ usage: takeprobe --weights PATH [options]
                        T_GRID_LEN points, plus a single-key champion->PATH
                        adoption sweep over every differing WeightKey (static
                        rescoring, see InterpCtx's doc comment)
+  --normalize        requires --interpolate; redoes both --interpolate
+                       sweeps on a scale-matched PATH vector (PATH scaled by
+                       s = ||champion||_2 / ||PATH||_2 first) rather than the
+                       raw PATH vector -- see l2_norm's doc comment. Does not
+                       change --interpolate's output when omitted.
   --help
 ";
 
@@ -681,6 +771,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--threads" => a.threads = value(flag)?.parse().map_err(|_| "bad --threads".to_string())?,
             "--sensitivity" => a.sensitivity = true,
             "--interpolate" => a.interpolate_path = Some(value(flag)?),
+            "--normalize" => a.normalize = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -697,10 +788,88 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     if a.games == 0 {
         return Err("--games must be at least 1".to_string());
     }
+    if a.normalize && a.interpolate_path.is_none() {
+        return Err("--normalize requires --interpolate PATH".to_string());
+    }
     if a.threads == 0 {
         a.threads = 1;
     }
     Ok(Some(a))
+}
+
+/// Plays `games` self-play games across up to `threads` threads (the same
+/// work `main` used to do inline before `--normalize`'s greedy joint check
+/// needed to repeat it up to 8 times with a different [`ProbeConfig`] each
+/// time -- see `main`'s greedy loop) and merges every thread's [`play_one`]
+/// output into one set of totals. Pure aggregation; never mutates `cfg` or
+/// `weights`, so calling it twice with the same `weights`/`seed`/`games`
+/// reproduces the identical per-game trajectories (same seeds), only
+/// re-scored under whatever `cfg.interp` says this time.
+fn run_all(
+    games: usize,
+    players: u8,
+    seed: u64,
+    threads: usize,
+    weights: Weights,
+    cfg: &ProbeConfig,
+    n_keys: usize,
+) -> ([CardStats; 3], Diag, SensStats, InterpStats, AdoptStats, std::time::Duration) {
+    let start = Instant::now();
+    let next = AtomicUsize::new(0);
+    let threads = threads.min(games).max(1);
+    let totals: Mutex<[CardStats; 3]> = Mutex::new([CardStats::default(); 3]);
+    let diag_totals: Mutex<Diag> = Mutex::new(Diag::new());
+    let sens_totals: Mutex<SensStats> = Mutex::new(SensStats::new());
+    let interp_totals: Mutex<InterpStats> = Mutex::new(InterpStats::new());
+    let key_adopt_totals: Mutex<AdoptStats> = Mutex::new(AdoptStats::new(n_keys));
+
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            handles.push(scope.spawn(|| {
+                let mut local = [CardStats::default(); 3];
+                let mut local_diag = Diag::new();
+                let mut local_sens = SensStats::new();
+                let mut local_interp = InterpStats::new();
+                let mut local_key_adopt = AdoptStats::new(n_keys);
+                loop {
+                    let g = next.fetch_add(1, Ordering::Relaxed);
+                    if g >= games {
+                        break;
+                    }
+                    let this_seed = seed + g as u64;
+                    let (s, d, sn, it, ka) = play_one(players, weights, this_seed, cfg);
+                    for i in 0..3 {
+                        local[i].merge(&s[i]);
+                    }
+                    local_diag.merge(&d);
+                    local_sens.merge(&sn);
+                    local_interp.merge(&it);
+                    local_key_adopt.merge(&ka);
+                }
+                let mut t = totals.lock().expect("totals mutex poisoned");
+                for i in 0..3 {
+                    t[i].merge(&local[i]);
+                }
+                diag_totals.lock().expect("diag mutex poisoned").merge(&local_diag);
+                sens_totals.lock().expect("sens mutex poisoned").merge(&local_sens);
+                interp_totals.lock().expect("interp mutex poisoned").merge(&local_interp);
+                key_adopt_totals.lock().expect("key_adopt mutex poisoned").merge(&local_key_adopt);
+            }));
+        }
+        for h in handles {
+            let _ = h.join();
+        }
+    });
+
+    (
+        totals.into_inner().expect("totals mutex poisoned"),
+        diag_totals.into_inner().expect("diag mutex poisoned"),
+        sens_totals.into_inner().expect("sens mutex poisoned"),
+        interp_totals.into_inner().expect("interp mutex poisoned"),
+        key_adopt_totals.into_inner().expect("key_adopt mutex poisoned"),
+        start.elapsed(),
+    )
 }
 
 fn main() -> ExitCode {
@@ -751,7 +920,25 @@ fn main() -> ExitCode {
         Some(h) => WeightKey::ALL.iter().copied().filter(|&k| (weights.get(k) - h.get(k)).abs() > 1e-9).collect(),
         None => Vec::new(),
     };
-    let interp_ctx: Option<InterpCtx> = human_weights.map(|human| InterpCtx { human, differ_keys: &differ_keys });
+    // `--normalize`: `s = ||champion||_2 / ||human||_2` over the FULLY
+    // RESOLVED vectors (see [`l2_norm`]'s own doc comment on why this is
+    // the same as "over the union of keys, resolved the way `load_weights`
+    // resolves them" -- both are already the same `N`-wide array by the
+    // time `load_weights` returns). `s > 0` always: both norms are sums of
+    // squares of a nonempty array, so `s` is finite and positive whenever
+    // `human_weights` isn't the all-zero vector.
+    let champ_norm = l2_norm(&weights);
+    let human_norm = human_weights.as_ref().map(l2_norm);
+    let scale_s = human_norm.map(|hn| champ_norm / hn);
+    let human_for_interp: Option<Weights> = human_weights.map(|h| {
+        if args.normalize {
+            scale_weights(&h, scale_s.expect("scale_s is Some whenever human_weights is Some"))
+        } else {
+            h
+        }
+    });
+    let interp_ctx: Option<InterpCtx> =
+        human_for_interp.map(|human| InterpCtx { human, differ_keys: &differ_keys, locked: &[] });
     let cfg = ProbeConfig {
         mine_ids: &mine_ids,
         sensitivity: args.sensitivity,
@@ -760,60 +947,8 @@ fn main() -> ExitCode {
         interp: interp_ctx.as_ref(),
     };
 
-    let start = Instant::now();
-    let next = AtomicUsize::new(0);
-    let threads = args.threads.min(args.games).max(1);
-    let totals: Mutex<[CardStats; 3]> = Mutex::new([CardStats::default(); 3]);
-    let diag_totals: Mutex<Diag> = Mutex::new(Diag::new());
-    let sens_totals: Mutex<SensStats> = Mutex::new(SensStats::new());
-    let interp_totals: Mutex<InterpStats> = Mutex::new(InterpStats::new());
-    let key_adopt_totals: Mutex<KeyAdoptStats> = Mutex::new(KeyAdoptStats::new(differ_keys.len()));
-
-    std::thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(threads);
-        for _ in 0..threads {
-            handles.push(scope.spawn(|| {
-                let mut local = [CardStats::default(); 3];
-                let mut local_diag = Diag::new();
-                let mut local_sens = SensStats::new();
-                let mut local_interp = InterpStats::new();
-                let mut local_key_adopt = KeyAdoptStats::new(differ_keys.len());
-                loop {
-                    let g = next.fetch_add(1, Ordering::Relaxed);
-                    if g >= args.games {
-                        break;
-                    }
-                    let seed = args.seed + g as u64;
-                    let (s, d, sn, it, ka) = play_one(args.players, weights, seed, &cfg);
-                    for i in 0..3 {
-                        local[i].merge(&s[i]);
-                    }
-                    local_diag.merge(&d);
-                    local_sens.merge(&sn);
-                    local_interp.merge(&it);
-                    local_key_adopt.merge(&ka);
-                }
-                let mut t = totals.lock().expect("totals mutex poisoned");
-                for i in 0..3 {
-                    t[i].merge(&local[i]);
-                }
-                diag_totals.lock().expect("diag mutex poisoned").merge(&local_diag);
-                sens_totals.lock().expect("sens mutex poisoned").merge(&local_sens);
-                interp_totals.lock().expect("interp mutex poisoned").merge(&local_interp);
-                key_adopt_totals.lock().expect("key_adopt mutex poisoned").merge(&local_key_adopt);
-            }));
-        }
-        for h in handles {
-            let _ = h.join();
-        }
-    });
-
-    let totals = totals.into_inner().expect("totals mutex poisoned");
-    let diag = diag_totals.into_inner().expect("diag mutex poisoned");
-    let sens = sens_totals.into_inner().expect("sens mutex poisoned");
-    let interp = interp_totals.into_inner().expect("interp mutex poisoned");
-    let key_adopt = key_adopt_totals.into_inner().expect("key_adopt mutex poisoned");
-    let elapsed = start.elapsed();
+    let (totals, diag, sens, interp, key_adopt, elapsed) =
+        run_all(args.games, args.players, args.seed, args.threads, weights, &cfg, differ_keys.len());
 
     println!("takeprobe: {} games, {} players, weights={}", args.games, args.players, args.weights_path);
     println!("elapsed: {elapsed:.1?}");
@@ -942,6 +1077,19 @@ fn main() -> ExitCode {
         println!("=== --interpolate: w(t) = (1-t)*champion + t*human, static rescoring, NOT a policy replay ===");
         println!("champion={} human={path}", args.weights_path);
         println!("keys differing champion vs human (beyond 1e-9): {}", ctx.differ_keys.len());
+        if args.normalize {
+            let s = scale_s.expect("scale_s is Some whenever args.normalize && human_weights.is_some()");
+            println!();
+            println!("--normalize active: sweeping w(t) = (1-t)*champion + t*(s*human), not raw human.");
+            println!(
+                "||champion||_2={champ_norm:.4}  ||human||_2={:.4}  s=||champion||/||human||={s:.4}",
+                human_norm.expect("human_norm is Some whenever args.normalize && human_weights.is_some()")
+            );
+            println!(
+                "(norms taken over the full N={}-wide load_weights-resolved vector -- see l2_norm's doc comment)",
+                WeightKey::ALL.len()
+            );
+        }
         println!();
         println!("{:>6} {:>8} {:>10} {:>10} {:>10} {:>12}", "t", "n", "rank1", "rank1or2", "mean_rank", "mean_gap");
         let mut coarse: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::new(); // (grid_idx, t, n, f1, f12, mean_rank)
@@ -953,6 +1101,27 @@ fn main() -> ExitCode {
             let mean_gap = if n > 0 { gsum / n as f64 } else { 0.0 };
             println!("{:>6.2} {n:>8} {f1:>10.4} {f12:>10.4} {mean_rank:>10.2} {mean_gap:>12.4}", t_at(i));
             coarse.push((i, t_at(i), n as f64, f1, f12, mean_rank));
+        }
+
+        // Endpoint correctness check: `t=1.00` is a positive multiple of
+        // the human vector regardless of `--normalize` (scaling by `s > 0`
+        // cannot change an argmax -- l2_norm's/scale_weights' own doc
+        // comments), so it MUST reproduce the un-normalized run's own
+        // t=1.00 row (rank1=0.0645, rank1or2=0.1767, mean_rank=6.63,
+        // reference: mine_take_interpolation_3p_2026-08-24.txt) whether or
+        // not `--normalize` was passed. If it doesn't, `--normalize`
+        // introduced a bug in this same code path, not a new finding.
+        {
+            let (n, r1, r12, rsum, _) = interp.by_t[T_GRID_LEN - 1];
+            let f1 = if n > 0 { r1 as f64 / n as f64 } else { 0.0 };
+            let f12 = if n > 0 { r12 as f64 / n as f64 } else { 0.0 };
+            let mean_rank = if n > 0 { rsum as f64 / n as f64 } else { 0.0 };
+            let ok = (f1 - 0.0645).abs() < 5e-4 && (f12 - 0.1767).abs() < 5e-4 && (mean_rank - 6.63).abs() < 5e-2;
+            println!();
+            println!(
+                "ENDPOINT CHECK (t=1.00 vs reference rank1=0.0645 rank1or2=0.1767 mean_rank=6.63): got rank1={f1:.4} rank1or2={f12:.4} mean_rank={mean_rank:.2} -- {}",
+                if ok { "PASS" } else { "FAIL -- investigate before trusting anything else in this file" }
+            );
         }
 
         // Biggest one-step jump in rank1 fraction between adjacent coarse
@@ -997,26 +1166,108 @@ fn main() -> ExitCode {
 
         println!();
         println!(
-            "Single-key adoption champion->human (w[key]=human[key], all else champion), ranked by rank1 fraction (n={} differing keys):",
+            "Single-key adoption champion->{} (w[key]={}[key], all else champion), ranked by rank1 fraction (n={} differing keys):",
+            if args.normalize { "s*human" } else { "human" },
+            if args.normalize { "s*human" } else { "human" },
             ctx.differ_keys.len()
         );
-        let mut ranked: Vec<(WeightKey, u64, u64)> = ctx
+        let mut ranked: Vec<(WeightKey, u64, u64, u64, u64)> = ctx
             .differ_keys
             .iter()
-            .zip(key_adopt.per_key.iter())
-            .map(|(&k, &(n, r1))| (k, n, r1))
+            .zip(key_adopt.adopt.per_key.iter())
+            .zip(key_adopt.delete.per_key.iter())
+            .map(|((&k, &(n, r1)), &(dn, dr1))| (k, n, r1, dn, dr1))
             .collect();
         ranked.sort_by(|a, b| {
             let fa = if a.1 > 0 { a.2 as f64 / a.1 as f64 } else { 0.0 };
             let fb = if b.1 > 0 { b.2 as f64 / b.1 as f64 } else { 0.0 };
             fb.partial_cmp(&fa).unwrap_or(std::cmp::Ordering::Equal)
         });
-        for (rank, (key, n, r1)) in ranked.iter().take(10).enumerate() {
+        let top_n = if args.normalize { 15 } else { 10 };
+        for (rank, (key, n, r1, _, _)) in ranked.iter().take(top_n).enumerate() {
             let f = if *n > 0 { *r1 as f64 / *n as f64 } else { 0.0 };
             println!("  {:>2}. {:<24} rank1_frac={f:.4}  (n={n})", rank + 1, format!("{key:?}"));
         }
-        let zero_count = ranked.iter().filter(|&&(_, n, r1)| n == 0 || r1 == 0).count();
+        let zero_count = ranked.iter().filter(|&&(_, n, r1, _, _)| n == 0 || r1 == 0).count();
         println!("keys achieving exactly zero rank1 fraction: {zero_count} of {}", ranked.len());
+
+        if args.normalize {
+            let check_n = 5.min(ranked.len());
+            println!();
+            println!(
+                "Cross-check (top {check_n}): adoption rank1_frac vs the m=0 DELETION rank1_frac at the same keys (same machinery, see AdoptStats doc comment)."
+            );
+            println!(
+                "If these still agree to 4 significant figures for every key below, --normalize did not change anything and scaled adoption is still a copy of deletion."
+            );
+            println!("{:>2}  {:<24} {:>14} {:>14} {:>10}", "#", "key", "adopt_rank1", "delete_rank1", "match4sf");
+            let mut all_match = check_n > 0;
+            for (rank, (key, n, r1, dn, dr1)) in ranked.iter().take(check_n).enumerate() {
+                let fa = if *n > 0 { *r1 as f64 / *n as f64 } else { 0.0 };
+                let fd = if *dn > 0 { *dr1 as f64 / *dn as f64 } else { 0.0 };
+                let matches4sf = format!("{fa:.4}") == format!("{fd:.4}");
+                all_match &= matches4sf;
+                println!("{:>2}. {:<24} {fa:>14.4} {fd:>14.4} {:>10}", rank + 1, format!("{key:?}"), matches4sf);
+            }
+            println!(
+                "{}",
+                if all_match {
+                    "All checked keys still match adoption==deletion to 4sf -- normalisation did NOT take effect for the single-key sweep; say so, do not report a discovery."
+                } else {
+                    "Adoption and deletion diverge for at least one checked key -- scaled adoption is measuring something deletion does not."
+                }
+            );
+
+            // Greedy joint check, ONLY if step 2 (scaled single-key
+            // adoption) surfaced a clearly nonzero rank1 fraction anywhere
+            // -- per this binary's own doc comment on --normalize / the
+            // task background. `n > 0` guards against a key with no scored
+            // occurrences at all (impossible here since every differ_key
+            // is swept at every one of the same 12,299 points, but kept as
+            // a defensive check rather than assumed).
+            let any_nonzero = ranked.iter().any(|&(_, n, r1, _, _)| n > 0 && r1 > 0);
+            println!();
+            if any_nonzero {
+                println!("=== Greedy joint scaled-adoption check (step 2 found a nonzero key; see task step 3) ===");
+                let human = ctx.human;
+                let mut remaining: Vec<WeightKey> = ctx.differ_keys.to_vec();
+                let mut locked: Vec<(usize, f64)> = Vec::new();
+                let mut prev_frac = 0.0f64;
+                for step in 1..=8 {
+                    if remaining.is_empty() {
+                        println!("  step {step}: no remaining candidate keys; stopping.");
+                        break;
+                    }
+                    let step_ctx = InterpCtx { human, differ_keys: &remaining, locked: &locked };
+                    let step_cfg = ProbeConfig { interp: Some(&step_ctx), ..cfg };
+                    let (_, _, _, _, step_adopt, _) =
+                        run_all(args.games, args.players, args.seed, args.threads, weights, &step_cfg, remaining.len());
+                    let mut best_i = 0usize;
+                    let mut best_frac = -1.0f64;
+                    for (i, &(n, r1)) in step_adopt.adopt.per_key.iter().enumerate() {
+                        let f = if n > 0 { r1 as f64 / n as f64 } else { 0.0 };
+                        if f > best_frac {
+                            best_frac = f;
+                            best_i = i;
+                        }
+                    }
+                    let key = remaining[best_i];
+                    println!("  step {step}: best next key = {key:?}  joint_rank1_frac={best_frac:.4}  (locked so far: {})", locked.len());
+                    if best_frac <= prev_frac + 1e-12 {
+                        println!("  no improvement over the previous step ({prev_frac:.4}); stopping (greedy is done).");
+                        break;
+                    }
+                    let delta = human.get(key) - weights.get(key);
+                    locked.push((key as usize, delta));
+                    remaining.remove(best_i);
+                    prev_frac = best_frac;
+                }
+            } else {
+                println!(
+                    "Step 2 found no key with a nonzero scaled-adoption rank1 fraction -- per this task's own instruction, the greedy joint check is skipped (it only runs when step 2 surfaces something to build on)."
+                );
+            }
+        }
     }
 
     ExitCode::SUCCESS

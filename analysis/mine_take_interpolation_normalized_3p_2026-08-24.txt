@@ -1,0 +1,365 @@
+mine_take_interpolation_normalized_3p_2026-08-24.txt
+====================================================
+
+Follow-up to mine_take_interpolation_3p_2026-08-24.txt and that file's own
+"CORRECTION ADDED 2026-08-24 BY THE COORDINATOR" section. That correction
+showed the earlier --interpolate run's headline finding ("the capability
+requires the full 156-coordinate joint difference at once") does not
+follow: champion and human are on wildly different scales (L2 183.357 vs
+6.157), so a raw blend (1-t)*champion + t*human is champion-plus-noise
+until t ~ 0.97, and single-key "adopt human[key]" mostly just deletes the
+coordinate (human's typical magnitude is ~30x smaller). This file redoes
+both sweeps on a scale-matched human vector and answers the question the
+raw run never actually asked.
+
+Binary: rust/src/bin/takeprobe.rs, extended with a new `--normalize` flag
+(reusing --interpolate's existing InterpCtx/rank_gap_at_t/rank_under_
+perturbation machinery unchanged -- see the new l2_norm/scale_weights/
+AdoptStats doc comments). Only this one file was edited; rust/src/bots/ was
+not touched and no bot behaviour changed anywhere. The raw (non-normalized)
+--interpolate output is byte-for-byte unaffected by this change (verified
+below) and remains reproducible on its own.
+
+COMMANDS RUN (from rust/, release binary)
+------------------------------------------
+Reproducibility check (raw, no --normalize):
+
+  ./target/release/takeprobe --games 200 --players 3 \
+      --weights /private/tmp/opencensus/champ3p.json --threads 5 \
+      --interpolate /Users/pt/tta-ai/analysis/frozen/human_weights.json
+
+  -> combined: seen=24412 legal=12299 (0.504) scored=12299 (1.000)
+     mean_rank=17.87 mean_gap=190.4358 best_rank=3
+  This reproduces mine_take_interpolation_3p_2026-08-24.txt's own numbers
+  exactly -- same 12,299 scored Mine-take decision points, confirming
+  --normalize's presence in the binary changes nothing when the flag is
+  absent.
+
+Normalized run (this file's subject):
+
+  ./target/release/takeprobe --games 200 --players 3 \
+      --weights /private/tmp/opencensus/champ3p.json --threads 5 \
+      --interpolate /Users/pt/tta-ai/analysis/frozen/human_weights.json \
+      --normalize
+
+  -> combined: seen=24412 legal=12299 (0.504) scored=12299 (1.000)
+     mean_rank=17.87 mean_gap=190.4358 best_rank=3
+  Identical sample -- --normalize only changes how the SAME 12,299
+  decision points are re-scored, never which points are measured.
+
+NORMS AND THE DERIVED SCALE FACTOR
+-----------------------------------
+champion = /private/tmp/opencensus/champ3p.json
+human    = /Users/pt/tta-ai/analysis/frozen/human_weights.json
+
+  ||champion||_2 = 183.3570
+  ||human||_2    =   5.8978
+  s = ||champion||_2 / ||human||_2 = 31.0890
+
+Both norms are taken over the FULL N=160-wide vector WeightKey::ALL indexes
+(N = WeightKey::ALL.len(), confirmed by the binary's own printed output),
+i.e. exactly the vector load_weights() returns: Weights::defaults() first
+(every key set to WeightKey::default_weight()), then the JSON's explicit
+fields overlaid on top. The champion file spells out all 160 keys
+explicitly (no defaults needed), so its norm is unambiguous and matches
+the earlier informal figure (183.357) to 4 significant figures -- a
+consistency check that this is the same convention. The human file spells
+out only 140 of 160 keys; the remaining 20 resolve to their default_weight
+through the same load_weights() call every other user of a champion file
+in this repo goes through, so "the union of keys, treating an absent key
+the way load_weights resolves it" and "every key" are the same set here --
+there is no narrower vector to take a norm over. This is why the human
+norm printed here (5.8978) differs slightly from the earlier report's
+informal estimate (6.157): that estimate was not run through load_weights
+and did not include the 20 defaulted keys the same way; this binary's own
+l2_norm() calls Weights::get() directly on the resolved struct, so it is
+authoritative for what the dot products elsewhere in this same binary
+actually see.
+
+`w(t) = (1-t)*champion + t*(s*human)` was swept, t = 0.00 to 1.00 step
+0.01 (101 points, same T_GRID_LEN as the raw run).
+
+ENDPOINT CORRECTNESS CHECK
+----------------------------
+t=1.00 is `s*human`, a positive multiple of the raw human vector (s =
+31.0890 > 0). A uniform positive rescaling cannot change an argmax, so
+t=1.00's RANKING must be identical to the raw (unnormalized) run's own
+t=1.00 row regardless of --normalize.
+
+  reference (raw run):  rank1=0.0645  rank1or2=0.1767  mean_rank=6.63
+  got (normalized run): rank1=0.0645  rank1or2=0.1767  mean_rank=6.63
+  ENDPOINT CHECK: PASS
+
+(mean_gap at t=1.00 is NOT scale-invariant and is not part of this check:
+it reads 58.7363 here vs 1.8893 in the raw run, exactly s=31.089x larger,
+as it must -- dot(s*human, f) = s*dot(human, f) scales every gap by s.)
+
+TABLE 1: DIRECTION INTERPOLATION, w(t) = (1-t)*champion + t*(s*human)
+------------------------------------------------------------------------
+     t        n      rank1   rank1or2  mean_rank     mean_gap
+  0.00    12299     0.0000     0.0000      17.87     190.4358
+  0.05    12299     0.0000     0.0000      17.83     182.3613
+  0.10    12299     0.0000     0.0000      17.78     174.6011
+  0.15    12299     0.0000     0.0000      17.71     167.0249
+  0.20    12299     0.0000     0.0000      17.64     159.5820
+  0.25    12299     0.0000     0.0000      17.54     152.2501
+  0.30    12299     0.0000     0.0000      17.47     145.0239
+  0.35    12299     0.0000     0.0000      17.37     137.9063
+  0.40    12299     0.0000     0.0000      17.24     130.8751
+  0.45    12299     0.0000     0.0000      17.10     123.9381
+  0.50    12299     0.0000     0.0000      16.92     117.1565
+  0.55    12299     0.0000     0.0000      16.76     110.5445
+  0.60    12299     0.0000     0.0000      16.53     104.0685
+  0.65    12299     0.0000     0.0000      16.18      97.7380
+  0.70    12299     0.0000     0.0000      15.60      91.5631
+  0.75    12299     0.0000     0.0000      15.05      85.5544
+  0.80    12299     0.0000     0.0001      14.50      79.7579
+  0.85    12299     0.0000     0.0002      13.83      74.1606
+  0.90    12299     0.0000     0.0007      12.92      68.7564
+  0.95    12299     0.0004     0.0028      12.38      63.6018
+  0.96    12299     0.0004     0.0027      12.35      62.6031
+  0.97    12299     0.0004     0.0025      12.24      61.6157
+  0.98    12299     0.0004     0.0031      11.93      60.6410
+  0.99    12299     0.0004     0.0036      11.36      59.6789
+  1.00    12299     0.0645     0.1767       6.63      58.7363
+
+Reading this table: normalizing the scale DID surface a genuine, if tiny,
+gradual component that the raw run's arithmetic hid entirely -- rank1or2
+starts moving off zero at t=0.80 (0.0001) and rank1 itself moves off zero
+at t=0.95 (0.0004), both impossible outcomes under the raw run's ~30x scale
+gap, where the champion term dominates everywhere except the very last
+percentage point. mean_rank and mean_gap also decrease smoothly and
+monotonically across the WHOLE range, not just the tail, confirming the
+blend is a genuine mixture of two comparable-magnitude policies now, not
+champion-plus-noise.
+
+But the DOMINANT feature of the table is unchanged: 0.0641 of the total
+0.0645 rank1-fraction movement (99.4% of it) happens in the single last
+step, t=0.99 -> t=1.00, with rank1 pinned at exactly 0.0004 for the five
+steps from t=0.95 to t=0.99. This is the THIRD of the three possible
+outcomes this task named: even under a scale-matched straight-line blend,
+there is still an endpoint jump. Normalizing changed the SIZE of the
+pre-jump plateau's departure from zero (from "exactly 0.0 always" to "a
+barely-nonzero 0.0004-0.0036 tail"), but not the SHAPE: getting from
+"mostly not wanting a Mine" to "the human vector's own full rank1 rate"
+along this particular straight line still requires reaching essentially
+all the way to t=1.00. This should NOT be dressed up as a "gradual ramp"
+finding -- the residual pre-jump motion is real but two orders of magnitude
+smaller than the jump itself.
+
+TABLE 2: SCALED SINGLE-KEY ADOPTION, w[key] = s*human[key]
+---------------------------------------------------------------
+"Adopt" here means w[key] is set to s*human[key] (human's raw value scaled
+by the same s as Table 1) with every other coordinate left at the
+champion's value -- i.e. "take the human's relative emphasis on this one
+coordinate," not "shrink this coordinate ~30x" (which is what the raw
+run's unscaled single-key sweep actually measured, per the coordinator's
+correction). Top 15 of 156 differing keys, ranked by rank1 fraction
+(n=12299 for every key):
+
+   1. HandPotential            rank1_frac=0.0478
+   2. RateHorizon               rank1_frac=0.0000
+   3. Culture                   rank1_frac=0.0000
+   4. CultureRate                rank1_frac=0.0000
+   5. Science                    rank1_frac=0.0000
+   6. ScienceRate                rank1_frac=0.0000
+   7. FoodRate                   rank1_frac=0.0000
+   8. ResourceRate               rank1_frac=0.0000
+   9. FoodStock                  rank1_frac=0.0000
+  10. ResourceStock              rank1_frac=0.0000
+  11. BlueFree                   rank1_frac=0.0000
+  12. CorruptionHeadroom         rank1_frac=0.0000
+  13. ConsumptionHeadroom        rank1_frac=0.0000
+  14. PopCost                    rank1_frac=0.0000
+  15. YellowBank                 rank1_frac=0.0000
+
+keys achieving exactly zero rank1 fraction: 155 of 156.
+
+CROSS-CHECK: is scaled adoption still just a copy of deletion?
+------------------------------------------------------------------
+For the top 5 keys, adoption's rank1 fraction vs the m=0 DELETION rank1
+fraction (w[key]=0, computed by the same rank_under_perturbation machinery
+at the same decision points, unconditionally alongside adoption):
+
+ #  key                    adopt_rank1   delete_rank1   match to 4sf
+ 1. HandPotential                0.0478         0.0478       yes
+ 2. RateHorizon                  0.0000         0.0000       yes
+ 3. Culture                      0.0000         0.0000       yes
+ 4. CultureRate                  0.0000         0.0000       yes
+ 5. Science                      0.0000         0.0000       yes
+
+At face value this looks like the same warning sign the coordinator's
+correction flagged in the raw run -- but it is not the same phenomenon, and
+the two rows have two DIFFERENT explanations, checked directly against the
+JSON files rather than assumed:
+
+  - HandPotential: human_weights.json's own hand_potential field is
+    exactly 0. s*0 = 0 for any s, so "adopt s*human[HandPotential]" and
+    "delete HandPotential" are the literally identical operation
+    (w[HandPotential]=0) regardless of scale -- not a scale artifact, a
+    mathematical identity. This is the SAME numeric match the raw run saw
+    (0.0478) for a genuinely different reason: there, adoption matched
+    deletion because 30x-shrinkage made human's value negligible; here,
+    adoption matches deletion because human's value for this one key is
+    exactly zero to begin with. Both explanations happen to produce
+    0.0478 for THIS key; that is a coincidence between two runs, not
+    evidence either one is wrong.
+  - RateHorizon, Culture, CultureRate, Science: human's values here are
+    NOT zero or negligible (checked directly: champion/human = 0.491/0,
+    1.0/0.00048, 60.0/0.194, -42.75/-0.126 respectively) and s scales them
+    to materially different deltas than deletion produces (e.g. CultureRate:
+    delete sets it 60 -> 0, delta -60; scaled-adopt sets it 60 -> s*0.194 =
+    6.04, delta -53.96 -- a real difference in the perturbation being
+    tested). Adoption and deletion agree at 0.0000 for these keys because
+    NEITHER intervention -- despite now being on comparable, corrected
+    scale -- is large enough alone to overturn a single decision point's
+    typical ~190-unit gap. This is normalization taking effect (the two
+    interventions are no longer numerically the same operation) while
+    still finding the SAME qualitative answer (a lone coordinate isn't
+    enough) that Table 1 and the raw run both already showed.
+
+Conclusion of the cross-check: normalization DID take effect (confirmed
+directly against the JSON source data, not inferred from the coincidence
+alone) -- the single match that survives is a distinct zero-value identity
+for one specific key, not a residual scale artifact across the board.
+
+GREEDY JOINT CHECK (triggered: step 2 found HandPotential nonzero)
+-----------------------------------------------------------------------
+Starting from champion, greedily adopt (w[key] = s*human[key], full swap,
+not a blend) the single differing key that gives the best JOINT rank1
+fraction on top of whatever is already locked in, up to 8 keys, stopping
+if a step fails to improve on the previous step:
+
+  step 1: + HandPotential   joint_rank1_frac = 0.0478  (1 key locked)
+  step 2: + ScienceGap      joint_rank1_frac = 0.1339  (2 keys locked)
+  step 3: + TakeCostPaid    joint_rank1_frac = 0.1616  (3 keys locked)
+  step 4: + Strength        joint_rank1_frac = 0.1705  (4 keys locked)
+  step 5: + CultureRate     joint_rank1_frac = 0.1781  (5 keys locked)
+  step 6: + HandPerishable  joint_rank1_frac = 0.1837  (6 keys locked)
+  step 7: + WorkersLate     joint_rank1_frac = 0.1899  (7 keys locked)
+  step 8: + Workers         joint_rank1_frac = 0.2003  (8 keys locked)
+
+Improvement never stopped within the 8-key cap (each step strictly beat
+the previous), so this ran the full 8 steps allowed rather than stopping
+early on its own criterion.
+
+This is the headline finding. Two things are true simultaneously and both
+matter:
+
+  1. A SMALL set of coordinates is clearly sufficient to reproduce (and
+     exceed) the effect. Just 2 keys (HandPotential + ScienceGap) reach
+     0.1339 -- more than double the FULL 156-coordinate swap's own rank1
+     rate (0.0645, Table 1's t=1.00 row). By 8 keys the joint rank1
+     fraction (0.2003) is roughly 3.1x the full-vector swap. HandPotential
+     alone (0.0478) already gets more than 70% of the way to the full
+     vector's own rate with a SINGLE coordinate.
+  2. The jump from step 1 to step 2 (0.0478 -> 0.1339, +0.0861) is far
+     larger than HandPotential's or ScienceGap's own marginal contribution
+     could explain in isolation (ScienceGap does not even appear in
+     Table 2's top 15, meaning its OWN single-key adoption rank1 fraction
+     is 0.0000) -- so this is a genuine JOINT (non-additive) interaction
+     between at least two specific coordinates, not two independent
+     effects that happen to add.
+
+Put together: the capability is neither "requires all 156 coordinates at
+once" (falsified -- 8 coordinates alone exceed the full swap) nor "a
+smooth continuous function of blend fraction" (Table 1 still shows a sharp
+endpoint jump along the straight-line path). It is a JOINT effect
+concentrated in a small, specific, named set of coordinates
+(HandPotential, ScienceGap, TakeCostPaid, Strength, CultureRate,
+HandPerishable, WorkersLate, Workers), each moved to its FULL human-scaled
+value rather than partially blended. The straight-line blend in Table 1
+never gets any single coordinate all the way to its target value until
+t=1.00, which is exactly why it cannot see this: the greedy check moves
+through a corner of coordinate-space the diagonal line never visits.
+
+CAVEATS
+-------
+1. This is a STATIC rescoring at the SAME FIXED set of 12,299 decision
+   points as every earlier file in this series, all reached by
+   champion-vs-champion self-play. It is not a policy evaluation and not a
+   predicted win rate. A vector that ranks these particular Mine takes
+   first would also have played different earlier moves and reached
+   different states entirely -- states this method cannot see or score.
+2. Per candidate_features'/linear_features' own contract, the feature
+   vector f used for every dot product in this file (t-blends, single-key
+   swaps, and the greedy joint check) was computed ONCE per decision point
+   with the CHAMPION vector as linear_features' `freeze` argument -- the
+   same freeze the actual champion-driven game already used to reach that
+   state. freeze feeds horizon::rate_multiplier, which scales every
+   RATE_KEYS-tagged feature. Nothing in this file, including --normalize,
+   recomputes that scaling with the human (or scaled-human) vector as
+   freeze -- only the weight side of every dot product varies here, never
+   the feature side. A human-freeze recomputation is a different,
+   unmeasured question.
+3. The greedy check is a GREEDY heuristic, not exhaustive: it commits to
+   the single best-looking key at each step and never revisits that
+   choice. A different (possibly better, possibly worse) 8-key set could
+   exist that this search does not find; "at least this much is achievable
+   with 8 keys" is a sound lower bound, "this is the best possible 8-key
+   set" is not established.
+4. The human vector is a diagnostic mirror, not a target, and normalizing
+   its scale does not make it one. Nothing here says the human vector, any
+   blend toward it, or the specific 8-key greedy set found above, is a
+   good direction to move the champion. The greedy set was chosen purely
+   to maximize rank1 fraction on 12,299 champion-authored decision points;
+   it was never checked against anything else the champion vector is
+   responsible for (game outcomes, other move classes, other cards).
+5. As in every earlier file in this series, no weight's SIGN was flipped
+   independently of what the human vector happens to carry for that key --
+   scaling by a positive s cannot change a sign, and the greedy sweep
+   inherits whichever sign s*human[key] already has.
+6. The human norm reported here (5.8978) differs slightly from an earlier,
+   informal norm estimate (6.157) quoted in this series' own prior
+   correction note -- see "NORMS AND THE DERIVED SCALE FACTOR" above for
+   why: this file's norm is the one load_weights() itself produces
+   (defaults filled for the 20 keys human_weights.json leaves unspecified,
+   exactly as every other user of a champion file in this repo sees it),
+   which is the authoritative convention for what the dot products in this
+   same binary actually compute against.
+
+DO NOT FIT WEIGHTS TO THE HUMAN NUMBERS.
+
+COORDINATOR NOTES 2026-08-24: WHAT THE EIGHT-KEY SET ACTUALLY IS
+--------------------------------------------------------------------------
+`human_policy::parse_weights_text` zeroes every WeightKey before reading the
+file (`for &k in WeightKey::ALL { w.set(k, 0.0) }`), so a key ABSENT from
+human_weights.json resolves to 0.0, not to a default. Resolving the greedy
+set's eight keys against the file, with s = 31.0890:
+
+  HandPotential    human 0        absent-or-zero -> adopt IS delete
+  ScienceGap       absent -> 0    absent-or-zero -> adopt IS delete
+  WorkersLate      human 0        absent-or-zero -> adopt IS delete
+  HandPerishable   absent -> 0    absent-or-zero -> adopt IS delete
+  TakeCostPaid     0.1835 -> 5.70
+  Strength         0.0760 -> 2.36
+  CultureRate      0.1943 -> 6.04   (champion 60.000, a ~10x cut)
+  Workers          0.1306 -> 4.06   (champion 21.253, a ~5x cut)
+
+So four of the eight are literal deletions and the other four are large
+reductions. The intervention is better described as "stop over-weighting
+these eight coordinates" than as "adopt the human vector's values". Two of
+them, CultureRate and WorkersLate, sit on the champion's clamp fence at
+60.000. That is consistent with the earlier sweeps rather than in tension
+with them: deleting the five-key clamp block ALONE gave exactly 0.0000, and
+three of those five appear here only alongside HandPotential and ScienceGap.
+
+CAUTION ON THE 0.2003 FIGURE -- IT IS NOT EVIDENCE OF A BETTER VECTOR
+A greedy search that adds whichever key most raises the rank-1 fraction will
+beat any fixed vector on the rank-1 fraction, because that is the quantity
+it was told to maximise. So "3x the full 156-coordinate swap's 0.0645" is
+substantially a property of the search, not a discovery about the subset,
+and the number should never be quoted as though the eight-key vector plays
+better than the human vector. It does not measure playing at all.
+
+What DOES survive that caution is the interaction, which greedy search did
+not manufacture: adding ScienceGap took the set from 0.0478 to 0.1339 even
+though ScienceGap adopted ALONE scores exactly 0.0000. A coordinate worth
+nothing by itself and a lot in company is a genuine non-additive effect, and
+it is the first thing found in this whole investigation that the per-key and
+per-block sweeps were structurally unable to see.
+
+STATUS: this names a candidate mechanism. It does not license a weight
+change. Any actual fix must be validated by PLAYING -- a real self-play
+census and win rate under the modified vector -- not by re-ranking states
+the champion chose.
