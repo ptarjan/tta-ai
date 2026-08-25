@@ -1,0 +1,583 @@
+ADJACENT BYTE-IDENTICAL TAKE LINES, SAME PLAYER -- all 1011 journals
+game	line_a	line_b	colour	age	round	card	gap_s	run_len
+7521361	467	468	Grey	III	13	Reserves	4	2
+7521364	276	277	Grey	II	8	Breakthrough	2	2
+7521364	573	574	Grey	III	15	Reserves	2	2
+7521377	576	577	Purple	III	16	Reserves	2	2
+7521449	523	524	Green	III	14	Reserves	5	2
+7521522	294	295	Purple	III	15	Reserves	1	2
+7521544	122	123	Orange	I	5	Breakthrough	2	2
+7521577	268	269	Orange	III	16	Reserves	1	2
+7521603	246	247	Orange	III	15	Breakthrough	1	2
+7521606	503	504	Orange	II	14	Reserves	1	2
+7521619	79	80	Grey	I	3	Reserves	1	2
+7521660	419	420	Orange	II	13	Reserves	2	2
+7521666	721	722	Grey	IV	18	Efficient Upgrade	2	2
+7521671	484	485	Orange	II	13	Efficient Upgrade	2	2
+7521673	315	316	Purple	III	17	Efficient Upgrade	1	2
+7521683	52	53	Purple	I	4	Breakthrough	2	2
+7521689	12	13	Orange	I	2	Frugality	2	2
+7521721	349	350	Green	III	13	Reserves	1	2
+7521740	299	300	Orange	III	17	Reserves	0	2
+7521758	390	391	Orange	II	12	Efficient Upgrade	1	2
+7521765	40	41	Green	I	2	Rich Land	4	2
+7521775	327	328	Purple	IV	19	Reserves	1	2
+7521819	84	85	Orange	I	6	Frugality	1	2
+7521832	222	223	Orange	II	13	Reserves	2	2
+7521835	177	178	Purple	II	10	Breakthrough	1	2
+7521851	253	254	Orange	III	14	Reserves	4	2
+7521883	191	192	Grey	I	6	Rich Land	2	2
+7521884	12	13	Orange	I	2	Rich Land	8	2
+7521885	84	85	Orange	I	6	Rich Land	1	2
+7521915	282	283	Orange	III	17	Reserves	2	2
+7521924	68	69	Purple	I	5	Rich Land	0	2
+7521931	209	210	Purple	III	13	Revolutionary Idea	5	2
+7521943	281	282	Purple	III	17	Reserves	2	2
+7521953	13	14	Orange	I	2	Urban Growth	1	2
+7521959	271	272	Purple	III	15	Efficient Upgrade	3	2
+7521959	315	316	Purple	III	17	Reserves	2	2
+7521967	13	14	Orange	I	2	Frugality	1	2
+7521968	111	112	Purple	II	7	Reserves	4	2
+7521983	72	73	Purple	I	5	Breakthrough	6	2
+7521983	267	268	Orange	III	15	Reserves	2	2
+7521985	14	15	Orange	I	2	Frugality	4	2
+7521987	10	11	Purple	A	1	Frugality	1	2
+7521990	44	45	Orange	I	4	Urban Growth	1	2
+7521992	19	20	Purple	I	2	Frugality	2	2
+7521995	85	86	Orange	I	6	Frugality	2	2
+7521995	118	119	Orange	II	8	Reserves	2	2
+7521995	290	291	Purple	III	15	Reserves	8	2
+7521996	267	268	Purple	III	15	Reserves	2959	2
+7521997	71	72	Purple	I	4	Reserves	131	2
+7521997	326	327	Purple	III	13	Reserves	3	2
+7521997	432	433	Green	IV	16	Efficient Upgrade	2	2
+7521998	340	341	Purple	IV	19	Urban Growth	11	2
+7522001	12	13	Orange	I	2	Urban Growth	5	2
+7522001	339	340	Purple	III	17	Reserves	2	2
+7522005	129	130	Orange	I	7	Urban Growth	1	2
+7522022	254	255	Purple	III	13	Efficient Upgrade	2	2
+7522023	156	157	Orange	II	10	Breakthrough	13	2
+7522024	19	20	Orange	I	2	Frugality	3	2
+7522024	230	231	Orange	II	10	Efficient Upgrade	2	2
+7522037	92	93	Purple	I	4	Breakthrough	1	2
+7522047	7	8	Purple	A	1	Frugality	2	2
+7522054	244	245	Purple	III	14	Reserves	4	2
+7522055	69	70	Purple	I	5	Rich Land	5	2
+7522067	501	502	Orange	III	14	Reserves	5	2
+7522099	18	19	Orange	I	2	Frugality	24	2
+7522099	411	412	Orange	III	16	Reserves	1	2
+7522102	107	108	Orange	I	7	Rich Land	2	2
+7522126	138	139	Orange	II	9	Breakthrough	15	2
+7522126	194	195	Purple	II	11	Reserves	27	2
+7522128	227	228	Purple	III	13	Urban Growth	1	2
+7522172	227	228	Orange	III	13	Breakthrough	7	2
+7522193	20	21	Purple	I	2	Urban Growth	2	2
+7522199	411	412	Purple	III	12	Efficient Upgrade	2	2
+7522203	141	142	Orange	II	9	Breakthrough	4	2
+7522218	200	201	Purple	II	12	Efficient Upgrade	5	2
+7522244	380	381	Green	III	14	Reserves	1	2
+7522249	532	533	Green	III	15	Reserves	3	2
+7522265	340	341	Purple	IV	17	Reserves	3	2
+7522268	163	164	Purple	II	10	Breakthrough	6	2
+7522272	182	183	Orange	II	10	Breakthrough	3	2
+7522283	182	183	Purple	II	11	Breakthrough	1	2
+7522284	309	310	Purple	III	16	Reserves	1	2
+7522287	243	244	Purple	III	14	Revolutionary Idea	2	2
+7522291	98	99	Purple	I	6	Rich Land	2	2
+7522319	403	404	Orange	III	16	Revolutionary Idea	3	2
+7522321	32	33	Purple	I	3	Breakthrough	8	2
+7522334	252	253	Purple	III	14	Reserves	2	2
+7522345	530	531	Purple	III	15	Urban Growth	1	2
+7522360	109	110	Purple	I	7	Rich Land	2	2
+7522360	341	342	Orange	III	18	Urban Growth	1	2
+7522362	223	224	Orange	III	14	Breakthrough	19	2
+7522363	80	81	Purple	I	6	Reserves	1	2
+7522368	7	8	Purple	A	1	Urban Growth	2	2
+7522372	257	258	Purple	III	14	Reserves	2	2
+7522382	278	279	Purple	III	15	Reserves	2	2
+7522384	327	328	Purple	III	12	Reserves	2	2
+7522388	133	134	Purple	II	9	Johannes Sebastian Bach	3	2
+7522388	280	281	Orange	III	17	Reserves	2	2
+7522392	8	9	Purple	A	1	Frugality	18	2
+7522404	285	286	Orange	III	16	Reserves	20	2
+7522421	249	250	Orange	III	15	Revolutionary Idea	4	2
+7522422	191	192	Orange	I	7	Rich Land	1	2
+7522423	269	270	Purple	III	15	Reserves	2	2
+7522443	254	255	Orange	III	15	Revolutionary Idea	2	2
+7522446	243	244	Orange	II	8	Rich Land	1	2
+7522448	358	359	Purple	II	11	Reserves	1	2
+7522450	7	8	Purple	A	1	Rich Land	3	2
+7522453	26	27	Orange	I	3	Rich Land	1	2
+7522453	42	43	Orange	I	4	Reserves	2	2
+7522457	277	278	Purple	III	15	Reserves	2	2
+7522476	286	287	Purple	III	17	Reserves	2	2
+7522478	420	421	Grey	II	12	Efficient Upgrade	2	2
+7522482	277	278	Green	II	11	Efficient Upgrade	2	2
+7522486	8	9	Purple	A	1	Urban Growth	2	2
+7522488	22	23	Purple	I	2	Frugality	2	2
+7522494	341	342	Orange	III	18	Revolutionary Idea	8	2
+7522502	99	100	Purple	I	5	Rich Land	2	2
+7522509	219	220	Purple	III	12	Reserves	4	2
+7522514	106	107	Purple	II	7	Rich Land	3	2
+7522516	618	619	Grey	III	17	Reserves	2	2
+7522521	409	410	Orange	III	17	Reserves	21	2
+7522526	83	84	Orange	I	6	Rich Land	2	2
+7522536	278	279	Purple	III	16	Reserves	2	2
+7522540	267	268	Purple	III	16	Revolutionary Idea	2	2
+7522553	429	430	Orange	II	13	Breakthrough	1	2
+7522557	249	250	Purple	III	14	Efficient Upgrade	2	2
+7522560	67	68	Purple	I	4	Rich Land	2	2
+7522573	194	195	Purple	II	11	Reserves	2	2
+7522578	21	22	Purple	I	2	Frugality	34	2
+7522581	24	25	Purple	I	2	Frugality	5	2
+7522587	289	290	Purple	III	15	Efficient Upgrade	1	2
+7522587	329	330	Orange	III	17	Urban Growth	2	2
+7522608	11	12	Green	A	1	Rich Land	1	2
+7522614	198	199	Purple	II	12	Reserves	2	2
+7522614	317	318	Purple	III	17	Reserves	2	2
+7522617	257	258	Purple	II	8	Breakthrough	1	2
+7522617	268	269	Green	II	8	Reserves	66	2
+7522619	344	345	Orange	III	13	Efficient Upgrade	2	2
+7522621	256	257	Orange	III	15	Reserves	2	2
+7522632	146	147	Orange	I	7	Breakthrough	19	2
+7522640	358	359	Grey	II	11	Breakthrough	17	2
+7522647	296	297	Orange	III	19	Reserves	2	2
+7522648	26	27	Orange	I	3	Rich Land	5	2
+7522650	241	242	Orange	III	14	Breakthrough	4	2
+7522650	266	267	Orange	III	15	Revolutionary Idea	97	2
+7522654	540	541	Purple	III	15	Reserves	8	2
+7522663	35	36	Purple	I	3	Rich Land	1	2
+7522673	448	449	Orange	III	17	Reserves	3	2
+7522685	35	36	Purple	I	3	Rich Land	2	2
+7522713	487	488	Purple	III	14	Reserves	2	2
+7522713	585	586	Purple	III	16	Urban Growth	8	2
+7522717	199	200	Purple	II	12	Breakthrough	1	2
+7522725	343	344	Purple	III	17	Efficient Upgrade	1	2
+7522731	240	241	Purple	III	13	Reserves	3	2
+7522756	179	180	Purple	II	11	Breakthrough	3	2
+7522756	189	190	Purple	II	11	Breakthrough	2	2
+7522763	32	33	Orange	I	3	Rich Land	4	2
+7522763	201	202	Orange	II	12	Efficient Upgrade	2	2
+7522764	271	272	Purple	III	15	Revolutionary Idea	5	2
+7522768	64	65	Purple	I	5	Reserves	1	2
+7522783	42	43	Orange	I	4	Frugality	2	2
+7522798	532	533	Orange	III	15	Urban Growth	3	2
+7522807	290	291	Purple	III	16	Reserves	1	2
+7522831	179	180	Purple	I	6	Urban Growth	6	2
+7522834	39	40	Green	I	2	Frugality	4	2
+7522859	303	304	Purple	III	16	Reserves	2	2
+7522866	576	577	Grey	III	15	Efficient Upgrade	1	2
+7522869	7	8	Purple	A	1	Urban Growth	6	2
+7522870	562	563	Purple	III	16	Reserves	4	2
+7522875	216	217	Purple	III	13	Efficient Upgrade	6	2
+7522880	56	57	Orange	I	5	Breakthrough	2	2
+7522887	53	54	Purple	I	4	Breakthrough	2	2
+7522890	80	81	Grey	I	3	Reserves	8	2
+7522890	236	237	Purple	II	8	Rich Land	3	2
+7522891	189	190	Purple	II	12	Efficient Upgrade	1	2
+7522893	318	319	Green	III	12	Breakthrough	17	2
+7522905	509	510	Orange	III	15	Revolutionary Idea	3	2
+7522913	156	157	Orange	I	6	Urban Growth	5	2
+7522920	486	487	Purple	III	14	Efficient Upgrade	2	2
+7522924	327	328	Purple	III	18	Revolutionary Idea	3	2
+7522944	88	89	Orange	I	6	Breakthrough	4	2
+7522944	365	366	Purple	IV	18	Reserves	3	2
+7522948	183	184	Purple	II	11	Efficient Upgrade	21	2
+7522953	242	243	Orange	III	14	Reserves	2	2
+7522958	11	12	Green	A	1	Frugality	1	2
+7522958	358	359	Orange	III	14	Efficient Upgrade	7	2
+7522959	301	302	Orange	III	16	Reserves	1	2
+7522962	48	49	Grey	I	2	Rich Land	1	2
+7522968	18	19	Purple	I	2	Frugality	15	2
+7522970	450	451	Purple	IV	18	Reserves	1	2
+7522973	222	223	Purple	III	13	Reserves	2	2
+7522981	221	222	Purple	III	13	Reserves	2	2
+7522987	39	40	Green	I	2	Frugality	4	2
+7523001	280	281	Purple	III	15	Reserves	1	2
+7523002	88	89	Purple	I	6	Urban Growth	3	2
+7523005	123	124	Orange	II	8	Urban Growth	3	2
+7523014	122	123	Purple	I	6	Rich Land	1	2
+7523014	379	380	Orange	III	16	Reserves	2	2
+7523021	22	23	Purple	I	2	Frugality	2	2
+7523026	37	38	Purple	I	3	Rich Land	2	2
+7523034	431	432	Green	III	13	Efficient Upgrade	2	2
+7523045	154	155	Purple	II	9	Efficient Upgrade	2	2
+7523052	367	368	Orange	III	18	Efficient Upgrade	2	2
+7523058	159	160	Orange	II	10	Reserves	0	2
+7523061	366	367	Purple	II	11	Efficient Upgrade	2	2
+7523065	221	222	Grey	I	7	Urban Growth	7	2
+7523069	320	321	Orange	III	17	Reserves	0	2
+7523070	336	337	Orange	III	13	Reserves	1	2
+7523073	328	329	Purple	IV	17	Reserves	1	2
+7523079	174	175	Orange	II	11	Breakthrough	2	2
+7523086	34	35	Purple	I	3	Rich Land	3	2
+7523087	437	438	Green	III	17	Urban Growth	1	2
+7523104	236	237	Orange	III	15	Reserves	2	2
+7523114	160	161	Green	II	7	Rich Land	4	2
+7523115	314	315	Purple	III	13	Reserves	2	2
+7523135	27	28	Purple	I	2	Frugality	1	2
+7523151	240	241	Orange	II	10	Efficient Upgrade	19	2
+7523154	148	149	Orange	II	10	Breakthrough	2	2
+7523162	495	496	Orange	III	15	Urban Growth	2	2
+7523164	144	145	Purple	II	9	Breakthrough	24	2
+7523167	179	180	Orange	II	11	Breakthrough	2	2
+7523169	30	31	Orange	I	3	Rich Land	9	2
+7523195	247	248	Purple	III	15	Urban Growth	2	2
+7523196	33	34	Purple	I	3	Frugality	1	2
+7523196	290	291	Orange	III	16	Reserves	2	2
+7523197	128	129	Orange	II	9	Wave of Nationalism	3	2
+7523198	103	104	Purple	II	7	Rich Land	2	2
+7523216	258	259	Purple	III	14	Reserves	2	2
+7523218	122	123	Orange	I	6	Rich Land	4	2
+7523223	9	10	Purple	A	1	Moses	3	2
+7523224	20	21	Purple	I	2	Frugality	1	2
+7523228	264	265	Purple	III	14	Reserves	3	2
+7523233	7	8	Purple	A	1	Urban Growth	5	2
+7523246	353	354	Purple	IV	17	Urban Growth	1	2
+7523274	14	15	Green	A	1	Frugality	1	2
+7523276	109	110	Purple	I	7	Frugality	5	2
+7523277	50	51	Purple	I	4	Breakthrough	1	2
+7523278	376	377	Purple	III	15	Revolutionary Idea	2	2
+7523281	369	370	Green	III	15	Reserves	3	2
+7523341	21	22	Orange	I	2	Rich Land	2	2
+7523341	56	57	Purple	I	3	Cultural Heritage	2	2
+7523350	218	219	Orange	II	13	Reserves	7	2
+7523354	83	84	Purple	I	6	Breakthrough	1	2
+7523370	357	358	Purple	III	18	Reserves	2	2
+7523370	358	359	Purple	III	18	Reserves	1	3
+7523375	35	36	Green	I	2	Urban Growth	5	2
+7523390	106	107	Purple	I	5	Breakthrough	2	2
+7523390	370	371	Purple	III	14	Urban Growth	3	2
+7523414	253	254	Purple	III	14	Reserves	2	2
+7523416	294	295	Orange	III	17	Reserves	4	2
+7523422	255	256	Orange	III	15	Reserves	1	2
+7523429	234	235	Grey	II	7	Breakthrough	31	2
+7523436	22	23	Orange	I	2	Frugality	3	2
+7523442	116	117	Orange	II	8	Efficient Upgrade	0	2
+7523459	280	281	Orange	III	15	Reserves	1	2
+7523460	265	266	Purple	III	15	Reserves	1	2
+7523462	317	318	Purple	III	17	Efficient Upgrade	3	2
+7523468	40	41	Orange	I	4	Breakthrough	1	2
+7523470	272	273	Purple	III	14	Revolutionary Idea	1	2
+7523493	62	63	Orange	I	5	Breakthrough	3	2
+7523509	28	29	Orange	I	3	Frugality	5	2
+7523509	168	169	Purple	II	10	Reserves	2	2
+7523510	512	513	Purple	III	14	Reserves	6	2
+7523515	30	31	Orange	I	3	Frugality	1	2
+7523524	173	174	Orange	II	10	Efficient Upgrade	1	2
+7523527	7	8	Purple	A	1	Frugality	1	2
+7523543	133	134	Purple	I	6	Frugality	10	2
+7523548	347	348	Purple	II	10	Efficient Upgrade	1	2
+7523564	161	162	Orange	II	10	Reserves	1	2
+7523568	269	270	Orange	III	14	Efficient Upgrade	2	2
+7523573	218	219	Purple	III	13	Reserves	1	2
+7523597	191	192	Orange	II	13	Efficient Upgrade	2	2
+7523608	272	273	Orange	III	15	Urban Growth	2	2
+7523609	38	39	Orange	I	3	Cultural Heritage	1	2
+7523616	149	150	Purple	II	9	Efficient Upgrade	3	2
+7523624	298	299	Orange	III	16	Revolutionary Idea	2	2
+7523634	287	288	Orange	III	18	Reserves	1	2
+7523657	488	489	Purple	IV	18	Efficient Upgrade	2	2
+7523658	226	227	Orange	III	14	Urban Growth	2	2
+7523662	223	224	Purple	II	12	Reserves	1	2
+7523791	454	455	Green	III	14	Breakthrough	4	2
+
+occurrences=281  games=251
+
+GAP DISTRIBUTION (seconds -> count)
+     0 s : 5
+     1 s : 72
+     2 s : 100
+     3 s : 30
+     4 s : 19
+     5 s : 14
+     6 s : 6
+     7 s : 4
+     8 s : 7
+     9 s : 1
+    10 s : 1
+    11 s : 1
+    13 s : 1
+    15 s : 2
+    17 s : 2
+    18 s : 1
+    19 s : 3
+    20 s : 1
+    21 s : 2
+    24 s : 2
+    27 s : 1
+    31 s : 1
+    34 s : 1
+    66 s : 1
+    97 s : 1
+   131 s : 1
+  2959 s : 1
+
+RUNS OF 3+ IDENTICAL (run_len>=3)
+   ('7523370', 358, 359, 'Purple', 'III', '18', 'Reserves', 1, 3)
+
+CARD DISTRIBUTION
+  Reserves                                 96
+  Breakthrough                             39
+  Efficient Upgrade                        36
+  Rich Land                                32
+  Frugality                                30
+  Urban Growth                             29
+  Revolutionary Idea                       14
+  Cultural Heritage                        2
+  Johannes Sebastian Bach                  1
+  Wave of Nationalism                      1
+  Moses                                    1
+
+AFFECTED GAME IDS
+7521361
+7521364
+7521377
+7521449
+7521522
+7521544
+7521577
+7521603
+7521606
+7521619
+7521660
+7521666
+7521671
+7521673
+7521683
+7521689
+7521721
+7521740
+7521758
+7521765
+7521775
+7521819
+7521832
+7521835
+7521851
+7521883
+7521884
+7521885
+7521915
+7521924
+7521931
+7521943
+7521953
+7521959
+7521967
+7521968
+7521983
+7521985
+7521987
+7521990
+7521992
+7521995
+7521996
+7521997
+7521998
+7522001
+7522005
+7522022
+7522023
+7522024
+7522037
+7522047
+7522054
+7522055
+7522067
+7522099
+7522102
+7522126
+7522128
+7522172
+7522193
+7522199
+7522203
+7522218
+7522244
+7522249
+7522265
+7522268
+7522272
+7522283
+7522284
+7522287
+7522291
+7522319
+7522321
+7522334
+7522345
+7522360
+7522362
+7522363
+7522368
+7522372
+7522382
+7522384
+7522388
+7522392
+7522404
+7522421
+7522422
+7522423
+7522443
+7522446
+7522448
+7522450
+7522453
+7522457
+7522476
+7522478
+7522482
+7522486
+7522488
+7522494
+7522502
+7522509
+7522514
+7522516
+7522521
+7522526
+7522536
+7522540
+7522553
+7522557
+7522560
+7522573
+7522578
+7522581
+7522587
+7522608
+7522614
+7522617
+7522619
+7522621
+7522632
+7522640
+7522647
+7522648
+7522650
+7522654
+7522663
+7522673
+7522685
+7522713
+7522717
+7522725
+7522731
+7522756
+7522763
+7522764
+7522768
+7522783
+7522798
+7522807
+7522831
+7522834
+7522859
+7522866
+7522869
+7522870
+7522875
+7522880
+7522887
+7522890
+7522891
+7522893
+7522905
+7522913
+7522920
+7522924
+7522944
+7522948
+7522953
+7522958
+7522959
+7522962
+7522968
+7522970
+7522973
+7522981
+7522987
+7523001
+7523002
+7523005
+7523014
+7523021
+7523026
+7523034
+7523045
+7523052
+7523058
+7523061
+7523065
+7523069
+7523070
+7523073
+7523079
+7523086
+7523087
+7523104
+7523114
+7523115
+7523135
+7523151
+7523154
+7523162
+7523164
+7523167
+7523169
+7523195
+7523196
+7523197
+7523198
+7523216
+7523218
+7523223
+7523224
+7523228
+7523233
+7523246
+7523274
+7523276
+7523277
+7523278
+7523281
+7523341
+7523350
+7523354
+7523370
+7523375
+7523390
+7523414
+7523416
+7523422
+7523429
+7523436
+7523442
+7523459
+7523460
+7523462
+7523468
+7523470
+7523493
+7523509
+7523510
+7523515
+7523524
+7523527
+7523543
+7523548
+7523564
+7523568
+7523573
+7523597
+7523608
+7523609
+7523616
+7523624
+7523634
+7523657
+7523658
+7523662
+7523791

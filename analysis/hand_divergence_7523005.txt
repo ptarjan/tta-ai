@@ -1,0 +1,97 @@
+7523005 Orange civil hand -- first divergence
+=============================================
+
+ANSWER (deliverable): first divergence at ln 124, offset +1.
+(ln = raw 7523005.tsv file line number, header is line 1.)
+
+What ln 124 is
+--------------
+Journal rows 123 and 124 are byte-identical:
+  ln 123 (06:03:33): "Orange takes Urban Growth in hand Orange uses 1 civil action"
+  ln 124 (06:03:36): "Orange takes Urban Growth in hand Orange uses 1 civil action"
+Same card, same slot (row slot 1), 3 seconds apart. BGO double-logged one
+take. The replayer dedups double-logged BUILD lines (GameResult.duplicate_builds)
+and trailing DISCARD lines (GameResult.trailing_discards), but has NO dedup for
+double-logged TAKE lines, so both ln 123 and ln 124 are applied. The second
+apply is the +1:
+
+  pre-ln123:  hand_civil = [Rich Land (I), Patriotism (I), Iron, Irrigation]  (4, limit 4)
+  apply ln123: TAKE REJECT HandFull (gate_have=3, limit 4) -> hand_full override
+               takes Urban Growth, hand -> 5
+  apply ln124: TAKE REJECT HandFull (gate_have=2, limit 4) -> hand_full override
+               takes Urban Growth AGAIN (slot 1 still holds it), hand -> 6
+  ln125: "Orange discovers Iron" -> engine drops one of the duplicate Urban
+         Growth cards, hand -> 5
+
+The duplicate card is the ghost: it sits in the hand until ln 125, is never
+played or built (no journal line for it), and the "discovers Iron" line is the
+one line that actually removes it. Everything downstream of ln 124 is this
+one +1 propagated.
+
+Two independent methods agree on ln 124 / +1
+--------------------------------------------
+Method 1 (engine trace, REPLAY_DEBUG=1 + pre-move snapshots from
+replay_game(record_decisions: true), via scratch bin handprobe):
+  ln 123  delta +0  hand_civil 4 -> 4 (snapshot before ln123; recount 12)
+  ln 124  delta +1  hand_civil 4 -> 5  <-- FIRST DIVERGENCE, offset +1
+  ln 125  delta +1  hand_civil 5 -> 6  (recount still 13; engine 6)
+  ln 127  delta -1  hand_civil 6 -> 5  (recount 14; engine 5)
+  ln 139  delta +1  hand 5 -> 6
+  ln 140  delta +1  hand 6 -> 7   (journal: "takes Frugality")
+  ln 141  delta +1  hand 7 -> 8   (journal: "takes Breakthrough")
+  ln 172  delta +1  hand 8 -> 9   (journal: "takes Napoleon Bonaparte")
+  ln 189  delta -1  hand 9 -> 8   (elects Napoleon Bonaparte)
+  ln 190  delta -1  hand 8 -> 7   (journal: "takes Constitutional Monarchy")
+
+Method 2 (journal recount: +1 per "Orange takes X in hand", -1 per civil
+play/build/discard/putback, -N per civil discard of N): the recount runs
+one card short of the engine hand from ln 124 onward and never catches up
+(it ends at 28 against the engine's 29). The first line where the two
+counts differ is ln 124, by +1. The +1 is then visible as the engine
+exceeding the recount on every subsequent fresh snapshot.
+
+Why the four hand-full-override takes all read hand=5/4
+-------------------------------------------------------
+  ln 124  hand_civil_size=5  civil_hand_limit=4  (override takes Urban Growth, 2nd copy)
+  ln 141  hand_civil_size=5  civil_hand_limit=4  (override takes Breakthrough)
+  ln 172  hand_civil_size=5  civil_hand_limit=4  (override takes Napoleon Bonaparte)
+  ln 190  hand_civil_size=5  civil_hand_limit=4  (override takes Constitutional Monarchy, cost 2)
+All four are legitimate hand-full overrides (the journal shows a real take
+happened at a full hand) -- the +1 from ln 124 is what makes the hand
+"one card too many" so that ordinary subsequent takes also trip the gate.
+This is consistent with the +0 majority (44 of 48) exonerating the
+hand-limit override logic itself.
+
+Civil action totals vs civil_hand_limit at the four lines
+---------------------------------------------------------
+  ln 124: civil_actions total (spent + unspent pool) = 2, ch=4, Library of Alexandria: NO
+  ln 141: total = 1, ch=4
+  ln 172: total = 1, ch=4
+  ln 190: total = 2, ch=4
+CA_TOTAL_CHECK (REPLAY_DEBUG) confirms ca_total=4 (gov=Despotism base, no
+wonder bonus) at all four. The "total vs limit" test does NOT find a
+defect: total < ch at all four lines is normal (spending depletes the
+pool); ch (the gate's reference, civil_actions from state_stats) is 4
+everywhere and the gate uses it correctly. No Library of Alexandria in the
+journal (grep "Alexandria" = 0 hits), so no wonder hand-limit bonus.
+
+The scattered +2/+3/+5 pattern in the wider corpus is the same single
+root cause: a BGO client-side double-log of a TAKE line, applied twice
+because the replayer has no take-dedup. The drift is not a clean
+whole-game offset (it is +1 at ln 124, then normal engine removals);
+it is one spurious card inserted at ln 124 that persists (here) until
+the next "discovers X" / hand-removal line removes it.
+
+Files
+-----
+  journal:    /tmp/bgoj/journals/7523005.tsv (extracted from
+              /Users/pt/tta-ai/sources/bgo/journals.tar.gz)
+  probe bin:  /Users/pt/tta-scratch/rust/src/bin/handprobe.rs
+  probe out:  /private/tmp/handprobe_v3.txt  (pre-move snapshots + recount)
+              /private/tmp/handprobe_dbg.txt (REPLAY_DEBUG=1, TAKE REJECT lines)
+  tta-ai replay_common.rs (read-only): try_apply_take:4519,
+              take_blocked_only_by_hand_full:4710, apply_one TakeCard:10508,
+              CA_TOTAL_CHECK:9889, prescan_putback_skips:7794
+  tta-ai costs.rs (read-only): ca_total:92, civil_hand_limit:100,
+              take_gate:318 (hand_full = hand_size_civil >= ch),
+              take_rejection:450 (WonderBudget->Budget->HandFull->LeaderAge->Duplicate)
