@@ -9,11 +9,24 @@ What ln 124 is
 Journal rows 123 and 124 are byte-identical:
   ln 123 (06:03:33): "Orange takes Urban Growth in hand Orange uses 1 civil action"
   ln 124 (06:03:36): "Orange takes Urban Growth in hand Orange uses 1 civil action"
-Same card, same slot (row slot 1), 3 seconds apart. BGO double-logged one
-take. The replayer dedups double-logged BUILD lines (GameResult.duplicate_builds)
-and trailing DISCARD lines (GameResult.trailing_discards), but has NO dedup for
-double-logged TAKE lines, so both ln 123 and ln 124 are applied. The second
-apply is the +1:
+3 seconds apart. BGO double-logged one take. The replayer dedups double-logged
+BUILD lines (GameResult.duplicate_builds) and trailing DISCARD lines
+(GameResult.trailing_discards), but has NO dedup for double-logged TAKE lines,
+so both ln 123 and ln 124 are applied. The second apply is the +1:
+
+CORRECTION (2026-08-25, from the coordinator's post-mortem): an earlier version
+of this file said the two lines referenced "the same row slot (slot 1)" and
+treated that as evidence of a duplicate. That was an ARTIFACT, not evidence.
+Replayer::ground_row_slot resolves a take by forcing the first ungrounded slot
+whose costs::take_cost matches the journal's CA charge, and take_cost is PURELY
+POSITIONAL (slots 0-4 cost 1, 5-8 cost 2, 9-12 cost 3) with zero card-identity
+information; an ungrounded slot's card identity is documented fictional filler
+("never validated against anything", only its EXISTENCE is real). So two
+adjacent cost-1 takes both resolve to "slot 1" simply because the greedy
+lowest-index-first scan finds cost-1 slots interchangeable. Do NOT carry the
+"same slot" observation forward as a fact -- the duplicate is established by
+the byte-identical text + 3s gap + the engine's hand running one card high,
+not by slot identity.
 
   pre-ln123:  hand_civil = [Rich Land (I), Patriotism (I), Iron, Irrigation]  (4, limit 4)
   apply ln123: TAKE REJECT HandFull (gate_have=3, limit 4) -> hand_full override
@@ -81,6 +94,18 @@ because the replayer has no take-dedup. The drift is not a clean
 whole-game offset (it is +1 at ln 124, then normal engine removals);
 it is one spurious card inserted at ln 124 that persists (here) until
 the next "discovers X" / hand-removal line removes it.
+
+CURE STATUS (2026-08-25, coordinator post-mortem): the cure is NOT available.
+A row-slot-occupancy guard was built and empirically falsified before it
+landed -- ground_row_slot's cost-based grounding makes adjacent identical
+takes indistinguishable from two genuine takes of different physical copies
+(many action cards have many copies, so two byte-identical adjacent takes are
+the norm, not the exception: 281 such occurrences across 251 of 1011
+journals, see analysis/adjacent_identical_takes_2026-08-25.txt). A
+text-equality or slot-occupancy dedup would corrupt a quarter of the corpus.
+The finding stands as a known, unfixable replayer limitation: the hand drift
+in these games is the double-logged take being applied twice, and there is no
+safe signal to suppress it.
 
 Files
 -----
