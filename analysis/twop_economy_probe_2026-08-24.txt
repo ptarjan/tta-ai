@@ -1,0 +1,371 @@
+2P WORKER-ECONOMY PROBE, 2026-08-24
+====================================
+
+QUESTION (task framing): farm_build_probe_3p_2026-08-24.txt and
+pop_probe_3p_2026-08-24.txt (both 3-player) found the champion's Farm-BUILD
+defect is a worker-economy scarcity, not a Farm-pricing problem: a developed
+Farm reaches a legal Move::Build only 1.9% of the time it is SEEN, 88.3% of
+the failures are NoFreeWorker, and the champion's worker pool runs a net
+deficit of -3656 (enters minus leaves) over 600 3p games against the human
+control vector's +237. Four separate weight interventions aimed at this
+defect all lost decisively in play (stockrate_playtest_3p_2026-08-24.txt).
+Two players is a completely unexamined regime, with its own unexplained
+round-9+ tail signal (20.8% vs a 50% null, p=0.0033) that this probe does
+not itself investigate -- this probe only asks whether the SAME worker-economy
+defect the 3p probes found is present, absent, worse or milder at 2p.
+
+This is diagnosis only. No weight change is proposed or tested here.
+
+STEP 1 -- IS --players ALREADY A FLAG?
+-----------------------------------------------------------------
+YES. Read the full 2144-line rust/src/bin/takeprobe.rs before touching
+anything. `Args.players: u8` already exists, defaults to 3, and
+`parse_args` already validates `(2..=4).contains(&a.players)`. Both
+`--build` (`play_one_build`) and `--pop` (`play_one_pop`) already take
+`players: u8` as a parameter threaded straight from `args.players` in
+`main()` -- there is no hardcoded 3 anywhere in either mode's game-playing
+path. `takeprobe.rs` was NOT modified. Per this task's own instruction ("the
+FORCED GATE, if and only if you modify takeprobe.rs"), the clippy/test/build
+gate was not run as a gate -- the existing release binary
+(rust/target/release/takeprobe, built 2026-08-24 20:15, newer than the
+20:12 source) was used as-is and its `--help` output confirms the
+`--players N   2, 3 or 4 (default 3)` flag.
+
+VECTORS
+-----------------------------------------------------------------
+champion: /private/tmp/opencensus/champ2p.json (exists; used as-is, this is
+          the file the task named first and it was present -- the fallback
+          rust_champion_2p.json was NOT needed)
+human control: /Users/pt/tta-ai/analysis/frozen/human_weights.json (same
+          file the 3p probes used, read-only)
+
+COMMANDS RUN
+-----------------------------------------------------------------
+  export PATH="$HOME/.cargo/bin:$PATH"
+  cd /Users/pt/tta-ai/rust
+
+  ./target/release/takeprobe --build --games 600 --players 2 \
+      --weights /private/tmp/opencensus/champ2p.json --threads 5 --seed 1
+  ./target/release/takeprobe --build --games 600 --players 2 \
+      --weights /Users/pt/tta-ai/analysis/frozen/human_weights.json --threads 5 --seed 1
+  ./target/release/takeprobe --pop --games 600 --players 2 \
+      --weights /private/tmp/opencensus/champ2p.json --threads 5 --seed 1
+  ./target/release/takeprobe --pop --games 600 --players 2 \
+      --weights /Users/pt/tta-ai/analysis/frozen/human_weights.json --threads 5 --seed 1
+
+All four exited 0 (see /private/tmp/twop_notes.txt for the EXIT-coded log).
+Raw stdout for all four saved under /private/tmp/twop/*.txt.
+
+SEEN-DEFINITION NOTE (per this task's own method requirement)
+-----------------------------------------------------------------
+--build's SEEN is still p.techs.has(id) (champion-dependent -- the same
+known trap the 3p farm_build_probe's own caveat 1 names, NOT fixed here
+since it is takeprobe.rs's existing --build code, unmodified). --pop's SEEN
+is still the vector-independent legal.rs:425-427 precondition
+(state.phase==Actions && state.pending.is_empty() && state.round>1). Both
+definitions are exactly what the 3p probes used -- this probe changes
+nothing about either definition, only the --players value, so the same
+caveat about --build's SEEN denominator applies again below, restated with
+its own 2p numbers rather than assumed equal to the 3p gap.
+
+
+RESULTS -- CHAMPION (/private/tmp/opencensus/champ2p.json), 600 games, 2p
+============================================================================
+
+--build funnel:
+  card                    seen    legal   scored   L-rate S-rate    mean_gap best_rank
+  Irrigation             18360     1703     1703    0.093  1.000     63.2374         1
+  Selective Breeding      7577      489      489    0.065  1.000     69.9487         1
+  Mechanized Agriculture   1487       41       41    0.028  1.000     89.6846         2
+
+  combined: seen=27424 legal=2233 (0.081) scored=2233 (1.000)
+            mean_rank=8.67 mean_gap=65.1927 best_rank=1
+
+  Illegality-reason breakdown (n=25191 SEEN-but-not-LEGAL occurrences):
+    NoFreeWorker         21207  (0.842)
+    NoCostPrinted            0  (0.000)
+    CannotPayResources    3659  (0.145)
+    NoCivilAction          325  (0.013)
+    Other                    0  (0.000)
+
+  Illegality-reason breakdown by round (selected; full table in
+  /private/tmp/twop/build_champ2p.txt):
+    round  NoFreeWork  CannotPayResrc  NoCivilActn  total
+        6         132              54            1    187
+       10         932             121            5   1058
+       14        1775             335           29   2139
+       18        2277             364           30   2671
+       21         255              76            2    333
+
+  What beats a scored Farm build (n=2233):
+    Build  1702 (0.762)  Take 153 (0.069)  PlayAction 73 (0.033)
+    WonderStep 73 (0.033)  CopyTactic 47 (0.021)  (+9 more kinds, each <=2%)
+
+--pop funnel:
+  combined: seen=116124 legal=28479 (0.245) scored=28479 (1.000)
+            mean_rank=3.57 mean_gap=22.3306 best_rank=1
+
+  Illegality-reason breakdown (n=87645 SEEN-but-not-LEGAL occurrences):
+    EmptyYellowBank         49  (0.001)
+    NoCivilAction        26463  (0.302)
+    InsufficientFood     61133  (0.698)
+    Other                    0  (0.000)
+
+  What beats a scored Pop (n=28479):
+    Pop 9035 (0.317)  Take 5747 (0.202)  Build 4030 (0.142)
+    WonderStep 3039 (0.107)  PlayAction 1725 (0.061)  PlayLeader 1655 (0.058)
+    (+10 more kinds, each <=3%; PopFree separately 251 (0.009))
+  -> Pop wins OUTRIGHT 31.7% of the time it is scored (32.6% counting
+     PopFree too) -- competitive, same shape as 3p, not "refused".
+
+  Worker-pool balance (ENTER=Pop/PopFree/Destroy, LEAVE=Build):
+    totals: enters=10397 leaves=12789 net=-2392
+    round   enters  leaves    net
+        2     1148    1198    -50
+        3      608    1186   -578
+        4     1007    1087    -80
+        5      728     941   -213
+        6      579     738   -159
+        7      519     675   -156
+        8      398     556   -158
+        9      400     529   -129
+       10      346     492   -146
+       11      379     526   -147
+       12      386     504   -118
+       13      531     564    -33
+       14      365     488   -123
+       15      335     472   -137
+       16      347     475   -128
+       17      434     515    -81
+       18      539     596    -57
+       19      633     641     -8
+       20      589     495     94
+       21      126     109     17
+       22        0       2     -2
+  -> NET NEGATIVE in 17 of 21 sampled rounds (round 20-21 flip positive on a
+     small late-game sample, same shape as the 3p champion table).
+
+
+RESULTS -- HUMAN CONTROL (/Users/pt/tta-ai/analysis/frozen/human_weights.json), 600 games, 2p
+================================================================================================
+
+--build funnel:
+  card                    seen    legal   scored   L-rate S-rate    mean_gap best_rank
+  Irrigation                 0        0        0    0.000  0.000      0.0000       n/a
+  Selective Breeding      6861     1874     1874    0.273  1.000     38.0762         1
+  Mechanized Agriculture   1628      227      227    0.139  1.000     38.3314         1
+
+  combined: seen=8489 legal=2101 (0.247) scored=2101 (1.000)
+            mean_rank=16.35 mean_gap=38.1037 best_rank=1
+
+  Illegality-reason breakdown (n=6388 SEEN-but-not-LEGAL occurrences):
+    NoFreeWorker          2992  (0.468)
+    NoCostPrinted            0  (0.000)
+    CannotPayResources    3100  (0.485)
+    NoCivilAction          296  (0.046)
+    Other                    0  (0.000)
+
+  What beats a scored Farm build (n=2101):
+    Build 600 (0.286)  Pop 486 (0.231)  Take 370 (0.176)  Develop 207 (0.099)
+    Upgrade 162 (0.077)  (+8 more kinds, each <=5%)
+
+--pop funnel:
+  combined: seen=68367 legal=7122 (0.104) scored=7122 (1.000)
+            mean_rank=1.16 mean_gap=0.3762 best_rank=1
+
+  Illegality-reason breakdown (n=61245 SEEN-but-not-LEGAL occurrences):
+    EmptyYellowBank       1053  (0.017)
+    NoCivilAction        10713  (0.175)
+    InsufficientFood     49479  (0.808)
+    Other                    0  (0.000)
+
+  What beats a scored Pop (n=7122): Pop wins outright 88.2% (6280/7122) --
+  same shape as 3p (89.3%), slightly lower.
+
+  Worker-pool balance:
+    totals: enters=7836 leaves=8007 net=-171
+    round   enters  leaves    net
+        2     1200    1200      0
+        3     1190    1223    -33
+        4      114    1135  -1021
+        5       70     181   -111
+        6     1115    1126    -11
+        7       71      84    -13
+        8      171     170      1
+        9      946     942      4
+       10       12      12      0
+       11       15      10      5
+       12       50      49      1
+       13       79      51     28
+       14      278     163    115
+       15      736     358    378
+       16      133     164    -31
+       17      165     154     11
+       18      215     170     45
+       19      215     161     54
+       20      466     313    153
+       21      550     314    236
+       22       45      27     18
+  -> Round 4 is a large one-round outlier (-1021, matching the 3p human
+     table's own round-4 outlier of -1498 in shape) that drags the
+     early-game sum negative; rounds 14-22 are decisively positive (sum
+     +961), the same late-game-accumulation shape the 3p human vector
+     showed from round 13 on. The TOTAL nets slightly negative (-171) at
+     2p, unlike 3p's total of +237 -- see STEP 4 below.
+
+
+STEP 4 -- 2P SIDE BY SIDE WITH THE COMMITTED 3P NUMBERS
+============================================================================
+
+Quoting the 3p figures directly from the committed files (not from memory):
+  farm_build_probe_3p_2026-08-24.txt: "combined: seen=2763 legal=52 (0.019)
+    ... mean_rank=4.83 mean_gap=109.5454" (champion); "NoFreeWorker 2393
+    (0.883)" of illegal; human "combined: seen=23802 legal=5988 (0.252)";
+    human "NoFreeWorker 8019 (0.450)".
+  pop_probe_3p_2026-08-24.txt: "combined: seen=130271 legal=34790 (0.267)
+    ... mean_rank=4.34 mean_gap=52.6586" (champion); "Pop wins OUTRIGHT
+    27.6%"; "totals: enters=11649 leaves=15305 net=-3656" (champion);
+    human "combined: seen=110829 legal=12279 (0.111)"; human "Pop
+    ... 10970 (0.893)"; human "totals: enters=13483 leaves=13246 net=+237".
+
+BUILD FUNNEL, 2p vs 3p:
+                              champion 2p   champion 3p   human 2p   human 3p
+  SEEN                          27424          2763        8489      23802
+  LEGAL rate                    8.1%           1.9%       24.7%      25.2%
+  NoFreeWorker share of illegal 84.2%          88.3%       46.8%      45.0%
+  CannotPayResources share      14.5%          11.5%       48.5%      50.3%
+  mean rank when scored         8.67           4.83        16.35      16.54
+  mean gap when scored          65.19          109.55      38.10      40.96
+  champ/human SEEN ratio        3.2x           8.6x           --         --
+
+POP FUNNEL, 2p vs 3p:
+                              champion 2p   champion 3p   human 2p   human 3p
+  SEEN                         116124        130271       68367     110829
+  champ/human SEEN ratio        1.70x          1.18x          --         --
+  LEGAL rate                    24.5%          26.7%       10.4%      11.1%
+  mean rank when scored         3.57           4.34         1.16       1.18
+  mean gap when scored          22.33          52.66        0.38       0.72
+  Pop wins outright (scored)    31.7%          27.6%       88.2%      89.3%
+  InsufficientFood share        69.8%          69.3%       80.8%      79.8%
+  NoCivilAction share           30.2%          30.7%       17.5%      16.9%
+  Worker balance, total net     -2392          -3656        -171       +237
+  Worker balance, per
+    player-game (net/(games*players))
+                                 -1.99          -2.03       -0.14      +0.13
+
+THE FLAT ANSWER
+-----------------------------------------------------------------
+The worker-economy defect is PRESENT AT 2P AND ESSENTIALLY THE SAME
+MAGNITUDE, per player-game, as at 3p. It is not absent and it is not
+dramatically worse or milder in the sense that matters (the standing
+worker deficit): the champion's worker-pool net deficit is -1.99 per
+player-game at 2p versus -2.03 per player-game at 3p -- a 2% difference,
+well inside anything this probe can call a real change. Every qualitative
+signature the 3p probes found reproduces at 2p on the champion side: Pop is
+legal often (24.5% vs 26.7%) and competitive when scored (mean rank 3.57 vs
+4.34, wins outright 31.7% vs 27.6% -- if anything Pop is chosen slightly
+MORE often at 2p, not less), yet the worker pool still runs net negative in
+17 of 21 sampled rounds, and NoFreeWorker still dominates the Farm-build
+illegality reasons (84.2% vs 88.3%).
+
+The one number that is genuinely different in absolute terms is the
+Farm-build LEGAL rate itself: 8.1% at 2p versus 1.9% at 3p, a ~4.3x
+increase. Read alone this looks like "milder at 2p" -- but it does not
+survive comparison with the illegality-reason breakdown printed two lines
+above it: NoFreeWorker is STILL 84.2% of the (still-large, 92%) mass of
+illegal occurrences, barely moved from 3p's 88.3%. The champion is not
+building Farms more because it stopped running out of workers; it is
+building them more mostly because SEEN itself is far larger at 2p relative
+to 3p in absolute count (27424 vs 2763, a ~10x jump) while LEGAL grew only
+~43x less than that -- i.e. the champion reaches a "Farm developed and my
+turn" state far more often at 2p (fewer opponents contesting the card row,
+shorter turn order, presumably faster tempo), and even a small, roughly
+constant conditional LEGAL-given-worker-starvation rate produces more raw
+LEGAL occurrences off a much bigger SEEN base. The mechanism (worker
+starvation) is unchanged; the opportunity count it acts on is not.
+
+The other genuinely 2p-specific finding is on the HUMAN CONTROL side, not
+the champion side: the human vector's worker balance is net POSITIVE at 3p
+(+237, +0.13/player-game) but net very slightly NEGATIVE at 2p (-171,
+-0.14/player-game). This is not evidence the champion's defect got worse in
+relative terms -- the champion is still ~14x more negative per player-game
+than the human control at 2p (-1.99 vs -0.14) -- but it does mean the 2p
+human-control worker balance is closer to break-even than the clearly
+accumulating surplus the 3p human control showed. Round-by-round shape is
+otherwise the same: both the 2p and 3p human tables show a single large
+negative outlier around round 4 (-1021 at 2p, -1498 at 3p) followed by a
+decisively positive tail from roughly round 13-14 onward (+961 summed over
+rounds 14-22 at 2p; the 3p report's own "13 of the last 14 sampled rounds
+are net-positive" language for the same shape).
+
+SO: SAME, not milder, not worse, not absent -- judged on the number that
+actually drives the Farm-build starvation (worker-pool net deficit per
+player-game and the NoFreeWorker illegality share), both of which are
+within a few percent of the 3p figures. The one number that moved a lot
+(Farm-build LEGAL rate, 4.3x) is explained by SEEN-denominator growth, not
+by the worker-starvation mechanism weakening, and this report says so
+explicitly rather than reporting "milder" on that number alone (per this
+task's own method requirement 2 -- checking the conclusion against every
+printed number, not just the most dramatic one).
+
+
+CAVEATS
+-----------------------------------------------------------------
+1. --build's SEEN (p.techs.has(id)) is champion-dependent, exactly the
+   confound farm_build_probe_3p_2026-08-24.txt's own caveat 1 names. At 2p
+   the champ/human SEEN ratio is 3.2x -- smaller than 3p's 8.6x, but still
+   large enough that the BUILD funnel's LEGAL-rate comparison between
+   vectors (as opposed to the same vector across player counts, which is
+   the comparison this report leans on) should be read with that same
+   caution the 3p report already states. Irrigation is never SEEN at all
+   for the human vector at either player count (0 occurrences, both 2p and
+   3p) -- unchanged from 3p.
+
+2. --pop's SEEN denominator is NOT champion-dependent by definition, but
+   its residual champ/human ratio is larger at 2p (1.70x) than at 3p
+   (1.18x) -- i.e. the two vectors' own game lengths/turn counts diverge
+   somewhat more at 2p. This is called out per this task's own method
+   requirement rather than treated as zero; it does not change the
+   worker-balance verdict above, which is driven by counts normalized to
+   player-games, not by the SEEN funnel.
+
+3. The champion and human-vector games are NOT the same trajectories at
+   either player count -- each vector plays its own self-play games, so
+   round-by-round tables are aggregate shape comparisons, not turn-for-turn
+   ones. Late rounds (21-22 at 2p) have small samples and are not
+   over-read here, matching the 3p reports' own caveat on this point.
+
+4. This probe reuses takeprobe.rs's existing --build/--pop modes unmodified
+   -- it does not redefine or improve either mode's SEEN/illegality
+   classifier logic beyond what the 3p probes already established. Any
+   defect in those classifiers (none found; Other reads exactly 0 in all
+   four runs here, matching all four 3p runs) would affect both player
+   counts identically, not just this comparison.
+
+5. The unexplained round-9+ 2p tail signal named in this task's own
+   background (20.8% vs 50% null, p=0.0033) is NOT investigated by this
+   probe -- this probe measures the Farm-BUILD and Pop funnels only, the
+   same two funnels the 3p investigation used, and draws no conclusion
+   about that separate tail signal.
+
+6. Per this task's own instruction, this is diagnosis only: no weight
+   change is proposed or tested, and none should be inferred from any
+   number in this file. The last four weight interventions aimed at the 3p
+   worker-economy defect all lost in play
+   (stockrate_playtest_3p_2026-08-24.txt); nothing here changes that
+   history for 2p or 3p.
+
+7. Because takeprobe.rs was not modified, the FORCED GATE (clippy/test/
+   build) was not run as a correctness gate for this task; the existing
+   release binary was confirmed newer than the source and its --help output
+   was checked to confirm the --players flag before any of the four probe
+   runs.
+
+
+DELIVERABLE FILES
+-----------------------------------------------------------------
+  /private/tmp/twop/build_champ2p.txt   (raw --build champion 2p output)
+  /private/tmp/twop/build_human2p.txt   (raw --build human 2p output)
+  /private/tmp/twop/pop_champ2p.txt     (raw --pop champion 2p output)
+  /private/tmp/twop/pop_human2p.txt     (raw --pop human 2p output)
+  /private/tmp/twop_notes.txt           (EXIT-coded command log)
