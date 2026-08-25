@@ -1,0 +1,134 @@
+END TURN vs SPENDING -- sibling code paths of the eval.rs fix
+2026-08-24
+
+TASK
+The user reported "end turn is better than spending": the bot wastes civil
+actions by ending its turn while a strictly-improving spend is still legal.
+The root cause was already diagnosed and fixed once, in
+rust/src/bots/weighted/eval.rs (WeightedBot::choose, ~lines 445-509): a 1-ply
+search that applies every candidate move and then scores it compares
+post-production EndTurn (apply::apply's EndTurn arm reaches
+crate::game::end_turn -> economy::end_of_turn, which runs this turn's
+production) against pre-production everything-else, because EndTurn is the
+only move whose apply arm reaches production. That fix scores EndTurn on the
+unmoved state and prices it via a learned bias instead. This pass checked
+whether the two other search bots in the crate that pick moves the same
+1-ply way -- rust/src/bots/greedy.rs and rust/src/bots/quiescent.rs -- carry
+the same defect, and fixed the ones that genuinely do.
+
+SITE 1: rust/src/bots/greedy.rs, GreedyBot::choose (was lines ~481-503)
+DIAGNOSIS: DEFECT CONFIRMED.
+choose() applied every candidate, including Move::EndTurn, to a trial clone
+and then scored it with evaluate(). GreedyKey::ALL (the frozen 19-feature
+fingerprint vector) includes Food, Resources, CivilActions, MilitaryActions
+and the Culture/Science pools that CultureRate/ScienceRate feed -- every one
+of those is exactly what production/turn-reset writes. So applying EndTurn
+gave it a free turn of production baked directly into features every rival
+candidate did not get, the same asymmetry as the eval.rs bug, plus a
+hardcoded -0.01 EndTurn penalty whose doc comment cited a deleted Python file
+(engine/bots/__init__.py, removed 2026-08-15 per CLAUDE.md) as its only
+authority.
+
+FIX: mirrors eval.rs as closely as this bot's shape allows. Move::EndTurn is
+no longer applied to the trial -- it is scored on the unmoved clone, exactly
+like every other candidate is scored before production. GreedyBot has no
+weight vector of its own the way WeightedBot has WeightKey::EndTurnBias
+(GreedyKey is a second, deliberately frozen, separate fieldless enum -- see
+this module's own top doc comment on why it must never gain a slot synced
+with weighted::weights::WeightKey), so per this task's own constraint the
+existing -0.01 constant was kept AS A CONSTANT; only the apply-order
+asymmetry was fixed. The doc comment's citation of the deleted Python file
+was also corrected to describe the rule, not to keep citing a file that no
+longer exists.
+
+SITE 2: rust/src/bots/quiescent.rs, pick_one (was ~line 243) and pick (was
+~line 355)
+DIAGNOSIS: DEFECT CONFIRMED, in both functions.
+Both apply every candidate (including Move::EndTurn) to a trial before
+scoring it with the caller-supplied `eval` closure. Checked the two real
+call sites that build that closure (bots/greedy.rs:755-757 and
+bots/neural/spec.rs:609-611, both under the Bot::Quiescent/
+ClassicalPlayer::Quiescent dispatch): in both places `eval` is built as
+`move |s, i| weighted::eval::evaluate(s, i, &w, None, None)` -- literally the
+same evaluate() function eval.rs's own WeightedBot::choose protects itself
+against. So this module inherits the identical asymmetry through its
+generic scorer parameter, not through a feature vector it owns itself.
+Checked game.rs (resume_end_turn, lines 946-966) and economy.rs to see
+whether Move::EndTurn can leave state.pending non-empty (which would route
+through quiescence's resolve() instead of scoring immediately): when a
+discard-military decision is needed, end_of_turn suspends via a QueueItem
+BEFORE production (RB p.20 -- discard is step 1, production is steps 2-5,
+strictly after), and the decision opens state.pending; resolve() then drains
+it and production still completes by the time the position is quiet, before
+scoring. So the free-production bug fires in both the common case (no
+discard needed, production applied immediately) and the discard-needed case
+(production applied once resolve() finishes) -- there is no path where
+applying and quiescing an EndTurn candidate avoids the asymmetry.
+QuiescenceConfig::end_bias (line ~121-122) is already a threaded config
+field the caller sets from its own weights, not a hardcoded literal and not
+a new mechanism -- only the apply asymmetry needed fixing, in both pick_one
+and pick.
+
+FIX: mirrors eval.rs. Move::EndTurn is no longer applied/resolved in either
+pick_one or pick; it is scored on the unmoved trial/root and priced via the
+existing end_bias/cfg.end_bias parameter, identically to how eval.rs treats
+WeightKey::EndTurnBias.
+
+TESTS (one per file, #[cfg(test)] mod at the end of the file, per this
+repo's registry-scanner constraint)
+- rust/src/bots/greedy.rs:
+  greedy_bot_does_not_end_turn_with_an_affordable_take_and_a_civil_action_left_when_food_and_resources_are_heavily_prized
+- rust/src/bots/quiescent.rs:
+  pick_does_not_end_turn_with_an_affordable_take_and_a_civil_action_left_when_food_and_resource_gaps_are_heavily_penalized
+
+Both fixtures are game::new_game(2, 0) (round 1, seat 0 decides, a civil
+action available, EndTurn and an affordable Take both legal) -- the same
+seed the already-landed eval.rs test uses, not a hand-built position. Each
+test cranks the weights that reward what production writes (greedy.rs:
+GreedyKey::Food/Resources to 1000.0; quiescent.rs test reuses the real
+weighted::eval::evaluate scorer with WeightKey::FoodGap/ResourceGap at
+-100.0, identical to eval.rs's own test) and asserts the chosen move is not
+EndTurn.
+
+RED/GREEN evidence (both tests, enforcement reverted then restored):
+- RED (apply::apply made unconditional again for Move::EndTurn in
+  GreedyBot::choose, quiescent::pick_one, and quiescent::pick):
+  `cargo test -- bots::greedy::tests::greedy_bot_does_not_end_turn
+  bots::quiescent::tests::pick_does_not_end_turn` -> exit 1, both tests
+  FAILED, both chose EndTurn (thread panic messages: "...got EndTurn" for
+  both).
+- GREEN (enforcement restored to the shipped fix): same command -> exit 0,
+  both tests ok.
+
+GATE (from rust/, PATH includes ~/.cargo/bin)
+1. touch src/bots/greedy.rs src/bots/quiescent.rs
+2. cargo clippy --all-targets -- -D warnings -> exit 0, no warnings
+3. cargo test (full workspace) -> exit 0; 38 "test result: ok" blocks, 0
+   FAILED, 0 panics; includes both new tests passing
+4. cargo build --release --bin kindmatch -> exit 0, built in 1m00s
+
+DUEL MEASUREMENT (patched greedy vs the frozen champion weighted bot,
+weights /private/tmp/opencensus/champ3p.json, 3 players, 240 games, seed
+1001, 5 threads -- no before-number exists for this comparison, these are
+levels, not deltas)
+
+Arrangement 1: --a greedy --b weighted --weights .../champ3p.json
+  A win rate   0.00%  +/- 0.00   (null 33.33%)   p = 1.0000
+  verdict      reject -- greedy is WORSE than weighted
+
+Arrangement 2: --a weighted --b greedy --a-weights .../champ3p.json
+  A win rate   98.54%  +/- 1.47   (null 33.33%)   p = 0.0000
+  verdict      accept -- weighted beats greedy (interval clear of the null)
+
+Both arrangements agree: the trained champion (WeightedBot, already carrying
+the eval.rs fix) beats GreedyBot (the frozen 19-weight fingerprint control,
+now carrying its own asymmetry fix) essentially every game. This is expected
+-- GreedyBot is a deliberately small, frozen evaluator used as a fingerprint
+CONTROL for gate arms, not a competitive opponent, and no baseline duel
+against the pre-fix GreedyBot was run (the task did not ask for one and none
+exists to compare against). The number to watch going forward is GreedyBot's
+own measured EndTurn-waste rate in a self-play/replay sweep, not this duel.
+
+FILES TOUCHED (uncommitted, left in the working tree)
+- rust/src/bots/greedy.rs
+- rust/src/bots/quiescent.rs

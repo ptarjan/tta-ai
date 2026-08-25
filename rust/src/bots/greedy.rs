@@ -471,9 +471,19 @@ impl GreedyBot {
     /// first -- see this module's top doc comment, point 4, for why that is
     /// not a configurable field.
     ///
-    /// `end_turn` is penalised `-0.01`: "ending the turn is never rewarded
-    /// for its own sake; it only wins when nothing else improves the
-    /// position" (`__init__.py`'s own comment on the identical line).
+    /// Every candidate must be scored at the SAME point in time -- mid-turn,
+    /// before this turn's production. `Move::EndTurn` is the only move whose
+    /// apply arm reaches `economy::end_of_turn`, so applying it here would
+    /// score it against a board that already holds this turn's food,
+    /// resources, culture and science (`GreedyKey::Food`/`Resources`/
+    /// `CultureRate`-driven `Culture`/etc. all read exactly what production
+    /// writes) while every rival candidate is still scored pre-production.
+    /// `EndTurn` is therefore scored on the unmoved clone instead, matching
+    /// `bots::weighted::eval::WeightedBot::choose`'s identical fix (see that
+    /// method's own doc comment) -- this bot has no learnable weight slot to
+    /// fold the bias into, so `end_turn` keeps the fixed `-0.01` penalty:
+    /// ending the turn is never rewarded for its own sake, only when nothing
+    /// else improves the position.
     ///
     /// # Panics
     /// If `moves` is empty (a caller bug, matching every other bot in this
@@ -490,7 +500,9 @@ impl GreedyBot {
         let mut best: Option<(Move, f64)> = None;
         for &mv in moves {
             let mut trial = state.clone();
-            apply::apply(&mut trial, mv);
+            if !matches!(mv, Move::EndTurn) {
+                apply::apply(&mut trial, mv);
+            }
             let mut val = evaluate(&trial, idx, w);
             if matches!(mv, Move::EndTurn) {
                 val -= 0.01;
@@ -1245,5 +1257,45 @@ mod tests {
             search: Search::HumanShortlistBeam { eval_weights: weighted::weights::Weights::defaults() },
         };
         let _ = build_bots(&[seat], 0);
+    }
+
+    // ------------------------------------------------------------- choose
+
+    /// `choose`'s 1-ply loop must score every candidate at the same point in
+    /// time. `EndTurn` is the only move whose apply arm reaches
+    /// `economy::end_of_turn`, so applying it would score passing on a board
+    /// that already held this turn's production while every rival candidate
+    /// is still scored pre-production -- a weight vector that prizes `Food`/
+    /// `Resources` would then make passing look like it produced, even with
+    /// an affordable spend on offer.
+    ///
+    /// Same fixture as `weighted::eval`'s identical test (`G::new_game(2,
+    /// 0)`): the first hit of a plain seed scan, not a hand-built position.
+    #[test]
+    fn greedy_bot_does_not_end_turn_with_an_affordable_take_and_a_civil_action_left_when_food_and_resources_are_heavily_prized() {
+        let state = G::new_game(2, 0);
+        assert_eq!(state.decider(), 0, "fixture assumption: seat 0 decides seed 0's opening move");
+        assert_eq!(state.round, 1, "fixture assumption: an early round, before any real production has happened");
+        assert!(state.players[0].civil_actions > 0, "fixture assumption: a civil action must still be available to spend");
+
+        let movelist = crate::legal::legal_moves(&state);
+        let moves = movelist.as_slice();
+        assert!(moves.contains(&Move::EndTurn), "fixture assumption: EndTurn must be offered so the bot has to choose against it");
+        assert!(
+            moves.iter().any(|m| matches!(m, Move::Take { .. })),
+            "fixture assumption: a legal (therefore affordable) Take must be on offer, {moves:?}"
+        );
+
+        let mut w = GreedyWeights::defaults();
+        w.set(GreedyKey::Food, 1000.0);
+        w.set(GreedyKey::Resources, 1000.0);
+
+        let bot = GreedyBot::new(w);
+        let chosen = bot.choose(&state, moves);
+        assert!(
+            !matches!(chosen, Move::EndTurn),
+            "prizing food/resources heavily must not make passing with a civil action \
+             and an affordable Take in hand look better than actually taking it, got {chosen:?}"
+        );
     }
 }

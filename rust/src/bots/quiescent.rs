@@ -235,9 +235,22 @@ where
     let mut best: Option<(Move, f64)> = None;
     for &mv in moves {
         let mut trial = state.clone();
-        apply::apply(&mut trial, mv);
-        if level > 0 && !trial.pending.is_empty() {
-            resolve(&mut trial, level - 1, nodes_left, max_depth, eval);
+        // Every candidate is scored at the SAME point in time -- mid-turn,
+        // before this turn's production. `Move::EndTurn` is the only move
+        // whose apply arm reaches `economy::end_of_turn`, whether directly
+        // or (when a discard decision suspends it) after `resolve` drains
+        // that decision and production still completes before scoring --
+        // so applying/resolving it here would score it against a board
+        // that already holds this turn's production while every rival
+        // candidate is still scored pre-production. `EndTurn` is therefore
+        // scored on the unmoved trial, and `end_bias` is what prices ending
+        // a turn -- mirrors `bots::weighted::eval::WeightedBot::choose`'s
+        // identical fix (see that method's own doc comment).
+        if !matches!(mv, Move::EndTurn) {
+            apply::apply(&mut trial, mv);
+            if level > 0 && !trial.pending.is_empty() {
+                resolve(&mut trial, level - 1, nodes_left, max_depth, eval);
+            }
         }
         let mut val = eval(&trial, idx);
         if matches!(mv, Move::EndTurn) {
@@ -338,14 +351,20 @@ where
     for &mv in moves {
         stats.candidates += 1;
         let mut trial = root.clone();
-        apply::apply(&mut trial, mv);
-        if cfg.levels > 0 && !trial.pending.is_empty() {
-            stats.quiesced += 1;
-            let before = nodes_left;
-            let quiet = resolve(&mut trial, cfg.levels - 1, &mut nodes_left, cfg.max_depth, eval);
-            stats.qnodes += (before - nodes_left) as u64;
-            if !quiet {
-                stats.truncated += 1;
+        // Same rule as `pick_one`'s own comment above: `Move::EndTurn` is
+        // the only candidate whose apply/resolve reaches this turn's
+        // production, so it is scored on the unmoved root and priced
+        // separately via `cfg.end_bias` instead of being applied.
+        if !matches!(mv, Move::EndTurn) {
+            apply::apply(&mut trial, mv);
+            if cfg.levels > 0 && !trial.pending.is_empty() {
+                stats.quiesced += 1;
+                let before = nodes_left;
+                let quiet = resolve(&mut trial, cfg.levels - 1, &mut nodes_left, cfg.max_depth, eval);
+                stats.qnodes += (before - nodes_left) as u64;
+                if !quiet {
+                    stats.truncated += 1;
+                }
             }
         }
         let mut val = eval(&trial, idx);
@@ -726,5 +745,51 @@ mod tests {
         let state = game::new_game(2, 1);
         assert!(state.players[0].war_declared_by_me.is_none());
         assert_eq!(war_value(&state, 0, &culture), culture(&state, 0));
+    }
+
+    // ---------------------------------------------------------- end_turn
+
+    /// `pick`'s candidate loop must score every candidate at the same point
+    /// in time. `EndTurn` is the only move whose apply reaches
+    /// `economy::end_of_turn`, so applying it would score passing on a board
+    /// that already held this turn's production while every rival candidate
+    /// still carried the full negative `food_gap`/`resource_gap` -- a weight
+    /// vector penalising those two gaps would then make passing look like it
+    /// produced. Uses the real `weighted::eval::evaluate` scorer (not the
+    /// `flat`/`culture` test doubles above) because that is the closure
+    /// every real caller threads in (`bots/greedy.rs`'s and
+    /// `bots/neural/spec.rs`'s `Bot::Quiescent` dispatch both build it from
+    /// `weighted::eval::evaluate` directly).
+    ///
+    /// Same fixture as `weighted::eval`'s identical test (`game::new_game(2,
+    /// 0)`): the first hit of a plain seed scan, not a hand-built position.
+    #[test]
+    fn pick_does_not_end_turn_with_an_affordable_take_and_a_civil_action_left_when_food_and_resource_gaps_are_heavily_penalized() {
+        let state = game::new_game(2, 0);
+        assert_eq!(state.decider(), 0, "fixture assumption: seat 0 decides seed 0's opening move");
+        assert_eq!(state.round, 1, "fixture assumption: an early round, before any real production has happened");
+        assert!(state.players[0].civil_actions > 0, "fixture assumption: a civil action must still be available to spend");
+
+        let moves = crate::legal::legal_moves(&state);
+        let moves = moves.as_slice();
+        assert!(moves.contains(&Move::EndTurn), "fixture assumption: EndTurn must be offered so the search has to choose against it");
+        assert!(
+            moves.iter().any(|m| matches!(m, Move::Take { .. })),
+            "fixture assumption: a legal (therefore affordable) Take must be on offer, {moves:?}"
+        );
+
+        let mut w = crate::bots::weighted::weights::Weights::defaults();
+        w.set(crate::bots::weighted::weights::WeightKey::FoodGap, -100.0);
+        w.set(crate::bots::weighted::weights::WeightKey::ResourceGap, -100.0);
+        let eval = move |s: &GameState, i: u8| crate::bots::weighted::eval::evaluate(s, i, &w, None, None);
+
+        let mut stats = Stats::default();
+        let cfg = QuiescenceConfig { end_bias: 0.0, ..QuiescenceConfig::default() };
+        let chosen = pick(&cfg, &mut stats, &state, moves, &eval);
+        assert!(
+            !matches!(chosen, Move::EndTurn),
+            "a heavy food/resource-gap penalty must not make passing with a civil action \
+             and an affordable Take in hand look better than actually taking it, got {chosen:?}"
+        );
     }
 }
