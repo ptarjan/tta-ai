@@ -1,0 +1,256 @@
+TAKE-DEDUP INVESTIGATION -- game 7523005, journal lines 123/124
+2026-08-25
+=========================================================================
+
+OUTCOME: NO FIX LANDED. Diagnosis complete, a structural guard was designed,
+implemented, and then EMPIRICALLY FALSIFIED against real corpus games before
+being written up as a permanent test -- so it was reverted in full. The tree
+is byte-identical to its pre-task state. This is deliberate, not a stall: the
+task explicitly allows "no fix is warranted, here is why" as an accepted
+result, and landing the guard that was built would have been actively wrong
+(it fails its own required positive control on two real games, see STEP 2).
+
+THE DEFECT (given, not re-derived)
+-----------------------------------
+BGO game 7523005, journal lines 123/124 are byte-identical: "Orange takes
+Urban Growth in hand Orange uses 1 civil action", 3 seconds apart. BGO's
+client double-logged ONE take; the replayer applies both, so Orange's civil
+hand goes 4 -> 5 -> 6 and carries a ghost card. See
+analysis/hand_divergence_7523005.txt for the original write-up. (Note: this
+particular game still completes and scores exactly today -- see the
+"CURRENT STATE" note at the bottom. The ghost card is a real, silent
+correctness bug; it just happens not to break this game's replay.)
+
+=========================================================================
+STEP 1 -- DIAGNOSIS: why does the SECOND apply succeed today?
+=========================================================================
+
+ANSWER, in one sentence: the take path is LENIENT about row occupancy --
+`Replayer::ground_row_slot` (rust/src/replay_common.rs, `fn ground_row_slot`,
+originally ~line 4209) resolves "takes Urban Growth" purely by matching the
+journal's stated civil-action COST against `costs::take_cost`'s POSITION-based
+formula (`costs::row_cost(idx)`, costs.rs:71-79: slots 0-4 cost 1, 5-8 cost 2,
+9-12 cost 3), then force-labels ("grounds") whichever ungrounded slot's
+position-cost matches -- with NO check that the slot in question ever held a
+second real copy of the named card. `card_row: [CardId; 13]` is documented as
+SIMULATED, fictional filler until grounded (module doc, replay_common.rs
+lines 59-68); an ungrounded slot's identity is "never validated against
+anything and never claimed to be historically accurate; only its EXISTENCE
+... is real."
+
+Concretely, for line 123 (first take): `ground_row_slot` forces some
+ungrounded slot `i0` (whichever satisfies cost 1, scanned lowest-index
+first) to `Urban Growth`, marks it grounded, and `apply::take_card_impl`
+(apply.rs ~591-593) zeroes `card_row[i0]` and the `TakeCard` arm immediately
+un-grounds it again (`r.row_grounded[slot] = false`, replay_common.rs, so a
+later take can force the TRUE next observed card into it).
+
+For line 124 (the duplicate, 3s later): `ground_row_slot` runs again. Its
+first branch (`row_grounded[i] && card_row[i] == card`, "already grounded to
+this exact card") does NOT match -- slot `i0` no longer holds Urban Growth
+identity, it was zeroed and reset. So it falls to the fallback loop: scan
+slots 0..13 in order, force the FIRST ungrounded slot whose position-cost
+equals 1 into "Urban Growth". Since slots 0-4 all cost exactly 1 regardless
+of what card sits there, and slot `i0` (freshly refilled, ungrounded again)
+is very likely the lowest-index candidate, this typically re-grounds the
+SAME slot index -- but not because the model verified anything about a real
+second copy; it is a coincidence of the greedy lowest-index-first scan
+finding cost-1 slots interchangeable. `costs::take_rejection`'s
+`TakeRejection::DuplicateCard` gate (costs.rs ~389-398) is explicitly
+EXEMPTED for `CardType::Action` cards (multi-copy by design -- Urban Growth
+prints `count: [2, 2, 2]`, card_table.rs:4073-4077), so nothing blocks the
+second take either. `Card::count` (cards.rs:663-665) is consumed ONLY at
+deck-construction time (`game::build_deck`, game.rs:340-352); nothing at
+take-time checks a live "copies remaining" ledger, because no such ledger
+exists.
+
+CONCLUSION: the leniency is real and is precisely why line 124 succeeds. It
+is, by itself, a defect worth naming: `ground_row_slot` can force ANY
+ungrounded slot into ANY card identity purely by position-cost match, with
+zero connection to how many physical copies of that card actually exist or
+have already been observed. See STEP 2 for why this same leniency makes a
+safe dedup guard unbuildable from the model's own state.
+
+=========================================================================
+STEP 2 -- THE GUARD: designed, implemented, empirically falsified, reverted
+=========================================================================
+
+Corpus measurement (already run by the coordinator across all 1011 journals,
+used here as given, not re-derived): 281 adjacent byte-identical take-line
+pairs across 251 games. Card distribution:
+    Reserves 96, Breakthrough 39, Efficient Upgrade 36, Rich Land 32,
+    Frugality 30, Urban Growth 29, Revolutionary Idea 14,
+    Cultural Heritage 2, Johannes Sebastian Bach 1,
+    Wave of Nationalism 1, Moses 1
+The top seven are all multi-copy Action cards -- near-certainly genuine
+back-to-back takes of two different physical copies. The tail (Bach, Moses:
+leaders; Cultural Heritage: a wonder) are each printed with exactly ONE
+physical copy, so a repeat MUST be a double-log. Gap-between-timestamps is
+unimodal (0s-2959s, no bimodal split) -- DISQUALIFIED as a discriminator.
+Byte-identical text alone is also DISQUALIFIED (281 occurrences, mostly
+genuine). Only a discriminator grounded in modelled ROW STATE was left as a
+candidate.
+
+DESIGN TRIED: "was the specific card still physically in that specific slot
+when the second line arrived." Implemented as: track `Replayer::last_take:
+Option<(actor, raw_text, slot, lineno)>` for the most recently applied
+ordinary (non-`TakeRow`) take. When a `TakeCard` line's raw text is
+byte-identical to the IMMEDIATELY PRECEDING journal line's, by the SAME
+actor (`lineno == last.lineno + 1`), re-run `ground_row_slot` with that
+slot EXCLUDED from candidacy. If some OTHER ungrounded slot's position-cost
+still reproduces the journal's cost, a second physical copy is structurally
+supportable -- apply normally from that other slot (handles a genuine run of
+3+ identical takes correctly too, by always excluding only the MOST RECENT
+slot). If NO other slot qualifies, there is no structural evidence a second
+physical copy ever existed -- skip the line as BGO's redundant log, matching
+`duplicate_build_lines`'s existing precedent shape (`GameResult::
+duplicate_takes` surfaced the count).
+
+Full mechanical change: `ground_row_slot` gained an `exclude: Option<u8>`
+parameter (filtered out of both its "already grounded" and "force by cost"
+branches); the `TakeCard` arm's plain (no-pending-choice) path computed the
+exclusion and dispatched into skip-or-apply; `last_take` was updated after
+every successful plain-path take and reset on `EndTurn`.
+
+EMPIRICAL FALSIFICATION (before writing any permanent test -- built a
+`TAKE_DEDUP_PROBE` env-gated debug print, ran `replaystats --game <id>`
+against the required positive-control games from the coordinator's
+`/private/tmp/takedup_scan.txt`):
+
+    game 7523341, Purple, round 3, "Cultural Heritage" (a WONDER, exactly
+    1 printed copy -- a second take is a logical impossibility):
+        lineno=56 exclude_vacated=None    result=Some(slot 0)  (first take)
+        lineno=57 exclude_vacated=Some(0) result=Some(slot 1)  <- WRONGLY
+                                                     applied as if genuine
+
+    game 7523609, Orange, round 3, "Cultural Heritage" (same card, same
+    shape):
+        lineno=38 exclude_vacated=None    result=Some(slot 0)
+        lineno=39 exclude_vacated=Some(0) result=Some(slot 1)  <- WRONGLY
+                                                     applied as if genuine
+
+Both are REQUIRED positive controls (the coordinator: "the four unique-card
+cases ... must be classified as duplicates by whatever guard you build").
+The guard classified neither as a duplicate. ROOT CAUSE: `costs::row_cost`
+is a pure function of SLOT INDEX (rows 0-4 all cost 1), completely
+independent of which card occupies the slot. Excluding one slot leaves
+~4 more same-tier slots free almost always -- especially this early
+(round 3), when most of the 13 slots are still untouched. So "does some
+OTHER slot's position-cost still match" is nearly always true regardless of
+true card multiplicity; it carries essentially zero card-identity
+information. The guard is not merely imperfect, it is close to inert as a
+discriminator, and fails exactly the cases it MUST catch.
+
+ALTERNATIVE CONSIDERED AND ALSO REJECTED: cap the number of simultaneously
+"grounded" instances of a `CardId` at its printed `Card::count[players-2]`.
+This IS a hard, safe invariant for the single-copy cases (Bach, Moses, Wave
+of Nationalism, Cultural Heritage x2 -- 5 lines total) with zero risk of
+false positives, since a second instance of a 1-copy card is a logical
+impossibility regardless of slot. BUT: Urban Growth -- the actual reported
+defect -- prints `count: [2, 2, 2]` (2 copies at every player count). After
+the first take only 1 instance has been observed; 1 < 2, so this check would
+NOT flag line 124 either. The model cannot know whether the second printed
+copy has genuinely been drawn into the row yet, because the row's undrawn
+contents are fictional/SIMULATED by design -- that is exactly the module's
+own documented boundary (replay_common.rs lines 59-68). A count-cap guard is
+safe but PROVABLY CANNOT fix the headline 7523005 case it was asked to fix,
+and would separately need put-back bookkeeping (a taken-then-put-back card
+returning to the row should not permanently consume its slot in the count)
+to avoid a different class of false positive on any legitimate
+take/putback/retake cycle -- unbuilt and unverified here, and moot given the
+first problem already rules the approach out as an answer to the actual ask.
+
+CONCLUSION: no signal available in this file's currently modelled state
+(position-based row cost, or static printed card counts) safely
+distinguishes BGO's genuine redundant double-log of a MULTI-COPY card
+(Urban Growth, Reserves, etc.) from a genuine second draw of it. Any signal
+that WOULD catch it (byte-identical text, timestamp gap) is independently
+disqualified by the 281/251 corpus measurement. A real fix would require
+reconstructing genuine deck-draw/shuffle order information the row model
+deliberately does not track (module doc: "never claimed to be historically
+accurate") -- out of scope here, and exactly the kind of invented tolerance
+/ fallback the task warned against building blind.
+
+The guard code (struct fields `last_take`/`duplicate_take_lines`, the
+`ground_row_slot` `exclude` parameter, the `TakeCard` arm dispatch, the
+`GameResult::duplicate_takes` field, the `EndTurn` reset, and the temporary
+`TAKE_DEDUP_PROBE` debug print) was fully reverted. `grep` for
+`last_take|duplicate_take_lines|duplicate_takes|TAKE_DEDUP_PROBE|
+exclude_vacated` in rust/src/replay_common.rs now returns only one line, a
+PRE-EXISTING, unrelated historical comment (line ~7748, about
+`prescan_putback_skips`'s own now-superseded design, which independently
+used the same English phrase "a single `last_take` slot" years before this
+investigation and was not touched).
+
+=========================================================================
+STEP 3 -- TEST: not added
+=========================================================================
+No permanent test was added. The guard that would need pinning was
+falsified before being written up as a test (STEP 2's red-confirm-equivalent
+IS the two-game empirical falsification above, run against the real corpus
+rather than a synthetic fixture, per the coordinator's own preference). Since
+no guard lands, there is nothing correct to pin; a test asserting the
+falsified behaviour would be exactly the kind of change the repo's own
+standing rule forbids ("do NOT edit an existing test to make your change
+pass" / do not fabricate a passing test around a wrong fix).
+
+=========================================================================
+STEP 4 -- MEASURE: before/after (no functional change; sanity-check only)
+=========================================================================
+Since the guard was reverted in full, "before" and "after" are the same
+tree. The sweep was still run once, after the revert, as a clean-tree sanity
+check (confirms the revert was complete and nothing was left broken):
+
+  cd rust && PATH=$HOME/.cargo/bin:$PATH cargo build --profile difftest \
+      --bin replaystats
+  SCOREDIV_DUMP_COMPLETED=1 ./target/difftest/replaystats \
+      /Users/pt/tta-ai/sources/bgo/index.tsv \
+      /private/tmp/bgo-journals/journals > /tmp/sweep_final.txt 2>&1
+  grep '^SCOREDIV_COMPLETED_ID' /tmp/sweep_final.txt | awk '{print $2}' \
+      | sort > /tmp/sweep_final_completed.txt
+  grep '^SCOREDIV_EXACT_ID' /tmp/sweep_final.txt | awk '{print $2}' \
+      | sort > /tmp/sweep_final_exact.txt
+
+RESULTS:
+  completed: 882 of 1011  (matches analysis/guard_ids_882.txt exactly)
+  exact:     840 of 1011  (matches analysis/guard_exact_840.txt exactly)
+  comm -23 analysis/guard_ids_882.txt   /tmp/sweep_final_completed.txt : EMPTY
+  comm -13 analysis/guard_ids_882.txt   /tmp/sweep_final_completed.txt : EMPTY
+  comm -23 analysis/guard_exact_840.txt /tmp/sweep_final_exact.txt     : EMPTY
+  comm -13 analysis/guard_exact_840.txt /tmp/sweep_final_exact.txt     : EMPTY
+No game moved on either measure, on either side -- expected, since the tree
+is unchanged.
+
+`cargo clippy --all-targets -- -D warnings`: exit 0, clean.
+`cargo test --profile fasttest`: exit 0, all suites passed, 0 failed
+(suite::main.rs: 10 passed, 1 ignored [bench]; whydiverge: 3 passed).
+
+CURRENT STATE OF GAME 7523005 (unchanged by this investigation): it IS in
+both frozen guard lists today -- it completes AND scores exactly despite the
+known ghost-card defect. So the hand-full gate this defect trips one card
+early is apparently already tolerated elsewhere (most likely the documented
+`hand_full_takes_overridden` BGO-vs-engine divergence in `Replayer::
+try_apply_take`, which already accepts a take BGO's own journal shows past
+the modelled hand limit). The defect is real and worth fixing on rules-
+correctness grounds (the reconstructed hand size is wrong for several turns),
+but it is not currently blocking this game's completion or score.
+
+=========================================================================
+ANSWERS TO THE THREE REQUIRED REPORT ITEMS
+=========================================================================
+1. Step 1, one sentence: the take path is lenient because `ground_row_slot`
+   grounds a card into any ungrounded row slot whose PURELY POSITIONAL cost
+   matches the journal's stated price, with no check that the slot ever
+   held a real second copy of the named card -- which is exactly why BGO's
+   duplicate "takes Urban Growth" line at 7523005:124 succeeds.
+2. Landed vs declined: DECLINED. A structural row-slot-exclusion guard was
+   built, then falsified on two required real-game positive controls
+   (7523341 line 57, 7523609 line 39 -- both single-copy Cultural Heritage
+   duplicates the guard failed to catch), and fully reverted. No safe
+   alternative was found for the general multi-copy case that the headline
+   defect (Urban Growth, 2 printed copies) actually needs.
+3. Corpus numbers: complete 882/1011 both before and after (identical tree),
+   exact 840/1011 both before and after, both `comm` comparisons empty on
+   both measures -- no game moved. 7523005 itself: unaffected, already
+   completes and scores exactly under the existing `hand_full_takes_
+   overridden` tolerance despite the unfixed ghost card.
