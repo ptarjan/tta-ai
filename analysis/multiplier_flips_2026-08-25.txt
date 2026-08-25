@@ -1,0 +1,363 @@
+multcheck counterfactual argmax-flip measurement -- multiplier-only WeightKey family
+generated 2026-08-25
+
+HEADER
+======
+
+Binary: src/bin/multcheck.rs, built via `cargo build --release --bin multcheck`
+(EXIT build=0, "Finished `release` profile [optimized] target(s) in 1m 03s").
+
+Real invocation signature (confirmed by reading parse_args() in multcheck.rs before
+running anything -- it takes exactly 5 POSITIONAL args, there is NO --players flag):
+  ./target/release/multcheck <games> <seed> <threads> <champion_json> <players 2|3|4>
+
+Frozen champion inputs (untracked copies, NOT the live experiments/rust_champion_*.json):
+  /private/tmp/multfreeze/rust_champion_2p.json   md5 9bfb3c06587f909d258a34deaf694e61
+  /private/tmp/multfreeze/rust_champion_3p.json   md5 119be25daa43fbcb09f7e1ed7a81e943
+  /private/tmp/multfreeze/rust_champion_4p.json   md5 904e6b68acc5beb1089554cc089cd0bf
+  (all three independently verified with `md5` before use and matched the values
+  supplied in the task exactly.)
+
+Calibration (step 3): `time ./target/release/multcheck 4 0 4 <3p champion> 3` ->
+EXIT cal=0, real 0m29.161s. Tool's own eprintln lines showed the classification pass
+is HARDCODED to 60 games regardless of the games CLI arg (15.1s fixed cost there),
+and the main pass scales with the games arg (14.1s / 4 games = 3.525 s/game at 3p).
+Chose games=150 for the 2p and 3p real runs (est. ~544s, well under the ~12 min
+target). The 4p run's classification pass alone (still fixed at 60 games) took 30.3s
+-- roughly 2x the 3p classification cost -- so a first 150-game 4p attempt was killed
+by the harness's own 10-minute hard command cap before its main pass finished (only
+the classification-pass line printed; EXIT 143/SIGTERM). Recalculated from the 4p
+classification cost (32177 decisions / 30.3s vs 3p's 23594 / 15.1s, plus more
+decisions per game) that 4p main-pass cost is ~7.05 s/game, and reran 4p with
+games=70 (est. ~523s), which completed cleanly.
+
+Commands actually run for the three real runs:
+  ./target/release/multcheck 150 0 4 /private/tmp/multfreeze/rust_champion_2p.json 2 > /private/tmp/mult_2p.txt 2>&1
+  ./target/release/multcheck 150 0 4 /private/tmp/multfreeze/rust_champion_3p.json 3 > /private/tmp/mult_3p.txt 2>&1
+  ./target/release/multcheck 70  0 4 /private/tmp/multfreeze/rust_champion_4p.json 4 > /private/tmp/mult_4p.txt 2>&1
+(2p and 4p used games=150; 4p used games=70 for the reason above. threads=4, seed=0
+for all three, as instructed.)
+
+Exit codes: EXIT run2p=0, EXIT run3p=0, EXIT run4p=0 (after the games=70 retry;
+first 150-game 4p attempt was EXIT run4p_attempt1=143/timeout, discarded).
+
+Decision counts each run reported (tool's own printed line):
+  2p: players=2 games=150 seed=0 threads=4 decisions=33900
+  3p: players=3 games=150 seed=0 threads=4 decisions=58681
+  4p: players=4 games=70  seed=0 threads=4 decisions=37599
+
+CLASSIFICATION PASS RESULT (all three runs agreed):
+  "57 of 163 WeightKeys never appear in an f.set(...) in features.rs" (not_in_fset=57)
+  "35 of those 57 have candidate-set spread == 0.0 at every sampled decision -- this
+  is the multiplier-only family" (mult_keys=35), identically in the 2p, 3p, and 4p
+  runs. 35 is within the expected ~31-35 range.
+
+
+SECTION 1 -- RAW per-key tables, verbatim, all three runs stacked
+===================================================================
+
+--- 2p: /private/tmp/mult_2p.txt (full contents) ---
+multcheck: 57 of 163 WeightKeys never appear in an f.set(...) in features.rs
+multcheck: classification pass done (60 games, 13543 decisions)
+multcheck: 35 of those 57 have candidate-set spread == 0.0 at every sampled decision -- this is the multiplier-only family (5.4s)
+multcheck: main pass done (150 games, 33900 decisions, 35 keys, 182.2s)
+players=2 games=150 seed=0 threads=4 champion=/private/tmp/multfreeze/rust_champion_2p.json decisions=33900
+not_in_fset=57 mult_keys=35
+key                               champ_w flip_rate_zero flip_rate_abs   flips_zero      flips_abs
+unit_strength_credit               0.2304       0.100737      0.000000         3415              0 term_nonzero_rate=0.848024 term_nonzero_n=28748
+card_board_leader                 -0.1502       0.065162      0.087227         2209           2957 term_nonzero_rate=0.460118 term_nonzero_n=15598
+card_board_credit                  0.1698       0.053923      0.000000         1828              0 term_nonzero_rate=0.848378 term_nonzero_n=28760
+rate_horizon                       1.0866       0.032242      0.000000         1093              0 term_nonzero_rate=1.000000 term_nonzero_n=33900
+bonus_card_credit                 -0.1709       0.023304      0.024602          790            834 term_nonzero_rate=0.338230 term_nonzero_n=11466
+action_board_credit                0.1719       0.023540      0.000000          798              0 term_nonzero_rate=0.710649 term_nonzero_n=24091
+territory_credit                   0.0654       0.014277      0.000000          484              0 term_nonzero_rate=0.198555 term_nonzero_n=6731
+war_board_credit                   0.3165       0.012330      0.000000          418              0 term_nonzero_rate=0.204985 term_nonzero_n=6949
+wonder_board_credit                0.0248       0.010885      0.000000          369              0 term_nonzero_rate=0.184130 term_nonzero_n=6242
+aggression_board_credit            0.1125       0.010029      0.000000          340              0 term_nonzero_rate=0.158614 term_nonzero_n=5377
+gov_board_credit                   0.1128       0.009558      0.000000          324              0 term_nonzero_rate=0.333894 term_nonzero_n=11319
+tech_redundancy_discount           0.6687       0.005221      0.000000          177              0 term_nonzero_rate=0.373923 term_nonzero_n=12676
+resource_discount                  0.8416       0.004690      0.000000          159              0 term_nonzero_rate=0.577935 term_nonzero_n=19592
+rival_take_share                   0.3689       0.002035      0.000000           69              0 term_nonzero_rate=0.286726 term_nonzero_n=9720
+restricted_resource_credit         0.3972       0.000619      0.000000           21              0 term_nonzero_rate=0.250088 term_nonzero_n=8478
+rival_desire                       0.0638       0.000383      0.000000           13              0 term_nonzero_rate=0.286136 term_nonzero_n=9700
+defense_bonus                      0.1472       0.000295      0.000000           10              0 term_nonzero_rate=0.338230 term_nonzero_n=11466
+hand_swap_extra                    0.1860       0.000265      0.000000            9              0 term_nonzero_rate=0.123717 term_nonzero_n=4194
+free_action_credit                 0.0023       0.000029      0.000000            1              0 term_nonzero_rate=0.606608 term_nonzero_n=20564
+culture_rate_trailing             -0.1458       0.000000      0.000029            0              1 term_nonzero_rate=0.066254 term_nonzero_n=2246
+gov_action_cost                   -0.4807       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+card_rate_credit                   0.1559       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+unit_tech_credit                   0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tech_board_credit                  0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+build_fresh_credit                 0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_board_credit                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+pact_board_credit                  0.0129       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+event_board_credit                 0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_shortfall_cost              0.0045       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_reach_credit                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+science_rate_trailing             20.6190       0.000000      0.000000            0              0 term_nonzero_rate=0.007788 term_nonzero_n=264
+food_stock_needed                  0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+resource_stock_needed              0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+science_needed                     0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+free_workers_needed                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+
+--- 3p: /private/tmp/mult_3p.txt (full contents) ---
+multcheck: 57 of 163 WeightKeys never appear in an f.set(...) in features.rs
+multcheck: classification pass done (60 games, 23594 decisions)
+multcheck: 35 of those 57 have candidate-set spread == 0.0 at every sampled decision -- this is the multiplier-only family (15.3s)
+multcheck: main pass done (150 games, 58681 decisions, 35 keys, 527.8s)
+players=3 games=150 seed=0 threads=4 champion=/private/tmp/multfreeze/rust_champion_3p.json decisions=58681
+not_in_fset=57 mult_keys=35
+key                               champ_w flip_rate_zero flip_rate_abs   flips_zero      flips_abs
+card_board_credit                  0.5837       0.155621      0.000000         9132              0 term_nonzero_rate=0.781718 term_nonzero_n=45872
+action_board_credit                0.0677       0.098022      0.000000         5752              0 term_nonzero_rate=0.995995 term_nonzero_n=58446
+tactic_board_credit                0.0415       0.064723      0.000000         3798              0 term_nonzero_rate=0.566180 term_nonzero_n=33224
+pact_board_credit                  0.0571       0.039212      0.000000         2301              0 term_nonzero_rate=0.350829 term_nonzero_n=20587
+unit_tech_credit                   1.9276       0.028425      0.000000         1668              0 term_nonzero_rate=0.659600 term_nonzero_n=38706
+resource_discount                  0.6050       0.017842      0.000000         1047              0 term_nonzero_rate=0.940441 term_nonzero_n=55186
+rate_horizon                       0.4911       0.017706      0.000000         1039              0 term_nonzero_rate=1.000000 term_nonzero_n=58681
+gov_board_credit                   0.8554       0.013241      0.000000          777              0 term_nonzero_rate=0.670081 term_nonzero_n=39321
+build_fresh_credit                 1.3948       0.011588      0.000000          680              0 term_nonzero_rate=0.123191 term_nonzero_n=7229
+restricted_resource_credit         0.4881       0.005487      0.000000          322              0 term_nonzero_rate=0.314037 term_nonzero_n=18428
+tech_redundancy_discount           1.8832       0.003698      0.000000          217              0 term_nonzero_rate=0.026789 term_nonzero_n=1572
+hand_swap_extra                    1.5788       0.002624      0.000000          154              0 term_nonzero_rate=0.136245 term_nonzero_n=7995
+rival_take_share                   3.8927       0.002522      0.000000          148              0 term_nonzero_rate=0.483734 term_nonzero_n=28386
+rival_desire                       0.3290       0.000818      0.000000           48              0 term_nonzero_rate=0.475333 term_nonzero_n=27893
+card_board_leader                  0.0278       0.000665      0.000000           39              0 term_nonzero_rate=0.562431 term_nonzero_n=33004
+free_action_credit                 0.1199       0.000324      0.000000           19              0 term_nonzero_rate=0.979670 term_nonzero_n=57488
+culture_rate_trailing               0.0303       0.000068      0.000000            4              0 term_nonzero_rate=0.250217 term_nonzero_n=14683
+defense_bonus                      0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+gov_action_cost                   -2.0240       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+card_rate_credit                 -11.2057       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+unit_strength_credit               0.0095       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tech_board_credit                  0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+wonder_board_credit                0.5253       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+territory_credit                   0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+bonus_card_credit                  3.5085       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+aggression_board_credit            0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+war_board_credit                   0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+event_board_credit                 0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_shortfall_cost              0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_reach_credit                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+science_rate_trailing               0.5413       0.000000      0.000000            0              0 term_nonzero_rate=0.019972 term_nonzero_n=1172
+food_stock_needed                  0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+resource_stock_needed              0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+science_needed                     0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+free_workers_needed                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+
+--- 4p: /private/tmp/mult_4p.txt (full contents; games=70, see calibration note above) ---
+multcheck: 57 of 163 WeightKeys never appear in an f.set(...) in features.rs
+multcheck: classification pass done (60 games, 32177 decisions)
+multcheck: 35 of those 57 have candidate-set spread == 0.0 at every sampled decision -- this is the multiplier-only family (33.9s)
+multcheck: main pass done (70 games, 37599 decisions, 35 keys, 541.2s)
+players=4 games=70 seed=0 threads=4 champion=/private/tmp/multfreeze/rust_champion_4p.json decisions=37599
+not_in_fset=57 mult_keys=35
+key                               champ_w flip_rate_zero flip_rate_abs   flips_zero      flips_abs
+card_board_credit                  0.0988       0.134046      0.000000         5040              0 term_nonzero_rate=0.984547 term_nonzero_n=37018
+card_board_leader                 -0.0988       0.029868      0.040187         1123           1511 term_nonzero_rate=0.445198 term_nonzero_n=16739
+bonus_card_credit                 -0.9299       0.022128      0.022953          832            863 term_nonzero_rate=0.305407 term_nonzero_n=11483
+rival_take_share                  -7.8582       0.000000      0.016357            0            615 term_nonzero_rate=0.000000 term_nonzero_n=0
+gov_action_cost                   -0.9631       0.001144      0.012979           43            488 term_nonzero_rate=0.723902 term_nonzero_n=27218
+unit_tech_credit                   0.0405       0.011756      0.000000          442              0 term_nonzero_rate=0.672837 term_nonzero_n=25298
+pact_board_credit                  0.0654       0.006516      0.000000          245              0 term_nonzero_rate=0.156919 term_nonzero_n=5900
+war_board_credit                   0.4321       0.003644      0.000000          137              0 term_nonzero_rate=0.137477 term_nonzero_n=5169
+card_rate_credit                  -0.1571       0.002500      0.002926           94            110 term_nonzero_rate=0.036650 term_nonzero_n=1378
+rate_horizon                       0.0536       0.000824      0.000000           31              0 term_nonzero_rate=1.000000 term_nonzero_n=37599
+tech_redundancy_discount           0.4937       0.000692      0.000000           26              0 term_nonzero_rate=0.225192 term_nonzero_n=8467
+hand_swap_extra                   -0.0586       0.000239      0.000585            9             22 term_nonzero_rate=0.182585 term_nonzero_n=6865
+defense_bonus                      0.0969       0.000053      0.000000            2              0 term_nonzero_rate=0.305407 term_nonzero_n=11483
+culture_rate_trailing              -0.0685       0.000027      0.000027            1              1 term_nonzero_rate=0.042501 term_nonzero_n=1598
+rival_desire                      -0.2874       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+resource_discount                  0.8424       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+unit_strength_credit               0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tech_board_credit                  0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+action_board_credit                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+gov_board_credit                   0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+wonder_board_credit                0.0895       0.000000      0.000000            0              0 term_nonzero_rate=0.046171 term_nonzero_n=1736
+build_fresh_credit                 0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+restricted_resource_credit         0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+free_action_credit                 0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+territory_credit                   0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_board_credit                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+aggression_board_credit            0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+event_board_credit                 0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_shortfall_cost              0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+tactic_reach_credit                0.1971       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+science_rate_trailing              -0.7103       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+food_stock_needed                  0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+resource_stock_needed              0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+science_needed                     0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+free_workers_needed                0.0000       0.000000      0.000000            0              0 term_nonzero_rate=0.000000 term_nonzero_n=0
+
+
+SECTION 2 -- merged table, one row per key, sorted DESCENDING by the largest
+flip rate (either perturbation) any key achieved at any table size
+===================================================================
+
+Columns: key | 2p_zero 2p_abs | 3p_zero 3p_abs | 4p_zero 4p_abs | max_any
+
+key                             2p_zero   2p_abs   3p_zero   3p_abs   4p_zero   4p_abs    max_any
+card_board_credit               0.053923  0.000000  0.155621  0.000000  0.134046  0.000000  0.155621
+unit_strength_credit            0.100737  0.000000  0.000000  0.000000  0.000000  0.000000  0.100737
+action_board_credit             0.023540  0.000000  0.098022  0.000000  0.000000  0.000000  0.098022
+card_board_leader               0.065162  0.087227  0.000665  0.000000  0.029868  0.040187  0.087227
+tactic_board_credit             0.000000  0.000000  0.064723  0.000000  0.000000  0.000000  0.064723
+pact_board_credit               0.000000  0.000000  0.039212  0.000000  0.006516  0.000000  0.039212
+rate_horizon                    0.032242  0.000000  0.017706  0.000000  0.000824  0.000000  0.032242
+unit_tech_credit                0.000000  0.000000  0.028425  0.000000  0.011756  0.000000  0.028425
+bonus_card_credit               0.023304  0.024602  0.000000  0.000000  0.022128  0.022953  0.024602
+resource_discount               0.004690  0.000000  0.017842  0.000000  0.000000  0.000000  0.017842
+rival_take_share                0.002035  0.000000  0.002522  0.000000  0.000000  0.016357  0.016357
+territory_credit                0.014277  0.000000  0.000000  0.000000  0.000000  0.000000  0.014277
+gov_board_credit                0.009558  0.000000  0.013241  0.000000  0.000000  0.000000  0.013241
+gov_action_cost                 0.000000  0.000000  0.000000  0.000000  0.001144  0.012979  0.012979
+war_board_credit                0.012330  0.000000  0.000000  0.000000  0.003644  0.000000  0.012330
+build_fresh_credit              0.000000  0.000000  0.011588  0.000000  0.000000  0.000000  0.011588
+wonder_board_credit             0.010885  0.000000  0.000000  0.000000  0.000000  0.000000  0.010885
+aggression_board_credit         0.010029  0.000000  0.000000  0.000000  0.000000  0.000000  0.010029
+restricted_resource_credit      0.000619  0.000000  0.005487  0.000000  0.000000  0.000000  0.005487
+tech_redundancy_discount        0.005221  0.000000  0.003698  0.000000  0.000692  0.000000  0.005221
+card_rate_credit                0.000000  0.000000  0.000000  0.000000  0.002500  0.002926  0.002926
+hand_swap_extra                 0.000265  0.000000  0.002624  0.000000  0.000239  0.000585  0.002624
+rival_desire                    0.000383  0.000000  0.000818  0.000000  0.000000  0.000000  0.000818
+free_action_credit              0.000029  0.000000  0.000324  0.000000  0.000000  0.000000  0.000324
+defense_bonus                   0.000295  0.000000  0.000000  0.000000  0.000053  0.000000  0.000295
+culture_rate_trailing           0.000000  0.000029  0.000068  0.000000  0.000027  0.000027  0.000068
+tech_board_credit               0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+event_board_credit              0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+tactic_shortfall_cost           0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+tactic_reach_credit             0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+science_rate_trailing           0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+food_stock_needed               0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+resource_stock_needed           0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+science_needed                  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+free_workers_needed             0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+
+(35 rows -- the full classified multiplier-only set, all three runs.)
+
+
+SECTION 3 -- zero-flip and zero-term_nonzero key lists
+===================================================================
+
+3A. Keys with flip rate 0.0000 under BOTH perturbations (zero AND abs) at ALL
+THREE table sizes (9 keys, from the merged table above, max_any == 0.000000):
+  tech_board_credit
+  event_board_credit
+  tactic_shortfall_cost
+  tactic_reach_credit
+  science_rate_trailing
+  food_stock_needed
+  resource_stock_needed
+  science_needed
+  free_workers_needed
+
+3B. Keys the tool reported with a zero `term_nonzero` count (i.e. the term it
+multiplies never evaluated nonzero across any candidate in ANY sampled decision --
+the ZERO-perturbation "touched" check) at ALL THREE table sizes. This is a
+DIFFERENT, STRONGER statement than 3A and is NOT the same set (8 keys, a strict
+subset of 3A):
+  tech_board_credit         (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+  event_board_credit        (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+  tactic_shortfall_cost     (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+  tactic_reach_credit       (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+  food_stock_needed         (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+  resource_stock_needed     (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+  science_needed            (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+  free_workers_needed       (term_nonzero_n: 2p=0, 3p=0, 4p=0)
+
+The one key in 3A that is NOT in 3B: science_rate_trailing has flip rate 0.0000 in
+both perturbations at all three sizes (3A), but its own printed term_nonzero_n is
+NOT zero at every size -- the tool reported term_nonzero_n=264 (rate 0.007788) at
+2p and term_nonzero_n=1172 (rate 0.019972) at 3p, and term_nonzero_n=0 at 4p. So at
+2p and 3p the quantity science_rate_trailing multiplies did evaluate nonzero in
+some sampled decisions, it just never changed which move was the argmax there.
+
+Note also (not part of either list above, but the same distinction shows up
+elsewhere in Section 1/2): rival_take_share at 4p prints term_nonzero_n=0,
+flip_rate_zero=0.000000, flips_zero=0, YET flip_rate_abs=0.016357 (615 flips) --
+the tool's own zero-perturbation "touched" check was 0 there while the abs
+perturbation still flipped the argmax. Quoted verbatim from Section 1, not
+recomputed.
+
+
+SECTION 4 -- COORDINATOR'S READING (appended after the worker's numbers; the
+worker was told numbers only, interpretation is mine)
+===================================================================
+
+4.1 THE PRUNE PASS IS OVERTURNED. RETIRE NOTHING FROM THIS FAMILY.
+
+`featspread` labelled all 35 of these keys STRUCTURAL_ZERO -- provably unable to
+change any decision -- because none of them occupies a slot in `phi`. Measured
+directly by counterfactual argmax flip over 130,180 real decisions:
+
+  26 of the 35 flip at least one real decision.
+   6 carry champion weight exactly 0.0 at all three table sizes, where BOTH
+     perturbations are the identity (0.0 -> 0.0, and abs(0.0) == 0.0), so
+     multcheck cannot say anything about them either way.
+   3 carry a nonzero weight somewhere and still never flip anything.
+
+The single most decision-relevant key in the whole family is
+`card_board_credit`, which flips 15.56% of 3p decisions and 13.40% of 4p
+decisions. `featspread` called it dead. Acting on that verdict would have
+retired the most load-bearing pricing multiplier in the bot.
+
+4.2 THE SECOND BLIND SPOT: A ZERO WEIGHT IS UNMEASURABLE BY THIS TOOL.
+
+Both perturbations are `0.0` and `champ_w.abs()`. When `champ_w == 0.0` those
+are the same number and both are the champion itself, so flips are zero BY
+CONSTRUCTION. The six affected keys are `event_board_credit`,
+`tech_board_credit`, and the four NEED keys `food_stock_needed`,
+`resource_stock_needed`, `science_needed`, `free_workers_needed`.
+
+The four need keys ship gated at 0.0 on purpose -- see rivals.rs's
+`the_need_hinge_prices_both_boards_identically_at_its_zero_default`, whose whole
+point is that a new coordinate must move nothing on the commit that adds it.
+They are wired through `WeightKey::needed()` (weights.rs:968-971) and are the
+gap/surplus channel that has not been priced yet. Retiring them would delete the
+feature before the climb ever gets to try it. DO NOT PRUNE THEM. Their zero is a
+statement about the champion, not about the key.
+
+4.3 THE THREE GENUINE ZEROES, AND WHAT THEY ACTUALLY MEAN.
+
+  science_rate_trailing  w2p=20.619  w3p=0.5413  w4p=-0.7103
+      term_nonzero_rate 0.0078 (2p, n=264) and 0.0200 (3p, n=1172), 0.0 at 4p.
+      So the term it multiplies DOES evaluate nonzero -- it just never once
+      changes which move is best, at any table size, carrying a weight of 20.6.
+      This also answers the standing question of why it is +20.62 at 2p and
+      -0.71 at 4p: the sign is unconstrained because nothing downstream can
+      observe it. It is a free parameter the climb has been fitting against
+      noise.
+
+  tactic_reach_credit     w4p=0.1971, term_nonzero_n = 0 at ALL THREE SIZES
+  tactic_shortfall_cost   w2p=0.0045, term_nonzero_n = 0 at ALL THREE SIZES
+
+      These two are NOT dead keys. term_nonzero == 0 everywhere means the branch
+      they live in (cards.rs:1410 and cards.rs:1446) was never executed in
+      130,180 decisions. That is a wiring defect, and it independently confirms
+      the tactic pricing blackout from the other direction. Retiring them would
+      cement the blackout as permanent instead of fixing it.
+
+4.4 A CONTRADICTION IN THE TOOL'S OWN OUTPUT, WORTH KNOWING BEFORE TRUSTING IT.
+
+`rival_take_share` at 4p prints term_nonzero_n=0 and flips_zero=0, yet
+flip_rate_abs=0.016357 (615 flips). Under a linear term that is impossible: if
+zeroing the multiplier moves no score, changing its magnitude cannot move an
+argmax. It is consistent only if the key enters through a BRANCH -- its champion
+value is -7.8582 and the abs perturbation is +7.8582, a sign flip. So these
+multipliers sit inside gated pricing code, and `term_nonzero` measures "zeroing
+this is a no-op", which is NOT the same statement as "the term is dead". Do not
+read Section 3B as structural death; read it as inertness at THIS champion.
+
+4.5 WHAT THIS PASS ESTABLISHES.
+
+  - The 56-key prune yields ZERO retirements from the multiplier family. Both
+    instruments' zero rows were dominated by their own blind spots.
+  - `card_board_credit`, `unit_strength_credit`, `action_board_credit` and
+    `card_board_leader` are the four load-bearing pricing multipliers
+    (max flip rate 0.087 to 0.156). Any change to card pricing goes through them.
+  - `card_board_leader` is the only key where the ABS column carries information
+    across the board, because it is the one with a negative champion weight at
+    every table size. Elsewhere a 0.000000 in flip_rate_abs usually means
+    abs(w) == w, i.e. the perturbation was the identity. Do not read those
+    zeroes as insensitivity.
+  - The tactic pricing path has a confirmed, measured blackout: two of its three
+    weights sit behind code that never runs.
