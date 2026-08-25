@@ -1,0 +1,287 @@
+Aggression @3p/@4p and Action @4p degenerate-cell diagnosis
+=============================================================
+2026-08-25, read-only analysis (no code changed). Companion to
+analysis/type_price_census_2026-08-25.txt, following up the two unresolved
+cells left after commit 3cf5622 (Event/Territory blackout fix).
+
+Method: rust/src/card_table.rs read directly for every card's printed
+CardEffects/Special fields; rust/src/bots/weighted/cards.rs (card_yields,
+card_choice, card_potential_core, sum_yields) and rust/src/bots/board_yields.rs
+(board_extra) read for the pricing code path; experiments/rust_champion_3p.json
+and rust_champion_4p.json read directly for the trained weight values that
+explain the two flat survivor numbers.
+
+=============================================================
+PART 1 -- Aggression (11 cards, CardType::Aggression, credit key
+AggressionBoardCredit)
+=============================================================
+
+card_table.rs entry-by-entry (all 11 read directly, card_table.rs:2255-2463):
+
+  Card                             id  age  CardEffects nonzero fields   Special
+  Aggression: Plunder (I)          109  I    (all zero)                  TakeFromOpponent{food/res:3}
+  Aggression: Raid (I)             110  I    (all zero)                  DestroyUrbanBuildings([I]), GainResources(HalfDestroyedBuildingCostRoundedUp)
+  Aggression: Enslave              111  I    gain_food:2, gain_resources:2   OpponentDecreasesPopulation(1)
+  Aggression: Plunder (II)         112  II   (all zero)                  TakeFromOpponent{food/res:5}
+  Aggression: Raid (II)            113  II   (all zero)                  DestroyUrbanBuildings([II,I]), GainResources(HalfDestroyedBuildingCostRoundedUp)
+  Aggression: Spy                  114  II   (all zero)                  TakeFromOpponent{science:5}
+  Aggression: Annex                115  II   (all zero)                  StealColony(1), ColonyPermanentBonusTransfers
+  Aggression: Infiltrate           116  II   (all zero)                  RemoveFromGame, GainCulturePerLevelOfRemovedCard(3)
+  Aggression: Plunder (III)        117  III  (all zero)                  TakeFromOpponent{food/res:7}
+  Aggression: Raid (III)           118  III  (all zero)                  DestroyUrbanBuildings([III,II]), GainResources(HalfDestroyedBuildingCostRoundedUp)
+  Aggression: Armed Intervention   119  III  (all zero)                  TakeFromOpponent{culture:7}
+
+CONFIRMED (part 1 of the question): every Aggression card except Enslave prints
+an all-zero CardEffects block -- every field that carries a printed number is 0
+-- and its entire value lives in `special`. card_yields (cards.rs:223) has a
+dedicated Aggression-only pricer (`aggression_value`, gated by
+AggressionBoardCredit, card_potential_core dispatch at cards.rs:2006-2010) but
+when that credit is 0.0 the function falls through to the generic tail
+(cards.rs:2053), which walks `card.special` through a giant match
+(cards.rs:398-462) that is exhaustive over every `Special` variant. Every
+variant these 10 cards use -- TakeFromOpponent, DestroyUrbanBuildings,
+GainResources, StealColony, ColonyPermanentBonusTransfers, RemoveFromGame,
+GainCulturePerLevelOfRemovedCard, OpponentDecreasesPopulation -- is listed on
+the right-hand side of that match's single no-op arm (cards.rs:462). None of
+these ten push a single WeightKey. That is exactly the Event-shaped blackout
+the background flagged: 10 no-op'd cards.
+
+Enslave is the one exception because, unlike the other ten, it ALSO carries
+nonzero numeric CardEffects fields (gain_food:2, gain_resources:2) alongside
+its Special (OpponentDecreasesPopulation, itself no-op'd). Those two fields are
+pushed unconditionally by card_yields' generic `_EFF_TO_FEATURE` block
+(cards.rs:288-289) as `(WeightKey::FoodStock, 2, Gain)` and
+`(WeightKey::ResourceStock, 2, Gain)`.
+
+Flat survivor constants, traced exactly:
+
+  sum_yields (cards.rs:531-568), YieldKind::Gain case: `total += wk * amt`, no
+  credit multiplier, no board term. Enslave's price is therefore exactly
+      2 * w[food_stock] + 2 * w[resource_stock]
+  (AggressionBoardCredit is 0.0 at both sizes, so aggression_value's type_bonus
+  contributes nothing, and no board_extra triple exists for Aggression's
+  special list either -- OpponentDecreasesPopulation is not one of the two
+  variants board_extra recognizes.)
+
+  3p champion (experiments/rust_champion_3p.json, "weights" block):
+      food_stock     = 60
+      resource_stock = 60
+      aggression_board_credit = -0.06672551663385082  (negative -> clamped to
+                                 0.0 by dominance_repair at load, matches
+                                 census column "trained" = -0.06673)
+      2*60 + 2*60 = 240.0  <-- EXACT MATCH to the census's 240.000000
+
+  4p champion (experiments/rust_champion_4p.json, "weights" block):
+      food_stock     = 0.10157418463634395
+      resource_stock = 0.04858019983456968
+      aggression_board_credit = -0.24519786767468477 (negative -> clamped to
+                                 0.0, matches census "trained" = -0.24520)
+      2*(0.10157418463634395 + 0.04858019983456968) = 0.3003087689...
+        <-- EXACT MATCH (to displayed precision) to the census's 0.300309
+
+  Both flat numbers are nothing but `2 * (w[food_stock] + w[resource_stock])`
+  evaluated at the two champions' trained stock weights -- a coincidence of
+  which two ordinary, non-Aggression-specific weights this one card happens to
+  touch, not a special constant anywhere in the aggression code path.
+
+Census cross-check (analysis/type_price_census_2026-08-25.txt lines 174-186,
+99-101):
+  card                              id   price@2p    price@3p    price@4p
+  Aggression: Plunder (I)           109   0.089603    0.000000    0.000000
+  Aggression: Raid (I)              110   0.000000    0.000000    0.000000
+  Aggression: Enslave                111   0.074970  240.000000    0.300309
+  Aggression: Plunder (II)          112   0.149339    0.000000    0.000000
+  Aggression: Raid (II)             113   0.000000    0.000000    0.000000
+  Aggression: Spy                   114  -0.247373    0.000000    0.000000
+  Aggression: Annex                 115   0.000000    0.000000    0.000000
+  Aggression: Infiltrate            116   0.000000    0.000000    0.000000
+  Aggression: Plunder (III)         117   0.209075    0.000000    0.000000
+  Aggression: Raid (III)            118   0.000000    0.000000    0.000000
+  Aggression: Armed Intervention    119   0.262487    0.000000    0.000000
+  (2p nonzero on several rows because aggression_board_credit is untrained-off
+  at 2p per the background/census; only 3p and 4p are the degenerate cells.)
+
+=============================================================
+PART 2 -- Action @4p (33 cards, CardType::Action, credit key
+ActionBoardCredit)
+=============================================================
+
+action_board_credit: 3p = +0.06765805587763932 (not clamped -- Action@3p is
+fine, matches background), 4p = -0.07156524285048321 (negative -> clamped to
+0.0 by dominance_repair -- this is the degenerate cell). card_board_credit
+("base" in card_potential_core) = 0.5837... (3p) / 0.0988290881985375 (4p) --
+nonzero at both sizes, so the generic tail's `card_choice` and `board_extra`
+terms are both live at 4p even though `action_value` itself never fires.
+
+Census price@4p for all 33 (analysis/type_price_census_2026-08-25.txt:
+315-345), split into the two observed groups:
+
+ZERO (15 cards):
+  card                        id   price@2p   price@3p   price@4p
+  Rich Land (A)                203   0.115384    2.455915   0.000000
+  Urban Growth (A)              204   0.115384    2.455915   0.000000
+  Engineering Genius (A)        206   0.230612    4.911750   0.000000
+  Rich Land (I)                  210   0.230612    4.911750   0.000000
+  Urban Growth (I)               211   0.230612    4.911750   0.000000
+  Engineering Genius (I)         213   0.345841    7.367586   0.000000
+  Rich Land (II)                  218   0.345841    7.367586   0.000000
+  Urban Growth (II)               219   0.345841    7.367586   0.000000
+  Engineering Genius (II)         221   0.461069    9.823421   0.000000
+  Efficient Upgrade (II)          225   0.345841    7.367586   0.000000
+  Wave of Nationalism              226   0.000000    0.000000   0.000000
+  Urban Growth (III)               228   0.461069    9.823421   0.000000
+  Engineering Genius (III)         229   0.576298   12.279257   0.000000
+  Efficient Upgrade (III)          232   0.461069    9.823421   0.000000
+  Military Build-Up                234   0.000000    0.000000   0.000000
+
+NONZERO (18 cards):
+  card                        id   price@2p   price@3p   price@4p
+  Frugality (A)                205   0.035073    4.059563   0.101574
+  Patriotism (A)                 207   0.067250    1.998789   0.817829
+  Cultural Heritage (A)           208   0.460793   -2.622087   3.529566
+  Stock Pile                       209   0.171838    8.118967   0.150154
+  Frugality (I)                   212   0.069991    8.119046   0.203148
+  Patriotism (I)                   214   0.121636    3.980029   0.817829
+  Breakthrough (I)                 215  -0.453448   -5.785358  -0.940868
+  Cultural Heritage (I)             216  -0.109806   -5.650121   1.059132
+  Reserves (I)                      217   0.273840    8.118967   0.020077
+  Frugality (II)                    220   0.104909   12.178530   0.304723
+  Patriotism (II)                    222   0.176022    5.961269   0.817829
+  Breakthrough (II)                   223  -0.680249   -8.678077  -1.411302
+  Revolutionary Idea (II)             224  -0.907206  -11.570875  -1.881736
+  Reserves (II)                        227   0.410760   12.178450   0.030115
+  Patriotism (III)                      230   0.230408    7.942509   0.817829
+  Revolutionary Idea (III)               231  -1.360809  -17.356312  -2.822603
+  Endowment for the Arts                  233   0.000000    0.202974   0.197658
+  Reserves (III)                           235   0.547680   16.237933   0.040154
+
+card_table.rs entries confirm what distinguishes the two groups (full fields
+read for all 33, card_table.rs:4052-4671; the interesting ones only shown):
+
+  Rich Land (A/I/II)          -- effects: ONLY resource_discount (1/2/3 across
+                                  A/I/II); special: FreeCivilAction(BuildOrUpgradeFarmOrMine)
+  Urban Growth (A/I/II/III)   -- effects: ONLY resource_discount (1/2/3/4);
+                                  special: FreeCivilAction(BuildOrUpgradeUrbanBuilding)
+  Engineering Genius (A/I/II/III) -- effects: ONLY resource_discount (2/3/4/5);
+                                  special: FreeCivilAction(BuildOneWonderStage)
+  Efficient Upgrade (II/III)  -- effects: ONLY resource_discount (3/4);
+                                  special: FreeCivilAction(UpgradeFarmMineOrUrbanBuilding)
+  Wave of Nationalism          -- effects: all zero; special:
+                                  ResourcesForMilitaryUnitsPerStrongerCivilization([6,3,2])
+  Military Build-Up            -- effects: all zero; special:
+                                  ResourcesForMilitaryUnitsPerStrongerCivilization([8,5,3])
+
+  Frugality (A/I/II)          -- effects: gain_food (1/2/3); special: FreeCivilAction(IncreasePopulation)
+  Patriotism (A/I/II/III)     -- effects: military_actions:1, resources_for_military_units (1/2/3/4)
+  Cultural Heritage (A/I)     -- effects: gain_culture/gain_science (4,1)/(2,2)
+  Stock Pile                  -- effects: gain_food:1, gain_resources:1
+  Breakthrough (I/II)         -- effects: gain_science (2/3); special: FreeCivilAction(DevelopTechnology)
+  Revolutionary Idea (II/III) -- effects: gain_science (4/6)
+  Reserves (I/II/III)         -- effects: all zero; special: GainFoodOrResources(2/3/4)
+  Endowment for the Arts      -- effects: all zero; special: CulturePerCivilizationWithMoreCulture([6,3,2])
+
+Code trace (card_potential_core, cards.rs:1960-1964 dispatch, then the shared
+tail at cards.rs:2053-2068 when ActionBoardCredit==0.0):
+
+  1. card_yields (cards.rs:223) never pushes `resource_discount` or
+     `resources_for_military_units` -- DELIBERATELY (cards.rs:334-357 comment):
+     they are reserved for action_value's board-aware resource_stock marginal.
+     The comment documents a real prior measurement: on the live 2p champion, a
+     flat push priced Rich Land (A)'s resourceDiscount at 0.0 (dominance_repair
+     clamps the persisted negative resource_discount weight to 0.0, a
+     BENEFIT_GATES member) versus 1.82 through the board-aware marginal -- the
+     static formula was PROVEN wrong, not merely unused.
+  2. `Special::FreeCivilAction` is also deliberately no-op'd in card_yields'
+     special match (cards.rs:416-429 comment): it used to be a flat +1.0 gain,
+     a second formula disagreeing with action_value's own board-aware
+     free_action_credit marginal for the same 18 action cards; the flat
+     version and its WeightKey::FreeCivilAction coordinate were retired
+     outright.
+  3. board_extra (rust/src/bots/board_yields.rs:908-940) fires independently of
+     ActionBoardCredit (gated on `credit_board = card_board_credit +
+     board_credit_key(id)`, and board_credit_key returns None for
+     CardType::Action -- so credit_board is just card_board_credit, which is
+     nonzero at 4p). It only recognizes two Special variants:
+     CulturePerCivilizationWithMoreCulture (counts rivals with more culture)
+     and ResourcesForMilitaryUnitsPerStrongerCivilization (counts rivals
+     stronger than you); it does NOT recognize FreeCivilAction or read
+     resource_discount at all.
+  4. card_choice (cards.rs:504) is a separate, dedicated hook for
+     GainFoodOrResources, applied at cards.rs:2061-2063 gated on `base`
+     (card_board_credit) -- NOT on action_board_credit -- so Reserves (I/II/III)
+     is priced through it regardless of whether action_value ever runs.
+
+  So the 15 zero-priced cards split into two different causes:
+    - 13 of them (Rich Land x3, Urban Growth x4, Engineering Genius x4,
+      Efficient Upgrade x2) have NO other numeric lever at all: their only
+      printed value is resource_discount + FreeCivilAction, and both are
+      wired EXCLUSIVELY to action_value. With action_board_credit clamped to
+      0.0, nothing in the fallback chain (card_yields / card_choice /
+      board_extra) reads either field. This is unconditional -- true on every
+      board state, not just this one.
+    - 2 of them (Wave of Nationalism, Military Build-Up) DO reach board_extra
+      (their special IS one of the two board_extra recognizes), but on this
+      specific deterministic baseline no rival's strength exceeds the pricing
+      player's, so the `if n > 0` guard at board_yields.rs:935 suppresses the
+      triple -- a genuine, board-aware zero for this state, not a dead code
+      path. (Consistent with Endowment for the Arts landing nonzero at 3p/4p
+      but exactly 0.0 at 2p in the same table -- board_extra's other branch,
+      same `n > 0` guard, evaluating true or false depending on how many
+      rivals currently have more culture than the player on that baseline.)
+
+  The 18 nonzero cards all reach a live path regardless of action_board_credit:
+  a flat CardEffects gain that card_yields' generic `_EFF_TO_FEATURE` block
+  always pushes (gain_food/gain_resources/gain_culture/gain_science/
+  military_actions -- Frugality, Patriotism, Cultural Heritage, Stock Pile,
+  Breakthrough, Revolutionary Idea), or card_choice's GainFoodOrResources hook
+  (Reserves I/II/III), or board_extra's CulturePerCivilizationWithMoreCulture
+  branch (Endowment for the Arts, board-state-dependent as above). Patriotism
+  prices IDENTICALLY (0.817829) across all four ages A/I/II/III despite its
+  printed resources_for_military_units growing 1/2/3/4 -- confirms that field
+  is never read; the constant price is purely `1 * w[military_actions]`
+  (military_actions:1 is the same on every Patriotism copy), independent of
+  age.
+
+=============================================================
+VERDICTS
+=============================================================
+
+VERDICT -- Aggression @3p and @4p: (b), inherently board-relative, no code
+fix warranted.
+  All ten no-op'd cards are, without exception, effects that are only
+  meaningful relative to an OPPONENT's current board state: TakeFromOpponent
+  (worth 0 if the opponent lacks that resource/science/culture), Destroy
+  UrbanBuildings + GainResources (worth 0 if the opponent has no matching
+  building, and its size depends on what they built), StealColony (worth 0 if
+  the opponent has no colony to steal), RemoveFromGame + GainCulturePer
+  LevelOfRemovedCard (value depends on the level of whatever gets removed).
+  There is no rulebook-guaranteed flat fact any of these cards carries the way
+  an Event's "level = guaranteed culture on prepare" fact does -- this is
+  exactly War's shape (dedicated `aggression_value`/AggressionBoardCredit
+  pricer already exists for precisely this reason, mirroring `war_hand_value`/
+  WarBoardCredit), not Event's. The only lever is the trained credit itself:
+  it is currently negative at both 3p and 4p and gets clamped to 0.0 by
+  dominance_repair (a printed benefit may never price negative), so the
+  dedicated pricer never runs and everything but Enslave (which happens to
+  carry genuine unconditional numeric fields) reads 0.0. That is a training
+  outcome, not a coding gap.
+
+VERDICT -- Action @4p: (b), inherently board-relative, no code fix
+warranted.
+  The systematic component of the 15 zero-priced cards (13 of the 15: Rich
+  Land / Urban Growth / Engineering Genius / Efficient Upgrade) is driven
+  entirely by resource_discount and FreeCivilAction, and the code comments at
+  cards.rs:334-357 and cards.rs:416-429 show this was already tried the other
+  way and reverted: a flat, static push of resource_discount measurably
+  disagreed with the board-aware marginal on a live champion (Rich Land (A):
+  0.0 static vs 1.82 board-aware -- the static number was simply wrong,
+  because a resource discount's worth depends entirely on what the player is
+  about to build, and a free civil action's worth depends on the board's
+  current marginal value of a civil action). Both fields are deliberately
+  reserved for action_value alone. This is the same shape as War/Aggression,
+  not Event -- there is no honest flat proxy, so the cure is
+  action_board_credit training away from 0.0, not a code change. (The
+  remaining 2 of the 15 -- Wave of Nationalism, Military Build-Up -- are
+  already board-aware-correct zeros for this specific baseline via
+  board_extra, independent of ActionBoardCredit, and are not part of this
+  gap at all.)
