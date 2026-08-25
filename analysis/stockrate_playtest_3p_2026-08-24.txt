@@ -1,0 +1,245 @@
+stockrate playtest 3p 2026-08-24
+=================================================
+Headline: V1 through V4 all LOSE to champ3p.json. V4 (the full ladder) loses
+catastrophically. This closes the naive "just flip stock-vs-rate sign" line
+for these eight keys the same way the two prior probes (farm_build_probe,
+pop_probe, eightkey_playtest) already closed their own target symptoms.
+
+Hypothesis under test: the frozen 3p champion prices FOOD STOCK at its
+positive clamp ceiling (+60) and FOOD RATE near zero (+0.07), the inverse of
+what the human-weight comparison (scaled by s=29.7797) suggests; same
+inversion on resource_stock/workers_late. Built a 4-step ladder (V1..V4) that
+flips these coordinates toward the human-scaled reading and measured each
+against the champion.
+
+
+STEP 0 -- dominance_repair round-trip verdict (READ THIS FIRST)
+-----------------------------------------------------------------
+Source read: rust/src/bots/weighted/eval.rs (dominance_repair, DOMINATES,
+non_positive_gates/non_negative_gates) and rust/src/bots/weighted/weights.rs
+(WeightKey::sign_intent, lines ~1056-1480).
+
+Per-key verdict for the eight keys in the hypothesis table:
+
+  resource_rate   SignIntent::Free  -- no gate, not touched by any variant
+  food_rate       SignIntent::Free  -- no gate; survives negative -> positive flip intact
+  food_stock      SignIntent::Free  -- no gate; a NEGATIVE food_stock survives the round trip
+  resource_stock  SignIntent::Free  -- BUT see the DOMINATES finding below
+  best_farm       SignIntent::Free  -- no gate; survives
+  free_workers    SignIntent::Free  -- no gate; survives
+  workers         SignIntent::Free  -- no gate; survives
+  workers_late    SignIntent::Free  -- no gate; survives
+
+None of the eight keys sit in non_positive_gates()/non_negative_gates(), so a
+negative food_stock is NOT repaired back to zero by a sign gate -- the engine
+CAN express the hypothesis, on six of the eight keys.
+
+CRITICAL FINDING, not anticipated by the task brief: `DOMINATES` (eval.rs
+853-856) contains `(WeightKey::ResourceStock, WeightKey::BlueFree)` --
+"resource_stock must be >= blue_free". champ3p.json has `blue_free = 60`.
+V4 sets `resource_stock -> 1.538` but (correctly, per the spec: "ONLY the
+listed keys changed") does NOT touch `blue_free`. Because blue_free (60) then
+exceeds the new resource_stock (1.538), `dominance_repair` silently RAISES
+resource_stock back to 60 on every load -- confirmed empirically, not just by
+reading the code:
+
+  $ climb --start /private/tmp/step0_probe_v4like.json \
+          --out /private/tmp/step0_probe_out.json --players 3 --gens 0 --hours 0
+  -> checkpoint written; step0_probe_out.json shows:
+       resource_stock: 60        (written as 1.538, silently restored to 60)
+       food_stock: -9.504        (written as -9.504, survives intact)
+       food_rate: 9.08           (survives intact)
+       best_farm: 5.334          (survives intact)
+       free_workers: 8.013       (survives intact)
+       workers: 3.89             (survives intact)
+       workers_late: 0           (survives intact)
+
+kindmatch's `--a/--b weighted` path loads via the identical
+`bots::weighted::eval::load_weights` -> `parse_weights` -> `dominance_repair`
+chain (kindmatch.rs:116,228-240), so this is not a climb-only artifact: every
+duel below that uses V4 has its resource_stock intervention silently voided.
+V4 "full" therefore only actually differs from V3 in `workers`/`workers_late`
+-- the resource_stock half of the "full stock inversion" story never reaches
+the evaluator. Per the task's own instruction ("drop that key from the
+variants... a first-class finding"), this is reported here loudly rather than
+patched around; the ladder was run exactly as specified below, with this
+caveat attached to every V4 number.
+
+
+THE VARIANTS -- build + verified diff
+-----------------------------------------------------------------
+Built from /private/tmp/opencensus/champ3p.json via a python script that
+copies the champion dict, overwrites only the listed keys, and diffs the
+result key-by-key against the champion. All four came back with EXACTLY the
+intended key set changed, nothing else:
+
+  V1 food            (/private/tmp/V1_food.json)
+    food_rate:  0.06657463278959166 -> 9.08
+    food_stock: 60                  -> -9.504
+    diff-verified: {food_rate, food_stock} -- OK
+
+  V2 food+farm        (/private/tmp/V2_food_farm.json)
+    + best_farm: -0.18604347304866997 -> 5.334
+    diff-verified: {best_farm, food_rate, food_stock} -- OK
+
+  V3 +free workers     (/private/tmp/V3_free_workers.json)
+    + free_workers: 0.35237643265712365 -> 8.013
+    diff-verified: {best_farm, food_rate, food_stock, free_workers} -- OK
+
+  V4 full              (/private/tmp/V4_full.json)
+    + workers: 21.25334586774819 -> 3.89
+    + workers_late: 60 -> 0.0
+    + resource_stock: 60 -> 1.538   (raw file only -- SILENTLY REVERTED TO 60
+                                      AT LOAD TIME, see STEP 0 above)
+    diff-verified (raw file): {best_farm, food_rate, food_stock, free_workers,
+                                resource_stock, workers, workers_late} -- OK
+
+
+THE MEASUREMENT -- kindmatch, --a weighted --b weighted, 240 games, 3
+players, 5 threads, against /private/tmp/opencensus/champ3p.json
+-----------------------------------------------------------------
+3-player null is 33.33% (printed by the tool itself on every run below). "A
+(rotates)" is seated once per game across all three chairs; "B (rest)" fills
+the other two chairs every game -- so "variant as A" means one variant seat
+vs. two champion seats, and "champ as A" means one champion seat vs. two
+variant seats. Both arrangements are reported for every variant that was run.
+
+V1 food:
+  V1 as A, champ as B:  A(V1) win rate   26.46% +/- 5.65   (null 33.33%)  p=0.0155
+                         verdict: reject -- V1 is WORSE than champ
+  champ as A, V1 as B:  A(champ) win rate 40.83% +/- 6.65  (null 33.33%)  p=0.0247
+                         verdict: accept -- champ beats V1, interval clear of null
+  V1 LOSES in both arrangements.
+
+V2 food+farm:
+  V2 as A, champ as B:  A(V2) win rate   25.63% +/- 5.47   (null 33.33%)  p=0.0050
+                         verdict: reject -- V2 is WORSE than champ
+  champ as A, V2 as B:  A(champ) win rate 41.25% +/- 6.68  (null 33.33%)  p=0.0183
+                         verdict: accept -- champ beats V2, interval clear of null
+  V2 LOSES in both arrangements, nearly identical to V1 -- adding best_farm
+  moved almost nothing.
+
+V3 +free workers:
+  V3 as A, champ as B:  A(V3) win rate   29.17% +/- 5.58   (null 33.33%)  p=0.1374
+                         verdict: INCONCLUSIVE -- interval straddles the null
+                         (33.33 - 29.17 = 4.16 < 5.58 half-width)
+  champ as A, V3 as B:  A(champ) win rate 40.42% +/- 6.01  (null 33.33%)  p=0.0190
+                         verdict: accept -- champ beats V3, interval clear of null
+  V3 is the BEST-scoring variant of the ladder (closest to the null, one
+  arrangement not statistically distinguishable from even), but champ still
+  clearly wins the other arrangement. Net: V3 does not clear the null in BOTH
+  arrangements, so this does NOT count as the first result this line of
+  investigation has produced -- it is a smaller loss, not a win.
+
+V4 full (resource_stock component inert -- see STEP 0):
+  V4 as A, champ as B:  A(V4) win rate   9.17% +/- 4.08    (null 33.33%)  p=0.0000
+                         verdict: reject -- V4 is WORSE than champ, LARGE margin
+  champ as A, V4 as B:  A(champ) win rate 71.04% +/- 6.10  (null 33.33%)  p=0.0000
+                         verdict: accept -- champ crushes V4, interval clear of null
+  V4 LOSES catastrophically in both arrangements -- far worse than V1/V2/V3.
+  Since resource_stock is inert, the collapse from V3's ~29%/40% to V4's
+  ~9%/71% is attributable to the workers (21.25 -> 3.89) and workers_late
+  (60 -> 0.0) flip alone: killing the champion's population-growth preference
+  is a much larger and more damaging intervention than the food-hoarding
+  fix, even though the food fix's own numbers (V1/V2) already lose.
+
+SUMMARY TABLE (variant-as-A % / champ-as-A % ; null always 33.33%):
+  V1: 26.46% / 40.83%   -- loses both
+  V2: 25.63% / 41.25%   -- loses both, ~= V1
+  V3: 29.17% / 40.42%   -- loses both (one arrangement inconclusive) -- BEST
+  V4: 9.17%  / 71.04%   -- loses catastrophically, both arrangements
+
+
+CENSUS MECHANISM CHECK -- behavcensus, 200 games, 3 players, best-scoring
+variant (V3) vs. champion, self-play under each vector
+-----------------------------------------------------------------
+Commands:
+  behavcensus --weights /private/tmp/opencensus/champ3p.json --games 200 --players 3 --threads 5
+    -> /private/tmp/behavcensus_champ.txt
+  behavcensus --weights /private/tmp/V3_free_workers.json --games 200 --players 3 --threads 5
+    -> /private/tmp/behavcensus_V3.txt
+
+Food production rate by round (mean, n=600 player-games unless noted) -- the
+curve DOES move, in the intended direction:
+  round        champ   V3
+   1           2.00    2.00
+   5           1.86    2.00
+  10           1.56    1.82
+  15           1.42    1.63
+  20           1.34    1.47
+V3 holds a visibly higher food PRODUCTION rate at every round from ~5 onward
+than the champion does -- the food_rate flip is measurably changing behavior,
+not a dead coordinate.
+
+Food STOCK at age boundaries (mean magnitude) -- V3 hoards much less:
+  end of Age I:   champ mean=2.63   V3 mean=1.50
+  end of Age II:  champ mean=1.36   V3 mean=0.95
+  end of Age III: champ mean=1.76   V3 mean=0.81
+  end of Age IV:  champ mean=1.95   V3 mean=0.67
+  food-stock==0 rate at game end: champ 57.7% (346/600)   V3 65.2% (391/600)
+V3 both produces more food AND holds less of it in reserve -- consistent
+with the hypothesis (food_stock no longer priced as a hoard-to-the-ceiling
+target) and confirms the mechanism moved as predicted.
+
+Farm/mine WORKER allocation at age boundaries (mean count, of workers already
+on the board):
+  farm workers, end of Age IV: champ mean=1.29   V3 mean=1.47  (+14%)
+  mine workers, end of Age IV: champ mean=2.87   V3 mean=2.79  (-3%, ~flat)
+V3 shifts existing workers toward farms modestly more than champ.
+
+Farm/Mine TAKEN and BUILT by age tier, per player-game -- this is the
+cautionary-tale mechanism (matches the prior farm_build_probe finding: fixing
+the priced target does not unstick the behavior):
+  champ  Farm taken:  A=0.000 I=0.002 II=0.040 III=0.195
+  champ  Farm built:  A=1.000 I=0.002 II=0.037 III=0.018
+  V3     Farm taken:  A=0.000 I=0.000 II=0.000 III=0.000
+  V3     Farm built:  A=1.000 I=0.000 II=0.000 III=0.000
+Despite best_farm swinging from -0.19 to +5.33 (strongly positive, "a better
+farm is now good"), V3 builds essentially ZERO additional farms beyond the
+Age-A starting one -- if anything slightly fewer take/build events than the
+champion (whose own rate was already near-zero: 0.018-0.195 per game). The
+farm-BUILDING pathway stays stuck even though the farm-VALUE coordinate was
+flipped hard positive; the improvement V3 shows over V1/V2/V4 is coming from
+worker reallocation and reduced hoarding, not from actually building more
+farms. This is the same shape the task's cited cautionary probe
+(eightkey_playtest_3p_2026-08-24.txt) already found: fixing the priced
+symptom moves internal numbers without moving the build behavior that would
+need to change for the fix to pay off.
+
+
+CAVEATS
+-----------------------------------------------------------------
+- V4's resource_stock component is INERT (see STEP 0) -- its measured
+  catastrophic loss is driven by workers/workers_late alone, not by the
+  "full" stock-vs-rate story the ladder name promises. Do not read V4's
+  9.17%/71.04% as evidence about resource_stock specifically.
+- V3's "best of the ladder" status rests on one arrangement being
+  inconclusive (p=0.1374, interval straddles the null), not on clearing the
+  null in both arrangements -- it is a smaller loss, not a win, and must not
+  be reported as the latter.
+- Only V1 and V3 were census-compared in full detail (V3 chosen as the
+  best-scoring variant per the task's own selection rule); V2/V4 were not
+  separately behavcensus'd -- V2 tracks V1 closely on win rate so little
+  additional signal was expected, and V4 was skipped once its win rate showed
+  a categorical (not marginal) collapse, plus its resource_stock component
+  being inert reduces the value of a dedicated census run.
+- All duels used the tool's own default seed (0) and threads=5; no
+  seed-sensitivity check was run given the budget -- the margins (esp. V4's
+  9.17% vs 33.33% null, p=0.0000) are large enough that this is unlikely to
+  matter, but V3's inconclusive arrangement (p=0.1374) could in principle
+  flip with a different seed and was not re-run to check.
+- No variant was tuned mid-run; the ladder was fixed before any duel ran, per
+  the task's instruction.
+- This report does not re-litigate whether the human-weight scaling
+  (s=29.7797) itself is sound -- that was taken as given from the task brief.
+
+
+DELIVERABLE FILES
+-----------------------------------------------------------------
+  /private/tmp/V1_food.json
+  /private/tmp/V2_food_farm.json
+  /private/tmp/V3_free_workers.json
+  /private/tmp/V4_full.json
+  /private/tmp/step0_probe_v4like.json, step0_probe_out.json  (Step 0 probe)
+  /private/tmp/behavcensus_champ.txt, behavcensus_V3.txt      (census raw output)
+  /private/tmp/stockrate_notes.txt                            (full EXIT-coded command log)
