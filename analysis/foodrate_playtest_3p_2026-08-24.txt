@@ -1,0 +1,271 @@
+foodrate playtest 3p 2026-08-24
+=================================================
+HEADLINE: F1 (food_rate raised to ~91x the champion's weight) does NOT lose --
+it is statistically TIED with the champion in BOTH seat arrangements (33.96%
+and 33.12% vs a 33.33% null, both p > 0.7, both "inconclusive"). This is the
+first result in this line of investigation (after four prior interventions
+that all lost decisively -- see stockrate_playtest_3p_2026-08-24.txt) that
+does not clear a loss. It is NOT a win either: neither arrangement's
+confidence interval clears the null in F1's favor, so the honest read is
+"no measured difference from the champion," not "food_rate was underpriced
+and fixing it helps." The two larger, more aggressive weights on the same
+ladder (F3 at ~446x, F2 at ~2195x) both lose, F2 catastrophically -- so this
+is a narrow, small-magnitude result, not evidence that food_rate can be
+pushed arbitrarily higher.
+
+The mechanism DID move as intended even at F1's small step: food production
+and farm-worker counts are higher every round/age boundary than the
+champion's, confirming F1 is not a dead coordinate. Farm taken/built rates
+are essentially unchanged from the champion (0.24->0.22 taken, 1.06->1.05
+built per player-game) -- the farm-BUILDING pathway stays stuck exactly as
+the cautionary stockrate report already found for its own best variant. The
+"physical effect happened but win rate did not move" combination from that
+report repeats here, just landing at a tie instead of a loss.
+
+
+STEP 0 -- ROUND-TRIP GATE (read this before trusting any variant)
+-----------------------------------------------------------------
+Source read: rust/src/bots/weighted/eval.rs (DOMINATES, dominance_repair) and
+rust/src/bots/weighted/weights.rs (WeightKey::sign_intent).
+
+  food_rate sign_intent: SignIntent::Free (weights.rs ~line 1263, grouped
+  with the other "raw economy/board magnitudes and rates with no rulebook
+  citation that a bigger number is never a downside" keys -- no gate).
+
+  DOMINATES (eval.rs 853-856) contains exactly two pairs:
+    (ResourceStock, BlueFree), (WonderPotential, WonderPromise)
+  food_rate appears in NEITHER pair. So dominance_repair cannot silently
+  revert or clamp food_rate the way it reverted resource_stock in the prior
+  stockrate probe.
+
+  Empirical round trip (climb --start <f> --out <g> --players 3 --gens 0
+  --hours 0, diff g vs f key-by-key), champion = /private/tmp/opencensus/
+  champ3p.json (byte-identical to experiments/rust_champion_3p.json at time
+  of run, confirmed by diff):
+    probe food_rate=6.0407 -> survives round trip intact, ZERO keys moved.
+
+FIRST-CLASS FINDING (not anticipated by the task brief): climb.rs carries a
+SECOND repair beyond dominance_repair -- `repair_to_bounds` / `clamp_bound`
+(weights.rs ~1533, climb.rs ~219-280) -- a per-key, per-player-count magnitude
+ceiling derived from measured candidate-set spread, capped at the historical
+flat rail `CLAMP_BLIND = 60.0`. `repair_to_bounds` is called ONLY from
+climb.rs's own `main` (both at `--start` load and, implicitly, every
+mutation) -- grep confirms no other binary calls it. `food_rate`'s
+`clamp_bound(3)` computes to `485.704661 / 2.518726 = 192.84`, which exceeds
+60, so `.min(CLAMP_BLIND)` pins it at exactly 60.
+
+Round-tripping the three chosen ladder values through `climb --gens 0 --hours
+0` (the literal, prescribed gate):
+  F1 (6.0407)  -> ZERO keys moved. Clean.
+  F2 (146.104) -> food_rate SILENTLY CLAMPED to 60 on the round trip.
+  F3 (29.708)  -> ZERO keys moved. Clean.
+
+Per the task's own instruction, this is reported loudly rather than patched
+around. It differs from the resource_stock/DOMINATES case in the cautionary
+report in one important way, verified by grep: `kindmatch.rs` and
+`behavcensus.rs` both load weight files through `bots::weighted::eval::
+load_weights` (`parse_weights` -> `dominance_repair` ONLY), and NEITHER
+calls `repair_to_bounds` at all -- that function exists solely inside
+climb.rs's own optimizer loop. So F2's raw 146.104 is what kindmatch and
+behavcensus actually loaded and played below; climb's round-trip clamp is a
+real constraint on what the SEARCH would ever accept as an incumbent, but it
+is NOT a constraint the PLAY tools enforce. The round-trip gate (as
+literally specified) is therefore STRICTER than the actual play path for F2
+-- the opposite direction from the stockrate report's resource_stock finding,
+where the play path (kindmatch, via dominance_repair) silently reverted the
+intervention. Here the play path does not revert anything; only climb's own
+optimizer bound would reject F2 as an incumbent. F2 was played anyway at its
+literal 146.104 value (that is what kindmatch actually used), with this
+caveat attached to every F2 number below. Under climb's own doctrine, F2 is
+an "off-rail" vector no promoted champion could ever carry.
+
+
+STEP 1 -- LADDER ARITHMETIC (from feature_decisiveness_3p_2026-08-24.txt)
+-----------------------------------------------------------------
+food_rate's row in the decisiveness table (85,404 sampled 3p decisions):
+  champ_w = 0.06657463278959166 (printed there as 0.0666)
+  fire_rate = 0.4682 (fires on 46.8% of decisions)
+  median candidate-set spread when firing = 1.032482
+  p95 candidate-set spread when firing    = 2.640373
+  median |w|*spread (swing) at champ_w    = 0.068737
+  capable_frac = 0.0989 (barely above the 0.0924 tie-only floor)
+
+Winning-margin distribution over the same 85,404 decisions (shared context,
+same table): median = 6.2370, p95 = 150.8501.
+
+  F1 = weight at which food_rate's MEDIAN swing equals the MEDIAN margin
+     = median_margin / median_spread = 6.2370 / 1.032482 = 6.0407
+     = 90.7x the champion's weight (6.0407 / 0.0666)
+
+  F2 = weight at which its median swing equals the P95 margin (large
+       intervention), same spread basis as F1 so the two are comparable:
+     = p95_margin / median_spread = 150.8501 / 1.032482 = 146.104
+     = 2194.6x the champion's weight
+
+  F3 = geometric mean of F1 and F2 (chosen over the arithmetic midpoint --
+       cleaner given F1 and F2 span >20x of each other):
+     = sqrt(6.0407 * 146.104) = 29.708
+     = 446.2x the champion's weight
+
+All three numbers came directly from the decisiveness table's own printed
+median/p95 columns; nothing was substituted or invented.
+
+Variants: each is the frozen champion (/private/tmp/opencensus/champ3p.json,
+confirmed byte-identical to experiments/rust_champion_3p.json) with ONLY
+`food_rate` changed, verified by a python key-by-key diff (every other key
+identical) AND the climb round trip above:
+  /private/tmp/F1_foodrate.json   food_rate: 0.0666 -> 6.0407
+  /private/tmp/F2_foodrate.json   food_rate: 0.0666 -> 146.104
+  /private/tmp/F3_foodrate.json   food_rate: 0.0666 -> 29.708
+
+
+STEP 2 -- PLAY: kindmatch --a weighted --b weighted --games 240 --players 3
+--threads 5, both seat arrangements, null = 33.33% (printed by the tool)
+-----------------------------------------------------------------
+Commands (repeated per variant V, champ = /private/tmp/opencensus/
+champ3p.json):
+  kindmatch --a weighted --b weighted --a-weights V --b-weights champ \
+    --games 240 --players 3 --threads 5          (variant as A, one seat)
+  kindmatch --a weighted --b weighted --a-weights champ --b-weights V \
+    --games 240 --players 3 --threads 5           (champ as A, one seat)
+
+F1 (food_rate=6.0407, 90.7x champion):
+  F1 as A, champ as B (2 seats):   A(F1) win rate    33.96% +/- 3.75  (null 33.33%)  p=0.7403
+                                    verdict: INCONCLUSIVE -- interval straddles null
+  champ as A, F1 as B (2 seats):   A(champ) win rate  33.12% +/- 3.66  (null 33.33%)  p=0.9098
+                                    verdict: INCONCLUSIVE -- interval straddles null
+  F1 TIES the champion in both arrangements -- no measured difference either way.
+
+F2 (food_rate=146.104, unclamped by kindmatch -- see STEP 0 caveat):
+  F2 as A, champ as B (2 seats):   A(F2) win rate      1.25% +/- 1.42  (null 33.33%)  p=0.0000
+                                    verdict: reject -- F2 is WORSE than champ, catastrophic
+  champ as A, F2 as B (2 seats):   A(champ) win rate  93.12% +/- 2.99  (null 33.33%)  p=0.0000
+                                    verdict: accept -- champ crushes F2
+  F2 LOSES catastrophically in both arrangements.
+
+F3 (food_rate=29.708, 446.2x champion):
+  F3 as A, champ as B (2 seats):   A(F3) win rate     17.29% +/- 4.99  (null 33.33%)  p=0.0000
+                                    verdict: reject -- F3 is WORSE than champ
+  champ as A, F3 as B (2 seats):   A(champ) win rate  59.72% +/- 5.34  (null 33.33%)  p=0.0000
+                                    verdict: accept -- champ beats F3
+  F3 LOSES clearly in both arrangements.
+
+SUMMARY TABLE (variant-as-A % / champ-as-A % ; null always 33.33%, 3p,
+one variant seat vs two champion seats or vice versa):
+  F1 (6.04,   90.7x):  33.96% / 33.12%   -- TIES both arrangements
+  F3 (29.71, 446.2x):  17.29% / 59.72%   -- loses both
+  F2 (146.1,2194.6x):   1.25% / 93.12%   -- loses catastrophically, both
+
+The pattern is monotonic in weight magnitude: the smallest step (F1) ties,
+the middle step (F3) loses clearly, the largest step (F2) loses
+catastrophically. This is consistent with "food_rate really is underpriced
+at the margin, but the champion's other 159 coordinates are tuned around its
+current small value and a big jump destabilizes everything else it
+interacts with" -- but that reading is not proven here; only the win-rate
+pattern itself was measured.
+
+
+STEP 3 -- MECHANISM CHECK: behavcensus --games 200 --players 3 --threads 5,
+best-scoring variant (F1, the only one that did not lose) vs champion
+-----------------------------------------------------------------
+Commands:
+  behavcensus --weights /private/tmp/opencensus/champ3p.json --games 200 --players 3 --threads 5
+    -> /private/tmp/behavcensus_champ_food.txt
+  behavcensus --weights /private/tmp/F1_foodrate.json --games 200 --players 3 --threads 5
+    -> /private/tmp/behavcensus_F1.txt
+
+Food production rate by round (mean, n=600 player-games unless noted) --
+F1 holds a HIGHER food production rate than the champion at every round
+from ~5 onward:
+  round        champ   F1
+   1           2.00    2.00
+   5           1.86    1.97
+  10           1.56    1.85
+  15           1.42    1.78
+  20           1.34    1.66
+
+Farm workers at age boundaries (mean count) -- F1 keeps more workers on
+farms throughout:
+  end of Age A:   champ=2.00  F1=2.00  (identical, forced start)
+  end of Age I:   champ=1.71  F1=1.94
+  end of Age II:  champ=1.45  F1=1.78
+  end of Age III: champ=1.36  F1=1.69
+  end of Age IV:  champ=1.29  F1=1.66
+
+Mine workers at age boundaries (mean count) -- essentially flat/slightly up:
+  end of Age I:   champ=2.87  F1=2.88
+  end of Age IV:  champ=2.87  F1=2.92
+
+Food stock at game end (mean) -- F1 holds MORE food in reserve than the
+champion, the OPPOSITE direction from the stockrate report's V3 finding
+(worth noting: two different interventions moved food stock in opposite
+directions while both moving food production up):
+  end of Age I:   champ=2.63  F1=2.76
+  end of Age II:  champ=1.36  F1=1.66
+  end of Age III: champ=1.76  F1=2.21
+  end of Age IV:  champ=1.95  F1=2.50
+
+Farm TAKEN and BUILT by age tier, per player-game -- the cautionary
+mechanism, unchanged from prior probes:
+  champ  Farm taken:  A=0.000 I=0.002 II=0.040 III=0.195
+  champ  Farm built:  A=1.000 I=0.002 II=0.037 III=0.018
+  F1     Farm taken:  A=0.000 I=0.002 II=0.047 III=0.170
+  F1     Farm built:  A=1.000 I=0.002 II=0.035 III=0.015
+
+MECHANISM ANSWER (plain, separated from win rate as required): YES, the
+intended physical effect happened -- food_rate's higher price at F1 visibly
+raises food production and farm-worker allocation at every measured round
+and age boundary. It did NOT translate into building more Farms beyond the
+Age-A starting one (taken/built counts are flat to very slightly down from
+the champion, within noise of a 200-game sample). Unlike the four prior
+interventions, this one's mechanism-moved-but-outcome-unchanged pairing
+lands at a TIE rather than a loss -- the first time in this whole
+investigation line that "the effect happened" has not been paired with
+"and the bot still lost."
+
+
+CAVEATS
+-----------------------------------------------------------------
+1. F1 is a TIE, not a win. Both confidence intervals straddle the null
+   (p=0.74 and p=0.91) -- this is "no measured difference," and must not be
+   reported as "food_rate fixed" or "F1 outranks the champion." A previous
+   worker was corrected for exactly this kind of overclaim from a marginal
+   table; this report's headline says TIE deliberately, not WIN.
+2. F2's win-rate numbers reflect kindmatch's actual (unclamped) load of
+   food_rate=146.104, NOT the value (60) climb's own round-trip repair would
+   have produced. See STEP 0. Do not read F2's catastrophic loss as evidence
+   about what a properly climb-promotable food_rate=60 champion would do --
+   that specific vector (food_rate=60, everything else held at the current
+   champion) was not separately tested here.
+3. Single seed (kindmatch/behavcensus default seed 0/1), 240 games per
+   duel, 200 games per behavcensus run, 3p only. No multi-seed replication
+   was run given the tool's own reported margins; F1's inconclusive result
+   in particular is exactly the kind of result a different seed could in
+   principle flip either direction (toward a real small win or a real small
+   loss) -- this was not checked.
+4. The ladder was fixed before any duel ran and not adjusted mid-run, per
+   the task's method requirements; F1/F3/F2 were all played exactly as
+   derived in STEP 1, including F2's known off-doctrine status.
+5. This report does not test intermediate weights between champ_w (0.0666)
+   and F1 (6.0407) -- the true "does food_rate help at all" answer may live
+   somewhere in that unexplored interval below F1, given F1 itself already
+   ties rather than wins and F3/F2 (both larger) lose. That is a natural
+   next step this report deliberately does not take (task instruction: do
+   not go hunting a fourth value if F1/F2/F3 all lose -- F1 did NOT lose,
+   but a genuine tie is also not grounds for silently trying a fourth value
+   here).
+6. behavcensus's per-round food/farm-worker tables compare self-play under
+   each vector separately (F1-vs-F1, champ-vs-champ), not F1-vs-champ
+   seated together -- consistent with how the cautionary stockrate report's
+   own mechanism check was run, and named here for the same reason: it
+   measures each vector's own tendencies, not head-to-head in-game dynamics.
+
+
+DELIVERABLE FILES
+-----------------------------------------------------------------
+  /private/tmp/F1_foodrate.json, F2_foodrate.json, F3_foodrate.json  (variants)
+  /private/tmp/F1_foodrate_rt.json, F2_foodrate_rt.json, F3_foodrate_rt.json (climb round-trip outputs)
+  /private/tmp/step0_probe_food.json, step0_probe_food_out.json      (Step 0 probe)
+  /private/tmp/foodrate_logs/*.log                                   (kindmatch raw output, 6 files)
+  /private/tmp/behavcensus_champ_food.txt, behavcensus_F1.txt        (census raw output)
+  /private/tmp/foodrate_notes.txt                                    (EXIT-coded command log)
