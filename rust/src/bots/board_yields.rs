@@ -451,6 +451,56 @@ fn hammurabi(state: &GameState, p: &PlayerState, out: &mut Vec<Triple>) {
     }
 }
 
+/// Highest level of `kind` currently in `p`'s tableau, `0` if none. The same
+/// scan `weighted::features::sweep_tableau` does to fill in its `Best*`
+/// coordinates, restated rather than imported: `board_yields.rs` sits BELOW
+/// `bots::weighted` in the dependency graph (the reverse import would be
+/// circular), so the two riders below that need a building's developed
+/// level cannot call the `bots::weighted` version.
+fn best_level(p: &PlayerState, kind: CardType) -> u8 {
+    let mut best = 0;
+    for (id, _) in p.techs.iter() {
+        if id.kind() == kind && id.level() > best {
+            best = id.level();
+        }
+    }
+    best
+}
+
+/// J. S. Bach: "Developing theater technologies costs 2 less science"
+/// (`theaterTechScienceDiscount: 2`, `data/cards_wonders_leaders.json`). No
+/// board fact gives a per-turn theater-tech-develop RATE, but the number of
+/// theater techs already developed is exact, not guessed: a Theater tech of
+/// level N cannot sit in `p.techs` without levels `1..=N` each having been
+/// developed first (the tech-level prerequisite chain), so `best_level(p,
+/// Theater)` -- the same board fact `Feature::BestTheater` already reads --
+/// IS that count. Tagged onto `BestTheater` rather than a fresh science
+/// coordinate so the already-tuned per-level weight prices it.
+fn bach(_state: &GameState, p: &PlayerState, out: &mut Vec<Triple>) {
+    let lvl = best_level(p, CardType::Theater);
+    if lvl > 0 {
+        out.push((Feature::BestTheater, 2.0 * f64::from(lvl), Kind::Gain));
+    }
+}
+
+/// William Shakespeare: "If you have a library, building a theater costs 1
+/// less resource and developing a theater technology costs 1 less science"
+/// (`theaterResourceDiscountIfLibrary: 1`, `theaterScienceDiscountIfLibrary:
+/// 1`). Both discounts need ONE of each building type developed at all, and
+/// neither can have fired more times than the SHORTER of the two chains
+/// reached -- `min(BestTheater, BestLibrary)`, an exact board fact, the same
+/// bound `Special::CulturePerLibraryTheaterPair`'s own `min(library, theater)
+/// workers` uses for the pairing this leader also carries. Split across both
+/// existing coordinates (one discount each) rather than piling both onto
+/// one, so neither weight alone has to carry Shakespeare's whole value.
+fn shakespeare(_state: &GameState, p: &PlayerState, out: &mut Vec<Triple>) {
+    let bound = best_level(p, CardType::Theater).min(best_level(p, CardType::Library));
+    if bound > 0 {
+        out.push((Feature::BestTheater, f64::from(bound), Kind::Gain));
+        out.push((Feature::BestLibrary, f64::from(bound), Kind::Gain));
+    }
+}
+
 /// `RIDERS`: leader name -> rider function. Only the leaders whose value is
 /// not in `Stats` and IS computable.
 fn rider_of(leader_name: &str) -> Option<fn(&GameState, &PlayerState, &mut Vec<Triple>)> {
@@ -458,6 +508,8 @@ fn rider_of(leader_name: &str) -> Option<fn(&GameState, &PlayerState, &mut Vec<T
         "Genghis Khan" => Some(genghis),
         "Winston Churchill" => Some(churchill),
         "Hammurabi" => Some(hammurabi),
+        "J. S. Bach" => Some(bach),
+        "William Shakespeare" => Some(shakespeare),
         _ => None,
     }
 }
@@ -1180,6 +1232,88 @@ mod tests {
         let culture_at = |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::CultureRate).map_or(0.0, |&(_, a, _)| a);
         assert_eq!(culture_at(&one), 1.0, "1 theater worker: {one:?}");
         assert_eq!(culture_at(&three), 3.0, "3 theater workers must be exactly 3x 1 worker's yield: {three:?}");
+    }
+
+    // ------------------------------------ newly wired "trigger" bucket riders
+    //
+    // Three `cards::DELIBERATELY_UNPRICED` "trigger" entries turned out to be
+    // bounded by an EXACT board fact after all (see `cards::PRICED_ELSEWHERE`
+    // for the citations) -- these pin that the wiring actually moves the
+    // evaluator's price, not merely that a triple exists. A fourth,
+    // Michelangelo's `wonderTakeNoExtraCivilActions`, looked like it fit the
+    // same shape but does not: see that key's own entry back in
+    // `DELIBERATELY_UNPRICED` for why.
+
+    /// Bach's `theaterTechScienceDiscount` (2 science off developing a
+    /// theater technology) is bounded by how many theater tech levels are
+    /// already developed: a player holding a Theater tech must price Bach
+    /// strictly higher than one holding none.
+    ///
+    /// Checked at the `BestTheater` triple itself, not the leader's overall
+    /// price: Bach ALSO carries `culturePerTheater` (already priced via
+    /// `Stats.culture`), which a Theater tech's WORKERS would move too --
+    /// comparing the total price would conflate that pre-existing credit
+    /// with this one, and could pass even with this rider fully reverted.
+    #[test]
+    fn bachs_theater_tech_discount_scales_with_theater_level() {
+        let bach = CardId::by_name("J. S. Bach").unwrap();
+        let theater_at =
+            |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::BestTheater).map_or(0.0, |&(_, a, _)| a);
+
+        let state0 = crate::game::new_game(2, 0);
+        let none = board_yields(bach, &Baseline::at(&state0, 0)).expect("Bach is a swap type (Leader)");
+
+        let mut state1 = crate::game::new_game(2, 0);
+        state1.players[0].techs.insert(CardId::by_name("Drama").unwrap(), TechSlot { workers: 1, stored: 0 });
+        let one = board_yields(bach, &Baseline::at(&state1, 0)).expect("Bach is a swap type (Leader)");
+
+        assert_eq!(theater_at(&none), 0.0, "no theater tech developed: {none:?}");
+        assert_eq!(theater_at(&one), 2.0, "1 theater tech level (Drama), printed discount 2: {one:?}");
+    }
+
+    /// Shakespeare's paired discounts (`theaterResourceDiscountIfLibrary`,
+    /// `theaterScienceDiscountIfLibrary`) are bounded by `min(BestTheater,
+    /// BestLibrary)`, not either alone: a matched level-1 pair must credit
+    /// MORE than a lone level-3 theater or a lone level-3 library, even
+    /// though each of those alone reaches a higher raw level.
+    ///
+    /// Checked at the `BestTheater`/`BestLibrary` triples themselves, not
+    /// the leader's overall price -- Shakespeare ALSO carries
+    /// `culturePerLibraryTheaterPair` (already priced via `Stats.culture`,
+    /// itself `min(library, theater) WORKERS`), which the same tech
+    /// combinations would move too and could pass this assertion even with
+    /// this rider fully reverted.
+    #[test]
+    fn shakespeares_theater_discounts_scale_with_the_lesser_of_theater_and_library() {
+        let shakespeare = CardId::by_name("William Shakespeare").unwrap();
+        let discount_of = |techs: &[&str]| {
+            let mut state = crate::game::new_game(2, 0);
+            for &name in techs {
+                state.players[0].techs.insert(CardId::by_name(name).unwrap(), TechSlot { workers: 1, stored: 0 });
+            }
+            let swap =
+                board_yields(shakespeare, &Baseline::at(&state, 0)).expect("Shakespeare is a swap type (Leader)");
+            let theater_at =
+                |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::BestTheater).map_or(0.0, |&(_, a, _)| a);
+            let library_at =
+                |t: &[Triple]| t.iter().find(|&&(f, _, _)| f == Feature::BestLibrary).map_or(0.0, |&(_, a, _)| a);
+            theater_at(&swap) + library_at(&swap)
+        };
+
+        let theater_only = discount_of(&["Movies"]); // theater level 3, no library
+        let library_only = discount_of(&["Multimedia"]); // library level 3, no theater
+        let matched_pair = discount_of(&["Drama", "Printing Press"]); // theater 1, library 1: min = 1
+
+        assert_eq!(theater_only, 0.0, "theater alone (no library) must not fire either discount: {theater_only}");
+        assert_eq!(library_only, 0.0, "library alone (no theater) must not fire either discount: {library_only}");
+        assert_eq!(
+            matched_pair, 2.0,
+            "min(theater=1, library=1) = 1, credited once each to BestTheater/BestLibrary: {matched_pair}"
+        );
+        assert!(
+            matched_pair > theater_only && matched_pair > library_only,
+            "a matched level-1 pair must credit more than a level-3 theater or library alone"
+        );
     }
 
     /// Sid Meier prints BOTH `culturePerLabEqualToLevel` (a bonus) and

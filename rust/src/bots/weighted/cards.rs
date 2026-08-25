@@ -822,9 +822,13 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
     ("opponentsPayDoubleMilitaryActionsToAttackYou", "rule change: alters what is legal, not what is produced"),
     (
         "wonderTakeNoExtraCivilActions",
-        "discounts the take-cost of a FUTURE wonder card, not a per-turn grant this board produces -- \
-         no board-state fact tells us how many more wonders this player will take before Michelangelo \
-         leaves play, same shape as leaderTakeCivilActionDiscount below",
+        "one-time civil-action refund scaling with p.completed_wonders.len() -- RULES_SPEC 2.4's own \
+         surcharge, already waived correctly by the RULES engine in costs.rs::take_cost. Pricing it needs a \
+         coordinate carrying a ONE-TIME civil action; the two civil-action coordinates that exist carry a \
+         per-turn allowance and this turn's remaining pool, so either would price a single refund as a \
+         recurring one. Borrowing an unrelated coordinate whose sign gate happens to make the arithmetic \
+         come out is not a substitute -- that is how an unreachable tactic got priced as an upside. Needs a \
+         new coordinate.",
     ),
     (
         "revolutionUsesMilitaryActionsInstead",
@@ -886,7 +890,6 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
         "resourceOnMilitaryUnitBuildOrUpgrade",
         "trigger: pays per future event, not on play; needs a measured firing rate",
     ),
-    ("cultureOnRevolution", "trigger: pays per future event, not on play; needs a measured firing rate"),
     (
         "leaderTakeCivilActionDiscount",
         "discounts the take-cost of a FUTURE leader card (Hammurabi), not a per-turn grant this \
@@ -897,9 +900,6 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
     ),
     ("comboFoodDiscount", "trigger: pays per future event, not on play; needs a measured firing rate"),
     ("comboResourceDiscount", "trigger: pays per future event, not on play; needs a measured firing rate"),
-    ("theaterTechScienceDiscount", "trigger: pays per future event, not on play; needs a measured firing rate"),
-    ("theaterResourceDiscountIfLibrary", "trigger: pays per future event, not on play; needs a measured firing rate"),
-    ("theaterScienceDiscountIfLibrary", "trigger: pays per future event, not on play; needs a measured firing rate"),
     // 5. tactic bonus: board-scaled, and a duplicate spelling of the
     // top-level strength `card_yields` already prices through `YieldKind::
     // Unit`/the flat-strength branch -- see this module's top doc comment
@@ -981,10 +981,6 @@ pub const DELIBERATELY_UNPRICED: &[(&str, &str)] = &[
     (
         "popIncreaseFoodDiscount",
         "trigger: pays per future Increase Population action, not on play; needs a measured firing rate, same shape as the other trigger-bucket entries above (Moses)",
-    ),
-    (
-        "takeCivilActionDiscountIfLeaderReplacedThisTurn",
-        "discounts the take-cost of a FUTURE leader card conditionally (must replace a leader the same turn), not a per-turn grant this board produces -- same shape as leaderTakeCivilActionDiscount above (Taj Mahal)",
     ),
 ];
 
@@ -3041,6 +3037,37 @@ mod tests {
                 "Special::CulturePerAdditionalColony: apply_special adds v x colonies-held-beyond-the-first to \
                  Stats.culture (James Cook); board_yields's generic swap diff -> Feature::CultureRate; test \
                  james_cooks_culture_scales_with_colonies_beyond_the_first",
+            ),
+            (
+                "cultureOnRevolution",
+                "Special::CultureOnRevolution: board_yields::government_routes special-cases \
+                 leader_is(p, \"Maximilien Robespierre\") directly and prices the revolution route's Culture \
+                 gain off the card's own printed amount (board_yields.rs's revolution route, ~line 591)",
+            ),
+            (
+                "takeCivilActionDiscountIfLeaderReplacedThisTurn",
+                "Special::TakeCivilActionDiscountIfLeaderReplacedThisTurn: costs.rs's \
+                 leader_replacement_take_discount reads the Special off the row card and subtracts it in \
+                 take_cost, gated on p.replaced_leader_this_turn (Taj Mahal)",
+            ),
+            (
+                "theaterTechScienceDiscount",
+                "Special::TheaterTechScienceDiscount: board_yields::bach (dispatched by \
+                 board_yields::rider_of(\"J. S. Bach\")) credits Feature::BestTheater by the printed discount x \
+                 best_level(p, Theater) -- the exact count of theater techs already developed, not a guessed \
+                 firing rate; test bachs_theater_tech_discount_scales_with_theater_level",
+            ),
+            (
+                "theaterResourceDiscountIfLibrary",
+                "Special::TheaterResourceDiscountIfLibrary: board_yields::shakespeare (dispatched by \
+                 board_yields::rider_of(\"William Shakespeare\")) credits Feature::BestTheater by \
+                 min(BestTheater, BestLibrary) -- test shakespeares_theater_discounts_scale_with_the_lesser_of_\
+                 theater_and_library",
+            ),
+            (
+                "theaterScienceDiscountIfLibrary",
+                "Special::TheaterScienceDiscountIfLibrary: board_yields::shakespeare credits Feature::BestLibrary \
+                 by min(BestTheater, BestLibrary) -- same rider and test as theaterResourceDiscountIfLibrary above",
             ),
         ];
 
