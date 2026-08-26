@@ -1,0 +1,466 @@
+Feature design: gap/surplus and conditional features for the weighted eval
+date 2026-08-26 -- READ-ONLY design note. No code changed, nothing built, no
+bot or climb binary run, no git command issued in this repo.
+
+Paths audited (the brief named rust/src/eval.rs and rust/src/registry.rs;
+those do not exist -- the real evaluation lives under rust/src/bots/weighted/):
+  rust/src/bots/weighted/features.rs   builds the feature vector
+  rust/src/bots/weighted/eval.rs       the dot product + the non-linear block
+  rust/src/bots/weighted/weights.rs    the WeightKey enum and name/default table
+  rust/src/bots/weighted/rivals.rs     feature_marginal: what ONE unit is worth
+  rust/src/bots/weighted/cards.rs      card pricing
+  rust/src/bots/weighted/registry.rs   the dead-coordinate ratchet (tests only)
+Evidence read in full: analysis/opening_worker_economy_2026-08-26.txt and
+analysis/round1_civil_actions_2026-08-26.txt.
+
+
+1. WHAT THE EVALUATION ACTUALLY SEES TODAY
+==========================================
+
+The headline in the brief -- "roughly one scalar per card TYPE" -- is no
+longer the whole truth of this code, and the design below is only useful if
+that is stated accurately first. Three conditioning mechanisms are already
+landed. Two of the owner's three complaints are therefore partially
+addressed, and the remaining gaps are narrower and more specific than
+"features are by category".
+
+1a. Genuinely per-card-TYPE scalars (the complaint, where it still holds)
+
+  BestFarm, BestMine, BestLab, BestTemple, BestTheater, BestLibrary,
+  BestArena, BestUnit -- features.rs:668-676, each the highest level of that
+  one type in the tableau, one f64 apiece, unconditioned on anything.
+
+  The "board credit" family, one weight per card CATEGORY, dispatched by
+  card kind in cards.rs:1944-2030: TechBoardCredit (1947), GovBoardCredit
+  (1956), ActionBoardCredit (1961), WonderBoardCredit (1991),
+  TacticBoardCredit (2004), AggressionBoardCredit (2007), WarBoardCredit
+  (2012), PactBoardCredit (2017), EventBoardCredit (2022), with
+  CardRateCredit (2029) and CardBoardCredit (2030) as the generic fallback.
+  Also UnitTechCredit, BonusCardCredit, TerritoryCredit, BuildFreshCredit,
+  RestrictedResourceCredit, FreeActionCredit.
+
+  IMPORTANT: these credits are multipliers on a board-AWARE price, not flat
+  per-type values. TechBoardCredit scales tech_value(id, state, idx, ...);
+  WonderBoardCredit scales board_yields::board_yields(id, b), the swap DIFF.
+  So a level-2 Farm replacing a level-1 Farm is already priced by the yield
+  DELTA, not by a constant "farm is worth X". The per-type scalar is the
+  GAIN, not the VALUE.
+
+1b. Absolute stock / count features (unconditioned levels)
+
+  FoodStock, ResourceStock, Science, Culture, BlueFree, YellowBank,
+  FreeWorkers, Workers, ProdWorkers, UrbanWorkers, UnitWorkers, CivilActions,
+  MilitaryActions, CaLeft, MaLeft, TechLevels, NumTechs, SpecialTechs,
+  Wonders, Colonies, Pacts, HandCivil, HandMilitary, Strength -- all set as
+  plain counts in features.rs. Rates likewise: FoodRate, ResourceRate,
+  ScienceRate, CultureRate (features.rs deliberately reports the BOARD and
+  leaves the horizon discount to evaluate/feature_marginal, features.rs:353).
+  CorruptionHeadroom / ConsumptionHeadroom (features.rs:555-556) are token-
+  band headroom off blue/yellow, not happiness.
+
+1c. Already state-relative -- this is the part the brief did not assume
+
+  (i) Gap/surplus pairs, features.rs:812-855. Real key names, from the
+  WeightKey enum and the name table in weights.rs:
+    food_gap / food_surplus, resource_gap / resource_surplus,
+    science_gap / science_surplus, culture_gap / culture_surplus,
+    happy_surplus, civil_action_gap / civil_action_surplus,
+    military_action_gap / military_action_surplus,
+    worker_gap / worker_surplus.
+  Always a hinged PAIR, never one signed difference. The thresholds come
+  from features::marginal_needs (features.rs:297ff), which is four rulebook
+  quantities: food = economy::pop_food_cost for ONE population increase;
+  resource = the cheapest unstaffed tableau slot's PRINTED resource cost;
+  science = the cheapest developable card IN MY CIVIL HAND; worker = the
+  count of unstaffed slots. culture_gap is different again and is already
+  field-relative: its threshold is the strongest rival's culture, not a
+  rulebook number (features.rs:826-834).
+
+  (ii) The STANDING hinge, rivals.rs feature_marginal (~965-980). For
+  STANDING_KEYS the per-unit marginal is w[key] + w[key.trailing()] *
+  trailing_fraction(key, ...), i.e. a unit is worth more to the player behind
+  the field. Live keys: culture_rate_trailing, science_rate_trailing.
+
+  (iii) The NEED hinge, rivals.rs (~993-1002). For NEED_KEYS the marginal is
+  additionally + w[key.needed()] * need_fraction, where need_fraction is
+  (threshold - have)/threshold in [0,1] off the SAME marginal_needs. Keys:
+  food_stock_needed, resource_stock_needed, science_needed,
+  free_workers_needed. NEED_KEYS is exactly four axes -- FoodStock,
+  ResourceStock, Science, FreeWorkers (the match in need_fraction,
+  rivals.rs ~940-946).
+
+  This last one matters: feature_marginal is the SINGLE definition of what
+  one unit is worth, and every card-pricing site in cards.rs calls it
+  (cards.rs:724, 730, 770, 1289), so "card pricing sees the gap" is ALREADY
+  TRUE for food, resources, science and free workers. The owner's approved
+  direction is partly shipped. What follows must not re-propose it.
+
+  (iv) Quotients deliberately outside the linear span: take_cost_share =
+  ca_spent_taking / costs::ca_total (features.rs:617-627, with the explicit
+  argument that this is the only way the vector can distinguish 3 actions out
+  of 4 from 3 out of 7). This is the precedent every ratio proposed below
+  leans on.
+
+  (v) Cliffs, not slopes, already used where a rule is discontinuous:
+  has_unit, has_colony, war_immune, attack_cost_doubled (features.rs:637-663).
+  Precedent for proposal 3 below.
+
+  (vi) Row and rival terms priced through w in eval.rs's non-linear block,
+  not as linear features: row_urgency, row_bargain_forgone (eval.rs:372-383,
+  via row::row_pressure), row_last_copy (eval.rs:385-388), rival_desire,
+  rival_take_share, rival_hand_potential, hand_potential, wonder_potential
+  (eval.rs:336-343), wonder_promise (eval.rs:344-349).
+
+  (vii) Wonder terms, features.rs:696-712: wonder_progress, wonder_remaining,
+  wonder_stages_left, wonder_turns_to_finish, wonder_overrun,
+  wonder_age_overrun, wonder_stages_per_action, plus wonder_pool_rival_claimed
+  (a public count of THIS age's wonders taken by rivals). cards::
+  wonder_potential already applies horizon::WonderOutlook::earned_share, a
+  computed "how much of it is paid for times how much of the game you would
+  own it for" discount, explicitly to kill the build-now bias
+  (cards.rs:2206-2228).
+
+  UNVERIFIED: I read the call sites of row::row_pressure and row::
+  row_last_copy (eval.rs:372-388) and row.rs's doc fragments, but not
+  row_pressure's body. Any claim about exactly which quantity
+  row_bargain_forgone measures is not mine to make; proposal 6 below overlaps
+  that function's territory and its implementer must diff against it first.
+
+
+2. DECISIONS THE CURRENT FEATURE SET CANNOT EXPRESS
+===================================================
+
+2a. "I am low on science now, so take yellow cards for temporary science."
+The science threshold is the cheapest developable card IN MY HAND
+(marginal_needs, features.rs:297ff). With an empty hand, or a hand of only
+non-levelled cards, needs.science == 0, so science_gap == 0 AND
+need_fraction(Science) == 0. Situation: age A, I hold no civil cards, my
+science is 1/turn, and the row shows Philosophy at 3 science plus an action
+card granting +2 science immediately. The action card is priced at flat
+w[science] * horizon at exactly the moment the player is most starved,
+because "need" is measured against a hand that is empty. The threshold never
+looks at the row, which is where the next thing I will want to pay for
+actually sits.
+
+2b. "Should I build this very last stage of the wonder, since it gives me
+the bonus?" wonder_stages_left is linear and earned_share is continuous, so
+the value of a wonder is smeared evenly across its stages. Situation:
+Pyramids, 2 of 3 stages paid, 3 resources outstanding, and I could instead
+build a level-2 Farm. Every stage buys the same fraction of the wonder's
+value under earned_share, so the last stage -- the only one that flips the
+printed effect ON, permanently -- carries no premium over the first. Nothing
+in the vector is discontinuous at completion except the Wonders count itself,
+which is a single scalar shared with wonders finished ten rounds ago.
+
+2c. "Maybe I need more economy right now instead of building that wonder."
+wonder_remaining (resources still owed) and resource_rate (resources per
+turn) are two independent linear coordinates. Their RATIO is not in the span
+of the pair, so the vector cannot distinguish 11 resources outstanding at
+6/turn (two turns, fine) from 11 outstanding at 2/turn (six turns, a
+disaster). resource_gap does not help: its threshold is the single cheapest
+unstaffed slot, a one-step quantity, not the total outstanding obligation.
+
+2d. "Nothing in the row is worth a civil action to THIS position." This is
+what the human data force. Round 1 is 100% takes, zero builds, zero
+population actions across 2525 player-games. Seat 1 faces a completely fresh
+row, pays the 1-CA band on 100% of its takes, and still leaves a median 3 of
+its 4 civil actions unused; 99.9% of seat-1 player-games waste at least one.
+The civil hand cap is reached by 0.6% of player-games, so legality is not the
+restraint and the measurement file says so explicitly. The bot's side of this
+is: ca_left is a flat positive scalar priced identically whether the row in
+front of me is full of cards I can use or full of cards I cannot pay to play;
+civil_action_gap = max(0, hand_civil - ca_left) compares hand size to THIS
+turn's remaining actions, not to whether I can afford to do anything with a
+card once I hold it. Situation: round 1, Despotism, 4 CA, 1 science and 1
+resource of income. A second and third hand card cannot be developed or built
+for several turns and may antiquate first. Nothing in the vector prices the
+SECOND card differently from the first except hand_perishable, which is a
+clock, not a capacity check.
+
+2e. A note on the owner's opportunity-cost sentence. "I weight each decision
+against the opportunity cost for every possible action" is, structurally,
+what the 1-ply search in eval.rs already does: it evaluates the resulting
+state of every legal move, including end-turn (end_turn_bias, weights.rs:798,
+default -3.0), and picks the max. Cross-action opportunity cost does not need
+a feature and should not get one. What is missing is narrower: the value of
+an action KEPT is a constant, so the search has nothing to trade against.
+Proposals 4 and 6 supply the two terms that make banking an action a
+position-dependent judgement instead of a constant.
+
+
+3. PROPOSED FEATURES
+====================
+
+Six, not a catalogue. No proposal is a new per-type scalar and none is a
+retune; that is explicitly rejected. Every one is a quantity the ENGINE
+computes from the rulebook and public state, priced by a weight the hill
+climb fits -- no proposal contains a value, a coefficient, or a threshold
+that a human would pick. Where a proposal is a ratio, the precedent is
+take_cost_share (features.rs:617-627).
+
+--- 3.1  science_need_row  (a second science gap, threshold from the ROW)
+
+QUANTITY: max(0, T - my science), where T is the smallest printed science
+cost among the cards in the current row that are of a levelled (developable)
+type and that I could legally take. 0.0 when the row holds no such card.
+Paired with a surplus half only if the learner needs it; the gap half is the
+live one. Deliberately a SEPARATE coordinate from science_gap rather than a
+change to marginal_needs -- editing that threshold would move every champion
+on disk and both readers of it at once.
+
+ENGINE: the card row is public. Printed science costs are static card data
+(cards.rs / data/cards_civil.json). My own science is my own stock. One pass
+over a bounded row (<= 13 slots) comparing u8s.
+
+DECISION CHANGED: 2a. It is nonzero exactly when the player is starved and
+the hand-based threshold has gone blind, so a science-yielding action card or
+a Library take gets its need premium at the moment it is actually needed.
+
+EXPECTED SIGN: negative, the same family as food_gap -- a shortfall is a bad
+state, so the move that shrinks it scores higher. If the implementer instead
+feeds it through the need hinge as a science_row_needed coefficient on
+feature_marginal, the sign flips positive there (a hinge is an ADDITION to a
+unit's worth, rivals.rs:907-911); pick one, not both, or the axis is
+double-counted.
+
+LEGALITY: PASSES. Row contents are public. Uses no hand identity of any
+rival and no deck order.
+
+--- 3.2  resource_commitment_turns  (economy versus wonder)
+
+QUANTITY: (wonder_remaining + sum of printed resource costs of my unstaffed
+tableau slots) / max(resource_rate, 1). How many turns of my ENTIRE resource
+production are already spoken for. A ratio, deliberately outside the linear
+span of the two coordinates it is built from.
+
+ENGINE: wonder_remaining is already computed (features.rs:697). The unstaffed
+slot costs come from the same tableau walk sweep_tableau already performs and
+must use the PRINTED cost, exactly as unbuilt_min_resource_cost does and for
+the reason stated there -- costs::build_cost_for recomputes a full
+effects::state_stats per call and must not be called per slot in this loop
+(features.rs:163-179). resource_rate is already in Stats.
+
+DECISION CHANGED: 2c, the owner's own sentence. Taking a wonder or
+developing a new building raises it; building a Mine lowers it. It makes
+"start another wonder" bad specifically when production is thin, and
+harmless when production is fat, which no pair of linear coordinates can say.
+
+EXPECTED SIGN: negative. Obligations outrunning production is a bad state.
+
+LEGALITY: PASSES. Entirely my own board, all of it face up anyway.
+
+--- 3.3  wonder_one_stage_short  (the completion cliff)
+
+QUANTITY: 1.0 if a wonder is in progress with exactly one stage left,
+else 0.0. An indicator, not a slope.
+
+ENGINE: stages_left is already computed (features.rs:699). This is a
+comparison against 1.
+
+DECISION CHANGED: 2b. Evaluation is of the post-move state, so the move that
+completes the wonder moves the vector from (wonder_one_stage_short = 1,
+Wonders = n) to (wonder_one_stage_short = 0, Wonders = n+1). If the learner
+finds a NEGATIVE weight -- sitting one stage short is a bad place to be, the
+value is banked and not yet earned -- then the completing build gains
+w[wonders] + |w[wonder_one_stage_short]| while every earlier stage gains only
+its earned_share slice. That is a cliff at completion, expressed inside a
+linear model. The repo already uses exactly this idiom for rule
+discontinuities: has_unit, has_colony, war_immune (features.rs:637-663).
+
+EXPECTED SIGN: negative, per the reasoning above. If the learner instead
+finds it positive, that is informative rather than wrong -- it would mean the
+league values being POISED to finish, and the completion cliff should then be
+sought as a convex transform (1/(1+stages_left)) instead. Let the climb
+decide; do not pick the shape by hand.
+
+LEGALITY: PASSES. My own wonder in progress is face up.
+
+--- 3.4  hand_over_capacity  (why round 1 is one take and stop)
+
+QUANTITY: max(0, hand_civil - K), where K is the number of cards currently in
+my civil hand that I could actually pay for right now: a levelled card whose
+printed science cost <= my science, or an already-developed card whose
+printed resource cost <= my resources. Counts cards, not actions. 0.0 for a
+player who can afford to play everything they hold.
+
+ENGINE: my own hand and my own stocks. Printed costs, static card data --
+NOT costs::build_cost_for / costs::tech_cost, for the state_stats reason
+above; a linear feature's need signal does not require discount-exact
+precision, which is the argument features.rs:163-179 already makes for
+unbuilt_min_resource_cost. The civil hand is bounded (median 1 card in the
+human corpus, cap 4 under Despotism), so this is a handful of u8 compares.
+
+DECISION CHANGED: 2d, and it is the marginal-value-of-the-next-unit shape the
+brief asks for. In round 1 the first take is free of this penalty; the second
+and third are not, because with 1 science and 1-2 resources of income K stays
+at 0 or 1. It gives the evaluation a reason to prefer end-turn over a
+second take that is a reason -- I cannot pay for what I already hold -- rather
+than a budget or a legality bound, which the human measurement explicitly
+rules out as the cause.
+
+EXPECTED SIGN: negative. Cards I cannot pay to play are dead weight that also
+antiquates (hand_perishable already prices the clock; this prices the
+capacity, and the two are different questions).
+
+LEGALITY: PASSES. My own hand.
+
+--- 3.5  happy_margin_after_next_pop
+
+QUANTITY: my happiness margin recomputed as if one population increase had
+already happened -- i.e. the margin at (workers + 1) under the same
+happiness sources -- minus nothing else; report the post-increase margin as
+its own coordinate alongside the existing happy_margin. Equivalently and more
+usefully as a hinge: max(0, -(margin after the next pop)), the discontent the
+NEXT worker would create, 0.0 when the next worker is free of consequence.
+
+ENGINE: economy.rs already owns the happiness and population band tables,
+and effects::compute already produces the current margin; this asks the same
+tables one worker forward. My own board only.
+
+DECISION CHANGED: the population action. happy_margin, discontent and
+happy_surplus all describe the board as it stands, so the bot learns whether
+being unhappy is bad but never that THIS increase is the one that tips it.
+Round 1 has zero population actions in 2525 human player-games and rounds
+2-5 plateau at a median of exactly 1 -- a plateau is what a per-unit
+consequence looks like, not what a flat per-worker weight produces.
+
+EXPECTED SIGN: negative on the discontent-hinge form.
+
+LEGALITY: PASSES. My own board.
+
+UNVERIFIED: I did not open economy.rs's happiness tables. I confirmed only
+that ConsumptionHeadroom / CorruptionHeadroom are yellow/blue TOKEN band
+headroom (features.rs:548-556), not happiness, so this is not a duplicate of
+them. Whether effects::Stats already exposes a one-worker-forward margin
+cheaply is for the implementer to check before writing a second computation
+of a rule -- a duplicated rules formula is exactly what MarginalNeed exists
+to prevent (features.rs:265-277).
+
+--- 3.6  row_playable_count  (is this row worth an action to ME)
+
+QUANTITY: the number of cards in the current row that I could both legally
+take AND afford to play in the near term -- concretely, count a row card if
+its printed science cost <= my science + my science_rate (levelled types), or
+its printed resource cost <= my resources + my resource_rate (already-
+developed types / wonder first stage). A count, not a valuation.
+
+ENGINE: the row is public; printed costs are static data; my own stocks and
+rates are mine. Bounded loop over <= 13 slots.
+
+DECISION CHANGED: 2d, from the other side. Together with the existing
+ca_left this is what lets the evaluation say "hold the action, this row has
+nothing I can use" -- today ca_left is a constant regardless of what the row
+holds, so banking an action can never be position-dependent. It is also the
+term that makes seat 1's measured behaviour representable: a fresh row full
+of cheap cards I cannot yet pay to develop is a row worth one take, not four.
+
+EXPECTED SIGN: positive. A row I can use makes spending actions good; the
+learner should trade it against end_turn_bias and ca_left.
+
+LEGALITY: PASSES. Row contents are public. Note this uses no deck ORDER and
+does not ask what will refill the row -- an earlier draft of this proposal
+scaled ca_left by how much of the row would turn over before my next turn,
+and it is DROPPED: the refill COUNT is public but the value of a banked
+action then depends on the identity of unseen cards, and the honest version
+of that quantity cannot be built without deck order. Dropped at the gate
+rather than weakened.
+
+--- Explicitly NOT proposed
+
+  - Any new per-card-TYPE scalar, and any retune of the existing Best* or
+    *_board_credit family. Rejected by the brief and it is the right call:
+    the credits are multipliers on board-aware prices, so a retune moves
+    every card of a category together, which is the defect, not the fix.
+  - A cross-action "opportunity cost" feature. The 1-ply search already
+    compares every legal move including end-turn (section 2e). A feature for
+    it would double-count the search.
+  - A rival-hand-contents feature. Rival CIVIL hand identity is public
+    (docs/RULES_SPEC.md 2.6) and rival_hand_potential already uses it
+    (eval.rs:369-371); I found no gap there worth a new coordinate.
+
+
+4. LEGALITY GATE -- SUMMARY
+===========================
+
+Private, per the brief: a rival's MILITARY hand identity, and the unshuffled
+deck ORDER. Public: card row, played cards, all boards, discards and
+discard-phase counts, and a rival's CIVIL hand identity.
+
+  3.1 science_need_row            PASSES -- public row + static card data
+  3.2 resource_commitment_turns   PASSES -- my own board only
+  3.3 wonder_one_stage_short      PASSES -- my own board only
+  3.4 hand_over_capacity          PASSES -- my own hand only
+  3.5 happy_margin_after_next_pop PASSES -- my own board only
+  3.6 row_playable_count          PASSES -- public row + my own stocks
+
+None reads a rival's military hand. None reads deck order. One candidate
+(scaling a banked civil action by the row refill ahead of my next turn) was
+DROPPED at this gate because its value depends on the identity of unseen
+cards; it is recorded in 3.6 so it is not re-proposed.
+
+
+5. COST IN SEARCH-HOT CODE
+==========================
+
+features::features runs once per candidate move of the 1-ply search, and
+feature_marginal runs once per priced unit inside card pricing. The rules
+that apply: no fresh Vec allocation per call, no process-global mutable
+state, no lazy cache.
+
+CHEAP -- fold into work already being done, no allocation:
+  3.2 resource_commitment_turns. The unstaffed-slot cost SUM is one extra
+      accumulator in the sweep_tableau loop that already visits every
+      tableau entry and already computes unbuilt_min_resource_cost. Adding a
+      field to TableauSweep costs nothing; a second walk would be the wrong
+      way to do it. One division at the end. NOTE: TableauSweep is shared
+      with bots::neural::encode (features.rs:148-158), so a new field must
+      not change what that encoder reads.
+  3.3 wonder_one_stage_short. One integer comparison against a value
+      features.rs:699 already has in hand.
+  3.4 hand_over_capacity. One pass over the civil hand, which
+      marginal_needs (features.rs:297ff) and hand_value already walk -- fold
+      the counter into that existing pass rather than adding a third. Hand is
+      bounded at the government's hand limit; printed-cost lookups are static
+      and involve no allocation.
+
+MODERATE -- new bounded work, must be written allocation-free:
+  3.1 science_need_row and 3.6 row_playable_count. Both walk the card row
+      (<= 13 slots) reading static printed costs. Each is a scalar
+      accumulator over a slice -- no Vec, no collect, no sort. They should
+      share ONE pass over the row producing both numbers, not two passes,
+      and that pass belongs where the row is already being read. If both
+      weights are 0.0 the pass must be skipped entirely, matching the gating
+      idiom eval.rs uses for every non-linear block (eval.rs:336-390) and
+      that features.rs already uses for event_scoring_margin.
+
+NOT CHEAP -- needs a decision before implementation:
+  3.5 happy_margin_after_next_pop. A naive implementation calls into
+      economy/effects a second time to recompute stats one worker forward.
+      effects::compute is already the expensive half of features() and
+      rivals::need_fraction is already noted in-source as re-sweeping the
+      tableau (rivals.rs, the NEED hinge comment). Doing this per candidate
+      move by recomputing full Stats is the wrong shape. It is only
+      acceptable if the one-worker-forward margin can be derived from the
+      Stats object features() already holds by adding one worker to the
+      band lookup -- a table read, not a recomputation. If it cannot, drop
+      3.5 rather than pay for it; it is the least load-bearing of the six.
+
+  Also flagged: any proposal routed through the NEED hinge instead of
+  becoming a linear coordinate inherits need_fraction's cost, which calls
+  effects::state_stats AND sweep_tableau AND marginal_needs per call
+  (rivals.rs ~933-948). That is already gated behind "the hinge weight is
+  nonzero" for a reason. A new hinge axis must keep that gate.
+
+
+6. WHAT THIS NOTE DOES NOT SETTLE
+=================================
+
+The human evidence establishes WHAT humans do in round 1 (one take, stop,
+bank the rest) and rules out the hand cap and legality as the cause. It does
+not establish that the bot currently gets round 1 wrong, because no bot run
+was permitted for this audit and none was made. Proposals 3.4 and 3.6 are
+the two that would let the evaluation represent the human behaviour; whether
+the learner then FINDS that behaviour is a league question, to be settled on
+master against real runs, not asserted here. Nothing above should be
+implemented as a hardcoded round-1 opening rule: every quantity here is an
+engine fact and every value attached to it must stay fitted.
