@@ -15,17 +15,45 @@ COMMON GROUND (both specs)
 
 C1. THE SHARED ROW PASS. Design note section 5 mandates ONE bounded pass
 over `state.card_row` ([CardId; ROW_SIZE], ROW_SIZE = 13, state.rs:16/1496)
-producing BOTH quantities, skipped entirely when both new weights are 0.0.
-Place it in `features()` (features.rs:435), immediately after the
-`f.set(WeightKey::ResourceStock, ...)` line (features.rs:~656), so the
-read-backs in C4/C5 are valid.
+producing BOTH quantities. Place it in `features()` (features.rs:435),
+immediately after the `f.set(WeightKey::ResourceStock, ...)` line
+(features.rs:~656), so the read-backs in C4/C5 are valid.
 
 C2. SKIP GATE (features.rs:~657):
-        let row_axes = !priced_only
-            && w.is_some_and(|w| w.get(WeightKey::ScienceNeedRow) != 0.0
-                || w.get(WeightKey::RowPlayableCount) != 0.0);
-    (mirrors the `unpriced` idiom at features.rs:~903-907; if neither key is
-    priced, set both to 0.0 and do nothing else in the pass).
+        let row_axes = priced_only
+            && w.is_none_or(|w| w.get(WeightKey::ScienceNeedRow) == 0.0
+                && w.get(WeightKey::RowPlayableCount) == 0.0);
+    (the `unpriced` idiom at features.rs:~903-907, verbatim shape:
+    `priced_only && w.is_none_or(|w| w.get(KEY) == 0.0)`). When `row_axes`
+    is true: set both keys to 0.0 and do nothing else in the pass.
+
+C2a. WHY THE GATE IS `priced_only &&`, NOT a bare "both weights are 0.0".
+    `features()` is called with `w: Option<&Weights>` (features.rs:439).
+    A bare gate `w.is_some_and(|w| w.get(K1) == 0.0 && w.get(K2) == 0.0)`
+    would skip the pass under `w = None` — and `w = None` is how the
+    registry probe calls it: registry.rs:272
+    (`features(&state, idx, None, None, false)`), which feeds the test at
+    registry.rs:414 `every_weight_key_features_writes_actually_goes_nonzero_
+    on_some_sampled_position` — every key `features()` is coded to write
+    must read back nonzero on some sampled position across 180 driven
+    games, unless listed in `NOT_SET_BY_FEATURES` (registry.rs:304), which
+    is for keys `features()` does NOT write. A gate that skips on `w = None`
+    makes that test fail for the two new keys (they are written, just never
+    fired), or forces a false `NOT_SET_BY_FEATURES` entry. The
+    `priced_only`-and form fixes both directions at once:
+      * `priced_only = false` (registry probe, and every `w = None` call
+        site: eval.rs:621 `linear_features`, plus all the `Some(w), false`
+        test calls) computes the pass unconditionally — the probe sees the
+        keys fire, and `None` weights can no longer mean "skip".
+      * `priced_only = true` (the search path, eval.rs:138) with both
+        weights at 0.0 skips it — the speed switch the note section 5 asks
+        for, with `w` guaranteed `Some` on that path (eval.rs:138 passes
+        `Some(w)`).
+    This is exactly the precedent `EventScoringMargin` established
+    (features.rs:904, test `event_scoring_margin_priced_only_gate` at
+    features.rs:1401 — which asserts a nonzero weight is NOT skipped even
+    with `priced_only`). Do not "simplify" the gate back to a weight-only
+    test: that is the regression the registry probe exists to catch.
 
 C3. NO ALLOCATION. The pass is a scalar accumulator over a 13-slot slice:
     no Vec, no collect, no sort, no String. The note's "allocation-free"
@@ -71,9 +99,11 @@ C7. NONE MEANS "NOT DEVELOPABLE" — FILTER, NEVER MAP TO 0.
     analysis/local_feature_audit_2026-08-26.txt). Mapping None to 0 would
     make Despotism look developable-for-nothing.
 
-C8. THE COST INSIDE THE PASS. `costs::tech_cost` calls
-    `effects::state_stats` (effects.rs:1571) — a full Stats recompute — per
-    call. Up to 13 slots x per candidate move. That is the price of calling
+C8. THE COST INSIDE THE PASS. `costs::tech_cost` (costs.rs:597 — crate root
+    `rust/src/costs.rs`, NOT a `weighted/` submodule) calls
+    `effects::state_stats` — a full Stats recompute — per call (costs.rs:
+    609, before the Theater/Library leader adjustments). Up to 13 slots x
+    per candidate move. That is the price of calling
     the rule instead of copying it (features.rs:1688's "never tech_cost in a
     per-card loop" comment was written for the TABLEAU sweep of 16+ slots
     where it also recomputes build_cost_for's discount path; the note's
@@ -212,6 +242,15 @@ TESTS (four, red-confirmed):
   T1.5 (optional, if time) DISCOUNT — with a live tech_discount (pact or
        one-time develop_science), the same row reads LOWER than the printed
        value — proves the call (not a hand-written peaceful_cost) is used.
+  T1.6 GATE — `features(&state, 0, None, Some(&w_zero), true)` (search
+       path, both weights at the 0.0 default) leaves ScienceNeedRow at
+       0.0 even with a developable row and zero science (the C2 skip
+       fires), while `features(&state, 0, None, None, false)` (registry
+       probe shape, per C2a) reads the real value — proving the skip is
+       keyed on `priced_only`, NOT on the weight being 0. Red-confirmed by
+       flipping the gate to a weight-only test. This is the test that
+       guards the registry probe (registry.rs:414) against the C2a
+       regression.
 
 ==============================================================================
 SPEC 2 — row_playable_count (proposal 3.6)
@@ -320,6 +359,10 @@ TESTS (four, red-confirmed):
        costs 2 CA; if spare CA is 1, it is not takeable and not counted —
        proves the gate's surcharge is in the count (the "wonder surcharge"
        half of the note's CA clause).
+  T2.6 GATE — same shape as T1.6: `priced_only` + both weights 0.0 skips
+       (RowPlayableCount stays 0.0 even with a full takeable+affordable
+       row); `priced_only = false` / `w = None` computes it. Guards the
+       C2a gate against the registry probe regression for this key.
 
 ==============================================================================
 ORDER OF WORK
