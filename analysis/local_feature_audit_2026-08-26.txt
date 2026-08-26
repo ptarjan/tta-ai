@@ -1,0 +1,112 @@
+LOCAL-MODEL AUDIT OF THE THREE UNSTARTED CONDITIONAL FEATURES
+2026-08-26, against tree at 7dffa1e (read-only; no edits, no build, no commits)
+
+Scope: science_need_row (3.1), wonder_one_stage_short (3.3), row_playable_count
+(3.6) from analysis/feature_design_gap_conditional_2026-08-26.txt. The other three
+are landed or in flight: hand_over_capacity (7dffa1e), happy_margin_after_next_pop,
+resource_commitment_turns.
+
+Two questions were asked of each proposal, both drawn from the two defects that bit
+feature 1:
+  TRAP 1, PRINTED-FIELD: does the note tell you to read a printed struct field that
+  is 0 or misleading for some card type?
+  TRAP 2, UNREACHABLE-STATE: does it tell you to handle a card type in a state the
+  rules never let it reach?
+
+This file records the audit's claims with the file:line citations it gave. It is an
+audit, not a verified result: confirm each citation before acting on it.
+
+--------------------------------------------------------------------------------
+THE SHARED FINDING (the headline)
+--------------------------------------------------------------------------------
+3.1 and 3.6 both walk the card row, and both misprice the ONE developable card type
+whose printed science_cost is always 0: GOVERNMENT.
+
+  - card_table.rs:831-975 -- all 8 governments print science_cost 0 (techCost is
+    null in the data).
+  - costs::tech_cost (costs.rs:597-605) prices a government off card.peaceful_cost,
+    the real develop price (range 6..19), and returns None for Despotism
+    (peaceful_cost 0) because the starting government is never developable.
+  - tech_cost also applies the tech_discount pool, the one-time develop-science
+    discount, and the Bach / Shakespeare theater-and-library adjustments, none of
+    which the note mentions.
+
+FIX FOR BOTH: route every develop-cost read through costs::tech_cost, including its
+government branch. Never read Card::science_cost directly. The note's "static card
+data" framing is precisely what hid this in feature 1 and hides it again here.
+
+--------------------------------------------------------------------------------
+3.1 science_need_row
+--------------------------------------------------------------------------------
+TRAP 1: YES -- the Government case above. The note defines T as the smallest printed
+science cost among row cards of a levelled (developable) type. Read literally, a
+government in the row has T = 0, it looks like a free developable, and the MIN
+COLLAPSES TO 0, silently destroying the feature for that whole row.
+
+TRAP 2: NO for the note's own filter. The filter excludes Farm/Mine/units
+(buildable-only; develop cost always 0, tech_cost returns None), and SpecialTech is
+genuinely developable with a real printed science_cost (Masonry 5 .. Satellites 19).
+One adjacency worth knowing: a Government sitting in the row IS take-legal
+(can_take_gated never gates it), so a hand-cap test on a government take is a live
+state, not dead code.
+
+--------------------------------------------------------------------------------
+3.3 wonder_one_stage_short -- CLEAN
+--------------------------------------------------------------------------------
+TRAP 1: NO. The note compares stages_left (horizon.rs:487, 635-640, WonderOutlook)
+against 1. That is a COMPUTED value derived from Card::stages, not a printed-field
+read, and all 16 wonders print all-nonzero stages (Pyramids [3,2,1] .. Hollywood
+[5,6,5]; data/cards_wonders_leaders.json), so "one stage left" has no zero-cost edge.
+
+TRAP 2: NO, and this is where the note's prose stops one step SHORT of feature 1's
+failure rather than repeating it. The in-progress wonder lives in
+PlayerState::wonder (wonder_outlook gates on p.wonder.is_none()), NOT in hand_civil.
+The RULES_SPEC 2.4 / 6.7 fact -- a taken wonder goes row -> play and never to hand --
+is already enforced in the engine at legal.rs:736 ("Wonder/other military-deck types
+never sit in hand_civil"), and the note never proposes reading a wonder out of hand,
+so there is no dead Wonder branch to write here.
+
+Implementation caution: make the comparison on the OUTLOOK, not on a hand scan.
+
+--------------------------------------------------------------------------------
+3.6 row_playable_count
+--------------------------------------------------------------------------------
+TRAP 1: YES, twice, and the note's own test MISCLASSIFIES the government type.
+
+The note counts a row card as playable on
+  printed science cost <= science + rate      (levelled types), OR
+  printed resource cost <= resources + rate   (already-developed types / wonder
+                                               first stage)
+
+Government falls in NEITHER branch as written: it IS developable (cards.rs:147-149,
+is_developable includes Government), but the resource branch is gated on
+"already-developed types", which excludes it. So a government row card is never
+counted at all -- and an implementer who "fixes" that by moving it to the science
+branch gets printed science_cost 0, i.e. a government that counts as ALWAYS payable.
+Both readings are wrong; the correct read is the costs::tech_cost branch from 3.1.
+
+Second half of the trap -- WONDERS. Printed resource_cost is 0 for all 16 wonders.
+The first-stage price is stages[0] (range 1..5), and the take additionally costs the
++1-CA-per-completed-wonder surcharge (can_take_gated, costs.rs:362-367). The note's
+"wonder first stage" clause covers the resource test but NOT the CA surcharge, so a
+wonder counted "playable" on resources may still be un-takeable on civil actions.
+
+Named approximation the note does not name: for the other row types the printed
+fields ARE the right ones (SpecialTech science_cost; Farm/Mine/urban resource_cost).
+build_cost_for's discounts only ever LOWER a cost, so a printed-cost affordability
+test is a SUPERSET of "payable right now". That is arguably what "can afford in the
+near term" wants, but it is an approximation and should be written down as one.
+
+TRAP 2: NO. Wonders never sit in hand (legal.rs:736; RULES_SPEC 2.4/6.7), but this
+feature's quantity is "can I afford to PLAY it" -- a develop/build cost against
+stocks -- not a hand test. Every row type it names (developable techs, buildable
+techs, wonder first stage) is reachable in a legal state.
+
+--------------------------------------------------------------------------------
+CONSEQUENCE FOR THE REMAINING WORK
+--------------------------------------------------------------------------------
+The template rule stands and is now confirmed on a second, independent pass:
+where a proposal names a printed cost field, verify it against the real payment path
+in costs.rs before using it; and check the rules before writing a branch for a state
+a card type cannot reach. 3.3 is clean and can be implemented from the note as
+written. 3.1 and 3.6 must not be implemented from the note as written.
