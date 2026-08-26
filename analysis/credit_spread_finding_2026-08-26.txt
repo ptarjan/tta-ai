@@ -1,0 +1,96 @@
+CREDIT-SPREAD MEASUREMENT -- FINDING (2026-08-26)
+Spec: analysis/credit_spread_measurement_spec_2026-08-26.txt (frozen af57966)
+Binary: rust/src/bin/creditspread.rs (commit 74a2cd9)
+Full per-key tables: analysis/credit_spread_measurement_2026-08-26.txt
+
+VERDICT: the per-key linearity test (spec section 4.3) FAILED for MOST
+keys -- in fact for ALL of them. Per the spec's own escape hatch, this
+is a finding about the credit pricers, not a failed measurement. I am
+NOT forcing a per-key bound table.
+
+WHAT THE LINEARITY TEST FOUND
+-----------------------------
+The test probes each credit key k at c=1.0 and c=2.0 (the probe goes in
+the FROZEN vector, spec section 3) and requires S_d(2.0) ~= 2*S_d(1.0)
+within 1%. Instead, for essentially every key and every player count:
+
+    S_d(1.0)  ~=  S_d(2.0)  ~=  T_players  (the TOTAL spread)
+
+i.e. S_d is INDEPENDENT of the probe magnitude c, and it equals the
+max-min of the whole candidate set under the unperturbed freeze -- NOT a
+per-key quantity. Concretely, 2p (10153 decisions): 14 of 20 keys have
+S_d(1.0) EXACTLY 214.092659 = T_p95, and S_d(2.0) is within <1% of the
+same value; the other 6 keys run a little higher (card_board_leader
+509, card_board_credit 362) but still not 2x. 3p and 4p show the same
+pattern at their own T (427.8 / 416.5).
+
+WHY THIS HAPPENS
+----------------
+The 20 credit keys have no coordinate in the linear feature vector;
+their only readers are the card pricers, which resolve credit from the
+FROZEN vector. The pricers read a SHARED credit pool (card rates,
+board credits, etc.) and the total S_d is dominated by the largest
+credit terms in the pool. Setting ONE key's frozen weight to 1.0 or to
+2.0 perturbs that shared pool only in the c=1.0->c=2.0 delta of a single
+term -- and the max-min is set by the OTHER terms, so it does not move.
+Doubling one key therefore changes nothing: S_d(c) is flat in c and
+pinned at the total spread. The credit pricers are not a set of 20
+independent levers; they are one shared mechanism whose total the probe
+can nudge but not scale per key.
+
+CONSEQUENCE FOR THE BOUND
+-------------------------
+bound(k, players) = CLAMP_T * T / p95_slope assumes p95_slope is a
+per-key quantity (the spread that key alone can produce). That
+assumption is false here: p95_slope ~= T, so "bound" ~= CLAMP_T * T / T
+~= 1.0 for most keys (see the per-key table) -- a number that carries no
+per-key information. Emitting it would be exactly the "do not emit a
+slope that cannot be defended" case the spec guards against. The RUST
+TABLE in the measurement file therefore emits 0.000000 for all 20
+credit rows (GATED), so clamp_bound's own <= 0.0 fallback keeps them at
+CLAMP_BLIND -- the same mechanism featspread's zero rows rely on.
+
+WHAT IS STILL MEANINGFUL (the other half of the spec)
+------------------------------------------------------
+The multcheck FLIP RATES (spec section 6) ARE per-key-defensible, because
+they are the counterfactual argmax-flip instrument, not a scale:
+  flip_rate_zero (all 20 credits -> 0.0): 2p 0.463, 3p 0.181, 4p 0.448
+  flip_rate_abs  (credits -> |w|)      : 2p 0.083, 3p 0.0028, 4p 0.038
+These are the INFLUENCE measure. The LEVER (S_d) is ~T and not per-key;
+the INFLUENCE (flips) is real and player-count dependent. The
+touched column (fraction of decisions where the c=1.0 probe changed any
+candidate score) ranges 0.0 (card_rate_credit: the pricer never reads
+it at c=1.0) to ~1.0 (action_board_credit, free_action_credit) -- which
+is the genuinely per-key signal in this run.
+
+T RE-MEASURED (not P95_TOTAL_SPREAD, per spec step 6)
+------------------------------------------------------
+  2p: n=10153  p50 76.153   p95 214.093  max 542.885
+  3p: n=16002  p50 135.231  p95 427.826  max 1272.369
+  4p: n=24433  p50 174.032  p95 416.508  max 1334.743
+
+CHAMPIONS FROZEN (analysis/champion_freeze_2026-08-26/, committed b2bc637)
+  2p md5 70bba311291371e577419493ed45b82d
+  3p md5 6b8dcae87471fa2f4cde9b5b99d0c525
+  4p md5 6f9dd8abd394cfea4b3c3c674149ede5
+  (cross-checked against the md5 the binary printed: match)
+
+RUN
+---
+games=40/count, seed=0, threads=4, nice -n 15 under three running climb
+arms (6-core machine, ~0% idle). Total 1188s (2p 184s, 3p 255s, 4p 749s).
+No game hit the move cap.
+
+GATES / DECISIONS FOR YOU
+-------------------------
+1. No per-key credit bound is defensible; the 20 rows stay at
+   CLAMP_BLIND. I recommend NOT pasting any non-zero credit spread into
+   p95_candidate_spread from this run.
+2. If you want a per-key credit scale at all, the instrument must be
+   changed: S_d as max-min of the whole candidate set cannot separate
+   20 keys that share one credit pool. A per-PRICER-TERM delta (re-run
+   each pricer with the key at c and at 0, diff that pricer's
+   contribution, not the total score) is the only formulation that could
+   be linear in c. That is a new spec, not this one.
+3. The flip rates above stand as the influence result for the credit
+   half, and are commensurable with multcheck's existing tables.
