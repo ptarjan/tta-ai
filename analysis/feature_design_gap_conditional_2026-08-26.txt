@@ -464,3 +464,127 @@ the learner then FINDS that behaviour is a league question, to be settled on
 master against real runs, not asserted here. Nothing above should be
 implemented as a hardcoded round-1 opening rule: every quantity here is an
 engine fact and every value attached to it must stay fitted.
+
+
+== VERIFICATION OF PROPOSALS 5 AND 6 ==
+
+Read-only, this session: rust/src/bots/weighted/row.rs (row_pressure's full
+body), rust/src/costs.rs (row_cost, TakeGate, can_take_gated),
+rust/src/economy.rs (happy_required and the pop-cost/discontent/uprising
+block), rust/src/effects.rs (Stats.happy and how it accumulates). No code
+changed, nothing built, no binary run, no git command issued.
+
+QUESTION 1 -- proposal 6, row_playable_count vs row_pressure
+
+VERDICT: DISTINCT (with a shared legality primitive, not shared arithmetic).
+
+row_pressure (row.rs:312-427) returns a pair, and both halves sum SIGNED
+VALUE, never a count:
+
+  row_urgency (row.rs:334, accumulated 356-381, 422-425): for each visible
+  row card that can_take_gated allows and whose card_potential is > 0, if the
+  sweep would carry it off the row before I act again (nxt < 0, row.rs:360),
+  add its card_potential to urgency; doomed single-slot cards (Leader/
+  Government, row.rs:362-380) fold in via hand_swap_extra instead of double-
+  counting every spare copy. This is "value about to be destroyed by the
+  sweep", already gated on card_potential, not on whether I could afford to
+  DEVELOP the card later.
+
+  row_bargain_forgone (the `bargain` local, row.rs:335, accumulated at
+  row.rs:383-420, returned row.rs:426): for each visible, legal, wanted card
+  that survives the sweep (nxt >= 0), compute saving = row_cost(i) -
+  row_cost(nxt) -- the CIVIL-ACTION cost I save by waiting one turn for the
+  card to slide left (costs.rs:71-79, the 1/1/1/1/1,2/2/2/2,3/3/3/3 table) --
+  then multiply by `survive`, the modelled probability no rival takes it
+  first (row.rs:394-419, built from rival_desire/rival_take_p). Summed:
+  row.rs:420 `bargain += f64::from(saving) * survive`. This is "civil actions
+  I would overpay by taking now instead of waiting", a CA-cost timing
+  arbitrage, not a resource/science affordability count.
+
+Both sums are gated on `costs::can_take_gated` (row.rs:353), built from
+`costs::take_gate` (row.rs:321) -- and can_take_gated (costs.rs:338-379)
+tests exactly one thing: can I spend enough SPARE CIVIL ACTIONS to take the
+card into my hand right now (`cost = row_cost(idx)` [+ wonder surcharge/
+leader discount] compared against `gate.have`, costs.rs:362-378), plus hand-
+full and one-leader-per-age legality. It does NOT ask whether the card, once
+taken, could be paid to develop or build -- there is no science/resource
+comparison anywhere in can_take_gated.
+
+Proposal 6's QUANTITY (this file, section 3.6, lines ~341-349) is a plain
+COUNT of row cards satisfying "printed science cost <= my science + my
+science_rate" or "printed resource cost <= my resources + my resource_rate"
+-- i.e. can I afford to eventually PLAY the card, not can I afford to TAKE
+it this turn. That test appears nowhere in row_pressure: row_pressure never
+compares a card's printed science/resource cost against my stocks or rates
+at all: row_cost() is a CIVIL-ACTION cost table (costs.rs:71-79), unrelated
+to the printed play cost proposal 6 reads from cards.rs/data.
+
+So: not redundant (the two functions sum different quantities off different
+cost tables, one CA-timing-and-rival-survival-weighted, one a flat
+playability count) and not fully independent either (both walk the same
+`visible_row`/`can_take_gated` legality filter, which is the "legally take"
+half of proposal 6's own "legally take AND afford to play" test). An
+implementer adding 3.6 gets the "legally take" half of the filter for free
+by reusing take_gate/can_take_gated exactly as row_pressure already does,
+but the "afford to play" half and the resulting COUNT are new arithmetic
+with no existing counterpart to diff against.
+
+QUESTION 2 -- proposal 5, happy_margin_after_next_pop
+
+VERDICT: CHEAP -- a table lookup and integer arithmetic, not a resimulation.
+
+happy_required (economy.rs:82-102) is a pure function of one u8
+(yellow_bank) through an 8-band if/else ladder -- O(1), no state, no
+allocation.
+
+discontent (economy.rs:242-245) is `(happy_required(p.yellow_bank) as i32 -
+s.happy).max(0)`, where `s = effects::state_stats(state, p)` -- i.e. the
+"required" side is the table lookup above and the "have" side is the
+Stats.happy field effects::compute already produced.
+
+The move being asked about, "one more population action", is
+economy::increase_population (economy.rs:283-314): it decrements
+`p.yellow_bank` by 1 (or, once the bank is at 0, increments the separate
+`p.yellow_granted` bookkeeping counter instead, economy.rs:303-313) and
+increments `p.workers_free` (economy.rs:314). Neither branch touches
+Stats.happy.
+
+Stats.happy is NOT a function of population count. It accumulates from two
+places: flat per-card grants (effects.rs:171, `stats.happy += eff.happy`)
+and production, which is scaled by `mult` -- and for tableau cards `mult` is
+the number of WORKERS STAFFED on that card, not total population
+(effects.rs:209-214 `add_production`, and the dedicated `happy_from` helper
+at effects.rs:236-240: `production.happy * slot.workers`, summed per card).
+A freshly-born worker from a population increase lands in `p.workers_free`
+(economy.rs:314) -- unassigned, staffed nowhere -- so it contributes zero to
+Stats.happy until a later, separate placement action.
+
+Consequence: the margin "as if one population increase had already
+happened", holding staffing fixed exactly as proposal 5's own QUANTITY text
+specifies ("under the same happiness sources"), is:
+
+  max(0, happy_required(next_yellow_bank) - s.happy)
+
+where `next_yellow_bank` is `p.yellow_bank.saturating_sub(1)` (mirroring the
+floor economy.rs:303-313 already applies) and `s.happy` is the SAME
+Stats.happy value features() already has in hand from its one
+effects::compute call. That is a saturating decrement, one table lookup
+(economy.rs:82-102, an 8-way if/else), and one subtraction -- it needs no
+second call into effects/economy, no re-sweep of the tableau, and no
+uprising check. The note's own hedge at lines 331-337 poses exactly this as
+the deciding question ("whether the one-worker-forward margin can be
+derived from the Stats object features() already holds by adding one
+worker to the band lookup") and the answer, read from the source, is yes:
+Stats.happy is staffing-driven, not population-count-driven, so the
+population-count half of the formula (happy_required) is a standalone table
+function that takes the hypothetical yellow_bank as a plain argument with no
+Stats dependency at all.
+
+One caveat worth recording for the implementer: this is the margin under
+UNCHANGED staffing. If the real decision under study is "increase
+population AND then place the new worker", that second step is a genuine
+choice (which card gets the worker) and pricing it exactly would need to
+search over placements -- but that is a different, larger question than what
+proposal 5 asks for, and proposal 5's own QUANTITY text (section 3.5) is
+explicit that it wants only the former.
+
