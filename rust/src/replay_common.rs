@@ -10392,6 +10392,52 @@ fn free_civil_action_move(
             convert_trade_food_shortfall(r, actor, rest, stated)?;
         }
     }
+    // Captured BEFORE the `PlayAction` (whose queue drain resolves the
+    // ordered free action) so the auto-resolve arm below can distinguish
+    // "the upgrade actually moved a worker from `from` to `to`" from "the
+    // `to` card happened to already be in `techs` from an independent
+    // develop/build" -- see the `Upgrade` arm's own comment.
+    let from_workers_before: Option<u8> = match &wanted {
+        Move::Upgrade { from, .. } => Some(r.state.players[actor as usize].techs.workers(*from)),
+        // Every non-upgrade target is confirmed by the `landed_in_techs`
+        // arm below, which needs no pre-count.
+        Move::Take { .. }
+        | Move::Build { .. }
+        | Move::Develop { .. }
+        | Move::WonderStep { .. }
+        | Move::Pop { .. }
+        | Move::PopFree
+        | Move::Revolution { .. }
+        | Move::PlayLeader { .. }
+        | Move::PlayAction { .. }
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::Churchill { .. }
+        | Move::EndTurn
+        | Move::PolPass
+        | Move::Resign => None,
+    };
     r.try_apply(Move::PlayAction { card: discount_card }, true)?;
     match r.state.pending.top() {
         Some(Pending::Choice(c)) if matches!(c.kind, ChoiceKind::FreeCivil { .. }) => {
@@ -10436,6 +10482,66 @@ fn free_civil_action_move(
         // also pay for a revolution, `legal::free_action_moves`'s own
         // comment), so it is checked here too rather than special-cased per
         // caller.
+        // `Upgrade{from, to}`: `techs.has(to)` alone is a FALSE POSITIVE when
+        // the `to` card was independently developed/built on a prior line (it
+        // is then already in `techs` before this free upgrade ever runs, so
+        // the check passes even though no worker moved and `from` is still
+        // sitting at its pre-upgrade count -- game `7523082` round 10, where
+        // the immediately-prior line developed Scientific Method and the next
+        // `"upgrades Philosophy to Scientific Method using Efficient
+        // Upgrade"` line's auto-resolve confirmed on that pre-existing copy).
+        // The genuine "the upgrade landed" signal is that `do_upgrade` moved
+        // a worker OUT of `from` (its own `lo.workers -= 1`), so an upgrade
+        // is confirmed only when `from` LOST a worker against the
+        // pre-`PlayAction` count, rather than merely that `to` is present.
+        None
+        if matches!(&wanted, Move::Upgrade { .. })
+            && from_workers_before.is_some_and(|b| {
+                match &wanted {
+                    Move::Upgrade { from, .. } => {
+                        r.state.players[actor as usize].techs.workers(*from) < b
+                    }
+                    Move::Take { .. }
+                    | Move::Build { .. }
+                    | Move::Develop { .. }
+                    | Move::WonderStep { .. }
+                    | Move::Pop { .. }
+                    | Move::PopFree
+                    | Move::Revolution { .. }
+                    | Move::PlayLeader { .. }
+                    | Move::PlayAction { .. }
+                    | Move::Destroy { .. }
+                    | Move::PlayTactic { .. }
+                    | Move::CopyTactic { .. }
+                    | Move::Aggression { .. }
+                    | Move::War { .. }
+                    | Move::OfferPact { .. }
+                    | Move::CancelPact { .. }
+                    | Move::PrepareEvent { .. }
+                    | Move::RemoveLeaderYellow
+                    | Move::ColumbusColonize { .. }
+                    | Move::Barbarossa { .. }
+                    | Move::BachTheater { .. }
+                    | Move::TradeFoodAsResource
+                    | Move::TradeResourceAsFood
+                    | Move::Bid { .. }
+                    | Move::BidPass
+                    | Move::Defend { .. }
+                    | Move::DefendDone
+                    | Move::SendUnit { .. }
+                    | Move::SendBonus { .. }
+                    | Move::SendDiscard { .. }
+                    | Move::SendDone
+                    | Move::Choose { .. }
+                    | Move::Churchill { .. }
+                    | Move::EndTurn
+                    | Move::PolPass
+                    | Move::Resign => false,
+                }
+            }) =>
+        {
+            Ok(true)
+        }
         _ if r.state.players[actor as usize].techs.has(landed_in_techs)
             || r.state.players[actor as usize].government == landed_in_techs =>
         {
