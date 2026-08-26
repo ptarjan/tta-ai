@@ -813,6 +813,15 @@ pub fn features(
     f.set(WeightKey::WonderRemaining, f64::from(remaining));
     // Finish discipline -- all 0.0 with nothing in progress.
     f.set(WeightKey::WonderStagesLeft, stages_left);
+    // `WeightKey::WonderOneStageShort` (design note section 3.3, "the
+    // completion cliff"): a comparison against the `stages_left` OUTLOOK
+    // just set above, never a hand/tableau scan of its own. `stages_left`
+    // is 0.0 both before a wonder is taken and the instant its last stage
+    // is paid (`horizon::wonder_outlook` only enters its `stages_left`
+    // branch when `remaining > 0`), so this reads 0.0 in both of those
+    // states and 1.0 in exactly the one state between them -- see the
+    // key's own doc comment in `weights.rs` for the full derivation.
+    f.set(WeightKey::WonderOneStageShort, if stages_left == 1.0 { 1.0 } else { 0.0 });
     f.set(WeightKey::WonderTurnsToFinish, turns_to_finish);
     f.set(WeightKey::WonderOverrun, overrun);
     // The same shortfall against the deadline the RULES impose (RULES_SPEC
@@ -1979,5 +1988,82 @@ mod tests {
             5.0,
             "Religion (3) + the now-unstaffed Bronze (2) = 5, over a floored denominator of 1"
         );
+    }
+
+    /// `wonder_one_stage_short` (design note section 3.3, "the completion
+    /// cliff") must be 0.0 with no wonder taken at all -- there is no
+    /// outlook to be one stage short of. Baseline for the cases below.
+    /// Confirmed RED by changing the production `f.set` call's condition
+    /// from `stages_left == 1.0` to `stages_left <= 1.0`: a fresh game's
+    /// `stages_left` is 0.0 (no wonder in progress), and `0.0 <= 1.0` is
+    /// true, so `WonderOneStageShort` came back 1.0 instead of 0.0 --
+    /// reverted after confirming.
+    #[test]
+    fn wonder_one_stage_short_is_zero_with_no_wonder_taken() {
+        let state = G::new_game(2, 51);
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WonderStagesLeft), 0.0, "test premise: nothing under construction");
+        assert_eq!(f.get(WeightKey::WonderOneStageShort), 0.0);
+    }
+
+    /// Two stages left (Pyramids `stages: &[3, 2, 1]`, one stage paid so
+    /// `built == 1`, leaving `stages[1..]` = `[2, 1]`, `stages_left = 2.0`)
+    /// must NOT count as "one stage short" -- this is the boundary just
+    /// above the indicator, guarding against a `<=`-shaped off-by-one in
+    /// the other direction from the test above. Confirmed RED by changing
+    /// the production condition to `stages_left <= 2.0`: this scenario's
+    /// `stages_left` of 2.0 satisfies it, so `WonderOneStageShort` came back
+    /// 1.0 instead of 0.0 -- reverted after confirming.
+    #[test]
+    fn wonder_one_stage_short_is_zero_with_two_stages_left() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let mut state = G::new_game(2, 51);
+        state.players[0].wonder = pyramids;
+        state.players[0].wonder_steps = 1;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WonderStagesLeft), 2.0, "test premise: one of Pyramids' three stages paid");
+        assert_eq!(f.get(WeightKey::WonderOneStageShort), 0.0);
+    }
+
+    /// The state the whole coordinate exists to flag: exactly one stage
+    /// left (Pyramids, two of three stages paid, `built == 2`, leaving
+    /// `stages[2..]` = `[1]`, `stages_left = 1.0`). Confirmed RED by
+    /// changing the production condition from `stages_left == 1.0` to
+    /// `stages_left == 2.0`: this scenario's `stages_left` of 1.0 no longer
+    /// satisfies it, so `WonderOneStageShort` came back 0.0 instead of 1.0
+    /// -- reverted after confirming.
+    #[test]
+    fn wonder_one_stage_short_is_one_with_exactly_one_stage_left() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let mut state = G::new_game(2, 51);
+        state.players[0].wonder = pyramids;
+        state.players[0].wonder_steps = 2;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WonderStagesLeft), 1.0, "test premise: two of Pyramids' three stages paid");
+        assert_eq!(f.get(WeightKey::WonderOneStageShort), 1.0);
+    }
+
+    /// Decision changed 2b (design note section 3.3): evaluation is of the
+    /// POST-MOVE state, so the move that pays a wonder's LAST stage must
+    /// drop `wonder_one_stage_short` straight back to 0.0 in the same step
+    /// `wonders` increments -- the cliff, not a lingering 1.0. Pyramids with
+    /// all three stages paid (`built` clamped to `stages.len()`, `remaining
+    /// == 0`) never enters `horizon::wonder_outlook`'s `stages_left` branch
+    /// at all, so `stages_left` stays at its 0.0 default -- a DIFFERENT
+    /// code path through the same production line than the "no wonder
+    /// taken" baseline above, worth its own regression pin. Confirmed RED
+    /// by changing the production condition to `stages_left <= 1.0` (the
+    /// same mutation the baseline test used): this scenario's `stages_left`
+    /// of 0.0 satisfies it too, so `WonderOneStageShort` came back 1.0
+    /// instead of 0.0 -- reverted after confirming.
+    #[test]
+    fn wonder_one_stage_short_drops_to_zero_the_instant_the_wonder_completes() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let mut state = G::new_game(2, 51);
+        state.players[0].wonder = pyramids;
+        state.players[0].wonder_steps = 3;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WonderStagesLeft), 0.0, "test premise: all three of Pyramids' stages paid");
+        assert_eq!(f.get(WeightKey::WonderOneStageShort), 0.0);
     }
 }
