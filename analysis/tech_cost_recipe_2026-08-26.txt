@@ -1,0 +1,207 @@
+TASK B — implementation recipe for pricing a row card's develop cost and a
+wonder's first stage from inside rust/src/bots/weighted/features.rs.
+
+Written against the working tree at cf81d2e (pulled 2026-08-26, before this
+file was written). Read-only throughout: no rust/src edits, no build, no git
+in /Users/pt or /Users/pt/tta-ai.
+
+==============================================================================
+1. costs::tech_cost — the exact signature and call
+==============================================================================
+
+Signature (rust/src/costs.rs:597):
+
+    pub fn tech_cost(state: &GameState, p: &PlayerState, id: CardId) -> Option<i32>
+
+Parameters, and what to pass from inside features():
+
+  state: &GameState
+      Already in hand. features() (features.rs:435-443) is
+      `pub fn features(state: &GameState, idx: u8, ctx: Option<&RivalContext>,
+      w: Option<&Weights>, priced_only: bool) -> Features` and passes
+      `state` straight into `effects::compute(state, p)` at features.rs:443,
+      so it is an immutable reference the whole function can keep sharing.
+      Pass the same `state`.
+
+  p: &PlayerState
+      Already in hand. features.rs:442 `let p = &state.players[idx as usize];`
+      is exactly the &PlayerState this wants. Pass the same `p`.
+
+  id: CardId
+      Copy type (cards.rs:17, `pub struct CardId(pub u16)`, derives
+      Clone+Copy). For a row card it is the slot's occupant:
+      `state.card_row[i]` — `card_row` is `[CardId; ROW_SIZE]`
+      (state.rs:1496), so the indexing returns a CardId by value, no
+      reference to keep alive. For a card from the hand it is likewise a
+      by-value element of `p.hand_civil`.
+
+Returns: Option<i32>, where the i32 is the science cost to DEVELOP `id`
+RIGHT NOW for `p` — the printed develop price with all standing discounts
+applied and floored at 0 (costs.rs:597-617):
+  * Government: the base is card.peaceful_cost, never card.science_cost
+    (which is always 0 for the 8 governments, card_table.rs:831-975);
+  * everyone else: the base is card.science_cost;
+  * then minus effects::state_stats(state, p).tech_discount (the standing
+    technologyScienceDiscount pool) and minus p.one_time_discount
+    .develop_science (event-granted one-time develop discount);
+  * then the Theater/Library leader adjustments (Bach -2 on a Theater;
+    Shakespeare -1 on a Theater-with-built-Library or Library-with-built-
+    Theater);
+  * then cost.max(0);
+  * None when the printed base is 0 — i.e. Despotism (peaceful_cost 0, the
+    starting government, never developable) and every non-developable card
+    (farms/mines/units print science_cost 0; action cards, leaders, wonders
+    print 0 too).
+
+The exact call expression for "what would it cost me in science to develop
+this row card right now":
+
+    match costs::tech_cost(state, p, id) {
+        Some(c) => c,   // science to pay, discounts applied, floored at 0
+        None    => 0,   // not developable at all — for a develop-cost
+                        // feature, treat as "no such price", not "free"
+    }
+
+or, if the caller wants to distinguish "not developable" from "cost 0":
+
+    let dev_cost: Option<i32> = costs::tech_cost(state, p, id);
+
+Do NOT collapse None to 0 inside the feature without deciding the question
+first: science_need_row's T is a MIN over developable cards, so a None card
+must simply not enter the min (filter it out), and row_playable_count's
+affordability test must not count a None card as payable. Mapping None
+silently to 0 would resurrect the exact printed-field trap this audit
+exists to remove (a 0-cost "developable" card is always affordable).
+
+==============================================================================
+2. Borrow problems
+==============================================================================
+
+NONE. Every input to tech_cost is a shared reference or a Copy value:
+  * `state` and `p` are &GameState / &PlayerState, and features() already
+    holds both while doing its other work — `effects::compute(state, p)`
+    at features.rs:443 coexists with the `p`-derived values used throughout,
+    so a second immutable borrower is routine here;
+  * `id: CardId` is Copy;
+  * the return is a plain Option<i32>, which owns nothing.
+Nothing inside tech_cost takes &mut (the discounts it reads are
+shared-reference reads: state_stats is a pure recompute at
+effects.rs:1571, one_time_discount is a field read, leader_is is a
+comparison). It can be called any number of times per candidate move with
+no conflict, including inside the shared row pass 3.1/3.6 are supposed to
+take (the note's "one pass, allocation-free" shape is unaffected — this is
+a scalar Option<i32>, no Vec, no collect).
+
+The one real cost is not a borrow: effects::state_stats recomputes a full
+Stats per call (features.rs:170-176 names this exact hazard for
+build_cost_for, and the same function is inside tech_cost). Two options,
+both legitimate:
+  (a) accept one state_stats per row slot being tested (a bounded row,
+      <= 13 slots, per candidate move of the 1-ply search);
+  (b) precompute `let stats = effects::state_stats(state, p);` ONCE per
+      features() call and replicate tech_cost's 8-line body against that
+      stats — but that copies the function's logic and the note's own rule
+      (features.rs:1688, the hand-cap comment: "Printed costs only, never
+      costs::tech_cost/build_cost_for — same discount-precision reasoning")
+      exists precisely to forbid a second computation of a rule. Call the
+      function; if the search-hot cost later proves too high, the fix is a
+      Stats-carrying variant of tech_cost, not a copy.
+
+==============================================================================
+3. Wonder first-stage price
+==============================================================================
+
+No costs:: function is needed. The static field is `Card::stages:
+&'static [u8]` (cards.rs:693) — per-stage resource costs in order, e.g.
+Pyramids [3, 2, 1], First Space Flight [1, 2, 4, 9]. All 16 wonders print
+all-nonzero stages (data/cards_wonders_leaders.json), so there is no
+zero-stage edge.
+
+For the first stage of a wonder card `id` sitting in the row:
+
+    let card = id.get();                    // &'static Card, cards.rs:31
+    let first_stage: u8 = card.stages[0];   // resource cost of stage 1
+
+Guard `!card.stages.is_empty()` first if the code path can be reached with
+a non-wonder (it cannot in the base game for a Wonder-typed id, but the
+guard costs nothing and keeps a data edit from panicking):
+
+    let first_stage: Option<u8> = card.stages.first().copied();
+
+Affordability against the player's stock for row_playable_count's "wonder
+first stage" clause: `first_stage` as i32 <= p.resources + my
+resource_rate. This is the RAW printed price with no discount — wonders
+take no build discounts (build_cost_for's discounts are gated on
+urban/production types, costs.rs:540-545), so the printed field is the
+whole story for the resource half.
+
+The live "stages left" of an in-progress wonder, if needed elsewhere in the
+same feature, is already computed: horizon::wonder_outlook(state, p,
+resource_rate) -> Option<WonderOutlook> (horizon.rs:620) with
+WonderOutlook.stages_left (horizon.rs:487, assigned 640 as
+`(stages.len() - built) as f64`); features.rs:493-496 already binds it.
+
+==============================================================================
+4. The CA surcharge on a wonder take
+==============================================================================
+
+The +1-CA-per-completed-wonder surcharge is NOT a costs:: function; it is a
+field of the take gate. From costs.rs:
+
+  * take_gate(state, p, budget: Option<i32>) -> TakeGate
+    (costs.rs:318). TakeGate (costs.rs:308-316) carries
+    `surcharge: i32`, built at costs.rs:322-326 as
+    `p.completed_wonders.len() as i32 + p.destroyed_wonders as i32`,
+    zeroed when the player is Michelangelo.
+
+  * can_take_gated(state, p, idx, gate, name: Option<CardId>) (costs.rs:
+    338) applies it: the Wonder branch (363-373) does
+    `cost += gate.surcharge` and then subtracts Taj Mahal's printed
+    leader-replacement take discount (which can drive a wonder take to
+    0 CA — the only way that happens in the base game).
+
+Two correct ways to read it from a features.rs row pass:
+
+  (a) REUSE THE GATE (preferred — the note's own shared-legality-primitive
+      idiom, and the way row.rs:356-381 already does it): build the gate
+      ONCE per features() call with
+          let gate = costs::take_gate(state, p, None);
+      and test each row slot with
+          costs::can_take_gated(state, p, i, &gate, None)
+      This gives "could I take this row card at all, CA surcharge included"
+      for every type in one call, and the surcharge never needs to be
+      re-derived. `budget: None` means "use my spare CA now" — the right
+      notion for a near-term affordability feature; do not pass a budget
+      unless the feature is explicitly about a hypothetical CA total.
+
+  (b) READ THE FIELD DIRECTLY (only if the feature genuinely wants just
+      the surcharge number, not take-ability):
+          let surcharge: i32 = costs::take_gate(state, p, None).surcharge;
+      This re-runs take_gate (cheap: two len() calls and two leader_is
+      checks) and discards the rest. For row_playable_count specifically,
+      (a) is the right shape, because its "legally take AND afford" clause
+      is exactly can_take_gated (CA side) plus the resource/science
+      affordability test (this file's half).
+
+Note the division of labour: can_take_gated answers the CA side of a take
+(row_cost + surcharge + leader discounts against spare CA, and the
+hand-limit / one-per-name / leader-age / wonder-in-progress gates). It says
+NOTHING about whether the card can later be developed or built — that is the
+printed-cost half of row_playable_count, and for developable cards it must
+go through costs::tech_cost (section 1), not Card::science_cost.
+
+==============================================================================
+5. One-sentence summary per quantity
+==============================================================================
+
+  develop cost now:  costs::tech_cost(state, p, id) -> Option<i32>; None =
+                     not developable, filter it, never map to 0.
+  wonder 1st stage:  id.get().stages[0] (all 16 wonders all-nonzero).
+  CA surcharge:      costs::take_gate(state, p, None).surcharge; or just
+                     can_take_gated(state, p, i, &gate, None) for the
+                     whole CA side of the take.
+  borrows:           none — all inputs shared refs / Copy, return is a
+                     plain Option<i32>; the only cost is one
+                     effects::state_stats recompute inside tech_cost,
+                     which is why the call (not a copy of its body) is the
+                     prescribed shape.
