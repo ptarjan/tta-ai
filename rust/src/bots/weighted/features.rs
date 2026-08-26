@@ -175,6 +175,14 @@ pub struct TableauSweep {
     /// linear feature's "need" signal does not require discount-exact
     /// precision, only the right shape.
     pub unbuilt_min_resource_cost: Option<i32>,
+    /// [`WeightKey::ResourceCommitmentTurns`]'s own numerator half: the SUM
+    /// (not the min) of every [`unbuilt_slots`](Self::unbuilt_slots) entry's
+    /// printed `resource_cost` -- every RAW printed obligation still owed for
+    /// standing tableau slots, same discount-precision reasoning as
+    /// [`unbuilt_min_resource_cost`](Self::unbuilt_min_resource_cost)
+    /// immediately above, computed in the SAME pass rather than a second walk
+    /// of the tableau.
+    pub unbuilt_resource_cost_sum: i32,
 }
 
 pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
@@ -188,6 +196,7 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
     let mut best = BestTypes::default();
     let mut unbuilt_slots = 0i32;
     let mut unbuilt_min_resource_cost: Option<i32> = None;
+    let mut unbuilt_resource_cost_sum = 0i32;
 
     for (id, slot) in p.techs.iter() {
         let kind = id.kind();
@@ -198,6 +207,7 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
             let cost = i32::from(id.get().resource_cost);
             unbuilt_min_resource_cost =
                 Some(unbuilt_min_resource_cost.map_or(cost, |m: i32| m.min(cost)));
+            unbuilt_resource_cost_sum += cost;
         }
 
         match kind {
@@ -255,6 +265,7 @@ pub fn sweep_tableau(p: &crate::state::PlayerState) -> TableauSweep {
         best,
         unbuilt_slots,
         unbuilt_min_resource_cost,
+        unbuilt_resource_cost_sum,
     }
 }
 
@@ -451,6 +462,7 @@ pub fn features(
         special_techs,
         best_unit,
         best,
+        unbuilt_resource_cost_sum,
         ..
     } = sweep;
     tech_levels += p.government.level() as i32;
@@ -622,6 +634,24 @@ pub fn features(
     f.set(
         WeightKey::ResourceRate,
         f64::from(s.resources) + g(GainFeature::ResourceRate) - corruption,
+    );
+    // `WeightKey::ResourceCommitmentTurns`: turns of this player's ENTIRE
+    // resource production already spoken for by the in-progress wonder's
+    // own remaining cost (`remaining`, already computed above from `horizon::
+    // wonder_outlook`) plus every developed-but-unstaffed tableau slot's
+    // printed resource cost (`unbuilt_resource_cost_sum`, folded into
+    // `sweep_tableau`'s own loop above rather than a second walk of the
+    // tableau). Reads `WeightKey::ResourceRate` back rather than
+    // recomputing it a second time -- the same "one true computation" idiom
+    // `WeightKey::HandOverCapacity` uses for `Science` -- so this picks up
+    // the NET rate (corruption and pending gains already folded in) that was
+    // just set immediately above. `max(resource_rate, 1)` per the design
+    // note's own formula: a stalled/negative economy reads the raw
+    // obligation as its own turn count rather than dividing by zero or
+    // going negative.
+    f.set(
+        WeightKey::ResourceCommitmentTurns,
+        (f64::from(remaining) + f64::from(unbuilt_resource_cost_sum)) / f.get(WeightKey::ResourceRate).max(1.0),
     );
     f.set(WeightKey::FoodStock, f64::from(p.food) + g(GainFeature::FoodStock));
     f.set(WeightKey::ResourceStock, f64::from(p.resources) + g(GainFeature::ResourceStock));
@@ -1840,6 +1870,114 @@ mod tests {
             f.get(WeightKey::HappyMarginAfterNextPop),
             0.0,
             "the next pop still leaves a positive margin (3), which is not a shortfall"
+        );
+    }
+
+    /// `WeightKey::ResourceCommitmentTurns` on an untouched fresh game --
+    /// deliberately NOT a hand-built "everything is zero" state, since a
+    /// fresh game already has one: `game::START_TECHS` stages Religion
+    /// (Temple, printed `resource_cost: 3`) with 0 workers, so it is already
+    /// a developed-but-unstaffed slot the moment the game starts, and Bronze
+    /// (Mine, `production.resources: 1`) starts staffed with 2 workers, so
+    /// `resource_rate` is 2 before any corruption (a fresh 16-token blue
+    /// bank is nowhere near the `< 11` band `economy::corruption` charges
+    /// for). No wonder is in progress, so the numerator is Religion's 3
+    /// alone. Confirmed RED by dropping the `+= cost` line from
+    /// `sweep_tableau`'s new `unbuilt_resource_cost_sum` accumulator (so the
+    /// sum silently stayed 0 forever): `ResourceCommitmentTurns` dropped from
+    /// 1.5 to 0.0 -- reverted after confirming.
+    #[test]
+    fn resource_commitment_turns_on_a_fresh_game_counts_religions_own_unstaffed_slot() {
+        let state = G::new_game(2, 51);
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(
+            f.get(WeightKey::ResourceRate),
+            2.0,
+            "test premise: Bronze's 2 staffed workers * 1 resource each, no corruption on a fresh blue bank"
+        );
+        assert_eq!(f.get(WeightKey::WonderRemaining), 0.0, "test premise: no wonder in progress yet");
+        assert_eq!(
+            f.get(WeightKey::ResourceCommitmentTurns),
+            1.5,
+            "Religion's own unstaffed printed resource_cost (3) / a resource_rate of 2"
+        );
+    }
+
+    /// The SUM, not the MIN, of every unstaffed slot's printed resource cost
+    /// -- `sweep_tableau` already tracks a MIN (`unbuilt_min_resource_cost`,
+    /// for the marginal-need threshold), and reusing that field here instead
+    /// of a real sum is exactly the mistake this test exists to catch. Adds
+    /// Iron (Mine, `resource_cost: 5`) as a second unstaffed slot beside the
+    /// fresh game's own Religion (`resource_cost: 3`): the sum is 8, not
+    /// `min(3, 5) == 3`. Confirmed RED by reading `sweep.unbuilt_min_
+    /// resource_cost` instead of `unbuilt_resource_cost_sum` on the
+    /// production `f.set` call: `ResourceCommitmentTurns` dropped from 4.0
+    /// to 1.5 (`3 / 2`, the min instead of the sum) -- reverted after
+    /// confirming.
+    #[test]
+    fn resource_commitment_turns_sums_every_unstaffed_slots_cost_not_just_the_cheapest() {
+        let iron = crate::cards::CardId::by_name("Iron").expect("a base-game Age I mine");
+        assert_eq!(iron.get().resource_cost, 5, "test premise: Iron's printed resource_cost is 5");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.insert(iron, crate::state::TechSlot { workers: 0, stored: 0 });
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::ResourceRate), 2.0, "test premise: unchanged from the fresh-game baseline");
+        assert_eq!(
+            f.get(WeightKey::ResourceCommitmentTurns),
+            4.0,
+            "Religion (3) + Iron (5) = 8 unstaffed resource obligation / a resource_rate of 2"
+        );
+    }
+
+    /// The in-progress wonder's own `WonderRemaining` is HALF the numerator,
+    /// not the whole of it and not absent from it -- `resource_commitment_
+    /// turns` prices "wonder debt AND standing tableau debt together", the
+    /// exact owner's sentence (design note section 2c) this feature exists
+    /// to answer. Pyramids taken with no stages paid owes `3 + 2 + 1 == 6`
+    /// (`stages: &[3, 2, 1]`, `card_table.rs`); added to the fresh game's own
+    /// Religion (3), the numerator is 9, over the unchanged resource_rate of
+    /// 2. Confirmed RED by dropping the `f64::from(remaining) +` term from
+    /// the production `f.set` call (numerator = `unbuilt_resource_cost_sum`
+    /// alone): `ResourceCommitmentTurns` dropped from 4.5 to 1.5 -- reverted
+    /// after confirming.
+    #[test]
+    fn resource_commitment_turns_adds_the_in_progress_wonders_own_remaining_cost() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let mut state = G::new_game(2, 51);
+        state.players[0].wonder = pyramids;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::WonderRemaining), 6.0, "test premise: Pyramids owes 3 + 2 + 1 with no stages paid");
+        assert_eq!(f.get(WeightKey::ResourceRate), 2.0, "test premise: unchanged from the fresh-game baseline");
+        assert_eq!(
+            f.get(WeightKey::ResourceCommitmentTurns),
+            4.5,
+            "Religion's unstaffed 3 plus Pyramids' unpaid 6 = 9, over a resource_rate of 2"
+        );
+    }
+
+    /// `max(resource_rate, 1)`: a stalled economy must not divide by zero or
+    /// go through a negative denominator, per the design note's own formula
+    /// (analysis/feature_design_gap_conditional_2026-08-26.txt, proposal
+    /// 3.2). Un-staffing the fresh game's own Bronze mine (workers -> 0)
+    /// removes the ONLY resource producer, so `resource_rate` collapses to
+    /// 0.0 and Bronze itself joins Religion as a second unstaffed slot
+    /// (printed `resource_cost: 2`), numerator `3 + 2 == 5`. Confirmed RED
+    /// by changing the production `f.set` call's denominator from
+    /// `.max(1.0)` to `.max(0.0)`: `ResourceCommitmentTurns` came back `inf`
+    /// (`5.0 / 0.0`, `assert_eq!` correctly treats `inf != 5.0` as a
+    /// mismatch) instead of `5.0` -- reverted after confirming.
+    #[test]
+    fn resource_commitment_turns_floors_the_denominator_when_the_economy_has_stalled() {
+        let bronze = crate::cards::CardId::by_name("Bronze").expect("a base-game Age A mine");
+        assert_eq!(bronze.get().resource_cost, 2, "test premise: Bronze's printed resource_cost is 2");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(bronze).expect("Bronze is in the starting tableau").workers = 0;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::ResourceRate), 0.0, "test premise: Bronze was the only staffed producer");
+        assert_eq!(
+            f.get(WeightKey::ResourceCommitmentTurns),
+            5.0,
+            "Religion (3) + the now-unstaffed Bronze (2) = 5, over a floored denominator of 1"
         );
     }
 }
