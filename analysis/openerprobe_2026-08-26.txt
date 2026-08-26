@@ -305,3 +305,188 @@ hypothesis stated in the question ("the weight moved without changing
 observed behaviour") -- it does not, by itself, prove `end_turn_bias` is the
 SOLE cause of the gap, only that the gap exists, is sizeable (2.37 vs 3.16
 actions/turn), and points the same way the weight change points.
+
+
+===============================================================================
+POP AND DEVELOP FOLLOW-UP 2026-08-26
+===============================================================================
+
+QUESTION
+--------
+The bot never builds a Farm (top move 0/316771) and its food production
+declines from round 2 while resources rise -- farms get converted to mines.
+From round 3 on it runs at ~0.3 free workers all game. Working hypothesis:
+the bot UNDER-POPULATES, so it never has the free workers to build with, so
+it can never afford the cards it takes. Is that a LEGALITY wall (Pop is
+illegal) or a PREFERENCE (Pop is legal, the bot just ranks something else
+higher)? And the 2p bot develops zero technologies in rounds 1-3 -- same
+question for Develop.
+
+METHOD
+------
+Same `openerprobe` binary as above, extended with two new measured items
+(same self-play mirror match, same rounds-1-3 truncation, same own-turn
+decision-point gate -- see the file's rustdoc, items 4 and 5):
+
+  4. Pop: legal/illegal at every own-turn decision point in rounds 1-3, and
+     when illegal, WHY -- read off the same four gates `legal.rs`'s
+     `action_moves` itself branches on (the round-1 SS1.9 early return, an
+     empty yellow bank, no spendable civil action net of the two CA-free
+     free-pop arms, or insufficient food) -- never re-derived independently.
+     When legal, the rank of the best-scored legal Pop move among all legal
+     moves (1 = the bot's actual top pick), and when legal but not the top
+     pick, what kind of move WAS chosen instead (by DecisionKind).
+  5. The same three questions for Develop, off `legal.rs`'s hand-card loop
+     gates (round-1, no develop-eligible card in `hand_civil`, no civil
+     action net of the Civil-Life exemption, the once-per-decision-point
+     science-pact-partners gate, or insufficient science on every eligible
+     card).
+
+Same weights, same games, same seeds as the original run:
+
+  ./target/difftest/openerprobe --games 6000 --players 2 --weights .../champ2p.json --threads 2 --seed 1
+  ./target/difftest/openerprobe --games 6000 --players 3 --weights .../champ3p.json --threads 2 --seed 1
+  ./target/difftest/openerprobe --games 2000 --players 4 --weights .../champ4p.json --threads 2 --seed 1
+
+RAW RESULTS -- Pop (item 4)
+----------------------------------------------------------------------------
+
+  2p (85240 own decisions, rounds 1-3):
+    Legal    57133/85240 (67.0%)   Illegal  28107/85240 (33.0%)
+    Why illegal (of 28107):
+      round 1 (SS1.9, taking a card is the only legal action): 19244/28107 (68.5%)
+      yellow bank empty (no worker to place):                      0/28107 (0.0%)
+      no civil action available:                                5219/28107 (18.6%)
+      food unaffordable:                                        3644/28107 (13.0%)
+    Rank when legal: min=1 p25=2 median=3 p75=13 max=20 mean=6.56 n=57133
+    Chosen (top pick) when legal:      8190/57133 (14.3%)
+    NOT chosen when legal:            48943/57133 (85.7%) -- what won instead (of 48943):
+      Build Military 17175 (35.1%)   EndTurn 17261 (35.3%)   Take 7836 (16.0%)
+      Leader 3177 (6.5%)   ActionCard 1063 (2.2%)   Other 1266 (2.6%)
+      Build Urban 931 (1.9%)   Build Mine 228 (0.5%)   WonderStep 6 (0.0%)
+
+  3p (155698 own decisions, rounds 1-3):
+    Legal    87198/155698 (56.0%)   Illegal  68500/155698 (44.0%)
+    Why illegal (of 68500):
+      round 1:                             18000/68500 (26.3%)
+      yellow bank empty:                       0/68500 (0.0%)
+      no civil action available:           39044/68500 (57.0%)
+      food unaffordable:                   11456/68500 (16.7%)
+    Rank when legal: min=1 p25=2 median=5 p75=7 max=19 mean=4.93 n=87198
+    Chosen when legal:      21265/87198 (24.4%)
+    NOT chosen when legal:  65933/87198 (75.6%) -- what won instead (of 65933):
+      Take 29818 (45.2%)   Build Mine 18156 (27.5%)   Build Urban 9688 (14.7%)
+      WonderStep 3212 (4.9%)   Leader 2129 (3.2%)   ActionCard 1445 (2.2%)
+      Other 1126 (1.7%)   Develop 315 (0.5%)   Build Military 23 (0.0%)
+      Upgrade 20 (0.0%)   EndTurn 1 (0.0%)
+
+  4p (75833 own decisions, rounds 1-3):
+    Legal    39112/75833 (51.6%)   Illegal  36721/75833 (48.4%)
+    Why illegal (of 36721):
+      round 1:                             19514/36721 (53.1%)
+      yellow bank empty:                       0/36721 (0.0%)
+      no civil action available:            4364/36721 (11.9%)
+      food unaffordable:                   12843/36721 (35.0%)
+    Rank when legal: min=1 p25=1 median=2 p75=5 max=11 mean=3.29 n=39112
+    Chosen when legal:      12988/39112 (33.2%)
+    NOT chosen when legal:  26124/39112 (66.8%) -- what won instead (of 26124):
+      Build Mine 5401 (20.7%)   Build Military 4947 (18.9%)   Build Urban 3883 (14.9%)
+      Take 2579 (9.9%)   ActionCard 2367 (9.1%)   EndTurn 2382 (9.1%)
+      Leader 2214 (8.5%)   WonderStep 1954 (7.5%)   Other 397 (1.5%)
+
+Note: round 1's "taking a card is the only legal action" gate (SS1.9) is a
+BLANKET rule that mechanically forbids Pop AND Develop identically -- the
+round-1-take-only count matches exactly between items 4 and 5 at every
+player count (19244/18000/19514), confirming it is the same early return,
+not independently mis-derived twice. Reading Pop's legality with that
+mechanical floor excluded (rounds 2-3 only, denominator = total decisions
+minus the round-1 count): 2p 57133/65996 (86.6%), 3p 87198/137698 (63.3%),
+4p 39112/56319 (69.5%) -- Pop is legal at the large majority of decision
+points once the game is actually allowed to offer it.
+
+RAW RESULTS -- Develop (item 5)
+----------------------------------------------------------------------------
+
+  2p: Legal 0/85240 (0.0%)   Illegal 85240/85240 (100.0%)
+    Why illegal (of 85240):
+      round 1:                                19244/85240 (22.6%)
+      no develop-eligible card in hand:        63332/85240 (74.3%)
+      no civil action available:                 852/85240 (1.0%)
+      science-pact partner(s) can't pay:           0/85240 (0.0%)
+      science unaffordable (every eligible card): 1812/85240 (2.1%)
+    Rank when legal: n/a -- 0 legal decisions to rank.
+
+  3p: Legal 348/155698 (0.2%)   Illegal 155350/155698 (99.8%)
+    Why illegal (of 155350):
+      round 1:                                18000/155350 (11.6%)
+      no develop-eligible card in hand:       113112/155350 (72.8%)
+      no civil action available:               12715/155350 (8.2%)
+      science-pact partner(s) can't pay:            0/155350 (0.0%)
+      science unaffordable (every eligible card): 11523/155350 (7.4%)
+      (of which >1 develop-eligible card held: 1302/155350)
+    Rank when legal: min=1 p25=1 median=1 p75=1 max=7 mean=1.15 n=348
+    Chosen when legal: 333/348 (95.7%)   NOT chosen: 15/348 (4.3%) --
+      what won instead (of 15): Build Urban 10 (66.7%), Leader 3 (20.0%),
+      Take 2 (13.3%)
+
+  4p: Legal 27/75833 (0.0%)   Illegal 75806/75833 (99.96%)
+    Why illegal (of 75806):
+      round 1:                                19514/75806 (25.7%)
+      no develop-eligible card in hand:        55767/75806 (73.6%)
+      no civil action available:                 340/75806 (0.4%)
+      science-pact partner(s) can't pay:           0/75806 (0.0%)
+      science unaffordable (every eligible card):  185/75806 (0.2%)
+    Rank when legal: min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=27
+    Chosen when legal: 27/27 (100.0%) -- every single legal instance was the
+    top pick; the "not chosen" table has zero decisions to show.
+
+VERDICT
+-------
+The two "the bot doesn't grow its economy" symptoms are TWO DIFFERENT
+failure modes, not one:
+
+Pop is a PREFERENCE failure, not a legality wall. Past the mechanical
+round-1 lockout (SS1.9, which blocks Pop and Develop identically and says
+nothing about the economy), Pop is legal at 63.3%-86.6% of round-2/3
+decision points depending on player count. The yellow bank (unassigned
+worker reserve) is NEVER the constraint in rounds 1-3, at any player count
+(0/28107, 0/68500, 0/36721 "yellow bank empty") -- there is always a worker
+available to place this early. When Pop IS illegal past round 1, the real
+reasons are a spent civil action (57.0% of 3p's illegal decisions) or
+insufficient food (35.0% of 4p's), i.e. real resource pressure, not a
+structural block. But even when Pop IS legal, the bot's own ranking puts
+something else on top MOST of the time: chosen only 8190/57133 (14.3%) of
+legal opportunities at 2p, 21265/87198 (24.4%) at 3p, 12988/39112 (33.2%) at
+4p. What consistently outranks it: Build Military and EndTurn dominate at
+2p (35.1%/35.3% of the 48943 times Pop lost), Take and Build Mine dominate
+at 3p (45.2%/27.5% of 65933), Build Mine/Military/Urban dominate at 4p
+(20.7%/18.9%/14.9% of 26124). This is the mine-over-farm substitution the
+original probe found, one decision earlier: the eval ranks converting
+workers into resource-producing builds (and, at 2p, simply ending the turn)
+above growing the population that would let it build a Farm at all.
+
+Develop is the OPPOSITE: overwhelmingly a LEGALITY wall, not a preference.
+Legal at only 0/85240 (2p), 348/155698 (0.2%, 3p), 27/75833 (0.0%, 4p) of
+decision points. The dominant reason, after round 1, is that the bot simply
+holds no develop-eligible card in its civil hand at all: 63332/85240
+(74.3%, 2p), 113112/155350 (72.8%, 3p), 55767/75806 (73.6%, 4p) of illegal
+decisions -- civil-action shortage and science affordability are minor by
+comparison (<=8.2% each at any count), and the science-pact-partners gate
+never fires anywhere (0 everywhere). And on the rare occasions Develop IS
+legal, the bot takes it almost every time -- rank is essentially always the
+top pick (median 1, mean 1.00-1.15 across all three counts; chosen 333/348
+= 95.7% of the time at 3p, and literally every one of the 27 legal
+instances at 4p). The 2p "zero technologies developed in rounds 1-3"
+finding is therefore not a ranking problem at all: it is a hand-composition
+wall -- rounds 1-3's Take choices apparently never put a develop-eligible
+card into `hand_civil` this early, so there is nothing to spend science on,
+whatever the bot would otherwise prefer.
+
+Net: fixing the Farm/food death spiral needs a PREFERENCE fix on Pop (rank
+it above Build Mine/Military/EndTurn early, when it's legal and cheap), not
+a legality change -- Pop is already offered most of the time it should be.
+Fixing zero-Develop, if it is worth fixing at all this early, needs a
+different lever entirely: either the Take ranking has to start prioritising
+develop-eligible cards into hand in rounds 1-3, or the "zero Develops in
+rounds 1-3" fact is simply not a bug -- humans may not develop that early
+either, and this probe was not asked to check that baseline.

@@ -61,6 +61,25 @@
 //!    [`costs::build_cost_net`], [`state::PlayerState::civil_actions`]) --
 //!    not re-derived independently -- so this can never disagree with the
 //!    engine about what made a move illegal.
+//! 4. [`Report::pop_legal`] / [`Report::pop_illegal`] /
+//!    [`Report::pop_illegal_reason`] / [`Report::pop_rank`] /
+//!    [`Report::pop_legal_not_chosen_top_kind`] -- the same three questions
+//!    (legal at all? rank when legal? what wins when legal but not chosen?)
+//!    for `Move::Pop`/`Move::PopFree`, added 2026-08-26 to settle whether the
+//!    bot's flat economy (`analysis/openerprobe_2026-08-26.txt`'s original
+//!    Farm findings) is a LEGALITY wall or a PREFERENCE: [`classify_pop_illegal`]
+//!    reads its reason off the same gates `legal.rs`'s `action_moves` itself
+//!    branches on ([`economy::pop_cost`], [`costs::spare_ca`],
+//!    [`costs::civil_life_ca_free`], the round-1 §1.9 early return, and the
+//!    two CA-free free-pop arms), never re-derived independently.
+//! 5. [`Report::develop_legal`] / [`Report::develop_illegal`] /
+//!    [`Report::develop_illegal_reason`] / [`Report::develop_rank`] /
+//!    [`Report::develop_legal_not_chosen_top_kind`] -- the same, for
+//!    `Move::Develop`, because the 2p bot develops zero technologies in
+//!    rounds 1-3 and this answers whether that is a choice or a wall.
+//!    [`classify_develop_illegal`] reads its reason off `legal.rs`'s hand-card
+//!    loop gates ([`costs::spare_ca`], [`costs::civil_life_ca_free`],
+//!    [`effects::science_pact_partners_can_pay`], [`costs::tech_cost_net`]).
 //!
 //! ```text
 //! cargo run --profile difftest --bin openerprobe -- \
@@ -74,6 +93,8 @@ use std::time::Instant;
 use tta::bots::weighted::eval::{load_weights, WeightedBot};
 use tta::bots::weighted::weights::Weights;
 use tta::costs;
+use tta::economy;
+use tta::effects;
 use tta::game::{self, MOVE_CAP};
 use tta::legal;
 use tta::moves::Move;
@@ -361,6 +382,179 @@ fn tta_trade_fill(state: &GameState, p: &PlayerState) -> i32 {
 }
 
 // ---------------------------------------------------------------------
+// Pop-legality reason (item 4)
+// ---------------------------------------------------------------------
+
+/// Why no `Move::Pop`/`Move::PopFree` is offered right now, read off the
+/// same four gates `legal.rs`'s `action_moves` itself branches on
+/// (`legal.rs:425-517`): the round-1 §1.9 early return (before ANY pop arm
+/// is reached), an empty yellow bank (nothing to place), no spendable civil
+/// action (and neither CA-free arm live), or insufficient food once a civil
+/// action is available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PopIllegalReason {
+    /// `state.round == 1` -- `action_moves` returns right after the Take
+    /// loop, before it ever reaches the pop arms (`legal.rs:425-427`).
+    Round1TakeOnly,
+    /// [`economy::pop_cost`] is `None` -- `p.yellow_bank == 0`
+    /// ([`economy::pop_cost_base`]), so there is no worker in the bank to
+    /// place regardless of civil action or food.
+    YellowBankEmpty,
+    /// A worker is available (bank nonzero) but `p` has no spendable civil
+    /// action ([`costs::spare_ca`]) and holds none of Civil Life's
+    /// `pop_food` exemption ([`costs::civil_life_ca_free`]) -- and neither
+    /// of the two CA-free free-pop arms (`Stats::free_pop_per_turn` plus
+    /// unused Ocean Liners, or a Civil Life discount driving the price to
+    /// zero) is live either, so nothing rescues this decision point.
+    CivilActionUnavailable,
+    /// A civil action (or exemption) is there, but food on hand is below
+    /// [`economy::pop_cost`]'s price, and neither CA-free free-pop arm
+    /// covers it.
+    FoodUnaffordable,
+}
+
+/// Classifies why no Pop move is legal for `p` right now. Only called once
+/// the caller has already confirmed, from the real [`legal::legal_moves`]
+/// output, that no `Move::Pop`/`Move::PopFree` is offered -- this never
+/// re-decides legality itself, only explains it. The two CA-free free-pop
+/// arms (`legal.rs:494` / `legal.rs:510-517`) are checked and `debug_assert`ed
+/// false rather than skipped, so a future arm added there that this reader
+/// forgot to mirror fails a debug build instead of silently mislabelling.
+fn classify_pop_illegal(state: &GameState, p: &PlayerState) -> PopIllegalReason {
+    if state.round == 1 {
+        return PopIllegalReason::Round1TakeOnly;
+    }
+    let Some(cost) = economy::pop_cost(state, p) else {
+        return PopIllegalReason::YellowBankEmpty;
+    };
+    let s = effects::state_stats(state, p);
+    let free_pop_arm = s.free_pop_per_turn && !p.ocean_liners_used && p.yellow_bank > 0;
+    let civil_life_free_pop_arm = p.yellow_bank > 0
+        && p.one_time_discount.pop_food > 0
+        && p.food == 0
+        && economy::pop_cost_base(p.yellow_bank)
+            .is_some_and(|base| u16::from(base) <= p.one_time_discount.pop_food as u16);
+    debug_assert!(
+        !free_pop_arm && !civil_life_free_pop_arm,
+        "classify_pop_illegal called when a CA-free free-pop arm legal.rs itself would accept is live"
+    );
+    let ca = costs::spare_ca(p);
+    let ca_ok = ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food);
+    if !ca_ok {
+        return PopIllegalReason::CivilActionUnavailable;
+    }
+    debug_assert!(
+        i32::from(p.food) < cost,
+        "classify_pop_illegal called on a Pop legal.rs itself would accept (CA ok, food covers cost)"
+    );
+    PopIllegalReason::FoodUnaffordable
+}
+
+// ---------------------------------------------------------------------
+// Develop-legality reason (item 5)
+// ---------------------------------------------------------------------
+
+/// Why no `Move::Develop` is offered right now, read off the same gates
+/// `legal.rs`'s hand-card loop branches on for every develop-eligible card
+/// (`legal.rs:701-736`): the round-1 early return, no develop-eligible card
+/// in hand at all, no spendable civil action, the science-pact-partners
+/// gate (checked once, globally -- [`effects::science_pact_partners_can_pay`]
+/// takes no card id), or insufficient science.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DevelopIllegalReason {
+    /// `state.round == 1` -- see [`PopIllegalReason::Round1TakeOnly`].
+    Round1TakeOnly,
+    /// No card in `p.hand_civil` is a develop-eligible [`CardType`]
+    /// ([`develop_eligible_kind`]) -- there is nothing to spend science on,
+    /// whatever the civil-action or science state.
+    NoEligibleCardInHand,
+    /// A develop-eligible card is held, but `p` has no spendable civil
+    /// action ([`costs::spare_ca`]) and holds none of Civil Life's
+    /// `develop_science` exemption ([`costs::civil_life_ca_free`]). This
+    /// gate is the SAME check for every hand card (`legal.rs`'s `ca`/`have_ca`
+    /// is computed once per decision point, not per card), so it alone
+    /// blocks every develop-eligible card at once.
+    CivilActionUnavailable,
+    /// A civil action (or exemption) is there, but
+    /// [`effects::science_pact_partners_can_pay`] is false -- also a single
+    /// per-decision-point gate, not per card, so it too blocks every
+    /// develop-eligible card at once.
+    SciencePactPartnersUnavailable,
+    /// Civil action and science-pact-partners are both clear, but every
+    /// develop-eligible card's own [`costs::tech_cost_net`] exceeds `p`'s
+    /// science on hand.
+    ScienceUnaffordable,
+}
+
+/// The develop-eligible [`CardType`]s `legal.rs`'s hand-card loop ever
+/// offers a `Move::Develop` for (`legal.rs:701` Government arm plus
+/// `legal.rs:728`'s `k.takes_workers() || k == CardType::SpecialTech` guard).
+/// Exhaustive over `CardType`, not a wildcard match, for the same reason
+/// [`build_target_kind`] is.
+fn develop_eligible_kind(k: CardType) -> bool {
+    match k {
+        CardType::Government
+        | CardType::Farm
+        | CardType::Mine
+        | CardType::Lab
+        | CardType::Temple
+        | CardType::Library
+        | CardType::Arena
+        | CardType::Theater
+        | CardType::Infantry
+        | CardType::Cavalry
+        | CardType::Artillery
+        | CardType::Air
+        | CardType::SpecialTech => true,
+        CardType::Wonder
+        | CardType::Leader
+        | CardType::Action
+        | CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => false,
+    }
+}
+
+/// Classifies why no Develop move is legal for `p` right now. Only called
+/// once the caller has already confirmed, from the real
+/// [`legal::legal_moves`] output, that no `Move::Develop` is offered -- this
+/// never re-decides legality itself, only explains it.
+///
+/// Second return value: whether `p` holds MORE than one develop-eligible
+/// card right now -- same disclosure convention as
+/// [`classify_farm_illegal`]'s `multi_candidate` flag, because
+/// [`DevelopIllegalReason::ScienceUnaffordable`] is only asserted true of
+/// EVERY eligible card (checked below), never picked off just the first one.
+fn classify_develop_illegal(state: &GameState, p: &PlayerState) -> (DevelopIllegalReason, bool) {
+    if state.round == 1 {
+        return (DevelopIllegalReason::Round1TakeOnly, false);
+    }
+    let eligible: Vec<CardId> =
+        p.hand_civil.as_slice().iter().copied().filter(|&id| develop_eligible_kind(id.kind())).collect();
+    let multi_candidate = eligible.len() > 1;
+    if eligible.is_empty() {
+        return (DevelopIllegalReason::NoEligibleCardInHand, multi_candidate);
+    }
+    let ca = costs::spare_ca(p);
+    let ca_ok = ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.develop_science);
+    if !ca_ok {
+        return (DevelopIllegalReason::CivilActionUnavailable, multi_candidate);
+    }
+    if !effects::science_pact_partners_can_pay(state, p) {
+        return (DevelopIllegalReason::SciencePactPartnersUnavailable, multi_candidate);
+    }
+    debug_assert!(
+        eligible.iter().all(|&id| i32::from(p.science) < costs::tech_cost_net(state, p, id).unwrap_or(0)),
+        "classify_develop_illegal called when some eligible card's science cost legal.rs itself would accept is affordable"
+    );
+    (DevelopIllegalReason::ScienceUnaffordable, multi_candidate)
+}
+
+// ---------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------
 
@@ -556,6 +750,61 @@ impl FarmReasonCounts {
     }
 }
 
+#[derive(Default, Clone, Copy)]
+struct PopReasonCounts {
+    round1_take_only: u64,
+    yellow_bank_empty: u64,
+    no_civil_action: u64,
+    no_food: u64,
+}
+
+impl PopReasonCounts {
+    fn record(&mut self, r: PopIllegalReason) {
+        match r {
+            PopIllegalReason::Round1TakeOnly => self.round1_take_only += 1,
+            PopIllegalReason::YellowBankEmpty => self.yellow_bank_empty += 1,
+            PopIllegalReason::CivilActionUnavailable => self.no_civil_action += 1,
+            PopIllegalReason::FoodUnaffordable => self.no_food += 1,
+        }
+    }
+
+    fn merge(&mut self, o: PopReasonCounts) {
+        self.round1_take_only += o.round1_take_only;
+        self.yellow_bank_empty += o.yellow_bank_empty;
+        self.no_civil_action += o.no_civil_action;
+        self.no_food += o.no_food;
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct DevelopReasonCounts {
+    round1_take_only: u64,
+    no_eligible_card: u64,
+    no_civil_action: u64,
+    no_science_pact_partners: u64,
+    no_science: u64,
+}
+
+impl DevelopReasonCounts {
+    fn record(&mut self, r: DevelopIllegalReason) {
+        match r {
+            DevelopIllegalReason::Round1TakeOnly => self.round1_take_only += 1,
+            DevelopIllegalReason::NoEligibleCardInHand => self.no_eligible_card += 1,
+            DevelopIllegalReason::CivilActionUnavailable => self.no_civil_action += 1,
+            DevelopIllegalReason::SciencePactPartnersUnavailable => self.no_science_pact_partners += 1,
+            DevelopIllegalReason::ScienceUnaffordable => self.no_science += 1,
+        }
+    }
+
+    fn merge(&mut self, o: DevelopReasonCounts) {
+        self.round1_take_only += o.round1_take_only;
+        self.no_eligible_card += o.no_eligible_card;
+        self.no_civil_action += o.no_civil_action;
+        self.no_science_pact_partners += o.no_science_pact_partners;
+        self.no_science += o.no_science;
+    }
+}
+
 #[derive(Default)]
 struct Report {
     games: u64,
@@ -576,10 +825,34 @@ struct Report {
     /// `classify_farm_illegal`'s own doc comment for why a nonzero count
     /// here means its single-candidate simplification was exercised.
     farm_illegal_multi_candidate: u64,
+
+    /// Item 4: Pop legality/rank/instead-of -- see this file's top doc
+    /// comment, item 4.
+    pop_legal: u64,
+    pop_illegal: u64,
+    pop_illegal_reason: PopReasonCounts,
+    /// Rank of the best-scored legal Pop move among every legal move at a
+    /// decision point where one was legal (1 = the bot's actual top pick).
+    pop_rank: Vec<u32>,
+    /// When Pop was legal but NOT the top-ranked (chosen) move, the kind of
+    /// move that WAS chosen instead.
+    pop_legal_not_chosen_top_kind: DecisionKindCounts,
+
+    /// Item 5: Develop legality/rank/instead-of -- see this file's top doc
+    /// comment, item 5.
+    develop_legal: u64,
+    develop_illegal: u64,
+    develop_illegal_reason: DevelopReasonCounts,
+    /// How many of the `develop_illegal` decisions were classified while
+    /// holding more than one develop-eligible card -- see
+    /// `classify_develop_illegal`'s own doc comment.
+    develop_illegal_multi_candidate: u64,
+    develop_rank: Vec<u32>,
+    develop_legal_not_chosen_top_kind: DecisionKindCounts,
 }
 
 impl Report {
-    fn merge(&mut self, o: Report) {
+    fn merge(&mut self, mut o: Report) {
         self.games += o.games;
         self.decisions += o.decisions;
         self.top_kind.merge(o.top_kind);
@@ -589,6 +862,19 @@ impl Report {
         self.farm_illegal += o.farm_illegal;
         self.farm_illegal_reason.merge(o.farm_illegal_reason);
         self.farm_illegal_multi_candidate += o.farm_illegal_multi_candidate;
+
+        self.pop_legal += o.pop_legal;
+        self.pop_illegal += o.pop_illegal;
+        self.pop_illegal_reason.merge(o.pop_illegal_reason);
+        self.pop_rank.append(&mut o.pop_rank);
+        self.pop_legal_not_chosen_top_kind.merge(o.pop_legal_not_chosen_top_kind);
+
+        self.develop_legal += o.develop_legal;
+        self.develop_illegal += o.develop_illegal;
+        self.develop_illegal_reason.merge(o.develop_illegal_reason);
+        self.develop_illegal_multi_candidate += o.develop_illegal_multi_candidate;
+        self.develop_rank.append(&mut o.develop_rank);
+        self.develop_legal_not_chosen_top_kind.merge(o.develop_legal_not_chosen_top_kind);
     }
 }
 
@@ -650,6 +936,47 @@ fn record_decision(report: &mut Report, state: &GameState, idx: u8, legal: &[Mov
         report.farm_illegal_reason.record(reason);
         if multi {
             report.farm_illegal_multi_candidate += 1;
+        }
+    }
+
+    // Item 4: Pop legality (and why not), rank when legal, and what wins
+    // when legal but not chosen.
+    let pop_legal = legal.iter().any(|m| decision_kind(*m) == DecisionKind::Pop);
+    if pop_legal {
+        report.pop_legal += 1;
+        let pos = ranked
+            .iter()
+            .position(|&(m, _)| decision_kind(m) == DecisionKind::Pop)
+            .expect("pop_legal true implies `ranked` (the same legal set, scored) holds a Pop-kind move");
+        report.pop_rank.push((pos + 1) as u32);
+        let top_kind = decision_kind(ranked[0].0);
+        if top_kind != DecisionKind::Pop {
+            report.pop_legal_not_chosen_top_kind.record(top_kind);
+        }
+    } else {
+        report.pop_illegal += 1;
+        report.pop_illegal_reason.record(classify_pop_illegal(state, p));
+    }
+
+    // Item 5: same three questions for Develop.
+    let develop_legal = legal.iter().any(|m| decision_kind(*m) == DecisionKind::Develop);
+    if develop_legal {
+        report.develop_legal += 1;
+        let pos = ranked
+            .iter()
+            .position(|&(m, _)| decision_kind(m) == DecisionKind::Develop)
+            .expect("develop_legal true implies `ranked` (the same legal set, scored) holds a Develop-kind move");
+        report.develop_rank.push((pos + 1) as u32);
+        let top_kind = decision_kind(ranked[0].0);
+        if top_kind != DecisionKind::Develop {
+            report.develop_legal_not_chosen_top_kind.record(top_kind);
+        }
+    } else {
+        report.develop_illegal += 1;
+        let (reason, multi) = classify_develop_illegal(state, p);
+        report.develop_illegal_reason.record(reason);
+        if multi {
+            report.develop_illegal_multi_candidate += 1;
         }
     }
 }
@@ -749,11 +1076,11 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     Ok(Some(a))
 }
 
-fn print_report(players: u8, r: &Report) {
-    println!("\n## {players}p (n={} games, {} own-turn decision points in rounds 1-3)\n", r.games, r.decisions);
-
-    println!("### Item 1: top-ranked (chosen) move by kind\n");
-    let t = &r.top_kind;
+/// Prints the same 13-row kind breakdown [`Report::top_kind`] originally
+/// printed inline as item 1 -- factored out so items 4 and 5's "what wins
+/// instead" tables (same [`DecisionKindCounts`] shape, a different
+/// condition-on-decision-point) print identically rather than drifting.
+fn print_kind_counts(t: &DecisionKindCounts) {
     let total = t.total().max(1);
     let rows: [(&str, u64); 13] = [
         ("Take", t.take),
@@ -773,6 +1100,13 @@ fn print_report(players: u8, r: &Report) {
     for (name, n) in rows {
         println!("- {name}: {n}/{total} ({:.1}%)", 100.0 * n as f64 / total as f64);
     }
+}
+
+fn print_report(players: u8, r: &Report) {
+    println!("\n## {players}p (n={} games, {} own-turn decision points in rounds 1-3)\n", r.games, r.decisions);
+
+    println!("### Item 1: top-ranked (chosen) move by kind\n");
+    print_kind_counts(&r.top_kind);
 
     println!("\n### Item 2: rank of the best LEGAL move of each build-shaped kind\n");
     println!("(rank 1 = the bot's actual top pick at that decision point; only counted when legal)\n");
@@ -812,6 +1146,87 @@ fn print_report(players: u8, r: &Report) {
             r.farm_illegal_multi_candidate
         );
     }
+
+    println!("\n### Item 4: Pop (increase population) legality in rounds 1-3\n");
+    let pop_total = (r.pop_legal + r.pop_illegal).max(1);
+    println!(
+        "Legal: {}/{pop_total} ({:.1}%)   Illegal: {}/{pop_total} ({:.1}%)",
+        r.pop_legal,
+        100.0 * r.pop_legal as f64 / pop_total as f64,
+        r.pop_illegal,
+        100.0 * r.pop_illegal as f64 / pop_total as f64
+    );
+    if r.pop_illegal > 0 {
+        let pr = &r.pop_illegal_reason;
+        let pt = r.pop_illegal.max(1);
+        println!("Why illegal (of {} illegal decisions):", r.pop_illegal);
+        println!(
+            "- round 1 (taking a card is the only legal action, SS1.9): {}/{pt} ({:.1}%)",
+            pr.round1_take_only,
+            100.0 * pr.round1_take_only as f64 / pt as f64
+        );
+        println!(
+            "- yellow bank empty (no worker available to place): {}/{pt} ({:.1}%)",
+            pr.yellow_bank_empty,
+            100.0 * pr.yellow_bank_empty as f64 / pt as f64
+        );
+        println!(
+            "- no civil action available: {}/{pt} ({:.1}%)",
+            pr.no_civil_action,
+            100.0 * pr.no_civil_action as f64 / pt as f64
+        );
+        println!("- food unaffordable: {}/{pt} ({:.1}%)", pr.no_food, 100.0 * pr.no_food as f64 / pt as f64);
+    }
+    println!("\nRank when legal (1 = bot's actual top pick): {}", percentiles_u32(r.pop_rank.clone()));
+    println!("\nWhen Pop is legal but NOT the top pick, what wins instead:\n");
+    print_kind_counts(&r.pop_legal_not_chosen_top_kind);
+
+    println!("\n### Item 5: Develop legality in rounds 1-3\n");
+    let develop_total = (r.develop_legal + r.develop_illegal).max(1);
+    println!(
+        "Legal: {}/{develop_total} ({:.1}%)   Illegal: {}/{develop_total} ({:.1}%)",
+        r.develop_legal,
+        100.0 * r.develop_legal as f64 / develop_total as f64,
+        r.develop_illegal,
+        100.0 * r.develop_illegal as f64 / develop_total as f64
+    );
+    if r.develop_illegal > 0 {
+        let dr = &r.develop_illegal_reason;
+        let dt = r.develop_illegal.max(1);
+        println!("Why illegal (of {} illegal decisions):", r.develop_illegal);
+        println!(
+            "- round 1 (taking a card is the only legal action, SS1.9): {}/{dt} ({:.1}%)",
+            dr.round1_take_only,
+            100.0 * dr.round1_take_only as f64 / dt as f64
+        );
+        println!(
+            "- no develop-eligible card in hand: {}/{dt} ({:.1}%)",
+            dr.no_eligible_card,
+            100.0 * dr.no_eligible_card as f64 / dt as f64
+        );
+        println!(
+            "- no civil action available: {}/{dt} ({:.1}%)",
+            dr.no_civil_action,
+            100.0 * dr.no_civil_action as f64 / dt as f64
+        );
+        println!(
+            "- science-pact partner(s) cannot pay their share: {}/{dt} ({:.1}%)",
+            dr.no_science_pact_partners,
+            100.0 * dr.no_science_pact_partners as f64 / dt as f64
+        );
+        println!(
+            "- science unaffordable (every eligible card): {}/{dt} ({:.1}%)",
+            dr.no_science,
+            100.0 * dr.no_science as f64 / dt as f64
+        );
+        println!(
+            "(of which classified while holding >1 develop-eligible card: {}/{dt})",
+            r.develop_illegal_multi_candidate
+        );
+    }
+    println!("\nRank when legal (1 = bot's actual top pick): {}", percentiles_u32(r.develop_rank.clone()));
+    println!("\nWhen Develop is legal but NOT the top pick, what wins instead:\n");
+    print_kind_counts(&r.develop_legal_not_chosen_top_kind);
 }
 
 fn main() -> ExitCode {
@@ -984,5 +1399,68 @@ mod tests {
         assert_eq!(report.games, 1);
         assert!(report.decisions > 0, "expected at least one own-turn decision point in rounds 1-3");
         assert!(report.top_kind.total() > 0);
+        assert_eq!(
+            report.pop_legal + report.pop_illegal,
+            report.decisions,
+            "every own-turn decision point must be counted exactly once as Pop legal or illegal"
+        );
+        assert_eq!(
+            report.develop_legal + report.develop_illegal,
+            report.decisions,
+            "every own-turn decision point must be counted exactly once as Develop legal or illegal"
+        );
+    }
+
+    #[test]
+    fn classify_pop_illegal_reports_round1_take_only_when_the_round_is_one() {
+        let state = game::new_game(2, 1);
+        assert_eq!(state.round, 1);
+        assert_eq!(classify_pop_illegal(&state, &state.players[0]), PopIllegalReason::Round1TakeOnly);
+    }
+
+    #[test]
+    fn classify_pop_illegal_reports_yellow_bank_empty_when_the_bank_has_no_worker() {
+        let mut state = game::new_game(2, 1);
+        state.round = 2;
+        state.players[0].yellow_bank = 0;
+        assert_eq!(classify_pop_illegal(&state, &state.players[0]), PopIllegalReason::YellowBankEmpty);
+    }
+
+    #[test]
+    fn classify_pop_illegal_reports_no_civil_action_when_the_bank_has_a_worker_but_ca_is_spent() {
+        let mut state = game::new_game(2, 1);
+        state.round = 2;
+        state.players[0].civil_actions = 0;
+        state.players[0].military_actions = 0; // no spare Hammurabi conversion either
+        assert!(state.players[0].yellow_bank > 0, "a fresh game's yellow bank starts nonzero");
+        assert_eq!(classify_pop_illegal(&state, &state.players[0]), PopIllegalReason::CivilActionUnavailable);
+    }
+
+    #[test]
+    fn classify_develop_illegal_reports_round1_take_only_when_the_round_is_one() {
+        let state = game::new_game(2, 1);
+        assert_eq!(state.round, 1);
+        assert_eq!(classify_develop_illegal(&state, &state.players[0]).0, DevelopIllegalReason::Round1TakeOnly);
+    }
+
+    #[test]
+    fn classify_develop_illegal_reports_no_eligible_card_when_hand_civil_is_empty() {
+        let mut state = game::new_game(2, 1);
+        state.round = 2;
+        assert!(state.players[0].hand_civil.is_empty(), "a fresh game deals no civil hand before any Take");
+        assert_eq!(
+            classify_develop_illegal(&state, &state.players[0]).0,
+            DevelopIllegalReason::NoEligibleCardInHand
+        );
+    }
+
+    #[test]
+    fn develop_eligible_kind_accepts_government_and_every_takes_workers_or_specialtech_type_only() {
+        assert!(develop_eligible_kind(CardType::Government));
+        assert!(develop_eligible_kind(CardType::Farm));
+        assert!(develop_eligible_kind(CardType::SpecialTech));
+        assert!(!develop_eligible_kind(CardType::Wonder));
+        assert!(!develop_eligible_kind(CardType::Action));
+        assert!(!develop_eligible_kind(CardType::Leader));
     }
 }
