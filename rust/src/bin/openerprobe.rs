@@ -1,0 +1,970 @@
+//! `openerprobe` -- does the champion's opener DECISION still want a Farm
+//! build (or any other move it cannot legally make) in rounds 1-3, and only
+//! get bounced to something legal by [`legal::legal_moves`], or is the
+//! opener now genuinely legal-by-construction?
+//!
+//! # Background
+//!
+//! A behaviour census (`bin/behavcensus.rs`) measured the bot's first
+//! EXECUTED build by round 3: a Mine 95.6% of the time at 3p, matching
+//! humans. A now-deleted scratch binary `buildprobe.rs` once measured the
+//! opposite-looking number from a different angle: the bot ATTEMPTS an
+//! illegal Farm build in round 1 98.1% of the time, 88.3% of those for want
+//! of a free worker. Both numbers can be true at once and say nothing
+//! contradictory -- "attempts" there almost certainly meant "the top-ranked
+//! candidate among a synthetic, not-legality-filtered move set", which
+//! nothing currently ported measures. This binary instruments the real
+//! decision instead of guessing: [`weighted::eval::WeightedBot::rank_moves`]
+//! scores every LEGAL move at every one of a player's own decision points in
+//! rounds 1-3 and this reads off what that ranking says.
+//!
+//! # Method
+//!
+//! Self-play mirror match (every seat plays `--weights`), truncated the
+//! moment `state.round` exceeds 3 -- nothing after round 3 is read by this
+//! probe, so there is no reason to keep simulating a game past it (unlike
+//! `behavcensus`, which needs the whole game for its other questions).
+//!
+//! A decision point counts as "the player's own" iff `Move::EndTurn` is
+//! among the legal moves right now -- [`legal::legal_moves`]'s own dispatch
+//! (`legal.rs`, `Phase::Actions` branch, `action_moves` always pushes
+//! `EndTurn` first) makes that exactly the set of moments a player is
+//! choosing among Take/Build/Develop/Pop/... for their own turn, as opposed
+//! to answering a pending sub-decision (Bid/Defend/Choose/...) opened by
+//! somebody else's move or their own -- those never offer `EndTurn` and
+//! would otherwise contaminate the Farm-legality reason breakdown with
+//! decisions where a build was never a candidate to begin with, independent
+//! of worker/resource state.
+//!
+//! Three measurements, matching the three questions this probe exists to
+//! answer:
+//!
+//! 1. [`Report::top_kind`] -- the bot's actual top-ranked (= chosen) move at
+//!    every such decision point, bucketed by kind (`Build` split further by
+//!    what it targets).
+//! 2. [`Report::build_rank`] / [`Report::build_presence`] -- for each of the
+//!    five build-shaped kinds (farm/mine/urban/military build, wonder
+//!    step), the rank position (1 = top pick) of the best-scored LEGAL move
+//!    of that kind, whenever one is legal at all. This is the honest
+//!    substitute for "would an ILLEGAL move have out-ranked the chosen one":
+//!    that counterfactual is not cheaply answerable (scoring an illegal
+//!    move means running it through [`apply::apply`], which assumes legality
+//!    and is not guarded against being handed a move [`legal::legal_moves`]
+//!    would have rejected), so this reads the preference ordering ONLY over
+//!    what was actually offered, which is exactly what `rank_moves` computes
+//!    for the bot's real choice anyway.
+//! 3. [`Report::farm_legal`] / [`Report::farm_illegal`] /
+//!    [`Report::farm_illegal_reason`] -- specifically for Farm, is a build
+//!    legal at all in rounds 1-3, and when not, why. The "why" is read off
+//!    the same facts [`legal::legal_moves`]'s own build loop already
+//!    branches on ([`state::PlayerState::workers_free`],
+//!    [`costs::build_cost_net`], [`state::PlayerState::civil_actions`]) --
+//!    not re-derived independently -- so this can never disagree with the
+//!    engine about what made a move illegal.
+//!
+//! ```text
+//! cargo run --profile difftest --bin openerprobe -- \
+//!     --games 4000 --players 3 --weights /path/to/champ3p.json --threads 2
+//! ```
+
+use std::process::ExitCode;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+
+use tta::bots::weighted::eval::{load_weights, WeightedBot};
+use tta::bots::weighted::weights::Weights;
+use tta::costs;
+use tta::game::{self, MOVE_CAP};
+use tta::legal;
+use tta::moves::Move;
+use tta::state::{GameState, PlayerState};
+use tta::{CardId, CardType};
+
+// ---------------------------------------------------------------------
+// Move classification
+// ---------------------------------------------------------------------
+
+/// The bucket a chosen move (item 1) falls into. `Build` is split by what it
+/// targets -- the whole question this probe exists to answer is about
+/// build KIND, so folding all four into one `Build` bucket would erase it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecisionKind {
+    Take,
+    BuildFarm,
+    BuildMine,
+    BuildUrban,
+    BuildMilitary,
+    Develop,
+    Upgrade,
+    WonderStep,
+    Pop,
+    Leader,
+    ActionCard,
+    /// Every other legal move an own-turn decision point can offer
+    /// (Revolution, Destroy, BachTheater, the trade moves, EndTurn itself,
+    /// ...). Coarse on purpose: none of these bear on the Farm/opener
+    /// question, and `docs/OPENINGS.txt`'s own convention
+    /// (`behavcensus.rs`'s `CivilMoveKind::Other`) already folds an
+    /// equivalent tail into one bucket rather than naming every variant.
+    Other,
+}
+
+/// The four `CardType`s [`legal::legal_moves`]'s build loop can ever attach
+/// to a [`Move::Build`] (`cards::CardType::takes_workers`: urban, unit, or
+/// production). Exhaustive over `CardType` below, not a wildcard match --
+/// `wildcard_enum_match_arm` is denied repo-wide -- so a `CardType` this
+/// engine ever starts building through a fifth path fails to compile here
+/// instead of silently landing in a catch-all.
+fn build_target_kind(k: CardType) -> DecisionKind {
+    match k {
+        CardType::Farm => DecisionKind::BuildFarm,
+        CardType::Mine => DecisionKind::BuildMine,
+        CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater => {
+            DecisionKind::BuildUrban
+        }
+        CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => DecisionKind::BuildMilitary,
+        CardType::Government
+        | CardType::SpecialTech
+        | CardType::Wonder
+        | CardType::Leader
+        | CardType::Action
+        | CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => {
+            panic!("Move::Build targeted non-buildable CardType {k:?} -- legal.rs only ever generates Build for takes_workers() kinds")
+        }
+    }
+}
+
+/// Exhaustive over every [`Move`] variant -- see [`build_target_kind`]'s own
+/// note on why a wildcard arm is never acceptable here.
+fn decision_kind(mv: Move) -> DecisionKind {
+    match mv {
+        Move::Take { .. } => DecisionKind::Take,
+        Move::Build { card } => build_target_kind(card.kind()),
+        Move::Develop { .. } => DecisionKind::Develop,
+        Move::Upgrade { .. } => DecisionKind::Upgrade,
+        Move::WonderStep { .. } => DecisionKind::WonderStep,
+        Move::Pop { .. } | Move::PopFree => DecisionKind::Pop,
+        Move::PlayLeader { .. } => DecisionKind::Leader,
+        Move::PlayAction { .. } => DecisionKind::ActionCard,
+        Move::Revolution { .. }
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::Churchill { .. }
+        | Move::EndTurn
+        | Move::PolPass
+        | Move::Resign => DecisionKind::Other,
+    }
+}
+
+/// The five build-shaped kinds item 2 tracks a legal-move rank for. A closed
+/// subset of [`DecisionKind`] (everything a "build a farm/mine/urban/unit or
+/// pay a wonder step" question could mean), kept as its own enum rather than
+/// reusing [`DecisionKind`] directly so [`ALL_BUILD_KINDS`] can enumerate
+/// exactly these five with no risk of a future non-build `DecisionKind`
+/// variant silently being iterated alongside them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BuildKind {
+    Farm,
+    Mine,
+    Urban,
+    Military,
+    WonderStep,
+}
+
+const ALL_BUILD_KINDS: [BuildKind; 5] =
+    [BuildKind::Farm, BuildKind::Mine, BuildKind::Urban, BuildKind::Military, BuildKind::WonderStep];
+
+fn build_kind_label(k: BuildKind) -> &'static str {
+    match k {
+        BuildKind::Farm => "Farm",
+        BuildKind::Mine => "Mine",
+        BuildKind::Urban => "Urban",
+        BuildKind::Military => "Military",
+        BuildKind::WonderStep => "WonderStep",
+    }
+}
+
+/// `Some(k)` iff `mv` is one of the five moves item 2 tracks; exhaustive over
+/// every [`Move`] variant for the same reason [`decision_kind`] is.
+fn probe_build_kind(mv: Move) -> Option<BuildKind> {
+    match mv {
+        Move::Build { card } => Some(match card.kind() {
+            CardType::Farm => BuildKind::Farm,
+            CardType::Mine => BuildKind::Mine,
+            CardType::Lab | CardType::Temple | CardType::Library | CardType::Arena | CardType::Theater => BuildKind::Urban,
+            CardType::Infantry | CardType::Cavalry | CardType::Artillery | CardType::Air => BuildKind::Military,
+            CardType::Government
+            | CardType::SpecialTech
+            | CardType::Wonder
+            | CardType::Leader
+            | CardType::Action
+            | CardType::Tactic
+            | CardType::Aggression
+            | CardType::War
+            | CardType::Pact
+            | CardType::Bonus
+            | CardType::Territory
+            | CardType::Event => {
+                panic!("Move::Build targeted non-buildable CardType {:?}", card.kind())
+            }
+        }),
+        Move::WonderStep { .. } => Some(BuildKind::WonderStep),
+        Move::Take { .. }
+        | Move::Develop { .. }
+        | Move::Upgrade { .. }
+        | Move::Pop { .. }
+        | Move::PopFree
+        | Move::Revolution { .. }
+        | Move::PlayLeader { .. }
+        | Move::PlayAction { .. }
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::Churchill { .. }
+        | Move::EndTurn
+        | Move::PolPass
+        | Move::Resign => None,
+    }
+}
+
+// ---------------------------------------------------------------------
+// Farm-build legality reason (item 3)
+// ---------------------------------------------------------------------
+
+/// Why [`Move::Build`] of a Farm-type card is absent from
+/// [`legal::legal_moves`] right now, read off the same facts `legal.rs`'s
+/// own build loop branches on (`legal.rs:554-590`) rather than re-derived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FarmIllegalReason {
+    /// No Farm-type card is in this player's tableau at all -- there is
+    /// nothing to put a worker on, whatever the worker/resource state.
+    CardNotInPlay,
+    /// A Farm card is owned, but `p.workers_free == 0` -- `legal.rs`'s build
+    /// loop is gated on this before it ever looks at cost (`legal.rs:554`),
+    /// and per [`apply`]'s own doc, [`Move::Build`] is the only move that
+    /// ever decrements it, so a Farm never legal here means nothing this
+    /// player has done yet has freed one up.
+    FreeWorkerUnavailable,
+    /// A free worker exists and the Farm card is owned, but this player has
+    /// no civil action left to spend and holds no Civil-Life-style
+    /// exemption (`costs::civil_life_ca_free`).
+    CivilActionUnavailable,
+    /// A free worker, a civil action (or exemption), and the card are all
+    /// there, but the resource cost (`costs::build_cost_net`, plus any live
+    /// Trade-Routes food-as-resource conversion) is not affordable.
+    ResourcesUnaffordable,
+}
+
+/// Classifies why a Farm build is not legal for `p` right now. Only called
+/// once the caller has already confirmed, from the real
+/// [`legal::legal_moves`] output, that no `Move::Build` targets a Farm card
+/// -- this never re-decides legality itself, only explains it.
+///
+/// Second return value: whether `p` owns MORE than one Farm-type card right
+/// now. Rounds 1-3 essentially never do (`Agriculture` is the only Age-A
+/// Farm card and nothing before round 4 can plausibly have developed
+/// `Irrigation` too), so this function reads its reason off the FIRST owned
+/// Farm card in tableau order -- the flag makes that simplifying assumption
+/// visible in the report rather than silently possibly wrong.
+fn classify_farm_illegal(state: &GameState, p: &PlayerState) -> (FarmIllegalReason, bool) {
+    let farm_ids: Vec<CardId> = p.techs.of_type(CardType::Farm).map(|(id, _)| id).collect();
+    let multi_candidate = farm_ids.len() > 1;
+    let Some(&id) = farm_ids.first() else {
+        return (FarmIllegalReason::CardNotInPlay, multi_candidate);
+    };
+    if p.workers_free == 0 {
+        return (FarmIllegalReason::FreeWorkerUnavailable, multi_candidate);
+    }
+    let have_ca = p.civil_actions >= 1;
+    let exempt = costs::civil_life_ca_free(p.one_time_discount.build_resources);
+    if !have_ca && !exempt {
+        return (FarmIllegalReason::CivilActionUnavailable, multi_candidate);
+    }
+    // Ground truth (the caller's real `legal_moves` check) already says this
+    // Farm build is not legal, and the two gates above are clear -- the
+    // remaining possibility from `legal.rs:557-584` is `costs::
+    // build_cost_net`/affordability (the urban-limit check never applies to
+    // Farm: `CardType::Farm.is_urban()` is always `false`). Read the SAME
+    // cost function `legal.rs` itself calls, rather than asserted by
+    // elimination, so a fourth gate added there later cannot silently mislabel
+    // as this one.
+    debug_assert!(
+        costs::build_cost_net(state, p, id).is_none_or(|cost| {
+            let trade_fill = tta_trade_fill(state, p);
+            let res = i32::from(p.resources);
+            !(res >= cost || (res + trade_fill) >= cost)
+        }),
+        "classify_farm_illegal called on a Farm build legal.rs would itself accept"
+    );
+    (FarmIllegalReason::ResourcesUnaffordable, multi_candidate)
+}
+
+/// `legal.rs`'s own Trade-Routes-Agreement food-as-resource fill, mirrored
+/// (not re-derived): the exact `min(remaining grant, food on hand)` amount a
+/// build's resource shortfall can be topped up by (`legal.rs:579-580`).
+fn tta_trade_fill(state: &GameState, p: &PlayerState) -> i32 {
+    tta::economy::trade_food_as_resource_remaining(state, p).min(i32::from(p.food))
+}
+
+// ---------------------------------------------------------------------
+// Report
+// ---------------------------------------------------------------------
+
+#[derive(Default, Clone, Copy)]
+struct DecisionKindCounts {
+    take: u64,
+    build_farm: u64,
+    build_mine: u64,
+    build_urban: u64,
+    build_military: u64,
+    develop: u64,
+    upgrade: u64,
+    wonder_step: u64,
+    pop: u64,
+    leader: u64,
+    action_card: u64,
+    other: u64,
+}
+
+impl DecisionKindCounts {
+    fn record(&mut self, k: DecisionKind) {
+        match k {
+            DecisionKind::Take => self.take += 1,
+            DecisionKind::BuildFarm => self.build_farm += 1,
+            DecisionKind::BuildMine => self.build_mine += 1,
+            DecisionKind::BuildUrban => self.build_urban += 1,
+            DecisionKind::BuildMilitary => self.build_military += 1,
+            DecisionKind::Develop => self.develop += 1,
+            DecisionKind::Upgrade => self.upgrade += 1,
+            DecisionKind::WonderStep => self.wonder_step += 1,
+            DecisionKind::Pop => self.pop += 1,
+            DecisionKind::Leader => self.leader += 1,
+            DecisionKind::ActionCard => self.action_card += 1,
+            DecisionKind::Other => self.other += 1,
+        }
+    }
+
+    fn total(&self) -> u64 {
+        self.take
+            + self.build_farm
+            + self.build_mine
+            + self.build_urban
+            + self.build_military
+            + self.develop
+            + self.upgrade
+            + self.wonder_step
+            + self.pop
+            + self.leader
+            + self.action_card
+            + self.other
+    }
+
+    fn merge(&mut self, o: DecisionKindCounts) {
+        self.take += o.take;
+        self.build_farm += o.build_farm;
+        self.build_mine += o.build_mine;
+        self.build_urban += o.build_urban;
+        self.build_military += o.build_military;
+        self.develop += o.develop;
+        self.upgrade += o.upgrade;
+        self.wonder_step += o.wonder_step;
+        self.pop += o.pop;
+        self.leader += o.leader;
+        self.action_card += o.action_card;
+        self.other += o.other;
+    }
+}
+
+#[derive(Default, Clone)]
+struct BuildRankSamples {
+    farm: Vec<u32>,
+    mine: Vec<u32>,
+    urban: Vec<u32>,
+    military: Vec<u32>,
+    wonder_step: Vec<u32>,
+}
+
+impl BuildRankSamples {
+    fn record(&mut self, k: BuildKind, rank: u32) {
+        match k {
+            BuildKind::Farm => self.farm.push(rank),
+            BuildKind::Mine => self.mine.push(rank),
+            BuildKind::Urban => self.urban.push(rank),
+            BuildKind::Military => self.military.push(rank),
+            BuildKind::WonderStep => self.wonder_step.push(rank),
+        }
+    }
+
+    fn get(&self, k: BuildKind) -> &[u32] {
+        match k {
+            BuildKind::Farm => &self.farm,
+            BuildKind::Mine => &self.mine,
+            BuildKind::Urban => &self.urban,
+            BuildKind::Military => &self.military,
+            BuildKind::WonderStep => &self.wonder_step,
+        }
+    }
+
+    fn merge(&mut self, mut o: BuildRankSamples) {
+        self.farm.append(&mut o.farm);
+        self.mine.append(&mut o.mine);
+        self.urban.append(&mut o.urban);
+        self.military.append(&mut o.military);
+        self.wonder_step.append(&mut o.wonder_step);
+    }
+}
+
+/// Present/absent counts per [`BuildKind`], indexed the same way
+/// [`BuildRankSamples`] is (present = at least one legal move of this kind
+/// existed at the decision point; its rank landed in the matching
+/// [`BuildRankSamples`] field).
+#[derive(Default, Clone, Copy)]
+struct BuildPresenceCounts {
+    farm_present: u64,
+    farm_absent: u64,
+    mine_present: u64,
+    mine_absent: u64,
+    urban_present: u64,
+    urban_absent: u64,
+    military_present: u64,
+    military_absent: u64,
+    wonder_step_present: u64,
+    wonder_step_absent: u64,
+}
+
+impl BuildPresenceCounts {
+    fn record(&mut self, k: BuildKind, present: bool) {
+        match (k, present) {
+            (BuildKind::Farm, true) => self.farm_present += 1,
+            (BuildKind::Farm, false) => self.farm_absent += 1,
+            (BuildKind::Mine, true) => self.mine_present += 1,
+            (BuildKind::Mine, false) => self.mine_absent += 1,
+            (BuildKind::Urban, true) => self.urban_present += 1,
+            (BuildKind::Urban, false) => self.urban_absent += 1,
+            (BuildKind::Military, true) => self.military_present += 1,
+            (BuildKind::Military, false) => self.military_absent += 1,
+            (BuildKind::WonderStep, true) => self.wonder_step_present += 1,
+            (BuildKind::WonderStep, false) => self.wonder_step_absent += 1,
+        }
+    }
+
+    fn counts(&self, k: BuildKind) -> (u64, u64) {
+        match k {
+            BuildKind::Farm => (self.farm_present, self.farm_absent),
+            BuildKind::Mine => (self.mine_present, self.mine_absent),
+            BuildKind::Urban => (self.urban_present, self.urban_absent),
+            BuildKind::Military => (self.military_present, self.military_absent),
+            BuildKind::WonderStep => (self.wonder_step_present, self.wonder_step_absent),
+        }
+    }
+
+    fn merge(&mut self, o: BuildPresenceCounts) {
+        self.farm_present += o.farm_present;
+        self.farm_absent += o.farm_absent;
+        self.mine_present += o.mine_present;
+        self.mine_absent += o.mine_absent;
+        self.urban_present += o.urban_present;
+        self.urban_absent += o.urban_absent;
+        self.military_present += o.military_present;
+        self.military_absent += o.military_absent;
+        self.wonder_step_present += o.wonder_step_present;
+        self.wonder_step_absent += o.wonder_step_absent;
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct FarmReasonCounts {
+    no_such_card_in_play: u64,
+    no_free_worker: u64,
+    no_civil_action: u64,
+    no_resources: u64,
+}
+
+impl FarmReasonCounts {
+    fn record(&mut self, r: FarmIllegalReason) {
+        match r {
+            FarmIllegalReason::CardNotInPlay => self.no_such_card_in_play += 1,
+            FarmIllegalReason::FreeWorkerUnavailable => self.no_free_worker += 1,
+            FarmIllegalReason::CivilActionUnavailable => self.no_civil_action += 1,
+            FarmIllegalReason::ResourcesUnaffordable => self.no_resources += 1,
+        }
+    }
+
+    fn merge(&mut self, o: FarmReasonCounts) {
+        self.no_such_card_in_play += o.no_such_card_in_play;
+        self.no_free_worker += o.no_free_worker;
+        self.no_civil_action += o.no_civil_action;
+        self.no_resources += o.no_resources;
+    }
+}
+
+#[derive(Default)]
+struct Report {
+    games: u64,
+    /// Own-turn decision points in rounds 1-3, summed over every player and
+    /// every game (see this file's top doc comment for the `EndTurn`-based
+    /// "own decision point" gate).
+    decisions: u64,
+
+    top_kind: DecisionKindCounts,
+    build_rank: BuildRankSamples,
+    build_presence: BuildPresenceCounts,
+
+    farm_legal: u64,
+    farm_illegal: u64,
+    farm_illegal_reason: FarmReasonCounts,
+    /// How many of the `farm_illegal` decisions were classified off a
+    /// tableau holding more than one Farm-type card -- see
+    /// `classify_farm_illegal`'s own doc comment for why a nonzero count
+    /// here means its single-candidate simplification was exercised.
+    farm_illegal_multi_candidate: u64,
+}
+
+impl Report {
+    fn merge(&mut self, o: Report) {
+        self.games += o.games;
+        self.decisions += o.decisions;
+        self.top_kind.merge(o.top_kind);
+        self.build_rank.merge(o.build_rank);
+        self.build_presence.merge(o.build_presence);
+        self.farm_legal += o.farm_legal;
+        self.farm_illegal += o.farm_illegal;
+        self.farm_illegal_reason.merge(o.farm_illegal_reason);
+        self.farm_illegal_multi_candidate += o.farm_illegal_multi_candidate;
+    }
+}
+
+fn percentiles_u32(mut v: Vec<u32>) -> String {
+    if v.is_empty() {
+        return "n/a (no samples)".to_string();
+    }
+    v.sort_unstable();
+    let at = |p: f64| -> u32 {
+        let i = ((v.len() - 1) as f64 * p).round() as usize;
+        v[i]
+    };
+    let mean: f64 = v.iter().map(|&x| f64::from(x)).sum::<f64>() / v.len() as f64;
+    format!(
+        "min={} p25={} median={} p75={} max={} mean={:.2} n={}",
+        v[0],
+        at(0.25),
+        at(0.50),
+        at(0.75),
+        v[v.len() - 1],
+        mean,
+        v.len()
+    )
+}
+
+// ---------------------------------------------------------------------
+// One game
+// ---------------------------------------------------------------------
+
+fn record_decision(report: &mut Report, state: &GameState, idx: u8, legal: &[Move], ranked: &[(Move, f64)]) {
+    report.decisions += 1;
+
+    // Item 1: the chosen move's kind. `ranked[0].0 == WeightedBot::choose`'s
+    // own pick, by `rank_moves`'s own contract (`eval.rs`).
+    report.top_kind.record(decision_kind(ranked[0].0));
+
+    // Item 2: for each build-shaped kind, is it legal here at all, and if so
+    // what rank does the best-scored one of that kind hold among every
+    // legal move at this decision point (1 = the bot's actual top pick).
+    for k in ALL_BUILD_KINDS {
+        match ranked.iter().position(|&(m, _)| probe_build_kind(m) == Some(k)) {
+            Some(pos) => {
+                report.build_presence.record(k, true);
+                report.build_rank.record(k, (pos + 1) as u32);
+            }
+            None => report.build_presence.record(k, false),
+        }
+    }
+
+    // Item 3: Farm legality and, when illegal, why -- read straight off the
+    // real legal-move list, never re-derived independently of it.
+    let p = &state.players[idx as usize];
+    let farm_legal = legal.iter().any(|m| matches!(m, Move::Build { card } if card.kind() == CardType::Farm));
+    if farm_legal {
+        report.farm_legal += 1;
+    } else {
+        report.farm_illegal += 1;
+        let (reason, multi) = classify_farm_illegal(state, p);
+        report.farm_illegal_reason.record(reason);
+        if multi {
+            report.farm_illegal_multi_candidate += 1;
+        }
+    }
+}
+
+/// Plays one self-play mirror-match game, truncated the moment
+/// `state.round` exceeds 3 -- see this file's top doc comment.
+fn play_one(players: u8, weights: Weights, seed: u64) -> Report {
+    let bots: Vec<WeightedBot> = (0..players).map(|_| WeightedBot::new(weights)).collect();
+    let mut state = game::new_game(players, seed);
+    let mut report = Report { games: 1, ..Report::default() };
+
+    let mut moves_played = 0usize;
+    while !state.game_over && state.round <= 3 {
+        if moves_played >= MOVE_CAP {
+            break;
+        }
+        let idx = state.decider();
+        let legal = legal::legal_moves(&state);
+        // See this file's top doc comment: `EndTurn` is offered only on the
+        // decider's own action-phase turn, never while answering a pending
+        // sub-decision opened by any player's move.
+        let is_own_turn = legal.as_slice().iter().any(|m| matches!(m, Move::EndTurn));
+        let mv = if is_own_turn {
+            let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
+            record_decision(&mut report, &state, idx, legal.as_slice(), &ranked);
+            ranked[0].0
+        } else {
+            bots[idx as usize].choose(&state, legal.as_slice())
+        };
+        game::step(&mut state, mv);
+        moves_played += 1;
+    }
+    report
+}
+
+// ---------------------------------------------------------------------
+// CLI (same shape as `bin/behavcensus.rs`)
+// ---------------------------------------------------------------------
+
+struct Args {
+    games: usize,
+    players: u8,
+    weights_path: String,
+    seed: u64,
+    threads: usize,
+}
+
+impl Default for Args {
+    fn default() -> Args {
+        Args { games: 20, players: 3, weights_path: String::new(), seed: 1, threads: 1 }
+    }
+}
+
+const USAGE: &str = "\
+usage: openerprobe --weights PATH [options]
+
+  --games N       games to play (default 20)
+  --players N     2, 3 or 4 (default 3)
+  --weights PATH  champion JSON every seat plays (required)
+  --seed N        base seed; game g uses seed+g (default 1)
+  --threads N     games in parallel (default 1)
+  --help
+";
+
+fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
+    let mut a = Args::default();
+    let mut it = argv.iter();
+    while let Some(flag) = it.next() {
+        let mut value = |flag: &str| -> Result<String, String> {
+            it.next().cloned().ok_or_else(|| format!("{flag} needs a value"))
+        };
+        match flag.as_str() {
+            "--games" => a.games = value(flag)?.parse().map_err(|_| "bad --games".to_string())?,
+            "--players" => a.players = value(flag)?.parse().map_err(|_| "bad --players".to_string())?,
+            "--weights" => a.weights_path = value(flag)?,
+            "--seed" => a.seed = value(flag)?.parse().map_err(|_| "bad --seed".to_string())?,
+            "--threads" => a.threads = value(flag)?.parse().map_err(|_| "bad --threads".to_string())?,
+            "--help" | "-h" => {
+                print!("{USAGE}");
+                return Ok(None);
+            }
+            other => return Err(format!("unknown flag {other}\n\n{USAGE}")),
+        }
+    }
+    if !(2..=4).contains(&a.players) {
+        return Err(format!("--players must be 2, 3 or 4, got {}", a.players));
+    }
+    if a.weights_path.is_empty() {
+        return Err("--weights is required".to_string());
+    }
+    if a.games == 0 {
+        return Err("--games must be at least 1".to_string());
+    }
+    if a.threads == 0 {
+        a.threads = 1;
+    }
+    Ok(Some(a))
+}
+
+fn print_report(players: u8, r: &Report) {
+    println!("\n## {players}p (n={} games, {} own-turn decision points in rounds 1-3)\n", r.games, r.decisions);
+
+    println!("### Item 1: top-ranked (chosen) move by kind\n");
+    let t = &r.top_kind;
+    let total = t.total().max(1);
+    let rows: [(&str, u64); 12] = [
+        ("Take", t.take),
+        ("Build Farm", t.build_farm),
+        ("Build Mine", t.build_mine),
+        ("Build Urban", t.build_urban),
+        ("Build Military", t.build_military),
+        ("Develop", t.develop),
+        ("Upgrade", t.upgrade),
+        ("WonderStep", t.wonder_step),
+        ("Pop", t.pop),
+        ("Leader", t.leader),
+        ("ActionCard", t.action_card),
+        ("Other", t.other),
+    ];
+    for (name, n) in rows {
+        println!("- {name}: {n}/{total} ({:.1}%)", 100.0 * n as f64 / total as f64);
+    }
+
+    println!("\n### Item 2: rank of the best LEGAL move of each build-shaped kind\n");
+    println!("(rank 1 = the bot's actual top pick at that decision point; only counted when legal)\n");
+    for k in ALL_BUILD_KINDS {
+        let (present, absent) = r.build_presence.counts(k);
+        let ranks = r.build_rank.get(k).to_vec();
+        println!(
+            "- {}: legal at {present}/{} decisions ({:.1}%), illegal at {absent}",
+            build_kind_label(k),
+            present + absent,
+            100.0 * present as f64 / (present + absent).max(1) as f64
+        );
+        println!("  rank when legal: {}", percentiles_u32(ranks));
+    }
+
+    println!("\n### Item 3: Farm build legality in rounds 1-3\n");
+    let farm_total = r.farm_legal + r.farm_illegal;
+    println!(
+        "Legal: {}/{} ({:.1}%)   Illegal: {}/{} ({:.1}%)",
+        r.farm_legal,
+        farm_total.max(1),
+        100.0 * r.farm_legal as f64 / farm_total.max(1) as f64,
+        r.farm_illegal,
+        farm_total.max(1),
+        100.0 * r.farm_illegal as f64 / farm_total.max(1) as f64
+    );
+    if r.farm_illegal > 0 {
+        let fr = &r.farm_illegal_reason;
+        let ft = r.farm_illegal.max(1);
+        println!("Why illegal (of {} illegal decisions):", r.farm_illegal);
+        println!("- no such Farm card in play: {}/{ft} ({:.1}%)", fr.no_such_card_in_play, 100.0 * fr.no_such_card_in_play as f64 / ft as f64);
+        println!("- no free worker: {}/{ft} ({:.1}%)", fr.no_free_worker, 100.0 * fr.no_free_worker as f64 / ft as f64);
+        println!("- no civil action: {}/{ft} ({:.1}%)", fr.no_civil_action, 100.0 * fr.no_civil_action as f64 / ft as f64);
+        println!("- no resources: {}/{ft} ({:.1}%)", fr.no_resources, 100.0 * fr.no_resources as f64 / ft as f64);
+        println!(
+            "(of which classified off a tableau with >1 Farm card owned: {}/{ft})",
+            r.farm_illegal_multi_candidate
+        );
+    }
+}
+
+fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let args = match parse_args(&argv) {
+        Ok(Some(a)) => a,
+        Ok(None) => return ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("openerprobe: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let weights = match load_weights(std::path::Path::new(&args.weights_path)) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("openerprobe: loading {}: {e}", args.weights_path);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let start = Instant::now();
+    let next = AtomicUsize::new(0);
+    let threads = args.threads.min(args.games);
+    let mut results: Vec<Option<Report>> = (0..args.games).map(|_| None).collect();
+
+    std::thread::scope(|scope| {
+        let (slots, args, next, weights) = (&mut results[..], &args, &next, &weights);
+        let mut handles = Vec::with_capacity(threads);
+        for _ in 0..threads {
+            handles.push(scope.spawn(move || {
+                let mut mine = Vec::new();
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= args.games {
+                        break;
+                    }
+                    let seed = args.seed.wrapping_add(i as u64);
+                    let r = play_one(args.players, *weights, seed);
+                    mine.push((i, r));
+                }
+                mine
+            }));
+        }
+        for h in handles {
+            for (i, r) in h.join().expect("openerprobe thread panicked") {
+                slots[i] = Some(r);
+            }
+        }
+    });
+
+    let mut overall = Report::default();
+    for r in results {
+        overall.merge(r.expect("every game played"));
+    }
+
+    let elapsed = start.elapsed().as_secs_f64();
+    println!("games        {}", args.games);
+    println!("players      {}", args.players);
+    println!("weights      {}", args.weights_path);
+    println!("seeds        {}..{}", args.seed, args.seed + args.games as u64 - 1);
+    println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
+
+    print_report(args.players, &overall);
+
+    ExitCode::SUCCESS
+}
+
+// ---------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_target_kind_maps_every_takes_workers_cardtype_to_a_distinct_bucket() {
+        assert_eq!(build_target_kind(CardType::Farm), DecisionKind::BuildFarm);
+        assert_eq!(build_target_kind(CardType::Mine), DecisionKind::BuildMine);
+        assert_eq!(build_target_kind(CardType::Lab), DecisionKind::BuildUrban);
+        assert_eq!(build_target_kind(CardType::Theater), DecisionKind::BuildUrban);
+        assert_eq!(build_target_kind(CardType::Infantry), DecisionKind::BuildMilitary);
+        assert_eq!(build_target_kind(CardType::Air), DecisionKind::BuildMilitary);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-buildable CardType")]
+    fn build_target_kind_panics_on_a_cardtype_move_build_never_targets() {
+        build_target_kind(CardType::Government);
+    }
+
+    #[test]
+    fn decision_kind_splits_build_by_target_and_leaves_every_other_move_kind_distinct() {
+        assert_eq!(decision_kind(Move::Take { slot: 0 }), DecisionKind::Take);
+        assert_eq!(decision_kind(Move::PopFree), DecisionKind::Pop);
+        assert_eq!(decision_kind(Move::WonderStep { steps: 1 }), DecisionKind::WonderStep);
+        assert_eq!(decision_kind(Move::EndTurn), DecisionKind::Other);
+    }
+
+    #[test]
+    fn probe_build_kind_is_none_for_every_non_build_shaped_move() {
+        assert_eq!(probe_build_kind(Move::Take { slot: 0 }), None);
+        assert_eq!(probe_build_kind(Move::EndTurn), None);
+        assert_eq!(probe_build_kind(Move::PopFree), None);
+    }
+
+    #[test]
+    fn probe_build_kind_reads_wonder_step_as_its_own_kind_distinct_from_every_build_target() {
+        assert_eq!(probe_build_kind(Move::WonderStep { steps: 2 }), Some(BuildKind::WonderStep));
+    }
+
+    #[test]
+    fn percentiles_u32_reports_min_and_max_at_the_ends_of_a_sorted_sample() {
+        let s = percentiles_u32(vec![5, 1, 3, 2, 4]);
+        assert!(s.contains("min=1"));
+        assert!(s.contains("max=5"));
+        assert!(s.contains("n=5"));
+    }
+
+    #[test]
+    fn percentiles_u32_reports_n_a_for_an_empty_sample_rather_than_dividing_by_zero() {
+        assert_eq!(percentiles_u32(vec![]), "n/a (no samples)");
+    }
+
+    #[test]
+    fn decision_kind_counts_total_equals_the_sum_of_every_recorded_kind() {
+        let mut c = DecisionKindCounts::default();
+        c.record(DecisionKind::Take);
+        c.record(DecisionKind::BuildFarm);
+        c.record(DecisionKind::Other);
+        assert_eq!(c.total(), 3);
+    }
+
+    #[test]
+    fn classify_farm_illegal_reports_no_such_card_in_play_when_the_tableau_has_no_farm_tech() {
+        let mut state = game::new_game(2, 1);
+        // Remove every Farm-type tech from player 0's tableau so the "no
+        // such card in play" branch is exercised directly.
+        let farm_ids: Vec<CardId> = state.players[0].techs.of_type(CardType::Farm).map(|(id, _)| id).collect();
+        for id in farm_ids {
+            state.players[0].techs.remove(id);
+        }
+        let (reason, _multi) = classify_farm_illegal(&state, &state.players[0]);
+        assert_eq!(reason, FarmIllegalReason::CardNotInPlay);
+    }
+
+    #[test]
+    fn classify_farm_illegal_reports_no_free_worker_when_the_owned_farm_card_has_none_left() {
+        let mut state = game::new_game(2, 1);
+        state.players[0].workers_free = 0;
+        // A fresh game's Agriculture is fully staffed already, so this is
+        // already the true starting condition -- asserted rather than
+        // assumed.
+        assert!(state.players[0].techs.of_type(CardType::Farm).next().is_some());
+        let (reason, _multi) = classify_farm_illegal(&state, &state.players[0]);
+        assert_eq!(reason, FarmIllegalReason::FreeWorkerUnavailable);
+    }
+
+    #[test]
+    fn a_truncated_2p_self_play_game_stops_at_round_4_and_records_at_least_one_decision() {
+        let weights = Weights::default();
+        let report = play_one(2, weights, 42);
+        assert_eq!(report.games, 1);
+        assert!(report.decisions > 0, "expected at least one own-turn decision point in rounds 1-3");
+        assert!(report.top_kind.total() > 0);
+    }
+}

@@ -1,0 +1,228 @@
+openerprobe -- 2026-08-26
+=========================
+
+QUESTION
+--------
+A behaviour census (bin/behavcensus.rs) measured the bot's first EXECUTED
+build by round 3: a Mine 95.6% of the time at 3p, matching humans. A
+now-deleted scratch binary buildprobe.rs had earlier measured something that
+sounds contradictory: the bot ATTEMPTS an illegal Farm build in round 1
+98.1% of the time, 88.3% of those for want of a free worker. buildprobe.rs
+no longer exists in the tree, so nobody could tell whether the current
+evaluator still WANTS a Farm opener and merely gets bounced to something
+legal, or whether that preference is gone and the opener is now genuinely
+legal-by-construction.
+
+METHOD
+------
+New binary: rust/src/bin/openerprobe.rs (committed alongside this file).
+Self-play mirror match (every seat plays the same weights), one call per
+game to WeightedBot::rank_moves (rust/src/bots/weighted/eval.rs) at every
+one of a player's own action-phase decision points ("own decision point" =
+Move::EndTurn is among the legal moves right now -- this is exactly the
+Phase::Actions branch of legal::legal_moves, never a pending sub-decision
+like Bid/Defend/Choose opened by someone's move). Games are truncated the
+instant state.round exceeds 3 -- nothing after round 3 is read, so a
+"game" here is really just its first three rounds, which is why 6000 games
+run in under 70 seconds even single-binary, un-optimized-for-throughput.
+
+Weights: the frozen postclimb_2026-08-26 champions, NOT the live
+experiments/rust_champion_*.json the climb is still rewriting:
+  analysis/frozen/postclimb_2026-08-26/champ2p.json
+  analysis/frozen/postclimb_2026-08-26/champ3p.json
+  analysis/frozen/postclimb_2026-08-26/champ4p.json
+
+Exact commands run:
+
+  cargo build --profile difftest --bin openerprobe   # from rust/
+
+  ./target/difftest/openerprobe --games 6000 --players 2 \
+      --weights /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ2p.json \
+      --threads 2 --seed 1
+
+  ./target/difftest/openerprobe --games 6000 --players 3 \
+      --weights /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ3p.json \
+      --threads 2 --seed 1
+
+  ./target/difftest/openerprobe --games 2000 --players 4 \
+      --weights /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ4p.json \
+      --threads 2 --seed 1
+
+(4p scaled to 2000 games, ~4x fewer, matching its per-game cost; still
+produced more decision points than either 2p or 3p run because a 4p board
+generates more own-turn decisions per round.)
+
+Three measurements, matching the three questions in the task brief:
+  1. The bot's actual top-ranked (chosen) move, by kind, at every own
+     decision point in rounds 1-3.
+  2. The counterfactual "would an illegal move have out-ranked the chosen
+     legal one" is NOT cheaply computable from rank_moves/evaluate: scoring
+     an illegal move means running it through apply::apply, which assumes
+     legality and is not guarded against a move legal::legal_moves would
+     reject. Per the task brief, this was not faked. Instead: for each of
+     the five build-shaped kinds (Build-Farm, Build-Mine, Build-Urban,
+     Build-Military, WonderStep), the rank position (1 = actual top pick)
+     of the best-scored LEGAL move of that kind, whenever one is legal.
+  3. Specifically for Farm: how often a Build move targeting a Farm-type
+     card is legal at all in rounds 1-3, and when not, why -- read off the
+     same facts legal.rs's own build loop already branches on
+     (PlayerState::workers_free, costs::build_cost_net,
+     PlayerState::civil_actions), not re-derived independently.
+
+RAW RESULTS
+-----------
+
+## 2p (n=6000 games, 85240 own-turn decision points, rounds 1-3)
+
+Item 1 -- top-ranked (chosen) move by kind:
+  Take            15347/85240 (18.0%)
+  Build Farm          0/85240 ( 0.0%)
+  Build Mine        228/85240 ( 0.3%)
+  Build Urban       935/85240 ( 1.1%)
+  Build Military  18827/85240 (22.1%)
+  Develop             0/85240 ( 0.0%)
+  Upgrade             0/85240 ( 0.0%)
+  WonderStep          6/85240 ( 0.0%)
+  Pop              8190/85240 ( 9.6%)
+  Leader           3252/85240 ( 3.8%)
+  ActionCard       1073/85240 ( 1.3%)
+  Other           37382/85240 (43.9%)
+
+Item 2 -- rank of best LEGAL move of each build-shaped kind (1 = top pick):
+  Farm:     legal 23101/85240 (27.1%), illegal 62139;  rank when legal: min=2 p25=4 median=5 p75=6 max=23 mean=5.63 n=23101
+  Mine:     legal 23101/85240 (27.1%), illegal 62139;  rank when legal: min=1 p25=3 median=3 p75=3 max=21 mean=2.97 n=23101
+  Urban:    legal   940/85240 ( 1.1%), illegal 84300;  rank when legal: min=1 p25=1 median=1 p75=1 max=3  mean=1.01 n=940
+  Military: legal 24436/85240 (28.7%), illegal 60804;  rank when legal: min=1 p25=1 median=1 p75=1 max=20 mean=1.24 n=24436
+  WonderStep: legal 2402/85240 ( 2.8%), illegal 82838;  rank when legal: min=1 p25=3 median=3 p75=4 max=7  mean=3.26 n=2402
+
+Item 3 -- Farm build legality:
+  Legal:   23101/85240 (27.1%)
+  Illegal: 62139/85240 (72.9%), of which:
+    no such Farm card in play:      0/62139 ( 0.0%)
+    no free worker:              37014/62139 (59.6%)
+    no civil action:              9398/62139 (15.1%)
+    no resources:                15727/62139 (25.3%)
+  (classified off a tableau with >1 Farm card owned: 0/62139)
+
+## 3p (n=6000 games, 155698 own-turn decision points, rounds 1-3)
+
+Item 1:
+  Take            38171/155698 (24.5%)
+  Build Farm          0/155698 ( 0.0%)
+  Build Mine      18554/155698 (11.9%)
+  Build Urban     10457/155698 ( 6.7%)
+  Build Military   3004/155698 ( 1.9%)
+  Develop            333/155698 ( 0.2%)
+  Upgrade             56/155698 ( 0.0%)
+  WonderStep        3212/155698 ( 2.1%)
+  Pop             21265/155698 (13.7%)
+  Leader           2663/155698 ( 1.7%)
+  ActionCard       2827/155698 ( 1.8%)
+  Other           55156/155698 (35.4%)
+
+Item 2:
+  Farm:     legal 29127/155698 (18.7%), illegal 126571;  rank when legal: min=2 p25=3 median=3 p75=4 max=22 mean=3.60 n=29127
+  Mine:     legal 29127/155698 (18.7%), illegal 126571;  rank when legal: min=1 p25=1 median=1 p75=2 max=18 mean=1.52 n=29127
+  Urban:    legal 10509/155698 ( 6.7%), illegal 145189;  rank when legal: min=1 p25=1 median=1 p75=1 max=2  mean=1.00 n=10509
+  Military: legal 32066/155698 (20.6%), illegal 123632;  rank when legal: min=1 p25=2 median=2 p75=3 max=17 mean=2.26 n=32066
+  WonderStep: legal 9507/155698 ( 6.1%), illegal 146191;  rank when legal: min=1 p25=1 median=6 p75=7 max=22 mean=5.55 n=9507
+
+Item 3:
+  Legal:   29127/155698 (18.7%)
+  Illegal: 126571/155698 (81.3%), of which:
+    no such Farm card in play:       0/126571 ( 0.0%)
+    no free worker:               81464/126571 (64.4%)
+    no civil action:              16001/126571 (12.6%)
+    no resources:                 29106/126571 (23.0%)
+  (classified off a tableau with >1 Farm card owned: 0/126571)
+
+## 4p (n=2000 games, 75833 own-turn decision points, rounds 1-3)
+
+Item 1:
+  Take            16605/75833 (21.9%)
+  Build Farm          0/75833 ( 0.0%)
+  Build Mine       5466/75833 ( 7.2%)
+  Build Urban      3996/75833 ( 5.3%)
+  Build Military   5153/75833 ( 6.8%)
+  Develop             27/75833 ( 0.0%)
+  Upgrade              0/75833 ( 0.0%)
+  WonderStep       1958/75833 ( 2.6%)
+  Pop             12988/75833 (17.1%)
+  Leader           2762/75833 ( 3.6%)
+  ActionCard       2450/75833 ( 3.2%)
+  Other           24428/75833 (32.2%)
+
+Item 2:
+  Farm:     legal 14634/75833 (19.3%), illegal 61199;  rank when legal: min=2 p25=3 median=3 p75=4 max=6  mean=3.28 n=14634
+  Mine:     legal 14634/75833 (19.3%), illegal 61199;  rank when legal: min=1 p25=1 median=2 p75=2 max=5  mean=1.86 n=14634
+  Urban:    legal  4013/75833 ( 5.3%), illegal 71820;  rank when legal: min=1 p25=1 median=1 p75=1 max=2  mean=1.00 n=4013
+  Military: legal 14587/75833 (19.2%), illegal 61246;  rank when legal: min=1 p25=1 median=2 p75=2 max=28 mean=1.92 n=14587
+  WonderStep: legal 9351/75833 (12.3%), illegal 66482;  rank when legal: min=1 p25=4 median=4 p75=6 max=9  mean=4.21 n=9351
+
+Item 3:
+  Legal:   14634/75833 (19.3%)
+  Illegal: 61199/75833 (80.7%), of which:
+    no such Farm card in play:       0/61199 ( 0.0%)
+    no free worker:               25599/61199 (41.8%)
+    no civil action:               8958/61199 (14.6%)
+    no resources:                 26642/61199 (43.5%)
+  (classified off a tableau with >1 Farm card owned: 1/61199)
+
+VERDICT
+-------
+NULL RESULT: the opener is legal-by-construction as far as Farm is
+concerned. The evaluator does not want a Farm build as its top pick, ever,
+anywhere in this sample:
+
+  "Build Farm" is the CHOSEN (top-ranked) move 0 times out of 85240 (2p),
+  155698 (3p), and 75833 (4p) own decision points -- 316771 decision points
+  total, zero Farm builds chosen. This is not "usually not chosen" rounded
+  down; the raw numerator is exactly 0 in all three player counts.
+
+  Stronger than that: even restricted to the decisions where a Farm build
+  IS legal (23101 / 29127 / 14634 decisions respectively), its rank among
+  every other legal move is NEVER 1 -- the minimum observed rank is 2 in
+  all three player counts, and the median rank is 3-5. So this is not a
+  case of "Farm nearly wins the argument, then legality removes it, then
+  something else wins" -- some OTHER legal move (usually Mine or Military)
+  out-scores Farm at literally every single one of these 89,862 legal-Farm
+  decision points sampled.
+
+This directly updates the old buildprobe.rs finding rather than confirming
+or refuting it head-on, because that binary no longer exists to compare
+against apples-to-apples: buildprobe.rs's "98.1% illegal Farm attempt" most
+likely measured a rank-1 pick over a synthetic, NOT legality-filtered move
+set (i.e. "if Farm build were unconditionally offered, would it win the
+argument"), which nothing in the current engine reproduces and which this
+probe was explicitly told not to fake. What this probe DOES establish,
+cleanly, on today's champions: the bot's real decision-time preference
+(scored only over what legal.rs actually offers) never ranks a Farm build
+first, whether or not one is legal. There is no live "wants a dumb Farm
+opener" habit hiding behind the legality filter to find.
+
+The old 88.3%-of-illegal-Farms-for-want-of-a-free-worker claim is,
+however, qualitatively still true in DIRECTION, if not magnitude: across
+all three player counts "no free worker" is the single largest reason a
+Farm build is illegal in rounds 1-3 (59.6% at 2p, 64.4% at 3p, 41.8% at
+4p), consistent with every civilization starting all 6 workers already
+placed (Agriculture holds 2, Bronze holds 2, Warriors 1 -- game.rs
+START_TECHS) and needing a population increase before any new Farm/Mine/
+unit can be staffed. "No such Farm card in play" is 0% in every sample --
+Agriculture is always present from turn 1, so that failure mode never
+fires; the closed reason set turned out to only need 3 live buckets, not
+all 4 defined.
+
+Secondary finding, matching the earlier behaviour census rather than
+contradicting it: Mine's chosen-move share (11.9% at 3p, the single
+largest named Build kind there) and its rank-when-legal (median 1 at 3p,
+i.e. it usually IS the top legal pick when offered) both point the same
+direction as behavcensus's "first executed build is a Mine 95.6% of the
+time at 3p" -- the champion's stated preference and its executed behaviour
+agree; there is no gap between "what it wants" and "what it does" for
+Mine, the same conclusion this probe reaches for Farm (just at 0% instead
+of 95.6%).
+
+Nothing here contradicts the task brief's premises; it resolves the open
+question the brief posed. The corpus/lint/climb-safety constraints in
+CLAUDE.md were not implicated (no bots/ files touched, no corpus games
+replayed).
