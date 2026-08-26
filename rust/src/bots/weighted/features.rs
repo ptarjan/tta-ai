@@ -58,7 +58,7 @@ use crate::combat;
 use crate::costs;
 use crate::economy;
 use crate::effects;
-use crate::state::GameState;
+use crate::state::{GameState, ROW_SIZE};
 
 use super::events;
 use super::horizon;
@@ -402,6 +402,84 @@ fn hand_card_affordable(card: CardId, science: f64) -> bool {
     }
 }
 
+/// Half (B) of [`WeightKey::RowPlayableCount`] (design note 3.6): whether a
+/// row card `id` could be PLAYED (developed, or its first wonder stage
+/// built) given the player's current "have + rate" totals -- the AFFORDABLE
+/// half. Half (A), whether it can be legally TAKEN at all
+/// (`costs::can_take_gated`, the CA/legality side), is applied by the one
+/// caller of this function, in the same shared row pass; this function
+/// knows nothing about CA.
+///
+/// Exhaustive over every `CardType`, no wildcard -- the same shape
+/// [`hand_card_affordable`] uses and for the identical reason
+/// (`docs/OPEN_ITEMS.md` item 5, a coordinate silently blind to a new type).
+///
+/// * a levelled/tech type is priced through [`costs::tech_cost`], never the
+///   printed `science_cost` field -- unlike `hand_card_affordable`'s hand
+///   test, this is a ROW card ("afford to play in the near term"), and the
+///   `Government` case below shows the printed field is not merely
+///   imprecise but WRONG (0 vs the real 6-19 `peaceful_cost`). The pass
+///   already pays for one `tech_cost` call per slot for
+///   [`WeightKey::ScienceNeedRow`], so reusing it here costs nothing extra.
+/// * [`CardType::Government`] is not levelled but IS developable -- same
+///   `costs::tech_cost` call, which already reads `peaceful_cost` for it
+///   internally. `None` (Despotism, printed `peaceful_cost: 0`) is NOT
+///   payable -- filtered, never mapped to 0 (the trap
+///   [`WeightKey::ScienceNeedRow`]'s own doc comment names).
+/// * [`CardType::Wonder`]: payable iff its printed first stage
+///   (`Card::stages[0]`, all 16 base-game wonders print all-nonzero stages)
+///   is within `resource_have_rate`. Wonders take no build discounts
+///   (`costs::build_cost_for`'s discounts are gated on urban/production
+///   types), so the printed field is the whole story here; the CA
+///   surcharge on TAKING it is already inside half (A), the caller's own
+///   `costs::can_take_gated` check.
+/// * [`CardType::Leader`]/[`CardType::Action`]: free to play, same as
+///   `hand_card_affordable`.
+/// * every other kind cannot occur in `card_row` (`cards::is_civil_row`) --
+///   named explicitly, not folded into a wildcard, so the match stays
+///   exhaustive by construction if `CardType` ever grows.
+fn row_card_playable(
+    id: CardId,
+    science_have_rate: f64,
+    resource_have_rate: f64,
+    state: &GameState,
+    p: &crate::state::PlayerState,
+) -> bool {
+    let kind = id.kind();
+    if crate::bots::board_yields::is_levelled_type(kind) {
+        return costs::tech_cost(state, p, id).is_some_and(|c| f64::from(c) <= science_have_rate);
+    }
+    match kind {
+        CardType::Government => costs::tech_cost(state, p, id).is_some_and(|c| f64::from(c) <= science_have_rate),
+        CardType::Wonder => id.get().stages.first().is_some_and(|&s| f64::from(s) <= resource_have_rate),
+        CardType::Leader | CardType::Action => true,
+        // Cannot occur in `card_row` -- see this function's own doc comment.
+        // `false` (not counted as playable) is the inert, no-op answer if
+        // this invariant is ever broken elsewhere.
+        CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => false,
+        // Unreachable: `is_levelled_type` above already returned for every
+        // one of these.
+        CardType::Farm
+        | CardType::Mine
+        | CardType::Lab
+        | CardType::Temple
+        | CardType::Library
+        | CardType::Arena
+        | CardType::Theater
+        | CardType::Infantry
+        | CardType::Cavalry
+        | CardType::Artillery
+        | CardType::Air
+        | CardType::SpecialTech => unreachable!("is_levelled_type already handled this type above"),
+    }
+}
+
 /// `features(state, idx, ctx=None, w=None, priced_only=False)`.
 ///
 /// `ctx`, when `Some`, MUST be a [`RivalContext`] built for this exact `idx`
@@ -409,14 +487,16 @@ fn hand_card_affordable(card: CardId, science: f64) -> bool {
 /// candidate move of a search (see [`rivals::rival_context`]'s own doc
 /// comment on why that reuse matters). `None` computes one on the spot.
 ///
-/// `w` is read for exactly one purpose: the `priced_only` speed switch below
-/// (Python's own docstring on this function explains why -- `evaluate`
-/// multiplies every entry by its weight and skips falsy ones, so
-/// `event_scoring_margin` -- fifteen final-event formulas, profiled at 22%
-/// of total evaluation time -- is worth skipping outright when the weight
-/// vector prices it at 0.0 and only the speed of the search, not the
-/// completeness of an instrument, is asked for). Nothing else in this
-/// function reads `w`.
+/// `w` is read for exactly two `priced_only` speed switches below, both the
+/// same shape: skip an expensive term outright when the weight vector
+/// prices it at 0.0 and only the speed of the search, not the completeness
+/// of an instrument, is asked for. `event_scoring_margin` -- fifteen
+/// final-event formulas, profiled at 22% of total evaluation time -- is the
+/// original one (Python's own docstring explains why); the shared
+/// `card_row` pass for [`WeightKey::ScienceNeedRow`]/
+/// [`WeightKey::RowPlayableCount`] is the second, guarding one
+/// `costs::tech_cost`/`costs::can_take_gated` call pair per row slot.
+/// Nothing else in this function reads `w`.
 ///
 /// `priced_only` must stay OFF for anything reading the complete vector as
 /// an instrument (the coordinate registry, the census, a differential test)
@@ -655,6 +735,77 @@ pub fn features(
     );
     f.set(WeightKey::FoodStock, f64::from(p.food) + g(GainFeature::FoodStock));
     f.set(WeightKey::ResourceStock, f64::from(p.resources) + g(GainFeature::ResourceStock));
+
+    // --- `WeightKey::ScienceNeedRow` (3.1) / `WeightKey::RowPlayableCount`
+    // (3.6): ONE shared, allocation-free pass over the 13-slot card row --
+    // design note section 5's mandate, not two separate walks. Placed here,
+    // right after `ResourceStock` is set, so the "have + rate" read-backs
+    // below are valid (`Science`/`ScienceRate`/`ResourceRate` are all
+    // already set above).
+    //
+    // `priced_only &&`, never a bare weight check: `w = None` is exactly how
+    // `registry.rs`'s probe calls `features()`, and a gate that skips
+    // whenever both weights read 0.0 regardless of `priced_only` would
+    // starve that probe forever, leaving both keys permanently unwritten --
+    // the identical `priced_only &&` shape `EventScoringMargin` already
+    // established immediately below this pass.
+    let row_axes = priced_only
+        && w.is_none_or(|w| {
+            w.get(WeightKey::ScienceNeedRow) == 0.0 && w.get(WeightKey::RowPlayableCount) == 0.0
+        });
+    if row_axes {
+        f.set(WeightKey::ScienceNeedRow, 0.0);
+        f.set(WeightKey::RowPlayableCount, 0.0);
+    } else {
+        // "science + my science_rate", the net rate (corruption/pending
+        // gains already folded in) plus current stock -- read back from the
+        // keys `features()` already set immediately above, never
+        // recomputed, the same "one true computation" idiom
+        // `HandOverCapacity`/`ResourceCommitmentTurns` use for `Science`/
+        // `ResourceRate`.
+        let science_have_rate = f.get(WeightKey::ScienceRate).max(0.0) + f.get(WeightKey::Science);
+        let resource_have_rate = f.get(WeightKey::ResourceRate).max(0.0) + f.get(WeightKey::ResourceStock);
+        // The CA/legality side of a row take, built ONCE for the whole
+        // pass -- covers row_cost + the completed-wonder surcharge +
+        // leader discounts against spare CA, the hand-limit gate,
+        // one-per-name, leader-age, and the wonder-in-progress gate.
+        let gate = costs::take_gate(state, p, None);
+
+        let mut t = 0.0f64;
+        let mut any = false;
+        let mut playable = 0.0f64;
+        for i in 0..ROW_SIZE {
+            let id = state.card_row[i];
+            if id.is_none() {
+                continue;
+            }
+            // `costs::tech_cost`, never `Card::science_cost`: every one of
+            // the 8 Governments prints `science_cost: 0` (their real price
+            // is `peaceful_cost`, RULES_SPEC 8.3), so reading the printed
+            // field here would make a Government in the row look free.
+            // `None` means "not developable" (Despotism, action/leader/
+            // wonder cards, farms/mines/units) and is FILTERED, never
+            // mapped to 0 -- mapping it to 0 would collapse this minimum to
+            // 0.0 the moment a non-developable card sits anywhere in the
+            // row, and would make `row_playable_count` count it as payable
+            // below.
+            if let Some(c) = costs::tech_cost(state, p, id) {
+                t = if any { t.min(f64::from(c)) } else { f64::from(c) };
+                any = true;
+            }
+            if costs::can_take_gated(state, p, i, &gate, None)
+                && row_card_playable(id, science_have_rate, resource_have_rate, state, p)
+            {
+                playable += 1.0;
+            }
+        }
+        // `T` (`t`) is 0.0 when the row holds no developable card at all
+        // (`any` stays false, `t` never leaves its 0.0 default) -- the
+        // design note's own "0.0 when the row holds no such card".
+        f.set(WeightKey::ScienceNeedRow, (f64::from(t as i32) - science_have_rate).max(0.0));
+        f.set(WeightKey::RowPlayableCount, playable);
+    }
+
     f.set(WeightKey::BlueFree, blue_free);
     // How much slack is left before the next band, as opposed to what the
     // current band already costs (which is now netted into the rates above
@@ -2065,5 +2216,307 @@ mod tests {
         let f = features(&state, 0, None, None, false);
         assert_eq!(f.get(WeightKey::WonderStagesLeft), 0.0, "test premise: all three of Pyramids' stages paid");
         assert_eq!(f.get(WeightKey::WonderOneStageShort), 0.0);
+    }
+
+    /// `science_need_row` (design note proposal 3.1): with no developable
+    /// card anywhere in the row (a Wonder and an Action card, both of which
+    /// print `science_cost: 0` so `costs::tech_cost` returns `None` for
+    /// both -- plus ten empty slots), the feature is exactly 0.0 even with
+    /// Philosophy un-staffed (`science_have_rate` also 0.0) -- the `any ==
+    /// false` branch. Confirmed RED by replacing the `any`-guarded
+    /// min-accumulator with the classic sentinel-init bug (`let mut t =
+    /// f64::INFINITY; ... t = t.min(f64::from(c));`, no `any` flag): with no
+    /// slot ever beating `INFINITY`, `t` stayed `INFINITY`, and the
+    /// production line's own `t as i32` cast SATURATED it to `i32::MAX` --
+    /// `ScienceNeedRow` came back `2147483647.0` instead of `0.0` --
+    /// reverted after confirming.
+    #[test]
+    fn science_need_row_is_zero_when_the_row_holds_no_developable_card() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        let rich_land = crate::cards::CardId::by_name("Rich Land (A)").expect("a base-game Age A action card");
+        assert_eq!(pyramids.get().science_cost, 0, "test premise: a wonder prints science_cost 0");
+        assert_eq!(rich_land.get().science_cost, 0, "test premise: an action card prints science_cost 0");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(crate::cards::CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = pyramids;
+        state.card_row[1] = rich_land;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::ScienceRate), 0.0, "test premise: Philosophy un-staffed, the only science producer");
+        assert_eq!(f.get(WeightKey::ScienceNeedRow), 0.0);
+    }
+
+    /// `science_need_row` is the MINIMUM developable cost in the row, not
+    /// the sum -- Selective Breeding (Farm, `science_cost: 5`) and
+    /// Mechanized Agriculture (Farm, `science_cost: 7`) together must read
+    /// 5.0, not 12.0 and not 7.0. Confirmed RED by changing the production
+    /// accumulator from `t.min(f64::from(c))` to `t + f64::from(c)` (a sum):
+    /// `ScienceNeedRow` came back 12.0 instead of 5.0 -- reverted after
+    /// confirming.
+    #[test]
+    fn science_need_row_uses_the_minimum_not_the_sum_of_developable_costs() {
+        let selective_breeding = crate::cards::CardId::by_name("Selective Breeding").expect("a base-game Age II farm tech");
+        let mechanized_agriculture =
+            crate::cards::CardId::by_name("Mechanized Agriculture").expect("a base-game Age III farm tech");
+        assert_eq!(selective_breeding.get().science_cost, 5, "test premise");
+        assert_eq!(mechanized_agriculture.get().science_cost, 7, "test premise");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(crate::cards::CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = selective_breeding;
+        state.card_row[1] = mechanized_agriculture;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::ScienceRate), 0.0, "test premise: Philosophy un-staffed");
+        assert_eq!(f.get(WeightKey::Science), 0.0, "test premise: no science banked");
+        assert_eq!(f.get(WeightKey::ScienceNeedRow), 5.0, "the cheaper of 5 and 7, not their sum and not the pricier one");
+    }
+
+    /// The Government trap (`costs::tech_cost`'s own doc comment, and
+    /// `WeightKey::ScienceNeedRow`'s): Theocracy prints `science_cost: 0`
+    /// (every government does) but its real develop price is
+    /// `peaceful_cost: 6`, paid in science (RULES_SPEC 8.3). With nothing
+    /// cheaper in the row and `science_have_rate` at 0, the feature must
+    /// read 6.0. Confirmed RED by changing the production `tech_cost` call
+    /// in the row-pass min-loop to read `card.get().science_cost` directly
+    /// (bypassing `costs::tech_cost`): `ScienceNeedRow` came back 0.0
+    /// instead of 6.0 (Theocracy's always-zero `science_cost` read as
+    /// "free to develop") -- reverted after confirming.
+    #[test]
+    fn science_need_row_reads_a_governments_real_price_never_its_zero_science_cost() {
+        let theocracy = crate::cards::CardId::by_name("Theocracy").expect("a base-game government");
+        assert_eq!(theocracy.get().science_cost, 0, "test premise: science_cost is always 0 for a government");
+        assert_eq!(theocracy.get().peaceful_cost, 6, "test premise: Theocracy's real price is 6");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(crate::cards::CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = theocracy;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::ScienceRate), 0.0, "test premise: Philosophy un-staffed");
+        assert_eq!(
+            f.get(WeightKey::ScienceNeedRow),
+            6.0,
+            "Theocracy's real price (peaceful_cost: 6) exceeds 0 science_have_rate; reading the \
+             always-zero science_cost instead would wrongly read this row as needing nothing"
+        );
+    }
+
+    /// The `None`-means-"not developable" trap (C7): Despotism prints
+    /// `peaceful_cost: 0`, so `costs::tech_cost` returns `None` for it, not
+    /// `Some(0)` -- it must be FILTERED out of the minimum, not treated as a
+    /// free develop. With Despotism and Selective Breeding (`science_cost:
+    /// 5`) both in the row and `science_have_rate` 0, the feature must read
+    /// 5.0, not 0.0. Confirmed RED by mapping `costs::tech_cost`'s `None`
+    /// to `0` in the row-pass min-loop (`.unwrap_or(0)` instead of the
+    /// `if let Some(c) = ...` filter): `ScienceNeedRow` came back 0.0
+    /// instead of 5.0 (Despotism read as "developable for nothing") --
+    /// reverted after confirming.
+    #[test]
+    fn science_need_row_filters_out_despotism_instead_of_pricing_it_as_free() {
+        let despotism = crate::cards::CardId::by_name("Despotism").expect("the starting government");
+        let selective_breeding = crate::cards::CardId::by_name("Selective Breeding").expect("a base-game Age II farm tech");
+        assert_eq!(despotism.get().peaceful_cost, 0, "test premise: Despotism's peaceful_cost is 0");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(crate::cards::CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = despotism;
+        state.card_row[1] = selective_breeding;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::ScienceRate), 0.0, "test premise: Philosophy un-staffed");
+        assert_eq!(
+            f.get(WeightKey::ScienceNeedRow),
+            5.0,
+            "Despotism must be filtered out of the minimum, leaving Selective Breeding's 5 -- not 0.0"
+        );
+    }
+
+    /// The C2a gate: the shared row pass (`ScienceNeedRow`/
+    /// `RowPlayableCount`) is skipped ONLY when `priced_only` is set AND
+    /// both weights price it at 0.0 -- never on `w = None` alone, which is
+    /// exactly how `registry.rs`'s probe calls `features()`. With Selective
+    /// Breeding in the row and `science_have_rate` 0, the real value is
+    /// 5.0. `priced_only = true` with the default (0.0) weights must skip
+    /// to 0.0; `priced_only = false` with `w = None` (the registry probe's
+    /// own shape) must compute the real 5.0; a nonzero `ScienceNeedRow`
+    /// weight must un-skip even under `priced_only`. Confirmed RED by
+    /// dropping the `priced_only &&` guard, leaving a bare
+    /// `w.is_none_or(...)` (the C2a regression this test exists to catch):
+    /// the `priced_only = false, w = None` call -- the registry probe's
+    /// exact shape -- came back 0.0 (skipped) instead of the real 5.0,
+    /// because `is_none_or` treats `w = None` as "weights are all 0, so
+    /// skip" regardless of `priced_only` -- reverted after confirming.
+    #[test]
+    fn science_need_row_priced_only_gate_skips_only_under_search_not_registry_probe() {
+        let selective_breeding = crate::cards::CardId::by_name("Selective Breeding").expect("a base-game Age II farm tech");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(crate::cards::CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = selective_breeding;
+
+        let mut w = Weights::default();
+        assert_eq!(w.get(WeightKey::ScienceNeedRow), 0.0);
+        assert_eq!(w.get(WeightKey::RowPlayableCount), 0.0);
+
+        let skipped = features(&state, 0, None, Some(&w), true);
+        assert_eq!(skipped.get(WeightKey::ScienceNeedRow), 0.0, "priced_only + zero weights -> skipped");
+
+        let full = features(&state, 0, None, None, false);
+        assert_eq!(full.get(WeightKey::ScienceNeedRow), 5.0, "the registry probe's exact shape (w = None) must compute it");
+
+        w.set(WeightKey::ScienceNeedRow, 1.0);
+        let priced = features(&state, 0, None, Some(&w), true);
+        assert_eq!(priced.get(WeightKey::ScienceNeedRow), full.get(WeightKey::ScienceNeedRow), "a nonzero weight must not be skipped");
+    }
+
+    /// `row_playable_count` (design note proposal 3.6): half (A), legal
+    /// takeability, gates the count even when every card would otherwise be
+    /// affordable. Filling the civil hand to 20 cards (`civil_hand_limit`
+    /// is a handful, far below `MAX_HAND`) trips `costs::take_gate`'s
+    /// `hand_full`, so Selective Breeding in the row -- fully affordable at
+    /// 10 science -- must still count 0. Confirmed RED by dropping the
+    /// `costs::can_take_gated(...) &&` half of the production condition
+    /// (counting affordability alone): `RowPlayableCount` came back 1.0
+    /// instead of 0.0 -- reverted after confirming.
+    #[test]
+    fn row_playable_count_is_zero_when_the_civil_hand_is_full() {
+        let rich_land = crate::cards::CardId::by_name("Rich Land (A)").expect("a base-game Age A action card");
+        let selective_breeding = crate::cards::CardId::by_name("Selective Breeding").expect("a base-game Age II farm tech");
+        let mut state = G::new_game(2, 51);
+        for _ in 0..20 {
+            state.players[0].hand_civil.push(rich_land);
+        }
+        state.players[0].science = 10;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = selective_breeding;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::RowPlayableCount), 0.0, "a full civil hand blocks every take, however affordable the card");
+    }
+
+    /// The (A) AND (B) conjunction, the note's own "legally take AND afford
+    /// to play": seven developable row cards, all legally takeable (spare
+    /// CA raised to 10, hand empty), science set to exactly 5. Selective
+    /// Breeding (5), Iron (5) and Masonry (3) are affordable; Mechanized
+    /// Agriculture (7), Theocracy (6), Monarchy (8) and Architecture (6)
+    /// are not -- exactly 3.0, not 7.0. Confirmed RED by dropping the
+    /// `row_card_playable(...)` half of the production condition (counting
+    /// legally-takeable alone): `RowPlayableCount` came back 7.0 instead of
+    /// 3.0 -- reverted after confirming.
+    #[test]
+    fn row_playable_count_requires_both_legally_takeable_and_affordable() {
+        let selective_breeding = crate::cards::CardId::by_name("Selective Breeding").expect("science_cost 5");
+        let mechanized_agriculture = crate::cards::CardId::by_name("Mechanized Agriculture").expect("science_cost 7");
+        let iron = crate::cards::CardId::by_name("Iron").expect("science_cost 5");
+        let theocracy = crate::cards::CardId::by_name("Theocracy").expect("peaceful_cost 6");
+        let monarchy = crate::cards::CardId::by_name("Monarchy").expect("peaceful_cost 8");
+        let masonry = crate::cards::CardId::by_name("Masonry").expect("science_cost 3");
+        let architecture = crate::cards::CardId::by_name("Architecture").expect("science_cost 6");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(crate::cards::CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state.players[0].civil_actions = 10;
+        state.players[0].science = 5;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = selective_breeding;
+        state.card_row[1] = mechanized_agriculture;
+        state.card_row[2] = iron;
+        state.card_row[3] = theocracy;
+        state.card_row[4] = monarchy;
+        state.card_row[5] = masonry;
+        state.card_row[6] = architecture;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::ScienceRate), 0.0, "test premise: Philosophy un-staffed, science_have_rate == science exactly");
+        assert_eq!(
+            f.get(WeightKey::RowPlayableCount),
+            3.0,
+            "Selective Breeding (5), Iron (5) and Masonry (3) are affordable at 5 science; the other \
+             four (7, 6, 8, 6) are takeable but not affordable"
+        );
+    }
+
+    /// The Government trap, restated for `row_playable_count`'s own
+    /// affordability half: Theocracy's real price is `peaceful_cost: 6`,
+    /// never the always-zero `science_cost`. At 6 science it counts 1; one
+    /// short, at 5, it counts 0. Confirmed RED by changing
+    /// `row_card_playable`'s `Government` arm to compare against
+    /// `card.get().science_cost` instead of calling `costs::tech_cost`:
+    /// `RowPlayableCount` came back 1.0 at BOTH 5 and 6 science (the
+    /// always-zero `science_cost` reads as affordable regardless) instead
+    /// of 0.0 at 5 -- reverted after confirming.
+    #[test]
+    fn row_playable_count_reads_a_governments_real_price_never_its_zero_science_cost() {
+        let theocracy = crate::cards::CardId::by_name("Theocracy").expect("a base-game government");
+        let mut state = G::new_game(2, 51);
+        state.players[0].techs.get_mut(crate::cards::CardId::by_name("Philosophy").unwrap()).unwrap().workers = 0;
+        state.players[0].civil_actions = 10;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = theocracy;
+
+        state.players[0].science = 5;
+        let short = features(&state, 0, None, None, false);
+        assert_eq!(short.get(WeightKey::ScienceRate), 0.0, "test premise: Philosophy un-staffed");
+        assert_eq!(short.get(WeightKey::RowPlayableCount), 0.0, "one science short of Theocracy's real price (6)");
+
+        state.players[0].science = 6;
+        let exact = features(&state, 0, None, None, false);
+        assert_eq!(exact.get(WeightKey::RowPlayableCount), 1.0, "exactly covers Theocracy's real price (6)");
+    }
+
+    /// `row_playable_count`'s wonder clause: payable iff the printed FIRST
+    /// STAGE (`Card::stages[0]`, never `resource_cost`, which is 0 for
+    /// every wonder) is within `resource_have_rate`. Pyramids prints
+    /// `stages: [3, 2, 1]`. At a resource_have_rate of 2 (the fresh game's
+    /// own baseline: Bronze's 2 staffed workers, 0 resources banked) it
+    /// counts 0; at 3 (one resource banked) it counts 1. Confirmed RED by
+    /// reading `card.get().resource_cost` instead of `stages[0]` in
+    /// `row_card_playable`'s `Wonder` arm: `RowPlayableCount` came back 1.0
+    /// at BOTH resource levels (printed `resource_cost` is 0 for every
+    /// wonder, always `<=` any non-negative rate) instead of 0.0 at 2 --
+    /// reverted after confirming.
+    #[test]
+    fn row_playable_count_prices_a_wonder_by_its_first_stage_against_resources() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("a base-game wonder");
+        assert_eq!(pyramids.get().stages, &[3, 2, 1], "test premise: Pyramids' printed stages");
+        assert_eq!(pyramids.get().resource_cost, 0, "test premise: every wonder prints resource_cost 0");
+        let mut state = G::new_game(2, 51);
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = pyramids;
+
+        let short = features(&state, 0, None, None, false);
+        assert_eq!(short.get(WeightKey::ResourceRate), 2.0, "test premise: the fresh-game baseline (Bronze, 2 workers)");
+        assert_eq!(short.get(WeightKey::RowPlayableCount), 0.0, "resource_have_rate 2 is one short of Pyramids' first stage (3)");
+
+        state.players[0].resources = 1;
+        let exact = features(&state, 0, None, None, false);
+        assert_eq!(exact.get(WeightKey::RowPlayableCount), 1.0, "resource_have_rate 3 (2 rate + 1 banked) exactly covers it");
+    }
+
+    /// The C2a gate, restated for `row_playable_count`: same shape as
+    /// `science_need_row_priced_only_gate_skips_only_under_search_not_
+    /// registry_probe` above, guarding the same shared `row_axes` gate for
+    /// the other key it controls. Selective Breeding in the row, spare CA
+    /// raised, science at 10 -> the real count is 1.0. Confirmed RED by the
+    /// identical mutation as that test (dropping the `priced_only` guard):
+    /// the `priced_only = false, w = None` call -- the registry probe's
+    /// exact shape -- came back 0.0 (skipped) instead of the real 1.0 --
+    /// reverted after confirming.
+    #[test]
+    fn row_playable_count_priced_only_gate_skips_only_under_search_not_registry_probe() {
+        let selective_breeding = crate::cards::CardId::by_name("Selective Breeding").expect("a base-game Age II farm tech");
+        let mut state = G::new_game(2, 51);
+        state.players[0].civil_actions = 10;
+        state.players[0].science = 10;
+        state.card_row = [CardId::NONE; ROW_SIZE];
+        state.card_row[0] = selective_breeding;
+
+        let mut w = Weights::default();
+        assert_eq!(w.get(WeightKey::RowPlayableCount), 0.0);
+
+        let skipped = features(&state, 0, None, Some(&w), true);
+        assert_eq!(skipped.get(WeightKey::RowPlayableCount), 0.0, "priced_only + zero weights -> skipped");
+
+        let full = features(&state, 0, None, None, false);
+        assert_eq!(full.get(WeightKey::RowPlayableCount), 1.0, "the registry probe's exact shape (w = None) must compute it");
+
+        w.set(WeightKey::RowPlayableCount, 1.0);
+        let priced = features(&state, 0, None, Some(&w), true);
+        assert_eq!(priced.get(WeightKey::RowPlayableCount), full.get(WeightKey::RowPlayableCount), "a nonzero weight must not be skipped");
     }
 }
