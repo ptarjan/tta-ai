@@ -2235,25 +2235,17 @@ impl WeightKey {
         // the documented "unmeasured" state this function already defines:
         // `clamp_bound` falls back to `CLAMP_BLIND` whenever spread `<= 0.0`,
         // exactly the fallback `RateHorizon`/`TechRedundancyDiscount` above
-        // already rely on. Regenerate for real once this key has climbed in
-        // enough self-play to measure, the same way `LeaderReplacement`/
-        // `WonderPoolRivalClaimed` above did (36c7c06).
-        WeightKey::HandOverCapacity => [0.000000, 0.000000, 0.000000],
-        // Same "unmeasured, falls back to CLAMP_BLIND" state as
-        // `HandOverCapacity` immediately above, not a guessed number --
-        // regenerate with `featspread` once these keys have run through real
-        // self-play.
-        WeightKey::HappyMarginAfterNextPop => [0.000000, 0.000000, 0.000000],
-        WeightKey::ResourceCommitmentTurns => [0.000000, 0.000000, 0.000000],
-        // Same "unmeasured, falls back to CLAMP_BLIND" state as the two
-        // immediately above, not a guessed number -- regenerate with
-        // `featspread` once this key has run through real self-play.
-        WeightKey::WonderOneStageShort => [0.000000, 0.000000, 0.000000],
-        // Same "unmeasured, falls back to CLAMP_BLIND" state as the three
-        // immediately above, not a guessed number -- regenerate with
-        // `featspread` once these two keys have run through real self-play.
-        WeightKey::ScienceNeedRow => [0.000000, 0.000000, 0.000000],
-        WeightKey::RowPlayableCount => [0.000000, 0.000000, 0.000000],
+        // The six gap-conditional keys below were seeded all-zero when they
+        // landed and are now MEASURED, from `featspread 40 0 ../experiments
+        // emit` run against the champion the climb was carrying on 2026-08-26.
+        // Every one of them fires, so none of them falls back to CLAMP_BLIND
+        // any more.
+        WeightKey::HandOverCapacity => [1.000000, 1.000000, 1.000000],
+        WeightKey::HappyMarginAfterNextPop => [2.000000, 2.000000, 2.000000],
+        WeightKey::ResourceCommitmentTurns => [16.000000, 16.000000, 16.000000],
+        WeightKey::WonderOneStageShort => [1.000000, 1.000000, 1.000000],
+        WeightKey::ScienceNeedRow => [5.000000, 4.000000, 4.000000],
+        WeightKey::RowPlayableCount => [12.000000, 12.000000, 13.000000],
     }
     }
 }
