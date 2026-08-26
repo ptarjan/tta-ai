@@ -1,0 +1,334 @@
+IMPLEMENTATION SPECS — science_need_row (3.1) and row_playable_count (3.6)
+============================================================================
+Written 2026-08-26 by the local-model worker, from the audit
+(analysis/local_feature_audit_2026-08-26.txt) and the call recipe
+(analysis/tech_cost_recipe_2026-08-26.txt), against the working tree at
+e7ba1fc (the state in which 3.4/3.5/3.2 are landed and 3.1/3.3/3.6 remain).
+
+A worker following these specs must NOT re-derive: the trap list, the
+registration checklist, the pass structure, the None-handling, or the test
+list. Everything below is the derivation.
+
+==============================================================================
+COMMON GROUND (both specs)
+==============================================================================
+
+C1. THE SHARED ROW PASS. Design note section 5 mandates ONE bounded pass
+over `state.card_row` ([CardId; ROW_SIZE], ROW_SIZE = 13, state.rs:16/1496)
+producing BOTH quantities, skipped entirely when both new weights are 0.0.
+Place it in `features()` (features.rs:435), immediately after the
+`f.set(WeightKey::ResourceStock, ...)` line (features.rs:~656), so the
+read-backs in C4/C5 are valid.
+
+C2. SKIP GATE (features.rs:~657):
+        let row_axes = !priced_only
+            && w.is_some_and(|w| w.get(WeightKey::ScienceNeedRow) != 0.0
+                || w.get(WeightKey::RowPlayableCount) != 0.0);
+    (mirrors the `unpriced` idiom at features.rs:~903-907; if neither key is
+    priced, set both to 0.0 and do nothing else in the pass).
+
+C3. NO ALLOCATION. The pass is a scalar accumulator over a 13-slot slice:
+    no Vec, no collect, no sort, no String. The note's "allocation-free"
+    rule is load-bearing because the pass runs once per candidate move of
+    the 1-ply search.
+
+C4. SCIENCE "HAVE + RATE" — READ BACK, NEVER RECOMPUTE. features() has
+    already set the two keys (features.rs:~626-632):
+        let science_have_rate =
+            f.get(WeightKey::ScienceRate).max(0.0) + f.get(WeightKey::Science);
+    This is the net science rate (corruption/pending gains folded in) plus
+    the current science stock — exactly the "science + my science_rate" the
+    proposal names, with zero recomputation. Do NOT recompute
+    `p.science + g(GainFeature::Science)`; that is the "one true
+    computation" idiom `HandOverCapacity` uses for `Science` (features.rs:
+    879-883) and `ResourceCommitmentTurns` uses for `ResourceRate`
+    (features.rs:638-655).
+
+C5. RESOURCE "HAVE + RATE" — SAME IDIOM:
+        let resource_have_rate =
+            f.get(WeightKey::ResourceRate).max(0.0) + f.get(WeightKey::ResourceStock);
+
+C6. THE GOVERNMENT TRAP (both specs). A Government's printed
+    `science_cost` is ALWAYS 0 (card_table.rs:831-975, all 8; techCost null
+    in the data) — reading it makes a government card look FREE. Its real
+    develop price is `card.peaceful_cost`, which is exactly what
+    `costs::tech_cost` returns for it (costs.rs:597-617, the government
+    branch at 599-604), with the standing `tech_discount`, the one-time
+    `develop_science` discount, and the Bach/Shakespeare theater/library
+    adjustments already applied. SPEC: every develop-cost read in both
+    features goes through `costs::tech_cost(state, p, id)` — never
+    `card.science_cost`, never a hand-written `if Government { peaceful_cost }`
+    (that would be a second computation of the rule; see C7).
+
+C7. NONE MEANS "NOT DEVELOPABLE" — FILTER, NEVER MAP TO 0.
+    `costs::tech_cost` returns None when the printed base is 0: Despotism
+    (peaceful_cost 0 — the starting government, never developable), farms,
+    mines, units, action cards, leaders, wonders. In science_need_row's MIN,
+    a None card does NOT enter the min. In row_playable_count, a None card
+    is NOT counted as payable (it is not "free" — it is "no such price").
+    This is the trap that has bitten this feature family twice
+    (hand_over_capacity's Government branch, now recorded in
+    analysis/local_feature_audit_2026-08-26.txt). Mapping None to 0 would
+    make Despotism look developable-for-nothing.
+
+C8. THE COST INSIDE THE PASS. `costs::tech_cost` calls
+    `effects::state_stats` (effects.rs:1571) — a full Stats recompute — per
+    call. Up to 13 slots x per candidate move. That is the price of calling
+    the rule instead of copying it (features.rs:1688's "never tech_cost in a
+    per-card loop" comment was written for the TABLEAU sweep of 16+ slots
+    where it also recomputes build_cost_for's discount path; the note's
+    section 5 classifies 3.1/3.6 as MODERATE, i.e. this is the expected
+    shape). DO NOT inline tech_cost's 8-line body to dodge it — that is a
+    second computation of the rule, exactly what the note's
+    MarginalNeed-precedent forbids (features.rs:265-277). If the search-hot
+    cost later proves too high, the fix is a Stats-carrying variant of
+    tech_cost in costs.rs, not a copy here.
+
+C9. BORROWS: NONE. `state`/`p` are the shared refs features() already holds
+    (features.rs:435-443); `id: CardId` is Copy; tech_cost takes no &mut and
+    returns a plain Option<i32>. `take_gate`/`can_take_gated` are the same.
+    The pass can call either any number of times per move.
+
+C10. WHERE THE "DEVELOPABLE" PREDICATE LIVES. The note says "levelled
+    (developable) type". The ONE classifier for "needs Develop's science" is
+    `crate::bots::board_yields::is_levelled_type` (board_yields.rs:253-255:
+    `kind.takes_workers() || kind == CardType::SpecialTech`) — it covers
+    Farm/Mine/Lab/Temple/Library/Arena/Theater/Infantry/Cavalry/Artillery/
+    Air/SpecialTech and EXCLUDES Government. Government is developable too
+    (cards.rs:147-149, `is_developable` = `takes_workers() || SpecialTech |
+    Government`) but is NOT "levelled" — it is the one developable card type
+    with no level. Both specs handle it as a SEPARATE explicit arm, the same
+    way `hand_card_affordable` (features.rs:362-395) does:
+    `is_levelled_type(kind)` first, then `CardType::Government =>` arm, then
+    an exhaustive match with `unreachable!` for the levelled arms — so a new
+    levelled type is a compile error, not a silent misprice.
+
+C11. WEIGHTS.RS REGISTRATION CHECKLIST — both keys, verbatim the landed
+    pattern (cf. HandOverCapacity @546, HappyMarginAfterNextPop @580,
+    ResourceCommitmentTurns @617):
+    (a) `WeightKey` enum: append the variant at the END, after
+        `ResourceCommitmentTurns` (weights.rs:617), with a doc comment citing
+        the proposal (design note 3.1 / 3.6), the quantity, the trap
+        (C6/C7), and the read-back idiom (C4/C5).
+    (b) `name()`: `ScienceNeedRow => "science_need_row", 0.0;` and
+        `RowPlayableCount => "row_playable_count", 0.0;` beside the three
+        landed keys (weights.rs:982-988). 0.0 default so every champion on
+        disk is unchanged.
+    (c) the FOUR exhaustive catch-all panic arms — `early` (weights.rs:1027),
+        `late` (1044), `trailing` (1070), `needed` (1096): add both keys to
+        the giant `|`-list that falls through to `panic!` (they are not
+        phase-multiplied, not trailing-conditioned, not need-hinged).
+    (d) `group()`: ScienceNeedRow joins `WeightGroup::Science` (beside
+        `Science`/`ScienceRate`/`ScienceNeeded` — same axis: a science
+        shortfall against a threshold); RowPlayableCount joins
+        `WeightGroup::Actions` (it prices whether a CIVIL ACTION is worth
+        spending — beside `CaLeft`/`TakeCostShare`; the row axis
+        `RowUrgency`/`RowBargainForgone` are already there — CHECK their
+        actual group in weights.rs:1121-1243 and follow, they are the
+        precedent).
+    (e) `sign_intent()`: ScienceNeedRow => `NonPositive("prices a
+        marginal-need shortfall")` — the SAME bucket and the SAME string as
+        HandOverCapacity/HappyMarginAfterNextPop (weights.rs:~1376-1380);
+        the gap half of a `max(0, need - have)` is NonPositive, never
+        NonNegative. RowPlayableCount => `NonNegative(...)` — a row I can
+        use makes spending actions good (the note's EXPECTED SIGN: positive);
+        put it in the NonNegative bucket beside the other upside keys with
+        its own one-line justification.
+    (f) `p95_candidate_spread()`: both => `[0.000000, 0.000000, 0.000000]`
+        (weights.rs:~2066-2072), documented "unmeasured, falls back to
+        CLAMP_BLIND; regenerate with `featspread` after real self-play" —
+        exactly the landed trio's state.
+    (g) The sign-intent test at weights.rs:2620-2646 will then assert the
+        0.0 default is consistent with the bucket; do not special-case it.
+
+C12. TESTS — follow the landed trio's red-confirmation method (break the
+    exact production line each test guards, confirm red, revert). Build on a
+    fresh `game::new_game` (unmodified — START_TECHS gives non-degenerate
+    stocks/rates; see the ResourceCommitmentTurns landing note in the design
+    note appendix). Minimum four per key, listed under each spec.
+
+==============================================================================
+SPEC 1 — science_need_row (proposal 3.1)
+==============================================================================
+
+QUANTITY (exact): max(0.0, T - science_have_rate), where
+    T = min over row slots i with `!state.card_row[i].is_none()` AND
+          `costs::tech_cost(state, p, state.card_row[i]).is_some()`
+        of that Option's Some value (i32 -> f64);
+    T = 0.0 when no such slot exists (the note's "0.0 when the row holds
+    no such card");
+    science_have_rate per C4.
+
+Note on "levelled (developable)": tech_cost.is_some() IS the filter — it is
+Some exactly for the levelled types (science_cost > 0) plus the 7
+non-Despotism governments (peaceful_cost > 0). Despotism, action cards,
+leaders, and wonders all return None and are filtered. No separate type
+predicate is needed for the MIN; C10's classifier is only relevant if you
+want to document the arms. Do NOT pre-filter by `is_levelled_type` and
+then special-case Government with a second predicate — that is two
+classifiers for one fact; tech_cost already encodes it.
+
+FEATURE COMPUTATION (features.rs, inside the shared pass, after the gate):
+    let mut t = 0.0f64;
+    let mut any = false;
+    for i in 0..ROW_SIZE {
+        let id = state.card_row[i];
+        if id.is_none() { continue; }
+        if let Some(c) = costs::tech_cost(state, p, id) {
+            t = if any { t.min(f64::from(c)) } else { f64::from(c) };
+            any = true;
+        }
+    }
+    let science_need_row = (f64::from(t as i32) - science_have_rate).max(0.0);
+    f.set(WeightKey::ScienceNeedRow, science_need_row);
+(When the gate C2 is false: f.set(WeightKey::ScienceNeedRow, 0.0).)
+
+EXPECTED SIGN: NonPositive (C11e). The gap half is live; the surplus half is
+not computed (the note: "Paired with a surplus half only if the learner
+needs it; the gap half is the live one").
+
+DELIBERATELY NOT A CHANGE TO marginal_needs: the note (3.1) is explicit that
+this is a SEPARATE coordinate from `science_gap` because editing that
+threshold would move every champion on disk. Do not fold it into
+`marginal_needs` or the ScienceNeeded hinge.
+
+TESTS (four, red-confirmed):
+  T1.1 BASELINE — a row with no developable card (e.g. all wonders/leaders/
+       actions): feature is exactly 0.0 even when science_have_rate is 0 —
+       the `any == false` branch (a player with no science AND nothing
+       developable in the row is not "starved"; the quantity is 0 by the
+       note's own definition).
+  T1.2 THE MIN IS THE MIN — row holds two developable cards of different
+       tech_cost (e.g. a 5-science SpecialTech and a 7-science one, both
+       undiscounted): with science_have_rate 0 the feature is 5.0, not 7.0
+       and not 12.0. Red-confirmed by summing instead of min-ing.
+  T1.3 GOVERNMENT IN THE ROW — row holds Theocracy (peaceful_cost 6,
+       science_cost 0) and nothing cheaper; science 0: feature is 6.0.
+       Red-confirmed by reading `science_cost` (would give 0.0 — the trap).
+       This is the test that guards C6.
+  T1.4 DESPOTISM FILTERED — row holds Despotism (peaceful_cost 0) plus a
+       5-science card; science 0: feature is 5.0, NOT 0.0. Red-confirmed by
+       mapping tech_cost's None to 0 (would give 0.0 — the C7 trap).
+  T1.5 (optional, if time) DISCOUNT — with a live tech_discount (pact or
+       one-time develop_science), the same row reads LOWER than the printed
+       value — proves the call (not a hand-written peaceful_cost) is used.
+
+==============================================================================
+SPEC 2 — row_playable_count (proposal 3.6)
+==============================================================================
+
+QUANTITY (exact): the COUNT of row slots i (0..ROW_SIZE,
+`!state.card_row[i].is_none()`) that pass BOTH halves:
+  (A) LEGALLY TAKEABLE: `costs::can_take_gated(state, p, i, &gate, None)`
+      with `gate = costs::take_gate(state, p, None)` built ONCE before the
+      loop (C9: cheap, and the row.rs:356-381 shared-legality idiom). This
+      covers the CA side: row_cost + wonder surcharge (take_gate's
+      `surcharge`, costs.rs:322-326) + leader discounts, against spare CA;
+      the hand-limit gate; one-per-name; leader-age; and the
+      wonder-in-progress gate (a second wonder take is not legal while one
+      is unfinished — RULES_SPEC 2.4, enforced in can_take_gated's Wonder
+      branch, costs.rs:363-373).
+  (B) AFFORDABLE TO PLAY IN THE NEAR TERM — per card kind (C6/C7/C10):
+      * `is_levelled_type(kind)` (board_yields.rs:253): payable iff
+            `costs::tech_cost(state, p, id)` is `Some(c)` with
+            `f64::from(c) <= science_have_rate` (C4). None => not payable
+            (C7 — this excludes Despotism-free and action/leader/wonder
+            cards that have no develop price; for the levelled types None
+            only means printed 0, which does not occur, but the check is the
+            filter either way).
+      * `CardType::Government` (the one developable non-levelled type):
+            payable iff `costs::tech_cost(state, p, id)` is `Some(c)` with
+            `f64::from(c) <= science_have_rate` — the SAME call as the
+            levelled arm; Despotism's None => not payable.
+      * Wonder: payable iff `f64::from(id.get().stages[0]) <=
+            resource_have_rate` (C5). All 16 wonders print all-nonzero
+            stages (data/cards_wonders_leaders.json), so `stages[0]` is a
+            valid index for a Wonder-typed id; guard with
+            `id.get().stages.first().copied()` if you want the panic-proof
+            form, but the kind match already guarantees Wonder. Wonders take
+            no build discounts (build_cost_for's discounts are gated on
+            urban/production, costs.rs:540-545), so the printed stage price
+            is the whole story for the resource half. The CA surcharge is
+            ALREADY inside half (A) via the gate — do not subtract it again
+            here.
+      * `CardType::Leader | CardType::Action`: payable (they cost no
+            science/resources to play — the same `true` arm
+            `hand_card_affordable` uses, features.rs:373).
+      * every other kind (military-deck types): not payable. They never sit
+        in the civil row (legal.rs:736 — "Wonder/other military-deck types
+        never sit in hand_civil", and card_row only ever holds
+        `is_civil_row` types, cards.rs:153-158), so this arm is unreachable
+        in the base game; keep it explicit (return false, not wildcard) so
+        the match stays exhaustive if CardType grows, exactly the shape
+        `hand_card_affordable` uses (features.rs:375-383).
+
+FEATURE COMPUTATION (features.rs, same shared pass as SPEC 1 — ONE loop):
+    let gate = costs::take_gate(state, p, None);   // once, before the loop
+    let mut playable = 0.0f64;
+    for i in 0..ROW_SIZE {
+        let id = state.card_row[i];
+        if id.is_none() { continue; }
+        if !costs::can_take_gated(state, p, i, &gate, None) { continue; }
+        if row_card_playable(id, science_have_rate, resource_have_rate,
+                             state, p) {
+            playable += 1.0;
+        }
+    }
+    f.set(WeightKey::RowPlayableCount, playable);
+where `row_card_playable` is a private helper in features.rs (beside
+`hand_card_affordable`, features.rs:362) with the exhaustive kind match of
+half (B) above. (When the gate C2 is false: f.set 0.0.)
+
+WHY (B) USES tech_cost AND NOT THE PRINTED FIELD: hand_card_affordable
+(features.rs:362) uses printed `science_cost`/`peaceful_cost` — that is
+correct for the HAND because the note's discount-precision argument applies
+to a "payable right now" test where the difference is at most a discount.
+For a ROW card the proposal says "afford to play IN THE NEAR TERM", and the
+Government case shows the printed field is not merely imprecise but WRONG
+(0 vs 6-19). Since we are already paying the tech_cost call in SPEC 1's pass
+for the same slots, there is no additional cost to using it here; use it.
+
+EXPECTED SIGN: NonNegative (C11e) — "a row I can use makes spending actions
+good; the learner should trade it against end_turn_bias and ca_left" (the
+note). It is a COUNT, not a valuation: no card_potential, no sweep
+probability. Do not multiply by row_cost or card_potential — that would
+make it row_pressure (the note's own VERIFICATION section proved
+row_playable_count DISTINCT from row_pressure precisely because row_pressure
+sums SIGNED VALUE with sweep dynamics and this is a bare count of
+"could-I-use-this" cards).
+
+TESTS (four, red-confirmed):
+  T2.1 BASELINE — a row of cards I cannot legally take (e.g. hand full:
+       hand_size_civil >= civil_hand_limit) is 0.0 even if every card is
+       cheap — half (A) gates the count, not (B).
+  T2.2 THE COUNT IS A COUNT — a fresh row with, say, 3 affordable+takeable
+       cards and 4 takeable-but-unaffordable cards (science 0, all
+       developable): feature is 3.0. Red-confirmed by counting takeable
+       only (would give 7.0) — this is the test that guards the (A) AND (B)
+       conjunction, the note's "legally take AND afford to play".
+  T2.3 GOVERNMENT — row holds Theocracy, science_have_rate 6: counts 1.
+       science_have_rate 5: counts 0. Red-confirmed by reading
+       science_cost (would count 1 at every science level — the trap).
+  T2.4 WONDER — row holds Pyramids (stages [3,2,1]), resource_have_rate 3:
+       counts 1; at 2: counts 0. Red-confirmed by reading
+       `resource_cost` (always 0 for wonders — would count 1 at every
+       resource level). Also: a second wonder while one is in progress is
+       NOT counted (can_take_gated's Wonder branch returns
+       `p.wonder.is_none()`).
+  T2.5 (optional) SURCHARGE — with one completed wonder in
+       completed_wonders, the same takeable row card at row position 1
+       costs 2 CA; if spare CA is 1, it is not takeable and not counted —
+       proves the gate's surcharge is in the count (the "wonder surcharge"
+       half of the note's CA clause).
+
+==============================================================================
+ORDER OF WORK
+==============================================================================
+1. weights.rs registration (C11) for BOTH keys — compiles standalone, all
+   champions unchanged (0.0 defaults), the four catch-alls panic-tested by
+   the existing test suite.
+2. features.rs: the shared pass (C1-C5) + SPEC 1's min + SPEC 2's count and
+   the `row_card_playable` helper.
+3. Tests per the lists above, red-confirmed.
+4. `cargo clippy --all-targets -- -D warnings` and full `cargo test` from
+   rust/ — report exit codes verbatim.
