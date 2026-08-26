@@ -862,3 +862,71 @@ landed. 3.1 (science_need_row), 3.3 (wonder_one_stage_short) and 3.6
 (row_playable_count) remain, per section 5's own cost classification above
 ("MODERATE -- new bounded work" for 3.1/3.6 sharing one row pass, "cliff...
 one integer comparison" for 3.3).
+
+
+== RESOLUTION AND LANDING, 2026-08-26 -- PROPOSAL 3.3 wonder_one_stage_short: LANDED ==
+
+Implemented from the note as written, per the independent audit's own verdict
+(analysis/local_feature_audit_2026-08-26.txt, "3.3 wonder_one_stage_short --
+CLEAN"): no printed-field trap (all 16 wonders print all-nonzero stages, so
+"one stage left" has no zero-cost edge) and no Wonder-in-hand trap (a taken
+wonder goes straight to `PlayerState::wonder`, never `hand_civil`, so there
+was never a branch to write for that state here). Verified independently
+rather than taken on the audit's word: `horizon.rs`'s `WonderOutlook::
+stages_left` field doc comment and its computation (`stages_left = (stages.
+len() - built) as f64`, only entered when `remaining > 0`) both read exactly
+as the audit describes, and `features.rs` already destructures `stages_left`
+out of `horizon::wonder_outlook`'s return and uses it to set `WeightKey::
+WonderStagesLeft` before this feature's own line.
+
+LANDED:
+  * `WeightKey::WonderOneStageShort` (`rust/src/bots/weighted/weights.rs`):
+    appended at the end of the enum, registered in `weight_key_table!` at
+    `0.0` default, included in the four exhaustive `early`/`late`/
+    `trailing`/`needed` catch-all panic arms, grouped `WeightGroup::Wonders`
+    (beside `WonderStagesLeft`, the exact key it compares against).
+    `p95_candidate_spread` seeded `[0.0, 0.0, 0.0]` -- the documented
+    "unmeasured, falls back to CLAMP_BLIND" state, not a fabricated number.
+    `SignIntent::Free`, NOT `NonPositive` -- unlike the shortfall keys
+    (`HandOverCapacity`/`HappyMarginAfterNextPop`), the note itself says a
+    positive weight would be informative rather than wrong ("let the climb
+    decide; do not pick the shape by hand"), so this key gets its own
+    dedicated `Free` arm rather than either sign-forced bucket, the same
+    treatment `CorruptionHeadroom`/`ConsumptionHeadroom` already get for the
+    identical reason.
+  * Feature computation (`rust/src/bots/weighted/features.rs`): one ternary,
+    `f.set(WeightKey::WonderOneStageShort, if stages_left == 1.0 { 1.0 }
+    else { 0.0 })`, folded directly into the EXISTING wonder block right
+    after `f.set(WeightKey::WonderStagesLeft, stages_left)` -- no new walk,
+    no re-derivation; the comparison is against the OUTLOOK value
+    `features()` already holds, exactly the one caution the audit named.
+  * Four tests, `#[cfg(test)] mod tests` at the end of `features.rs`, each
+    RED-confirmed by breaking the exact production ternary and reverting:
+    zero with no wonder taken (`stages_left` 0.0, confirmed red by loosening
+    the guard to `<= 1.0`, which wrongly fired at 1.0); zero with two
+    stages left, Pyramids (`stages: [3, 2, 1]`) with one of three paid
+    (confirmed red by loosening to `<= 2.0`); one with exactly one stage
+    left, Pyramids with two of three paid (confirmed red by mistargeting
+    the threshold to `== 2.0`, which then read 0.0 instead of 1.0); and the
+    decision-changed-2b regression pin -- zero the instant the wonder
+    completes, all three Pyramids stages paid, `stages_left` back at its
+    0.0 default through a DIFFERENT code path (the `remaining > 0` branch
+    never entered at all, vs. simply never having built one) than the
+    "no wonder taken" baseline (confirmed red by the same `<= 1.0` mutation
+    as the baseline test, which wrongly fired here too).
+  * `cargo clippy --all-targets -- -D warnings` and the full `cargo test`
+    suite (1539 lib tests + every integration binary) both clean, including
+    `registry.rs`'s runtime-instrumentation check confirming
+    `WonderOneStageShort` actually goes nonzero on real self-play, not
+    merely compiles.
+
+STATUS AFTER THIS BATCH: 3.2 (resource_commitment_turns), 3.3
+(wonder_one_stage_short), 3.4 (hand_over_capacity) and 3.5
+(happy_margin_after_next_pop) are landed. 3.1 (science_need_row) and 3.6
+(row_playable_count) remain -- both flagged MODERATE in section 5 above and
+NOT implementable from the note as written per the audit's own second-pass
+verdict (analysis/local_feature_audit_2026-08-26.txt): 3.1's science/
+resource cost fields need the same real-payment-path check `hand_over_
+capacity` already needed for Government, and 3.6 additionally misclassifies
+Government's affordability branch and omits the wonder take's +1-CA-per-
+completed-wonder surcharge.
