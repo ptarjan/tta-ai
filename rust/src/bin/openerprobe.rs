@@ -100,12 +100,19 @@ enum DecisionKind {
     Pop,
     Leader,
     ActionCard,
+    /// Ending the turn with civil/military actions still available (or
+    /// none) -- broken out of [`DecisionKind::Other`] on its own, not folded
+    /// in with the response/military-phase tail, because `end_turn_bias`
+    /// (`bots/weighted/weights.rs`) is a per-table-size trained weight and
+    /// this probe's whole reason for existing is to check whether a weight
+    /// move shows up in the bot's actual decisions.
+    EndTurn,
     /// Every other legal move an own-turn decision point can offer
-    /// (Revolution, Destroy, BachTheater, the trade moves, EndTurn itself,
-    /// ...). Coarse on purpose: none of these bear on the Farm/opener
-    /// question, and `docs/OPENINGS.txt`'s own convention
-    /// (`behavcensus.rs`'s `CivilMoveKind::Other`) already folds an
-    /// equivalent tail into one bucket rather than naming every variant.
+    /// (Revolution, Destroy, BachTheater, the trade moves, ...). Coarse on
+    /// purpose: none of these bear on the Farm/opener or EndTurn questions,
+    /// and `docs/OPENINGS.txt`'s own convention (`behavcensus.rs`'s
+    /// `CivilMoveKind::Other`) already folds an equivalent tail into one
+    /// bucket rather than naming every variant.
     Other,
 }
 
@@ -177,9 +184,9 @@ fn decision_kind(mv: Move) -> DecisionKind {
         | Move::SendDone
         | Move::Choose { .. }
         | Move::Churchill { .. }
-        | Move::EndTurn
         | Move::PolPass
         | Move::Resign => DecisionKind::Other,
+        Move::EndTurn => DecisionKind::EndTurn,
     }
 }
 
@@ -370,6 +377,7 @@ struct DecisionKindCounts {
     pop: u64,
     leader: u64,
     action_card: u64,
+    end_turn: u64,
     other: u64,
 }
 
@@ -387,6 +395,7 @@ impl DecisionKindCounts {
             DecisionKind::Pop => self.pop += 1,
             DecisionKind::Leader => self.leader += 1,
             DecisionKind::ActionCard => self.action_card += 1,
+            DecisionKind::EndTurn => self.end_turn += 1,
             DecisionKind::Other => self.other += 1,
         }
     }
@@ -403,6 +412,7 @@ impl DecisionKindCounts {
             + self.pop
             + self.leader
             + self.action_card
+            + self.end_turn
             + self.other
     }
 
@@ -418,6 +428,7 @@ impl DecisionKindCounts {
         self.pop += o.pop;
         self.leader += o.leader;
         self.action_card += o.action_card;
+        self.end_turn += o.end_turn;
         self.other += o.other;
     }
 }
@@ -744,7 +755,7 @@ fn print_report(players: u8, r: &Report) {
     println!("### Item 1: top-ranked (chosen) move by kind\n");
     let t = &r.top_kind;
     let total = t.total().max(1);
-    let rows: [(&str, u64); 12] = [
+    let rows: [(&str, u64); 13] = [
         ("Take", t.take),
         ("Build Farm", t.build_farm),
         ("Build Mine", t.build_mine),
@@ -756,6 +767,7 @@ fn print_report(players: u8, r: &Report) {
         ("Pop", t.pop),
         ("Leader", t.leader),
         ("ActionCard", t.action_card),
+        ("EndTurn", t.end_turn),
         ("Other", t.other),
     ];
     for (name, n) in rows {
@@ -897,7 +909,13 @@ mod tests {
         assert_eq!(decision_kind(Move::Take { slot: 0 }), DecisionKind::Take);
         assert_eq!(decision_kind(Move::PopFree), DecisionKind::Pop);
         assert_eq!(decision_kind(Move::WonderStep { steps: 1 }), DecisionKind::WonderStep);
-        assert_eq!(decision_kind(Move::EndTurn), DecisionKind::Other);
+        assert_eq!(decision_kind(Move::PolPass), DecisionKind::Other);
+    }
+
+    #[test]
+    fn decision_kind_reads_end_turn_as_its_own_kind_distinct_from_other() {
+        assert_eq!(decision_kind(Move::EndTurn), DecisionKind::EndTurn);
+        assert_ne!(DecisionKind::EndTurn, DecisionKind::Other);
     }
 
     #[test]
