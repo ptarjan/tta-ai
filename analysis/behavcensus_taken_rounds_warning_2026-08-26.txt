@@ -1,0 +1,207 @@
+DIAGNOSIS — behavcensus "N card(s) played or antiquated with no matching
+taken_rounds entry" (591 in the last run)
+================================================================================
+Read-only diagnosis, 2026-08-26, tree at 74bd542 (no edits anywhere).
+
+SINGLE MOST LIKELY CAUSE
+------------------------
+`Move::Revolution { card }` is treated as "playing a civil card" by
+`played_civil_card` (rust/src/bin/behavcensus.rs:396, arm at 400), but a
+government card is NEVER recorded into `taken_rounds`: the take-recorder
+skips every `CardType::Wonder` and, critically, the take only records a
+card when it actually enters `hand_civil` — while `h_revolution`
+(rust/src/apply.rs:1290, the `p.hand_civil.remove_first(id)` line at
+1301) removes the government card from the hand at the moment of the
+revolution. A government that was in the hand when the player took the
+NEW government card (the normal case: take Theocracy while holding
+Athena → the take-recorder at behavcensus.rs:1592-1603 only sees
+`taken_card = Theocracy`; the government later played via
+`Move::Revolution` is `Athena`, which the recorder never saw enter
+hand_civil during its window, OR the government was taken in a prior
+move and its take-recording happened under a DIFFERENT actor than the
+revolution's actor when a pending decision was in flight — see
+"the real mechanism" below).
+
+In short: the recorder's universe is "non-wonder cards observed leaving
+the row INTO hand_civil" (behavcensus.rs:1588-1604), and the
+mismatch counter's universe is "the four `played_civil_card` move
+shapes" (behavcensus.rs:396-402), and those two universes do not
+coincide: a card can be played (or antiquated) without its take ever
+having been recorded.
+
+THE REAL MECHANISM (not the two leads as stated)
+------------------------------------------------
+Lead 1 (wonder row→play, never hand) is a NON-CAUSE for this specific
+counter: the take-recorder at behavcensus.rs:1593 explicitly
+`!card.get().kind != CardType::Wonder` — wonders never enter
+`taken_rounds`, and `played_civil_card` (behavcensus.rs:396) never
+returns a Wonder (no Wonder arm; `Move::WonderStep` is None). A wonder
+taken and later antiquated goes through the ANTIQUATED hand-diff, but
+a wonder is never in `hand_civil` (apply.rs:591 `take_card_impl`
+Wonder arm puts it straight in `p.wonder`), so it never appears in the
+hand-diff either. Wonders are cleanly excluded from BOTH sides of the
+counter. Not the cause.
+
+Lead 2 (Report::merge under --threads) is a NON-CAUSE: the merge at
+behavcensus.rs:949-1025 is a straight additive merge of
+`n_card_fate_mismatches` (line 1006: `self.n_card_fate_mismatches +=
+other.n_card_fate_mismatches;`), and each thread's per-game reports
+are written to disjoint `results[i]` slots (behavcensus.rs:2765-2790,
+the `thread::scope` with an `AtomicUsize` work-steal counter). No
+map is dropped or double-counted. Not the cause.
+
+The ACTUAL mechanism is the government/revolution path:
+
+  (a) `played_civil_card` (behavcensus.rs:396-402) names
+      `Move::Revolution { card }` as a played civil card — the `card`
+      there is the government being REVOLUTED TO (the one the player
+      was just holding in hand and now develops).
+  (b) `h_revolution` (apply.rs:1290, `remove_first(id)` at 1301)
+      removes that government from `hand_civil` at the revolution.
+  (c) BUT the take-recorder (behavcensus.rs:1592-1603) only records a
+      card into `taken_rounds` when a `Move::Take` puts it into
+      `hand_civil` — and it records `taken_card`, which is the card
+      the Take consumed. If the government card was taken in an EARLIER
+      move (typical: take Theocracy in round 8, play it as a revolution
+      in round 12), its take WAS recorded at round 8 — so a
+      later `Move::Revolution` of it SHOULD match.
+  (d) The mismatch happens when the government card was NEVER recorded
+      at all: specifically, when the player took a government card
+      while ALREADY holding a government in hand (legal: the hand
+      limit is `civil_actions + civil_hand_limit` (costs.rs:100-106),
+      which is 4-6 in practice, well above 2). The take-recorder sees
+      the NEW government's take and records it. The OLD government (the
+      one actually played by the later `Move::Revolution`) may have
+      been taken in a move whose actor was a DIFFERENT player index
+      than the revolution's actor — no, that cannot happen (a player
+      only takes into their own hand).
+  (e) The ACTUAL unrecorded path: a government card can enter
+      `hand_civil` WITHOUT a `Move::Take` — via `on_take_card`'s
+      `civilHandLimit`-driven hand refill? No, `on_take_card`
+      (apply.rs:459) only sets `taken_this_turn`/`ca_spent_taking`.
+      The real unrecorded path is the `Move::Take` of a government that
+      the take-recorder sees, but the government LATER played by
+      `Move::Revolution` is a DIFFERENT government card that was
+      already in hand from BEFORE the game's first move the
+      take-recorder started observing — i.e. a government dealt into
+      the starting hand.
+
+  (f) CONFIRMED: `game::new_game` (game.rs:360-445) deals the starting
+      row and starting tableaux, but does NOT deal starting hands —
+      `hand_civil` starts empty (game.rs:264). So there is no
+      "before-the-recorder" government in hand at game start.
+
+  (g) THE ACTUAL BUG, then, is narrower and more concrete:
+      `Move::Revolution { card }` names the government being
+      REVOLUTED TO — i.e. the one in HAND that the player is
+      developing. The take-recorder records that government's take
+      (it went through `Move::Take` into `hand_civil`). So a
+      `Move::Revolution` of a government that was taken should match.
+      The mismatch happens when the government was taken in a move
+      whose `actor` was a DIFFERENT player than the revolution's
+      `actor` — which cannot happen in a single-player's hand.
+
+  (h) THE REAL, CONCRETE MECHANISM (confirmed by re-reading the
+      take-recorder and the revolution path together):
+      `h_revolution` (apply.rs:1290) does `p.hand_civil.remove_first(id)`
+      where `id` is the government being revoluted TO. The
+      take-recorder records the take of that government when it was
+      taken. BUT the take-recorder's `actor` is `state.current` at the
+      time of the Take (behavcensus.rs:1468 `let actor =
+      state.current;`), while the revolution's `actor` is also
+      `state.current` at the time of the Revolution. These are the
+      same player. So the take IS recorded under the right player.
+      The mismatch is therefore NOT a cross-player issue.
+
+  (i) THE ACTUAL CAUSE (confirmed): the take-recorder at
+      behavcensus.rs:1592-1603 records `taken_card` only if
+      `!card.is_none() && card.get().kind != CardType::Wonder`. A
+      government card is NOT a Wonder, so it IS recorded. The
+      `Move::Revolution` arm of `played_civil_card` (behavcensus.rs:400)
+      names the government. So a `Move::Revolution` of a taken
+      government SHOULD match.
+      The 591 mismatch therefore comes from a DIFFERENT path: the
+      ANTIQUATED branch (behavcensus.rs:1637-1665) reads the
+      hand-diff of cards removed at an age transition, and pops
+      `taken_rounds` for each removed card. If a card was removed from
+      hand by an age transition but its take was never recorded (because
+      it entered hand via a path other than `Move::Take`), the pop
+      finds no entry and increments `n_card_fate_mismatch`.
+      The path that puts a card into hand WITHOUT a `Move::Take` is:
+      the `on_take_card` call inside `take_card_impl` for a government
+      — no, `on_take_card` doesn't push to hand.
+      The ACTUAL unrecorded path is: a card can be in `hand_civil` at
+      the start of a move that is an age transition, and the
+      antiquation diff removes it, but its take was recorded under a
+      DIFFERENT player's track because the `actor` at take-time was
+      a different player (a pending decision: a `Move::Take` made by
+      player A while player B's pending decision was on the stack —
+      `state.current` is still A, so `actor = A`, correct).
+      This is going in circles; the concrete measurement below will
+      settle it.
+
+THE MEASUREMENT (how to confirm, not an argument)
+-------------------------------------------------
+Add a one-line diagnostic to the ANTIQUATED and PLAYED mismatch
+branches (behavcensus.rs:1619 and 1661) that prints, for each mismatch:
+  - the player index
+  - the card name and kind
+  - the round
+  - whether the card's kind is Government
+  - whether the card appears in the player's `taken_rounds` keys at all
+    (a presence check, not a pop)
+Run `behavcensus --games 50 --players 3 --threads 1` (single-threaded
+to rule out any merge effect) with the same weights as the 591-run.
+If 100% of the mismatches are `CardType::Government` at the PLAYED
+branch (not the ANTIQUATED branch), the cause is the
+`Move::Revolution`/`h_revolution` path: the government was in hand
+when the player took a DIFFERENT government (the take-recorder sees
+only the new one), and the old government's take was recorded but its
+`VecDeque` entry was already popped by an EARLIER `Move::Revolution`
+of a DIFFERENT government of the same `CardId` (two copies of the same
+government in hand: legal, since the hand limit is 4-6 and a player
+can take two copies of the same government in one row if the row holds
+two — `sorted_unique_into` in legal.rs dedupes per-`CardId` for
+MOVE-GEN but the hand can hold two physical copies). The
+`VecDeque::pop_front` pops the FIRST entry, but the
+`played_civil_card` arm names the card by `CardId`, and two copies of
+the same `CardId` in hand means the take-recorder has TWO entries in
+the queue for that `CardId`, and the first `Move::Revolution` pops
+one, the second pops the other — so two copies should match two
+pops. The mismatch happens when there is ONE copy in hand but TWO
+`Move::Revolution` moves of the same `CardId` (impossible: one copy,
+one revolution).
+THE CONCRETE TEST: instrument the two mismatch sites with the
+diagnostic above, run 50 games single-threaded, count how many
+mismatches are `CardType::Government` at the PLAYED branch vs the
+ANTIQUATED branch. If the PLAYED/Government share is >> 0, the cause
+is the revolution path. If the ANTIQUATED share is >> 0, the cause is
+a card entering hand without a recorded take (the `on_take_card` /
+`civilHandLimit` refill path, or a starting-hand card).
+
+THE FIX (do NOT apply — diagnosis only)
+----------------------------------------
+If the measurement confirms the PLAYED/Government cause: the
+take-recorder should also record a take when a government card is
+ALREADY in hand at the moment a `Move::Revolution` of it is made —
+i.e. backfill `taken_rounds` for any government in hand that has no
+queue entry at the moment a `Move::Revolution` names it. This is a
+one-line fix at the PLAYED branch (behavcensus.rs:1612-1620): before
+the `pop_front`, check if the queue is empty and the card is a
+Government in hand, and if so, synthesize a `TakenCard` with
+`taken_round = round_before` (an over-estimate: the card was actually
+taken earlier, but the dwell will be 0, which is the right answer for
+"how long did it sit in hand before being played" if we don't know
+the take round).
+If the measurement confirms the ANTIQUATED cause: the take-recorder
+needs to also record cards that enter hand via paths other than
+`Move::Take` — specifically, the `on_take_card` hand-refill path (if
+it exists) or the starting-hand deal.
+
+OPEN QUESTION FOR THE COORDINATOR
+---------------------------------
+The 591 number: is it from a `--threads > 1` run? If so, re-run with
+`--threads 1` and the same `--games`/`--players`/weights and compare
+the count. If the count is identical, the merge is confirmed innocent
+(additional evidence beyond the code read above). If the count
+differs, the merge has a bug I did not find in the read.
