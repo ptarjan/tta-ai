@@ -1,0 +1,61 @@
+Round-1 civil-action measurement, human BGO corpus (read-only; no bot runs, no build)
+corpus: 1011 journals, 2525 player-games, all age-A round 1
+method: every round-1 line matching '<Colour> takes <Card> in hand <Colour> uses <N> civil action'.
+Round 1 contains ONLY takes: corpus-wide verb census for round 1 = takes 3923, 'puts X back in the row
+... gets N civil action' refunds 257, plus phase/score/bookkeeping lines; 0 builds, 0 population, 0
+develops, 0 political plays in any of the 2525 player-games. So 'actions by kind' = kinds of takes,
+and CA spend = CA taken. Card taxonomy from data/: cards_wonders_leaders.json (16 wonders, 24 leaders),
+cards_civil.json (54: 8 government, 12 special-tech, 4 farm, 4 mine, 12 urban, 10 military),
+cards_military_actions.json (action cards). Journal prints 'Stockpile'; data names it 'Stock Pile'
+(same card: Age A, type action, 'Gain 1 food and 1 resource') - matched, not a gap.
+
+== 1. round-1 civil actions by kind (all 3923 r1 CAs are takes) ==
+kind               n    pct
+action          1730   44.1
+wonder          1117   28.5
+leader          1076   27.4
+wonder stage-count mix: {6: 1117}
+leader CA-cost mix (band paid): {3: 48, 1: 808, 2: 220}
+governments taken in r1: 0 (no takes of a government card; changes of government are not logged as takes)
+
+== 2. unused round-1 CAs ==
+baseline: 4 CA under starting government Despotism (data/cards_civil.json: civilActions=4).
+r1 CA spent per player-game: n=2525 mean=1.99 min=0 q25=1.00 median=2 q75=2.00 max=11
+unused = 4 - spent: n=2525 mean=2.01 min=-7 q25=2.00 median=2 q75=3.00 max=4
+player-games wasting >=1 of 4 CA: 2297/2525 (91.0%)
+player-games spending exactly all 4: 177/2525 (7.0%)
+player-games with spend >4 ('unused' negative): 51/2525 - mid-round CA gains
+(e.g. Pyramids +1 CA) let spend exceed the 4 baseline; CA-gain events are not logged.
+caveat: unused = 4 minus logged r1 CA spend. Exact for the 2474 player-games with spend <=4; a FLOOR on
+actual waste for the 51 with CA-gain effects (they may have wasted still more, or none at all).
+
+== 3. round-1 take row position + card mix ==
+The journal does NOT log row position. Two proxies measured:
+(a) take ORDER within the player's r1 turn (1 = first take logged):
+    n=3923 mean=1.43 min=1 q25=1.00 median=1 q75=2.00 max=6
+    histogram: {1: 2523, 2: 1150, 3: 205, 4: 36, 5: 8, 6: 1}
+(b) CA band paid (1 CA = row positions 1-5, 2 CA = 6-9, 3 CA = 10-13, per cost bands; wonders pay the band):
+    1 CA band: n=2993  by take-order: {1: 1826, 2: 965, 3: 168, 4: 27, 5: 6, 6: 1}
+    2 CA band: n=754  by take-order: {1: 560, 2: 158, 3: 28, 4: 7, 5: 1}
+    3 CA band: n=176  by take-order: {1: 137, 2: 27, 3: 9, 4: 2, 5: 1}
+    anomaly: 137 takes in the 3-CA band at take-order 1 - a first logged take at a row-10-13 position
+    implies an undo or a refund ('puts X back in the row', 257 corpus-wide) before it; row position itself
+    is unobservable from these files.
+
+== card mix (all 3923 r1 takes, by name, top 15) ==
+    Pyramids                     437
+    Rich Land                    430
+    Engineering Genius           391
+    Urban Growth                 346
+    Hammurabi                    332
+    Library of Alexandria        317
+    Frugality                    272
+    Hanging Gardens              248
+    Aristotle                    197
+    Homer                        154
+    Moses                        137
+    Alexander the Great          130
+    Stockpile                    127
+    Julius Caesar                126
+    Colossus                     115
+UNCLASSIFIED: none - every r1 take name resolves to a data/ card.
