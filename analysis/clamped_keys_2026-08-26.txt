@@ -1,0 +1,218 @@
+Clamped weight keys: where the clamp is, which keys sit at the blind fallback, and what science_rate_trailing at 60.0 means
+=====================================================================================================================
+2026-08-26. Read-only diagnosis (no edits, no build). Clone: /Users/pt/tta-scratch.
+
+1. WHERE THE CLAMP IS APPLIED, AND WHAT DECIDES MEASURED vs CLAMP_BLIND
+----------------------------------------------------------------------
+The decision is WeightKey::clamp_bound (rust/src/bots/weighted/weights.rs:1911-1918):
+
+    pub fn clamp_bound(self, players: u8) -> f64 {
+        let spread = self.p95_candidate_spread()[player_index(players)];
+        if spread <= 0.0 {
+            return CLAMP_BLIND;                       // line 1913-1914: the fallback
+        }
+        let bound = CLAMP_T * P95_TOTAL_SPREAD[player_index(players)] / spread;
+        bound.min(CLAMP_BLIND)                        // line 1917: the cap
+    }
+
+- CLAMP_BLIND = 60.0 (weights.rs:2143): the pre-rail flat magnitude, kept as a CEILING
+  on every derived bound and as the fallback for coordinates the spread instrument
+  cannot see (doc at 2138-2142).
+- CLAMP_T = 1.0 (weights.rs:2136): the only free parameter, dimensionless (both sides
+  of the ratio are score ranges over the same candidate sets).
+- P95_TOTAL_SPREAD = [823.689416, 483.787396, 545.274556] (weights.rs:2152), per 2/3/4p.
+- The deciding quantity is the per-(key, player-count) p95 candidate-set spread
+  p95_candidate_spread (weights.rs:1936-2123). A stored 0.0 is the DOCUMENTED
+  "unmeasured" state, not a measured zero: 36c7c06 regenerated this table and the
+  in-tree comment at weights.rs:2101-2120 says new keys ship as [0,0,0] until a
+  real featspread pass covers them.
+
+Enforcement is in bin/climb.rs, per mutation and at load, not load-only (the
+load-only history is the doc at climb.rs:227-234):
+- clamp() (climb.rs:235-242): if |x| > effective_bound(key, players), x is pinned to
+  bound.copysign(x) -- magnitude clamped, SIGN kept.
+- effective_bound() (climb.rs:219-225): min of the key's own clamp_bound and the
+  clamp_bounds of every DOMINATES dominator, because dominance_repair (which runs
+  after every mutation and silently clamps negative weights to 0.0) would otherwise
+  push a dominator back over its bound.
+- repair_to_bounds() (climb.rs:267-280) pulls an INCUMBENT vector inside the bounds
+  at load (clamping mutations alone left pre-rail champions outside the rail
+  indefinitely); FROZEN (Culture, climb.rs:91-93) is excluded.
+- Applied at mutation: the scale operator (climb.rs:455) and the additive Gaussian
+  operator (climb.rs:493) both wrap their output in clamp(...).
+- runaway_weights() (climb.rs:286-294) flags any movable weight with
+  |w| >= 0.95 * effective_bound (RUNAWAY_FRACTION, climb.rs:106-112) and logs it
+  loudly (climb.rs:1352-1360), never silently. A weight AT 60.0 on a CLAMP_BLIND
+  fallback key therefore reappears in every generation's runaway list forever:
+  60.0 >= 0.95*60.0. The log line is expected behaviour, not an extra signal.
+
+2. WHICH KEYS CARRY AN UNMEASURED (ALL-ZERO) SPREAD ENTRY
+---------------------------------------------------------
+All arms of p95_candidate_spread that are [0.000000, 0.000000, 0.000000] in the
+current tree (weights.rs:1936-2123), grouped by reason.
+
+2a. EXCLUDED per instruction -- the leaf-eval batch landing today, seeded [0,0,0]
+    on purpose (the in-tree comments at weights.rs:2101-2120 say so):
+    - HandOverCapacity        (7dffa1e)
+    - HappyMarginAfterNextPop (628f63a)
+    - ResourceCommitmentTurns (cf81d2e)
+    - WonderOneStageShort     (08e1e41)
+
+2b. PRE-EXISTING unmeasured keys -- 36, in three mechanical classes:
+
+    Class A -- priced at the caller's FROZEN vector, spread zero BY CONSTRUCTION,
+    the documented class the doc comment at weights.rs:1896-1903 calls
+    "INVISIBLE TO THE INSTRUMENT" (featspread.rs:616-622 restates it). These CANNOT
+    be measured by featspread as currently written; they need the multcheck
+    instrument (rust/src/bin/multcheck.rs, header lines 7-69), which reaches the
+    effective value through the feature_marginal indirection that
+    linear_features prices away.
+    Multiplier (rate/horizon) keys:
+    - RateHorizon
+    - ResourceDiscount
+    - GovActionCost
+    - TacticShortfallCost
+    - TechRedundancyDiscount
+    Credit keys (18):
+    - CardBoardCredit, CardBoardLeader, HandSwapExtra, CardRateCredit,
+      UnitStrengthCredit, UnitTechCredit, TechBoardCredit, ActionBoardCredit,
+      GovBoardCredit, WonderBoardCredit, BuildFreshCredit, RestrictedResourceCredit,
+      FreeActionCredit, TerritoryCredit, BonusCardCredit, TacticBoardCredit,
+      AggressionBoardCredit, WarBoardCredit, PactBoardCredit, EventBoardCredit,
+      TacticReachCredit   (21 with the three above)
+    The doc's "nine of them carry live champion weights between 6 and 27, and
+    tech_board_credit sits at -27.05 at three players" (weights.rs:1901-1903) is
+    STALE: the current champions carry live values on 13 of these
+    (rust_champion_2p.json: tech_board_credit -27.05, card_board_leader 23.59,
+    unit_strength_credit 22.34, action_board_credit 20.79, card_board_credit 19.88,
+    tactic_reach_credit 19.75, build_fresh_credit 15.53, restricted_resource_credit
+    14.29, resource_discount 11.53, territory_credit 9.31, unit_tech_credit 7.81,
+    gov_action_cost 7.29, free_action_credit 6.27; 3p: 10 live incl.
+    tech_board_credit -27.05; 4p: 9 live). The count was written before the
+    champions these numbers came from were regenerated at 36c7c06.
+
+    Class B -- the STANDING-HINGE keys, which features() never writes at all
+    (registry.rs:310-311 names the source "rivals.rs standing-hinge marginal"):
+    - CultureRateTrailing
+    - ScienceRateTrailing
+    They are read only through w.get(key.trailing()) inside feature_marginal
+    (rivals.rs:976-983), multiplied by trailing_fraction in [0,1], so their
+    candidate-set spread in the feature vector is identically 0.0 -- same
+    "invisible to the instrument" situation as Class A, through a different
+    path: they are hinge coefficients, not feature coordinates.
+
+    Class C -- the NEED-HINGE keys, same story (features.rs:308-334 builds
+    MarginalNeed; the hinge read is rivals.rs:995-1002):
+    - FoodStockNeeded
+    - ResourceStockNeeded
+    - ScienceNeeded
+    - FreeWorkersNeeded
+
+    Class D -- rival-context keys that featspread's sample (frozen champion,
+    own self-play) apparently never fires at all candidate sets, so their rows
+    were emitted as zeros:
+    - RivalDesire, RivalTakeShare, RivalWonders, RivalScienceRate
+    These four are NOT in the frozen-vector class (they are written by
+    features() through ctx); their zero rows mean the instrument observed no
+    candidate-set spread, which for rival keys priced off opponents' hands and
+    stocks is a sample property, not a by-construction one. They ARE measurable
+    by featspread re-runs.
+
+    Total: 21 (Class A) + 2 (Class B) + 4 (Class C) + 4 (Class D) + 4 (Class A
+    multipliers counted with the 21 above: RateHorizon, ResourceDiscount,
+    GovActionCost, TacticShortfallCost, TechRedundancyDiscount are 5 of the 21)
+    = 36 pre-existing all-zero arms, 32 after the four excluded batch keys.
+
+3. SCIENCE_RATE_TRAILING AT 60.0: DEFECT OR HONEST ANSWER
+---------------------------------------------------------
+Verdict: HONEST ANSWER for a key the climb genuinely wants to push hard, with the
+caveat that the 60.0 is a FLOOR, not a measured ceiling. Reasoning:
+
+- The key is a hinge, not a coordinate (see Class B). Its weight multiplies
+  trailing_fraction in [0,1] (rivals.rs:873-902: 0.0 when level/leading,
+  (best-mine)/best otherwise) and adds to the marginal of ScienceRate
+  (rivals.rs:976-983). A positive weight means "value a unit of science production
+  MORE the further behind the leader you are" -- the design intent stated at
+  rivals.rs:965-975 ("THE STANDING HINGE"), which the test
+  a_player_behind_on_science_values_science_production_more_than_a_level_one
+  (rivals.rs:1132-1162) pins.
+- The clamp is a CEILING on magnitude (weights.rs:2138-2142, climb.rs:100-109):
+  it only ever tightens. A key whose bound is CLAMP_BLIND can legally walk the
+  whole [-60, 60] interval, and nothing in the code stops the search from
+  preferring the far end if fitness rewards it. Sitting AT the bound therefore
+  means "the fitness gradient is still pointing at the wall"; it does not mean
+  the wall is wrong. The 60.0 is the value the search arrived at, clamped at a
+  rail that is the HIGHEST the framework will allow.
+- Direction check against the current champions (experiments/rust_champion_*.json):
+  2p: science_rate_trailing = +20.62 (positive, trailing player values science
+  more -- matches design intent); 3p: +0.54; 4p: -0.71. A negative value at 4p is
+  NOT a contradiction of the design (a player trailing on science rate might
+  instead be one who should stop racing and build), but it shows the sign is a
+  trained quantity, not a fixed one. If the 2p log line "60.0" comes from a
+  generation whose value ran past 60, the clamp pinned it at +60: the search
+  wanted MORE than 60. That is a demand signal, not a corruption signal.
+- What would make it a DEFECT instead: (i) the value oscillating sign-by-sign
+  generation to generation while pinned at |60| (a search fighting its own
+  clamp, a sign of a mis-specified rail); (ii) the 2p arm beating rivals it
+  lost to while pinned at the wall (the pinned-coordinate-overfit signature the
+  module doc at climb.rs:102-106 describes as what the pool veto exists to
+  catch); (iii) the feature itself being degenerate (trailing_fraction reading
+  0.0 or 1.0 almost always), which would make any large weight noise-fitted.
+  None of these is visible from the weight value alone.
+- The distinguishing observation (measurement, not argument): compare the
+  champion's win share WITH science_rate_trailing at its clamped value against
+  the win share with the key pinned to 0.0 (or a small value like 1.0),
+  head-to-head over the same pool of opponents at 2p. If the 60.0 version wins
+  more (or the same, within noise) than the 0.0 version, the climb's push is
+  honest: the coordinate is doing work and the rail, not the key, is the thing
+  to revisit (regenerate its p95_candidate_spread row so the bound is measured
+  rather than blind -- see (4)). If the 0.0 version wins, the 60.0 is
+  overfit: the rail let a noise-fitted coordinate ride the wall for generations.
+  The existing gauntlet/pool machinery in climb.rs already runs the head-to-head;
+  what is missing is the ablation (zero the key, re-run the same pool).
+  A cheaper pre-check: look at the 2p climb's runaway log (climb.rs:1352-1360
+  emits it every generation) -- if science_rate_trailing appears at 60.0 in
+  every generation for hundreds of generations with the champion's win share
+  flat, that is the oscillation/stall signature; if win share rises while it
+  sits at the wall, that is the honest-push signature.
+
+4. EXISTING BINARY THAT MEASURES A SPREAD BOUND
+-----------------------------------------------
+YES: bin/featspread (rust/src/bin/featspread.rs). It is the instrument
+p95_candidate_spread's own doc names (weights.rs:1924-1928) and the one that
+regenerated the table at 36c7c06. Exact invocation (featspread.rs:50-52, 82):
+
+    cargo run --release --bin featspread -- 40 0 ../experiments emit
+
+- `40` = games per player count (2p/3p/4p each), `0` = deal seed base
+  (base_seed + game_index), `../experiments` = champion dir, holding
+  rust_champion_{2,3,4}p.json (featspread.rs:684), `emit` = also print the
+  regenerated p95_candidate_spread match arms and P95_TOTAL_SPREAD as
+  compilable Rust (featspread.rs:615-646, print_clamp_table) to paste into
+  weights.rs -- the doc at weights.rs:1927-1928 warns against hand-transcribing
+  the 486 constants out of the text table.
+- 36c7c06 used the same form at higher fidelity: 46043 decisions total, spliced
+  programmatically.
+- `decisive` mode (featspread.rs:76-78, 51-52) is 3p-only and reports
+  zero_frac / capable_frac per key -- the right follow-up for the Class D
+  rival keys (are they structurally dead or just quiet in the frozen sample?).
+  Invocation: `cargo run --release --bin featspread -- <games> <seed> <champion_dir> decisive`.
+
+CAVEAT that matters for Class A/B/C: featspread scores candidates with
+eval::candidate_features -> eval::linear_features, which prices multiplier and
+credit keys at the caller's FROZEN vector (featspread.rs:616-622, weights.rs:
+1896-1903) and never writes the standing/need hinge keys into the feature vector
+at all (registry.rs:310-311). So a featspread re-run will fill in Class D (and
+re-measure every measured row) but will EMIT ZERO for every Class A/B/C key
+again, by construction. Those classes need the multcheck instrument
+(rust/src/bin/multcheck.rs, lines 7-69), which reaches the effective value
+through the feature_marginal indirection; there is no featspread flag that
+switches it onto that path. Filling the nine hinge/multiplier/credit rows is
+a code change to featspread (or a multcheck run plus a manual splice), not a
+command that exists today.
+
+RULES OBSERVED
+--------------
+Read-only throughout: no edits under rust/src, no cargo build, no git commands in
+/Users/pt or /Users/pt/tta-ai. Champion values read from
+/Users/pt/tta-scratch/experiments/rust_champion_{2,3,4}p.json.
