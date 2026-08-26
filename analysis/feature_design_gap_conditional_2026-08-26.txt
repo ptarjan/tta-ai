@@ -588,3 +588,81 @@ search over placements -- but that is a different, larger question than what
 proposal 5 asks for, and proposal 5's own QUANTITY text (section 3.5) is
 explicit that it wants only the former.
 
+
+== IMPLEMENTATION ATTEMPT 2026-08-26 -- PROPOSAL 3.4 hand_over_capacity: BLOCKED ==
+
+Assigned as the first of the six proposals to implement, setting the
+registration template the other five would follow. Stopped BEFORE writing
+any production code: `rust/src/bots/weighted/weights.rs`, `features.rs` and
+`registry.rs`'s tests were read in full and the WeightKey registration
+pattern (the `weight_key_table!` macro, the exhaustive `early`/`late`/
+`trailing`/`needed`/`group`/`sign_intent` matches with no wildcard arm, the
+MEASURED `p95_candidate_spread` table) is understood well enough to land the
+key mechanically. What blocks it is the QUANTITY itself.
+
+THE CONFLICT: section 3.4's QUANTITY splits the civil hand into two cases --
+"a levelled card whose printed science cost <= my science" (science_cost) or
+"an already-developed card whose printed resource cost <= my resources"
+(resource_cost). `p.hand_civil` (state.rs:480) can hold Farm/Mine/Lab/
+Temple/Theater/Library/Arena/Infantry/Cavalry/Artillery/Air and SpecialTech
+(all `is_levelled_type`, science-costed -- fine), plus four more CardTypes
+that are NOT `is_levelled_type` and so fall into the note's "else" branch:
+Government, Wonder, Leader, Action.
+
+Checked `card_table.rs` directly for all four: every Government, Wonder,
+Leader and Action entry prints `science_cost: 0, resource_cost: 0`. Leader
+and Action are genuinely free to play, so reading `resource_cost` (0) for
+them is correct by coincidence. Government and Wonder are NOT free, but
+their real costs live in different fields the note never names:
+
+  * Government's real price is `Card::peaceful_cost` (cards.rs ~695), paid
+    in SCIENCE through the ordinary develop action (RULES_SPEC 8.3) --
+    `costs::tech_cost`'s own doc comment states this outright: "`science_
+    cost`... is 0 for every government (a government's `techCost` is always
+    null)". The note's "else -> resource_cost" branch reads exactly the
+    field that field's own doc comment says is always 0 for this type, so
+    a Government sitting in hand always counts as affordable under the
+    note's literal formula regardless of the real peaceful_cost.
+  * Wonder's real first-stage price is `Card::stages[0]` (Pyramids
+    `[3, 2, 1]`, etc, read today by `costs::wonder_stage_cost`), not
+    `resource_cost`, which is 0 for every Wonder entry in `card_table.rs`.
+    A Wonder sitting in hand always counts as affordable under the note's
+    literal formula too.
+
+Net effect of implementing the note literally: `hand_over_capacity` would
+silently never charge a Government or a Wonder as "cards I cannot afford to
+play" -- exactly the two non-levelled civil types that DO have a real,
+often-unaffordable cost, while the two that happen to read correctly
+(Leader, Action) are the two that were never going to be unaffordable
+anyway. This is not a discount-precision gap the note explicitly allows
+("does not require discount-exact precision, only the right shape") -- it is
+reading a field that is unconditionally 0 for these types, i.e. the wrong
+signal entirely, not an imprecise version of the right one. It also cuts
+against the round-1 motivating scenario (section 2d) more than it looks:
+Age-A Wonders sit in the row from turn one and are commonly among a
+player's first takes, so undercounting exactly the "took a Wonder, can't
+pay stage 1 for several turns" case works against the feature's own
+motivation.
+
+STOPPED HERE per the standing instruction not to invent a resolution to a
+spec/code conflict. Two live options for whoever picks this back up, neither
+chosen:
+
+  (A) Implement literally as written (resource_cost for the non-levelled
+      branch). Cheapest, matches the note's prose exactly, but Government
+      and Wonder are permanently invisible to this feature.
+  (B) Extend the split to the real field per type: keep the science_cost
+      test for is_levelled_type; test Government against science using
+      `peaceful_cost` (still a science-affordability test, just the correct
+      field); test Wonder against resources using `stages[0]` (still
+      printed, static per-card data, so it stays inside the note's own
+      "printed costs... static card data" ENGINE guidance even though the
+      note's prose never names this field); Leader/Action keep reading as
+      free (correct). More code, three printed-cost fields read instead of
+      two, but the QUANTITY actually means what section 3.4 says it means
+      for all six civil-hand-eligible card shapes, not four of them.
+
+No `WeightKey` variant was added, no default weight was set, no test was
+written, no file under `rust/src` was touched. `rust/src/bots/weighted/
+weights.rs`, `features.rs`, `registry.rs` were read only.
+
