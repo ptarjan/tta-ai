@@ -745,3 +745,120 @@ branch that must not be written at all, because RULES_SPEC 2.4/6.7 and
 before "how much does it cost" would have caught both halves in one pass
 rather than needing a stop-and-report round trip for the second.
 
+
+
+== RESOLUTION AND LANDING, 2026-08-26 -- PROPOSAL 3.5 happy_margin_after_next_pop: LANDED ==
+
+Second of the six proposals, assigned together with 3.2 below. No spec/code
+conflict this time -- the note's own "VERIFICATION OF PROPOSALS 5 AND 6"
+section above had already done the hard verification work (QUESTION 2:
+`effects::Stats.happy` is staffing-driven, not population-count-driven, so
+the whole feature is a table lookup, not a resimulation) and it held exactly
+as written.
+
+QUANTITY implemented: the HINGE form the note calls "more useful" -- `max(0,
+-(margin after one more population increase))`, computed under UNCHANGED
+staffing. `economy::increase_population` only ever touches `p.yellow_bank`
+(decrementing it, or leaving it floored at 0 -- mirrored here with
+`saturating_sub(1)`), so the feature reads the SAME `s.happy`
+`features::features` already computed once, against `economy::
+happy_required` (the VERIFIED CORRECT band table, untouched, per this task's
+own instruction) evaluated one token lower. No second `effects::compute`, no
+tableau resweep.
+
+LANDED (commit 628f63a):
+  * `WeightKey::HappyMarginAfterNextPop` (`weights.rs`): appended at the end
+    of the enum after `HandOverCapacity`, registered at `0.0` default,
+    included in the four exhaustive `early`/`late`/`trailing`/`needed`
+    catch-all panic arms, grouped `WeightGroup::Happiness` (beside
+    `HappyMargin`/`Discontent`/`HappySurplus` -- the identical axis one
+    population increase forward), gated `SignIntent::NonPositive` in the
+    SAME shortfall bucket as `HandOverCapacity`/`FoodGap`/etc (`max(0, need -
+    have)` shape). `p95_candidate_spread` seeded `[0.0, 0.0, 0.0]`,
+    documented unmeasured.
+  * Feature computation (`features.rs`): folded into the EXISTING happiness
+    block (the `happy_req`/`margin`/`discontent` locals just above
+    `blue_have`), not a new pass -- `next_yellow_bank`, `happy_req_next`,
+    `margin_next`, `discontent_next_pop` computed alongside the current-board
+    versions, then `f.set` beside `HappyMargin`/`Discontent`.
+  * Four tests, red-confirmed by breaking the exact production line each
+    guards and reverting: a non-degenerate "free of consequence" baseline
+    (post-pop margin +4, not merely 0, so the test cannot pass by every
+    number happening to be zero), a band-tip case where the CURRENT board is
+    perfectly content but the next pop is not (the scenario the feature
+    exists for), the `saturating_sub` floor at an already-empty yellow bank
+    (confirmed red via a genuine `u8` subtract-with-overflow panic when
+    swapped for plain `- 1`), and the hinge-vs-raw-margin distinction
+    (confirmed red by writing the raw `margin_next` instead of the hinged
+    value, which also incidentally red-confirmed the baseline and band-tip
+    tests a second way).
+  * `cargo clippy --all-targets -- -D warnings` and the full `cargo test`
+    suite (1531 lib tests + every integration binary) both clean.
+
+
+== RESOLUTION AND LANDING, 2026-08-26 -- PROPOSAL 3.2 resource_commitment_turns: LANDED ==
+
+Third of the six proposals. No spec/code conflict: this reads a RESOURCE
+cost off `p.techs` (developed-but-unstaffed tableau slots), never a SCIENCE
+develop cost, so the Government/`costs::tech_cost` trap that bit
+`hand_over_capacity` (3.4) does not apply here -- confirmed independently
+rather than assumed, and doubly moot because `sweep_tableau`'s own match
+arms already establish a `Government` can never occupy a `Tableau` slot at
+all (governments live in `PlayerState::government`, not `Tableau`).
+
+QUANTITY implemented exactly as specified: `(wonder_remaining + sum of
+printed resource costs of every developed-but-unstaffed tableau slot) /
+max(resource_rate, 1)`.
+
+LANDED (commit cf81d2e):
+  * `WeightKey::ResourceCommitmentTurns` (`weights.rs`): appended at the end
+    of the enum, registered at `0.0` default, included in the four
+    exhaustive catch-all panic arms, grouped `WeightGroup::Wonders` (beside
+    `WonderRemaining` -- it reads that key's own local as half its
+    numerator and prices the same "is this wonder worth it" decision), gated
+    `SignIntent::NonPositive` with its own dedicated arm beside the
+    wonder-debt bucket ("prices an outstanding resource obligation, in
+    turns, as an upside"). `p95_candidate_spread` seeded `[0.0, 0.0, 0.0]`.
+  * `TableauSweep` (`features.rs`) gained one new field,
+    `unbuilt_resource_cost_sum: i32` -- a SUM, deliberately distinct from
+    the existing `unbuilt_min_resource_cost` (a MIN, kept for
+    `marginal_needs`'s own threshold), computed in the SAME loop
+    `sweep_tableau` already runs rather than a second walk. `TableauSweep`
+    is shared with `bots::neural::encode`; the new field is additive only
+    and that encoder's own behaviour is unchanged (confirmed by reading its
+    call site, which reads named fields, not an exhaustive destructure).
+  * Feature computation: `remaining` (the wonder-outlook local already in
+    scope) and `unbuilt_resource_cost_sum` combined and divided by
+    `f.get(WeightKey::ResourceRate)` read back AFTER `features()` sets it
+    (the NET rate, corruption and pending gains folded in already) --
+    `HandOverCapacity`'s own "one true computation" idiom for `Science`,
+    reused here for `ResourceRate`.
+  * Four tests, red-confirmed by breaking the exact production line each
+    guards and reverting. Deliberately built on a fresh, UNMODIFIED
+    `game::new_game` rather than a hand-zeroed state: `game::START_TECHS`
+    already stages Religion (Temple, printed `resource_cost: 3`) unstaffed
+    from turn one, and Bronze (Mine) starts staffed at 2 workers, so a fresh
+    game already has a non-degenerate `resource_rate` of 2.0 and a
+    non-degenerate unstaffed obligation of 3 -- the baseline test (1.5)
+    could not pass by every number happening to be zero. The other three
+    add: a second unstaffed slot (Iron) to prove the SUM is used, not the
+    existing MIN field (confirmed red by swapping in `needs.resource`, the
+    min, which read 1.5 instead of the expected 4.0); an in-progress wonder
+    (Pyramids, `stages: [3, 2, 1]`, unpaid) to prove `wonder_remaining` is
+    added into the numerator (confirmed red by dropping that term); and
+    un-staffing Bronze to stall the economy to `resource_rate == 0.0`,
+    proving the `max(resource_rate, 1)` floor (confirmed red by loosening it
+    to `max(resource_rate, 0.0)`, which produced `inf`, not the `5.0`
+    expected -- `assert_eq!` correctly treats `inf != 5.0` as a mismatch).
+  * `cargo clippy --all-targets -- -D warnings` and the full `cargo test`
+    suite (1535 lib tests + every integration binary) both clean, including
+    `registry.rs`'s runtime-instrumentation check confirming
+    `ResourceCommitmentTurns` actually goes nonzero on real self-play, not
+    merely compiles.
+
+STATUS AFTER THIS BATCH: 3.4 (hand_over_capacity), 3.5
+(happy_margin_after_next_pop) and 3.2 (resource_commitment_turns) are
+landed. 3.1 (science_need_row), 3.3 (wonder_one_stage_short) and 3.6
+(row_playable_count) remain, per section 5's own cost classification above
+("MODERATE -- new bounded work" for 3.1/3.6 sharing one row pass, "cliff...
+one integer comparison" for 3.3).
