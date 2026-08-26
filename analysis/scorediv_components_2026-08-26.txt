@@ -1,0 +1,149 @@
+scorediv component decomposition — 42 completed-but-not-exact games
+date 2026-08-26; baseline 882 complete and 840 exact; gap=42
+
+=== HISTOGRAM (bucket: n, sums) ===
+=== HISTOGRAM ===
+final_award                              n=3   sum_in_play=     0 sum_final_award=     6 sum_end_bonus=     0 in_play_pattern=zero
+in_play_drift                            n=39  sum_in_play=   -88 sum_final_award=   -24 sum_end_bonus=   116 in_play_pattern=mixed
+
+=== per-game residual/in_play/award/end (sorted) ===
+DIVERGE 7520722 engine=[173, 201, 183, 230] index_placed=[230, 193, 183, 169] residual=[4, 8, 0, 0] in_play=[4, 8, 0, 0] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7521141 engine=[107, 133, 96, 105] index_placed=[133, 107, 102, 101] residual=[0, 0, -5, 3] in_play=[0, 0, -5, 3] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7521425 engine=[109, 146, 62] index_placed=[146, 109, 59] residual=[0, 0, 3] in_play=[0, -6, 3] award_delta=[0, 0, 0] end_bonus=[0, 6, 0]
+DIVERGE 7521660 engine=[198, 209, 190, 142] index_placed=[209, 198, 190, 136] residual=[0, 0, 0, 6] in_play=[0, -6, 0, 6] award_delta=[0, 0, 0, 0] end_bonus=[0, 6, 0, 0]
+DIVERGE 7521695 engine=[320, 284, 227, 281] index_placed=[320, 284, 278, 225] residual=[0, 0, 2, 3] in_play=[0, 0, 2, 3] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7521828 engine=[228, 249] index_placed=[247, 228] residual=[0, 2] in_play=[0, 2] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7521833 engine=[197, 109] index_placed=[200, 109] residual=[-3, 0] in_play=[-3, 0] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7521849 engine=[125, 66] index_placed=[125, 64] residual=[0, 2] in_play=[0, 0] award_delta=[0, 2] end_bonus=[0, 0]
+DIVERGE 7521967 engine=[113, 139] index_placed=[136, 118] residual=[-5, 3] in_play=[-5, -6] award_delta=[0, 0] end_bonus=[0, 9]
+DIVERGE 7521985 engine=[176, 180] index_placed=[185, 173] residual=[3, -5] in_play=[3, -5] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7522168 engine=[173, 129, 137, 170] index_placed=[173, 166, 133, 129] residual=[0, 0, 4, 4] in_play=[-12, 0, 4, 4] award_delta=[0, 0, 0, 0] end_bonus=[12, 0, 0, 0]
+DIVERGE 7522211 engine=[113, 97] index_placed=[134, 76] residual=[-21, 21] in_play=[-28, 21] award_delta=[0, 0] end_bonus=[7, 0]
+DIVERGE 7522212 engine=[205, 147] index_placed=[203, 147] residual=[2, 0] in_play=[2, -8] award_delta=[0, 0] end_bonus=[0, 8]
+DIVERGE 7522239 engine=[54, 14] index_placed=[54, 11] residual=[0, 3] in_play=[-12, 3] award_delta=[0, 0] end_bonus=[12, 0]
+DIVERGE 7522277 engine=[213, 114] index_placed=[213, 112] residual=[0, 2] in_play=[0, 0] award_delta=[0, 2] end_bonus=[0, 0]
+DIVERGE 7522373 engine=[186, 163, 238, 188] index_placed=[238, 190, 184, 163] residual=[-4, 0, 0, 4] in_play=[-4, 0, 0, 4] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7522397 engine=[116, 191] index_placed=[191, 110] residual=[6, 0] in_play=[2, 0] award_delta=[4, 0] end_bonus=[0, 0]
+DIVERGE 7522446 engine=[182, 174, 174, 172] index_placed=[182, 181, 174, 174] residual=[0, 0, 0, -9] in_play=[0, 0, 0, -14] award_delta=[0, 0, 0, -2] end_bonus=[0, 0, 0, 7]
+DIVERGE 7522473 engine=[210, 129, 214, 162] index_placed=[213, 210, 162, 129] residual=[0, 0, 1, 0] in_play=[0, 0, 1, 0] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7522633 engine=[150, 142] index_placed=[151, 142] residual=[-1, 0] in_play=[-1, 0] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7522648 engine=[220, 215] index_placed=[220, 220] residual=[0, -5] in_play=[0, -6] award_delta=[0, -5] end_bonus=[0, 6]
+DIVERGE 7522672 engine=[130, 122, 111] index_placed=[134, 122, 107] residual=[-4, 0, 4] in_play=[-7, 0, 4] award_delta=[0, 0, 0] end_bonus=[3, 0, 0]
+DIVERGE 7522703 engine=[159, 187] index_placed=[192, 156] residual=[3, -5] in_play=[3, -5] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7522730 engine=[109, 68] index_placed=[109, 65] residual=[0, 3] in_play=[0, 3] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7522776 engine=[178, 125] index_placed=[178, 122] residual=[0, 3] in_play=[0, 3] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7522838 engine=[169, 147] index_placed=[169, 146] residual=[0, 1] in_play=[0, 1] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7522866 engine=[126, 152, 151, 171] index_placed=[171, 151, 148, 122] residual=[4, 4, 0, 0] in_play=[4, 4, 0, 0] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7522984 engine=[179, 126] index_placed=[169, 136] residual=[10, -10] in_play=[10, -9] award_delta=[0, -10] end_bonus=[0, 9]
+DIVERGE 7523025 engine=[258, 219] index_placed=[267, 219] residual=[-9, 0] in_play=[-9, 0] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7523035 engine=[335, 245] index_placed=[354, 245] residual=[-19, 0] in_play=[-16, 0] award_delta=[-3, 0] end_bonus=[0, 0]
+DIVERGE 7523115 engine=[116, 127, 203] index_placed=[209, 127, 116] residual=[0, 0, -6] in_play=[0, -4, -6] award_delta=[0, 0, 0] end_bonus=[0, 4, 0]
+DIVERGE 7523154 engine=[134, 156] index_placed=[156, 131] residual=[3, 0] in_play=[3, 0] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7523159 engine=[137, 175] index_placed=[174, 137] residual=[0, 1] in_play=[0, 1] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7523162 engine=[205, 236, 173, 228] index_placed=[236, 228, 205, 171] residual=[0, 0, 2, 0] in_play=[0, 0, 0, 0] award_delta=[0, 0, 2, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7523167 engine=[168, 148] index_placed=[173, 145] residual=[-5, 3] in_play=[-5, 3] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7523236 engine=[155, 251, 194, 113] index_placed=[251, 194, 152, 118] residual=[3, 0, 0, -5] in_play=[3, 0, 0, -5] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 0]
+DIVERGE 7523253 engine=[215, 199, 242, 198] index_placed=[240, 215, 199, 198] residual=[0, 0, 2, 0] in_play=[0, 0, 0, -6] award_delta=[0, 0, 2, 0] end_bonus=[0, 0, 0, 6]
+DIVERGE 7523341 engine=[168, 209, 224, 129] index_placed=[228, 205, 168, 129] residual=[0, 4, -4, 0] in_play=[0, 4, -10, 0] award_delta=[0, 0, 0, 0] end_bonus=[0, 0, 0, 6]
+DIVERGE 7523367 engine=[84, 183] index_placed=[183, 81] residual=[3, 0] in_play=[3, 0] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7523474 engine=[184, 104] index_placed=[189, 101] residual=[-5, 3] in_play=[-5, 3] award_delta=[0, 0] end_bonus=[0, 0]
+DIVERGE 7523557 engine=[93, 142] index_placed=[147, 90] residual=[3, -5] in_play=[3, -11] award_delta=[0, 0] end_bonus=[0, 6]
+DIVERGE 7523566 engine=[237, 173] index_placed=[227, 183] residual=[10, -10] in_play=[10, -9] award_delta=[0, -10] end_bonus=[0, 9]
+
+=== index rows (verdict class, last round, index scores) ===
+7520722 4p Emperor r19 230|193|183|169
+7521141 4p Emperor r19 133|107|102|101
+7521425 3p King r19 146|109|59
+7521660 4p Emperor r19 209|198|190|136
+7521695 4p Warlord r19 320|284|278|225
+7521828 2p Prince r20 247|228
+7521833 2p Emperor r20 200|109
+7521849 2p Emperor r18 125|64
+7521967 2p Warlord r19 136|118
+7521985 2p Emperor r19 185|173
+7522168 4p King r19 173|166|133|129
+7522211 2p Emperor r18 134|76
+7522212 2p Emperor r19 203|147
+7522239 2p Emperor r20 54|11
+7522277 2p Emperor r20 213|112
+7522373 4p Emperor r18 238|190|184|163
+7522397 2p Emperor r19 191|110
+7522446 4p Emperor r19 182|181|174|174
+7522473 4p Prince r19 213|210|162|129
+7522633 2p King r19 151|142
+7522648 2p Emperor r20 220|220
+7522672 3p Emperor r18 134|122|107
+7522703 2p Emperor r19 192|156
+7522730 2p Emperor r20 109|65
+7522776 2p Emperor r19 178|122
+7522838 2p King r19 169|146
+7522866 4p Prince r19 171|151|148|122
+7522984 2p Warlord r19 169|136
+7523025 2p Warlord r20 267|219
+7523035 2p Prince r20 354|245
+7523115 3p King r18 209|127|116
+7523154 2p King r19 156|131
+7523159 2p King r20 174|137
+7523162 4p Emperor r19 236|228|205|171
+7523167 2p Emperor r19 173|145
+7523236 4p King r19 251|194|152|118
+7523253 4p Emperor r20 240|215|199|198
+7523341 4p Emperor r19 228|205|168|129
+7523367 2p King r19 183|81
+7523474 2p King r20 189|101
+7523557 2p Prince r20 147|90
+7523566 2p Emperor r20 227|183
+
+=== the 3 final_award games: raw rows ===
+format: game | card | seat | counted_quantity | engine_count | journal_implied_count | engine_pts | journal_pts | late_change (journal line, verbatim) | class
+
+7521849 | Impact of Progress | Purple(1) | special+gov tech levels | 7 | 6 | 14 | 12 | UNLOGGED: no upgrade/develop line in journal; final board shows 7 levels (Code of Laws L1, Engineering L3, Satellites L3) vs 6 implied | consistent-but-unpinned
+7522277 | Impact of Happiness | Purple(1) | happy faces (2*min(2*happy,16) - 2*discontent) | 14 | 12 | 14 | 12 | L353 "2026-03-24 21:08:54 Purple IV 19 Purple builds Religion using Urban Growth" (game ends round 20) | pinned: build in final round r19, event logged as round 20
+7523162 | Impact of Population | Green(2) | content workers (2 per above 10) | 17 | 16 | 14 | 12 | L631 "2026-06-22 22:45:21 Green IV 18 Green discovers Engineering Green loses 9 science"; L633 "2026-06-22 22:45:46 Green IV 18 Green discovers Tanks Green loses 9 science" (game ends round 19) | hole closed: see below
+
+7523162 hole closure:
+- card data: Engineering (data/cards_civil.json:769) = special-tech, buildDiscount+4-wonder-stages only;
+  Tanks (data/cards_civil.json:508) = Age III cavalry, strength 5, no production.
+  NEITHER adds a content worker. The earlier "+1 content worker" annotation on each was WRONG.
+- content worker = yellow tokens not in Population Bank minus Discontent (events.rs:390-412).
+  Discovering a tech does not move yellow tokens; the count did not change at L631/L633.
+- the +1 vs journal-implied 16 is a worker that never appears in Green's journal lines
+  (no logged increase-population / event-population line accounts for the 17th).
+  Unlogged, like 7521849: consistent-but-unpinned, not a pinned trigger.
+- consequence: the two logged r18 discoveries are NOT the trigger; they add zero to the counted quantity.
+
+=== snapshot-point result ===
+candidates tested: (A) start of final round, (B) start of final player's turn, (C) after last turn before a specific step.
+- 7522277: build logged r19, game ends r20, event logged as "round 20". Consistent with (A)/(B)/(C) all:
+  any point after r19's build (i.e. at/after r20) excludes it. Pinned only as "after the r19 build".
+- 7521849: triggering line unlogged (unpinned). No constraint.
+- 7523162: the counted quantity (content workers) has NO logged change in the final round
+  (the r18 discoveries add zero content workers). Therefore NO snapshot point can exclude a
+  final-round change for this game: there is no final-round change to exclude.
+  In particular (A) "start of the final round" is RULED OUT as the universal point, because it
+  would require a logged final-round change to explain the gap, and there is none.
+VERDICT: NO consistent single snapshot point across all three games. "BGO snapshots at start of
+the final round" is falsified by 7523162. The three +2s are best read as three separate
+understatements of one item each (one counted quantity off by one per seat), not one shared
+evaluation-timing offset. 7522277 is the only one with a logged final-round change to the
+counted quantity; 7521849 and 7523162 have unlogged/unexplained single-item gaps.
+
+=== rules verdict: is an "Impact of ..." award computed against the TRUE final board ===
+YES — including anything built or developed in the final round. Engine is rules-correct.
+sources:
+- docs/RULES_SPEC.md §12.5.2 (line 308): "After the last turn: evaluate ALL Age III events
+  remaining in the current AND future events decks ... Most award culture per cards/workers
+  in play" [CoL p.1, RB p.23]. "After the last turn" = true game end; "in play" = final board.
+- sources/faq_v15.pdf (v15, CGE): "At the end of the game, any Age-III Events still in the
+  Current- and Future-Event stacks are evaluated (any Age-I or Age-II Events are not)."
+  And "Impact of Population: Count the number of yellow markers that are not in your Population
+  Bank. Subtract from this the number of Discontent Workers that you have. This is your number
+  of Content Workers." — a live-board count, no final-round exclusion stated.
+- cross-check (web): BGG 403 / Fandom 402 / CGE DNS — NOT reachable from this box. Web check
+  FAILED (not a disagreement; simply unavailable). No source contradicts the errata reading;
+  no independent web confirmation obtained.
+CONCLUSION: the rulebook and FAQ say Impact events score the final board at true game end.
+The engine does this. BGO's end-of-game "Impact of ..." line understates one counted item in
+three seats; that is BGO's artifact, NOT a rule. These 3 games are PERMANENTLY non-exact by
+design: do not "fix" the engine to match BGO, do not add tolerance, do not touch the
+suppression gate. The engine being right is the point.
