@@ -120,14 +120,14 @@ type's prices.
 ================================================================================
 
 The relay cited "multcheck.rs:242" as the freeze site. VERIFIED: the
-freeze is the call at multcheck.rs:246
+freeze is the call at multcheck.rs:242
   `eval::candidate_features(s, legal.as_slice(), bot.allow_resign, &pw)`
-where `pw = *weights; pw.set(k, pert_val)` (multcheck.rs:244-245). The
+where `pw = *weights; pw.set(k, pert_val)` (multcheck.rs:240-241). The
 freeze is the fourth argument, `freeze: &Weights`, which threads to
 linear_features (eval.rs:726) and then to every pricer call at
-eval.rs:689-698. Line 242 is the `base_move` line; the freeze call is
-at 246 (off by 4). The probe vector pw = champion with ONLY the credit
-key k set to c; every other key at the champion value.
+eval.rs:689-698. Line 235 is the `base_move` line. The probe vector
+pw = champion with ONLY the credit key k set to c; every other key at
+the champion value.
 CRITICAL CORRECTION TO THE DESIGN SKETCH: the sketch said "phi' is
 built with the PROBE vector as the freeze" and "S_d = max - min of
 dot(w_probe, phi')". That is WRONG for the credit keys, because the
@@ -355,15 +355,15 @@ applies: document the deferral and do not build.
 9. CITATION VERIFICATION LOG (THE RELAY'S FOUR CITATIONS)
 ================================================================================
 
-1. "multcheck.rs:242 does it [the freeze]" -- VERIFIED WITH CORRECTION.
-   The freeze call is at multcheck.rs:246
-   (candidate_features(s, legal, bot.allow_resign, &pw)); line 242 is
-   the base_move line (mechanism correct, line off by 4). MORE
-   IMPORTANTLY, the sketch's formulation (probe in the dot vector, S_d
-   = max-min of dot(w_probe, phi')) is WRONG for the credit keys: they
-   have no linear_feature coordinate, so the probe in the dot vector
-   changes nothing; the swing comes from re-running the pricers under
-   the probe freeze. Section 3 corrects this.
+1. "multcheck.rs:242 does it [the freeze]" -- VERIFIED CORRECT.
+   The freeze call is at multcheck.rs:242
+   (candidate_features(s, legal, bot.allow_resign, &pw)); line 235
+   is the base_move line. MORE IMPORTANTLY, the sketch's
+   formulation (probe in the dot vector, S_d = max-min of
+   dot(w_probe, phi')) is WRONG for the credit keys: they have no
+   linear_feature coordinate, so the probe in the dot vector
+   changes nothing; the swing comes from re-running the pricers
+   under the probe freeze. Section 3 corrects this.
 2. "featspread's print_clamp_table (featspread.rs:623-646)" -- VERIFIED.
    The function `print_clamp_table` starts at featspread.rs:622 (doc
    from 604); the table it prints spans 623-646. Correct as a line
