@@ -1,0 +1,144 @@
+DEFECT VERIFICATION — horizon::paid_fraction and economy::pop_food_cost
+========================================================================
+Read-only, 2026-08-26, tree at 74bd542. Diagnose, do not fix.
+
+----------------------------------------------------------------------------
+(1) horizon::paid_fraction — "returns 1.0 when progress + remaining == 0"
+----------------------------------------------------------------------------
+VERDICT: FALSE ALARM. The branch is unreachable in a real game; the doc
+comment at the call site says so, and the proof is short.
+
+The function (rust/src/bots/weighted/horizon.rs:549-554):
+
+    pub fn paid_fraction(&self) -> f64 {
+        let total = self.progress + self.remaining;
+        if total > 0 { f64::from(self.progress) / f64::from(total) } else { 1.0 }
+    }
+
+The ONLY constructor of `WonderOutlook` is `wonder_outlook`
+(horizon.rs:620-661), which returns `None` when `p.wonder.is_none()`
+(line 621-623). For every `Some` result:
+  progress  = sum of stages[..built]      (horizon.rs:630)
+  remaining = sum of stages[built..]      (horizon.rs:631)
+so progress + remaining = sum of ALL printed stages of the wonder.
+
+Every one of the 16 base-game wonders prints at least one stage with a
+nonzero cost (data/cards_wonders_leaders.json; the same fact the doc
+comment at horizon.rs:545-547 relies on: "Every wonder in the base game
+prints at least one stage with a nonzero cost, so the denominator is
+positive whenever wonder_outlook returned Some"). Therefore
+progress + remaining > 0 for every Some(WonderOutlook), and the `else
+{ 1.0 }` arm requires a data edit that prints an all-zero-stages wonder —
+a card that costs nothing to complete, which no base-game wonder is.
+
+What the 1.0 WOULD mean if it fired: paid_fraction feeds exactly two
+consumers (horizon.rs:568 `earned_share = paid_fraction *
+collect_fraction` and horizon.rs:608 `promise_share = (1 -
+paid_fraction) * feasible_fraction`), both applied to the
+WonderPotential/WonderPromise weights in eval.rs. A spurious 1.0 would
+make `earned_share` claim the full value of a nonexistent wonder and
+make `promise_share` zero — i.e. the evaluator would treat a free
+wonder as already fully owned. But since the branch is unreachable with
+real data, this is a guard, not a defect: the comment at horizon.rs:
+547-548 says exactly this ("the guard is there so a data edit that
+printed a free wonder could not produce a NaN inside the evaluator").
+Note the guard's 1.0 is arguably the RIGHT value for a free wonder
+(0/0 → "fully paid" is the only sane limit), so even the hypothetical
+data edit would not propagate a wrong number so much as a degenerate one.
+
+No callers outside horizon.rs consume paid_fraction directly; the two
+share methods are the only path, and both are gated on the same
+wonder_outlook being Some (eval.rs's WonderPotential/WonderPromise
+blocks call wonder_outlook first).
+
+----------------------------------------------------------------------------
+(2) economy::pop_food_cost — one_time discount parameter
+----------------------------------------------------------------------------
+VERDICT: REAL DEFECT, deliberately deferred (documented), and SMALL.
+
+Signature (rust/src/economy.rs:189-197):
+
+    pub fn pop_food_cost(
+        pop_food_discount: i32,
+        yellow_bank: u8,
+        one_time_food_discount: i32,
+    ) -> Option<i32>
+
+Every call site, with what it passes as the one_time argument:
+
+  PASS THE REAL DISCOUNT (p.one_time_discount.pop_food):
+    economy.rs:210   pop_cost wrapper — the state-reading entry point.
+    legal.rs:203     legal.rs's private pop_cost (move-gen legality).
+    apply.rs:691     h_pop — the actual charge at population increase.
+    apply.rs:749     Ocean Liners' PopFree grant check (grant as i32).
+    apply.rs:774     Frederick Barbarossa's pop half.
+  PASS 0 (the discount omitted):
+    bots/board_yields.rs:338   board-yield pop-cost estimate.
+    bots/board_yields.rs:732   board-yield pop-cost estimate (2nd site).
+    bots/weighted/features.rs:317  marginal_needs — THE SUSPECTED SITE.
+    bots/neural/encode.rs:322   neural encoding's pop-cost feature.
+    replay_common.rs:5301       oracle "full price" computation.
+    replay_common.rs:11149      oracle "full price" computation (2nd).
+  (economy.rs:1487-1497 are unit tests, not production.)
+
+CONFIRMED: `marginal_needs` (features.rs:308-334) passes 0, and the
+omission is EXPLICIT and documented (features.rs:314-317):
+
+    // `pop_food_cost`'s `one_time` is deliberately NOT passed here: closing
+    // that (small) blind spot changes what the bot plays and belongs in its
+    // own measured change. The formula itself lives in exactly one place,
+    // `economy::pop_food_cost`.
+    let food = f64::from(economy::pop_food_cost(s.pop_food_discount,
+        p.yellow_bank, 0).unwrap_or(8));
+
+So this is not an unnoticed gap: it is a known, deliberately-deferred
+blind spot with a comment saying why (it changes bot behaviour, so it
+must land as its own measured change, not piggybacked). The same 0 is
+passed at board_yields.rs:338/732 and neural/encode.rs:322 — the
+"printed-cost precision" idiom (the same reasoning hand_card_affordable
+uses for develop costs), consistent across the board-yield layer. The
+replay_common.rs:5301/11149 sites are oracles computing the FULL price
+deliberately, so 0 is correct there by design.
+
+THE RESULTING ERROR: OVER-states the cost of the next population
+increase. marginal_needs computes the food threshold for the need
+hinge; rivals.rs:936-945 (need_fraction) reads it as
+`(need - have) / need` when `have < need`. With the discount omitted,
+need = band_cost - pop_food_discount (no one_time), while the true
+price is band_cost - pop_food_discount - one_time. So the threshold is
+too high by exactly one_time_food_discount, and the shortfall
+fraction (need - have)/need is correspondingly too large: the bot
+believes it is further short of the next pop than it really is, and
+prices food (the FoodStock need hinge, WeightKey::FoodStockNeeded)
+higher than justified while a grant is banked.
+
+WORST CASE: the one grant source in the base game is Development of
+Civil Life (the only card printing oneTimeDiscount; events.rs:1501-1508
+banks all three sub-amounts, each 1). So one_time_food_discount is
+either 0 or 1. The base pop bands are 2/3/4/5/7 (economy.rs:47-60), so
+the error is at most 1 food on a 2-food price — up to 50% of the true
+cost at the top band (bank >= 17), 33% at band 3, 25% at band 4. It is
+transient: the grant is one-time and is exhausted the instant ANY of
+its three options is spent (state.rs:755-785, the exclusive-choice
+model), so the over-statement lasts at most one turn's worth of
+decision points. Direction: OVER-states the cost (the bot is too
+cautious about food / too eager to bank food), never under.
+
+SIZE: REAL but small — bounded by 1 food, one turn, one grant source,
+and the need hinge is itself gated at 0.0 by default
+(WeightKey::FoodStockNeeded), so it only bites once a champion has
+climbed off that default. It is the kind of thing the comment says
+should land as its own measured change.
+
+----------------------------------------------------------------------------
+BOTTOM LINE
+----------------------------------------------------------------------------
+(1) paid_fraction's 1.0-on-zero: UNREACHABLE with base-game data (every
+wonder prints >= 1 nonzero stage; the only constructor gates on
+p.wonder.is_none()). Guard, not defect. No fix needed.
+
+(2) pop_food_cost's one_time omission in marginal_needs: CONFIRMED and
+DELIBERATE (features.rs:314-317 documents it as a deferred measured
+change). Over-states the next pop's food cost by the banked grant
+(<= 1 food, one turn, Civil Life only). Real, small, and already
+acknowledged in-tree.
