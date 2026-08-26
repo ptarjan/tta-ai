@@ -480,6 +480,23 @@ pub fn features(
     let happy_req = economy::happy_required(p.yellow_bank);
     let margin = f64::from(s.happy) - f64::from(happy_req) + g(GainFeature::Happy);
     let discontent = (-margin).max(0.0);
+    // `WeightKey::HappyMarginAfterNextPop`: the identical margin one
+    // population increase forward, under UNCHANGED staffing.
+    // `economy::increase_population` only ever touches `p.yellow_bank`
+    // (decrementing it, or leaving it floored at 0 once already empty --
+    // `saturating_sub(1)` mirrors that floor exactly) for a player who has
+    // not yet re-placed the new worker; `effects::Stats.happy` is staffing-
+    // driven, not population-COUNT-driven (`add_production`/`happy_from`
+    // scale by `slot.workers`, and a freshly born worker lands unassigned in
+    // `p.workers_free`), so `s.happy` carries over unchanged -- see
+    // `WeightKey::HappyMarginAfterNextPop`'s own doc comment in `weights.rs`
+    // for the full derivation off `economy.rs`. Reuses `economy::
+    // happy_required`'s own VERIFIED band table a second time rather than a
+    // new formula, and needs no second `effects::compute`.
+    let next_yellow_bank = p.yellow_bank.saturating_sub(1);
+    let happy_req_next = economy::happy_required(next_yellow_bank);
+    let margin_next = f64::from(s.happy) - f64::from(happy_req_next) + g(GainFeature::Happy);
+    let discontent_next_pop = (-margin_next).max(0.0);
     let blue_have = economy::blue_available(p);
     let blue_free = f64::from(blue_have) + g(GainFeature::BlueFree);
     // --------------------------------------------------------- wonders
@@ -633,6 +650,7 @@ pub fn features(
     // --- happiness
     f.set(WeightKey::HappyMargin, margin.min(3.0));
     f.set(WeightKey::Discontent, discontent);
+    f.set(WeightKey::HappyMarginAfterNextPop, discontent_next_pop);
     // UNITS FIX: this used to be a bare 0/1 indicator, so the fitted
     // `WeightKey::Uprising` coefficient had to stand for "the cost of an
     // uprising" at EVERY board size at once -- a catastrophic mid/late-game
@@ -1712,6 +1730,116 @@ mod tests {
             f.get(WeightKey::HandOverCapacity),
             2.0,
             "two unaffordable Irrigations and one free Leader: shortfall must be 2.0"
+        );
+    }
+
+    /// `WeightKey::HappyMarginAfterNextPop` reads 0.0 when the next
+    /// population increase would create no discontent at all -- the "free of
+    /// consequence" baseline the key's own doc comment names. `yellow_bank`
+    /// 17 has `happy_required(17) == 0` now; the decrement drops it to 16,
+    /// where `happy_required(16) == 1`, still comfortably covered by
+    /// `happy_extra` 5 (post-pop margin +4, strictly POSITIVE, not merely
+    /// zero) -- chosen deliberately non-degenerate so this test cannot pass
+    /// merely because every number involved happens to be zero. Confirmed
+    /// RED by writing the raw `margin_next` (4.0) instead of the hinged
+    /// `discontent_next_pop` (0.0) on the production `f.set` call --
+    /// reverted after confirming (same break
+    /// `happy_margin_after_next_pop_is_a_hinge_not_the_raw_post_pop_margin`
+    /// below documents in full).
+    #[test]
+    fn happy_margin_after_next_pop_is_zero_when_the_next_worker_is_free_of_consequence() {
+        assert_eq!(economy::happy_required(17), 0, "test premise: happy_required(17) == 0");
+        assert_eq!(economy::happy_required(16), 1, "test premise: one pop increase raises the band to 1");
+        let mut state = G::new_game(2, 51);
+        state.players[0].yellow_bank = 17;
+        state.players[0].happy_extra = 5;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::Discontent), 0.0, "test setup: no current discontent either");
+        assert_eq!(f.get(WeightKey::HappyMarginAfterNextPop), 0.0, "post-pop margin is +4, not a shortfall");
+    }
+
+    /// The exact scenario `happy_margin_after_next_pop` exists for (design
+    /// note, analysis/feature_design_gap_conditional_2026-08-26.txt,
+    /// proposal 3.5): the CURRENT board is perfectly content, but the next
+    /// population increase crosses a `happy_required` band edge and creates
+    /// real discontent that `happy_margin`/`discontent`/`happy_surplus`
+    /// (all board-as-it-stands) cannot see. `yellow_bank` 9 has
+    /// `happy_required(9) == 3`; `happy_extra` 3 makes `s.happy == 3`
+    /// exactly, so current `margin == 0` and `discontent == 0.0`. One more
+    /// population increase drops the bank to 8, where `happy_required(8) ==
+    /// 4` -- one MORE than the unchanged `s.happy == 3` can cover, so the
+    /// next-pop margin is -1 and the hinge reads 1.0. Confirmed RED by
+    /// changing the production line's `p.yellow_bank.saturating_sub(1)` to
+    /// plain `p.yellow_bank` (i.e. not decrementing at all, so the
+    /// next-pop lookup silently reused the CURRENT band): `HappyMarginAfter
+    /// NextPop` dropped from 1.0 to 0.0 -- reverted after confirming.
+    #[test]
+    fn happy_margin_after_next_pop_sees_a_band_tip_the_current_board_state_cannot() {
+        assert_eq!(economy::happy_required(9), 3, "test premise: happy_required(9) == 3");
+        assert_eq!(economy::happy_required(8), 4, "test premise: one pop increase raises the band to 4");
+        let mut state = G::new_game(2, 51);
+        state.players[0].yellow_bank = 9;
+        state.players[0].happy_extra = 3;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::Discontent), 0.0, "test setup: perfectly content RIGHT NOW");
+        assert_eq!(
+            f.get(WeightKey::HappyMarginAfterNextPop),
+            1.0,
+            "one more population increase tips happy_required from 3 to 4 against an unchanged s.happy of 3"
+        );
+    }
+
+    /// `economy::increase_population`'s own floor: once the yellow bank is
+    /// already empty, a further increase does not go negative, it stays at
+    /// 0 (`p.yellow_granted` bookkeeping takes over instead) --
+    /// `saturating_sub(1)` must mirror that floor exactly rather than
+    /// underflowing. `yellow_bank` 0 has `happy_required(0) == 8`; with
+    /// `happy_extra` 8 the player exactly meets it both before and after
+    /// the (floored) decrement, so the hinge stays 0.0, "the bank stays at
+    /// zero, not negative" (`economy.rs`'s own phrase for this floor).
+    /// Confirmed RED by replacing the production line's
+    /// `p.yellow_bank.saturating_sub(1)` with plain `p.yellow_bank - 1`: the
+    /// test panicked on `u8` subtraction overflow (debug build) instead of
+    /// computing a next-pop margin at all -- reverted after confirming.
+    #[test]
+    fn happy_margin_after_next_pop_floors_at_the_empty_bank_exactly_like_increase_population_does() {
+        assert_eq!(economy::happy_required(0), 8, "test premise: an empty bank demands every happy face");
+        let mut state = G::new_game(2, 51);
+        state.players[0].yellow_bank = 0;
+        state.players[0].happy_extra = 8;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::Discontent), 0.0, "test setup: exactly meets happy_required(0) right now");
+        assert_eq!(f.get(WeightKey::HappyMarginAfterNextPop), 0.0, "the bank stays at zero, not negative");
+    }
+
+    /// `happy_margin_after_next_pop` is the HINGE `max(0, -(margin after the
+    /// next pop))`, not the raw post-pop margin -- the key's own doc comment
+    /// in `weights.rs` is explicit that a next pop merely eating into a
+    /// surplus (never actually going negative) must read 0.0, the same way
+    /// `Discontent` hinges `HappyMargin` today. `yellow_bank` 13
+    /// (`happy_required == 1`) with `happy_extra` 5 gives a current margin
+    /// of 4; one more pop drops the bank to 12 (`happy_required == 2`), a
+    /// still-positive margin of 3 -- a real drop, but not a shortfall.
+    /// Confirmed RED by setting the production `f.set` call to write the
+    /// raw `margin_next` (3.0) instead of the hinged `discontent_next_pop`
+    /// (0.0) -- reverted after confirming.
+    #[test]
+    fn happy_margin_after_next_pop_is_a_hinge_not_the_raw_post_pop_margin() {
+        assert_eq!(economy::happy_required(13), 1, "test premise: happy_required(13) == 1");
+        assert_eq!(economy::happy_required(12), 2, "test premise: one pop increase raises the band to 2");
+        let mut state = G::new_game(2, 51);
+        state.players[0].yellow_bank = 13;
+        state.players[0].happy_extra = 5;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(
+            f.get(WeightKey::HappyMargin),
+            3.0,
+            "test setup: currently in surplus (raw margin 4, clamped to HappyMargin's own 3.0 cap)"
+        );
+        assert_eq!(
+            f.get(WeightKey::HappyMarginAfterNextPop),
+            0.0,
+            "the next pop still leaves a positive margin (3), which is not a shortfall"
         );
     }
 }
