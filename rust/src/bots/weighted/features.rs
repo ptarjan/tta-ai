@@ -53,7 +53,7 @@
 //!   static lookup (`cards.rs`), so there is nothing to memoize and nothing
 //!   that could go stale.
 
-use crate::cards::{CardType, Special};
+use crate::cards::{CardId, CardType, Special};
 use crate::combat;
 use crate::costs;
 use crate::economy;
@@ -320,6 +320,74 @@ pub fn marginal_needs(
         resource: f64::from(sweep.unbuilt_min_resource_cost.unwrap_or(0)),
         science: f64::from(science.unwrap_or(0)),
         worker: f64::from(sweep.unbuilt_slots),
+    }
+}
+
+/// Whether `card`, sitting in `p.hand_civil`, could be paid for RIGHT NOW --
+/// the classifier [`WeightKey::HandOverCapacity`]'s "K" counts against (see
+/// that key's own doc comment in `weights.rs` for the full derivation).
+/// Printed costs only, never `costs::tech_cost`/`costs::build_cost_for` --
+/// same discount-precision reasoning as [`MarginalNeed::resource`].
+///
+/// Exhaustive over every `CardType`, no wildcard:
+///
+/// * a levelled/tech type ([`crate::bots::board_yields::is_levelled_type`],
+///   which already covers [`CardType::SpecialTech`]) is paid for by
+///   DEVELOPING it -- its printed `science_cost` against the player's
+///   science.
+/// * [`CardType::Government`] is not `is_levelled_type`, and its
+///   `science_cost` is always 0 -- its real price is `Card::peaceful_cost`,
+///   paid in science through the ordinary develop action (RULES_SPEC 8.3).
+/// * [`CardType::Leader`]/[`CardType::Action`] print zero for every cost
+///   field and genuinely cost nothing to play from hand.
+/// * [`CardType::Wonder`] cannot physically reach `p.hand_civil`: a taken
+///   wonder goes straight to `PlayerState::wonder`, never the hand
+///   (`apply.rs`'s take-move branch; RULES_SPEC 2.4/6.7). Every military-
+///   deck type is drafted into `hand_military`, a different field, never
+///   this one. Both groups are named explicitly rather than folded into a
+///   wildcard -- see `sweep_tableau`'s own precedent for a state nothing in
+///   this function enforces but the rules make impossible: an inert answer
+///   is the correct response if either ever fires.
+fn hand_card_affordable(card: CardId, science: f64) -> bool {
+    let kind = card.kind();
+    // The ONE classifier for "does this type need Develop's science before
+    // anything else" (`marginal_needs`'s own science-threshold loop above
+    // uses the identical call) -- restated as a second, hand-written type
+    // list here is exactly the drift this crate's own doc comments warn
+    // against elsewhere.
+    if crate::bots::board_yields::is_levelled_type(kind) {
+        return f64::from(card.get().science_cost) <= science;
+    }
+    match kind {
+        CardType::Government => f64::from(card.get().peaceful_cost) <= science,
+        CardType::Leader | CardType::Action => true,
+        // Cannot occur in `p.hand_civil` -- see this function's own doc
+        // comment. `false` (not counted as affordable) is the inert, no-op
+        // answer if this invariant is ever broken elsewhere.
+        CardType::Wonder
+        | CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => false,
+        // Unreachable: `is_levelled_type` above already returned for every
+        // one of these -- kept as an explicit arm rather than a wildcard so
+        // the match stays exhaustive by construction if `CardType` ever
+        // grows a new levelled type.
+        CardType::Farm
+        | CardType::Mine
+        | CardType::Lab
+        | CardType::Temple
+        | CardType::Library
+        | CardType::Arena
+        | CardType::Theater
+        | CardType::Infantry
+        | CardType::Cavalry
+        | CardType::Artillery
+        | CardType::Air
+        | CardType::SpecialTech => unreachable!("is_levelled_type already handled this type above"),
     }
 }
 
@@ -755,11 +823,28 @@ pub fn features(
     // `horizon::AntiquationClock`'s own doc comment.
     let clock = horizon::AntiquationClock::at(state, horizon::live_count(state));
     let mut hand_perishable = 0.0;
+    // `WeightKey::HandOverCapacity`'s "K": how many civil-hand cards this
+    // player could pay to play right now (`hand_card_affordable`'s own doc
+    // comment has the full derivation). `WeightKey::Science` is already set
+    // above, so this reads it back rather than recomputing `p.science +
+    // g(GainFeature::Science)` a second time -- the same "one true
+    // computation" idiom the marginal-need gap/surplus block below uses for
+    // its own "have" sides. Folded into this same civil-hand pass rather
+    // than a fourth walk of the same bounded list.
+    let my_science = f.get(WeightKey::Science);
+    let mut hand_affordable = 0.0;
     for &card in p.hand_civil.as_slice() {
         let left = clock.rounds_until_antiquation(card.get().age);
         hand_perishable += (1.0 - left / clock.rounds_left()).clamp(0.0, 1.0);
+        if hand_card_affordable(card, my_science) {
+            hand_affordable += 1.0;
+        }
     }
     f.set(WeightKey::HandPerishable, hand_perishable);
+    f.set(
+        WeightKey::HandOverCapacity,
+        (f.get(WeightKey::HandCivil) - hand_affordable).max(0.0),
+    );
     f.set(WeightKey::HandMilitary, p.hand_military.len() as f64 + g(GainFeature::HandMilitary));
     f.set(WeightKey::HandMilValue, hand_mil_value);
 
@@ -1498,6 +1583,135 @@ mod tests {
             "two RIVALS completed an Age::A wonder; the evaluated player's own Pyramids must not \
              be counted, or this would reproduce the all-players sign-averaging defect the task \
              exists to fix"
+        );
+    }
+
+    /// `WeightKey::HandOverCapacity` (`max(0, hand_civil - K)`) reads 0.0
+    /// with an empty civil hand -- there is nothing to be over capacity on.
+    /// Baseline for the non-empty cases below.
+    #[test]
+    fn hand_over_capacity_is_zero_with_an_empty_civil_hand() {
+        let state = G::new_game(2, 51);
+        assert!(state.players[0].hand_civil.as_slice().is_empty(), "test setup: hand must start empty");
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::HandOverCapacity), 0.0);
+    }
+
+    /// A levelled card the player can already pay to DEVELOP (printed
+    /// `science_cost <= science`) must not count toward the shortfall --
+    /// `hand_over_capacity` is 0.0 for "a player who can afford to play
+    /// everything they hold" (the key's own doc comment in `weights.rs`).
+    /// Irrigation (Farm, Age I) prints `science_cost: 3`; 3 science exactly
+    /// covers it. Confirmed RED by making `hand_card_affordable`'s levelled
+    /// branch always return `false` (so an affordable card is wrongly
+    /// counted as a shortfall) -- reverted after confirming.
+    #[test]
+    fn an_affordable_levelled_card_does_not_count_toward_hand_over_capacity() {
+        let irrigation = crate::cards::CardId::by_name("Irrigation").expect("a base-game Age I farm tech");
+        let mut state = G::new_game(2, 51);
+        state.players[0].hand_civil.push(irrigation);
+        state.players[0].science = 3;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(
+            f.get(WeightKey::HandOverCapacity),
+            0.0,
+            "science (3) exactly covers Irrigation's printed science_cost (3)"
+        );
+    }
+
+    /// The mirror case: the same card, but science is one short of the
+    /// printed cost. `hand_civil` (1) minus `K` (0, unaffordable) must read
+    /// 1.0. Confirmed RED by making `hand_card_affordable`'s levelled branch
+    /// always return `true` (so an unaffordable card is wrongly counted as
+    /// affordable, `HandOverCapacity` reading 0.0 instead of 1.0) --
+    /// reverted after confirming.
+    #[test]
+    fn an_unaffordable_levelled_card_counts_toward_hand_over_capacity() {
+        let irrigation = crate::cards::CardId::by_name("Irrigation").expect("a base-game Age I farm tech");
+        let mut state = G::new_game(2, 51);
+        state.players[0].hand_civil.push(irrigation);
+        state.players[0].science = 2; // one short of Irrigation's science_cost: 3
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::HandOverCapacity), 1.0);
+    }
+
+    /// The conflict this key's implementation was stopped and re-briefed
+    /// over: `Card::science_cost` is always 0 for every government
+    /// (`costs::tech_cost`'s own doc comment) -- a government's real price
+    /// is `Card::peaceful_cost`, paid in SCIENCE (RULES_SPEC 8.3). Monarchy
+    /// prints `peaceful_cost: 8`; at 3 science it is nowhere close to
+    /// affordable, so it must count toward the shortfall. A naive
+    /// implementation reading `science_cost` (0) for the non-levelled
+    /// branch would read this as ALWAYS affordable regardless of science,
+    /// exactly the blindness this feature exists to remove. Confirmed RED
+    /// by changing `hand_card_affordable`'s `Government` arm to read
+    /// `card.get().science_cost` instead of `card.get().peaceful_cost`
+    /// (the literal bug): `HandOverCapacity` drops from 1.0 to 0.0 --
+    /// reverted after confirming.
+    #[test]
+    fn a_government_whose_peaceful_cost_exceeds_science_counts_as_unaffordable() {
+        let monarchy = crate::cards::CardId::by_name("Monarchy").expect("a base-game government");
+        assert_eq!(monarchy.get().science_cost, 0, "test premise: science_cost is always 0 for a government");
+        assert!(
+            monarchy.get().peaceful_cost > 3,
+            "test premise: Monarchy's peaceful_cost must exceed the science this test grants"
+        );
+        let mut state = G::new_game(2, 51);
+        state.players[0].hand_civil.push(monarchy);
+        state.players[0].science = 3;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(
+            f.get(WeightKey::HandOverCapacity),
+            1.0,
+            "Monarchy's real price (peaceful_cost: {}) exceeds 3 science; reading the always-zero \
+             science_cost instead would wrongly read this as affordable",
+            monarchy.get().peaceful_cost
+        );
+    }
+
+    /// Leader and Action cards print zero for every cost field and
+    /// genuinely cost nothing to play from hand -- they must never count
+    /// toward the shortfall, even at zero science. Confirmed RED by making
+    /// `hand_card_affordable`'s `Leader | Action` arm return `false`
+    /// instead of `true` (so two genuinely free cards are wrongly counted
+    /// as a 2.0 shortfall) -- reverted after confirming.
+    #[test]
+    fn leader_and_action_cards_are_always_affordable_even_at_zero_science() {
+        let moses = crate::cards::CardId::by_name("Moses").expect("a base-game leader");
+        let action = crate::cards::CardId::by_name("Rich Land (A)").expect("a base-game Age A action card");
+        assert_eq!(action.kind(), CardType::Action, "test premise: Rich Land (A) is an Action card");
+        let mut state = G::new_game(2, 51);
+        state.players[0].hand_civil.push(moses);
+        state.players[0].hand_civil.push(action);
+        state.players[0].science = 0;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::HandOverCapacity), 0.0);
+    }
+
+    /// The boundary the round-1 measurement (analysis/
+    /// feature_design_gap_conditional_2026-08-26.txt, section 2d) motivates
+    /// this whole key with: `hand_over_capacity` must be the CARD COUNT of
+    /// the shortfall, not a 0/1 flag that merely notices one exists. Two
+    /// unaffordable Farms (Irrigation, science_cost 3) plus one affordable
+    /// Leader (free) at 0 science must read exactly 2.0, not 1.0 and not
+    /// 3.0. Confirmed RED by reading `f.get(WeightKey::HandCivil)` alone
+    /// (dropping the `- hand_affordable` term entirely, which would read
+    /// 3.0 instead of 2.0) -- reverted after confirming.
+    #[test]
+    fn hand_over_capacity_counts_every_unaffordable_card_not_just_whether_any_exist() {
+        let irrigation = crate::cards::CardId::by_name("Irrigation").expect("a base-game Age I farm tech");
+        let moses = crate::cards::CardId::by_name("Moses").expect("a base-game leader");
+        let mut state = G::new_game(2, 51);
+        state.players[0].hand_civil.push(irrigation);
+        state.players[0].hand_civil.push(irrigation);
+        state.players[0].hand_civil.push(moses);
+        state.players[0].science = 0;
+        let f = features(&state, 0, None, None, false);
+        assert_eq!(f.get(WeightKey::HandCivil), 3.0, "test setup: three cards in hand");
+        assert_eq!(
+            f.get(WeightKey::HandOverCapacity),
+            2.0,
+            "two unaffordable Irrigations and one free Leader: shortfall must be 2.0"
         );
     }
 }

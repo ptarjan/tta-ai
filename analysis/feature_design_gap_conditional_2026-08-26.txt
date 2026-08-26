@@ -666,3 +666,82 @@ No `WeightKey` variant was added, no default weight was set, no test was
 written, no file under `rust/src` was touched. `rust/src/bots/weighted/
 weights.rs`, `features.rs`, `registry.rs` were read only.
 
+
+== RESOLUTION AND LANDING, 2026-08-26 -- PROPOSAL 3.4 hand_over_capacity: LANDED ==
+
+The Wonder half of the block above was moot, verified independently rather
+than reasoned from this note's own prose: RULES_SPEC 2.4/6.7 and
+`apply.rs`'s take-move branch (~line 649-656) both confirm a taken wonder
+goes straight to `PlayerState::wonder`, never to `p.hand_civil` -- so a
+Wonder can never be one of the cards `hand_over_capacity` iterates. No
+Wonder branch, no `stages[0]` read, was added.
+
+The Government half was real and is fixed: `Card::science_cost` is 0 for
+every government (`costs::tech_cost`'s own doc comment), so the affordability
+classifier tests `Government` against `Card::peaceful_cost` in SCIENCE
+(RULES_SPEC 8.3) instead. `Leader`/`Action` read as always affordable (they
+genuinely are, printing zero for every cost field); every levelled type
+(`board_yields::is_levelled_type`, which already covers `SpecialTech`) is
+tested against its printed `science_cost`; `Wonder` and every military-deck
+type are named explicitly in the classifier and answer `false` -- an inert
+default for a state RULES_SPEC and `apply.rs` both make unreachable, not a
+priced judgement.
+
+LANDED:
+  * `WeightKey::HandOverCapacity` (`rust/src/bots/weighted/weights.rs`):
+    appended at the end of the enum (repr(usize) stability for every key
+    already on disk, matching `LeaderReplacement`/`WonderPoolRivalClaimed`'s
+    own precedent), registered in `weight_key_table!` at `0.0` default,
+    included in the four exhaustive `early`/`late`/`trailing`/`needed`
+    catch-all panic arms (it is none of those), grouped `WeightGroup::Cards`
+    (beside `HandPerishable`, the other property of the hand itself), gated
+    `SignIntent::NonPositive` ("prices a marginal-need shortfall", the same
+    bucket `FoodGap`/`CivilActionGap`/etc already sit in -- the shape is
+    identical: `max(0, need - have)`). `p95_candidate_spread` seeded
+    `[0.0, 0.0, 0.0]` -- explicitly the documented "unmeasured, falls back to
+    CLAMP_BLIND" state that function's own doc comment defines, not a
+    fabricated number; regenerate with `featspread` once this key has run
+    through real self-play.
+  * Feature computation (`rust/src/bots/weighted/features.rs`): a new
+    `hand_card_affordable(card, science) -> bool` classifier (exhaustive over
+    every `CardType`, no wildcard), and the counting itself folded into the
+    EXISTING `hand_perishable` loop over `p.hand_civil` rather than a fourth
+    walk of the same bounded list -- `f.set(WeightKey::HandOverCapacity,
+    (f.get(WeightKey::HandCivil) - hand_affordable).max(0.0))`.
+  * Loader default check (as asked): `eval::parse_weights` starts from
+    `Weights::defaults()` and only overwrites names present in the JSON
+    (`rust/src/bots/weighted/eval.rs` ~line 1067-1082) -- a champion file on
+    disk today has no `hand_over_capacity` key at all, so every existing
+    champion loads it at its `0.0` default and plays bit-identically to
+    before this landed. Confirmed by reading the loader, not merely by the
+    key's own precedent-following doc comment.
+  * Six tests, `#[cfg(test)] mod tests` at the end of `features.rs`, each
+    RED-confirmed by actually breaking the corresponding production line and
+    re-running (all reverted correctly; `grep RED-CONFIRM` on the file
+    returns nothing): an empty hand reads 0.0; an affordable levelled card
+    (Irrigation, `science_cost: 3`, at 3 science) does not count; the same
+    card one science short does; a Government (Monarchy, `peaceful_cost: 8`,
+    `science_cost: 0`) at 3 science counts as unaffordable -- the exact
+    regression pin for the resolved conflict above; Leader/Action cards
+    never count even at 0 science; and a mixed 3-card hand (two unaffordable
+    Irrigations, one free Leader) reads the COUNT 2.0, not a 0/1 flag.
+  * `cargo clippy --all-targets -- -D warnings` and `cargo test` (1527 lib
+    tests + every integration binary, ~5 min) both clean, including
+    `registry.rs`'s runtime-instrumentation check
+    (`every_weight_key_features_writes_actually_goes_nonzero_on_some_sampled_
+    position`) confirming `HandOverCapacity` actually goes nonzero on real
+    2p/3p/4p self-play, not merely compiles.
+
+TEMPLATE FOR THE REMAINING FIVE (3.1, 3.2, 3.3, 3.5, 3.6): where a proposal
+names a printed-cost field, verify it against the REAL payment path in
+`costs.rs` first (`tech_cost`/`build_cost_for`/`wonder_stage_cost`/etc. and
+their own doc comments) before wiring a feature to it -- this proposal's
+first draft would have silently mispriced Government by trusting the note's
+"resource_cost" shorthand over the card-data model. But also check the
+RULES first for whether a card type can even reach the state being priced --
+the Wonder half of the same conflict was not a pricing bug to fix, it was a
+branch that must not be written at all, because RULES_SPEC 2.4/6.7 and
+`apply.rs` already make that state impossible. Verifying "is this reachable"
+before "how much does it cost" would have caught both halves in one pass
+rather than needing a stop-and-report round trip for the second.
+
