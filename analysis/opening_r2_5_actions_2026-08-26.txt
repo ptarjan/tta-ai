@@ -1,0 +1,78 @@
+Rounds 2-5 civil actions, first build/pop, and take CA bands, human BGO corpus (read-only; no bot runs, no build)
+corpus: 1011 journals, 2525 player-games; rounds 1-5 measured (r1 included for continuity with the round-1 file)
+CA-spend parsing: take = 'uses N civil action' clause (N = CA spent); build/pop/elect/discover/play-action = 1 CA each;
+'plays event' = 0 CA; 'puts X back in the row' = refund, counted as a kind, NOT subtracted from spend;
+standalone 'spends N resources/food' lines are resource costs, not CA. CA bands: 1 = row positions 1-5, 2 = 6-9,
+3 = 10-13, 4+ = beyond 13 (CA-gain effects let takes cost 4+; see round-1 file).
+Government changes in r1-5: 30 revolutions (30 in r2-5) + 63 peaceful changes = 93 of 2525 player-games
+REVOLUTIONS ARE CA-OPAQUE: the journal logs the science cost, not how many CAs were available/spent,
+and no CA-adjustment line follows. By rule a revolution consumes ALL available CAs (unused = 0 that round),
+so revolution rounds are set to unused=0 in the tracked table. Peaceful changes are tracked: the new
+government's civilActions (data/cards_civil.json) becomes the baseline; unspent CAs carry over by rule.
+GOV CA totals: {'Communism': 7, 'Republic': 7, 'Fundamentalism': 6, 'Theocracy': 4, 'Despotism': 4, 'Monarchy': 5, 'Constitutional Monarchy': 6, 'Democracy': 7}
+
+== 1. r2-5 CA spend per player-round and kind mix (per round, all 2525 player-games) ==
+round 1 spend: n=2525 mean=1.99 min=0 q25=1.00 median=2 q75=2.00 max=11
+   kinds: take 3923
+   (refunds not in spend: 257; events not CA: 0)
+round 2 spend: n=2525 mean=4.21 min=1 q25=4.00 median=4 q75=4.00 max=9
+   kinds: take 4228  build 2040  elect 1508  pop 1507  play_action 219
+   (refunds not in spend: 241; events not CA: 0)
+round 3 spend: n=2525 mean=4.89 min=1 q25=4.00 median=5 q75=5.00 max=13
+   kinds: take 4008  build 3060  play_action 1949  pop 1644  elect 633  discover 79  revolution 3
+   (refunds not in spend: 251; events not CA: 0)
+round 4 spend: n=2525 mean=5.23 min=0 q25=4.00 median=5 q75=6.00 max=11
+   kinds: take 3817  build 3737  play_action 2096  pop 1724  discover 640  elect 371  revolution 13
+   (refunds not in spend: 274; events not CA: 0)
+round 5 spend: n=2525 mean=5.38 min=0 q25=4.00 median=5 q75=6.00 max=13
+   kinds: take 4192  build 2838  pop 1854  play_action 1843  discover 1314  elect 490  revolution 14
+   (refunds not in spend: 304; events not CA: 0)
+
+unused vs baseline, two ways (the tracked one is the honest denominator):
+  [vs flat 4 (r1 Despotism, NO government tracking)]
+    round 2 unused: n=2525 mean=-0.21 min=-5 q25=0 median=0 q75=0 max=3  waste>=1: 4/2525 (0.2%)
+    round 3 unused: n=2525 mean=-0.89 min=-9 q25=-1 median=-1 q75=0 max=3  waste>=1: 9/2525 (0.4%)
+    round 4 unused: n=2525 mean=-1.23 min=-7 q25=-2 median=-1 q75=0 max=4  waste>=1: 84/2525 (3.3%)
+    round 5 unused: n=2525 mean=-1.38 min=-9 q25=-2 median=-1 q75=0 max=4  waste>=1: 160/2525 (6.3%)
+  [vs TRACKED government civilActions (peaceful tracked; revolution round = 0 by rule)]
+    round 2 unused: n=2525 mean=-0.21 min=-5 q25=0 median=0 q75=0 max=3  waste>=1: 4/2525 (0.2%)
+    round 3 unused: n=2525 mean=-0.89 min=-9 q25=-1 median=-1 q75=0 max=2  waste>=1: 6/2525 (0.2%)
+    round 4 unused: n=2525 mean=-1.24 min=-7 q25=-2 median=-1 q75=0 max=2  waste>=1: 71/2525 (2.8%)
+    round 5 unused: n=2525 mean=-1.38 min=-9 q25=-2 median=-1 q75=0 max=3  waste>=1: 149/2525 (5.9%)
+  (negative unused = spend exceeded the baseline, i.e. mid-round CA gains: Pyramids +1 CA, leader
+   replacement refund, Patriotism extra action; the journal does not log the gain events themselves)
+VERDICT 1: from round 2 the CA budget is spent - median spend meets or exceeds the tracked baseline in r2-r5;
+genuine waste (unused>=1) is 0.2%/0.2%/2.8%/5.9% of player-rounds, and negative 'unused' means spend exceeded
+the baseline (CA gains: Pyramids, leader refunds, Patriotism). The round-1 banking does NOT continue: r2-5 is a spend-everything phase.
+
+== 2. first build and first population action, per player-game ==
+first build round (n=2525): n=2525 mean=2.20 min=2 q25=2.00 median=2 q75=2.00 max=5  histogram: {2: 2026, 3: 487, 4: 11, 5: 1}
+first pop round (n=2519 of 2525): n=2519 mean=2.55 min=2 q25=2.00 median=2 q75=3.00 max=5  histogram: {2: 1503, 3: 698, 4: 267, 5: 51}
+first-build card names (top 15):
+   Bronze                       1938
+   Philosophy                   165
+   Pyramids                     145
+   Library of Alexandria        139
+   Hanging Gardens              52
+   Colossus                     32
+   Agriculture                  23
+   Warrior                      22
+   Religion                     4
+   Taj Mahal                    2
+   Universitas Carolina         1
+   St. Peter's Basilica         1
+   Drama                        1
+first-build type mix (n=2503): mine 1938 (77.4%), wonder 372 (14.9%), urban 170 (6.8%), farm 23 (0.9%), military 0 (0.0%)
+VERDICT 2: the switch from taking to spending happens at round 2 for both: first build in round 2 for 80.2% of
+player-games (median 2), first pop in round 2 for 59.7% (median 2); the first build is most often a mine (Bronze,
+77.4% of first builds), then wonder stages (14.9%) and urban buildings (6.8%); military is 0%.
+
+== 3. CA band of takes per round, 1-5 ==
+round 1: n=3923  1 2993 (76.3%)  2 754 (19.2%)  3 176 (4.5%)
+round 2: n=4228  1 3219 (76.1%)  2 883 (20.9%)  3 126 (3.0%)
+round 3: n=4008  1 3079 (76.8%)  2 883 (22.0%)  3 46 (1.1%)
+round 4: n=3817  1 3050 (79.9%)  2 723 (18.9%)  3 42 (1.1%)  4plus 2 (0.1%)
+round 5: n=4192  1 3245 (77.4%)  2 850 (20.3%)  3 91 (2.2%)  4plus 6 (0.1%)
+VERDICT 3: the cheap 1-CA band share does NOT fall: r1 76.3%, r2 76.1%, r3 76.8%, r4 79.9%, r5 77.4% -
+later takes are no more expensive-band-heavy than the first round's. The 3-CA band drops from 4.5% (r1) to
+~1-2% (r3-r5) and a 4-CA band appears at 0.1% in r4-r5 (CA-gain effects). Reported as bands; mechanism not asserted.
