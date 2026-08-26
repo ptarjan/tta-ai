@@ -1,0 +1,157 @@
+MEASUREMENT — behavcensus "N card(s) played or antiquated with no matching
+taken_rounds entry"
+================================================================================
+Measured 2026-08-26. Tree at 9af497a + temporary instrumentation
+(reverted after the run; `git diff -- rust/src/bin/behavcensus.rs` is
+empty at the time of writing). This file replaces the measurement
+section of behavcensus_taken_rounds_warning_2026-08-26.txt: the
+hypothesis ranked first there (government/revolution path) is NOT what
+the measurement shows.
+
+INSTRUMENTATION (as instructed, reverted after)
+-----------------------------------------------
+Two sites, each a PRESENCE check, not a pop:
+
+  PLAYED branch (was behavcensus.rs:1619, now ~1619-1632): on the
+  `None` arm of the taken_rounds pop, eprintln! the actor, the card's
+  Debug name, its CardType (Debug, resolved at runtime -- no WeightKey
+  variant name written as a string literal anywhere), the round, and
+  whether the card's key is absent from taken_rounds at all vs
+  key-present-with-empty-queue vs key-present-with-N-entries.
+
+  ANTIQUATED branch (was ~1661, now ~1667-1681): same four fields,
+  player index instead of actor.
+
+Run: `cargo run --release --bin behavcensus -- --games 50 --players 3
+--threads 1 --weights experiments/rust_champion_3p.json`
+(single-threaded on purpose, to remove the merge as a variable).
+Rebuilt and rerun at --games 200 for a larger sample; same binary.
+Note: the first run attempt omitted --weights (required arg,
+behavcensus.rs:2192-2193) and exited before any game.
+
+RESULTS (200 games, 3p, rust_champion_3p.json, single-threaded)
+---------------------------------------------------------------
+Total mismatches: 17 (the report's own WARNING line: "17 card(s)
+played or antiquated with no matching taken_rounds entry").
+
+  PLAYED branch:        14  (82.4%)
+  ANTIQUATED branch:     3  (17.6%)
+  CardType::Government in PLAYED:  2  (14.3% of PLAYED)
+
+Full tally, by (branch, CardType):
+
+  PLAYED Action:          7
+    Reserves (III)        5
+    Military Build-Up     2
+  PLAYED SpecialTech:     1   Military Theory
+  PLAYED Artillery:       1   Rockets
+  PLAYED Leader:           1   Winston Churchill
+  PLAYED Government:       2   Democracy, Fundamentalism
+  ANTIQUATED Action:      1    Engineering Genius (II)
+  ANTIQUATED SpecialTech: 1    Justice System
+  ANTIQUATED Infantry:    1    Riflemen
+
+Presence, all 17: 16 of 17 `absent` (the key never existed in
+taken_rounds); 1 of 17 `key-present-empty` (a key that exists with an
+empty queue -- i.e. a take WAS recorded and its entry already popped).
+Zero `key-present-lenN`.
+
+Rounds: 14-20 (late game only; no early-round mismatches).
+Players: 0, 1, 2 all appear, in both branches.
+
+The 50-game run (same binary, same weights, single-threaded):
+4 mismatches, 3 PLAYED + 1 ANTIQUATED, 2 of the 3 PLAYED are
+Reserves (III), same pattern.
+
+VERDICT
+-------
+Hypothesis (a) from the earlier file (two physical copies of the same
+government / the Revolution path) is NOT supported: Government is only
+2 of 14 PLAYED mismatches, and the dominant card is Reserves (III), an
+Action, not a government.
+
+The actual pattern is a single mechanism, visible in the presence
+column:
+
+  (1) 16/17 `absent` = the card left hand_civil (played or antiquated)
+      with NO take ever recorded for that CardId under that player.
+      The recorder's universe is "non-wonder cards observed leaving
+      the row INTO hand_civil via Move::Take" (behavcensus.rs:1589-
+      1604); the played/antiquated universe is "cards removed from
+      hand_civil" (PlayAction/Develop/Revolution/PlayLeader for
+      PLAYED, the age-transition hand diff for ANTIQUATED). A card
+      that entered hand_civil without a Move::Take the recorder saw
+      falls between the two universes.
+
+  (2) 1/17 `key-present-empty` (Reserves (III), actor 2, round 15)
+      = a take WAS recorded but its queue entry was already popped.
+      Reserves (III) has count 3 in 3p (data/cards_military_actions.
+      json: cards[141]); three physical copies under one CardId share
+      one queue. The pop order and the play order disagree when a copy
+      is played after an earlier pop consumed the only recorded entry
+      -- i.e. one of the three copies entered hand without a recorded
+      take, so two plays of the CardId find only one queue entry.
+      Same root cause as (1), one step downstream.
+
+Where do the unrecorded takes come from? The candidates, in order of
+how well the sample fits:
+
+  (i)  Age-transition hand refill / re-take paths that bypass
+       Move::Take. The mismatches are ALL rounds 14-20, i.e. at or
+       after the Age III transition (Age III starts ~round 14-16 in 3p
+       self-play), and the dominant cards are Age-III cards (Reserves
+       III, Military Build-Up, Rockets, the round-18 governments
+       Democracy/Fundamentalism) plus late-age cards from earlier
+       ages (Military Theory, Justice System, Riflemen, Churchill).
+       A card taken in Age I/II and still in hand at the transition
+       should have its take recorded in that earlier age -- so the
+       age-III concentration says the unrecorded entries are cards
+       that ENTERED hand late, through a path the recorder does not
+       see. The recorder only sees Move::Take (behavcensus.rs:1456-
+       1459: taken_card is non-None for Move::Take only). Any other
+       path into hand_civil -- a card returned to hand, a re-take
+       after antiquation within the same age, an engine path that
+       pushes to hand_civil without a Take move -- is invisible to
+       it.
+
+  (ii) The 17 are 17 individual card instances; the census cannot
+       distinguish "taken in a round the recorder was not sampling"
+       from "entered hand without a take" because taken_rounds has no
+       per-round presence log. A follow-up that records, per player,
+       the hand_civil membership at every round (a pre/post diff like
+       the antiquation branch already does, behavcensus.rs:1634-
+       1644) would separate the two: a card that APPEARS in the
+       membership diff without a Move::Take in that round is a
+       non-Take entry; a card that was present for rounds before its
+       play but whose take round predates the recorder's window is a
+       windowing artifact.
+
+What the measurement does NOT show:
+  - No merge effect (single-threaded, still 17 in 200 games).
+  - No cross-player misattribution (every mismatch's actor/player
+    matches the hand the card left; the recorder records under
+    state.current, the player who took, and a player only takes into
+    their own hand).
+  - No Wonder involvement (wonders are excluded from both sides, as
+    the earlier file established: never in hand_civil, never in
+    played_civil_card).
+
+RECOMMENDED FOLLOW-UP (not done in this session -- read-write scope
+here was the two instrumentation sites only)
+--------------------------------------------
+Add a per-round hand_civil membership diff (pre/post, like the
+antiquation branch) that fires on EVERY move, not only age
+transitions, and logs cards that enter hand_civil without a Move::Take
+in that round. That log, cross-referenced against the 17-mismatch
+sample, will name the exact entry path (and the exact engine function
+that performs it) instead of the class of paths in (i). The fix,
+whichever path it is, belongs in the recorder (record the non-Take
+entry as a take with the round it was observed), not in the
+mismatch counter.
+
+RULES OBSERVED
+--------------
+Only rust/src/bin/behavcensus.rs touched, only the two described
+sites, instrumentation reverted (diff empty). No WeightKey variant
+name written as a string literal. No commit of instrumentation.
+Committed only this file, by pathspec.
