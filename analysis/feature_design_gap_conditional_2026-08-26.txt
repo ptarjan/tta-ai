@@ -930,3 +930,91 @@ resource cost fields need the same real-payment-path check `hand_over_
 capacity` already needed for Government, and 3.6 additionally misclassifies
 Government's affordability branch and omits the wonder take's +1-CA-per-
 completed-wonder surcharge.
+
+==============================================================================
+LANDING RECORD -- 3.1 (science_need_row) / 3.6 (row_playable_count), 2026-08-26
+==============================================================================
+
+Implemented from the verified specs at
+analysis/specs_science_need_row_row_playable_2026-08-26.txt (which itself
+built on analysis/tech_cost_recipe_2026-08-26.txt and this file's own audit
+above), not re-derived. Closes out this section's six-proposal list: all of
+3.1-3.6 are now landed.
+
+LANDED:
+  * `WeightKey::ScienceNeedRow` and `WeightKey::RowPlayableCount`
+    (`rust/src/bots/weighted/weights.rs`): both appended at the end of the
+    enum (after `WonderOneStageShort`), registered in `weight_key_table!` at
+    `0.0` default, included in the four exhaustive `early`/`late`/
+    `trailing`/`needed` catch-all panic arms. `ScienceNeedRow` grouped
+    `WeightGroup::Economy` (beside `ScienceGap`/`ScienceNeeded` -- the same
+    axis, a second science shortfall against a different threshold);
+    `RowPlayableCount` grouped `WeightGroup::Actions` (beside `CaLeft`/
+    `TakeCostShare` -- it prices whether a civil action spent taking a row
+    card is worth it, not a raw row fact like `RowUrgency`). `p95_candidate_
+    spread` seeded `[0.0, 0.0, 0.0]` for both -- the documented "unmeasured,
+    falls back to CLAMP_BLIND" state, not a fabricated number.
+    `SignIntent::NonPositive` for `ScienceNeedRow` (the same "marginal-need
+    shortfall" bucket as `HandOverCapacity`/`HappyMarginAfterNextPop` --
+    the gap half is live, no surplus half is computed);
+    `SignIntent::NonNegative` for `RowPlayableCount` (a bare count of
+    usable row cards is never worse, the same shape `CivilActions`/
+    `CivilActionSurplus`/`Wonders` already use, with its own justification
+    string).
+  * Feature computation (`rust/src/bots/weighted/features.rs`): ONE shared,
+    allocation-free pass over `state.card_row` (13 slots), placed
+    immediately after `f.set(WeightKey::ResourceStock, ...)` so the
+    `science_have_rate`/`resource_have_rate` "have + rate" read-backs
+    (`WeightKey::ScienceRate.max(0) + WeightKey::Science`, and the resource
+    twin) are valid. Every develop-cost read goes through
+    `costs::tech_cost(state, p, id) -> Option<i32>`, never
+    `Card::science_cost` -- the Government trap named throughout this file
+    (all 8 governments print `science_cost: 0`; their real price is
+    `peaceful_cost`, RULES_SPEC 8.3) -- and `None` (Despotism, and every
+    non-developable card) is FILTERED out of both quantities, never mapped
+    to 0. `ScienceNeedRow` is `max(0, T - science_have_rate)` where `T` is
+    the minimum `tech_cost` over developable row slots (0.0 when none
+    qualify). `RowPlayableCount` is a count of slots passing BOTH
+    `costs::can_take_gated` (legality: row cost + completed-wonder
+    surcharge + leader discounts against spare CA, hand-limit, one-per-name,
+    leader-age, wonder-in-progress -- gate built once per call via
+    `costs::take_gate`) AND a new private `row_card_playable` helper
+    (affordability: `tech_cost` for levelled/Government types against
+    `science_have_rate`; printed `Card::stages[0]`, never `resource_cost`
+    which is always 0 for a wonder, against `resource_have_rate` for
+    Wonder; always payable for Leader/Action; unreachable-by-construction
+    for every other kind, matching `hand_card_affordable`'s exhaustive
+    shape). The skip gate is `priced_only && w.is_none_or(|w| both keys ==
+    0.0)` -- the exact shape `EventScoringMargin` established just below it
+    in `features()`, not a bare weight check: `w = None` is exactly how
+    `registry.rs`'s probe calls `features()`, and a weight-only gate would
+    have left both keys permanently unwritten, failing the probe's own
+    `every_weight_key_features_writes_actually_goes_nonzero_on_some_
+    sampled_position` test. Confirmed this was not a hypothetical risk: a
+    deliberate mutation dropping the `priced_only &&` guard during
+    red-confirmation reproduced exactly that failure before being reverted.
+  * Ten tests, `#[cfg(test)] mod tests` at the end of `features.rs`, each
+    RED-confirmed by breaking the exact production line it guards,
+    observing the failure, and reverting -- five per key: a "no
+    developable/no legal-and-affordable card" baseline, the min-not-sum (or
+    legal-AND-affordable-not-legal-alone) conjunction, the Government trap,
+    a filtered-not-priced-at-zero edge (Despotism for `ScienceNeedRow`,
+    Pyramids' wonder-stage pricing for `RowPlayableCount`), and the
+    `priced_only`/C2a gate regression test. One correction made during
+    red-confirmation rather than assumed: the "no developable card"
+    baseline's sentinel-init mutation (`t` initialized to `f64::INFINITY`
+    with no `any` guard) did not surface as `inf` -- the production line's
+    own `t as i32` cast saturates first, so the observed failure value was
+    `2147483647.0` (`i32::MAX`), and the test's doc comment records that
+    real number rather than the originally-guessed `inf`.
+  * `cargo clippy --all-targets -- -D warnings` and the full `cargo test`
+    suite (1549 lib tests + every integration binary, including
+    `suite::card_coverage` and the doc-tests) are clean, including
+    `registry.rs`'s runtime-instrumentation check confirming both keys
+    actually go nonzero on real self-play, not merely compile.
+
+STATUS AFTER THIS BATCH: all six proposals in this file's section 5 list
+(3.1-3.6) are landed. Every champion JSON on disk lacks both new keys and
+loads them at their `0.0` default (`parse_weights` starts from `Weights::
+defaults()`), so no existing champion's play changes until the climb learns
+values for them.
