@@ -331,3 +331,242 @@ RULES OBSERVED
 --------------
 Read-only: no edits under rust/src, no build, no git in /Users/pt or
 /Users/pt/tta-ai. All file:line references verified in /Users/pt/tta-scratch.
+
+
+======================================================================
+SECTION 7 -- REBUTTAL OF QUESTION (2): IS THE p95 ROW A CATEGORY ERROR?
+(Appended 2026-08-26 in response to the coordinator's question (2),
+which the earlier sections skipped. This section does NOT revise or
+supersede Sections 1-6; it answers the question they were written to
+avoid, and where the answer lands on the Section 6 design is said
+plainly at the end.)
+======================================================================
+
+7.1 What the clamp actually operates on
+---------------------------------------
+The clamp operates on the WEIGHT COEFFICIENT, never on a phi entry and
+never on a contribution:
+
+  climb.rs:235-242
+    fn clamp(x: f64, key: WeightKey, players: u8) -> f64 {
+        let bound = effective_bound(key, players);
+        if x.abs() > bound {
+            bound.copysign(x)
+        } else {
+            x
+        }
+    }
+
+  climb.rs:219-225   effective_bound = min(own clamp_bound, dominators')
+  climb.rs:455,493   applied at both mutation operators
+  climb.rs:267-280   repair_to_bounds pulls an incumbent in at load
+
+So "science_rate_trailing is clamped at 60.0" is true in the only sense
+the machinery has: the search is forbidden from pushing that coordinate
+past +/-60.0, and a coordinate sitting there is pinned. The p95 row is
+not what is clamped. The question is what the row is FOR, and the honest
+answer is that it is not a single thing. The bound formula
+
+  bound(k, players) = min(CLAMP_BLIND, CLAMP_T * T_players / spread_k)
+
+  weights.rs:1911-1918, with CLAMP_BLIND = 60.0 (weights.rs:2143)
+
+uses the key's phi spread as a UNIT CONVERSION: T (the total-score
+swing the instrument observed across the candidate set) divided by
+"one unit of this weight's feature" gives "how far may the coefficient
+walk before one unit of it can move the total by one total-swing". That
+conversion is only meaningful for weights whose contribution to the
+score IS w_k * phi_k. For the zero-row classes, that is not how they
+enter the score:
+
+  * Hinge keys (M3): w[ScienceRateTrailing] is read at rivals.rs:977
+    (w.get(key.trailing())) and added to the SCIENCE_RATE marginal:
+    m += hinge * trailing_fraction(key, state, idx)  (rivals.rs:976-983)
+  * Credit keys (M2): w[TechBoardCredit] is read inside the per-card
+    pricers (cards.rs:1947-2019: tb * tech_value(...), etc.), scaling
+    hand/wonder/action values that evaluate then books under the OUTER
+    gates (hand_potential, wonder_potential, ...).
+
+In both cases the feature value phi_k is not a quantity that exists,
+because the coefficient multiplies a state-dependent factor (a
+fraction in [0,1], a card value) that the instrument never records.
+So the answer to (1) is: the clamp applies, and applies to the
+coefficient; the zero p95 row records that the instrument cannot see
+that coefficient's own feature, not that the coefficient is unbounded.
+"Clamped at 60.0" means "held at the fallback ceiling" and nothing
+more.
+
+7.2 The p95 row for the hinge class: category error, and the honest
+    move is to stop pretending
+------------------------------
+For the six hinge keys the row IS a category error, and the design in
+Section 6 is the wrong response. Reason:
+
+  (a) The row is not "unmeasured" in the sense featspread's own docs
+      use for the class it was built for. Those docs say a stored 0.0
+      is a documented unmeasured state and the flat rail is the
+      fallback (weights.rs:1896-1903). For the hinge keys, by contrast,
+      the spread is 0.0 for a structural reason that no measurement
+      run can change: linear_features never writes their slots
+      (eval.rs:613 zero-init, no f.set arm, confirmed by the multcheck
+      runtime classification) and evaluate never dots them
+      (evaluate's linear body, eval.rs:162-185, dots features() output,
+      which never carries them either). A measurement binary would
+      produce the same zeros forever. Filling the row would require
+      inventing a DIFFERENT quantity -- p95 over hinge *
+      trailing_fraction across decisions -- and labelling it
+      p95_candidate_spread. That is not filling a row, it is redefining
+      the column to fit one key, and the bound formula would then be
+      dividing T by a number whose units are "hinge-times-fraction",
+      not "one unit of the feature the weight prices".
+
+  (b) The meaningful quantity for a hinge is not a spread at all, it is
+      the fire rate. The hinge fires on exactly the decisions where
+      trailing_fraction > 0, and its leverage on the score is
+      hinge * trailing_fraction * (candidate spread of the hinged
+      marginal) -- which the existing instrument already measures,
+      without any new binary: multcheck's term_nonzero_rate
+      (multcheck.rs:254-261) IS the fraction of decisions where the
+      hinge moves a candidate score. The 2026-08-24 4p run
+      (analysis/multcheck_raw_4p_2026-08-24.txt) already recorded
+      culture_rate_trailing at 0.2045 term_nonzero with
+      flip_rate_zero 0.000073. That pair -- fires in one decision in
+      five, flips the choice almost never -- is the complete honest
+      summary of the lever, and it is already on disk.
+
+  (c) So the honest move is: remove the pretence. The zero row for a
+      hinge key should not be read as "measured zero" nor "unmeasured",
+      it is "not a quantity this instrument defines for this key".
+      That is a documentation change to weights.rs's p95_candidate_
+      spread table comment (and the clamp_bound doc at 1896-1903), and
+      at most a marker on those six rows, NOT a measurement tool. A new
+      binary that fills them with a differently-defined quantity would
+      add a thing that then has to be maintained, defended, and whose
+      output would be mistaken for the column's existing meaning. The
+      coordinator's proposed outcome -- "the row is meaningless for
+      these classes, delete the pretence" -- is the right one for the
+      hinge class, and the Section 6 plan's hinge half should be
+      dropped.
+
+  One correction to my own earlier claim while answering this: I wrote
+  in Section 1 (M3) that the hinge "contribution never appears in ANY
+  phi slot" in a way that implied the weight had no score effect. It
+  DOES have a score effect -- it reaches evaluate through the card
+  pricers (feature_marginal's callers, cards.rs:724, 730, 770, 1289,
+  pricing science-yielding cards' marginals), so the 2p champion's
+  +20.619 does move real move ranking. The correct statement is: the
+  weight's effect exists and is measurable in flip/term_nonzero terms,
+  but it is NOT of the form w_k * phi_k for any phi the instrument
+  records, which is exactly why no spread row exists for it and none
+  should be forced into existence.
+
+7.3 Same question, credit class: the row is not a category error
+-----------------------------
+The credit keys are different, and the answer is that a bound IS
+meaningful for them, for the specific reason that their contribution
+IS of the form w_k * (something the instrument can record). The credit
+weight multiplies a per-card value that depends on the board state, not
+on w: tb * tech_value(...) where tech_value is arithmetic on the card's
+printed yields priced by OTHER weights' base values. With the pricers'
+internal sub-pricing frozen at the champion (the same freeze discipline
+linear_features already applies, eval.rs:677-689), the credit's
+candidate-set swing IS a well-defined, state-dependent, w-independent
+quantity: for each candidate move, the hand/wonder/action value that
+the credit scales, and its spread across candidates. That is a
+p95-candidate-spread-shaped quantity in the literal sense: "the
+candidate-set spread of the thing one unit of this weight prices,
+under frozen sub-pricing". The Section 6 probe-as-freeze measurement
+measures exactly that.
+
+The distinction from the hinge class is real, not cosmetic: the hinge's
+multiplier (trailing_fraction) is a STATE-only factor in [0,1] that
+gates a contribution to ANOTHER key's marginal -- it has no candidate-
+set of its own, and its "spread" across candidates would just be
+trailing_fraction spread, a number with no relation to the total-score
+swing T. The credit's multiplier (the card value) is precisely the
+thing the candidate moves change, so its candidate spread converts T
+into a coefficient bound with the same unit logic as every measured row.
+
+Two honest limits on the credit reading:
+  (i) The measured quantity is conditional on the freeze: it is "the
+      spread under champion sub-pricing", which is also what the
+      existing measured rows are (weights.rs:1930-1935: "These are a
+      property of the CHAMPION as much as of the game"). Consistent with
+      the column's existing semantics, so it is a legitimate row value,
+      not a redefinition.
+  (ii) The credit keys are doubly present: they scale the outer gates'
+      inner values (M2) AND some are themselves outer gates. The
+      measured spread covers the inner-scaling role only; the gate role
+      belongs to the gate key's own row. The bound is a rail on the
+      inner-scaling leverage, and that is the role the rail is for.
+
+7.4 What the blind 60.0 ceiling costs the credit class in practice
+------------------------------------------------------------------
+The question: what does a WRONG bound actually do to these keys during
+a climb, observably?
+
+  * It costs nothing when it is too LOOSE. A 60.0 ceiling is a ceiling:
+    the measured bounds are all below 60.0 (the min at weights.rs:1917),
+    so 60.0 is never tighter than the rail would be. While a credit key
+    sits below 60.0, the blind ceiling is inactive.
+  * It costs something when a key WALKS to it. A credit key reaching
+    +/-60.0 means the fitness gradient still points at the wall after
+    thousands of generations (the pinned-coordinate pathology the
+    runaway guard exists for, climb.rs:99-115, 282-294). The guard logs
+    it (climb.rs:1352-1360) but cannot distinguish "the true optimal is
+    past 60 and the rail is wrong" from "overfit to the pool, pinned
+    coordinate". With a measured bound in place, a key at its measured
+    bound is a different report than a key at the blind one: the former
+    says the instrument saw the leverage and the search pushed to it;
+    the latter says the instrument could not see the leverage at all.
+    That is the observable difference the row is for.
+  * It costs something structural: P95_TOTAL_SPREAD (the numerator T)
+    was measured from an evaluate that does not carry the credits'
+    contributions (featspread's phi, featspread.rs:201, dots
+    linear_features, which prices the eleven identity-aware gates at
+    the freeze and carries no credit inner-scaling). So T is the
+    total-score swing of a PARTIAL score. Any bound computed from that
+    T -- measured or blind -- divides a partial numerator by a
+    key-specific denominator. The measured rows are already affected
+    by this in principle (whenever any credit weight is nonzero, the
+    true total swing is larger than T). The practical magnitude is
+    unknown and was not measured in this session; stating it that way
+    rather than waving at it.
+  * What it does NOT cost: it cannot make a credit key misbehave below
+    the ceiling. The ceiling only binds at 60.0. So "what does the
+    blind 60.0 do to a credit key during a climb" has a short answer:
+    nothing until the key reaches 60.0, and at 60.0 it is an
+    indistinguishable-pinned-coordinate log line, not a wrong decision.
+    The value of the measured row is in the REPORTING (pinned-at-
+    measured-bound vs pinned-at-blind-ceiling) and in the numerator
+    discipline (a T re-measured under the same run), not in preventing
+    a wrong move today.
+
+7.5 Verdict on the Section 6 design, plainly
+--------------------------------------------
+  * Hinge half (the 6 M3 keys): unnecessary. The row is a category
+    error; the honest instrument already exists (multcheck
+    term_nonzero/flip, run on 2026-08-24); the right move is a
+    documentation correction that says the zero row for these keys is
+    "not defined for this key", not "unmeasured". Drop the plan.
+  * RateHorizon: as written in Section 1, its slot is never written by
+    features(); its effect is a scale on the four RATE_KEYS. Same
+    category-error logic as the hinges applies to its own row: the
+    meaningful quantity is the fire rate of hz != 1.0, not a spread.
+    Drop from the plan too.
+  * Credit half (the 21 M2 keys): the row is meaningful, the
+    measurement is the right way to fill it, and the Section 6
+    mechanism (probe-as-freeze, per-decision candidate spread, same
+    bound formula, same emit path) stands. This is the part of the
+    design worth building, and it is smaller than the design as
+    written because the hinge and RateHorizon rows no longer need
+    rows.
+  * The one gap named in Section 6 (probe must be passed as freeze)
+    remains the critical implementation point for the surviving half.
+
+In the coordinator's framing: the design as a whole was ~50%
+unnecessary. The hinge and RateHorizon halves should be withdrawn in
+favour of "delete the pretence" -- a doc change that removes a false
+promise from the table -- and the credit half is the real work, with
+its cost/benefit stated honestly in 7.4 (reporting quality and
+numerator discipline, not prevention of a wrong move).
