@@ -383,7 +383,13 @@ impl CardFateCounts {
 /// The `CardId` a civil card was played AS, if `mv` is one of the four
 /// sites that ever call `hand_civil.remove_first` in production code
 /// (`apply::h_play_leader`, the `Develop` handler, `apply::h_revolution`,
-/// `apply::h_play_action` -- confirmed by grep, there are no others).
+/// `apply::h_play_action` -- confirmed by grep, there are no others; the
+/// fifth and only other `hand_civil` clearing is `h_resign`'s
+/// `hand_civil = CardList::new()` after a `Move::Resign`, which is out of
+/// this census's universe by design -- it clears the hand without naming
+/// the cards, and the `antiquated` diff branch below cannot see a
+/// resign's clearing either, because a resigned player makes no further
+/// moves, so no post-snapshot ever exists for it).
 /// `Move::Build`/`Move::Upgrade` do NOT touch `hand_civil` at all: both
 /// operate on a card already sitting in `PlayerState::techs` (`apply::
 /// do_build`'s own `p.techs.get_mut(id).expect("...must already be
@@ -442,6 +448,49 @@ fn played_civil_card(mv: Move) -> Option<CardId> {
 /// `O(pre.len() * post.len())`, fine at real `hand_civil` sizes (a handful
 /// of cards, gated by `MAX_HAND`), called at most once per game per player
 /// (only on the single move that advances `state.age_civil`).
+/// Whether a `CardId` can ever sit in `hand_civil`, and is therefore inside
+/// the card-fate recorder's universe. `hand_civil` holds only the
+/// civil-row takeables: Wonders go straight into the `.wonder` slot on
+/// take (see the TAKEN branch's own comment), and the military-deck
+/// card types never sit in `hand_civil` at all -- the in-tree assertion is
+/// the catch-all arm of `legal.rs`'s Develop-legality match ("Wonder/other
+/// military-deck types never sit in hand_civil"). Such cards are DRAWN
+/// (e.g. `events::draw_military`, `economy`'s end-of-turn draw) rather
+/// than TAKEN, so no `Move::Take` ever records them in `taken_rounds`:
+/// a cull of one of them must not count as a tracking bug. `card.get()`
+/// returns the shared `&Card` table row (the `card.get().kind !=
+/// CardType::Wonder` comparison in the TAKEN branch is the same call).
+fn card_census_in_universe(card: CardId) -> bool {
+    if card.is_none() {
+        return false;
+    }
+    match card.get().kind {
+        CardType::Wonder
+        | CardType::Tactic
+        | CardType::Aggression
+        | CardType::War
+        | CardType::Pact
+        | CardType::Bonus
+        | CardType::Territory
+        | CardType::Event => false,
+        CardType::Farm
+        | CardType::Mine
+        | CardType::Lab
+        | CardType::Temple
+        | CardType::Library
+        | CardType::Arena
+        | CardType::Theater
+        | CardType::Infantry
+        | CardType::Cavalry
+        | CardType::Artillery
+        | CardType::Air
+        | CardType::SpecialTech
+        | CardType::Government
+        | CardType::Leader
+        | CardType::Action => true,
+    }
+}
+
 fn hand_multiset_diff(pre: &[CardId], post: &[CardId]) -> Vec<CardId> {
     let mut remaining: Vec<CardId> = post.to_vec();
     let mut removed = Vec::new();
@@ -891,11 +940,22 @@ struct Report {
     card_fate_early: CardFateCounts,
     card_fate_late: CardFateCounts,
     /// A `Move::Develop`/`PlayLeader`/`Revolution`/`PlayAction`, or an
-    /// antiquation cull, that could not be matched back to a `taken_rounds`
-    /// entry (should stay 0 -- see `play_one`'s card-fate blocks; the same
-    /// "a nonzero count here is a real bug, not a census gap" reasoning as
-    /// `n_wonder_fate_mismatches`).
+    /// antiquation cull of a card that CAN sit in `hand_civil` (see
+    /// `card_census_in_universe`), that could not be matched back to a
+    /// `taken_rounds` entry (should stay 0 -- see `play_one`'s card-fate
+    /// blocks; the same "a nonzero count here is a real bug, not a census
+    /// gap" reasoning as `n_wonder_fate_mismatches`). Culls of cards that
+    /// only ever sit in `hand_military` are outside the recorder's
+    /// universe and are not counted here -- that was the 17-mismatch
+    /// warning the 2026-08-26 200-game run showed (analysis/
+    /// behavcensus_taken_rounds_measured_2026-08-26.txt).
     n_card_fate_mismatches: u64,
+    /// Cards the antiquation diff saw leave `hand_civil` that could not sit
+    /// there at all (military-deck types, see `card_census_in_universe`):
+    /// counted, not silently dropped, so a future engine change that starts
+    /// putting military cards in the civil hand is visible here instead of
+    /// invisible in the mismatch counter.
+    n_card_fate_out_of_universe: u64,
     /// Civil cards taken over the whole game, one sample per player-game.
     cards_taken_per_playergame_early: Vec<i32>,
     cards_taken_per_playergame_late: Vec<i32>,
@@ -1004,6 +1064,7 @@ impl Report {
         self.card_fate_early.merge(other.card_fate_early);
         self.card_fate_late.merge(other.card_fate_late);
         self.n_card_fate_mismatches += other.n_card_fate_mismatches;
+        self.n_card_fate_out_of_universe += other.n_card_fate_out_of_universe;
         self.cards_taken_per_playergame_early.extend(other.cards_taken_per_playergame_early);
         self.cards_taken_per_playergame_late.extend(other.cards_taken_per_playergame_late);
         self.cards_still_in_hand_per_playergame_early.extend(other.cards_still_in_hand_per_playergame_early);
@@ -1160,6 +1221,13 @@ struct PlayerTrack {
     n_antiquated: u32,
     /// See `n_card_fate_mismatches` on [`Report`].
     n_card_fate_mismatch: u32,
+    /// Cards culled from `hand_civil` by the pre/post diff that could not
+    /// sit in `hand_civil` at all (military-deck types, which the engine
+    /// asserts never sit there and which therefore have no recorded
+    /// take). Counted, not silently dropped, so a future engine change
+    /// that starts putting military cards in the civil hand is visible
+    /// here instead of invisible in the mismatch counter.
+    n_card_fate_out_of_universe: u32,
     played_dwell: Vec<i32>,
     /// Antiquation-censored dwell only (rounds held before being culled) --
     /// the still-in-hand-at-game-end half of the censored population is
@@ -1228,6 +1296,7 @@ impl PlayerTrack {
             n_played: 0,
             n_antiquated: 0,
             n_card_fate_mismatch: 0,
+            n_card_fate_out_of_universe: 0,
             played_dwell: Vec::new(),
             censored_dwell: Vec::new(),
             blocked_played: Vec::new(),
@@ -1606,7 +1675,11 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // ---- card fate: PLAYED -- the card played_this_move named, if
         // any, matched back to the take that put it in hand (see
         // played_civil_card's doc comment for which four Move variants
-        // this can ever be non-None for).
+        // this can ever be non-None for). `played_this_move` is always a
+        // card that sat in `hand_civil` (those four handlers are the
+        // engine's only `hand_civil.remove_first` sites), which is where
+        // `taken_rounds` records from, so every such card is inside this
+        // counter's universe by construction.
         if let Some(card) = played_this_move {
             let t = &mut tracks[actor as usize];
             match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
@@ -1627,6 +1700,17 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
         // reimplementing game::antiquate_hands's own age-cutoff test,
         // because that keeps this census reading what the engine actually
         // did rather than a second, potentially-drifting copy of the rule.
+        //
+        // The diff spans EVERY move, not just age transitions, so it must
+        // be narrowed to cards that can actually sit in `hand_civil`:
+        // Wonder (taken straight into the `.wonder` slot) and the
+        // military-deck card types, which the engine asserts never sit in
+        // `hand_civil` (legal.rs's Develop-legality match carries the
+        // in-tree citation) and which therefore have no recorded take --
+        // a cull of one of them is outside the recorder's universe, not a
+        // tracking bug. `card.get().kind` is a `CardType` field read (the
+        // `CardType::Wonder` comparison above is the same pattern), not a
+        // literal construction.
         // The actor's OWN played card this move (if any) is excluded from
         // the diff first: it already left hand_civil via the PLAYED branch
         // above, on the very same move, and must not be double-counted as
@@ -1644,6 +1728,10 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
                 }
                 let t = &mut tracks[i as usize];
                 for card in removed {
+                    if !card_census_in_universe(card) {
+                        t.n_card_fate_out_of_universe += 1;
+                        continue;
+                    }
                     match t.taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
                         Some(TakenCard { taken_round, playable_turns, blocked_no_civil_action, blocked_nothing_affordable, blocked_something_else_developable }) => {
                             t.n_antiquated += 1;
@@ -2049,6 +2137,7 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             }
         }
         report.n_card_fate_mismatches += tracks[i as usize].n_card_fate_mismatch as u64;
+        report.n_card_fate_out_of_universe += tracks[i as usize].n_card_fate_out_of_universe as u64;
 
         let completed: Vec<CardId> = p.completed_wonders.as_slice().to_vec();
         let started_count = tracks[i as usize].wonder_started.len();
@@ -2497,6 +2586,14 @@ fn print_report(players: u8, r: &Report) {
             "WARNING  {} card(s) played or antiquated with no matching taken_rounds entry -- a real bug in \
              this census's own tracking, not a sample gap (see Report::n_card_fate_mismatches's doc comment)",
             r.n_card_fate_mismatches
+        );
+    }
+    if r.n_card_fate_out_of_universe > 0 {
+        println!(
+            "INFO     {} cull(s) of cards that can never sit in hand_civil (military-deck types) -- \
+             outside the take-recorder's universe, not a tracking bug; if this starts growing, the engine \
+             may be putting military cards in the civil hand (see card_census_in_universe's doc comment)",
+            r.n_card_fate_out_of_universe
         );
     }
     for (label, counts, taken_v, hand_v, played_dwell_v, censored_dwell_v, n_pg) in [
@@ -2974,5 +3071,72 @@ mod tests {
         a.merge(b);
         assert_eq!(a.games, 2);
         assert_eq!(a.final_score, vec![10, 20]);
+    }
+
+    fn card(name: &str) -> CardId {
+        CardId::by_name(name).unwrap_or_else(|| panic!("no such card: {name}"))
+    }
+
+    #[test]
+    fn card_census_in_universe_excludes_exactly_the_military_deck_and_wonder_types_and_admits_every_civil_row_type() {
+        let in_universe = [
+            card("Irrigation"),
+            card("Bronze"),
+            card("Masonry"),
+            card("Democracy"),
+            card("Reserves (I)"),
+            card("Winston Churchill"),
+            card("Monarchy"),
+        ];
+        let out_of_universe = [
+            card("Pyramids"),
+            card("Fighting Band"),
+            card("War over Territory"),
+            card("Open Borders Agreement"),
+            card("Military Bonus (defense 2 / colonization 1)"),
+            card("Vast Territory (I)"),
+        ];
+        for id in in_universe {
+            assert!(
+                card_census_in_universe(id),
+                "the card-fate recorder must cover {}",
+                id.name()
+            );
+        }
+        for id in out_of_universe {
+            assert!(
+                !card_census_in_universe(id),
+                "{} can never sit in hand_civil (legal.rs's Develop match \
+                 asserts it) and so has no recorded take; counting a cull of \
+                 it as a mismatch was the 2026-08-26 17-mismatch warning",
+                id.name()
+            );
+        }
+        // The predicate is the single enforcement point: the antiquated
+        // branch's `continue` consults nothing else, so a type that slips
+        // through this test reaches the mismatch counter.
+        let mut tracks = (0..2).map(|_| PlayerTrack::new()).collect::<Vec<_>>();
+        let mut pre = Vec::new();
+        let post: Vec<CardId> = Vec::new();
+        let cull = card("War over Territory");
+        let civil = card("Irrigation");
+        pre.push(cull);
+        pre.push(civil);
+        // post is empty: both cards left the hand. The military card is
+        // out of universe (no recorded take), the civil card is a genuine
+        // mismatch (taken_rounds has no entry for it).
+        for card in hand_multiset_diff(&pre, &post) {
+            if !card_census_in_universe(card) {
+                tracks[0].n_card_fate_out_of_universe += 1;
+                continue;
+            }
+            match tracks[0].taken_rounds.get_mut(&card).and_then(VecDeque::pop_front) {
+                Some(_) => tracks[0].n_antiquated += 1,
+                None => tracks[0].n_card_fate_mismatch += 1,
+            }
+        }
+        assert_eq!(tracks[0].n_card_fate_out_of_universe, 1, "the military-deck cull is counted, not silenced");
+        assert_eq!(tracks[0].n_card_fate_mismatch, 1, "the civil cull with no recorded take is still a mismatch");
+        assert_eq!(tracks[0].n_antiquated, 0);
     }
 }

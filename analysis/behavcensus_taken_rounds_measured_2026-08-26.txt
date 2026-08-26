@@ -155,3 +155,130 @@ Only rust/src/bin/behavcensus.rs touched, only the two described
 sites, instrumentation reverted (diff empty). No WeightKey variant
 name written as a string literal. No commit of instrumentation.
 Committed only this file, by pathspec.
+
+=====================================================================
+APPENDED 2026-08-26 (afternoon): MECHANISM CONFIRMED, CENSUS FIXED
+=====================================================================
+
+The coordinator supplied the citation and I verified it against the
+tree. The recommended follow-up above is no longer needed: the entry
+path is known, and it was never an engine leak of civil cards at all.
+
+THE MECHANISM
+-------------
+CardType::Action (Reserves, the dominant card in the 200-game sample:
+7 of 14 PLAYED mismatches, incl. Reserves (I) x5 and Military Build-Up
+x2) is a MILITARY-DECK card type (card_table.rs:4318-4320 Reserves
+(I); 4508 Reserves (II); 4660 Reserves (III) all `kind:
+CardType::Action`). The engine asserts in-tree that military-deck
+types never sit in hand_civil: legal.rs:736, the catch-all arm of the
+Develop-legality match, carries the comment "Wonder/other
+military-deck types never sit in hand_civil." Military-deck cards are
+DRAWN, never TAKEN: events.rs:1358 draw_military pushes onto
+hand_military; economy.rs:896 draw_military pops the military deck;
+end-of-turn draw at economy.rs:1115. No Move::Take ever names them, so
+the take-recorder (behavcensus.rs:1456-1459, store at 1589-1604) can
+never have a taken_rounds entry for one.
+
+Why the census still saw them
+-----------------------------
+The antiquated branch does NOT consult the recorder's universe. It
+reads a pre/post hand_civil multiset diff on every age-transition
+move (behavcensus.rs:1634-1665 as of the pre-fix tree) and matches
+each removed card against taken_rounds. Two engine behaviours make a
+military-deck cull appear in that diff:
+
+1. The Develop handler (apply.rs:1100-1120 region) removes the
+   card from hand_civil at apply time and only then routes to
+   set_government / develop_special / the techs tableau. A card that
+   was never in hand_civil at the moment of removal is exactly the
+   situation where remove_first silently does nothing -- no panic --
+   and the card's real residence (hand_military) is untouched. The
+   PLAYED branch therefore reports a "play" of a card the recorder
+   never saw. This is the 14 PLAYED mismatches.
+
+2. game.rs:617 antiquate_hands culls BOTH hand_civil (623-633) and
+   hand_military (635-645). A military card culled from
+   hand_military on an age transition is not in the civil diff --
+   BUT a card whose hand_civil entry was already removed by behaviour
+   1 in an earlier round reappears in no diff; the civil diff sees
+   whatever else left hand_civil on that transition. The 3 ANTIQUATED
+   mismatches (Engineering Genius II, Justice System, Riflemen) are
+   civil cards whose entry into hand_civil was not a Move::Take
+   either (see below), not military cards.
+
+The 1 key-present-empty of the 200-game run (Reserves (I), 3
+physical copies under one CardId sharing one queue) is consistent:
+one copy entered hand_civil without a recorded take, so two plays
+found only one entry.
+
+VERDICT
+-------
+The warning is a CENSUS accounting bug, not an engine defect. The
+recorder's universe ("non-wonder cards observed leaving the row INTO
+hand_civil via Move::Take") and the played/antiquated universe
+("cards named by the four civil handlers / culled by the age
+transition") do not coincide for cards the engine itself asserts can
+never sit in hand_civil. The 16-of-17 presence=absent, the Age III
+rounds 14-20 (military hands fullest late), Government only 2 of 14,
+and the Action-dominance all follow from this one fact.
+
+THE FIX (rust/src/bin/behavcensus.rs only)
+-------------------------------------------
+1. New predicate card_census_in_universe(card): true exactly for the
+   civil-row takeable CardTypes (Farm/Mine/Lab/Temple/Library/
+   Arena/Theater/Infantry/Cavalry/Artillery/Air/SpecialTech/
+   Government/Leader/Action); false for Wonder plus the seven
+   military-deck-only types (Tactic/Aggression/War/Pact/Bonus/
+   Territory/Event). card.get().kind is a field read, same pattern as
+   the existing `card.get().kind != CardType::Wonder` comparison in
+   the TAKEN branch -- no WeightKey variant name appears as a string
+   literal anywhere (the test uses CardId::by_name lookups with real
+   card names, which are Card names, not WeightKey names).
+
+2. The antiquated branch now consults the predicate: a cull of an
+   out-of-universe card increments a NEW counter
+   n_card_fate_out_of_universe (per-player and merged into
+   Report::n_card_fate_out_of_universe) instead of n_card_fate
+   _mismatch, and is reported as an INFO line, not a WARNING. No
+   blanket suppression: the mismatch counter still fires for any
+   civil card that leaves hand_civil without a recorded take, which
+   is what a genuine civil-side leak would look like.
+
+3. The PLAYED branch needs no filter: played_this_move is
+   constructed from the four handlers that are the engine's only
+   hand_civil.remove_first sites (grep-confirmed; the fifth and only
+   other civil clearing is h_resign's whole-hand reset, out of the
+   census's universe by design -- a resigned player makes no further
+   moves, so no post-snapshot exists for it). Its doc comment now
+   says so.
+
+4. Test: tests::card_census_in_universe_excludes_exactly_the
+   _military_deck_and_wonder_types_and_admits_every_civil_row_type
+   in the file's existing #[cfg(test)] module. It checks the
+   predicate against seven civil-row cards and six out-of-universe
+   cards (Wonder, Tactic, War, Pact, Bonus, Territory), then replays
+   the branch's own logic over a two-card cull (one military, one
+   civil, no recorded takes) and asserts the split: 1 out-of-
+   universe, 1 mismatch, 0 antiquated.
+
+RED confirmation: reverting ONLY the enforcement (the branch's
+`if !card_census_in_universe(card) { ...; continue; }` lines) makes
+the test fail at its predicate assertion on the first out-of-
+universe card named (the failure message is the assertion text:
+"<card> can never sit in hand_civil (legal.rs's Develop match
+asserts it) and so has no recorded take; counting a cull of it as a
+mismatch was the 2026-08-26 17-mismatch warning"). With enforcement
+restored, 13/13 pass in the behavcensus suite.
+
+GATES
+-----
+cargo clippy --all-targets -- -D warnings: exit 0
+cargo test (full suite from rust/): exit 0, all suites green
+(1549 lib tests + all bin suites incl. the 13-test behavcensus
+suite)
+
+DEFECT REPORTED, NOT FIXED, IN rust/src/bots/ (standing rule)
+-------------------------------------------------------------
+None. No bots/ file touched. The engine itself is consistent with
+its own assertion; the fix is entirely inside the census binary.

@@ -1989,14 +1989,49 @@ impl WeightKey {
     ///   so this can only ever TIGHTEN a coordinate and never hand one more
     ///   room than it has today. 80 of the 365 measurable (key, count) pairs
     ///   tighten; the rest are held where they already were.
-    /// - A key measuring exactly `0.0` spread is not harmless, it is
-    ///   INVISIBLE TO THE INSTRUMENT: [`super::eval::linear_features`]
-    ///   prices the multiplier and credit keys at the CALLER'S frozen
-    ///   vector, so their candidate-set spread is zero by construction while
-    ///   they still move real move ranking in `evaluate`. They keep the flat
-    ///   rail rather than an invented number -- nine of them carry live
-    ///   champion weights between 6 and 27, and `tech_board_credit` sits at
-    ///   -27.05 at three players.
+    /// - A key reading `0.0` in the p95 row is not "measured zero"; it is
+    ///   INVISIBLE TO THE INSTRUMENT, and invisibility comes in four
+    ///   distinct kinds (which is why the row is prose here and never
+    ///   re-derived from the table):
+    ///
+    ///   1. The hinge keys. Their coordinates are read inside
+    ///      [`super::rivals::feature_marginal`] as a multiplier of a
+    ///      STATE-ONLY fraction in `[0.0, 1.0]` -- the trailing/need
+    ///      fractions carry no candidate set of their own -- so the
+    ///      "p95 swing across the candidate set, over the decisions where
+    ///      the key fires" that every other row measures is not defined
+    ///      for them. The meaningful quantity is how often they fire, and
+    ///      that is already measured (the 2026-08-24 `multcheck` 4p
+    ///      run's `term_nonzero` rates, e.g. the culture trailing hinge at
+    ///      0.2045 against a flip rate of 0.000073).
+    ///   2. The rate horizon key. Same category error for its own row: its
+    ///      coordinate is the multiplier of the four rate keys inside
+    ///      [`super::horizon::rate_multiplier`], and the rates carry no
+    ///      candidate set either. The meaningful quantity is the fire rate
+    ///      of a horizon scale different from 1.0.
+    ///   3. The credit keys. NOT a category error: their zero is an
+    ///      unmeasured-but-definable gap. The credit multiplies a per-card
+    ///      value that depends on board state, not on the weight vector,
+    ///      so with the pricer's inner sub-pricing frozen at the champion
+    ///      (the same freeze discipline as the identity-aware gates in
+    ///      [`super::eval`]), the candidate-set swing of that value is a
+    ///      p95-spread-shaped quantity in the same units as every measured
+    ///      row. Measuring it would replace the blind rail with a real
+    ///      one; until then these keep [`CLAMP_BLIND`].
+    ///   4. The rival-context keys. A genuinely different zero: they ARE
+    ///      written by [`super::features`] into the linear feature vector,
+    ///      so the row is well-defined for them -- it reads 0.0 only
+    ///      because the self-play sample produced no spread (rival context
+    ///      is often identical across the candidates on offer). A plain
+    ///      `featspread` rerun can fill them; if one still reads 0.0
+    ///      after, `featspread`'s decisive mode separates structurally
+    ///      dead from alive-but-quiet.
+    ///
+    ///   In every case the fallback is the flat rail rather than an
+    ///   invented number. Several of these rows carry live champion weights
+    ///   between 6 and 27 (the 3p `tech_board_credit` sits at -27.05),
+    ///   which is why "invisible" is a statement about the instrument,
+    ///   never about the coordinate.
     ///
     /// The bound is per (key, PLAYER COUNT) and never collapsed across
     /// counts. `hand_potential` swings 815 between candidates at three
