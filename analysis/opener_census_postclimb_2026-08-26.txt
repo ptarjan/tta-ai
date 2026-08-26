@@ -1,0 +1,295 @@
+Opener behaviour census, post-climb champion weights, 2026-08-26
+Binary: /Users/pt/tta-ai/rust/target/release/behavcensus (built Aug 25 10:37, NOT rebuilt, NOT touched)
+cwd for all runs: /Users/pt/tta-ai/rust
+Threads: 2 throughout (climb process left the other cores)
+No git commands run. No source files edited. Climb / stop_* sentinels untouched.
+
+=== Timing probes (--games 8 --seed 1 --threads 2), used to size the full runs ===
+2p (champ2p.json): elapsed 1.1s, 7.5 games/s -> full run scaled from this estimate
+3p (champ3p.json): elapsed 1.0s, 7.7 games/s -> full run scaled from this estimate
+4p (champ4p.json): elapsed 4.3s, 1.9 games/s -> full run scaled from this estimate
+(actual full-run throughput differed from these small-sample estimates, see below;
+this is expected variance, not a bug)
+
+=== Full run commands actually executed (sequential, one at a time) ===
+2p: cd /Users/pt/tta-ai/rust && ./target/release/behavcensus \
+    --games 9000 --players 2 --seed 1 --threads 2 \
+    --weights /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ2p.json \
+    > /Users/pt/tta-ai/analysis/behavcensus_postclimb_2026-08-26_2p.txt 2>&1
+    seeds 1..9000. Actual: elapsed 771.0s (12.85 min), 11.7 games/s. 18000 player-games.
+
+3p: cd /Users/pt/tta-ai/rust && ./target/release/behavcensus \
+    --games 9200 --players 3 --seed 1 --threads 2 \
+    --weights /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ3p.json \
+    > /Users/pt/tta-ai/analysis/behavcensus_postclimb_2026-08-26_3p.txt 2>&1
+    seeds 1..9200. Actual: elapsed 1383.6s (23.06 min), 6.6 games/s. 27600 player-games.
+
+4p: cd /Users/pt/tta-ai/rust && ./target/release/behavcensus \
+    --games 1800 --players 4 --seed 1 --threads 2 \
+    --weights /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ4p.json \
+    > /Users/pt/tta-ai/analysis/behavcensus_postclimb_2026-08-26_4p.txt 2>&1
+    seeds 1..1800 (games count cut down from the original 2300 plan mid-task, after
+    2p/3p came in slower than the 8-game probe predicted, to keep the run inside the
+    time budget rather than risk hours). Actual: elapsed 940.6s (15.7 min), 1.9 games/s.
+    7200 player-games.
+
+All three: EXIT=0, files confirmed non-empty on disk (see ls -l at end of this file).
+
+=== What the binary prints (established from the 8-game/3p probe, analysis/probe_3p.txt) ===
+Sections: Openings (first card taken, first tech, round of first develop / first
+wonder-stage build), Wonders, Government, Military, Economy/culture/science by age
+boundary table, Score, Wonder tempo (CA spend by move kind, rounds 3-9, split into
+EARLY/LATE wonder-build-timing groups only), Card fate (played/antiquated/still-in-hand,
+also EARLY/LATE only), Card fate follow-up + Zero-playable-turns follow-up (also
+EARLY/LATE only), Production curve (food/resources mean PER ROUND, full population,
+not tempo-split -- this is the shape defect 2 needs), Worker allocation curve (per
+round, full population), Tech acquisition (seen/taken/built/staffed per building type,
+Farm/Mine taken+built by age tier, full population).
+
+Confirmed NOT PRESENT anywhere in any of the three run outputs (grep -i "illegal|
+wasted|attempt|free worker|no free|end turn|end-turn|EndTurn|turn termination" across
+all three files, only one incidental hit -- a doc-comment header that uses the word
+"wasted" in a section title, not a metric): no illegal-move-attempt counter, no
+"wasted civil action" metric, no end-turn / turn-termination event of any kind.
+
+=== Human round-1 baseline (given, NOT recomputed) ===
+Round 1 is 100% takes (0 builds, 0 population growth). Humans first BUILD in round 2
+(80.2% of games); the first build is a MINE (Bronze) 77.4% of the time, a FARM only
+0.9% of the time. Mean round-1 civil actions spent: 1.99 of 4.
+
+=========================================================================
+DEFECT-BY-DEFECT COMPARISON
+=========================================================================
+
+--- Defect 1: "Farm build attempted in round 1 and ILLEGAL 98.1% of the time,
+    88.3% of those for want of a free worker" ---
+
+NOT MEASURABLE. behavcensus does not log attempted-but-rejected moves at all (no
+"illegal", "attempt", or "free worker" reasoning anywhere in the output of any of the
+three runs). It only reports moves that actually happened. Inventing an equivalent
+number would misrepresent what was measured, so none is given.
+
+Closest available (different-shape) context, all player counts, all three runs:
+  - Worker allocation curve, round 1, mean free (unstaffed) workers: 1.00 for 2p, 3p,
+    AND 4p (n = 18000 / 27600 / 7200 player-games respectively). Every player-game in
+    this sample starts round 1 with exactly one free worker on average -- i.e. under
+    current weights the "no free worker" precondition that the pre-climb defect
+    attributed 88.3% of illegal attempts to is not obviously present at round 1.
+  - Farm/Mine "built by age tier": Farm A=1.000, Mine A=1.000 for all three player
+    counts. This is the pre-built starting farm/mine every player begins with (part
+    of setup, matches the round-1 worker curve: farmW=2.00, mineW=2.00), NOT a new
+    build decision by the bot in round 1. It is not evidence about opener farm-build
+    attempts either way.
+VERDICT: NOT MEASURABLE.
+
+--- Defect 2: "food declining from round 2 onward (humans climb to a mean 4.95;
+    the bot's food curve runs backwards)" ---
+
+MEASURABLE via "Production curve" (full population, food mean per round):
+
+2p (n=18000/round through round ~19, thinning after):
+  r1=2.00 r2=2.00 r3=2.00 r4=1.99 r5=1.97 r6=1.95 r7=1.91 r8=1.84 r9=1.72 r10=1.64
+  ... r19=1.20 (n=17328) r20=1.12 (n=5552) r21=1.04 (n=166)
+
+3p (n=27600 through round ~10):
+  r1=2.00 r2=2.00 r3=2.00 r4=1.99 r5=1.95 r6=1.92 r7=1.85 r8=1.78 r9=1.72 r10=1.66
+  ... r21=1.14 (n=5979) r22=1.05 (n=258)
+
+4p (n=7200 through round ~10):
+  r1=2.00 r2=2.00 r3=2.00 r4=1.99 r5=1.96 r6=1.97 r7=1.98 r8=1.99 r9=2.02 r10=2.08
+  ... r23=3.65 (n=1892) r24=3.46 (n=296)
+
+VERDICT (2p): UNCHANGED. Food is flat rounds 1-3, then declines monotonically from
+round 4 through the rest of the game (2.00 -> 1.04 by round 21). This is exactly the
+pre-climb "runs backwards" shape, still nowhere near a human-like climb to ~4.95.
+
+VERDICT (3p): UNCHANGED. Same shape as 2p: flat rounds 1-3, decline from round 4
+onward, down to ~1.05-1.14 late game.
+
+VERDICT (4p): IMPROVED (partially). Food also dips rounds 4-5 (2.00 -> 1.96), but
+then reverses and climbs for the rest of the sampled range: r6=1.97, r7=1.98,
+r8=1.99, r9=2.02, r10=2.08, ..., r23=3.65, r24=3.46. This is a real behavioural
+change from "runs backwards" -- the 4p bot now recovers and grows food late-game,
+though it still falls well short of the human 4.95 mean. Note this is a genuine
+player-count split: 2p and 4p diverged on this defect under the post-climb weights.
+
+--- Defect 3: "only 61% of taken cards are ever played (humans ~78%)" ---
+
+NOT MEASURABLE in the stated whole-population shape. The census only reports card
+fate (played/antiquated/still-in-hand) broken out by EARLY vs LATE wonder-tempo
+group; player-games whose first wonder-stage build lands in rounds 6-9 fall into
+neither bucket and are silently excluded from this table entirely (see the binary's
+own header comment, carried into each run file). There is no combined/whole-
+population number printed.
+
+Available EARLY+LATE SUBSET numbers (coverage caveat below), raw counts:
+  2p: EARLY n=7070 player-games, 148147 cards taken, played 106098 (71.6%),
+      antiquated 17813 (12.0%), still in hand 24236 (16.4%)
+      LATE n=2952, 62931 taken, played 45741 (72.7%), antiquated 7615 (12.1%),
+      still in hand 9575 (15.2%)
+      EARLY+LATE combined: played 151839/211078 = 71.9%
+      coverage: (7070+2952)=10022 of 18000 player-games (55.7%); 44.3% excluded.
+  3p: EARLY n=14360, 250419 taken, played 143106 (57.1%), antiquated 50559 (20.2%),
+      still in hand 56754 (22.7%)
+      LATE n=3063, 55695 taken, played 32414 (58.2%), antiquated 11509 (20.7%),
+      still in hand 11772 (21.1%)
+      EARLY+LATE combined: played 175520/306114 = 57.3%
+      coverage: (14360+3063)=17423 of 27600 player-games (63.1%); 36.9% excluded.
+  4p: EARLY n=5007, 106539 taken, played 86986 (81.6%), antiquated 8035 (7.5%),
+      still in hand 11518 (10.8%)
+      LATE n=306, 6046 taken, played 4529 (74.9%), antiquated 835 (13.8%),
+      still in hand 682 (11.3%)
+      EARLY+LATE combined: played 91515/112585 = 81.3%
+      coverage: (5007+306)=5313 of 7200 player-games (73.8%); 26.2% excluded.
+
+VERDICT: NOT MEASURABLE (whole-population). As directional context only (subset,
+not the same population, not directly comparable to the pre-climb 61% figure which
+may itself have been whole-population or a different player count): the EARLY/LATE-
+subset play rate now ranges 57.3% (3p) to 81.3% (4p), i.e. it is NOT uniform across
+table sizes and straddles the old 61% figure in both directions. Do not read this as
+either "improved" or "worse" -- the populations aren't comparable enough to say.
+
+--- Defect 4: "20.3% of civil actions wasted" ---
+
+NOT MEASURABLE. No "wasted civil action" metric is printed anywhere. The nearest
+adjacent (different-definition) stat is "civil actions left unused across rounds
+1-3" -- a per-player-game count of CAs never spent in the first 3 rounds, not a
+whole-game fraction of CAs spent on ineffective moves:
+  2p: 0 unused->17581, 1->391, 2->26, 3->2 (of 18000). 97.7% left zero unused;
+      2.3% left >=1 unused.
+  3p: 0 unused->27221, 1->343, 2->34, 2->2 (of 27600). 98.6% left zero unused;
+      1.4% left >=1 unused.
+  4p: 0 unused->5470, 1->1387, 2->229, 3->82, 4->23, 5->9 (of 7200). 76.0% left
+      zero unused; 24.0% left >=1 unused -- markedly higher than 2p/3p.
+VERDICT: NOT MEASURABLE. (The 4p spike in "left unused" CAs is notable in its own
+right -- see contradictions section below -- but it is not the same quantity as
+"wasted" CAs from the pre-climb defect and must not be reported as such.)
+
+=========================================================================
+EXTRA: END TURN / turn termination, and civil-action spend per ROUND
+=========================================================================
+
+END TURN / turn-termination: NOT MEASURABLE. Grepped all three raw output files for
+"end turn", "end-turn", "EndTurn", "turn termination" (case-insensitive) -- zero
+hits in any of the three files. The census has no notion of an explicit end-turn
+event or a per-table-size termination-round statistic to report. This means the
+requested comparison ("does 2p now end turns markedly earlier than 4p, given
+end_turn_bias split -9.60->-2.49 at 2p vs -29.49->-37.34 at 4p") CANNOT be answered
+from this binary's output.
+
+The only per-round CA-spend breakdown the binary prints ("Wonder tempo: civil-action
+spend by move kind, rounds 3-9") is EARLY/LATE-tempo-subset only (same population
+caveat as defect 3), rounds 3-9 only (not the whole game), and its move-kind
+categories are take/build/develop/pop/leader/action-card/wonder-step/other -- there
+is no "pass"/"end turn" category in that breakdown either, so it cannot serve as a
+proxy for turn-termination timing. Not attempting to back into an end-turn-timing
+number from it.
+
+Round-of-first-Develop (a genuinely different, but adjacent, timing signal that IS
+whole-population) for reference only -- do not read this as an end_turn proxy:
+  2p: mean=6.07, median=6, n=17669
+  3p: mean=5.43, median=5, n=27415
+  4p: mean=5.30, median=5, n=7165
+(2p bot develops slightly LATER on average than 3p/4p, which is if anything the
+opposite direction from "2p ends turns earlier"; but this is Develop timing, not
+end-turn timing, and should not be substituted for the requested measurement.)
+
+=========================================================================
+THINGS THE CENSUS SHOWED THAT WEREN'T ASKED ABOUT BUT ARE WORTH FLAGGING
+=========================================================================
+
+1. First-build-kind-by-round-3 differs sharply and non-monotonically by player count
+   under the post-climb weights -- this was not one of the four stated defects but
+   is a large, clean signal:
+     2p: Military 99.3% (17878/18000) is the dominant "first build/develop/upgrade"
+         by round 3. Mine is not even in the top line.
+     3p: Mine 95.6% (26391/27600), Military only 3.2% (894/27600).
+     4p: Mine 53.7% (3864/7200), Military 45.5% (3276/7200) -- nearly split.
+   The 2p bot's opening is now overwhelmingly military-first, which is neither the
+   pre-climb defect (farm-first) nor the human baseline (mine-first, 77.4%). This
+   looks like a real, table-size-dependent behavioural split introduced or exposed
+   by the climb, independent of the four defects asked about.
+2. 4p's "civil actions left unused rounds 1-3" rate (24.0%) is an order of magnitude
+   higher than 2p/3p (2.3% / 1.4%) -- consistent in direction with 4p's much more
+   negative end_turn_bias (-37.34) mentioned in the brief, though this file cannot
+   causally connect the two (see END TURN section above for why).
+3. 4p's food-curve reversal (defect 2) is the only one of the three table sizes
+   where any pre-climb defect looks IMPROVED; 2p and 4p diverge from each other on
+   this specific measure, which the brief's framing (one verdict per defect) doesn't
+   naturally accommodate -- reported per-player-count above instead of a single verdict.
+
+=========================================================================
+FILES ON DISK (see ls -l below, captured before final report)
+=========================================================================
+/Users/pt/tta-ai/analysis/behavcensus_postclimb_2026-08-26_2p.txt
+/Users/pt/tta-ai/analysis/behavcensus_postclimb_2026-08-26_3p.txt
+/Users/pt/tta-ai/analysis/behavcensus_postclimb_2026-08-26_4p.txt
+/Users/pt/tta-ai/analysis/opener_census_postclimb_2026-08-26.txt (this file)
+/Users/pt/tta-ai/analysis/probe_2p.txt, probe_3p.txt, probe_4p.txt (8-game timing probes, kept for reference)
+
+================================================================================
+COORDINATOR CORRECTION, 2026-08-26 — three of the four "NOT MEASURABLE" verdicts
+above are too weak. The raw census files do carry the numbers; what they do not
+carry is the *illegal-attempt* instrumentation, which is a different thing.
+================================================================================
+
+DEFECT 1 (Farm build in round 1, illegal 98.1%, 88.3% for want of a free worker)
+  behavcensus records EXECUTED moves, so an illegal ATTEMPT can never appear here.
+  That instrumentation lives in the untracked scratch probe buildprobe.rs, NOT in
+  behavcensus, and the 98.1% figure came from there. So: not re-measured, and the
+  correct follow-up is a buildprobe run, not a behavcensus flag.
+  What the census DOES say, and it is not nothing: the first executed
+  build/develop/upgrade by round 3 is NEVER a Farm at any table size.
+    2p: Military 17878 (99.3%)
+    3p: Mine 26391 (95.6%), Military 894 (3.2%)
+    4p: Mine 3864 (53.7%), Military 3276 (45.5%)
+  Human baseline: first build in round 2 (80.2%), Mine 77.4%, Farm 0.9%.
+  3p now matches the human opener on this axis. VERDICT: farm-first behaviour is
+  ABSENT; the illegal-attempt rate is UNMEASURED (wrong binary).
+
+DEFECT 2 (food declines from round 2; humans climb to a mean 4.95)
+  2p: r1 2.00 -> r4 1.99 -> r9 1.72 -> r13 1.44 -> r15 1.25 (monotone decline)
+  3p: r1 2.00 -> r4 1.99 -> r9 1.72 -> r12 1.55            (monotone decline)
+  4p: r1 2.00 -> r5 1.96 -> r10 2.08 -> r23 3.65           (recovers, still < 4.95)
+  MECHANISM, new this run: food falls while RESOURCES rise (2p 2.00->2.33,
+  3p 2.00->3.26), and the worker curve shows why -- 3p farmW 2.00 -> 1.77 by r9
+  while mineW 2.00 -> 3.35. The bot is not failing to grow food; it is actively
+  converting farms into mines and never building a farm.
+  VERDICT: UNCHANGED at 2p/3p, IMPROVED at 4p. Still the headline defect.
+
+DEFECT 3 (61% of taken cards ever played; humans ~78%)
+  Reported split by EARLY/LATE wonder tempo, but BOTH groups agree closely, so the
+  excluded middle cannot move the estimate much:
+    3p EARLY: 250419 taken -> played 143106 (57.1%), antiquated 50559 (20.2%),
+              still in hand at game end 56754 (22.7%)
+    3p LATE:   55695 taken -> played  32414 (58.2%), antiquated 11509 (20.7%),
+              still in hand  11772 (21.1%)
+  VERDICT: ~57-58%, i.e. NOT IMPROVED (slightly below the old 61%), far under 78%.
+  CAUSE, and this is the most useful thing in the whole census: of 107313
+  never-played cards, 73776 (68.7%) were NEVER LEGAL to play again after the take.
+  Of those cards' blocked decision points, 68.9% are "nothing affordable" (an action
+  WAS available and nothing in hand could be paid for) against only 17.5% "no civil
+  action". The bot is not short of civil actions. It is buying cards it cannot pay
+  for. That is a PRODUCTION defect presenting as a card-play defect, and it is the
+  same root as defect 2.
+
+DEFECT 4 (20.3% of civil actions wasted)
+  Different denominator, stated plainly: the census reports player-games leaving any
+  CA unused across rounds 1-3, not the whole-game share of actions.
+    2p: 419/18000 (2.3%)   3p: 379/27600 (1.4%)   4p: 24.0%
+  VERDICT: the opening CA waste is effectively GONE at 2p/3p -- and that is now a
+  finding in the OTHER direction. Humans deliberately bank: mean 1.99 of 4 spent in
+  round 1, median 2 unused, 91.0% of human player-games leave at least one unused.
+  The bot now spends essentially everything in rounds 1-3. On this axis the climb
+  moved the bot FURTHER from the human opener, not closer.
+
+END TURN / turn termination: confirmed NOT MEASURABLE -- behavcensus has no
+pass/end-turn category anywhere in its output, so the 2p (-2.49) vs 4p (-37.34)
+end_turn_bias split cannot be checked here. The 4p opening CA-waste rate of 24.0%
+against 2p's 2.3% is directionally consistent with it but establishes nothing.
+
+FREE WORKERS (unasked, relevant to defect 1's "88.3% for want of a free worker"):
+  3p free workers by round: r1 1.00, r2 1.00, r3 0.36, r4 0.62, r5 0.44, r6 0.38,
+  r7 0.37, r8 0.34, r9 0.30. From round 3 on the bot runs at roughly a third of a
+  free worker. The worker pool IS the binding constraint, all game, not just in the
+  opener.

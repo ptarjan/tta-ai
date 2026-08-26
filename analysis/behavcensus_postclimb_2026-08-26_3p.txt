@@ -1,0 +1,333 @@
+games        9200
+players      3
+weights      /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ3p.json
+seeds        1..9200
+elapsed      1383.6s  (6.6 games/s)
+
+## 3p (n=9200 games, 27600 player-games)
+
+### Openings
+
+First card taken while in Age A (top 10 by frequency, 27600 player-games):
+- Colossus: 5930 (21.5%)
+- Stock Pile: 5170 (18.7%)
+- Frugality (A): 4986 (18.1%)
+- Engineering Genius (A): 3677 (13.3%)
+- Rich Land (A): 2275 (8.2%)
+- Urban Growth (A): 2273 (8.2%)
+- Cultural Heritage (A): 1670 (6.1%)
+- Julius Caesar: 679 (2.5%)
+- Alexander the Great: 621 (2.2%)
+- Patriotism (A): 152 (0.6%)
+
+First technology developed (top 10 by frequency):
+- Warfare: 9828 (35.6%)
+- Cartography: 4944 (17.9%)
+- Swordsmen: 4342 (15.7%)
+- Knights: 3854 (14.0%)
+- Code of Laws: 1598 (5.8%)
+- Theocracy: 1440 (5.2%)
+- Masonry: 885 (3.2%)
+- Monarchy: 119 (0.4%)
+- Navigation: 69 (0.2%)
+- Justice System: 68 (0.2%)
+
+Round of first Develop: min=3 p25=5 median=5 p75=6 max=21 mean=5.43 n=27415
+Round of first wonder-stage build (only among player-games that ever built one): min=3 p25=4 median=5 p75=7 max=19 mean=5.82 n=26917
+
+Round of first wonder-stage build, count/share/win-rate (outcome-resolvable player-games only):
+- round 3: 6197 (22.5%)  win-rate 39.0% (2416/6197)
+- round 4: 3272 (11.9%)  win-rate 38.0% (1243/3272)
+- round 5: 4726 (17.1%)  win-rate 34.3% (1623/4726)
+- round 6: 3881 (14.1%)  win-rate 33.7% (1307/3881)
+- round 7: 2571 (9.3%)  win-rate 31.2% (803/2571)
+- round 8: 2020 (7.3%)  win-rate 30.9% (624/2020)
+- round 9: 1589 (5.8%)  win-rate 28.9% (460/1589)
+- round 10: 1093 (4.0%)  win-rate 23.9% (261/1093)
+- round 11: 684 (2.5%)  win-rate 22.4% (153/684)
+- round 12: 459 (1.7%)  win-rate 17.6% (81/459)
+- round 13: 266 (1.0%)  win-rate 19.2% (51/266)
+- round 14: 107 (0.4%)  win-rate 20.6% (22/107)
+- round 15: 36 (0.1%)  win-rate 22.2% (8/36)
+- round 16: 12 (0.0%)  win-rate 25.0% (3/12)
+- round 17: 2 (0.0%)  win-rate 50.0% (1/2)
+- round 18: 1 (0.0%)  win-rate 0.0% (0/1)
+- round 19: 1 (0.0%)  win-rate 0.0% (0/1)
+- never built a wonder stage at all: 368 (1.3%)  win-rate 10.6% (39/368)
+
+Player-games with NO wonder step by end of round 4: 18027/27600 (65.3%)
+
+### Opening (human-comparable schema: first take name+build kind+leader/pop by round 3)
+
+Outcome unknown (cap_hit or tie, excluded from every win-rate below): 315/27600 (1.1%)
+
+First card taken by round 3 (top 15), count/share/win-rate:
+- Colossus: 5863 (21.2%)  win-rate 41.6% (2438/5863)
+- Stock Pile: 5108 (18.5%)  win-rate 29.0% (1479/5108)
+- Frugality (A): 4930 (17.9%)  win-rate 32.0% (1580/4930)
+- Engineering Genius (A): 3640 (13.2%)  win-rate 34.7% (1263/3640)
+- Rich Land (A): 2243 (8.1%)  win-rate 31.3% (701/2243)
+- Urban Growth (A): 2242 (8.1%)  win-rate 30.8% (690/2242)
+- Cultural Heritage (A): 1650 (6.0%)  win-rate 29.9% (494/1650)
+- Julius Caesar: 675 (2.4%)  win-rate 32.6% (220/675)
+- Alexander the Great: 617 (2.2%)  win-rate 23.5% (145/617)
+- Patriotism (A): 152 (0.6%)  win-rate 32.2% (49/152)
+- Library of Alexandria: 99 (0.4%)  win-rate 17.2% (17/99)
+- Hanging Gardens: 60 (0.2%)  win-rate 25.0% (15/60)
+- Moses: 3 (0.0%)  win-rate 66.7% (2/3)
+- Hammurabi: 2 (0.0%)  win-rate 50.0% (1/2)
+- Aristotle: 1 (0.0%)  win-rate 100.0% (1/1)
+
+First build/develop/upgrade kind by round 3, count/share/win-rate:
+- Mine: 26391 (95.6%)  win-rate 33.6% (8880/26391)
+- Military: 894 (3.2%)  win-rate 24.0% (215/894)
+Elected >=1 leader by round 3 = true: 6220 (22.5%)  win-rate 32.3% (2010/6220)
+Elected >=1 leader by round 3 = false: 21065 (76.3%)  win-rate 33.6% (7085/21065)
+Increased population by round 3 = true: 20898 (75.7%)  win-rate 32.8% (6858/20898)
+Increased population by round 3 = false: 6387 (23.1%)  win-rate 35.0% (2237/6387)
+
+Civil actions left unused across rounds 1-3 (count -> player-games): 0->27221 1->343 2->34 3->2 
+First Age-A take, CA price paid (price -> player-games): 1->12532 (45.4%) 2->8555 (31.0%) 3->6513 (23.6%) [n=27600]
+
+### Wonders
+
+Wonders completed per player-game: min=0 p25=1 median=2 p75=2 max=5 mean=1.80 n=27600
+Wonders started per player-game: min=0 p25=2 median=2 p75=3 max=5 mean=2.15 n=27600
+Wonders started-but-abandoned per player-game: min=0 p25=0 median=0 p75=1 max=4 mean=0.35 n=27600
+Distribution of wonders completed (count -> player-games): 0->1044 1->8031 2->14165 3->4145 4->213 5->2 
+
+Wonders completed by name (most to least, top 16):
+- Taj Mahal: 8660
+- Colossus: 7914
+- Transcontinental Railroad: 7852
+- St. Peter's Basilica: 6983
+- Eiffel Tower: 6435
+- Great Wall: 6090
+- Kremlin: 4667
+- Universitas Carolina: 632
+- Hanging Gardens: 350
+- Library of Alexandria: 75
+
+Fate of every distinct wonder that ever occupied a `wonder` slot (59353 total):
+- Completed: 49658 (83.7%)
+- Destroyed by Infiltrate: 3378 (5.7%)
+- Destroyed by antiquation (§12.2, age-end): 6317 (10.6%)
+- Destroyed, unexplained (engine cleared `.wonder` from a fourth site the rulebook does not sanction -- a real bug, not a census gap; see WonderFate::DestroyedUnexplained's doc comment): 0 (0.0%)
+- Still in progress at game end: 0 (0.0%)
+
+### Government
+
+Final government (all player-games):
+- Despotism: 8365 (30.3%)
+- Theocracy: 8328 (30.2%)
+- Monarchy: 3909 (14.2%)
+- Constitutional Monarchy: 2518 (9.1%)
+- Fundamentalism: 2515 (9.1%)
+- Democracy: 1198 (4.3%)
+- Communism: 628 (2.3%)
+- Republic: 139 (0.5%)
+
+Stayed in Despotism the entire game: 10118/27600 (36.7%)
+Government changes per player-game: min=0 p25=0 median=1 p75=1 max=4 mean=0.74 n=27600
+Round of first government change (only player-games with >=1 change): min=3 p25=5 median=7 p75=13 max=22 mean=9.08 n=17482
+
+### Military
+
+Wars declared per player-game: min=0 p25=0 median=1 p75=2 max=7 mean=1.02 n=27600
+Aggressions played per player-game: min=0 p25=2 median=3 p75=5 max=12 mean=3.51 n=27600
+Strict-weakest military strength at end of Age II: 8448/27600 player-games with a sample (30.6%; baseline under identical self-play is 1/players, so deviation from that flags asymmetric outcomes even among identical weights, e.g. seating order)
+
+### Economy / culture / science by age
+
+| age boundary | farm workers | mine workers | lab workers | food stock | resource stock | military strength | culture/turn | science/turn |
+|---|---|---|---|---|---|---|---|---|
+| end of Age A | min=2 p25=2 median=2 p75=2 max=2 mean=2.00 n=27600 | min=2 p25=2 median=2 p75=2 max=2 mean=2.00 n=27600 | min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=27600 | min=0 p25=0 median=2 p75=2 max=2 mean=1.33 n=27600 | min=0 p25=0 median=2 p75=2 max=2 mean=1.33 n=27600 | min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=27600 | min=0 p25=0 median=0 p75=0 max=0 mean=0.00 n=27600 | min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=27600 |
+| end of Age I | min=0 p25=2 median=2 p75=2 max=2 mean=1.88 n=27600 | min=2 p25=3 median=3 p75=4 max=7 mean=3.32 n=27600 | min=0 p25=1 median=1 p75=1 max=3 mean=0.93 n=27600 | min=0 p25=2 median=3 p75=5 max=15 mean=3.68 n=27600 | min=0 p25=3 median=4 p75=5 max=18 mean=3.97 n=27600 | min=0 p25=3 median=4 p75=6 max=21 mean=4.76 n=27600 | min=0 p25=2 median=3 p75=4 max=13 mean=3.59 n=27600 | min=0 p25=1 median=1 p75=1 max=4 mean=0.94 n=27600 |
+| end of Age II | min=0 p25=1 median=2 p75=2 max=2 mean=1.52 n=27600 | min=0 p25=3 median=3 p75=4 max=8 mean=3.45 n=27600 | min=0 p25=0 median=1 p75=1 max=3 mean=0.71 n=27600 | min=0 p25=0 median=1 p75=3 max=13 mean=1.79 n=27600 | min=0 p25=3 median=5 p75=7 max=24 mean=5.39 n=27600 | min=0 p25=5 median=9 p75=12 max=39 mean=8.93 n=27600 | min=0 p25=4 median=6 p75=7 max=22 mean=6.17 n=27600 | min=0 p25=0 median=1 p75=1 max=4 mean=0.76 n=27600 |
+| end of Age III | min=0 p25=1 median=2 p75=2 max=6 mean=1.40 n=27600 | min=0 p25=3 median=3 p75=4 max=8 mean=3.26 n=27600 | min=0 p25=0 median=1 p75=1 max=4 mean=0.85 n=27600 | min=0 p25=0 median=0 p75=2 max=17 mean=1.34 n=27600 | min=0 p25=6 median=9 p75=12 max=26 mean=9.19 n=27600 | min=0 p25=7 median=11 p75=15 max=58 mean=11.74 n=27600 | min=0 p25=5 median=7 p75=9 max=19 mean=7.01 n=27600 | min=0 p25=0 median=1 p75=1 max=4 mean=0.81 n=27600 |
+| end of Age IV (game end) | min=0 p25=1 median=1 p75=2 max=6 mean=1.27 n=27600 | min=0 p25=3 median=3 p75=4 max=9 mean=3.00 n=27600 | min=0 p25=0 median=1 p75=1 max=4 mean=0.87 n=27600 | min=0 p25=0 median=0 p75=2 max=16 mean=1.10 n=27600 | min=0 p25=6 median=9 p75=12 max=26 mean=9.20 n=27600 | min=0 p25=7 median=11 p75=16 max=56 mean=12.10 n=27600 | min=0 p25=5 median=7 p75=9 max=19 mean=6.87 n=27600 | min=0 p25=0 median=1 p75=1 max=4 mean=0.79 n=27600 |
+  proxy at end of Age A: food stock == 0 in 9200/27600 (33.3%); resource stock == 0 in 9200/27600 (33.3%)
+  proxy at end of Age I: food stock == 0 in 2987/27600 (10.8%); resource stock == 0 in 3168/27600 (11.5%)
+  proxy at end of Age II: food stock == 0 in 9540/27600 (34.6%); resource stock == 0 in 2128/27600 (7.7%)
+  proxy at end of Age III: food stock == 0 in 14534/27600 (52.7%); resource stock == 0 in 945/27600 (3.4%)
+  proxy at end of Age IV (game end): food stock == 0 in 16387/27600 (59.4%); resource stock == 0 in 779/27600 (2.8%)
+
+### Score
+
+Final score (= culture stock, the engine's only scoring quantity): min=0 p25=93 median=120 p75=145 max=278 mean=118.15 n=27600
+
+No per-source score decomposition (wonders/culture buildings/leaders/etc.) is available: `game::scores` returns `PlayerState::culture`, a single accumulating stock with no source-tagged ledger anywhere in the engine -- see this file's module doc.
+
+### Wonder tempo: civil-action spend by move kind, rounds 3-9, EARLY vs LATE
+
+EARLY = first wonder-stage build by round 5 (n=14360 player-games). LATE = round 10+ or never built (n=3063 player-games). Player-games whose first wonder-stage round is 6-9 are in neither group (see analysis/wonder_tempo_2026-08-24.txt).
+
+| round | group | n (CA spent) | take | build | develop | pop | leader | action-card | wonder-step | other |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 3 | EARLY | 57359 | 43.1% | 11.5% | 0.3% | 19.4% | 2.4% | 8.0% | 11.0% | 4.3% |
+| 3 | LATE | 12224 | 47.4% | 17.1% | 0.5% | 20.4% | 2.7% | 5.4% | 0.0% | 6.5% |
+| 4 | EARLY | 57423 | 48.5% | 12.7% | 3.4% | 12.1% | 3.0% | 5.6% | 9.9% | 4.9% |
+| 4 | LATE | 12233 | 49.1% | 16.4% | 4.1% | 12.3% | 3.3% | 3.5% | 0.0% | 11.2% |
+| 5 | EARLY | 57635 | 45.6% | 8.5% | 7.6% | 11.3% | 2.2% | 5.6% | 16.6% | 2.7% |
+| 5 | LATE | 12314 | 51.5% | 9.7% | 8.2% | 13.6% | 2.4% | 4.5% | 0.0% | 10.1% |
+| 6 | EARLY | 57896 | 50.7% | 6.8% | 6.5% | 12.1% | 2.4% | 5.9% | 10.2% | 5.4% |
+| 6 | LATE | 12396 | 50.3% | 7.4% | 6.2% | 15.9% | 2.6% | 5.9% | 0.0% | 11.6% |
+| 7 | EARLY | 58334 | 51.8% | 5.0% | 4.9% | 12.3% | 2.5% | 5.9% | 8.5% | 9.1% |
+| 7 | LATE | 12348 | 51.2% | 5.7% | 5.2% | 16.1% | 2.8% | 6.4% | 0.0% | 12.6% |
+| 8 | EARLY | 59096 | 55.5% | 4.2% | 4.7% | 10.0% | 2.6% | 5.1% | 9.3% | 8.5% |
+| 8 | LATE | 12565 | 57.8% | 4.9% | 5.4% | 11.7% | 3.2% | 5.5% | 0.0% | 11.5% |
+| 9 | EARLY | 58776 | 60.9% | 2.9% | 4.6% | 8.3% | 2.5% | 5.9% | 10.7% | 4.3% |
+| 9 | LATE | 12214 | 67.1% | 3.6% | 4.9% | 9.6% | 2.8% | 7.0% | 0.0% | 5.0% |
+
+### Wonder tempo: end-of-round-6 board state, EARLY vs LATE
+
+
+EARLY (n=14360):
+  total culture:       min=0 p25=6 median=9 p75=12 max=36 mean=9.37 n=14360
+  science production:  min=0 p25=1 median=1 p75=1 max=4 mean=0.96 n=14360
+  food production:     min=0 p25=2 median=2 p75=2 max=2 mean=1.94 n=14360
+  resource production: min=2 p25=3 median=3 p75=4 max=6 mean=3.27 n=14360
+  military strength:   min=0 p25=3 median=4 p75=5 max=15 mean=4.14 n=14360
+  cards in civil hand: min=0 p25=1 median=2 p75=3 max=5 mean=2.15 n=14360
+  buildings on board:  min=4 p25=4 median=4 p75=4 max=4 mean=4.00 n=14360
+
+LATE (n=3063):
+  total culture:       min=0 p25=8 median=10 p75=12 max=25 mean=10.04 n=3063
+  science production:  min=0 p25=1 median=1 p75=1 max=2 mean=0.99 n=3063
+  food production:     min=0 p25=2 median=2 p75=2 max=2 mean=1.91 n=3063
+  resource production: min=2 p25=3 median=3 p75=4 max=6 mean=3.24 n=3063
+  military strength:   min=0 p25=2 median=4 p75=5 max=20 mean=4.11 n=3063
+  cards in civil hand: min=0 p25=2 median=2 p75=3 max=5 mean=2.37 n=3063
+  buildings on board:  min=4 p25=4 median=4 p75=4 max=4 mean=4.00 n=3063
+
+### Card fate: are LATE's extra taken civil cards wasted, or a real investment paying off later?
+
+Same EARLY/LATE grouping as the wonder-tempo tables above (see analysis/wonder_tempo_2026-08-24.txt). PLAYED = left hand_civil via Develop/PlayLeader/Revolution/PlayAction (see played_civil_card's doc comment) -- Move::Build/Move::Upgrade never touch hand_civil at all, so they cannot be this event. ANTIQUATED = culled from hand at an age transition (RULES_SPEC.md §12.2). There is no separate hand-LIMIT discard event in this engine to measure -- civil_hand_limit only blocks an illegal Take (game::force_civil_age_at_least's doc comment), it never forces a discard -- so item 4's hand-limit half is not reported because it does not exist, not because it was skipped.
+WARNING  591 card(s) played or antiquated with no matching taken_rounds entry -- a real bug in this census's own tracking, not a sample gap (see Report::n_card_fate_mismatches's doc comment)
+
+EARLY (n=14360 player-games):
+  civil cards taken over the whole game: min=9 p25=15 median=17 p75=19 max=29 mean=17.44 n=14360
+  fate of every taken card (250419 total): played 143106 (57.1%), antiquated 50559 (20.2%), still in hand at game end 56754 (22.7%)
+  cards still in hand at game end:       min=0 p25=3 median=4 p75=5 max=9 mean=3.95 n=14360
+  dwell (rounds in hand), PLAYED cards:              min=0 p25=1 median=1 p75=3 max=13 mean=1.93 n=143106
+  dwell (rounds in hand), NEVER played (censored):   min=1 p25=3 median=6 p75=7 max=13 mean=5.38 n=107313
+
+LATE (n=3063 player-games):
+  civil cards taken over the whole game: min=10 p25=16 median=18 p75=20 max=30 mean=18.18 n=3063
+  fate of every taken card (55695 total): played 32414 (58.2%), antiquated 11509 (20.7%), still in hand at game end 11772 (21.1%)
+  cards still in hand at game end:       min=0 p25=3 median=4 p75=5 max=8 mean=3.84 n=3063
+  dwell (rounds in hand), PLAYED cards:              min=0 p25=1 median=1 p75=2 max=12 mean=1.84 n=32414
+  dwell (rounds in hand), NEVER played (censored):   min=1 p25=3 median=6 p75=7 max=16 mean=5.42 n=23281
+
+### Card fate follow-up: was a never-played card ever LEGAL to play?
+
+playable-turns = count of this player's own decision points, since the card was taken, at which Develop/PlayLeader/Revolution/PlayAction of it appeared in legal::legal_moves (the same move list Seat::pick already chose from) -- ZERO means the card was never legal again after the take (a bad take, or the resources/prereqs never arrived); nonzero means it lost the civil-action auction to something else on every turn it was legal, until it was culled or the game ended. PLAYED cards are the control population: how many turns a card sat legal before it was actually played.
+
+EARLY:
+  playable-turns, PLAYED cards (control):   min=1 p25=1 median=2 p75=3 max=44 mean=3.13 n=143106
+  playable-turns, NEVER-played cards:       min=0 p25=0 median=0 p75=1 max=49 mean=1.49 n=107313
+  of 107313 never-played cards, 73776 (68.7%) were NEVER legal to play again after the take -- the rest (33537, 31.3%) were legal on at least one later turn and lost the CA auction to something else
+
+LATE:
+  playable-turns, PLAYED cards (control):   min=1 p25=1 median=1 p75=3 max=40 mean=2.87 n=32414
+  playable-turns, NEVER-played cards:       min=0 p25=0 median=0 p75=1 max=52 mean=1.56 n=23281
+  of 23281 never-played cards, 15727 (67.6%) were NEVER legal to play again after the take -- the rest (7554, 32.4%) were legal on at least one later turn and lost the CA auction to something else
+
+### Zero playable-turns follow-up: why was it never legal?
+
+For never-played cards that scored zero playable-turns, every one of their blocked decision points is attributed to exactly one of three buckets: "no civil action" (nothing in hand was legal because the player had no action left to spend -- an action-budget miss, the hand may have been affordable), "nothing affordable" (an action WAS available and still nothing in hand could be paid for -- a true production shortfall), or "something else developable" (some OTHER civil card in hand WAS legal, so this specific card lost the competition). PLAYED cards are the control: the same three buckets, over however many blocked turns they sat through before finally winning one.
+The "at least one turn" shares below are counts of CARDS and inflate easily over a long dwell; the per-turn shares are the comparable quantity, because civil-action exhaustion hits both populations at the same rate and cancels out of a ratio.
+
+EARLY:
+  PLAYED cards (control)           blocked "no civil action":         min=0 p25=1 median=3 p75=5 max=33 mean=3.64 n=143106
+  PLAYED cards (control)           blocked "nothing affordable":      min=0 p25=1 median=3 p75=8 max=89 mean=6.10 n=143106
+  PLAYED cards (control)           blocked "something else developable": min=0 p25=0 median=0 p75=1 max=32 mean=1.17 n=143106
+  PLAYED cards (control)           per-turn share of ALL its blocked decision points: no civil action 33.4%, nothing affordable 55.9%, something else developable 10.7%
+  NEVER-played zero-playable-turn  blocked "no civil action":         min=0 p25=2 median=4 p75=8 max=37 mean=5.34 n=73776
+  NEVER-played zero-playable-turn  blocked "nothing affordable":      min=0 p25=5 median=21 p75=33 max=86 mean=21.03 n=73776
+  NEVER-played zero-playable-turn  blocked "something else developable": min=0 p25=0 median=2 p75=6 max=43 mean=4.15 n=73776
+  NEVER-played zero-playable-turn  per-turn share of ALL its blocked decision points: no civil action 17.5%, nothing affordable 68.9%, something else developable 13.6%
+  of 73776 never-played zero-playable-turn cards: 20253 (27.5%) never once shared a decision point with a developable card, 53523 (72.5%) had at least one turn where something ELSE in hand was developable, and 0 (0.0%) sat through zero decision points of their own before resolving
+
+LATE:
+  PLAYED cards (control)           blocked "no civil action":         min=0 p25=1 median=2 p75=5 max=30 mean=3.51 n=32414
+  PLAYED cards (control)           blocked "nothing affordable":      min=0 p25=1 median=3 p75=8 max=72 mean=5.94 n=32414
+  PLAYED cards (control)           blocked "something else developable": min=0 p25=0 median=0 p75=1 max=34 mean=1.14 n=32414
+  PLAYED cards (control)           per-turn share of ALL its blocked decision points: no civil action 33.2%, nothing affordable 56.1%, something else developable 10.8%
+  NEVER-played zero-playable-turn  blocked "no civil action":         min=0 p25=2 median=4 p75=9 max=35 mean=5.82 n=15727
+  NEVER-played zero-playable-turn  blocked "nothing affordable":      min=0 p25=5 median=21 p75=33 max=80 mean=21.60 n=15727
+  NEVER-played zero-playable-turn  blocked "something else developable": min=0 p25=0 median=2 p75=6 max=40 mean=4.19 n=15727
+  NEVER-played zero-playable-turn  per-turn share of ALL its blocked decision points: no civil action 18.4%, nothing affordable 68.3%, something else developable 13.3%
+  of 15727 never-played zero-playable-turn cards: 4390 (27.9%) never once shared a decision point with a developable card, 11337 (72.1%) had at least one turn where something ELSE in hand was developable, and 0 (0.0%) sat through zero decision points of their own before resolving
+
+### Production curve
+
+round 1: food mean=2.00 resources mean=2.00 n=27600
+round 2: food mean=2.00 resources mean=2.00 n=27600
+round 3: food mean=2.00 resources mean=2.97 n=27600
+round 4: food mean=1.99 resources mean=3.00 n=27600
+round 5: food mean=1.95 resources mean=3.04 n=27600
+round 6: food mean=1.92 resources mean=3.09 n=27600
+round 7: food mean=1.85 resources mean=3.09 n=27600
+round 8: food mean=1.78 resources mean=3.11 n=27600
+round 9: food mean=1.72 resources mean=3.17 n=27600
+round 10: food mean=1.66 resources mean=3.22 n=27600
+round 11: food mean=1.60 resources mean=3.25 n=27600
+round 12: food mean=1.55 resources mean=3.26 n=27600
+round 13: food mean=1.50 resources mean=3.27 n=27600
+round 14: food mean=1.45 resources mean=3.25 n=27600
+round 15: food mean=1.41 resources mean=3.19 n=27600
+round 16: food mean=1.38 resources mean=3.09 n=27600
+round 17: food mean=1.34 resources mean=2.99 n=27600
+round 18: food mean=1.32 resources mean=2.89 n=27600
+round 19: food mean=1.30 resources mean=2.81 n=27507
+round 20: food mean=1.24 resources mean=2.71 n=22170
+round 21: food mean=1.14 resources mean=2.60 n=5979
+round 22: food mean=1.05 resources mean=2.49 n=258
+round 23: food mean=1.33 resources mean=2.33 n=3
+
+### Worker allocation curve
+
+round 1: farmW=2.00 mineW=2.00 urbanW=1.00 milW=1.00 free=1.00 staffed=6.00 bestFarm=1.00 bestMine=1.00 n=27600
+round 2: farmW=2.00 mineW=2.00 urbanW=1.00 milW=1.00 free=1.00 staffed=6.00 bestFarm=1.00 bestMine=1.00 n=27600
+round 3: farmW=2.00 mineW=2.97 urbanW=1.01 milW=1.05 free=0.36 staffed=7.03 bestFarm=1.00 bestMine=1.00 n=27600
+round 4: farmW=2.00 mineW=3.03 urbanW=1.69 milW=1.27 free=0.62 staffed=7.99 bestFarm=1.00 bestMine=1.00 n=27600
+round 5: farmW=1.99 mineW=3.13 urbanW=2.34 milW=1.43 free=0.44 staffed=8.88 bestFarm=1.00 bestMine=1.00 n=27600
+round 6: farmW=1.96 mineW=3.23 urbanW=2.61 milW=1.52 free=0.38 staffed=9.32 bestFarm=1.00 bestMine=1.00 n=27600
+round 7: farmW=1.91 mineW=3.29 urbanW=2.78 milW=1.57 free=0.37 staffed=9.55 bestFarm=1.00 bestMine=1.00 n=27600
+round 8: farmW=1.84 mineW=3.33 urbanW=2.89 milW=1.68 free=0.34 staffed=9.74 bestFarm=1.00 bestMine=1.00 n=27600
+round 9: farmW=1.77 mineW=3.35 urbanW=2.97 milW=1.76 free=0.30 staffed=9.85 bestFarm=1.00 bestMine=1.00 n=27600
+round 10: farmW=1.69 mineW=3.38 urbanW=3.01 milW=1.86 free=0.24 staffed=9.95 bestFarm=1.00 bestMine=1.00 n=27600
+round 11: farmW=1.63 mineW=3.40 urbanW=3.02 milW=1.96 free=0.20 staffed=10.01 bestFarm=1.00 bestMine=1.00 n=27600
+round 12: farmW=1.58 mineW=3.42 urbanW=3.00 milW=2.07 free=0.20 staffed=10.06 bestFarm=1.00 bestMine=1.00 n=27600
+round 13: farmW=1.53 mineW=3.44 urbanW=2.98 milW=2.18 free=0.19 staffed=10.14 bestFarm=1.00 bestMine=1.00 n=27600
+round 14: farmW=1.48 mineW=3.42 urbanW=2.97 milW=2.26 free=0.22 staffed=10.13 bestFarm=1.00 bestMine=1.00 n=27600
+round 15: farmW=1.44 mineW=3.38 urbanW=2.99 milW=2.32 free=0.22 staffed=10.12 bestFarm=1.00 bestMine=1.00 n=27600
+round 16: farmW=1.42 mineW=3.35 urbanW=3.01 milW=2.37 free=0.19 staffed=10.15 bestFarm=1.00 bestMine=1.00 n=27600
+round 17: farmW=1.41 mineW=3.32 urbanW=3.04 milW=2.43 free=0.17 staffed=10.21 bestFarm=1.00 bestMine=1.00 n=27600
+round 18: farmW=1.40 mineW=3.30 urbanW=3.07 milW=2.47 free=0.16 staffed=10.24 bestFarm=1.00 bestMine=1.00 n=27600
+round 19: farmW=1.39 mineW=3.27 urbanW=3.08 milW=2.52 free=0.16 staffed=10.26 bestFarm=1.00 bestMine=1.00 n=27507
+round 20: farmW=1.34 mineW=3.21 urbanW=3.03 milW=2.59 free=0.20 staffed=10.18 bestFarm=1.00 bestMine=1.00 n=22170
+round 21: farmW=1.25 mineW=3.18 urbanW=2.81 milW=2.64 free=0.21 staffed=9.87 bestFarm=1.00 bestMine=1.00 n=5979
+round 22: farmW=1.18 mineW=3.10 urbanW=2.62 milW=2.68 free=0.23 staffed=9.58 bestFarm=1.00 bestMine=1.00 n=258
+round 23: farmW=1.33 mineW=3.33 urbanW=2.33 milW=2.33 free=0.00 staffed=9.33 bestFarm=1.00 bestMine=1.00 n=3
+
+### Tech acquisition
+
+per player-game (n=27600):
+type           seen    taken    built  staffed
+Farm           3.00     0.00     1.00     1.00
+Mine           3.00     0.00     1.00     1.00
+Lab            3.00     0.00     1.00     1.00
+Temple         2.00     0.00     1.00     1.00
+Arena          3.00     0.00     0.00     0.00
+Library        3.00     0.00     0.00     0.00
+Military       8.98     2.02     1.95     1.79
+
+Farm/Mine taken by age tier, per player-game:
+  Farm: A=0.000 I=0.000 II=0.000 III=0.000
+  Mine: A=0.000 I=0.000 II=0.000 III=0.000
+Farm/Mine built by age tier, per player-game:
+  Farm: A=1.000 I=0.000 II=0.000 III=0.000
+  Mine: A=1.000 I=0.000 II=0.000 III=0.000
+EXIT=0
