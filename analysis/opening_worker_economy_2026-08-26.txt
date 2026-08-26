@@ -1,0 +1,29 @@
+opening worker economy — human corpus, rounds 1-5
+date 2026-08-26; 1011 journals, 2525 player-games (file,player)
+metric per round: distribution (n, mean, min, q25, median, q75, max) of per-player-game counts
+pop = lines containing "increases population"; builds = lines containing "builds"
+CAVEAT: free-worker availability at the build moment is NOT observable in the BGO journal.
+The journal logs the action and its resource/food cost, but not the worker-pool state.
+So "free workers available" cannot be measured from these files; only action counts.
+This is the human target curve for the bot Farm-build finding.
+
+=== population actions per player-game per round ===
+round  n      mean   min  q25  median  q75  max
+1      2525   0.00   0    0    0       0    0
+2      2525   0.65   0    0    1       1    2
+3      2525   0.76   0    0    1       1    4
+4      2525   0.78   0    0    1       1    4
+5      2525   0.82   0    0    1       1    4
+
+=== builds per player-game per round ===
+round  n      mean   min  q25  median  q75  max
+1      2525   0.00   0    0    0       0    0
+2      2525   0.82   0    1    1       1    2
+3      2525   1.56   0    1    1       2    5
+4      2525   1.84   0    1    2       3    6
+5      2525   1.34   0    1    1       2    5
+
+=== reading (raw, not interpretation) ===
+- round 1: no player takes a population action or a build in the human corpus.
+- pop actions plateau near 0.8/player-game/round from r2-r5 (median 1, ~23% take none).
+- builds ramp r2(1)->r3(1)->r4(2)->r5(1); median 1-2, a tail up to 5-6.
