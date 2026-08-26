@@ -1,0 +1,79 @@
+DECISIVE-MODE MEASUREMENT OF THE FOUR ZERO-SPREAD RIVAL-CONTEXT KEYS
+2026-08-26. Run: featspread 40 0 <frozen 3p champion> decisive
+  40 games, 3p, 16382 decisions, 32.4s, exit 0.
+  Champion frozen to analysis/frozen_run_2026-08-26_decisive/rust_champion_3p.json
+  before the run, because the climb rewrites experiments/rust_champion_3p.json
+  on every promotion.
+
+THE QUESTION
+------------
+p95_candidate_spread reads 0.0 for rival_desire, rival_take_share, rival_wonders
+and rival_science_rate. Two plain featspread runs (the second on 10388 decisions)
+both returned 0.0, so the sample-poverty explanation was refuted. Decisive mode
+adds the discriminator the plain mode lacks: mean_level, the mean |candidate
+value| over the candidate set. Spread and level separate two very different
+zeroes.
+
+THE ANSWER: THE FOUR KEYS ARE TWO DIFFERENT THINGS
+--------------------------------------------------
+  key                  champ_w    zero_frac  p95_spread  mean_level  capable_frac
+  rival_desire          3.2666     1.0000     0.000000    0.000000     0.0454
+  rival_take_share      0.1371     1.0000     0.000000    0.000000     0.0454
+  rival_wonders        -0.1433     1.0000     0.000000    1.276584     0.0454
+  rival_science_rate   -0.0962     1.0000     0.000000    1.072274     0.0454
+
+CLASS A -- PHI IS LITERALLY ZERO (rival_desire, rival_take_share)
+  level 0 and spread 0. The feature writes nothing on any of the 16382 decisions
+  reached in 3p self-play under this champion. Note rival_desire carries the
+  LARGEST champion weight of the four (3.2666) while contributing nothing: the
+  climb walked that coordinate freely because fitness is flat along it.
+
+CLASS B -- ALIVE BUT CONSTANT (rival_wonders, rival_science_rate)
+  level is clearly nonzero (1.28 and 1.07) while spread is exactly zero. The
+  feature IS computed and IS nonzero, but it takes the SAME value on every
+  candidate move at a given decision. It therefore adds a constant offset to
+  every candidate's dot(w, phi) and CANNOT change an argmax -- not rarely, but
+  mathematically never, at any weight.
+
+  This is the same shape as rival_free_ca (champ_w -0.2391, mean_level 4.7071,
+  spread 0), which was not on the original list of four. Across the whole table,
+  exactly three keys are alive-but-constant: rival_free_ca, rival_wonders,
+  rival_science_rate.
+
+WHY BOTH CLASSES ARE THE SAME PROBLEM FOR THE CLIMB
+---------------------------------------------------
+A key that cannot change any move cannot change any game, so the climb's win-rate
+fitness is exactly flat along that coordinate. Mutations on it are accepted or
+rejected on the noise of the OTHER coordinates in the same candidate vector. The
+weight is therefore a random walk bounded only by its clamp -- which is why
+rival_desire sits at 3.2666 and means nothing.
+
+READ capable_frac CORRECTLY -- 0.0454 IS THE TIE FLOOR, NOT INFLUENCE
+--------------------------------------------------------------------
+capable_frac is the fraction of decisions where swing_k >= margin. Every one of
+these keys has swing exactly 0, so its 0.0454 is entirely decisions whose
+winning margin is <= 0, i.e. exact ties among the top candidates. 0.0454 is the
+floor every zero-swing key reports and must never be read as 4.5% influence.
+The winning-margin distribution for the run: n=16382 mean=31.9855 median=6.7535
+p95=142.6544 max=1247.3338.
+
+WHAT THIS DOES NOT SAY
+----------------------
+  - Decisive mode is 3p ONLY (featspread.rs:658-675). This is a 3p statement.
+  - It measures the candidate sets actually REACHED by WeightedBot::choose under
+    this champion. A different champion visits different states. Class A in
+    particular is a statement about reachability, not about the code being
+    unreachable in principle.
+  - It says nothing about the hinge keys or the credit keys, which linear_features
+    never writes at all (see Section 7 of
+    analysis/hinge_spread_measurement_design_2026-08-26.txt). Their level-0 row
+    here is the same category error, not a new finding.
+
+CONSEQUENCE
+-----------
+Class B is the actionable half. "Nonzero but identical across candidates" means
+the feature is measuring a property of the STATE and not of the MOVE, so it is
+being asked a question the leaf eval cannot use. Either it should be differenced
+against something the move changes, or it should not be a per-candidate feature
+at all. That is a feature-design finding, not a retirement finding, and it is
+distinct from the 56-key prune closed at ff1a000.
