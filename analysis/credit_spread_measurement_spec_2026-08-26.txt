@@ -176,42 +176,68 @@ For the ADDITIVE credits (CardRateCredit, UnitStrengthCredit, etc.) there
 is no gate: sum_yields multiplies the rate yield by `credit`
 (cards.rs:543) unconditionally, so the pricer output is LINEAR in c
 across all c and S_d is linear in c, passing through 0 with no kink.
-4.2 Sensitivity to c. Because S_d is linear (or |c|-linear) in c for a
-fixed d, p95_d(S_d) is linear (or |c|-linear) in c:
-p95_d(|c| * R_d) = |c| * p95_d(R_d). The bound is
-  bound = CLAMP_T * T / p95(S_d) = T / (|c| * p95(R))
-so the bound scales as 1/|c|: doubling c halves the bound. The sketch's
-hope that "if S_d scales linearly in c the whole bound is c-invariant"
-is WRONG: linearity in c makes the BOUND scale as 1/c, not invariant, for
-both gate and additive credits. The free parameter is NOT free; it sets
-the scale of the bound directly.
-4.3 How to pin c. Because the bound is 1/c, c must be pinned to a
-documented, defensible magnitude. Options, in order of preference:
-  (a) c = |champion_value(k)|. The bound then answers "how large can this
-      credit get before it commands more than CLAMP_T typical decisions,
-      measured at the scale the champion ALREADY uses." The pricers are
-      tuned around champ_w; measuring at champ_w keeps the bound
-      comparable to every other key's bound (featspread measures the
-      spread at the champion's state, not at a probe).
-  (b) c = 1.0. A unit probe; defensible but arbitrary (a credit at 0.3
-      is measured 3.3x above its operating scale, one at 15.0 is 15x
-      below).
-  (c) c = default_weight(k). Rejected: a hand-picked prior, and several
-      credit keys have default 0.0, which makes c = 0 and the
-      measurement undefined.
-  RECOMMENDATION: (a), with the champion md5 frozen and recorded in the
-  output (the multcheck convention, analysis/multiplier_flips_2026-08-25.txt
-  lines 16-22). For keys whose champion value is 0.0 the measurement is
-  undefined and the key stays at CLAMP_BLIND; documented, not a defect,
-  matching the existing "spread <= 0.0 -> CLAMP_BLIND" fallback at
-  weights.rs:2045.
-  SENSITIVITY REPORT REQUIRED: for each key, report S_d at c =
-  |champ_w|, c = |champ_w|/2, and c = 2*|champ_w|, and confirm the
-  predicted scaling (S_d proportional to |c|, hence the bound
-  proportional to 1/|c|). If it does not hold (e.g. a gate threshold is
-  crossed between the three c values), flag it and report the
-  nonlinearity. Cheap check (3x the pricer calls) and the only way to
-  catch the gate-threshold nonlinearity of section 4.1 empirically.
+4.2 Sensitivity to c, and the normalization that removes it. Because S_d
+is |c|-linear in c for a fixed d, p95_d(S_d) is |c|-linear in c:
+p95_d(|c| * R_d) = |c| * p95_d(R_d). Read the RAW S_d as the bound's
+denominator and the bound scales as 1/|c|: doubling c halves it.
+
+That is an artifact of not normalizing, not a property of the game. The
+quantity to measure is the per-key SLOPE
+
+    s_k = S_d(c) / |c|
+
+which is what |c|-linearity says exists: a pure function of state and
+legal moves, with no weight in it. The bound is then
+
+    bound = min(CLAMP_BLIND, CLAMP_T * T / p95(firing s_k))
+
+and IS c-invariant. The linearity finding of 4.1 is precisely what makes
+it invariant; the 1/|c| scaling above is what is left when the division
+by |c| is skipped.
+
+THIS IS NOT COSMETIC. It is what makes a credit row commensurable with
+the other 169 rows at all. For a linear-feature key, spread_k = max-min
+of the phi_k coordinate over the candidate set: a state+move property
+with no weight in it, so the bound answers "at what weight could this key
+alone swing T points". s_k is the same shape of quantity for a credit
+key. A bound built from an un-normalized S_d would carry the probe
+magnitude inside it and would not mean the same thing as the rest of the
+table, even though it would paste into the same column.
+4.3 How to pin c. Under the 4.2 normalization any nonzero c gives the
+same bound wherever S_d is linear, so c is a numerical-conditioning
+choice, not a modelling one. USE c = 1.0, FIXED, FOR EVERY KEY, recorded
+in the output header alongside the frozen champion md5 (the multcheck
+convention, analysis/multiplier_flips_2026-08-25.txt lines 16-22).
+
+  REJECTED: c = |champion_value(k)|. It was this spec's own earlier
+  recommendation and it is wrong twice over. First, under normalization
+  it buys nothing, since the c cancels. Second, it is undefined exactly
+  where it is needed: measured against the champion carried on
+  2026-08-26, TechBoardCredit and AggressionBoardCredit both sit at
+  weight EXACTLY 0.0000, giving c = 0, S_d = 0 and no bound at all --
+  and four more sit under 0.05 (TacticBoardCredit 0.0072,
+  RestrictedResourceCredit 0.0192, UnitStrengthCredit 0.0249,
+  PactBoardCredit 0.0320). Read through the un-normalized 1/|c| rule
+  those six get the LOOSEST rails in the table. That is backwards for a
+  safety rail: it is most permissive precisely where the climb has
+  already driven the key to nothing, which is where a random walk on
+  noise is most likely and a wide clamp is least affordable. A rail must
+  not be a function of how much the incumbent happens to use the key.
+
+  REJECTED: c = default_weight(k). A hand-picked prior, and several
+  credit keys default to 0.0.
+
+  LINEARITY TEST REQUIRED, PER KEY -- this is the surviving reason to
+  vary c, and it tests rather than assumes. Measure S_d at c = 1.0 and
+  c = 2.0 and check S_d doubles within tolerance.
+    - Doubles: the key is in a linear segment, emit s_k = S_d(1.0) and
+      its bound.
+    - Does not double: a gate threshold lies between the two probes
+      (section 4.1). The key is GATED; report both raw readings in a
+      separate section and emit NO normalized bound for it, leaving it
+      at CLAMP_BLIND. Do not emit a slope that cannot be defended.
+  If most keys come back non-linear, stop and report that: it is a
+  finding about the credit pricers, not a failed measurement.
 
 ================================================================================
 5. THE MEASUREMENT, PRECISELY
@@ -389,8 +415,10 @@ YES, with two conditions. It fills 20 zero rows with defensible,
 p95-spread-shaped numbers in the same units as every other measured
 row, at ~15 minutes single-core-equivalent (section 8), and retires
 the CLAMP_BLIND fallback for the credit class.
-  (1) c pinned to |champion_value(k)| (section 4.3), with the
-      3-point sensitivity check (c/2, c, 2c).
+  (1) the bound built from the NORMALIZED slope s_k = S_d(c)/|c|
+      (section 4.2) at a fixed probe c = 1.0 (section 4.3), with the
+      per-key linearity test at c = 1.0 and c = 2.0, and no bound
+      emitted for any key that fails it.
   (2) flip rates (section 6) in the same table as p95_spread and
       bound, or the number is misread as importance.
 This is the one class of the four that Section 7 said is
