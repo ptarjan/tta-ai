@@ -109,11 +109,15 @@ safe signal to suppress it.
 
 Files
 -----
-  journal:    /tmp/bgoj/journals/7523005.tsv (extracted from
-              /Users/pt/tta-ai/sources/bgo/journals.tar.gz)
-  probe bin:  /Users/pt/tta-scratch/rust/src/bin/handprobe.rs
-  probe out:  /private/tmp/handprobe_v3.txt  (pre-move snapshots + recount)
-              /private/tmp/handprobe_dbg.txt (REPLAY_DEBUG=1, TAKE REJECT lines)
+  journal:    /Users/pt/tta-ai/sources/bgo/journals.tar.gz -> journals/7523005.tsv
+              (re-extract with: tar -xzf ... journals/7523005.tsv; the /tmp copy
+              was a scratch extraction and is not durable)
+  probe bin:  /Users/pt/tta-scratch/rust/src/bin/handprobe.rs (throwaway
+              diagnostic, in the scratch checkout, NOT in the tta-ai tree)
+  probe out:  /private/tmp/handprobe_v3.txt (pre-move snapshots + recount),
+              /private/tmp/handprobe_dbg.txt (REPLAY_DEBUG=1, TAKE REJECT
+              lines) -- both ephemeral /tmp, regenerate with the probe bin if
+              needed; the numbers above are the durable record
   tta-ai replay_common.rs (read-only): try_apply_take:4519,
               take_blocked_only_by_hand_full:4710, apply_one TakeCard:10508,
               CA_TOTAL_CHECK:9889, prescan_putback_skips:7794
