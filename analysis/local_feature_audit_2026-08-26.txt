@@ -53,7 +53,9 @@ state, not dead code.
 --------------------------------------------------------------------------------
 3.3 wonder_one_stage_short -- CLEAN
 --------------------------------------------------------------------------------
-TRAP 1: NO. The note compares stages_left (horizon.rs:487, 635-640, WonderOutlook)
+TRAP 1: NO. The note compares stages_left (horizon.rs:487 is the WonderOutlook field
+declaration, doc comment at 486; the assignment is horizon.rs:640 inside the
+`remaining > 0` guard opened at 639)
 against 1. That is a COMPUTED value derived from Card::stages, not a printed-field
 read, and all 16 wonders print all-nonzero stages (Pyramids [3,2,1] .. Hollywood
 [5,6,5]; data/cards_wonders_leaders.json), so "one stage left" has no zero-cost edge.
@@ -87,7 +89,9 @@ Both readings are wrong; the correct read is the costs::tech_cost branch from 3.
 
 Second half of the trap -- WONDERS. Printed resource_cost is 0 for all 16 wonders.
 The first-stage price is stages[0] (range 1..5), and the take additionally costs the
-+1-CA-per-completed-wonder surcharge (can_take_gated, costs.rs:362-367). The note's
++1-CA-per-completed-wonder surcharge (can_take_gated, costs.rs:362-373 is the whole
+Wonder branch; the surcharge add is 364, and gate.surcharge is built in take_gate at
+costs.rs:322-326 as completed_wonders.len() + destroyed_wonders). The note's
 "wonder first stage" clause covers the resource test but NOT the CA surcharge, so a
 wonder counted "playable" on resources may still be un-takeable on civil actions.
 
