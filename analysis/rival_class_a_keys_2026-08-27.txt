@@ -1,0 +1,291 @@
+================================================================================
+RivalDesire / RivalTakeShare -- WHY THEY MEASURE CLASS A -- 2026-08-27
+================================================================================
+Source of the class-A finding: analysis/rival_context_decisive_all_counts_2026-08-27.txt
+lines 26,29-31,46-47: rival_desire and rival_take_share read level 0.000000,
+spread 0.000000 at 2p/3p/4p -- "phi is never written in any count".
+
+--------------------------------------------------------------------------------
+1. IS THERE AN `f.set(WeightKey::RivalDesire, ...)` / `...RivalTakeShare...`?
+--------------------------------------------------------------------------------
+NO. Grepped every `f.set(WeightKey::` call in
+rust/src/bots/weighted/features.rs (112 total, the only file that writes the
+`Features` struct via `Features::set` -- features.rs:100 `fn set(&mut self,
+key: WeightKey, value: f64)`) -- neither key appears among them. Also grepped
+the whole tree for `.set(WeightKey::Rival` (case matched): the only
+Rival-prefixed hits are RivalCulture/RivalMeanCulture/RivalCultureRate/
+RivalScienceRate/RivalStrength/RivalFreeCa/RivalHandCivil/RivalWonders
+(features.rs:1071-1078), RivalScienceStock/RivalFoodStock/RivalResourceStock/
+RivalFreeWorkers/RivalYellowBank/RivalColonies/RivalMilActions/
+RivalBuildingWonder (features.rs:1121-1128), and one `w.set` (a *Weights*
+mutation, not a Features one) on RivalHandPotential in eval.rs:1509. Zero
+hits for RivalDesire or RivalTakeShare. So `Features::get(WeightKey::
+RivalDesire)` / `::RivalTakeShare)` return the struct's zero default forever
+(features.rs:105-109 `impl Default for Features { Features([0.0; N]) }`) --
+there is no gate, no player-count condition, no early return to work out:
+the coordinate is simply never assigned.
+
+This is not silent or accidental -- the repo's own reader audit
+(rust/src/bots/weighted/registry.rs, "the coordinate registry",
+registry.rs:1) explicitly classifies both keys as NOT features by design:
+
+  registry.rs:386-388
+    // Rival-row pricing, read directly in row.rs/rivals.rs.
+    (WeightKey::RivalDesire, "row.rs/rivals.rs rival-row pricing"),
+    (WeightKey::RivalTakeShare, "row.rs/rivals.rs rival-row pricing"),
+
+and rust/src/harness/mirror.rs has a standing test that fails the build if a
+`rival_*` key is ever left off one of two lists -- RIVAL_FEATURE_KEYS (real
+`Features::set` coordinates) or NON_FEATURE_RIVAL_WEIGHTS (hyperparameters
+read straight off the weight vector):
+
+  mirror.rs:939-943
+    /// Weight keys named `rival_*` that are HYPERPARAMETERS of the
+    /// evaluator (read from the weight vector itself, e.g. `w.get
+    /// ("rival_desire", ...)`), not per-position features `features()`
+    /// computes -- so they are correctly absent from [`RIVAL_FEATURE_KEYS`].
+    const NON_FEATURE_RIVAL_WEIGHTS: &[WeightKey] = &[WeightKey::RivalDesire,
+        WeightKey::RivalTakeShare, WeightKey::RivalHandPotential];
+  mirror.rs:945-959 (test every_rival_weight_key_is_accounted_for_as_a_
+    feature_or_a_hyperparameter) asserts every rival_* WeightKey is in
+    exactly one of the two lists.
+
+So: point 2's "declared and climbed but nothing produces it" is TRUE of the
+Features/phi coordinate specifically, but it is not the whole story --
+see part below ("a live reader exists").
+
+--------------------------------------------------------------------------------
+2. NO SET AT ALL -- STATED PLAINLY, THEN THE COMPLICATION
+--------------------------------------------------------------------------------
+Plainly: `Features::set(WeightKey::RivalDesire, _)` and
+`Features::set(WeightKey::RivalTakeShare, _)` do not exist anywhere in
+rust/src. The phi coordinate for both keys is permanently 0.0. Any
+measurement that reads `Features`/`out[k]` (featspread, and the hard-coded
+`p95_candidate_spread` table baked into weights.rs itself, see below) will
+report level 0, spread 0 for these two at every player count, forever,
+regardless of what value the weight actually holds.
+
+BUT -- unlike a key with genuinely no reader anywhere -- both keys DO have a
+live, non-gated production read, just not through `Features`:
+
+  rust/src/bots/weighted/row.rs:322-323 (inside `pub fn row_pressure`)
+    let share = w.get(WeightKey::RivalTakeShare);
+    let desire = w.get(WeightKey::RivalDesire).clamp(0.0, 1.0);
+
+`share`/`desire` are then used unconditionally inside the same function
+(no player-count branch, no `if rival_count > 0` early return -- rival_views
+being empty just makes the loops at row.rs:395/352 no-ops, the ordinary
+"zero rivals" case, not a gate on the weight):
+
+  row.rs:399-418 -- `desire` blends `compete` between the uniform reach
+    count and an "effective competition" figure per rival
+    (`compete = (1.0 - desire) * dem.reach + desire * eff;`, row.rs:414),
+    which then feeds `rival_take_p(cost, gate.have, compete, view.hand_slack,
+    share)` (row.rs:418) -- `share` is `rival_take_p`'s 5th argument, the
+    budget-share parameter documented at row.rs:140-157.
+  row.rs:390 -- `desire > 0.0` also gates whether `rival_desire()` bothers
+    pricing rival "wants" via `cards::card_potential` at all (an
+    optimization, not a legality gate).
+
+`row_pressure`'s two return values (`urgency`, `bargain`) ARE fed into
+`Features` -- under DIFFERENT keys, `RowUrgency` and `RowBargainForgone`:
+
+  rust/src/bots/weighted/eval.rs:372-382 (inside the real, live `evaluate`)
+    let ru = w.get(WeightKey::RowUrgency);
+    let rb = w.get(WeightKey::RowBargainForgone);
+    if ru != 0.0 || rb != 0.0 {
+        let (urgency, bargain) = row::row_pressure(state, idx, w, ctx);
+        if ru != 0.0 { total += ru * urgency; }
+        if rb != 0.0 { total += rb * bargain; }
+    }
+
+and `w` here is `evaluate`'s own live parameter (eval.rs:133 `pub fn
+evaluate(state: &GameState, idx: u8, w: &Weights, ...)`), i.e. whatever
+weight vector is actually being scored -- a climbed mutant during
+`bin/climb.rs`'s self-play, or the champion at inference. RowUrgency and
+RowBargainForgone are confirmed non-zero on all three frozen champions this
+run used (analysis/frozen_run_2026-08-27_decisive_all_counts/rust_champion_
+{2,3,4}p.json): row_bargain_forgone = 0.2511/2.8471/1.0997,
+row_urgency = 0.0594/0.0208/-0.2480 at 2p/3p/4p respectively -- so this
+branch is live, not dormant, at every count. So `rival_desire`/
+`rival_take_share` DO have a genuine, unconditional, always-reachable causal
+path to the real `evaluate()` score, through `row_pressure`'s urgency/bargain
+outputs -- they are not inert.
+
+WHY THE MEASUREMENT STILL READS ZERO EVERYWHERE. The `linear_features`
+approximation that the measurement tooling (bin/featspread.rs and siblings
+bin/creditspread.rs, bin/multcheck.rs, bin/agreefit.rs, bin/whydiverge.rs,
+bin/takeprobe.rs -- all import `linear_features`; bin/climb.rs itself does
+NOT) uses to build phi is a DIFFERENT function from `evaluate`, and it feeds
+`row_pressure` a permanently FROZEN weight vector, never the candidate under
+test:
+
+  eval.rs:580-600 -- doc comment: eleven coordinates (HandPotential,
+    WonderPotential, WonderPromise, HandMilPotential, RivalHandPotential,
+    RowUrgency, RowBargainForgone, RowLastCopy, MyEventThreat, plus
+    RateHorizon's scaling of the four RATE_KEYS) are "NOT linear in `w`"
+    because each reprices internal sub-terms through the FULL weight
+    vector, so `linear_features` "resolves this by freezing those eleven
+    sub-computations at a caller-supplied `freeze` vector (the champion, in
+    every real call site)".
+  eval.rs:685 (inside `pub fn linear_features(state, idx, ctx, freeze: &Weights)`)
+    let (row_urgency, row_bargain) = row::row_pressure(state, idx, freeze, ctx);
+    out[WeightKey::RowUrgency as usize] = row_urgency;
+    out[WeightKey::RowBargainForgone as usize] = row_bargain;
+
+`freeze` is the champion, not the perturbed candidate -- so inside
+`linear_features`, `row_pressure` always reads `freeze.get(WeightKey::
+RivalTakeShare)`/`freeze.get(WeightKey::RivalDesire)` (row.rs:322-323 again,
+same call site, different caller), never the candidate value featspread is
+trying to score. Combined with `out[]` at RivalDesire's/RivalTakeShare's OWN
+index staying 0.0 forever (never written by anyone, part 1 above), this
+means the phi vector `linear_features` builds is FLATLY BLIND to both keys
+from two directions at once: their own coordinate is never set, and the one
+place their value has a real effect (row_pressure's urgency/bargain) is
+computed off a fixed constant that never varies with them either. That is
+exactly the class-A signature (level 0, spread 0, at every count) this
+run measured, and it is measured correctly.
+
+THE WEIGHTS.RS-INTERNAL CONFIRMATION. weights.rs hardcodes its own copy of
+this same instrument's output, `p95_candidate_spread`, per (key, player
+count), used to compute clamp bounds:
+
+  weights.rs:2176-2177
+    WeightKey::RivalDesire => [0.000000, 0.000000, 0.000000],
+    WeightKey::RivalTakeShare => [0.000000, 0.000000, 0.000000],
+
+matching this run's finding exactly. weights.rs:2061-2105's own doc comment
+enumerates four known "invisible to the instrument" categories (hinge keys,
+the rate-horizon key, credit keys, and "the rival-context keys" that ARE
+Features-written but happened to sample flat) -- RivalDesire/RivalTakeShare
+fit NONE of the four named there; they are a fifth, undocumented kind
+(genuinely read, genuinely causal, but through a freeze-parameterized
+sibling feature rather than their own coordinate or a `feature_marginal`
+hinge). `clamp_bound` (weights.rs:2119-2126) falls back to `CLAMP_BLIND` for
+them purely because `p95_candidate_spread() <= 0.0`, same as a truly dead
+key -- the bound-setting code cannot distinguish "no reader" from "reader
+exists but this instrument can't see it".
+
+WHAT THIS MEANS FOR "TUNING AGAINST PURE NOISE". `bin/climb.rs` (the actual
+hill-climb: climb.rs:1 "hill-climb a weight vector against itself"; mutates
+the champion, plays real games via arena, promotes on real win share) does
+NOT go through `linear_features` at all -- grep of climb.rs shows no
+`linear_features` import and a `WeightedBot`-driven duel (climb.rs:671 area).
+Real games call `eval::evaluate` with the live candidate `w`
+(eval.rs:133/372-382), so a climbed mutant's `rival_desire`/
+`rival_take_share` value DOES change `row_pressure`'s urgency/bargain and
+therefore the real score and real move choices -- climb.rs is not fitting
+these two coordinates against pure noise, in the sense of "zero causal path
+to the objective it actually optimizes". What IS structurally blind to them
+is the SEPARATE linear-regression/measurement tooling (featspread and the
+`p95_candidate_spread`/`clamp_bound` machinery baked into weights.rs) that
+approximates `evaluate` as a dot product against `linear_features`'s phi --
+that approximation is flat on these two coordinates by construction (frozen
+sub-pricing), independent of whatever value climb.rs finds for them.
+
+--------------------------------------------------------------------------------
+3. WHAT EACH KEY WAS INTENDED TO MEASURE
+--------------------------------------------------------------------------------
+weight_key_table! entries (rust/src/bots/weighted/weights.rs:811-812):
+  RivalDesire => "rival_desire", 0.0;
+  RivalTakeShare => "rival_take_share", 0.5;
+
+Grouping/sign metadata:
+  weights.rs:1356-1358 -- WeightGroup::Row: `RowUrgency | RowBargainForgone |
+    RivalTakeShare | RowLastCopy | RivalDesire => WeightGroup::Row`.
+  weights.rs:1756-1766 -- sign_intent Free: "Row-reading and rival-row
+    preference coordinates -- how much to weigh a rival wanting a card is a
+    strategic read, not a rules fact. ... RowUrgency | RowBargainForgone |
+    RowLastCopy | RivalDesire | RivalTakeShare => Free."
+
+RivalTakeShare ("RIVAL_TAKE_SHARE"): the fraction of a rival's civil-action
+budget that goes toward buying row cards, in the budget-split model
+`rival_take_p` uses to price P(a rival takes a specific row card before my
+next turn). Doc comment, row.rs:55-65:
+  "P(a rival who CAN legally take a card I also want actually takes it)
+  before my next turn, USED to be one flat 0.25 for every rival, every card
+  and every board ... `w.get(WeightKey::RivalTakeShare)` reads the live
+  value -- [`WeightKey::RivalTakeShare`]'s own default (also 0.5) is this
+  constant, duplicated so `WeightKey::default_weight` (a `const fn`) does
+  not need to reach across module boundaries for one number."
+So it was promoted from a hardcoded Python constant (0.25 originally, per
+that same comment's "USED to be", later defaulted to 0.5 in both engines) to
+a climbable weight -- a free parameter of the take-probability model, meant
+to let the league fit how aggressively rivals compete for row cards.
+
+RivalDesire ("rival_desire"): a 0..1 blend coefficient (row.rs:323 clamps it)
+that interpolates `row_pressure`'s per-rival "reach" (row.rs:196-239 doc,
+"an effective competition figure") between two models: at 0.0, every
+legally-reachable row slot is equally likely to be what a rival wants
+(uniform prior); at 1.0, `rival_desire()` (row.rs:241-273) actually prices
+each reachable card from the rival's own seat with the SAME `card_potential`
+function the bot uses on its own row (row.rs:229-233: "Their board is
+public, so it can be priced. This runs the SAME `card_potential` the bot
+prices its own row with, from the rival's seat -- which is the honest thing
+to run"), producing a genuine, non-uniform demand distribution
+(`compete = eff = total_i / mine_i`, row.rs:412) instead of the uniform
+`reach`. Intended to measure: "how much should I trust that a rival's
+apparent board interest, not just their raw legal capacity, predicts which
+row card they take."
+
+Introducing commits (git -C /Users/pt/tta-ai log -S "rival_desire"/
+"rival_take_share" -- rust/src):
+  f44826d "Port weighted.py's weights/horizon modules to rust/src/bots/
+    weighted/" -- lands WeightKey/DEFAULT_WEIGHTS as the 130-key enum+macro
+    table (both keys' table entries land here).
+  20c7438 "Port row_pressure/row_last_copy/rival_take_p to Rust" -- lands the
+    actual consumers: "_rival_take_cost, rival_take_p, _rival_desire,
+    row_pressure, row_last_copy, and the RIVAL_TAKE_SHARE constant, into
+    rust/src/bots/weighted/row.rs." Commit message also records a bug fix
+    made at the same time: "`_rival_desire`'s eff = total_i / mine_i floor
+    ('if eff < 1.0: eff = 1.0') was dead code -- total_i always includes
+    mine_i as one of its own positive addends, so it can never be smaller"
+    -- removed, pinned by row::tests::eff_is_never_below_one_for_any_
+    positive_demand_set.
+
+--------------------------------------------------------------------------------
+4. IS THE QUANTITY LEGALLY AVAILABLE AT THE EMIT SITE?
+--------------------------------------------------------------------------------
+Yes -- everything `desire`/`share` and the functions they parameterize
+(`rival_desire`, `rival_take_p`) read is PUBLIC information, and the code's
+own module doc comment calls this out explicitly as a designed-in legality
+boundary:
+
+  row.rs:25-41 ("Gating a `RivalView` needs its own legality check") --
+    `rivals::RivalView` is "an owned snapshot of the four fields that
+    function reads (`building_wonder`, `hand_civil`, `techs`, `government`),
+    frozen at the root so a journalled search's mutate/undo of the CURRENT
+    player's own board can never alias into it."
+  rust/src/bots/weighted/rivals.rs:518-529 -- the actual struct:
+    pub struct RivalView {
+        pub idx: u8,
+        pub building_wonder: bool,
+        pub hand_civil: CardList<MAX_HAND>,
+        pub techs: Tableau,
+        pub government: CardId,
+        pub hand_slack: i32,
+    }
+  All five data fields are exactly the PUBLIC quantities the task's legality
+  rule allows: a rival's CIVIL hand identity (`hand_civil`), their board
+  (`techs`, `government`, `building_wonder`), and a derived public count
+  (`hand_slack`). None of it is the rival's MILITARY hand or deck order.
+  `rival_desire()` (row.rs:241-273) also calls `cards::card_potential`
+  against this same public `RivalView`/`Baseline` (row.rs:257,264) -- no
+  additional state is threaded in.
+
+So both quantities were, and are, legally and correctly computable at the
+row.rs:322-323 emit site with data the evaluator already legitimately holds
+-- there is no private-information obstacle here (unlike the CRITICAL
+LEGALITY RULE's cautioned case). The reason they never reach `Features`/phi
+under their OWN coordinate is the design choice documented at registry.rs:
+386-388 and mirror.rs:939-943 -- they are hyperparameters of a nonlinear
+row-pricing formula (`row_pressure`), grouped the same way as
+HandPotential/WonderPotential/RowUrgency/RowLastCopy/MyEventThreat
+(eval.rs:580-600's "eleven identity-aware... coordinates"), not linear
+per-position board features -- and the `linear_features`/featspread
+measurement path that produces the class-A reading freezes exactly that
+kind of coordinate's internal sub-pricing at the champion (eval.rs:685),
+which is why the phi-based instrument reads flat zero for them at every
+player count while the real evaluator (eval.rs:372-382, fed the live `w`)
+and the real hill-climb (climb.rs, which never calls `linear_features`) do
+not.
