@@ -56,11 +56,20 @@ KEY1 (FamineDeficit) -- DONE.
   cargo test --lib: 1553 passing after this key (1552 + 1 new test).
   clippy --all-targets -D warnings: clean.
 
-KEY2 (FreeWorkerWall) -- code+test landed, p95 measurement in progress.
+KEY2 (FreeWorkerWall) -- DONE.
+  commits: 0967f99 (add key), 48de3a9 (measured p95 row).
   design: if workers_free == 0 { hand_value } else { 0.0 } -- scaled
   indicator, NOT flat 0/1 (see commit message for the Uprising-precedent
   justification). Deliberately reads the local `hand_value` var, NOT
   WeightKey::HandPotential (that's a w.get-only hyperparameter, never
   Features::set -- would silently read 0.0 if used).
+  measured p95_candidate_spread: [19.0, 22.0, 18.0] at 2p/3p/4p.
+  fire rate: 54.75% / 47.57% / 55.19% of decisions -- NOT [0,0,0], the
+  common case in random self-play, not a rare edge.
   cargo test --lib: 1554 passing after this key (1552 + 2 new tests).
   clippy --all-targets -D warnings: clean.
+
+Both keys landed, both measured live (neither is [0,0,0]). Final gates
+(clippy + full cargo test --lib) re-run clean on the final pushed state.
+All throwaway champion-freeze dirs deleted; nothing left under analysis/
+except this file and the source audit.
