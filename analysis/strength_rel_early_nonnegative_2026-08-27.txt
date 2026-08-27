@@ -1,0 +1,327 @@
+StrengthRelEarly: the NonNegative citation case
+2026-08-27 -- sign_intent shortlist, LAST key. Read-only: no code
+edits, no p95 row changes. Last key on the shortlist; after this the
+avenue is closed.
+================================================================
+
+VERDICT: NOT CITABLE as NonNegative.
+
+NonNegative would assert "more relative strength is never worse" for
+the early-game coefficient of a SIGNED difference. The claim fails
+twice, and the second failure is decisive:
+
+  (1) No rule citation. RULES_SPEC 5.3's "strongest/weakest" events
+      key off MY OWN position, so being the strongest player can
+      trigger a penalty aimed at the strongest. Hunted for it: the
+      strongest-side effects in the base game are net POSITIVE
+      (Foray, Uncertain Borders, Border Conflict, Crusades, Cold War,
+      Refugees, International Agreement, Politics of Strength,
+      Genghis Khan) -- so no clean counterexample in data/ or the
+      spec. That kills only the FOR case, not the gate: NonNegative
+      is a monotonicity assertion, and "the rules never subtract for
+      it" (the bucket's own citation shape) is not a citation.
+
+  (2) The live 4p champion prices the key POSITIVE (+15.744 at the
+      read below, authored default -0.1). A NonNegative gate
+      forbids negative weights; a champion that measured +15.74 for
+      the key cannot exist under that gate. That is the same
+      shape of refutation as every other shortlist key where the
+      measured sign contradicted the asserted one.
+
+
+WHAT THE COORDINATE HOLDS
+----------------------------------------------------------------
+  features.rs:656-679
+      rival_str = max over rivals of (base strength + offered-pact
+      strength gain);  strength = my strength + my pending gains;
+      rel = strength - rival_str
+  features.rs:931-934
+      Strength       = strength          (my absolute)
+      StrengthRel    = rel               (SIGNED, NO CLAMP)
+      StrengthDeficit= (-rel).max(0.0)   (the "behind" half, clamped)
+      StrengthLead   = rel.clamp(0.0, STRENGTH_LEAD_CAP)
+                     (the "ahead" half, clamped and capped)
+  registry.rs:399  (WeightKey::StrengthRelEarly, "phase blend off
+                   StrengthRel")
+  weights.rs:1115  authored default -0.1 (string "strength_rel_early")
+  weights.rs:1214  WeightKey::StrengthRel => WeightKey::StrengthRelEarly
+                   -- the ONLY key with a phase pair post PHASECUT's
+                   T1-A/C/D collapse (weights.rs:1205-1216 panics on
+                   every other key)
+
+So: `rel` is an unclamped signed difference; StrengthDeficit carries
+the negative half (hinge, NonPositive at weights.rs:1618 "prices a
+penalty the rules impose"); StrengthLead carries the positive half
+(capped). StrengthRelEarly is a PHASE COEFFICIENT on the signed
+value, not a new quantity.
+
+THE PHASE BLEND (eval.rs:215-276)
+----------------------------------------------------------------
+eff(L) = (1-L)*strength_rel_early + L*(strength_rel + strength_rel_late)
+GATED on horizon::combat_unreachable -- TRUE while round <
+EARLIEST_COMBAT_ROUND (= FIRST_DRAW_ROUND + 1 = 3, horizon.rs:358-360)
+OR no player holds a military card. So:
+
+  * while combat is unreachable: the WHOLE coefficient IS
+    strength_rel_early; strength_rel and strength_rel_late
+    contribute nothing (L * ... is multiplied into the blend but
+    the gate uses early_full/late_full exactly as written at
+    eval.rs:268-271: total += early*early_full*v + late*late_full*v
+    -- and EARLIEST_COMBAT_ROUND = 3, so in the literal opening
+    lateness is small and early ~ 1).
+  * once combat is reachable: strength_rel prices at FULL BASE
+    exactly as pre-fix (eval.rs:273), plus the phase nudge on top.
+
+Consequence: in the opening, strength_rel_early is the ONLY
+coefficient on rel. If it is NonNegative, then in the opening, a
+positive relative-strength difference (I am stronger than my
+strongest rival) can NEVER be priced as a benefit -- and a negative
+one is priced as a benefit (a NonNegative weight on a negative
+value is a negative contribution, i.e. the evaluator REWARDS being
+weaker in the opening). The gate does not just forbid "early
+strength is bad"; it forces "early strength is good or neutral, and
+early weakness is good or neutral."
+
+That is the opposite of what the game's own structure says about
+the opening, and the measured champions agree with the structure:
+the authored default is NEGATIVE (-0.1), and the 2p/3p champions
+price it large NEGATIVE.
+
+THE RULES (the FOR side of the case -- and why it is thin)
+----------------------------------------------------------------
+RULES_SPEC 5.3 [RB p.16, CoL p.7]: "Statistic comparisons
+('strongest/weakest' = strength rating [FAQ p.11]): ties broken in
+favor of the current player, then proximity in clockwise order after
+the current player... 2p: 'two strongest/weakest' reads as 'the
+stronger/weaker'."
+
+So the ranking is MY OWN position -- being the strongest player
+does not just help me; it can put me in the target seat of a card
+that says "the strongest player [does X]." The coordinator's
+hypothesis: find one event or aggression where topping the strength
+table is a liability, and that is the whole answer.
+
+Hunt result (data/cards_military_actions.json + RULES_SPEC +
+data/cards_civil.json, full text read 2026-08-27):
+
+  strongest-side effects in the base military deck:
+    Foray                strongest gains up to 3 food/resources
+    Uncertain Borders    strongest takes a yellow token from the
+                         weakest's bank
+    Border Conflict      strongest gains 3 resources
+    Crusades             strongest gains 4 culture
+    Cold War             strongest gains 6 science
+    Refugees             strongest gains 3 culture + 1 population
+    International Agreement  strongest MAY spend up to 5 CAs
+                         taking cards, GIVING UP the next Politics
+                         Phase (RULES_SPEC item 14: "the strongest
+                         player may use the option even in the last
+                         round")
+    Politics of Strength strongest draws 5 military cards (last
+                         round: +5 culture instead)
+  leader (data/cards_wonders_leaders.json):
+    Genghis Khan         if among the two strongest, +3 culture at
+                         turn end
+  civil deck: NO strongest/weakest cards.
+
+EVERY base-game effect that targets the strongest player is a GAIN
+(or an optional gain). International Agreement is the only
+strongest-side cost, and it is OPTIONAL ("may spend...") -- the
+strongest player may simply not take it; a card you may decline is
+not a penalty aimed at the strongest. Aggressions (RULES_SPEC 5.4-
+5.5) key off the DEFENDER's strength (defender total >= attacker
+strength => fail), not the attacker's rank; the target clauses are
+per-card (Annex: "a rival with a colony"), none rank-based.
+
+So the hunt comes up empty in the base game: there is NO event or
+aggression in data/ or the spec where topping the strength table is
+a liability. The strongest seat is, in the base game, a prize, not
+a target. (Note for the record: expansion cards could change this
+-- the data/ deck here is the base set -- but the shortlist's
+citation standard is the spec + the deck the engine plays.)
+
+What the FOR case can actually say:
+  (a) the strongest seat is safe in the base game -- so "early
+      strength is never worse" is not contradicted by any rules
+      citation;
+  (b) the engine ALREADY prices the strongest seat directly:
+      events.rs:315 my_event_threat ranks TODAY's players
+      (rank_players, events.rs:360-375) and credits/debits the
+      seeded-event payload per seat, so a Barbarians I seeded that
+      would hit me-as-strongest is priced NEGATIVE against me
+      regardless of any sign gate on strength_rel_early.
+
+Against that, the gate's assertion is the wrong shape: NonNegative
+says "more is never WORSE," but the honest claim is "more is
+sometimes BETTER AND sometimes costs nothing" -- the value of
+rel > 0 in the opening depends on WHAT IS SEEDED, which my_event_
+threat prices separately. A quantity whose sign of value depends on
+another coordinate is not a quantity whose value is monotonically
+non-decreasing. The bucket's own citations ("prices an
+available/completed stock the rules never subtract for,"
+weights.rs:1563; "counts row cards immediately usable; a bigger
+count is never worse," weights.rs:1573) are claims about the
+QUANTITY itself, not about a phase coefficient on a signed
+difference.
+
+THE EARLY-BLEND QUESTION (does the phase change the test?)
+----------------------------------------------------------------
+Yes, decisively -- the blend is the whole story.
+
+  * In the opening (combat unreachable), strength_rel_early is the
+    ONLY coefficient on rel (eval.rs:268-271, gate above). The
+    gate would apply to the entire opening's relative-strength
+    pricing.
+  * Is there an age where leading on strength is priced badly? In
+    the base game, NO -- every strongest-side effect is a gain, so
+    no age subtracts for leading. But that is the FOR side's best
+    case, and it is not the gate's shape: the gate asserts
+    monotonicity of the VALUE, while the base game gives
+    "gains if you lead, nothing if you don't" -- a step function
+    with a flat bottom, which is non-decreasing (fine for
+    NonNegative on the quantity) but the coefficient is a MULTI-
+    PLIER on a signed value, and the multiplier's own sign is a
+    free choice the gate would freeze.
+  * The measured multipliers: 2p -13.32, 3p -20.56 (authored
+    -0.1). The 2p/3p champions found that in the opening, a
+    positive relative-strength lead is WORTH NEGATIVE -- i.e. being
+    the strongest in a no-combat opening is priced as a small
+    liability. The plausible mechanics, all in the code:
+      - my_event_threat: being the strongest seat while a weakest-
+        side event is seeded is fine, but while a strongest-side
+        event is seeded the gain is mine to lose -- and the
+        coordinate's negative price is the climb's way of keeping
+        the opening from over-investing in strength when combat
+        cannot happen yet (the EARLYMIL structural fix,
+        eval.rs:215-254, was made precisely because the base
+        strength term dominated the opening and bought military
+        units before mines).
+      - StrengthLead (rel.clamp(0, CAP)) already carries the
+        "I am ahead" half as a separate, clamped, capped
+        coordinate; StrengthRelEarly is the phase coefficient, not
+        the lead.
+
+DOES StrengthDeficit CARRY THE "BEHIND" HALF?
+----------------------------------------------------------------
+Yes, for the hinge: StrengthDeficit = (-rel).max(0.0)
+(features.rs:933) is NonPositive at weights.rs:1618 ("prices a
+penalty the rules impose") -- so the "behind" half has its own
+gate, and the "ahead" half has StrengthLead. But StrengthRelEarly
+is NOT "only ever the surplus half": it multiplies the WHOLE signed
+rel, both halves, in the opening. A NonNegative gate on it would
+constrain the SURPLUS half (fine, if it were a stock) and, worse,
+would forbid the deficit half from being priced positive in the
+opening -- which is exactly what a phase coefficient exists to do:
+say how much a unit of relative strength is worth RIGHT NOW, and
+the opening's answer, per the 2p/3p champions, is "not much, maybe
+a little negative."
+
+LIVE EVIDENCE (champions read 2026-08-27 -- re-read immediately
+before quoting, per the auction_bid erratum: the champion file is
+rewritten by the running climb)
+----------------------------------------------------------------
+  2p  strength_rel          +0.13968985643071585
+      strength_rel_early    -13.321952440194808
+      strength_rel_late      -0.17642055475724572
+      strength_deficit       -0.2783788009233168
+      strength_lead          +0.25785817715947124
+  3p  strength_rel          +2.4760538721802106
+      strength_rel_early    -20.557416750767175
+      strength_rel_late      +0.09186433640205612
+      strength_deficit       -0.04169483331612183
+      strength_lead          -0.02427468477615387
+  4p  strength_rel          -0.01432902292666062
+      strength_rel_early    +15.744090863765322   <-- POSITIVE
+      strength_rel_late      +2.466908455592315
+      strength_deficit       -0.970005018058673
+      strength_lead          -1.8690715271764984
+
+A NonNegative gate forbids negative weights (eval.rs:895-902,
+non_negative_gates; enforced at load by dominance_repair and at
+mutation time by climb.rs's under-mutation guard, eval.rs:860-888).
+The evidence against it is the 2p and 3p arms: they price the key
+NEGATIVE (-13.32, -20.56), and a NonNegative gate forbids that.
+The gate would have rejected the 2p and 3p champions' own measured
+finding. (The 4p +15.74 is legal under NonNegative -- it is not a
+contradiction of the gate, only of the FOR case's "more is never
+worse" intuition, which is not a gate's job.) And the sign FLIP
+itself -- from the negative authored default through the 2p/3p
+negative regime to 4p positive -- is the climb discovering that
+the opening's answer depends on the number of players: with four
+rivals the strongest seat is worth more in the opening, with two
+rivals less. A gate freezes one answer for all arms.
+
+Also note the collinearity warning from the auction_bid erratum
+applies with extra force here: StrengthRel, StrengthDeficit,
+StrengthLead and the two phase coefficients are five terms on the
+same underlying difference rel (and its two hinges) -- exactly the
+shape where one term's sign can be an artifact of the others
+splitting the weight. The 4p +15.74 vs 2p -13.32 spread is the
+climb re-balancing a family of collinear terms across player
+counts, not a clean reading of "early strength is good at 4p."
+But none of that rescues the gate: a gate must hold in EVERY arm,
+and the 2p/3p arms already violate it.
+
+BOTTOM LINE
+----------------------------------------------------------------
+DO NOT give StrengthRelEarly a NonNegative sign_intent.
+
+  1. No rules citation: the base game's strongest-side effects are
+     all gains (International Agreement's cost is optional), so the
+     FOR case has nothing to cite; NonNegative is a monotonicity
+     assertion and "the rules never subtract for leading" is not a
+     monotonicity proof for a multiplier on a signed difference.
+  2. The gate freezes the wrong answer: it would forbid the 2p
+     (-13.32) and 3p (-20.56) champions' measured negative
+     opening coefficient -- the EARLYMIL finding that the opening
+     should not over-invest in strength when combat is unreachable.
+  3. The coordinate is a phase COEFFICIENT on a signed difference,
+     not a stock: NonNegative's own citations price quantities
+     whose value is non-decreasing in themselves; this is a
+     multiplier whose correct sign is an empirical per-arm finding.
+  4. StrengthDeficit (the behind half) and StrengthLead (the ahead
+     half) already carry the hinge structure with their own
+     (correct) gates; StrengthRelEarly stays Free, as the
+     structural fix (eval.rs:215-254) and the 2026-08-13 EARLYMIL
+     work intended.
+
+The authored default -0.1 is the right shape: small, negative
+(early lead is not worth much when nothing can be fought), Free
+(each player count may price it differently -- and the 4p arm has
+already done exactly that).
+
+This closes the sign_intent shortlist: no further keys remain.
+
+Sources:
+  rust/src/bots/weighted/features.rs:656-679 (rel computation)
+  rust/src/bots/weighted/features.rs:931-934 (the four strength keys)
+  rust/src/bots/weighted/registry.rs:399 (StrengthRelEarly, phase blend)
+  rust/src/bots/weighted/weights.rs:1115 (authored default -0.1)
+  rust/src/bots/weighted/weights.rs:1205-1216 (StrengthRel is the
+      only phase-paired key)
+  rust/src/bots/weighted/weights.rs:1563,1573 (NonNegative
+      citations: stock/count shape)
+  rust/src/bots/weighted/weights.rs:1618 (StrengthDeficit
+      NonPositive)
+  rust/src/bots/weighted/eval.rs:215-276 (structural fix + gated
+      blend)
+  rust/src/bots/weighted/eval.rs:640-660 (linear_features mirror)
+  rust/src/bots/weighted/eval.rs:860-902 (gates derived from
+      sign_intent; NonNegative forbids negative weights)
+  rust/src/bots/weighted/horizon.rs:329-345 (lateness), 358-440
+      (EARLIEST_COMBAT_ROUND = 3, combat_unreachable)
+  rust/src/bots/weighted/events.rs:298-400 (my_event_threat,
+      TODAY's ranking per seat)
+  docs/RULES_SPEC.md 5.3 (strongest/weakest = strength rating,
+      ties to current player), 5.4-5.5 (aggressions), item 14
+      (International Agreement optional even in the last round)
+  data/cards_military_actions.json (all 13 ranked events read in
+      full; strongest-side effects all gains)
+  data/cards_civil.json (no strongest/weakest cards)
+  data/cards_wonders_leaders.json (Genghis Khan, +3 culture if in
+      top two strength)
+  experiments/rust_champion_{2p,3p,4p}.json (live weights, read
+      2026-08-27 immediately before quoting)
+  analysis/auction_bid_nonpositive_2026-08-27.txt (erratum:
+      collinear-split warning, re-read-before-quoting rule)
+================================================================
