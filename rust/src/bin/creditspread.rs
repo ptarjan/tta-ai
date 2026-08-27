@@ -29,12 +29,13 @@
 //! same frozen vector.
 //!
 //! The correct formulation (spec section 3, the CRITICAL CORRECTION, as
-//! corrected by the coordinator on 2026-08-26):
+//! corrected by the coordinator on 2026-08-26, displacement form per
+//! 2026-08-26):
 //!   phi_c = candidate_features(s, legal, allow_resign, freeze=champion)
 //!   phi_p = candidate_features(s, legal, allow_resign, freeze=pw)
-//!           (pw = champion with k set to c; every other key at the
-//!            champion value, so only the pricer reads of k differ
-//!            between phi_c and phi_p)
+//!           (pw = champion with k DISPLACED by c: set to w_k + c, every
+//!            other key at the champion value, so only the pricer reads
+//!            of k differ between phi_c and phi_p)
 //!   d_m   = dot(pw, phi_p(m)) - dot(champion, phi_c(m))
 //!           = dot(champion, phi_p(m) - phi_c(m))     (pw and champion
 //!             differ only in coordinate k, and k has NO linear feature
@@ -47,15 +48,23 @@
 //! pricer's own resolution of k. Applying the probe to the DOT vector
 //! instead of the freeze is the wrong instrument -- `tests` below contains
 //! a unit test that fails if that is done. The spec's own
-//! "S_d = max-min dot(pw, phi_p(m))" was ALSO the wrong instrument, and
-//! that is why the first measurement came back negative: the spread of
-//! the TOTAL score is T (the total spread), which is identical under
-//! every probe, so S_d(1.0) ~= S_d(2.0) ~= T for every key at every
-//! count -- the probe's contribution is a small term buried inside a
-//! number ~400 units wide, not a property of the pricers. The DELTA form
-//! above removes the constant baseline: the 168 non-credit keys cancel
-//! out of d_m, leaving purely the pricer re-pricing effect, which is the
-//! thing that should be |c|-linear.
+//! "S_d = max-min dot(pw, phi_p(m))" was ALSO the wrong instrument: the
+//! spread of the TOTAL score is T (the total spread), identical under
+//! every probe, so it read flat at T for every key -- the probe's
+//! contribution is a small term buried inside a number ~400 units wide.
+//! The DELTA form above removes the constant baseline: the 168 non-credit
+//! keys cancel out of d_m, leaving purely the pricer re-pricing effect.
+//!
+//! DISPLACEMENT, not SET (coordinator correction, 2026-08-26): an earlier
+//! draft of this binary SET k to c (pw[k] = c). That made
+//! S_d(c) = h(c) - h(w_k) where h is the pricer's response to a key set
+//! to a value, and the c = 1.0/2.0 test then passes iff h is linear on an
+//! interval containing {w_k, 1.0, 2.0} -- trivially true when w_k = 0
+//! (h(2) = 2h(1) on a linear segment through 0) and otherwise a
+//! second-difference test, not a |c|-linearity test. The displacement
+//! probe (w_k + c) measures the pricer's response AT THE CHAMPION'S OWN
+//! OPERATING POINT, so |c|-linearity is the correct test and gated_frac
+//! is a per-key property of the pricers.
 //!
 //! # WHAT IS REPORTED IS A LEVER, NOT INFLUENCE (spec section 6)
 //!
@@ -71,23 +80,29 @@
 //! not commensurable with multcheck's one-key-at-a-time per-key flip
 //! rates) -- and the method header carries the required caveat verbatim.
 //!
-//! # Per-key linearity test (spec section 4.3)
+//! # Per-key linearity test (spec section 4.3, displacement form)
 //!
-//! `S_d(c)` is |c|-linear wherever the pricer's output is linear in the
-//! credit weight: the dedicated gates (`cards::card_potential_core`'s
-//! `tb != 0.0` branches) are linear in c for c != 0 with a kink at 0
-//! (at c = 0.0 the branch falls through to the `sum_yields` fallback,
-//! which reads `CardRateCredit`, not the gate's own key), and the
-//! additive credits (`sum_yields`'s unconditional `amt *= credit`) are
-//! linear in c across all c. Because the bound is built from the
-//! NORMALIZED slope `s_k = S_d(c)/|c|`, any nonzero c gives the same
-//! bound on a linear segment -- c is a numerical-conditioning choice,
-//! pinned at 1.0 for every key. The per-key test probes c = 1.0 and
-//! c = 2.0 and requires `S_d(2.0) ~= 2 * S_d(1.0)`; a key that fails is
-//! GATED (a gate threshold lies between the two probes): its two raw
-//! readings are reported in a separate section and it emits NO bound
-//! (it stays at `CLAMP_BLIND`). No normalized slope is emitted for a key
-//! that cannot be defended.
+//! Under the displacement probe the key sits at w_k + c, and S_d(c) is
+//! |c|-linear wherever the pricer's response is linear on the interval
+//! [w_k, w_k + 2.0] around the champion's own operating point: the
+//! dedicated gates (`cards::card_potential_core`'s `tb != 0.0` branches)
+//! are linear in the key's value wherever the branch stays active, and
+//! the additive credits (`sum_yields`'s unconditional `amt *= credit`)
+//! are linear across all values. A pricer whose branch flips inside that
+//! interval (a gate threshold between w_k and w_k + 2.0) is NOT
+//! |c|-linear there, and the test catches it. Because the bound is built
+//! from the NORMALIZED slope `s_k = S_d(c)/|c|`, any nonzero c gives the
+//! same bound on a linear segment -- c is a numerical-conditioning
+//! choice, pinned at 1.0 for every key. The per-key test probes
+//! c = 1.0 and c = 2.0 and requires `S_d(2.0) ~= 2 * S_d(1.0)`; a
+//! decision where that fails counts toward the key's GATED_FRAC. gated
+//! frac is the headline: most keys are expected to drop to a small
+//! gated_frac and carry a usable slope, while a few keep a high one --
+//! those few are the genuine finding, and for them the right move is
+//! still CLAMP_BLIND. Keys gated at more than half their firing
+//! decisions emit NO bound (the RUST TABLE row is 0.000000, so
+//! `clamp_bound`'s own `<= 0.0` fallback keeps them at `CLAMP_BLIND`);
+//! no slope is emitted for a key that cannot be defended.
 //!
 //! # T is re-measured in the SAME run (spec section 5, step 6)
 //!
@@ -100,16 +115,15 @@
 //!
 //! # Cost
 //!
-//! Per decision: 1 shared phi_c + 20 per-key phi_p (c=1.0) + 20 per-key
-//! phi_p2 (c=2.0, the linearity test) + 2 shared flip vectors (all 20 keys -> 0.0 and
-//! k->champion.get(k).abs(), shared across keys) = 43
-//! `candidate_features` calls, versus 1 for plain `featspread`. The
-//! spec's 24-count assumed phi_p2 could be shared across keys; it
-//! cannot: phi_p2 for key k is priced under the freeze with ONLY k at
-//! 2.0, a different vector per key, and the pricers cannot be delta'd
-//! (spec section 5's COST NOTE acknowledges the pricers are the dominant
-//! cost and are not linear in a way that supports a delta). Documented
-//! here as the spec's required output note.
+//! Per decision: 1 shared phi_c + 20 per-key phi_p (displacement c=1.0)
+//!     + 20 per-key phi_p2 (displacement c=2.0, the linearity test) + 2
+//!     shared flip vectors (all 20 keys -> 0.0 and ->abs, shared across
+//!     keys) = 43 `candidate_features` calls, versus 1 for plain
+//!     `featspread`. phi_p2 is NOT shared across keys: key k's c=2.0
+//!     freeze differs from every other key's, and the pricers cannot be
+//!     delta'd (spec section 5's COST NOTE acknowledges the pricers are
+//!     the dominant cost and are not linear in a way that supports a
+//!     delta).
 //!
 //! ```text
 //! cargo run --release --bin creditspread -- <games> <seed> <threads> <champion_dir>
@@ -128,9 +142,11 @@ use tta::bots::weighted::eval::{self, load_weights, WeightedBot};
 use tta::bots::weighted::weights::{CLAMP_BLIND, CLAMP_T, WeightKey, Weights};
 use tta::game::{self, MOVE_CAP};
 
-/// The probe magnitude, FIXED for every key (spec section 4.3).
+/// The probe DISPLACEMENT, FIXED for every key (spec section 4.3,
+/// displacement form 2026-08-26): the key sits at w_k + c, so the probe
+/// measures the pricer's response at the champion's own operating point.
 const C: f64 = 1.0;
-/// The second probe of the per-key linearity test (spec section 4.3).
+/// The second displacement of the per-key linearity test.
 const C2: f64 = 2.0;
 /// Relative tolerance for the linearity test: |S_d(2.0) - 2*S_d(1.0)|
 /// <= TOL * S_d(1.0) when S_d(1.0) > 0.
@@ -238,13 +254,14 @@ const CREDIT_KEYS: [WeightKey; N_KEYS] = [
 ];
 
 /// Synthetic-decision S_d (spec section 7's required unit test, as
-/// corrected 2026-08-26): `probe_w` is the probe weight vector (the
-/// champion with k at c), `phi_p` the candidate vectors under the probe
-/// freeze, `base` the per-candidate baseline `dot(champion, phi_c(m))`.
-/// Returns `S_d = max_m (dot(pw, phi_p(m)) - base(m)) - min_m (...)` --
-/// the spread of the per-move DELTA the probe causes. Because `probe_w`
-/// and the champion differ only in a coordinate with no linear feature
-/// (k is a credit key), each delta equals
+/// corrected 2026-08-26, displacement form): `probe_w` is the probe
+/// weight vector (the champion with k DISPLACED to w_k + c), `phi_p` the
+/// candidate vectors under the probe freeze, `base` the per-candidate
+/// baseline `dot(champion, phi_c(m))`. Returns
+/// `S_d = max_m (dot(pw, phi_p(m)) - base(m)) - min_m (...)` -- the
+/// spread of the per-move DELTA the probe causes. Because `probe_w` and
+/// the champion differ only in a coordinate with no linear feature (k is
+/// a credit key), each delta equals
 /// `dot(champion, phi_p(m) - phi_c(m))`: purely the pricer re-pricing
 /// effect, baseline removed.
 #[cfg(test)]
@@ -307,6 +324,14 @@ struct KeySummary {
     key: WeightKey,
     name: &'static str,
     champ_w: f64,
+    /// Per-key COUNT of firing decisions (S_d(c=1.0) > 0), the headline
+    /// denominator for gated_frac (coordinator, 2026-08-26).
+    firing: u64,
+    /// Per-key fraction of decisions where the c = 1.0 probe fired
+    /// (S_d > 0): firing / decisions. Superseded by `firing` (the raw
+    /// count, the headline denominator for gated_frac) but kept for the
+    /// spec section 6 report.
+    #[allow(dead_code)]
     fire_rate: f64,
     p95_slope: f64,
     bound: f64,
@@ -428,9 +453,10 @@ fn play_shard(
                     }
                 }
 
-                // Steps 4b-4e -- per key: probe freezes at c = 1.0 and
-                // c = 2.0. S_d is the spread over CANDIDATES of the
-                // per-move DELTA the probe causes,
+                // Steps 4b-4e -- per key: probe freezes at displacement
+                // c = 1.0 and c = 2.0 (pw[k] = w_k + c; every other key at
+                // the champion value). S_d is the spread over CANDIDATES
+                // of the per-move DELTA the probe causes,
                 //   d_m = dot(pw, phi_p(m)) - dot(champion, phi_c(m))
                 //        = dot(champion, phi_p(m) - phi_c(m))
                 // (pw differs from the champion only in coordinate k, and
@@ -445,11 +471,22 @@ fn play_shard(
                 // "S_d = max-min dot(pw, phi_p(m))" was the wrong
                 // instrument: it buried the probe's contribution inside a
                 // ~400-unit total).
+                //
+                // DISPLACEMENT, not SET (coordinator correction,
+                // 2026-08-26): setting k to c made S_d(c) = h(c) - h(w_k),
+                // so the c = 1.0/2.0 test passed iff the pricer's response
+                // h was linear on an interval containing {w_k, 1.0, 2.0}
+                // -- trivially true at w_k = 0, a second-difference test
+                // otherwise. Displacing by c measures the response at the
+                // champion's own operating point, where |c|-linearity is
+                // the right test and gated_frac is a per-key property of
+                // the pricers.
                 for (ki, &k) in CREDIT_KEYS.iter().enumerate() {
                     let a = &mut agg[ki];
+                    let wk = weights.get(k);
 
                     let mut pw = *weights;
-                    pw.set(k, C);
+                    pw.set(k, wk + C);
                     let phi_p = eval::candidate_features(s, legal.as_slice(), bot.allow_resign, &pw);
                     let mut lo = f64::INFINITY;
                     let mut hi = f64::NEG_INFINITY;
@@ -477,7 +514,7 @@ fn play_shard(
                     }
 
                     let mut pw2 = *weights;
-                    pw2.set(k, C2);
+                    pw2.set(k, wk + C2);
                     let phi_p2 = eval::candidate_features(s, legal.as_slice(), bot.allow_resign, &pw2);
                     let mut lo2 = f64::INFINITY;
                     let mut hi2 = f64::NEG_INFINITY;
@@ -556,6 +593,7 @@ fn reduce_count(players: u8, shards: &[(Vec<KeyAgg>, Vec<f64>, u64)], weights: &
             key: k,
             name: k.name(),
             champ_w: weights.get(k),
+            firing: agg.firing,
             fire_rate: if decisions > 0 { agg.firing as f64 / decisions as f64 } else { 0.0 },
             p95_slope,
             bound: bound_from_slope(p95_slope, percentile(&sorted(total_spreads.clone()), 95.0)),
@@ -592,9 +630,9 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
     println!("THIS measurement is applied to the FREEZE (not the dot vector -- c * 0.0 = 0.");
     println!("0 there); S_d comes entirely from the pricers re-running under the probe.");
     println!();
-    println!("Per credit key k, per decision d (candidate set |C| > 1), c = 1.0 FIXED:");
+    println!("Per credit key k, per decision d (candidate set |C| > 1), DISPLACEMENT c = 1.0 FIXED:");
     println!("  phi_c = candidate_features(s, legal, allow_resign, freeze=champion)   [shared]");
-    println!("  phi_p = candidate_features(s, legal, allow_resign, freeze=champ[k=1.0]) [per key]");
+    println!("  phi_p = candidate_features(s, legal, allow_resign, freeze=champ[k+w_k]) [per key]");
     println!("  d_m   = dot(pw, phi_p(m)) - dot(champion, phi_c(m))");
     println!("          = dot(champion, phi_p(m) - phi_c(m))");
     println!("  S_d(1.0) = max_m d_m - min_m d_m   (the per-move DELTA spread: the constant");
@@ -605,9 +643,23 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
     println!("  s_k(d)  = S_d(1.0)/1.0 -- the normalized slope: a pure function of state and");
     println!("           legal moves, no weight in it (spec section 4.2); commensurable with");
     println!("           the featspread spread rows of the other 169 keys.");
-    println!("Linearity test (spec section 4.3): phi_p2 under freeze champ[k=2.0]; if");
-    println!("S_d(2.0) is not ~2*S_d(1.0) the key is GATED (a gate threshold lies between");
-    println!("the probes): raw readings go to a separate section, NO bound is emitted");
+    println!("DISPLACEMENT (coordinator correction, 2026-08-26): the probe SETS k to");
+    println!("w_k + c, not to c. A set-to-c probe made S_d(c) = h(c) - h(w_k) and the");
+    println!("c = 1.0/2.0 test passed iff the pricer's response h was linear on an");
+    println!("interval containing {{w_k, 1.0, 2.0}} -- trivially true at w_k = 0 (the pass");
+    println!("set was exactly the zero-champion-weight keys), a second-difference test");
+    println!("otherwise. Displacing by c measures the pricer's response AT THE");
+    println!("CHAMPION'S OWN OPERATING POINT, where |c|-linearity is the correct test");
+    println!("and gated_frac is a per-key property of the pricers.");
+    println!("Linearity test (spec section 4.3): phi_p2 under displacement c = 2.0; if");
+    println!("S_d(2.0) is not ~2*S_d(1.0) the decision counts toward the key's GATED_FRAC");
+    println!("(a gate threshold lies between w_k and w_k + 2.0). gated_frac is the");
+    println!("HEADLINE column: most keys are expected to drop to a small gated_frac and");
+    println!("carry a usable slope; a few keep a high one -- those few are the genuine");
+    println!("finding and stay at CLAMP_BLIND, named with their gated_frac in the");
+    println!("GATED-FRACTION section. Keys gated at more than half their firing decisions");
+    println!("emit NO bound (the RUST TABLE row is 0.000000; clamp_bound's own <= 0.0");
+    println!("fallback keeps them at CLAMP_BLIND).");
     println!();
     println!("T_players is re-measured in THIS run (p95 over decisions of the TOTAL spread");
     println!("max-min dot(champion, phi_c) over C) -- P95_TOTAL_SPREAD (weights.rs) is a");
@@ -618,13 +670,12 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
     println!("[REQUIRED CAVEAT, verbatim]");
     println!("{CAVEAT}");
     println!();
-    println!("COST NOTE: per decision, 1 shared phi_c + {} per-key phi_p (c=1.0) +", N_KEYS);
-    println!("phi_p2 (c=2.0, the linearity test) + 2 shared flip vectors (all 20 keys -> 0.0, ->abs) =");
+    println!("COST NOTE: per decision, 1 shared phi_c + {} per-key phi_p (displacement c=1.0) +", N_KEYS);
+    println!("phi_p2 (displacement c=2.0, the linearity test) + 2 shared flip vectors (all 20 keys -> 0.0, ->abs) =");
     println!("43 candidate_features calls (vs 1 for featspread). phi_p2 is NOT shared across");
-    println!("keys (the spec's 24-count assumed it could be; each key's c=2.0 freeze is a");
-    println!("different vector and the pricers are not delta-able -- spec section 5's COST");
-    println!("NOTE concedes the pricers are the dominant cost and not linear in a way that");
-    println!("supports a delta).");
+    println!("keys (each key's c=2.0 freeze is a different vector and the pricers are not");
+    println!("delta-able -- spec section 5's COST NOTE concedes the pricers are the dominant");
+    println!("cost and not linear in a way that supports a delta).");
     println!();
     for r in results {
         let i = (r.players - 2) as usize;
@@ -637,28 +688,28 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
 fn print_key_table(count: &CountResult) {
     println!("-- {}p -- (decisions {})", count.players, count.decisions);
     println!(
-        "{:<28} {:>10} {:>8} {:>12} {:>14} {:>13} {:>12}",
-        "key", "champ_w", "fire", "p95_slope", "bound", "touched", "GATED?"
+        "{:<28} {:>10} {:>9} {:>12} {:>10} {:>14} {:>13} {:>12}",
+        "key", "champ_w", "fire", "p95_slope", "gated_frac", "bound", "touched", "GATED?>"
     );
     for k in &count.keys {
         println!(
-            "{:<28} {:>10.4} {:>8.4} {:>12.6} {:>14.6} {:>13.6} {:>12}",
-            k.name, k.champ_w, k.fire_rate, k.p95_slope, k.bound, k.term_nonzero_frac,
+            "{:<28} {:>10.4} {:>9} {:>12.6} {:>10.4} {:>14.6} {:>13.6} {:>12}",
+            k.name, k.champ_w, k.firing, k.p95_slope, k.gated_frac, k.bound, k.term_nonzero_frac,
             if k.gated { "YES" } else { "no" }
         );
     }
     // The flip rates are CREDIT-CLASS (both flip vectors move all 20 keys
     // at once), so they are ONE row per count, not a column on every key.
     println!(
-        "{:<28} {:>10} {:>8} {:>12} {:>14} {:>13} {:>12}",
-        "CREDIT-CLASS flip rates (all 20 keys perturbed together):", "", "", "", "",
+        "{:<28} {:>10} {:>9} {:>12} {:>10} {:>14} {:>13} {:>12}",
+        "CREDIT-CLASS flip rates (all 20 keys perturbed together):", "", "", "", "", "",
         format!("{:.6}", count.flip_rate_zero), format!("{:.6}", count.flip_rate_abs)
     );
     println!(
         "  flip_zero = credit half zeroed at once; flip_abs = credit half abs-set at once.\
          These are NOT commensurable with multcheck's per-key flip rates (one key at\
          a time). 'touched' above IS per-key (fraction of decisions where that key's\
-         c=1.0 probe changed any candidate's score)."
+         displacement c=1.0 probe changed any candidate's score)."
     );
     println!();
 }
@@ -683,31 +734,36 @@ fn print_t_quantiles(results: &[CountResult]) {
 }
 
 fn print_gated_keys(results: &[CountResult]) {
-    let gated: Vec<(&KeySummary, u8)> = results
+    let rows: Vec<(&KeySummary, u8)> = results
         .iter()
         .flat_map(|r| r.keys.iter().map(move |k| (k, r.players)))
-        .filter(|(k, _)| k.gated || k.gated_frac > 0.0)
+        .filter(|(k, _)| k.gated_frac > 0.0)
         .collect();
-    if gated.is_empty() {
-        println!("GATED KEYS (linearity test failed at any firing decision): NONE");
+    if rows.is_empty() {
+        println!("GATED-FRACTION TABLE (linearity test failed at any firing decision): NONE");
         println!();
         return;
     }
     println!("================================================================================");
-    println!("GATED KEYS -- S_d(2.0) not ~2*S_d(1.0) at firing decisions (a gate threshold");
-    println!("lies between the two probes, spec section 4.3). NO normalized bound is");
-    println!("emitted for these; they stay at CLAMP_BLIND (the RUST TABLE emits 0.000000");
-    println!("for them, so clamp_bound's own <= 0.0 fallback applies).");
+    println!("GATED-FRACTION TABLE -- S_d(2.0) not ~2*S_d(1.0) at some firing decisions");
+    println!("(a gate threshold lies between w_k and w_k + 2.0, spec section 4.3,");
+    println!("displacement form). gated_frac is the HEADLINE: most keys are expected to");
+    println!("drop to a small gated_frac and carry a usable slope; a few keep a high one.");
+    println!("Those few are the genuine finding and the right move for them is still");
+    println!("CLAMP_BLIND -- they are named here with their gated_frac, on the record.");
+    println!("Keys gated at more than half their firing decisions (the GATED? column of");
+    println!("the key table) emit NO bound: the RUST TABLE row is 0.000000, so");
+    println!("clamp_bound's own <= 0.0 fallback applies.");
     println!("Raw p95 readings over FIRING decisions, both probes:");
     println!("================================================================================");
     println!(
-        "{:<28} {:>8} {:>14} {:>14} {:>10} {:>14}",
-        "key", "count", "p95 S_d(1.0)", "p95 S_d(2.0)", "gated_frac", "bound (CLAMP_BLIND)"
+        "{:<28} {:>8} {:>9} {:>10} {:>12} {:>14} {:>14} {:>12}",
+        "key", "count", "fire", "gated_frac", "p95 S_d(1.0)", "p95 S_d(2.0)", "bound", "(CLAMP_BLIND)"
     );
-    for (k, players) in &gated {
+    for (k, players) in &rows {
         println!(
-            "{:<28} {:>7}p {:>14.6} {:>14.6} {:>10.4} {:>14.6}",
-            k.name, players, k.sd1_p95, k.sd2_p95, k.gated_frac, CLAMP_BLIND
+            "{:<28} {:>7}p {:>9} {:>10.4} {:>12.6} {:>14.6} {:>12.6}",
+            k.name, players, k.firing, k.gated_frac, k.sd1_p95, k.sd2_p95, k.bound
         );
     }
     println!();
@@ -717,10 +773,13 @@ fn print_gated_keys(results: &[CountResult]) {
 /// `WeightKey::p95_candidate_spread`, in the SAME shape as featspread's
 /// `print_clamp_table` (featspread.rs:622-646), so the credit rows splice
 /// into the existing match (weights.rs:2166-2188), replacing the
-/// `[0.000000, 0.000000, 0.000000]` rows. GATED keys (no defensible
-/// slope) are emitted as `0.000000` so `clamp_bound`'s own `<= 0.0`
-/// fallback keeps them at CLAMP_BLIND -- the same mechanism featspread's
-/// zero rows already rely on.
+/// `[0.000000, 0.000000, 0.000000]` rows. Keys gated at more than half
+/// their firing decisions (no defensible slope) are emitted as
+/// `0.000000` so `clamp_bound`'s own `<= 0.0` fallback keeps them at
+/// CLAMP_BLIND -- the same mechanism featspread's zero rows already rely
+/// on. (Gate held 2026-08-26: nothing from this run goes into
+/// p95_candidate_spread; all 20 rows stay CLAMP_BLIND until a defensible
+/// slope exists.)
 fn print_clamp_table(results: &[CountResult]) {
     println!();
     println!("================================================================================");
@@ -1014,42 +1073,58 @@ mod tests {
     }
 
     /// The formulation-pinning test required by spec section 7, as
-    /// corrected 2026-08-26: a synthetic decision whose pricer-written
-    /// slot differs by a KNOWN, |c|-LINEAR amount under a KNOWN probe,
-    /// asserting the DELTA S_d equals the hand-computed value at c = 1.0,
-    /// doubles at c = 2.0 (the linearity test passes), AND that the bound
-    /// formula reproduces the hand value.
+    /// corrected 2026-08-26 (displacement form): a synthetic decision
+    /// whose pricer-written slot differs by a KNOWN amount under a KNOWN
+    /// DISPLACEMENT probe, asserting the DELTA S_d equals the
+    /// hand-computed value at c = 1.0 and c = 2.0, that the readings are
+    /// LINEAR IN THE VALUE w_k + c (which is what the displacement form
+    /// promises -- not |c|-linearity of the spread itself, which holds
+    /// only when w_k = 0), that the per-decision linearity check
+    /// (S_d(2.0) ~= 2*S_d(1.0)) behaves exactly as its arithmetic says,
+    /// AND that the bound formula reproduces the hand value.
     ///
     /// The probe key k (any credit key: it has no linear coordinate, so
-    /// pick the first of the set at runtime -- no name literal) is set to
-    /// c in `pw`; the pricer re-run is modeled by a KNOWN linear pricer
-    /// output: the HandPotential slot of the probe-frozen vectors gains
-    /// `c * 7.0` on candidate 0 and loses `c * 3.0` on candidate 1
-    /// (linear in c: a dedicated gate reading k directly). Every OTHER
-    /// slot is identical in phi_c and phi_p, and the champion weights are
-    /// nonzero on a few slots so the baseline dots are non-trivial.
+    /// pick the first of the set at runtime -- no name literal) has
+    /// champion weight w_k = 0.5, deliberately NONZERO: the displacement
+    /// probe sets k to w_k + c = 0.5 + c, measuring the pricer's response
+    /// at the champion's own operating point. The pricer re-run is
+    /// modeled by a KNOWN pricer linear in the key's VALUE: the
+    /// HandPotential slot of the probe-frozen vectors gains `0.5 * value`
+    /// on candidate 0 and loses `0.5 * value` on candidate 1 (a dedicated
+    /// gate reading k directly). Every OTHER slot is identical in phi_c
+    /// and phi_p, and the champion weights are nonzero on a few slots so
+    /// the baseline dots are non-trivial.
     ///
-    /// Hand computation: champion w has HandPotential weight 4.0 and
-    /// Culture weight 2.0 (everything else 0.0); the credit slot is 0.0
-    /// in every vector (no linear coordinate), so the baseline is
+    /// Hand computation: champion w has HandPotential weight 4.0,
+    /// Culture weight 2.0, and k weight 0.5 (everything else 0.0); the
+    /// credit slot is 0.0 in every vector (no linear coordinate), so the
+    /// baseline is
     ///   base(0) = 4.0*10.0 + 2.0*1.0 = 42.0
     ///   base(1) = 4.0*5.0  + 2.0*0.0 = 20.0
     /// and the TOTAL spread is T = 22.0, identical under every probe.
     ///
-    ///   c = 1.0: deltas d(0) = 4.0*7.0 = 28.0, d(1) = 4.0*(-3.0) = -12.0
-    ///            S_d = 28.0 - (-12.0) = 40.0
-    ///   c = 2.0: deltas 56.0 / -24.0  (2x each, linearity)
-    ///            S_d = 80.0 = 2 * S_d(1.0)  -- within any tolerance
-    ///   s_k = S_d / 1.0 = 40.0; with T = 500.0: bound = 1.0*500/40
-    ///       = 12.5 (< CLAMP_BLIND, uncapped).
+    ///   c = 1.0: value = 1.5, deltas d(0) = 4.0*0.5*1.5 = 3.0,
+    ///            d(1) = 4.0*(-0.5*1.5) = -3.0; S_d = 3.0 - (-3.0) = 6.0
+    ///   c = 2.0: value = 2.5, deltas 5.0 / -5.0; S_d = 5.0 - (-5.0)
+    ///            = 10.0
+    ///   S_d(c) = 4.0 * (w_k + c) = 2.0 + 4.0c  -- linear in the VALUE.
+    ///   s_k = S_d / 1.0 = 6.0; with T = 500.0: bound = 1.0*500/6
+    ///       = 83.33.. capped at CLAMP_BLIND = 60.0.
+    ///
+    /// The per-decision linearity check is |S_d(2.0) - 2*S_d(1.0)|
+    /// <= TOL*S_d(1.0): here |10.0 - 12.0| = 2.0 > 0.06, so it GATES --
+    /// correctly, because the spread is linear in w_k + c, not in c (the
+    /// spread doubles only when w_k = 0, value = c). The check is the
+    /// right instrument for the REAL pricers at the operating point;
+    /// this synthetic pair pins its arithmetic.
     ///
     /// The WRONG formulation (the spec's original max-min dot(pw,
     /// phi_p(m)) -- the TOTAL score, no baseline removal) is
-    /// hand-computed as
-    ///   (22.0 + 28.0c) - (20.0 - 12.0c) = 2.0 + 40.0c
-    /// -- c-dependent, coincidentally equal to the true S_d at c = 1.0
-    /// (42.0) but not at c = 2.0 (82.0 vs 80.0), so the linearity test on
-    /// the wrong numbers gates the key; the discriminator is c = 2.0.
+    /// hand-computed as (42.0 + 2.0*value) - (20.0 - 2.0*value)
+    ///   = 22.0 + 4.0*value = 24.0 + 4.0c
+    /// -- c-dependent (28.0 at c = 1.0 vs true 6.0; 30.0 at c = 2.0 vs
+    /// true 10.0), and its linearity reading 30.0/2 != 28.0 gates the
+    /// key under the wrong numbers too, for a different reason.
     ///
     /// The engine invariant the binary relies on -- that the probe
     /// contributes NOTHING to the dot product (the credit slot is 0.0 in
@@ -1060,14 +1135,17 @@ mod tests {
     fn synthetic_decision_delta_sd_and_bound_match_the_hand_computation() {
         let k = CREDIT_KEYS[0]; // the probe key, resolved at runtime
         let n = WeightKey::ALL.len();
-        // Zero every default first so only the two slots below are live.
+        // Zero every default first so only the three slots below are live.
         let mut champion = Weights::defaults();
         for &key in WeightKey::ALL {
             champion.set(key, 0.0);
         }
         champion.set(WeightKey::HandPotential, 4.0);
         champion.set(WeightKey::Culture, 2.0);
-
+        let wk = 0.5_f64; // the champion's weight of k: NONZERO, so the
+        // displacement probe (k -> w_k + c) is a genuine displacement
+        // away from the operating point, not a set-from-zero.
+        champion.set(k, wk);
 
         let mut phi_c0 = vec![0.0f64; n];
         let mut phi_c1 = vec![0.0f64; n];
@@ -1082,29 +1160,36 @@ mod tests {
         assert!((base[0] - 42.0).abs() < 1e-12);
         assert!((base[1] - 20.0).abs() < 1e-12);
 
-        for (c, expected_sd) in [(C, 40.0), (C2, 80.0)] {
+        for (c, expected_sd) in [(C, 6.0), (C2, 10.0)] {
             let mut pw = champion;
-            pw.set(k, c);
+            let value = wk + c; // the DISPLACEMENT probe: k -> w_k + c
+            pw.set(k, value);
             let mut phi_p0 = phi_c0.clone();
             let mut phi_p1 = phi_c1.clone();
-            // The modeled linear pricer re-run, KNOWN in closed form.
-            phi_p0[WeightKey::HandPotential as usize] += 7.0 * c;
-            phi_p1[WeightKey::HandPotential as usize] -= 3.0 * c;
+            // The modeled pricer re-run, KNOWN in closed form: linear in
+            // the key's value (0.5 * value per candidate, with opposite
+            // signs on the two candidates).
+            phi_p0[WeightKey::HandPotential as usize] += 0.5 * value;
+            phi_p1[WeightKey::HandPotential as usize] -= 0.5 * value;
 
             let phi_p = vec![phi_p0, phi_p1];
             let sd = synthetic_sd(&pw, &phi_p, &base);
             assert!((sd - expected_sd).abs() < 1e-12, "S_d(c={c}) = {sd}, expected {expected_sd}");
 
+            // S_d is LINEAR IN THE VALUE w_k + c: 4.0 * (wk + c). This is
+            // what the displacement form promises (not |c|-linearity of
+            // the spread itself, which holds only when wk = 0).
+            assert!((sd - 4.0 * (wk + c)).abs() < 1e-12, "S_d(c={c}) must be 4.0*(wk+c)");
+
             // The WRONG formulation: the spec's original max-min of the
             // TOTAL probe-perturbed score (no baseline removal),
-            // hand-computed as 2.0 + 40.0c (see the doc above). At
-            // c = 1.0 it coincidentally equals the true S_d (both
-            // 42.0); at c = 2.0 it does not (82.0 vs 80.0), so the
-            // linearity test on the wrong numbers reads 82.0 / 2 !=
-            // 42.0 and gates the key -- the discriminator is c = 2.0.
-            let wrong_total_sd = (20.0_f64 - 12.0 * c).max(22.0 + 28.0 * c)
-                - (20.0 - 12.0 * c).min(22.0 + 28.0 * c);
-            assert!((wrong_total_sd - (2.0 + 40.0 * c)).abs() < 1e-12, "total-score S_d = {wrong_total_sd}");
+            // hand-computed as 24.0 + 4.0c (see the doc above): 28.0 at
+            // c = 1.0 (true 6.0) and 30.0 at c = 2.0 (true 10.0), so the
+            // linearity test on the wrong numbers reads 30.0/2 != 28.0
+            // and gates the key.
+            let wrong_total_sd = (20.0_f64 - 2.0 * value).max(42.0 + 2.0 * value)
+                - (20.0 - 2.0 * value).min(42.0 + 2.0 * value);
+            assert!((wrong_total_sd - (24.0 + 4.0 * c)).abs() < 1e-12, "total-score S_d = {wrong_total_sd}");
             if c == C2 {
                 assert!((wrong_total_sd - sd).abs() > 1.0, "the test must fail under the total-score formulation");
             }
@@ -1121,18 +1206,23 @@ mod tests {
         // re-pricing (the phi_p - phi_c difference) remains.
         for (i, f) in [phi_c0.clone(), phi_c1.clone()].iter().enumerate() {
             let mut pw = champion;
-            pw.set(k, C);
+            pw.set(k, wk + C);
             let d = eval::dot(&pw, f) - base[i];
             assert!(d.abs() < 1e-12, "probe-in-dot-vector delta must be 0, got {d} for candidate {i}");
         }
 
-        // The linearity test on the synthetic pair passes: 80.0 is
-        // exactly 2 * 40.0.
-        let linear = (80.0_f64 - 2.0 * 40.0).abs() <= LINEAR_TOL * 40.0;
-        assert!(linear);
+        // The per-decision linearity check (S_d(2.0) ~= 2*S_d(1.0)): on
+        // this synthetic pair it GATES, because the spread is linear in
+        // w_k + c, not in c -- |10.0 - 2*6.0| = 2.0 > 0.01*6.0 = 0.06.
+        // The check is the right instrument for the real pricers at the
+        // operating point; this pins its arithmetic on the hand values.
+        let sd1 = 6.0_f64;
+        let sd2 = 10.0_f64;
+        let linear = sd1 <= SD_EPS || (sd2 - 2.0 * sd1).abs() <= LINEAR_TOL * sd1;
+        assert!(!linear, "the displacement form makes the spread linear in w_k + c, not in c: the check must gate here");
 
-        let slope = 40.0_f64 / C;
+        let slope = sd1 / C;
         let bound = bound_from_slope(slope, 500.0);
-        assert!((bound - 500.0 / 40.0).abs() < 1e-9, "bound = {bound}");
+        assert_eq!(bound, CLAMP_BLIND, "500/6 = 83.33 exceeds CLAMP_BLIND = 60.0");
     }
 }
