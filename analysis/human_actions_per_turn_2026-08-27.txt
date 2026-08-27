@@ -38,9 +38,14 @@ military action", and "End turn" lines delimit turns. Caveat:
 this counts ACTION SPENDING, which is the stated equivalent —
 a human turn with 4 CA spent but only 2 actions (e.g. a 2-CA
 take + a 1-CA build + a 1-CA develop) shows as 4 CA but 3
-non-EndTurn decisions. The two are not identical, but both are
-"how busy is this turn", and the bot's 1.06 is a decision count,
-so the CA figure is the more generous comparison for the bot.
+non-EndTurn decisions. The two are not identical, and points
+spent is ALWAYS >= actions taken on BOTH sides -- so a human
+turn's action count is <= its 2.12 CA+MA figure, and the bot's
+points per turn are > its 1.06 decision figure. The 2.12-vs-1.06
+gap ("roughly 2x" above) is therefore an UPPER bound on the true
+gap, not a conservative one; matching units in one direction
+shrinks it. See the unit-matching section at the end for the
+corrected figure.
 
 Method
 ------------------------------------------------------------
@@ -86,12 +91,15 @@ Bot comparison (coordinator's figures)
   3p: 2.43
   4p: 2.38
 The bot's 2p figure is the odd one out: at 3p and 4p the bot
-matches human tempo (2.43 / 2.38 vs the 2p human 2.12), but at
-2p it trails by ~2x. Combined with the end_turn_bias sensitivity
-sweep (analysis/end_turn_bias_sensitivity_2026-08-27.txt: the
-2p coordinate sits at its un-trained default -2.957 while 3p
-carries -9.53 and 4p -41.21), the 2p pass rate is a
-coordinate-level defect, not a general bot property.
+straddles the human 2.12 (2.43 / 2.38 actions per turn), while
+2p sits at 1.06. That is a like-for-like comparison in one unit
+(actions per turn, bot at three counts vs the human 2p figure),
+and it makes the point on its own: the 2p pass rate is a 2p
+property, not a general bot property. (No coordinate-magnitude
+argument is needed or offered: the -2.957 / -9.53 / -41.21
+end_turn_bias values are different champions at different scales,
+and absolute magnitudes across arms are not comparable. The
+behavioural straddling above is the argument.)
 
 Sources
 -------
@@ -101,3 +109,140 @@ Sources
   listed above; no build performed).
 - bot figures: coordinator-provided; companion
   analysis/end_turn_bias_sensitivity_2026-08-27.txt.
+
+Unit-matching: action points per turn, both sides (2026-08-27)
+============================================================
+The two numbers above were in different units: humans in CA+MA
+POINTS SPENT (2.12), bot in NON-ENDTURN DECISIONS (1.06). The
+units are commensurable, and matching them SHRINKS the gap.
+
+1. Does openerprobe count military/political-phase choices?
+------------------------------------------------------------
+NO. It counts civil-phase action decisions only. The loop
+(rust/src/bin/openerprobe.rs:992-1011) records a decision iff
+`Move::EndTurn` is among the legal moves (`is_own_turn`, the gate
+documented at :28-37); legal.rs's `action_moves` pushes EndTurn
+first on the Actions phase only, never during a pending
+sub-decision, so the recorded set is exactly the moments a player
+picks among Take/Build/Develop/Pop/Upgrade/WonderStep/PlayLeader/
+PlayAction/... for their own civil turn. Military-phase and
+political-phase choices (PlayTactic, PlayAction-as-military,
+Aggression/War/Pact declarations, PrepareEvent, Columbus,
+Churchill) never co-offer EndTurn and are NEVER counted.
+Sub-decision responses (Bid/Defend/Choose/Send*/PolPass) are
+excluded by the same gate.
+
+2. Can one bot move spend more than one action point? YES.
+------------------------------------------------------------
+Costs from rust/src/apply.rs (dispatch in `apply`, handlers
+quoted; `costs::pay_ca` costs.rs:179 debits civil_actions and,
+once, Hammurabi-converts an MA if the CA pool is short):
+
+  Take                1-4 CA by row slot (costs.rs:196 `take_cost`,
+                      row 1-2 -> 1, row 3-4 -> 2, row 5-6 -> 3,
+                      row 7 -> 4) + wonder surcharge +1 per
+                      completed/destroyed wonder (Michelangelo
+                      waives); Hammurabi -1 on leader take;
+                      Taj Mahal -2 on wonder take (reached 0).
+  Build (non-unit)    1 CA (apply.rs:849) -- 0 when Civil Life's
+                      banked grant exempts it.
+  Build (unit)        1 MA (apply.rs:847) -- the ONLY civil-phase
+                      move debiting MA.
+  Develop             1 CA (apply.rs:1108) -- 0 under Civil Life's
+                      develop grant.
+  Upgrade             1 CA (apply.rs:917) or 1 MA (apply.rs:904,
+                      unit upgrade); BachTheater = 1 CA theater
+                      upgrade (apply.rs:799).
+  WonderStep          1 CA per stage (apply.rs:945); a k-stage
+                      move debits k CA -- multi-point moves.
+  Pop                 1 CA (apply.rs:699); PopFree = 0.
+  PlayLeader          1 CA (apply.rs:1042); 0 when REPLACING a
+                      leader (spend-and-refund, apply.rs:978).
+  PlayAction          1 CA (apply.rs:1563) -- the one MA-funded
+                      exception is Breakthrough funding Robespierre's
+                      revolution (apply.rs:1560, gated in
+                      legal.rs).
+  Destroy             1 CA / 1 MA by unit-ness (apply.rs:885-891).
+  Revolution          wipes the pool: civil zeroed (apply.rs:1389)
+                      or Robespierre's MA zeroed (apply.rs:1384);
+                      points spent are turn-dependent, not fixed.
+  PlayTactic          1 MA (apply.rs:1441).
+  CopyTactic          2 MA (apply.rs:1450) -- multi-point.
+  Aggression          1-3 MA by card (card_table.rs
+                      `military_action_cost`; card data: Plunder/I 1,
+                      Raid(I) 1, Enslave/Raid(II)/Annex/Infiltrate/
+                      Armed Intervention 2, Raid(III) 3), DOUBLED
+                      vs a Gandhi defender (combat.rs:261-265); the
+                      declaration closes the political action
+                      (apply.rs:1499 end_politics before the
+                      defense decision).
+  War                 2-3 MA (War over Territory/Technology 2,
+                      War over Culture 3; apply.rs:1464-1469,
+                      Gandhi doubling).
+  OfferPact /
+  CancelPact /
+  PrepareEvent /
+  RemoveLeaderYellow /
+  ColumbusColonize    0 CA/MA -- the POLITICAL action (at most one
+                      per turn, free in CA/MA terms; end_politics
+                      at apply.rs:219). PolPass = the same action,
+                      unused.
+  Barbarossa          1 MA total for pop+build combined
+                      (apply.rs:769-797: do_build's 1 MA pays the
+                      whole move).
+  TradeFoodAsResource / TradeResourceAsFood
+                      0 (moves.rs:117-129: the printed text is not
+                      a civil/military action).
+  Bid/BidPass/Defend/DefendDone/SendUnit/SendBonus/SendDiscard/
+  SendDone/Choose/
+  Churchill           0 -- sub-decisions inside an already-paid
+                      resolution (moves.rs:221-233: the deleted
+                      `is_military` doc).
+
+So the bot's unit "decisions" is a real undercount of points:
+2-4 point takes, k-stage WonderSteps, 2-MA CopyTactic and 2-3 MA
+attacks each count as one decision, and the whole military phase
+plus the one free political action are invisible to it.
+
+3. Restated in one unit: action points spent per turn, 2p,
+   rounds 1-3.
+------------------------------------------------------------
+  HUMAN: 2.123 CA+MA per turn -- this IS the points unit already
+  (1.993 CA + 0.130 MA; n=4070 turns). Human actions-per-turn is
+  NOT separately measured in this corpus (the journals print point
+  spend, not action counts), and points-spent >= actions-taken,
+  so the human action count is <= 2.123.
+  BOT: the probe counts decisions, not points, and no existing
+  binary reports bot points without a code change. The closest
+  honest comparison is bracketing the bot in points:
+  1.06 <= bot points/turn (each decision debits >= 1 point;
+  0-point moves are excluded by construction -- no 0-cost move
+  ever offers EndTurn), and the upper slack is small in the
+  opener: the multi-point contributors (row-3+ takes, WonderSteps,
+  CopyTactic, attacks, unit builds) are exactly the kinds whose
+  shares the sensitivity file records at 2p (e.g. 26.2% Take at
+  etb=-3, and of those takes a share come from row 3+; WonderStep
+  and Military build near 0-2%). The bot's human-like action
+  count likewise sits in [1.06, bot points] -- decisions can
+  only merge, never split.
+
+  Corrected ratio: 2.123 / bot-points, with bot-points in
+  [1.06, ~1.3-1.5]. The gap is therefore 1.4x-2.0x, and 2.0x is
+  its UPPER edge (the original "roughly 2x" was the upper bound,
+  not the centre). Direction of the correction: SMALLER than 2x,
+  never larger.
+
+  The like-for-like unit the existing measurements DO share is
+  actions per turn, where no conversion is needed: bot 2.43 (3p)
+  and 2.38 (4p) straddle the human 2p 2.12, and only 2p sits at
+  1.06. That straddling, in one unit, is the argument that the
+  2p pass rate is a 2p property.
+
+Honesty note: this is a bracket, not a point estimate for the bot
+in points -- the exact bot points/turn would need a one-line
+instrumentation change in openerprobe.rs (sum the debited
+CA/MA per recorded decision instead of counting it), which this
+read-only job did not make. The bracket bounds the answer to the
+coordination question either way: the units are matchable, the
+gap shrinks under matching, and the corrected ratio is no more
+than 2x.
