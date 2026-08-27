@@ -124,19 +124,30 @@ penalty? The argument:
 
 THE CASE AGAINST (where the argument breaks)
 ----------------------------------------------------------------
-The NonPositive bucket in this codebase is for quantities the player
-NEVER chooses to be larger -- penalties the rules impose (discontent,
-uprisk, deficits). The sign_intent comment for the pair at
-weights.rs:1904-1906 says the opposite for auction_bid: "a genuine
-trade-off (paying more to win a colony/aggression slot), not a
-rules-imposed penalty the player never chooses." That is a real
-objection, and it is the strongest one:
+First, the bucket's rule. NonPositive in this codebase is NOT
+"penalties the player never chooses": PopCost is NonPositive at
+weights.rs:1647 ("prices a rulebook population-growth cost as an
+upside") and growing population is a CHOICE; the same shape at
+:1666 HandPerishable and :1673 TacticShort. The real test is
+monotonicity of the feature's value, not whether a human elected it.
+The sign_intent comment for the pair at weights.rs:1904-1906
+("a genuine trade-off (paying more to win a colony/aggression
+slot)") is therefore not the objection -- the objection is the
+monotonicity case:
 
-  A. The bid IS the player's choice. The player CHOSE to bid B (or to
-     stay in the auction until B was the last bid). NonPositive keys
-     in this codebase are ones the player would never want to be
-     larger -- the value is a symptom, not a decision. auction_bid is
-     the decision itself, priced by what it bought.
+  A. The bid IS the player's choice, and the price of a win is a
+     chosen price, not an imposed penalty. The player CHOSE to bid B
+     (or to stay in the auction until B was the last bid). The
+     NonPositive keys that ARE purely imposed -- Discontent, Uprising,
+     StrengthDeficit, FamineDeficit (weights.rs:1618) -- price a
+     quantity the player cannot reduce by choosing; auction_bid
+     prices a quantity the player set on purpose and that bought
+     something. (Caveat, per the 2026-08-27 audit: the "the player
+     never chooses" framing was itself wrong as a bucket rule --
+     PopCost above. The surviving content of this objection is that
+     the coordinate's value is a CHOSEN PRICE, so "more" is more of a
+     deliberate commitment, which the NonPositive citations elsewhere
+     do not make.)
 
   B. Bigger B can be better in a DIFFERENT auction instance. The
      coordinate is a per-decision feature, not a board quantity: it
@@ -169,10 +180,13 @@ NOT CITABLE as NonPositive. The "more is never better" case is real
 but it is the trade-off case wearing the penalty costume. The rules
 charge the sacrifice (11.4) -- true -- but the sacrifice is the
 PRICE the player chose to pay for the territory (11.2 "MUST colonize
-(no backing out)"), and NonPositive in this codebase is reserved for
-quantities the player never chooses. The sign_intent comment at
-weights.rs:1904-1906 is the correct reading: a genuine trade-off,
-not a rules-imposed penalty.
+(no backing out)"). The sign_intent comment at weights.rs:1904-1906
+is the correct reading: a genuine trade-off. (Corrections per the
+2026-08-27 audit: the NonPositive bucket rule is monotonicity of the
+feature's value, NOT "penalties the player never chooses" -- PopCost
+at weights.rs:1647 is NonPositive even though population growth is a
+choice; and the 4p live weight is not evidence against a gate, since
+a Free key is unconstrained by construction -- see LIVE EVIDENCE.)
 
 The split of the pair does NOT change this. auction_committed is the
 commitment (I am in, discounted by win probability); auction_bid is
@@ -185,24 +199,29 @@ The -0.4 authored default is consistent with this: it prices the
 sacrifice negative (it IS a cost) but not NonPositive (it is also the
 price of a win the player chose). The league should be allowed to
 move the sign if it finds the trade-off net positive in some arms
--- which is exactly what the 4p champion did (+3.477, see below).
+-- which is exactly what the 4p champion did (see LIVE EVIDENCE).
 
 
 LIVE EVIDENCE (champions read 2026-08-27)
 ----------------------------------------------------------------
   2p  auction_bid  -0.5066570947150919   (authored -0.4)
   3p  auction_bid  -0.09498611753743
-  4p  auction_bid   3.4769700269627286   (SIGN FLIPPED POSITIVE)
+  4p  auction_bid   3.4769700269627286   (positive at read time)
 
-The 4p sign flip is the decisive datum. If auction_bid were
-NonPositive -- "more is never better" -- the 4p climb should not have
-been able to price it +3.48: that would be pricing the sacrifice as a
-BENEFIT, which the NonPositive bucket exists to forbid. The 4p
-champion found that, at 4p, committing to a higher bid is NET
-POSITIVE (the territory won outweighs the units sacrificed, at 4p
-board density). That is the trade-off, priced in the direction the
-league found it. Locking the sign NonPositive would forbid a
-measured, champion-level finding.
+CORRECTION per the 2026-08-27 audit: the 4p positive weight was
+misread here as a refutation of a NonPositive gate. It is not. A
+Free key is unconstrained by construction, so where its weight
+lands is the ABSENCE of a constraint, not evidence against one.
+And the two keys of this pair are collinear by construction --
+auction_committed = share, auction_bid = share * bid -- so at 4p
+they sit at OPPOSITE signs (auction_bid +3.477 vs
+auction_committed -0.087), the classic signature of two collinear
+terms splitting the weight, not a finding about auctions. The 4p
+datum is therefore neither evidence for nor against a sign gate.
+(Also: the champion file is rewritten by the running climb -- 2p
+auction_bid was +0.073 at gen 118672 a few hours after this read;
+always re-read experiments/rust_champion_*.json immediately before
+quoting a magnitude.)
 
 P95 context (no row changes, per the job): the current 2p bound is
 823.689416/10.0 = 82.37 (uncapped). The 2p pin at -22.446 (gen
@@ -216,11 +235,18 @@ BOTTOM LINE
 ----------------------------------------------------------------
 The reason at weights.rs:1904-1906 SURVIVES the split. auction_bid
 is the price limb of a trade the player chose; the rules charge the
-sacrifice but the sacrifice is the price, not a penalty. NonPositive
-is for penalties the player never chooses. The 4p champion's +3.477
-is the empirical proof that "more is never better" is false for this
-coordinate: at 4p, more IS better, and the league priced it that
-way. Do not give AuctionBid a NonPositive sign_intent.
+sacrifice but the sacrifice is the price, not a penalty. The
+decisive argument is the limb decomposition: the coordinate holds
+the committed floor that WON the auction, and the monotonicity test
+runs over that value -- the NonPositive citations elsewhere price
+quantities the player cannot reduce by choosing, and this is one
+they set on purpose. (Corrections per the 2026-08-27 audit: the
+"the player never chooses" bucket framing was wrong -- PopCost at
+weights.rs:1647 shows the bucket is about monotonicity of the
+feature's value, not human election -- and the 4p positive weight is
+not evidence against a gate, since Free keys are unconstrained and
+the collinear pair splits at opposite signs.) Do not give
+AuctionBid a NonPositive sign_intent.
 
 Sources:
   rust/src/bots/weighted/weights.rs:975 (authored default -0.4)
