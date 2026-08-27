@@ -8,6 +8,19 @@ groups first (pinned key 0.0 vs a sibling carrying large magnitude = max |siblin
 LIVE champion generations at read time: 2p 116942, 3p 65519, 4p 21451; md5 2p 737e65aee1b669f95d2b724ced886f00,
 3p 50a27fe8399b73170ab161cc9feb5d4e, 4p f1ddd865da736c107150159c173bf211.
 
+AMENDED (same day): the champion files are rewritten mid-run, so this census
+aged within hours. Re-reading the LIVE files at the coordinator's read time
+shows two of the three "no absorber" verdicts above are no longer pinned:
+military_action_gap@2p escaped the sign gate between gen 116808 and gen 116956
+(148 generations) to -0.0809 -- the fastest gate escape yet observed -- and
+military_action_gap@4p is the same key on the slow arm with only 10 generations
+behind it, i.e. young, not gated. General rule: any census of champion weights
+must record the gen and md5 of the snapshot it used. The no_aggression@2p
+residual stands but needs no absorber: its cross-count profile 0 / -0.030369 /
+-4.235542 is monotone in opponent count, so the true 2p coefficient is ~0 and
+the gate is rounding a noise-positive fit -- see
+analysis/no_absorber_residual_2026-08-27.txt (456b494).
+
 hand_perishable 4p -- group Cards (max sibling |w| = 23.620430292554897)
     hand_civil                   = -23.620430292554897  <-- likely absorber
     hand_potential               = 1.1201778838919063  <-- likely absorber
