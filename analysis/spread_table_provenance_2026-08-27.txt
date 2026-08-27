@@ -1,0 +1,124 @@
+spread_table_provenance — git-history provenance of the live
+WeightKey::p95_candidate_spread table, per the request in 8d37ddf's wake
+("verify that with git history alone"). Read-only; weights.rs untouched.
+Method: git log -S on the FULL row line "WeightKey::<V> => [" (so a value
+change is detected even when the line prefix is unchanged), restricted to
+rust/src/bots/weighted/weights.rs.
+
+RESULT: the claim is confirmed. The live table is a merge of exactly two
+instruments, and git history shows it:
+
+  1. bin/featspread — 35fb168 "Bound each weight by what its own feature
+     is worth, not by one flat 60" (2026-08-24). Introduced the whole
+     table for all 174 keys; commit message says the 486 constants come
+     from bin/featspread.
+  2. bin/creditspread — 523bfc2 "Land the measured credit-key clamp
+     bounds" (2026-08-27, ~12h before this report). Rewrote EXACTLY the
+     20 credit-class rows (19 *Credit + CardBoardLeader), all from all-zero
+     triples, and nothing else in the table.
+
+No other commit in the repo's history touches any of these 28 rows.
+
+=== Part A: the 19 nonzero credit-class rows ===
+
+Every one was set by 523bfc2, and that commit's message says
+"bin/creditspread.rs measures them a different way and this lands its
+table". The 18 rows with 523bfc2's exact values today:
+
+  CardBoardCredit     [440.293944, 257.969239, 555.766676]
+  CardBoardLeader     [444.221547,  75.852318, 639.120835]
+  UnitTechCredit      [157.532462,  12.531155, 796.642824]
+  UnitStrengthCredit  [  0.000000,   0.000000, 503.905097]
+  TechBoardCredit     [141.213174,   0.000000, 340.149556]
+  ActionBoardCredit   [ 30.951381,  60.270880,   8.980789]
+  GovBoardCredit      [103.608714,  40.765199, 175.810309]
+  WonderBoardCredit   [  5.008904,   0.000000,  35.990065]
+  BuildFreshCredit    [  5.088772, 163.578218,  26.668300]
+  RestrictedResourceCredit [1.222799, 12.011099,  3.456802]
+  FreeActionCredit    [  1.358827,   0.006957,   0.027570]
+  TerritoryCredit     [  1.153157,  13.357448,  63.607113]
+  BonusCardCredit     [  0.323400,   0.058798,   1.135809]
+  TacticBoardCredit   [  0.711767,   4.537967, 247.104292]
+  AggressionBoardCredit [0.376610,   7.967209,   2.273367]
+  WarBoardCredit      [  0.367623,   0.401146,   3.999759]
+  PactBoardCredit     [  0.000000,   1.955373,  26.975213]
+  EventBoardCredit    [  0.117639,   0.071633,   0.974300]
+  TacticReachCredit   [  0.781131,   0.211469,  24.407310]
+
+The 19th row of the 523bfc2 diff is CardRateCredit, which it left at
+[0.000000, 0.000000, 0.000000] — still all-zero today. So:
+
+  * 19 credit-class rows carry nonzero cells live; ALL 19 trace to 523bfc2
+    (bin/creditspread). These are exactly the 19 cells 8d37ddf found
+    nonzero-live-but-zero-featspread.
+  * 1 row of the 20, CardRateCredit, is all-zero LIVE too — 523bfc2 could
+    not measure it either (board-aware branch at cards.rs:2042-2050 returns
+    before the key is read whenever card_board_credit != 0.0, true on all
+    three live champions; zero firing decisions at every count).
+  * 523bfc2's message also records the other intra-row zeros as
+    instrument-visible-but-indefensible: 3p tech_board_credit (gated_frac
+    0.6283, sublinear response) and 3p wonder_board_credit (4 firing
+    decisions). Plus the 2p/3p cells of unit_strength_credit.
+
+=== Part B: the 8 zero-live-but-nonzero-featspread keys ===
+
+BestArena, BestFarm, BestLab, BestLibrary, BestMine, BestTemple,
+BestTheater, RivalFreeCa. For every one of them, git log -S on the full
+row line returns EXACTLY ONE commit: 35fb168, and the line has not been
+edited since. So they were never zeroed; they were set to their current
+values at table creation.
+
+BUT — and this is the point that 8d37ddf's "zero in featspread" does NOT
+imply — the values 35fb168 wrote are not featspread measurements. The
+commit message itself says the keys featspread measures at zero spread
+"keep the flat rail rather than an invented number", and the triples it
+wrote for these 8 are clean small integers, not instrument output:
+
+  key             35fb168 wrote                live today (unchanged)
+  BestArena       [2.0, 3.0, 3.0]              [3.0, 0.0, 0.0]
+  BestFarm        [2.0, 3.0, 3.0]              [0.0, 0.0, 3.0]
+  BestLab         [2.0, 0.0, 3.0]              [0.0, 0.0, 2.0]
+  BestLibrary     [2.0, 2.0, 3.0]              [3.0, 0.0, 0.0]
+  BestMine        [0.0, 0.0, 3.0]              [0.0, 0.0, 2.0]
+  BestTemple      [2.0, 0.0, 2.0]              [2.0, 0.0, 0.0]
+  BestTheater     [0.0, 2.0, 3.0]              [3.0, 0.0, 0.0]
+  RivalFreeCa     [1.0, 1.0, 1.0]              [0.0, 2.0, 4.0]
+
+The per-count pattern — exactly one nonzero entry per row for the seven
+Best* keys (and one nonzero for RivalFreeCa's 3p/4p) — matches the
+per-count feature definitions: at 2p these features are defined for one
+of the three board classes (the second player's), at 3p for one, at 4p
+for one; the integer is the hand-authored "typical magnitude" the commit
+used in place of a measurement. 8d37ddf's featspread run, which DOES
+measure them (nonzero in featspread, zero in the live table), is the
+instrument that would replace these integers with real numbers; that
+landing has not happened yet.
+
+So the honest split of the 8 is:
+  * never measured by featspread in any committed table version —
+    confirmed (one commit touched each row, and it wrote integers);
+  * never zeroed either — they were authored nonzero at creation and
+    remain so;
+  * their live zeros are per-count feature-availability zeros (the
+    feature does not exist at that count), not "thin sampling" zeros —
+    consistent with 8d37ddf's 160-vs-40 finding that sampling is not the
+    zero-maker.
+
+=== The merge, precisely ===
+
+  live table = 35fb168's featspread table
+             + 523bfc2's creditspread overwrite of the 20 credit rows.
+
+  19 credit rows:   creditspread values (nonzero; 4 intra-row zeros are
+                    instrument-indefensible cells, documented in 523bfc2).
+  1 credit row:     CardRateCredit, zero in BOTH instruments (unmeasurable
+                    by construction at current champions).
+  8 best/rival rows: hand-authored integers from 35fb168; featspread has
+                    since measured them (8d37ddf) but no commit has landed
+                    those numbers.
+  the other 146 rows: 35fb168's featspread values, unchanged.
+
+Caveat for anyone re-deriving this: a -S on the bare prefix
+"WeightKey::<V> =>" (without the trailing "[") shows only 35fb168 for
+every row, because 523bfc2 changed the VALUES on the same line prefix.
+The full-line -S (prefix plus "[") is what isolates 523bfc2.
