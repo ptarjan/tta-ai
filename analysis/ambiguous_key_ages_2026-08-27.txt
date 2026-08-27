@@ -1,0 +1,38 @@
+ambiguous_key_ages_2026-08-27.txt
+
+The 14 AMBIGUOUS zeros from zero_bucket_split_2026-08-27.txt (authored default 0.0 AND
+sign-gated) split by KEY AGE. For each of the 11 distinct variants, git log -S on the
+declaration line in rust/src/bots/weighted/weights.rs finds the commit that INTRODUCED
+it (earliest diff touching that line; the Rust port commit f44826d 2026-08-05 is the
+introduction for keys that came with the port). Arm generation counts per the
+coordinator: 2p gen 116912, 3p gen 65500, 4p gen 21450.
+
+OLD -- introduced BEFORE 2026-08-27: lived through the full generation count of its arm.
+For a key with a live spread row and this much mutation behind it, "the climb never
+mutated it" is not credible; a value of exactly 0.0 is the sign gate snapping it, not
+youth. TREAT THESE AS EFFECTIVE PROVEN SNAPS.
+
+  variant                    zero@  introduced date  gen      commit (subject)
+  FreeActionCredit           3    introduced 2026-08-05  65500    f44826d Port weighted.py weights/horizon modules to rust/src/bots/weighted/
+  FreeActionCredit           4    introduced 2026-08-05  21450    f44826d Port weighted.py weights/horizon modules to rust/src/bots/weighted/
+  HandLimit                  2    introduced 2026-08-05  116912   f44826d Port weighted.py weights/horizon modules to rust/src/bots/weighted/
+  NoAggression               2    introduced 2026-08-05  116912   f44826d Port weighted.py weights/horizon modules to rust/src/bots/weighted/
+  WonderBoardCredit          2    introduced 2026-08-06  116912   51c4573 Add wonder_board_credit coordinate
+  MilitaryActionGap          2    introduced 2026-08-12  116912   46924e7 Land the untracked-tree Rust evaluator work: weighted bot, climb, replay
+  MilitaryActionGap          4    introduced 2026-08-12  21450    46924e7 Land the untracked-tree Rust evaluator work: weighted bot, climb, replay
+  HandPerishable             4    introduced 2026-08-13  21450    5d5e64a Let the evaluator see which wonder it is taking, and when it dies
+  HappyMarginAfterNextPop    4    introduced 2026-08-26  21450    628f63a Add happy_margin_after_next_pop: second conditional leaf-eval feature
+  ResourceCommitmentTurns    4    introduced 2026-08-26  21450    cf81d2e Add resource_commitment_turns: third conditional leaf-eval feature
+  RowPlayableCount           4    introduced 2026-08-26  21450    0fe8d21 Add science_need_row and row_playable_count: the last two leaf-eval features
+
+  11 of the 14 zero-pairs are OLD, i.e. 11 are now effectively proven snaps.
+
+NEW -- introduced 2026-08-27: genuinely too young to judge, especially at 4p, the slow
+arm (21450 generations total).
+
+  FamineDeficit              3    introduced 2026-08-27  65500    6179014 Add FamineDeficit: hinge food stock+rate against consumption
+  FamineDeficit              4    introduced 2026-08-27  21450    6179014 Add FamineDeficit: hinge food stock+rate against consumption
+  FreeWorkerWall             4    introduced 2026-08-27  21450    0967f99 Add FreeWorkerWall: hinge the zero-free-workers Build-legality wall
+
+  3 of the 14 zero-pairs are NEW.
+
