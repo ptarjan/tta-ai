@@ -5,8 +5,10 @@
 //! `c = 1.0` (spec section 4.3), the normalized slope `s_k = S_d(c)/|c|`
 //! with the per-key c=1.0/c=2.0 linearity test (spec sections 4.2/4.3/5),
 //! T re-measured in the same run (spec section 5, step 6), and the
-//! LEVER-not-INFLUENCE report with the multcheck flip rates in the same
-//! table (spec section 6).
+//! LEVER-not-INFLUENCE report with the flip rates in the same table
+//! (spec section 6, as corrected 2026-08-26: the flip vectors move all
+//! 20 credit keys at once, so the flip rates are a single CREDIT-CLASS
+//! row per count, not a per-key column).
 //!
 //! # Why a new binary, not a featspread mode
 //!
@@ -26,21 +28,34 @@
 //! parameter, and each pricer resolves its own credit weight from that
 //! same frozen vector.
 //!
-//! The correct formulation (spec section 3, the CRITICAL CORRECTION):
+//! The correct formulation (spec section 3, the CRITICAL CORRECTION, as
+//! corrected by the coordinator on 2026-08-26):
 //!   phi_c = candidate_features(s, legal, allow_resign, freeze=champion)
 //!   phi_p = candidate_features(s, legal, allow_resign, freeze=pw)
 //!           (pw = champion with k set to c; every other key at the
 //!            champion value, so only the pricer reads of k differ
 //!            between phi_c and phi_p)
-//!   score_p(m) = dot(pw, phi_p(m))
-//!   S_d = max_m score_p(m) - min_m score_p(m)
+//!   d_m   = dot(pw, phi_p(m)) - dot(champion, phi_c(m))
+//!           = dot(champion, phi_p(m) - phi_c(m))     (pw and champion
+//!             differ only in coordinate k, and k has NO linear feature
+//!             coordinate, so both forms are identical)
+//!   S_d   = max_m d_m - min_m d_m
 //!
 //! The probe has NO effect on the dot product (the credit coefficient is
 //! frozen OUT of it); the swing is the difference between phi_p and phi_c
 //! in the slots the pricers wrote, a function of c only through the
 //! pricer's own resolution of k. Applying the probe to the DOT vector
 //! instead of the freeze is the wrong instrument -- `tests` below contains
-//! a unit test that fails if that is done.
+//! a unit test that fails if that is done. The spec's own
+//! "S_d = max-min dot(pw, phi_p(m))" was ALSO the wrong instrument, and
+//! that is why the first measurement came back negative: the spread of
+//! the TOTAL score is T (the total spread), which is identical under
+//! every probe, so S_d(1.0) ~= S_d(2.0) ~= T for every key at every
+//! count -- the probe's contribution is a small term buried inside a
+//! number ~400 units wide, not a property of the pricers. The DELTA form
+//! above removes the constant baseline: the 168 non-credit keys cancel
+//! out of d_m, leaving purely the pricer re-pricing effect, which is the
+//! thing that should be |c|-linear.
 //!
 //! # WHAT IS REPORTED IS A LEVER, NOT INFLUENCE (spec section 6)
 //!
@@ -49,9 +64,12 @@
 //! INFLUENCE: a large `S_d` says nothing about whether the key changes
 //! the CHOSEN move -- if the spread is small relative to the argmax gap,
 //! the flip rate is zero no matter how large the lever. The flip rates
-//! (zero/abs, the multcheck counterfactual argmax-flip instrument) are
-//! therefore printed in the SAME table as `p95_slope` and `bound`, and
-//! the method header carries the required caveat verbatim.
+//! (zero/abs, the counterfactual argmax-flip instrument) are therefore
+//! printed in the SAME table as `p95_slope` and `bound` -- as ONE
+//! CREDIT-CLASS row per count (both flip vectors perturb all 20 keys at
+//! once, so the number is the flip rate for the credit half as a whole,
+//! not commensurable with multcheck's one-key-at-a-time per-key flip
+//! rates) -- and the method header carries the required caveat verbatim.
 //!
 //! # Per-key linearity test (spec section 4.3)
 //!
@@ -83,7 +101,7 @@
 //! # Cost
 //!
 //! Per decision: 1 shared phi_c + 20 per-key phi_p (c=1.0) + 20 per-key
-//! phi_p2 (c=2.0, the linearity test) + 2 shared flip vectors (k->0.0 and
+//! phi_p2 (c=2.0, the linearity test) + 2 shared flip vectors (all 20 keys -> 0.0 and
 //! k->champion.get(k).abs(), shared across keys) = 43
 //! `candidate_features` calls, versus 1 for plain `featspread`. The
 //! spec's 24-count assumed phi_p2 could be shared across keys; it
@@ -125,10 +143,16 @@ const SD_EPS: f64 = 1e-9;
 const PLAYER_COUNTS: [u8; 3] = [2, 3, 4];
 const N_KEYS: usize = 20;
 
-const CAVEAT: &str = "S_d is a LEVER (max-min of the probe-perturbed score over the\
-                      candidate set), not INFLUENCE. A large S_d does not imply the key\
-                      changes the chosen move. Read flip_rate_zero and flip_rate_abs for\
-                      influence; read p95_slope for the scale of the bound.";
+const CAVEAT: &str = "S_d is a LEVER (max-min over the candidate set of the per-move\
+                      DELTA the probe causes, d_m = dot(pw, phi_p(m)) - dot(champion,\
+                      phi_c(m)) = dot(champion, phi_p(m) - phi_c(m)) -- purely the\
+                      pricer re-pricing effect, baseline removed), not INFLUENCE. A large\
+                      S_d does not imply the key changes the chosen move. Read\
+                      flip_rate_zero and flip_rate_abs for influence -- those two are\
+                      CREDIT-CLASS statistics (all 20 credit keys zeroed / set to abs\
+                      together, one row), NOT per-key: multcheck's per-key flip rates\
+                      perturb ONE key at a time. Read p95_slope for the scale of the\
+                      bound.";
 
 struct Args {
     games: usize,
@@ -213,22 +237,22 @@ const CREDIT_KEYS: [WeightKey; N_KEYS] = [
     WeightKey::CardBoardLeader,
 ];
 
-/// Synthetic-decision S_d (spec section 7's required unit test):
-/// `phi_p` is the candidate feature vector set built under the PROBE
-/// freeze (as `candidate_features` returns it), `probe_w` the probe
-/// vector. Returns `S_d = max_m dot(pw, phi_p(m)) - min_m dot(pw,
-/// phi_p(m))` -- the ONLY formulation in which a credit-key probe can
-/// move the number, because the probe reaches the score through the
-/// pricer re-run baked into `phi_p`, never through the dot vector.
-/// (The champion-frozen vectors `phi_c` are the test's own; this
-/// function takes only the probe side, so dotting the probe against the
-/// champion vectors is not expressible through it.)
+/// Synthetic-decision S_d (spec section 7's required unit test, as
+/// corrected 2026-08-26): `probe_w` is the probe weight vector (the
+/// champion with k at c), `phi_p` the candidate vectors under the probe
+/// freeze, `base` the per-candidate baseline `dot(champion, phi_c(m))`.
+/// Returns `S_d = max_m (dot(pw, phi_p(m)) - base(m)) - min_m (...)` --
+/// the spread of the per-move DELTA the probe causes. Because `probe_w`
+/// and the champion differ only in a coordinate with no linear feature
+/// (k is a credit key), each delta equals
+/// `dot(champion, phi_p(m) - phi_c(m))`: purely the pricer re-pricing
+/// effect, baseline removed.
 #[cfg(test)]
-fn synthetic_sd(probe_w: &Weights, phi_p: &[Vec<f64>]) -> f64 {
+fn synthetic_sd(probe_w: &Weights, phi_p: &[Vec<f64>], base: &[f64]) -> f64 {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
-    for f in phi_p {
-        let d = eval::dot(probe_w, f);
+    for (i, f) in phi_p.iter().enumerate() {
+        let d = eval::dot(probe_w, f) - base[i];
         if d < lo {
             lo = d;
         }
@@ -253,6 +277,11 @@ fn bound_from_slope(p95_slope: f64, t_players: f64) -> f64 {
 /// One credit key's running totals over one player count's whole self-play
 /// sample. `firing_slopes` is kept in full (not a running sum) because
 /// `p95_slope` needs the distribution, mirroring featspread's `KeyAgg`.
+///
+/// `flips_zero` / `flips_abs` are CREDIT-CLASS counters: the two flip
+/// vectors zero / abs-set ALL 20 credit keys at once, so every key's
+/// counter counts the same decisions. They are reduced to ONE per-count
+/// row in `CountResult`, never divided across the 20 keys.
 #[derive(Default, Clone)]
 struct KeyAgg {
     firing: u64,
@@ -285,8 +314,9 @@ struct KeySummary {
     gated_frac: f64,
     sd1_p95: f64,
     sd2_p95: f64,
-    flip_rate_zero: f64,
-    flip_rate_abs: f64,
+    /// Per-key fraction of decisions where the c = 1.0 probe changed any
+    /// candidate's score (spec section 6, item 6). Per-key because each
+    /// key's probe is its own.
     term_nonzero_frac: f64,
 }
 
@@ -295,6 +325,13 @@ struct CountResult {
     players: u8,
     decisions: u64,
     keys: Vec<KeySummary>,
+    /// CREDIT-CLASS flip rates (coordinator correction, 2026-08-26): the
+    /// two flip vectors zero / abs-set ALL 20 credit keys at once, so the
+    /// flip rate is ONE number per count -- "flip rate for the credit half
+    /// as a whole" -- not commensurable with multcheck's per-key flip
+    /// rates (which perturb one key at a time).
+    flip_rate_zero: f64,
+    flip_rate_abs: f64,
     /// T_players (spec section 5, step 6): p95 over decisions of the TOTAL
     /// spread max-min dot(champion, phi_c) over the candidate set,
     /// re-measured in this run.
@@ -308,9 +345,10 @@ struct CountResult {
 /// gate featspread and multcheck use) performs the spec section 5 steps:
 /// one shared phi_c under the champion freeze, one phi_p per key under the
 /// c = 1.0 probe freeze, one phi_p2 per key under the c = 2.0 probe
-/// freeze (the linearity test), and the two shared flip vectors (k -> 0.0
-/// and k -> champion.get(k).abs()) with their argmax-flip and
-/// term-nonzero indicators.
+/// freeze (the linearity test), and the two SHARED flip vectors (all 20
+/// credit keys -> 0.0, and all 20 -> champion.get(k).abs()) with their
+/// argmax-flip indicators -- CREDIT-CLASS statistics by construction,
+/// reduced to one row per count, never divided across keys.
 fn play_shard(
     games: usize,
     seed: u64,
@@ -370,6 +408,14 @@ fn play_shard(
                     .iter()
                     .zip(base_scores.iter())
                     .any(|(&a, &b)| (a - b).abs() > 1e-9);
+                // CREDIT-CLASS accumulation: both flip vectors move ALL 20
+                // keys at once, so one counter pair serves the whole
+                // credit half. The counters are stored on every key's
+                // KeyAgg (reduce_count sums them across shards, so the
+                // value must be counted once per shard per flip), and the
+                // reduce divides by ONE count's decisions -- never by the
+                // 20 keys. The per-key `touched` column is the per-key
+                // probe_touched accumulated in the per-key loop below.
                 for a in &mut agg {
                     if flip0 {
                         a.flips_zero += 1;
@@ -383,10 +429,22 @@ fn play_shard(
                 }
 
                 // Steps 4b-4e -- per key: probe freezes at c = 1.0 and
-                // c = 2.0, S_d from the PROBE-frozen vectors dotted with
-                // the PROBE vector (the only formulation in which the
-                // probe can move the number -- see this file's top doc
-                // comment).
+                // c = 2.0. S_d is the spread over CANDIDATES of the
+                // per-move DELTA the probe causes,
+                //   d_m = dot(pw, phi_p(m)) - dot(champion, phi_c(m))
+                //        = dot(champion, phi_p(m) - phi_c(m))
+                // (pw differs from the champion only in coordinate k, and
+                // k has no linear feature coordinate, so the first form
+                // equals the second: the delta is PURELY the pricer
+                // re-pricing effect, with the constant baseline removed
+                // -- the 168 non-credit keys cancel out of it). Measuring
+                // the spread of the total score instead measures T, which
+                // dominates d_m for every key; the delta is the quantity
+                // that should be |c|-linear (coordinator correction,
+                // 2026-08-26, on the af57966 spec -- the spec's
+                // "S_d = max-min dot(pw, phi_p(m))" was the wrong
+                // instrument: it buried the probe's contribution inside a
+                // ~400-unit total).
                 for (ki, &k) in CREDIT_KEYS.iter().enumerate() {
                     let a = &mut agg[ki];
 
@@ -397,8 +455,13 @@ fn play_shard(
                     let mut hi = f64::NEG_INFINITY;
                     let mut touched = false;
                     for (i, (_, f)) in phi_p.iter().enumerate() {
-                        let d = eval::dot(&pw, f);
-                        if (d - base_scores[i]).abs() > 1e-9 {
+                        // dot(pw, phi_p(m)) - dot(champion, phi_c(m)): the
+                        // credit coordinate contributes 0.0 to both dots
+                        // (the pricer re-run is baked into phi_p), so this
+                        // equals dot(champion, phi_p(m) - phi_c(m)) and is
+                        // the delta, not the total.
+                        let d = eval::dot(&pw, f) - base_scores[i];
+                        if d.abs() > 1e-9 {
                             touched = true;
                         }
                         if d < lo {
@@ -418,8 +481,8 @@ fn play_shard(
                     let phi_p2 = eval::candidate_features(s, legal.as_slice(), bot.allow_resign, &pw2);
                     let mut lo2 = f64::INFINITY;
                     let mut hi2 = f64::NEG_INFINITY;
-                    for (_, f) in &phi_p2 {
-                        let d = eval::dot(&pw2, f);
+                    for (i, (_, f)) in phi_p2.iter().enumerate() {
+                        let d = eval::dot(&pw2, f) - base_scores[i];
                         if d < lo2 {
                             lo2 = d;
                         }
@@ -461,6 +524,8 @@ fn reduce_count(players: u8, shards: &[(Vec<KeyAgg>, Vec<f64>, u64)], weights: &
     }
 
     let mut keys: Vec<KeySummary> = Vec::with_capacity(N_KEYS);
+    let mut flips_zero_total = 0u64;
+    let mut flips_abs_total = 0u64;
     for (ki, &k) in CREDIT_KEYS.iter().enumerate() {
         let mut agg = KeyAgg::default();
         for (sa, _, _) in shards {
@@ -470,10 +535,17 @@ fn reduce_count(players: u8, shards: &[(Vec<KeyAgg>, Vec<f64>, u64)], weights: &
             agg.sd1.extend_from_slice(&s.sd1);
             agg.sd2.extend_from_slice(&s.sd2);
             agg.gated += s.gated;
-            agg.flips_zero += s.flips_zero;
-            agg.flips_abs += s.flips_abs;
-            agg.term_nonzero += s.term_nonzero;
             agg.probe_touched += s.probe_touched;
+        }
+        // The flip counters are CREDIT-CLASS: every key's KeyAgg counted
+        // the same decisions, so summing across keys would multiply by 20.
+        // Take any one key's cross-shard sum -- they are all equal -- and
+        // report it once, per count.
+        if ki == 0 {
+            for (sa, _, _) in shards {
+                flips_zero_total += sa[ki].flips_zero;
+                flips_abs_total += sa[ki].flips_abs;
+            }
         }
         let slopes_sorted = sorted(agg.firing_slopes.clone());
         let sd1_sorted = sorted(agg.sd1.clone());
@@ -491,8 +563,6 @@ fn reduce_count(players: u8, shards: &[(Vec<KeyAgg>, Vec<f64>, u64)], weights: &
             gated_frac: if agg.firing > 0 { agg.gated as f64 / agg.firing as f64 } else { 0.0 },
             sd1_p95: percentile(&sd1_sorted, 95.0),
             sd2_p95: percentile(&sd2_sorted, 95.0),
-            flip_rate_zero: if decisions > 0 { agg.flips_zero as f64 / decisions as f64 } else { 0.0 },
-            flip_rate_abs: if decisions > 0 { agg.flips_abs as f64 / decisions as f64 } else { 0.0 },
             term_nonzero_frac: if decisions > 0 { agg.probe_touched as f64 / decisions as f64 } else { 0.0 },
         });
     }
@@ -502,6 +572,8 @@ fn reduce_count(players: u8, shards: &[(Vec<KeyAgg>, Vec<f64>, u64)], weights: &
         players,
         decisions,
         keys,
+        flip_rate_zero: if decisions > 0 { flips_zero_total as f64 / decisions as f64 } else { 0.0 },
+        flip_rate_abs: if decisions > 0 { flips_abs_total as f64 / decisions as f64 } else { 0.0 },
         t_p50: percentile(&ts_sorted, 50.0),
         t_p95: percentile(&ts_sorted, 95.0),
         t_max: ts_sorted.last().copied().unwrap_or(0.0),
@@ -523,7 +595,13 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
     println!("Per credit key k, per decision d (candidate set |C| > 1), c = 1.0 FIXED:");
     println!("  phi_c = candidate_features(s, legal, allow_resign, freeze=champion)   [shared]");
     println!("  phi_p = candidate_features(s, legal, allow_resign, freeze=champ[k=1.0]) [per key]");
-    println!("  S_d(1.0) = max_m dot(pw, phi_p(m)) - min_m dot(pw, phi_p(m))");
+    println!("  d_m   = dot(pw, phi_p(m)) - dot(champion, phi_c(m))");
+    println!("          = dot(champion, phi_p(m) - phi_c(m))");
+    println!("  S_d(1.0) = max_m d_m - min_m d_m   (the per-move DELTA spread: the constant");
+    println!("            baseline removed, so the 168 non-credit keys cancel out -- the");
+    println!("            spec's 'max-min dot(pw, phi_p(m))' measured the TOTAL score, whose");
+    println!("            spread is T and is identical under every probe; that is why the");
+    println!("            first measurement was flat at T for all keys)");
     println!("  s_k(d)  = S_d(1.0)/1.0 -- the normalized slope: a pure function of state and");
     println!("           legal moves, no weight in it (spec section 4.2); commensurable with");
     println!("           the featspread spread rows of the other 169 keys.");
@@ -541,7 +619,7 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
     println!("{CAVEAT}");
     println!();
     println!("COST NOTE: per decision, 1 shared phi_c + {} per-key phi_p (c=1.0) +", N_KEYS);
-    println!("phi_p2 (c=2.0, the linearity test) + 2 shared flip vectors (k->0.0, k->abs) =");
+    println!("phi_p2 (c=2.0, the linearity test) + 2 shared flip vectors (all 20 keys -> 0.0, ->abs) =");
     println!("43 candidate_features calls (vs 1 for featspread). phi_p2 is NOT shared across");
     println!("keys (the spec's 24-count assumed it could be; each key's c=2.0 freeze is a");
     println!("different vector and the pricers are not delta-able -- spec section 5's COST");
@@ -559,16 +637,29 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
 fn print_key_table(count: &CountResult) {
     println!("-- {}p -- (decisions {})", count.players, count.decisions);
     println!(
-        "{:<28} {:>10} {:>8} {:>12} {:>14} {:>14} {:>13} {:>13} {:>12}",
-        "key", "champ_w", "fire", "p95_slope", "bound", "flip_zero", "flip_abs", "touched", "GATED?"
+        "{:<28} {:>10} {:>8} {:>12} {:>14} {:>13} {:>12}",
+        "key", "champ_w", "fire", "p95_slope", "bound", "touched", "GATED?"
     );
     for k in &count.keys {
         println!(
-            "{:<28} {:>10.4} {:>8.4} {:>12.6} {:>14.6} {:>14.6} {:>13.6} {:>12.6} {:>12}",
-            k.name, k.champ_w, k.fire_rate, k.p95_slope, k.bound, k.flip_rate_zero, k.flip_rate_abs, k.term_nonzero_frac,
+            "{:<28} {:>10.4} {:>8.4} {:>12.6} {:>14.6} {:>13.6} {:>12}",
+            k.name, k.champ_w, k.fire_rate, k.p95_slope, k.bound, k.term_nonzero_frac,
             if k.gated { "YES" } else { "no" }
         );
     }
+    // The flip rates are CREDIT-CLASS (both flip vectors move all 20 keys
+    // at once), so they are ONE row per count, not a column on every key.
+    println!(
+        "{:<28} {:>10} {:>8} {:>12} {:>14} {:>13} {:>12}",
+        "CREDIT-CLASS flip rates (all 20 keys perturbed together):", "", "", "", "",
+        format!("{:.6}", count.flip_rate_zero), format!("{:.6}", count.flip_rate_abs)
+    );
+    println!(
+        "  flip_zero = credit half zeroed at once; flip_abs = credit half abs-set at once.\
+         These are NOT commensurable with multcheck's per-key flip rates (one key at\
+         a time). 'touched' above IS per-key (fraction of decisions where that key's\
+         c=1.0 probe changed any candidate's score)."
+    );
     println!();
 }
 
@@ -812,10 +903,10 @@ fn main() -> std::process::ExitCode {
 
     print_method_header(&args, &results, &md5s);
     println!("================================================================================");
-    println!("PER-KEY TABLE -- one table carrying p95_slope, bound AND the multcheck");
-    println!("flip rates (spec section 6): flip_zero/flip_abs are counterfactual");
-    println!("argmax-flip rates (the INFLUENCE measure), touched is the fraction of");
-    println!("decisions where the c=1.0 probe changed any candidate's score.");
+    println!("PER-KEY TABLE -- one table carrying p95_slope, bound, the per-key touched");
+    println!("fraction, and (as a single CREDIT-CLASS row) the flip rates (spec section 6,");
+    println!("as corrected 2026-08-26: the flip vectors move all 20 credit keys at once, so");
+    println!("the flip rates are ONE number for the credit half as a whole, not per-key).");
     println!("================================================================================");
     for r in &results {
         print_key_table(r);
@@ -922,37 +1013,51 @@ mod tests {
         assert_eq!(bound_from_slope(5.0, 50000.0), CLAMP_BLIND);
     }
 
-    /// The formulation-pinning test required by spec section 7: a
-    /// synthetic decision whose pricer-written slot differs by a KNOWN
-    /// amount under a KNOWN probe, asserting S_d equals the hand-computed
-    /// value AND that the bound formula reproduces it.
+    /// The formulation-pinning test required by spec section 7, as
+    /// corrected 2026-08-26: a synthetic decision whose pricer-written
+    /// slot differs by a KNOWN, |c|-LINEAR amount under a KNOWN probe,
+    /// asserting the DELTA S_d equals the hand-computed value at c = 1.0,
+    /// doubles at c = 2.0 (the linearity test passes), AND that the bound
+    /// formula reproduces the hand value.
     ///
     /// The probe key k (any credit key: it has no linear coordinate, so
     /// pick the first of the set at runtime -- no name literal) is set to
-    /// c = 1.0 in `pw`; the pricer re-run is modeled by the KNOWN delta
-    /// in the HandPotential slot of the probe-frozen vectors (delta 7.0 on
-    /// candidate 0, -3.0 on candidate 1). Every OTHER slot is identical in
-    /// phi_c and phi_p, and the champion weights are nonzero on a few
-    /// slots so the dot products are non-trivial.
+    /// c in `pw`; the pricer re-run is modeled by a KNOWN linear pricer
+    /// output: the HandPotential slot of the probe-frozen vectors gains
+    /// `c * 7.0` on candidate 0 and loses `c * 3.0` on candidate 1
+    /// (linear in c: a dedicated gate reading k directly). Every OTHER
+    /// slot is identical in phi_c and phi_p, and the champion weights are
+    /// nonzero on a few slots so the baseline dots are non-trivial.
     ///
     /// Hand computation: champion w has HandPotential weight 4.0 and
-    /// Culture weight 2.0 (everything else 0.0); pw = champion with the
-    /// credit key at 1.0.
-    ///   dot(pw, phi_p(0)) = 4*(10+7) + 2*1 = 68 + 2 = 70... computed as:
-    ///     HandPotential slot: phi_c=10.0, phi_p=17.0; Culture slot 1.0 both.
-    ///     dot(pw, phi_p(0)) = 4.0*17.0 + 2.0*1.0 = 70.0
-    ///     dot(pw, phi_p(1)) = 4.0*(5-3) + 2.0*0.0 = 8.0
-    ///   S_d = 70.0 - 8.0 = 62.0
-    ///   s_k = S_d / 1.0 = 62.0; with T = 500.0: bound = 1.0*500/62
-    ///       = 8.064516... (< CLAMP_BLIND, uncapped).
+    /// Culture weight 2.0 (everything else 0.0); the credit slot is 0.0
+    /// in every vector (no linear coordinate), so the baseline is
+    ///   base(0) = 4.0*10.0 + 2.0*1.0 = 42.0
+    ///   base(1) = 4.0*5.0  + 2.0*0.0 = 20.0
+    /// and the TOTAL spread is T = 22.0, identical under every probe.
     ///
-    /// If the probe were (wrongly) applied to the DOT vector instead of
-    /// the freeze -- i.e. if S_d were computed as max-min of
-    /// dot(pw, phi_c) -- the credit slot (0.0 in every vector) contributes
-    /// nothing and S_d would be 4.0*(10-5) + 2.0*(1-0) = 22.0, a DIFFERENT
-    /// number, so this assertion fails on the wrong formulation.
+    ///   c = 1.0: deltas d(0) = 4.0*7.0 = 28.0, d(1) = 4.0*(-3.0) = -12.0
+    ///            S_d = 28.0 - (-12.0) = 40.0
+    ///   c = 2.0: deltas 56.0 / -24.0  (2x each, linearity)
+    ///            S_d = 80.0 = 2 * S_d(1.0)  -- within any tolerance
+    ///   s_k = S_d / 1.0 = 40.0; with T = 500.0: bound = 1.0*500/40
+    ///       = 12.5 (< CLAMP_BLIND, uncapped).
+    ///
+    /// The WRONG formulation (the spec's original max-min dot(pw,
+    /// phi_p(m)) -- the TOTAL score, no baseline removal) is
+    /// hand-computed as
+    ///   (22.0 + 28.0c) - (20.0 - 12.0c) = 2.0 + 40.0c
+    /// -- c-dependent, coincidentally equal to the true S_d at c = 1.0
+    /// (42.0) but not at c = 2.0 (82.0 vs 80.0), so the linearity test on
+    /// the wrong numbers gates the key; the discriminator is c = 2.0.
+    ///
+    /// The engine invariant the binary relies on -- that the probe
+    /// contributes NOTHING to the dot product (the credit slot is 0.0 in
+    /// every vector) -- is asserted separately: a probe vector dotted
+    /// against the CHAMPION-frozen vectors moves no candidate off its
+    /// baseline, whatever the pricer did under the probe freeze.
     #[test]
-    fn synthetic_decision_sd_and_bound_match_the_hand_computation() {
+    fn synthetic_decision_delta_sd_and_bound_match_the_hand_computation() {
         let k = CREDIT_KEYS[0]; // the probe key, resolved at runtime
         let n = WeightKey::ALL.len();
         // Zero every default first so only the two slots below are live.
@@ -963,8 +1068,6 @@ mod tests {
         champion.set(WeightKey::HandPotential, 4.0);
         champion.set(WeightKey::Culture, 2.0);
 
-        let mut pw = champion;
-        pw.set(k, C);
 
         let mut phi_c0 = vec![0.0f64; n];
         let mut phi_c1 = vec![0.0f64; n];
@@ -972,33 +1075,64 @@ mod tests {
         phi_c0[WeightKey::Culture as usize] = 1.0;
         phi_c1[WeightKey::HandPotential as usize] = 5.0;
 
-        let mut phi_p0 = phi_c0.clone();
-        let mut phi_p1 = phi_c1.clone();
-        phi_p0[WeightKey::HandPotential as usize] = 17.0; // +7.0 known delta
-        phi_p1[WeightKey::HandPotential as usize] = 2.0; // -3.0 known delta
+        let base = [
+            eval::dot(&champion, &phi_c0),
+            eval::dot(&champion, &phi_c1),
+        ];
+        assert!((base[0] - 42.0).abs() < 1e-12);
+        assert!((base[1] - 20.0).abs() < 1e-12);
 
-        let phi_c = vec![phi_c0, phi_c1];
-        let phi_p = vec![phi_p0, phi_p1];
+        for (c, expected_sd) in [(C, 40.0), (C2, 80.0)] {
+            let mut pw = champion;
+            pw.set(k, c);
+            let mut phi_p0 = phi_c0.clone();
+            let mut phi_p1 = phi_c1.clone();
+            // The modeled linear pricer re-run, KNOWN in closed form.
+            phi_p0[WeightKey::HandPotential as usize] += 7.0 * c;
+            phi_p1[WeightKey::HandPotential as usize] -= 3.0 * c;
 
-        let sd = synthetic_sd(&pw, &phi_p);
-        assert!((sd - 62.0).abs() < 1e-12, "S_d = {sd}, expected 62.0");
+            let phi_p = vec![phi_p0, phi_p1];
+            let sd = synthetic_sd(&pw, &phi_p, &base);
+            assert!((sd - expected_sd).abs() < 1e-12, "S_d(c={c}) = {sd}, expected {expected_sd}");
 
-        let slope = sd / C;
-        assert!((slope - 62.0).abs() < 1e-12);
-        let bound = bound_from_slope(slope, 500.0);
-        assert!((bound - 500.0 / 62.0).abs() < 1e-9, "bound = {bound}");
-
-        // The WRONG formulation (probe in the dot vector, champion
-        // vectors) gives 22.0, not 62.0 -- assert the test discriminates.
-        let mut lo = f64::INFINITY;
-        let mut hi = f64::NEG_INFINITY;
-        for f in &phi_c {
-            let d = eval::dot(&pw, f);
-            lo = lo.min(d);
-            hi = hi.max(d);
+            // The WRONG formulation: the spec's original max-min of the
+            // TOTAL probe-perturbed score (no baseline removal),
+            // hand-computed as 2.0 + 40.0c (see the doc above). At
+            // c = 1.0 it coincidentally equals the true S_d (both
+            // 42.0); at c = 2.0 it does not (82.0 vs 80.0), so the
+            // linearity test on the wrong numbers reads 82.0 / 2 !=
+            // 42.0 and gates the key -- the discriminator is c = 2.0.
+            let wrong_total_sd = (20.0_f64 - 12.0 * c).max(22.0 + 28.0 * c)
+                - (20.0 - 12.0 * c).min(22.0 + 28.0 * c);
+            assert!((wrong_total_sd - (2.0 + 40.0 * c)).abs() < 1e-12, "total-score S_d = {wrong_total_sd}");
+            if c == C2 {
+                assert!((wrong_total_sd - sd).abs() > 1.0, "the test must fail under the total-score formulation");
+            }
         }
-        let wrong_sd = hi - lo;
-        assert!((wrong_sd - 22.0).abs() < 1e-12, "wrong-formulation S_d = {wrong_sd}");
-        assert!((wrong_sd - sd).abs() > 1.0, "the test must fail under the wrong formulation");
+
+        // The engine invariant: the probe vector dotted against the
+        // CHAMPION-frozen vectors moves no candidate off its baseline --
+        // the credit slot is 0.0 in every vector, so the probe
+        // contributes nothing to the dot, whatever the pricer did under
+        // the probe freeze. This is what makes
+        //   dot(pw, phi_p(m)) - dot(champion, phi_c(m))
+        // equal to dot(champion, phi_p(m) - phi_c(m)): the pw-vs-champion
+        // difference cancels out of the dot, and only the pricer
+        // re-pricing (the phi_p - phi_c difference) remains.
+        for (i, f) in [phi_c0.clone(), phi_c1.clone()].iter().enumerate() {
+            let mut pw = champion;
+            pw.set(k, C);
+            let d = eval::dot(&pw, f) - base[i];
+            assert!(d.abs() < 1e-12, "probe-in-dot-vector delta must be 0, got {d} for candidate {i}");
+        }
+
+        // The linearity test on the synthetic pair passes: 80.0 is
+        // exactly 2 * 40.0.
+        let linear = (80.0_f64 - 2.0 * 40.0).abs() <= LINEAR_TOL * 40.0;
+        assert!(linear);
+
+        let slope = 40.0_f64 / C;
+        let bound = bound_from_slope(slope, 500.0);
+        assert!((bound - 500.0 / 40.0).abs() < 1e-9, "bound = {bound}");
     }
 }
