@@ -1,0 +1,166 @@
+end_turn_bias trace (2026-08-27)
+============================================================
+Lead: end_turn_bias is negative in all three live champions but its
+strength is wildly uneven and runs OPPOSITE to the 2p opener defect:
+  2p gen 119000   -2.957    (coordinator's quote: gen 118989, -2.957)
+  3p gen  66484   -9.534    (quote: 66484, -9.534)
+  4p gen  21687  -41.210    (quote: 21687, -41.210)
+Champions re-read live for this trace (they rewrite on every
+accept): gens above, all three values confirmed to the printed
+digits. The weakest penalty sits on the arm that ends its turn most.
+
+Terminology (the standing trap): "pinned" in a RUNAWAY log line
+means |w| >= 0.95 x the key's OWN effective_bound (RUNAWAY_FRACTION
+= 0.95, climb.rs:106). The `(clamp B)` print in every line is the
+GLOBAL CLAMP_CEILING, not the key's rail — that is exactly the
+defect commit 96bf774 fixes (committed, not built into the running
+league). For end_turn_bias the real rail history is: CLAMP_BLIND
+60.0 in the era when its spread row was [0,0,0], then CLAMP_CEILING
+120.0 after the featspread remeasure set it to [1.0,1.0,1.0]
+(formula 823.689/1.0 = 823.69 at 2p, capped to 120). So:
+  - a "-60.000 (clamp 60.0)" line means pinned to the 60.0 BLIND
+    rail of that era;
+  - a value in [57.0, 60.0) means pinned to the 60.0 rail AFTER the
+    ceiling doubled to 120 (95% of 60 = 57.0; 95% of 120 = 114.0,
+    which end_turn_bias has never approached);
+  - the current champions (-2.957 / -9.534 / -41.210) are FAR below
+    114.0: none of them is pinned to anything now.
+
+(1) Emission site
+------------------------------------------------------------
+It is NOT emitted in rust/src/bots/weighted/features.rs at all —
+that file contains no end_turn_bias (grep: zero hits). The firing
+condition lives in eval.rs, in the candidate-scoring loop, and it IS
+a constant 1.0 on the EndTurn candidate, conditional on nothing
+else:
+
+  eval.rs:728 (inside candidate_features, the shared vector builder)
+      if matches!(mv, Move::EndTurn) {
+          f[WeightKey::EndTurnBias as usize] += 1.0;
+      }
+
+  eval.rs:551-553 (rank_moves, the bot's own chooser)
+      if matches!(mv, Move::EndTurn) {
+          val += end_bias;
+      }
+  with end_bias = w.get(WeightKey::EndTurnBias) at eval.rs:540.
+
+So the feature is exactly 1.0 for the EndTurn candidate and 0.0 for
+every other candidate: the weight is a straight "how much do I
+dislike passing" knob, a flat offset on that one move, no
+conditioning on game state. (The neural spec,
+neural/spec.rs:132-308, carries a separate Knob::EndTurnBias "etb"
+for the neural arms; the weighted champion value above is the
+relevant one.)
+
+Default at load: weight_key_table (weights.rs:1086)
+    EndTurnBias => "end_turn_bias", -3.0;
+so a fresh vector starts at -3.0 — and the 2p arm now sits at
+-2.957, i.e. within 1.5% of its own default.
+
+(2) 2p value history
+------------------------------------------------------------
+Sources: RUNAWAY lines in experiments/logs/rust_league_2p.log (669
+observations, gens 18658-37729, every one a pinned coordinate),
+accept gens from rust_climb_2p.jsonl (12,346 accepts, contiguous to
+gen 119000; gaps only at restarts), and frozen champion snapshots
+under analysis/frozen/.
+
+  gen        value          source / bracket
+  1455       -20.35         snapshot (gauntlet, 2026-08-06)
+  19554       -60.00        snapshot (gauntlet, 2026-08-08)
+  18658-37729  -60.000 x581  RUNAWAY observations; 30 transient
+           -57.02 .. -59.99  dips, each snapped back to -60.0 within
+                             2-155 gens (e.g. 29661 -57.023 -> 29750
+                             -60.0; 35990 -58.773 -> 36154 -60.0)
+  ~37730      -60.0         last obs 37729; next accept 37737
+  37730..116144   (unobserved) bracket: >= -60.0 at 37730, and
+           -13.79 at gen 65450 (clamp_ceiling freeze, 2026-08-27)
+  116808       -2.35        snapshot (clamp_ceiling_2026-08-27) —
+                             on-disk champion at the 116858 restart
+  116858-118374 (unobserved)  two restarts; no observation source
+                             between 116808 and now
+  119000       -2.95703     live champion, re-read for this trace
+
+Answers to the questions as posed:
+  - More negative than -2.957? YES, by an order of magnitude: it
+    sat pinned at exactly -60.0 from at least gen 19554 through
+    ~37729 (every observation in that span is -60.000 except the
+    30 transient dips), and it was -20.35 as early as gen 1455.
+  - Which way is it travelling? TOWARD ZERO, and the travel is
+    almost entirely in one interval: -60.0 (at or before 37730)
+    -> -13.79 (65450) -> -2.35 (116808) -> -2.96 (119000, a slight
+    re-growth). That is a ~95% relaxation toward the -3.0 default
+    over ~80k generations. There is no observation between 116808
+    and 119000, so the -2.35 -> -2.96 wobble is two snapshots, not
+    a trend.
+
+(3) 3p and 4p, for contrast
+------------------------------------------------------------
+3p: ZERO end_turn_bias RUNAWAY observations in the entire league
+log. It has never been pinned to anything observable. Bracket:
+  152    -4.09   snapshot (python era, 2026-07-26)
+  160    -4.09   snapshot
+  1255   -13.40  snapshot
+  1384   -20.90  snapshot (gauntlet, 2026-08-06)
+  12364  -28.56  snapshot (gauntlet, 2026-08-08)
+  65450  -13.79  snapshot (clamp_ceiling_2026-08-27)
+  66484   -9.53  live champion, re-read
+So 3p grew to a peak of ~-28.6 (gen 12364, ~19% of its 66k
+generations — EARLY), then relaxed to -9.53. It never touched a
+rail.
+
+4p: 116 RUNAWAY observations, gens 7071-8350, pinned at -60.000
+(94 obs) with dips to -57.36 .. -59.97, same snap-back pattern as
+2p. Bracket:
+  133    -4.31   snapshot (python era, 2026-07-26)
+  350    -5.29   snapshot
+  448    -0.42   snapshot (gauntlet, 2026-08-06)
+  4034   -1.12   snapshot (gauntlet, 2026-08-08)
+  7071-8350   -60.0 pinned (obs); 21445 -38.24
+  snapshot (clamp_ceiling_2026-08-27); 21687 -41.21 live.
+So 4p arrived at its large magnitude LATE: it was at -1.12 as late
+as gen 4034, was pinned at -60.0 by gen 7071 (~33% into its 21.7k
+run), and is now -41.2 and still the largest of the three arms.
+
+Contrast: 2p relaxed from its pin over its LATE gens (the 2p arm
+is also the one with the most generations, 119k vs 66k vs 21.7k —
+but the relaxation is not a function of generation count: 3p grew
+early and relaxed early, 4p is still large, 2p's pin era ended at
+~33% of its run and the walk to the default has taken the rest of
+it). The 2p arm's current -2.957 is essentially its DEFAULT
+(-3.0): the penalty behind the opener defect is, at present, the
+un-trained prior.
+
+(4) What the logs cannot say
+------------------------------------------------------------
+  - No per-gen weight values exist outside pinned-coordinate
+    RUNAWAY lines; the 37730->65450 walk on 2p (and 116808->119000
+    on all arms) is bracketed by snapshots, not measured.
+  - No per-key accept deltas are logged, so which accepts moved
+    end_turn_bias in the 37730-116144 window cannot be identified
+    from the jsonl.
+  - The opener-defect connection (EndTurn chosen 48.6% of 2p
+    opener decisions) was not re-measured here; this trace only
+    establishes that the weight the lead suspects is at its
+    default while the other two arms carry -9.5 and -41.2.
+
+Sources
+-------
+- rust/src/bots/weighted/eval.rs:540, 551-553 (rank_moves), 726-729
+  (candidate_features); weights.rs:1086 (default -3.0);
+  climb.rs:106 (RUNAWAY_FRACTION), 226-233 (clamp), 277-283
+  (runaway_weights), 1217 (clamp-repair print).
+- experiments/logs/rust_league_{2,3,4}p.log: end_turn_bias RUNAWAY
+  lines (2p: 669 obs gens 18658-37729; 3p: 0; 4p: 116 obs gens
+  7071-8350).
+- experiments/logs/rust_climb_{2,3,4}p.jsonl: accept gens (2p to
+  119000, 3p to 66470, 4p to 21686).
+- experiments/rust_champion_{2,3,4}p.json: live, re-read at
+  119000/66484/21687 for this trace.
+- analysis/frozen/**: snapshots at the gens listed above
+  (clamp_ceiling_2026-08-27: 116808/-2.347604, 65450/-13.791110,
+  21445/-38.239814).
+- commit 96bf774 (not built): the `(clamp 60.0)`/`(clamp 120.0)`
+  prints in every RUNAWAY line are the global ceiling, not the
+  key's rail.
