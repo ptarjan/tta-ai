@@ -7,26 +7,47 @@ avenue is closed.
 VERDICT: NOT CITABLE as NonNegative.
 
 NonNegative would assert "more relative strength is never worse" for
-the early-game coefficient of a SIGNED difference. The claim fails
-twice, and the second failure is decisive:
+the early-game coefficient of a SIGNED difference. The claim fails,
+and the failure is structural:
 
-  (1) No rule citation. RULES_SPEC 5.3's "strongest/weakest" events
-      key off MY OWN position, so being the strongest player can
-      trigger a penalty aimed at the strongest. Hunted for it: the
-      strongest-side effects in the base game are net POSITIVE
-      (Foray, Uncertain Borders, Border Conflict, Crusades, Cold War,
-      Refugees, International Agreement, Politics of Strength,
-      Genghis Khan) -- so no clean counterexample in data/ or the
-      spec. That kills only the FOR case, not the gate: NonNegative
-      is a monotonicity assertion, and "the rules never subtract for
-      it" (the bucket's own citation shape) is not a citation.
-
-  (2) The live 4p champion prices the key POSITIVE (+15.744 at the
-      read below, authored default -0.1). A NonNegative gate
-      forbids negative weights; a champion that measured +15.74 for
-      the key cannot exist under that gate. That is the same
-      shape of refutation as every other shortlist key where the
-      measured sign contradicted the asserted one.
+  (1) DECISIVE -- the feature is a signed difference and the gate
+      constrains the WEIGHT. rel = strength - rival_str
+      (features.rs:679) is signed and unclamped; sign_intent can
+      only pin the coefficient, so a NonNegative gate asserts a
+      monotone reading for a quantity that has none. This is the
+      same reason the "lead/weakness measures are signed
+      differences by construction" arm (weights.rs:1899-1903,
+      MySeededPending/MyEventThreat/AttackTargetLead/
+      AttackTargetWeakness/PactPartnerLead) keeps that whole
+      family Free, and the same reason the StrengthRel family as a
+      whole sits in no gate. A gate on a phase coefficient of a
+      signed difference would freeze the sign of a quantity the
+      rules do not make one-directional -- the bucket's own
+      NonNegative citations (weights.rs:1563/1573) price
+      magnitudes that are one-directional by rule, not signed
+      differences.
+  (2) No rule citation for the FOR side either. RULES_SPEC 5.3's
+      "strongest/weakest" events key off MY OWN position, so being
+      the strongest player can trigger a penalty aimed at the
+      strongest. Hunted for it: the strongest-side effects in the
+      base game are net POSITIVE (Foray, Uncertain Borders, Border
+      Conflict, Crusades, Cold War, Refugees, International
+      Agreement, Politics of Strength, Genghis Khan) -- so no
+      counterexample in data/ or the spec. That kills only the FOR
+      case: NonNegative is a monotonicity assertion, and "the
+      rules never subtract for it" is not a citation.
+  (3) CORROBORATION, not proof -- the measured coefficients: 2p
+      -13.322 and 3p -20.557 (authored default -0.1), 4p +15.744
+      (champions re-read by the coordinator at gen 118728 / 66331 /
+      21649, agreeing with my reads). A NonNegative gate forbids
+      negative weights, so the 2p/3p arms violate it. CAUTION per
+      the coordinator (2026-08-27): this argument alone proves too
+      much -- a Free key lands where it lands, and "the gate would
+      forbid the measured value" would close every sign_intent
+      question ever asked. It is load-bearing here only because
+      limb (1) stands independently: the signed-difference
+      structure is the proof, the 2p/3p numbers are corroboration
+      that the structure bites in practice.
 
 
 WHAT THE COORDINATE HOLDS
@@ -266,19 +287,25 @@ BOTTOM LINE
 ----------------------------------------------------------------
 DO NOT give StrengthRelEarly a NonNegative sign_intent.
 
-  1. No rules citation: the base game's strongest-side effects are
-     all gains (International Agreement's cost is optional), so the
-     FOR case has nothing to cite; NonNegative is a monotonicity
-     assertion and "the rules never subtract for leading" is not a
-     monotonicity proof for a multiplier on a signed difference.
-  2. The gate freezes the wrong answer: it would forbid the 2p
-     (-13.32) and 3p (-20.56) champions' measured negative
-     opening coefficient -- the EARLYMIL finding that the opening
-     should not over-invest in strength when combat is unreachable.
-  3. The coordinate is a phase COEFFICIENT on a signed difference,
-     not a stock: NonNegative's own citations price quantities
-     whose value is non-decreasing in themselves; this is a
-     multiplier whose correct sign is an empirical per-arm finding.
+  1. DECISIVE -- the structural limb: rel is a signed, unclamped
+     difference (features.rs:679) and sign_intent constrains the
+     WEIGHT, so a signed feature has no monotone reading for the
+     gate to pin. The signed-difference family is already Free on
+     exactly this ground (weights.rs:1899-1903); NonNegative's own
+     citations (weights.rs:1563/1573) price one-directional
+     magnitudes, not signed differences.
+  2. No rules citation for the FOR side: the base game's
+     strongest-side effects are all gains (International
+     Agreement's cost is optional), so "the rules never subtract
+     for leading" is not a monotonicity citation.
+  3. CORROBORATION (per the coordinator: corroboration, not
+     proof) -- the gate would also forbid the 2p (-13.322) and 3p
+     (-20.557) champions' measured negative opening coefficient,
+     the EARLYMIL finding that the opening should not over-invest
+     in strength while combat is unreachable. The "gate would
+     forbid the measured value" argument alone proves too much
+     (a Free key lands where it lands); it bites here only
+     because limb 1 stands independently.
   4. StrengthDeficit (the behind half) and StrengthLead (the ahead
      half) already carry the hinge structure with their own
      (correct) gates; StrengthRelEarly stays Free, as the
