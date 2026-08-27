@@ -1,0 +1,210 @@
+Free Worker Food Cost — Q1 rules, Q2 code, Q3 verdict
+2026-08-27
+================================================================
+
+QUESTION
+Does an UNASSIGNED (free/idle) worker cost food? I.e. is food consumption
+computed over ALL yellow tokens a player has taken from the bank (including
+workers sitting unassigned in the worker pool), or only over workers placed
+on buildings? And, given the answer, is `free_workers` (emitted at
+rust/src/bots/weighted/features.rs:840) citable as NonNegative, i.e.
+"more of this is never worse for me"?
+
+----------------------------------------------------------------
+Q1. RULES
+----------------------------------------------------------------
+SHORT ANSWER: consumption is keyed to POPULATION TAKEN (tokens removed from
+the yellow bank), NOT to how many of those tokens happen to be sitting on
+cards. An unassigned worker is part of the population that drives
+consumption. An idle worker therefore eats food while producing nothing.
+
+The rule is a single board lookup with no card-placement term:
+
+  RULES_SPEC 6.1 (yellow bank layout):
+    "consumption = leftmost uncovered printed negative number (−1 on square
+     17, −2 on sq 13, −3 on sq 9, −4 on sq 5, −6 on sq 1)".
+    The number is revealed as the bank empties; it is a function of how many
+    yellow tokens are LEFT in the bank, i.e. how many have been TAKEN
+    (population = 18 − tokens-left-in-bank, modulo grants/losses). There is
+    no "per worker on a building" term anywhere in the definition.
+
+  RULES_SPEC 6.6 step 3d (end-of-turn, exact 2015 sequence):
+    "d. Food consumption — pay food = consumption (6.1); if short, pay what
+     you can and lose 4 culture points per missing food [CoL p.6]".
+
+  CoL p.6 (cge_code_of_laws.pdf, "Food Consumption"):
+    "The leftmost square in each section of your yellow bank is marked with
+     a negative number. • If all these numbers are covered by yellow tokens,
+     you have no consumption. • Otherwise, the leftmost uncovered negative
+     number is your consumption. − Lose food equal to your consumption. − If
+     you lost all your food, but not enough to account for the entire
+     consumption, lose 4 culture points for each unit of food necessary to
+     cover the difference."
+    This is the canonical wording. The consumption number is determined by
+    which yellow-bank squares are COVERED by tokens (i.e. how many are still
+    in the bank). A token that has been moved OUT of the bank — whether onto
+    a farm, a city, a mine, or simply left unassigned in the worker pool —
+    has UNCOVERED its square and contributes to the consumption number. The
+    rule never asks "is this worker on a card?"
+
+  CoL p.5 (Workers and Population):
+    "Any yellow token in your play area that is not in your yellow bank is a
+     worker. An unused worker is one that is not on any card."
+    This distinguishes "worker" (any token out of the bank) from "unused
+     worker" (a worker not on a card). Consumption is a function of the
+     former's count, not the latter's.
+
+CROSS-CHECK — faq_v15.pdf:
+  The FAQ does not state a separate consumption formula; it reinforces the
+  same board-lookup model:
+    "Consumption and Corruption: You do not sum all of the values exposed in
+     your two banks when figuring out how much Consumption and Corruption to
+     pay--you pay only the leftmost [uncovered value]." (faq_v15, "Consumption
+     and Corruption" entry)
+  The FAQ's one mention of "unused workers" is about UPRISES, not food:
+    "Unused Workers have absolutely nothing to do with the number of Discontent
+     Workers you have... Unused Workers merely prevent Uprisings."
+    (faq_v15, "Discontent Workers" entry)
+  i.e. an unassigned worker's ONLY special role in the rules is offsetting
+  discontent workers to prevent an uprising. It is NOT exempted from
+  consumption; consumption counts it as population.
+
+CROSS-CHECK — open web (not optional, but blocked in this environment):
+  Fandom (HTTP 402), BGG (HTTP 403), Reddit and web.archive.org (refused by
+  the fetcher) are all inaccessible here. I cross-checked the in-house
+  web-captured sources instead, and they agree with CoL p.6:
+    • sources/hypercheat.txt:121 — "Consumption: return food to the supply
+      according to your empty population bank spaces." (population-bank
+      driven, no card-placement term)
+    • sources/namu_main.txt:124 — "you can replenish one lack of happiness
+      for each worker who is not working." (the "not working" = unassigned
+      workers; their special role is offsetting happiness, matching the FAQ;
+      they are not carved out of consumption)
+  No in-house web source contradicts the board-lookup rule.
+
+CONCLUSION (Q1): food consumption is computed over ALL yellow tokens taken
+from the bank (population), regardless of whether they are assigned to
+buildings. An idle worker in the worker pool eats food and produces
+nothing.
+
+----------------------------------------------------------------
+Q2. CODE
+----------------------------------------------------------------
+The engine's consumption is a pure function of `p.yellow_bank` (tokens LEFT
+in the bank), with no card-placement or worker-on-card term.
+
+  rust/src/economy.rs:65
+    pub fn consumption(yellow_bank: u8) -> u8 {
+        if yellow_bank >= 17 { 0 }
+        else if yellow_bank >= 13 { 1 }
+        else if yellow_bank >= 9 { 2 }
+        else if yellow_bank >= 5 { 3 }
+        else if yellow_bank >= 1 { 4 }
+        else { 6 }
+    }
+
+  The actual end-of-turn payment (production phase step 3d):
+    rust/src/economy.rs:1058
+      let need = consumption(p.yellow_bank) as u16;
+      if p.food >= need {
+          pay_food(p, need);
+      } else {
+          let missing = need - p.food;
+          clear_food(p);
+          p.culture = p.culture.saturating_sub(4 * missing);
+      }
+  The economic-progress event runs the identical computation:
+    rust/src/events.rs:1566
+      let need = economy::consumption(state.players[idx as usize].yellow_bank)
+        as u16;
+
+  `p.yellow_bank` is the number of yellow tokens STILL in the bank
+    rust/src/state.rs:492
+      pub yellow_bank: u8,   // "Unborn population."
+  and it decreases only when a token leaves the bank:
+    rust/src/economy.rs:304   p.yellow_bank -= 1;   // increase population
+  (plus combat/age-end/loss routes). It is NOT decremented when a worker is
+  moved onto a card, and it is NOT incremented when a worker is unassigned
+  (that only moves the token within the play area; the bank count is
+  unchanged). So `consumption(p.yellow_bank)` depends on population TAKEN —
+  exactly the rule in Q1 — and says nothing about card placement.
+
+  The `free_workers` feature is emitted from `p.workers_free`
+    rust/src/bots/weighted/features.rs:840
+      f.set(WeightKey::FreeWorkers,
+            f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
+  `p.workers_free` counts the unassigned tokens (state.rs:497
+  `pub workers_free: u8`). Note the invariant:
+      population taken = workers_on_cards + p.workers_free
+  (modulo yellow_granted bookkeeping). Since consumption is a function of
+  population taken, it is a function of (workers_on_cards + workers_free).
+  An increase in `workers_free` — holding card assignment fixed — IS an
+  increase in population taken, and therefore an increase in the
+  consumption number (at a band boundary) with NO compensating production.
+
+CONCLUSION (Q2): the engine counts every token taken from the bank toward
+consumption; it does not distinguish assigned from unassigned. An idle
+worker raises (or holds up) the consumption figure and adds no farm/mine
+production.
+
+----------------------------------------------------------------
+Q3. VERDICT — is `free_workers` citable as NonNegative?
+----------------------------------------------------------------
+NOT CITABLE as NonNegative.
+
+Reasoning:
+  1. A bigger `free_workers` (holding card assignment fixed) means one more
+     population token has been taken from the yellow bank. Per Q1 (CoL p.6,
+     RULES_SPEC 6.1/6.6) that raises the consumption number at each band
+     boundary (17→13, 13→9, 9→5, 5→1) and costs food every turn.
+  2. Per Q2 (economy.rs:1058) the engine charges exactly that food and, on a
+     shortfall, loses 4 culture per missing food (economy.rs:1063,
+     RULES_SPEC 6.6 step 3d).
+  3. An unassigned worker produces no food, no resources, no science, no
+     culture. Its only positive rulebook role is offsetting a discontent
+     worker to PREVENT an uprising (RULES_SPEC 6.3; faq_v15 "Discontent
+     Workers") — which is a floor (prevents a total production skip), not a
+     benefit that scales with the count.
+  4. "More is never worse" therefore FAILS: above the level needed to cover
+     discontent workers, each additional idle worker is pure food cost with
+     zero production. A player can have strictly too many free workers.
+
+The clean, useful answer: an idle worker EATS FOOD AND PRODUCES NOTHING, so
+the NonNegative reading is dead. `free_workers` is not citable as
+NonPositive or NonNegative — it is genuinely two-sided (it prevents
+uprising up to the discontent count, then becomes a net cost), which is
+exactly why it sits in the Free bucket of sign_intent rather than a signed
+one. The +5.145 2p weight is pricing "having a spare worker to place / to
+block an uprising" as a benefit; if the coordinator's hypothesis is that the
+weight is instead rewarding pure idle food-eating, the rulebook does NOT
+support a NonNegative sign — the sign is legitimately free and the positive
+value is a strategic (anti-uprising + optionality) choice the league is
+fitting, not a rules citation.
+
+----------------------------------------------------------------
+CITATIONS
+----------------------------------------------------------------
+  RULES_SPEC 6.1 — yellow bank layout; consumption = leftmost uncovered
+    printed negative number (function of tokens left in bank).
+  RULES_SPEC 6.3 — happiness & uprising; "Unused workers do not reduce
+    discontent workers; they only prevent the uprising."
+  RULES_SPEC 6.6 step 3d — end-of-turn food consumption; −4 culture per
+    missing food.
+  CoL p.5 (cge_code_of_laws.pdf) — "Any yellow token in your play area that
+    is not in your yellow bank is a worker. An unused worker is one that is
+    not on any card."
+  CoL p.6 (cge_code_of_laws.pdf) — "Food Consumption": leftmost uncovered
+    negative number is your consumption; lose food equal to it; −4 culture
+    per unit of shortfall.
+  faq_v15.pdf — "Consumption and Corruption": pay only the leftmost uncovered
+    value (board-lookup model). "Discontent Workers": unused workers only
+    prevent uprisings, do not cancel discontent.
+  sources/hypercheat.txt:121 — "Consumption: return food to the supply
+    according to your empty population bank spaces."
+  sources/namu_main.txt:124 — unassigned workers offset happiness; not carved
+    out of consumption.
+  rust/src/economy.rs:65 (consumption), :1058 (end-of-turn payment),
+  rust/src/events.rs:1566 (economic-progress payment),
+  rust/src/state.rs:492 (yellow_bank), :497 (workers_free),
+  rust/src/bots/weighted/features.rs:840 (FreeWorkers emit).
+================================================================
