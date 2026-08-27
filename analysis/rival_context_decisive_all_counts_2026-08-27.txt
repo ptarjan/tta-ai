@@ -1,0 +1,94 @@
+================================================================================
+RIVAL-CONTEXT KEYS, DECISIVE MODE, ALL THREE PLAYER COUNTS -- 2026-08-27
+================================================================================
+Run: featspread 40 0 <frozen champions> decisive  (the parameterized
+decisive mode: player count is a PARAMETER of decisive mode, not a 3p
+constant; the optional fifth argument selects a single count, absence
+runs all three in order 2p/3p/4p -- the change itself is the vehicle for
+this measurement).
+  2p: 40 games,  9714 decisions, 19.8s
+  3p: 40 games, 16696 decisions, 51.6s
+  4p: 40 games, 24251 decisions, 150.8s
+  total 222.1s, exit 0, no move-cap hits
+Champions frozen to analysis/frozen_run_2026-08-27_decisive_all_counts/
+BEFORE the run (the climb rewrites experiments/rust_champion_*.json every
+few minutes):
+  2p md5 ac2c745839776f8ee404e19f258d827a
+  3p md5 8d371de0f25382660475f27631a04c67
+  4p md5 1e9a48c30f96807a0b18cb09598e95c3
+Code: rust/src/bin/featspread.rs at f7e0cec (this change). clippy
+--all-targets -- -D warnings: exit 0; cargo test: exit 0 (1549 lib + all
+integration suites).
+
+THE SIX RIVAL-CONTEXT KEYS, SIDE BY SIDE
+----------------------------------------
+  key                  count  champ_w    p95_spread  mean_level  capable_frac
+  rival_desire          2p      -0.0264   0.000000   0.000000      0.0380
+  rival_desire          3p       4.2294   0.000000   0.000000      0.0526
+  rival_desire          4p       6.8112   0.000000   0.000000      0.0600
+  rival_take_share      2p       0.0279   0.000000   0.000000      0.0380
+  rival_take_share      3p       0.0004   0.000000   0.000000      0.0526
+  rival_take_share      4p       0.5226   0.000000   0.000000      0.0600
+  rival_wonders         2p      -1.8739   0.000000   1.046325      0.0380
+  rival_wonders         3p      -0.1358   0.000000   1.410517      0.0526
+  rival_wonders         4p      -5.7184   0.000000   2.123418      0.0600
+  rival_science_rate    2p      -0.7229   0.000000   0.682108      0.0380
+  rival_science_rate    3p      -0.2180   0.000000   1.318879      0.0526
+  rival_science_rate    4p      13.8495   0.000000   3.129438      0.0600
+  rival_free_ca         2p     -14.6551   0.000000   4.257155      0.0380
+  rival_free_ca         3p      -0.2164   0.000000   4.895544      0.0526
+  rival_free_ca         4p      -0.2392   1.000000   5.853848      0.0600
+
+CLASS ASSIGNMENT, ONE SENTENCE PER KEY (A = phi never written, level 0
+and spread 0; B = written but constant across candidates at every
+decision, spread 0 with level clearly nonzero; neither = spread > 0 on
+some decisions, the key can move the argmax)
+  rival_desire:        A at ALL THREE counts (level 0.000000, spread 0.0 at 2p/3p/4p) -- phi is never written in any count; the class is STABLE, no A-to-B flip anywhere.
+  rival_take_share:    A at ALL THREE counts (level 0.000000, spread 0.0 at 2p/3p/4p) -- never written anywhere; STABLE, no flip.
+  rival_wonders:       B at ALL THREE counts (level 1.046325/1.410517/2.123418, spread 0.0 at 2p/3p/4p) -- alive but constant in every count; STABLE, no flip.
+  rival_science_rate:  B at ALL THREE counts (level 0.682108/1.318879/3.129438, spread 0.0 at 2p/3p/4p) -- alive but constant in every count; STABLE, no flip.
+  rival_free_ca:       B at 2p and 3p (spread 0.0, level 4.257155/4.895544); NEITHER at 4p -- the LOUD one: this key is class B at 2p/3p but CARRIES SPREAD (1.000000) at 4p, where it is no longer a structural constant and can actually move a 4p argmax; the class FLIPS from B to neither going 3p -> 4p.
+  (context) the remaining rival_ keys are all class NEITHER at every count
+  (spread > 0 in 2p/3p/4p); none of them is A or B anywhere, so they are
+  outside the zero-spread question this run exists to answer.
+
+THE ANSWER TO THE RUN'S OWN QUESTION
+------------------------------------
+The point of the run was to catch a key that is class A at 3p but class B
+at 2p or 4p (or any cross-count class change). None of the ORIGINAL FOUR
+flips: rival_desire and rival_take_share are A at 2p/3p/4p (never written
+at any count), and rival_wonders and rival_science_rate are B at 2p/3p/4p
+(alive-but-constant at every count). The class structure is STABLE across
+player counts for all four. The one cross-count class change the run did
+catch is on the fifth key, rival_free_ca: B at 2p and 3p, NEITHER at 4p
+(spread 1.000000, level 5.853848) -- at 4p it is a live, candidate-
+varying feature, not a structural constant. SAY IT LOUD: rival_free_ca
+CHANGES CLASS going from 3p to 4p; any analysis that generalizes its 3p
+class-B status to 4p is wrong.
+
+capable_frac IS THE TIE FLOOR, NOT INFLUENCE
+--------------------------------------------
+Every one of these six keys has swing exactly 0 wherever its spread is 0,
+so its capable_frac (2p 0.0380, 3p 0.0526, 4p 0.0600 for the spread-zero
+rows) is ENTIRELY decisions whose winning margin is <= 0 -- exact ties
+among the top candidates. It is the floor every zero-swing key reports at
+that count and must never be read as influence (it is not, e.g., 3.8%
+influence at 2p). The per-count margin distributions the floor is
+computed against:
+  2p: n=9714  mean=20.4526 median=6.6927 p95=75.2052 max=878.5684
+  3p: n=16696 mean=30.7511 median=7.6791 p95=137.0200 max=1288.8435
+  4p: n=24251 mean=35.9845 median=13.3246 p95=148.4710 max=1402.5175
+(At 4p rival_free_ca's capable_frac 0.0600 is NOT the tie floor for it:
+it has spread 1.000000 and champ_w -0.2392, so swing = 0.2392 and its
+capable_frac is a genuine capability number, not floor -- unlike its 2p/3p
+rows.)
+
+WHAT THIS DOES NOT SAY
+----------------------
+It is a measurement. It does not propose a redesign of these features --
+that design call is the coordinator's. It does not claim the rival
+context is worthless: class B means "cannot move an argmax AT THIS
+CHAMPION'S WEIGHTS and this sample", which is exactly the climb-flatness
+the 2026-08-26 finding established, now confirmed to hold at 2p and 4p as
+well (for the four original keys), with the rival_free_ca 4p exception
+named above.
