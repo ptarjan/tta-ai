@@ -66,6 +66,17 @@ files (exhaustive walk, no filter):
   data/cards_wonders_leaders.json   Kremlin                       effects.happy           -1
   data/cards_wonders_leaders.json   Sid Meier                     effects.sciencePerLab   -1
 
+Counting basis, made explicit after the audit exchange (8d1ad71): this is
+NINE distinct field names, but FOURTEEN negative fields per card -- Vast
+Territory's `blueTokens: -1` appears on two separate cards (its Age I card
+and its Age II card, each `count {2p:1, 3p:1, 4p:1}` in
+cards_military_actions.json), and the two `culture` values are on three
+different cards (Crusades/Refugees/Politics of Strength). A number without
+its unit caused the nine-vs-twelve mismatch; the underlying set is
+identical either way and nothing reaches food. (Corroborates the
+sign_intent comment at weights.rs:2055-2067, which already says "Vast
+Territory (I and II)".)
+
 That is the entire negative-value surface of the base-2015 card data. Of
 those, only ONE can reach a production key with a negative sign: the
 `resourceProduction: -1` on Acceptance of Supremacy side B. Nothing in the
