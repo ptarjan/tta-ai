@@ -84,7 +84,7 @@ use std::time::{Duration, Instant};
 use tta::arena::{loader_for, Duel, Match, Summary};
 use tta::bots::greedy::{BotKind, Search as SeatSearch, Seat};
 use tta::bots::weighted::eval::{dominance_repair, load_weights, save_weights, DOMINATES};
-use tta::bots::weighted::weights::{self, WeightGroup, WeightKey, Weights};
+use tta::bots::weighted::weights::{WeightGroup, WeightKey, Weights};
 use tta::rng::PyRandom;
 use tta::stats;
 
@@ -93,24 +93,11 @@ use tta::stats;
 /// nothing and just rescales `sigma` behind the search's back.
 const FROZEN: &[WeightKey] = &[WeightKey::Culture];
 
-/// No weight may exceed this magnitude. A coordinate that runs away takes
-/// over the evaluation regardless of what the others say.
-///
-/// This is now the CEILING on a per-key, per-player-count bound rather than
-/// the bound itself -- see [`WeightKey::clamp_bound`], which divides what one
-/// typical decision is worth by how far this key's own feature actually
-/// swings between the moves on offer. A flat rail is 162 different rules
-/// wearing a costume: 60 on `culture` moves a decision by ~780 points and 60
-/// on `take_cost_share` moves it by 48.
-///
-/// This is the ceiling on a MEASURED bound only; a coordinate the spread
-/// instrument cannot see still gets `CLAMP_BLIND`. The two were one number
-/// until 2026-08-27, which meant the flat rail rather than the measurement
-/// was holding almost every pinned coordinate -- see [`weights::CLAMP_CEILING`].
-const CLAMP: f64 = weights::CLAMP_CEILING;
-
-/// How close to `CLAMP` counts as "pinned" for [`runaway_weights`]. `0.95`
-/// (57.0 at the current `CLAMP`) is tight enough that a healthy vector
+/// How close to a key's own [`effective_bound`] counts as "pinned" for
+/// [`runaway_weights`]. Not to `CLAMP_CEILING`: that is only the
+/// ceiling, and most
+/// keys are held far below it by their measured spread. `0.95` is tight
+/// enough that a healthy vector
 /// bouncing around mid-range never trips it, loose enough to catch a
 /// coordinate a couple of mutation steps short of the wall rather than only
 /// one sitting exactly on it -- a pinned coordinate is the signature of the
@@ -1361,12 +1348,12 @@ fn main() -> ExitCode {
                 runaway = runaway_weights(&args.cfg.champion, args.cfg.players);
                 for (k, v) in &runaway {
                     eprintln!(
-                        "climb: RUNAWAY [{}p] gen {} {} = {:.3} (clamp {:.1}) -- pinned coordinate",
+                        "climb: RUNAWAY [{}p] gen {} {} = {:.3} (bound {:.3}) -- pinned coordinate",
                         args.cfg.players,
                         progress.gen,
                         k.name(),
                         v,
-                        CLAMP,
+                        effective_bound(*k, args.cfg.players),
                     );
                 }
                 accepted = true;
@@ -1690,7 +1677,11 @@ mod tests {
     fn a_wide_swinging_feature_is_bounded_far_tighter_than_a_narrow_one() {
         let wide = WeightKey::HandPotential.clamp_bound(3);
         let narrow = WeightKey::TakeCostShare.clamp_bound(3);
-        assert_eq!(narrow, CLAMP, "take_cost_share swings so little its bound saturates the rail");
+        assert_eq!(
+            narrow,
+            tta::bots::weighted::weights::CLAMP_CEILING,
+            "take_cost_share swings so little its bound saturates the rail"
+        );
         // An order of magnitude is a sanity floor, not a measurement. The
         // live gap is ~29x (4.15 against the 120 ceiling); asserting anything
         // near that would re-create the brittleness described above.
@@ -2694,17 +2685,17 @@ mod tests {
 
     /// `runaway_weights` is the logged-loudly half of the runaway guard
     /// (this file's module doc, "the failure this pool veto exists to
-    /// catch"): a coordinate at or very near `CLAMP` must be reported by
+    /// catch"): a coordinate at or very near its own bound must be reported by
     /// name and value, and the frozen numeraire must never be reported even
     /// if it were somehow set that high.
     #[test]
     fn runaway_weights_flags_only_movable_keys_at_or_near_the_clamp() {
         let mut w = Weights::defaults();
-        w.set(WeightKey::Workers, CLAMP); // pinned exactly at the wall
-        w.set(WeightKey::Culture, CLAMP); // frozen; must never be flagged
+        w.set(WeightKey::Workers, tta::bots::weighted::weights::CLAMP_CEILING); // pinned exactly at the wall
+        w.set(WeightKey::Culture, tta::bots::weighted::weights::CLAMP_CEILING); // frozen; must never be flagged
         let got = runaway_weights(&w, 3);
         let keys: Vec<WeightKey> = got.iter().map(|(k, _)| *k).collect();
-        assert!(keys.contains(&WeightKey::Workers), "a weight pinned at CLAMP must be flagged");
+        assert!(keys.contains(&WeightKey::Workers), "a weight pinned at its bound must be flagged");
         assert!(!keys.contains(&WeightKey::Culture), "the frozen key must never be reported as runaway");
     }
 
