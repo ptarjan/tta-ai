@@ -40,12 +40,22 @@ return before `card_yields` is ever reached, so the credit multiplies
 nothing anywhere.
 gov_board_credit has no such reach problem: it multiplies `gov_value`, and
 ALL 33 government cards (data/cards_civil.json, type "government") pass
-through the same dispatch (cards.rs:1956-1962). It is irrelevant that only
-3 of the 33 print a rate field (Theocracy culture=1, Fundamentalism
-science=-2, Democracy culture=3): the credit scales the WHOLE `gov_value`,
-whose gain triples include action counts and route costs, not rate fields.
-A government card with no rate effect still has `gov_value` > 0 on a board
-with a placement route, and the credit multiplies that.
+through the same dispatch (cards.rs:1956-1962). The credit scales the WHOLE
+`gov_value` -- the government's board-aware gain triples plus its cheapest
+legal placement route -- and every government card flows through it.
+Corollary, verified in card_table.rs: NONE of the 33 governments prints a
+per-turn rate field. The Rate triples that `card_rate_credit` multiplies come
+ONLY from CardEffects.culture/.science (the short per-turn fields;
+cards.rs:306-307) -- never from Production's per-worker values nor from
+gain_culture/gain_science. Every government has CardEffects { culture: 0,
+science: 0 }: Theocracy (card_table.rs:869) puts its 1 culture in
+Production, Fundamentalism (945) its -2 science in Production, Democracy
+(964) its 3 culture in Production -- none in CardEffects. So even the
+generic sum_yields fallback a Government hits when gov_board_credit == 0.0
+gives it NO Rate triples, and card_rate_credit multiplies nothing there
+either. The three fields (Production / CardEffects / ImmediateEffects) are
+three different culture/science slots on the same literal; only the
+CardEffects one feeds the credit.
 
 THE EARLIER GATED BRANCH, CHECKED EXPLICITLY
 For a Government card entering `card_potential_core` (cards.rs:1919):
