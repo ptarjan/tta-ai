@@ -1,6 +1,18 @@
 cap-bound key census (2026-08-27)
 ============================================================
 
+HEADLINE (corrected 2026-08-27): the cap only bites where the weight
+actually GROWS. Of the 174 key,player-count cells per count, only
+THREE sit at or near the ceiling in the live champions (2p gen
+118950, 3p 66469, 4p 21683):
+  workers_late@2p           120.000 = 100.0%  spread 1.592105
+  colonies@3p                114.990 =  95.8%  spread 1.000
+  attack_cost_doubled@3p     107.912 =  89.9%  spread 1.000
+4p has none. The 110/93/92 cap-bound counts below are therefore a
+statement about the RAILS, not about behavior: those cells are cap-bound
+because their SPREADS are tiny, not because their weights are large
+(most sit at <1% of the ceiling, see section 2 and the new section 4).
+
 A key,player-count cell is CAP-BOUND when the measured formula
 P95_TOTAL_SPREAD[p] / spread[p] exceeds CLAMP_CEILING = 120.0, so
 clamp_bound (weights.rs:2208-2215) returns the cap: the rail is the
@@ -340,7 +352,51 @@ only (mostly wonder/strength/board rows whose 2p spread is tiny);
 
 4p: rate_horizon, rival_desire, rival_take_share, rival_wonders, best_temple, best_theater, best_library, best_arena, resource_discount, defense_bonus, gov_action_cost, hand_swap_extra, card_rate_credit, tactic_shortfall_cost, rival_science_rate, culture_rate_trailing, science_rate_trailing, food_stock_needed, resource_stock_needed, science_needed, free_workers_needed, tech_redundancy_discount
 
+(4) The unit-step class: 18 rows measured exactly [1.0, 1.0, 1.0]
+------------------------------------------------------------
+Spread 1.0 is the CORRECT measurement for this class, not a
+placeholder: these are booleans (has_unit, has_colony,
+no_aggression, attack_cost_doubled, wonder_in_progress,
+end_turn_bias, auction_committed, hand_over_capacity,
+wonder_one_stage_short, leader_replacement) and small unit counters
+(colonies, rival_colonies, wonders, num_techs, special_techs,
+leader, rival_free_workers, rival_wonder_deficit) where one decision
+moves the feature by exactly 1. For precisely this class the formula
+permits ~484 (3p: 483.787396/1.0) to ~824 (2p: 823.689416/1.0),
+while the cap allows 120 — the rail is 4-7x tighter than the
+measurement supports, and it is arbitrary rather than measured. All
+18 rows are cap-bound at ALL THREE player counts.
+
+Live |w| at each count (champions re-read for this section: 2p gen
+118974, 3p 66482, 4p 21686), sorted by 2p |w|:
+
+| key                     2p |w|     % |    3p |w|     % |    4p |w|     %
+| attack_cost_doubled    0.0003   0.0% | 107.9121  89.9% |   0.1791   0.1%
+| auction_committed      0.2004   0.2% |   0.5399   0.4% |   0.1303   0.1%
+| colonies              19.2240  16.0% | 114.9901  95.8% |  20.1493  16.8%
+| end_turn_bias          2.9570   2.5% |   9.5343   7.9% |  41.2100  34.3%
+| has_colony             0.4065   0.3% |   0.2498   0.2% |   0.1865   0.2%
+| has_unit               0.4232   0.4% |   0.0382   0.0% |   0.0843   0.1%
+| hand_over_capacity     0.2578   0.2% |   1.1785   1.0% |   0.6242   0.5%
+| leader                27.8617  23.2% |   0.3187   0.3% |  13.0051  10.8%
+| leader_replacement     0.0595   0.0% |   0.0952   0.1% |   0.1403   0.1%
+| no_aggression          0.1342   0.1% |   0.0326   0.0% |   4.8781   4.1%
+| num_techs              0.1127   0.1% |  38.4795  32.1% |   2.1870   1.8%
+| rival_colonies         2.1238   1.8% |   0.5376   0.4% |   0.5505   0.5%
+| rival_free_workers     0.0022   0.0% |   0.5817   0.5% |   5.3377   4.4%
+| rival_wonder_deficit   0.0069   0.0% |   0.2254   0.2% |   0.0000   0.0%
+| special_techs          0.0974   0.1% |   0.3143   0.3% |  50.8790  42.4%
+| wonder_in_progress     0.8774   0.7% |   0.0827   0.1% |   0.0251   0.0%
+| wonder_one_stage_short 0.1334   0.1% |   0.2146   0.2% |   0.0820   0.1%
+| wonders                0.0000   0.0% |   0.0000   0.0% |   0.0000   0.0%
+
+Climbing watch (cells at >25% of the ceiling, beyond the headline
+three): special_techs@4p 42.4% (50.8790), end_turn_bias@4p 34.3%
+(41.2100), num_techs@3p 32.1% (38.4795), leader@2p 23.2%
+(27.8617). None of them is at the runaway threshold (95% of bound,
+i.e. 114.0) yet.
+
 Sources
 -------
 - rust/src/bots/weighted/weights.rs:2208-2215 (clamp_bound), 2233-2460 (p95_candidate_spread), 2499 (CLAMP_BLIND), 2523 (CLAMP_CEILING), 2532 (P95_TOTAL_SPREAD).
-- experiments/rust_champion_{2,3,4}p.json: live, gens 118949/66469/21682 at read time.
+- experiments/rust_champion_{2,3,4}p.json: live; sections 1-3 read at gens 118949/66469/21682; section 4 re-read at 118974/66482/21686 (champions rewrite on every accept).
