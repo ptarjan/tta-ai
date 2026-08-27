@@ -48,3 +48,19 @@ experiments/rust_champion_{2,3,4}p.json (frozen copy deleted after
 measuring -- live files are rewritten by the running climb).
 
 Progress log below, appended as each step lands.
+
+KEY1 (FamineDeficit) -- DONE.
+  commits: 6179014 (add key), aaab132 (measured p95 row).
+  measured p95_candidate_spread: [2.0, 2.0, 2.0] at 2p/3p/4p.
+  fire rate: 13.40% / 13.33% / 13.53% of decisions.
+  cargo test --lib: 1553 passing after this key (1552 + 1 new test).
+  clippy --all-targets -D warnings: clean.
+
+KEY2 (FreeWorkerWall) -- code+test landed, p95 measurement in progress.
+  design: if workers_free == 0 { hand_value } else { 0.0 } -- scaled
+  indicator, NOT flat 0/1 (see commit message for the Uprising-precedent
+  justification). Deliberately reads the local `hand_value` var, NOT
+  WeightKey::HandPotential (that's a w.get-only hyperparameter, never
+  Features::set -- would silently read 0.0 if used).
+  cargo test --lib: 1554 passing after this key (1552 + 2 new tests).
+  clippy --all-targets -D warnings: clean.

@@ -838,6 +838,27 @@ pub fn features(
     f.set(WeightKey::PopCost, needs.food);
     f.set(WeightKey::YellowBank, yellow_bank);
     f.set(WeightKey::FreeWorkers, f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
+    // `apply.rs::do_build` is the only writer that ever decrements
+    // `p.workers_free`, so zero free workers makes `Move::Build` flatly
+    // illegal -- a cliff `FreeWorkers` (raw, just above) cannot represent,
+    // and `WorkerGap` (below, scoped to `TableauSweep::unbuilt_slots`) does
+    // not cover either: it reads 0.0 whenever nothing is unbuilt YET, which
+    // is exactly the position here (the wall is hit BEFORE any slot exists
+    // to be short against). RAW `p.workers_free`, not the pending-adjusted
+    // `FreeWorkers` coordinate above -- `apply.rs`'s own legality check
+    // reads the raw field, and this key prices that same legality
+    // question, not a projected one.
+    //
+    // Scaled by `hand_value` (the local var just above, also `HandValue`'s
+    // own source), never a flat 0/1: the same "UNITS FIX"
+    // `WeightKey::Uprising`'s own doc comment records -- hitting the wall
+    // with an empty hand and hitting it with a hand full of high-level
+    // develop-ready cards are not the same event, and one fitted
+    // coefficient cannot price both. Deliberately NOT `WeightKey::
+    // HandPotential`: that key is a `w.get`-only hyperparameter
+    // (registry.rs's `NOT_SET_BY_FEATURES`), never written to `Features` by
+    // this function, so reading it back here would silently read 0.0.
+    f.set(WeightKey::FreeWorkerWall, if p.workers_free == 0 { hand_value } else { 0.0 });
     f.set(WeightKey::Workers, f64::from(workers));
     f.set(WeightKey::ProdWorkers, f64::from(prod_workers));
     f.set(WeightKey::UrbanWorkers, f64::from(urban_workers));
@@ -2756,6 +2777,62 @@ mod tests {
             features(&state, 0, None, None, false).get(WeightKey::FamineDeficit),
             1.0,
             "one food short of consumption must read as a shortfall of exactly 1.0"
+        );
+    }
+
+    /// `apply.rs::do_build` (`p.workers_free -= 1`) is the only decrementer
+    /// of `workers_free`, so zero free workers makes `Move::Build` flatly
+    /// illegal -- see `WeightKey::FreeWorkerWall`'s own doc comment for why
+    /// `WeightKey::FreeWorkers` (raw) and `WeightKey::WorkerGap` (scoped to
+    /// `TableauSweep::unbuilt_slots`, which is 0 here -- nothing is
+    /// developed-but-unstaffed yet) both miss this cliff. Irrigation
+    /// (Farm, Age I, `level() == 1`) is pushed onto `hand_civil` bare, with
+    /// no science paid for it -- `hand_value`'s own formula
+    /// (`features.rs`'s own `let hand_value` binding) prices every hand
+    /// card by `level() + 1` regardless of affordability, so this is
+    /// exactly the queued-but-unstaffable pipeline the key exists to price.
+    #[test]
+    fn the_free_worker_wall_fires_only_at_zero_workers_and_scales_with_the_queued_hand() {
+        let irrigation = crate::cards::CardId::by_name("Irrigation").expect("a base-game Age I farm tech");
+        let mut state = G::new_game(2, 54);
+
+        // A free worker still on hand: the wall has not been hit, whatever
+        // sits in the queued hand.
+        state.players[0].hand_civil.push(irrigation);
+        state.players[0].workers_free = 1;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::FreeWorkerWall),
+            0.0,
+            "a free worker on hand must read as zero regardless of the queued hand"
+        );
+
+        // At the wall with nothing queued: the indicator is live but has
+        // nothing to scale.
+        state.players[0].workers_free = 0;
+        state.players[0].hand_civil = crate::state::CardList::new();
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::FreeWorkerWall),
+            0.0,
+            "zero workers with an empty hand must still read as zero -- nothing is stranded"
+        );
+
+        // At the wall with one Age I card queued (level 1 -> hand_value
+        // contribution 2.0): the wall is now visible and priced by what it
+        // strands, not a flat 1.0.
+        state.players[0].hand_civil.push(irrigation);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::FreeWorkerWall),
+            2.0,
+            "one queued Age I card (level 1) must read as exactly 2.0, not a flat 0/1 indicator"
+        );
+
+        // A second identical card doubles what is stranded -- pinning the
+        // hinge as a real scale, not a step.
+        state.players[0].hand_civil.push(irrigation);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::FreeWorkerWall),
+            4.0,
+            "two queued Age I cards must read as exactly 4.0"
         );
     }
 }
