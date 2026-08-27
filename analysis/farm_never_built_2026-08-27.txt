@@ -1,0 +1,104 @@
+THE OPENER FOOD DEFECT IS A VALUATION, NOT A LEGALITY PROBLEM
+=============================================================
+2026-08-27. Follows analysis/opener_recheck_2026-08-27.txt (c47e3df), which
+re-measured the four opener baselines after two weeks of leaf-eval feature work
+and found the food-production defect completely unmoved: production still sits
+flat at exactly 2.00 through rounds 2-3 and then declines, at every player count.
+
+This file localizes it.
+
+
+THE MEASUREMENT
+---------------
+rust/target/release/openerprobe --games 60 --players 3 --seed 0 --threads 2
+  --weights experiments/rust_champion_3p.json      (LIVE, gen 65552)
+1851 own-turn decision points in rounds 1-3.
+
+Chosen move by kind:
+    EndTurn      540 (29.2%)
+    Take         426 (23.0%)
+    Pop          310 (16.7%)
+    Build Mine   180 ( 9.7%)
+    Build Urban  155 ( 8.4%)
+    Build Farm     0 ( 0.0%)     <-- zero, in 60 games
+
+Rank of the best LEGAL move of each build-shaped kind (rank 1 = actual pick):
+    Farm   legal 359/1851   min=3  p25=3  median=4  p75=5  mean=4.47
+    Mine   legal 359/1851   min=1  p25=1  median=1  p75=3  mean=2.25
+    Urban  legal 156/1851   min=1  p25=1  median=1  p75=1  mean=1.01
+
+Farm and Mine are legal at EXACTLY the same 359 decision points -- the same free
+worker, the same resources, the same civil action. At none of those 359 is a farm
+ranked in the top two. The minimum rank a farm ever achieves is 3.
+
+Pop (increase population) is legal at 808/1851 (43.7%) and ranks median 2, so the
+population path is open as well; the bot takes it 310 times. Workers are being
+produced and then placed somewhere other than a farm.
+
+So the bot is not BLOCKED from farming. It prices farming last, every time.
+
+
+THE WEIGHTS SAY THE SAME THING
+------------------------------
+Live champions, gens 2p 116992 / 3p 65552 / 4p 21459:
+
+                    2p         3p         4p
+    food_rate      -1.0516    -0.0657    +0.6461
+    resource_rate  +0.2144    +7.8257    +4.5434
+    food_stock     +0.7428   +40.4226    +0.0271
+    best_farm      -0.1870    -1.1984   +37.7806
+    best_mine      -0.0481   +19.5980    -1.2100
+
+food_rate is fitted NEGATIVE at 2p and 3p: the eval is actively penalized for
+owning more food production. best_farm is negative at 2p and 3p as well.
+
+The three lineages do not merely differ in size, they disagree in SIGN on
+best_farm and best_mine, and by two orders of magnitude on food_stock. That is
+the signature of a collinear family whose fitted signs flip on noise, not of
+three lineages that have each discovered a different real strategy.
+
+
+THE STRUCTURAL FACT BEHIND IT
+-----------------------------
+FoodRate, ResourceRate, BestFarm, BestMine, FoodStock and ProdWorkers have NO
+sign_intent -- none of them appears in weights.rs's sign_intent match, so all six
+fall through to Free. Nothing in the code prevents food production from being
+priced as a liability.
+
+By the rules it cannot be one. Food has no corruption analogue: resources over
+the corruption threshold are destroyed, food is only ever spent (consumption at
+end of production, and the cost of increasing population). Owning a higher food
+RATE is never worse than owning a lower one, holding workers fixed; the
+opportunity cost of the worker is carried by the other production terms, not by
+food_rate itself. A negative food_rate is a fit the rules forbid.
+
+
+WHAT NOT TO DO
+--------------
+Do not hand-reprice food_rate. That is already on the dead list, and the
+three-lineage disagreement above is exactly why: a hand-set value in a collinear
+family is re-fitted away within a few hundred generations.
+
+Do not land anything from this file while the clamp-ceiling A/B is live. That
+experiment (f942741, judged 2026-08-30) is running on all three arms right now
+and a weight-space constraint landed mid-flight would contaminate it.
+
+
+THE CANDIDATE INTERVENTION, QUEUED
+----------------------------------
+A rules-derived NonNegative sign_intent on FoodRate. That is a constraint rather
+than a value, which is the form the codebase already uses for ~100 keys, and it
+is the form that survives re-fitting.
+
+It carries a real cost and must have its own A/B: per
+analysis/zero_writer_census_2026-08-27.txt, dominance_repair snaps a wrong-sign
+weight to exactly 0.0 on every load and every mutation, so a sign_intent is the
+one decision the climb cannot undo. If the intent is wrong, food_rate is pinned
+at 0.0 rather than merely mispriced. Before landing it, check whether the signal
+would simply migrate to food_stock or food_gap, which are collinear with it.
+
+Open question this does NOT answer: whether best_mine/best_farm need the same
+treatment, and whether the real defect is that one scalar per card TYPE cannot
+express "a farm is worth more when my food rate is low" -- the coarse-feature
+problem. The rank data above (farm never above rank 3, at 359 different board
+states) is consistent with a feature that cannot condition on need.
