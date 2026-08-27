@@ -1,0 +1,237 @@
+NONPOSITIVE CITATION CASE: WeightKey::AuctionBid
+==============================================
+2026-08-27. Read-only. No code edits, no p95 row changes.
+
+THE QUESTION
+----------------------------------------------------------------
+weights.rs:1907 puts AuctionCommitted and AuctionBid under ONE reason:
+  "Auction bidding is a genuine trade-off (paying more to win a
+   colony/aggression slot), not a rules-imposed penalty the player
+   never chooses."
+Does that reason survive splitting the pair? The argument that it does
+NOT: rivals.rs:459-468 makes auction_bid the COST limb alone. The
+upside of bidding high is already booked in two other coordinates, and
+what is left in auction_bid is the committed sacrifice and nothing
+else -- "more is never better" -- which is the NonPositive case.
+Authored default is already -0.4 (weights.rs:975).
+
+
+WHAT THE COORDINATE HOLDS
+----------------------------------------------------------------
+Emit: features.rs:966 `f.set(WeightKey::AuctionBid, dc.auction_bid);`
+where dc is `deferred_credit(state, idx)` (rivals.rs:417). Only two
+arms ever add to it:
+
+  (a) Pending::Auction, idx is the current high bidder (rivals.rs:458-470):
+      rivals_still_bidding = auc.active().iter().filter(|&&p| p != idx).count();
+      share = 1.0 / (1.0 + rivals_still_bidding as f64);          // :459-460
+      out.auction_committed += share;                             // :461
+      out.auction_bid += share * auc.bid as f64;                  // :464
+      add_permanent_effects(&mut out.gains, &card.effects, share);         // :467
+      add_immediate_effects(&mut out.gains, &card.immediate_effects, share); // :468
+  (b) Pending::Colonize, idx is the settled winner (rivals.rs:481-489):
+      out.auction_committed += 1.0;                               // :482
+      out.auction_bid += c.bid as f64;                           // :483
+      add_permanent_effects(&mut out.gains, &card.effects, 1.0);         // :486
+      add_immediate_effects(&mut out.gains, &card.immediate_effects, 1.0); // :487
+  (c) Everything else: zero (rivals.rs:490 `Pending::Auction(_) |
+      Pending::Defense(_) | Pending::Colonize(_) => {}`).
+
+Three facts the coordinator cited, all verified:
+  1. `share` depends on rivals_still_bidding, NOT on the bid amount.
+     It is emitted separately as auction_committed (the "I am in this
+     auction" commitment, discounted by win probability).
+  2. The card's own value is credited separately, at the same share,
+     through add_permanent_effects (culture/science/food/resource
+     RATES) and add_immediate_effects (culture/science/food/resource
+     STOCKS) into dc.gains, which features.rs:570 folds into the
+     existing rate/stock coordinates via `let g = |gf| dc.gains.get(gf);`.
+  3. The bid number itself (auc.bid / c.bid) appears in NO other
+     coordinate. dc.auction_bid is the ONLY place the committed
+     sacrifice is priced.
+
+So auction_bid = share x (units sacrificed for the colony), with the
+share (win-probability commitment) in auction_committed and the card
+value in the rate/stock coordinates. The quantity it holds is the
+sacrifice itself: military units gone from the board (RULES_SPEC 11.4),
+their yellow tokens returned to the bank (11.4), bonus cards spent
+discarded (11.6).
+
+
+THE RULES: WHAT A HIGHER BID BUYS, AND WHAT IT COSTS
+----------------------------------------------------------------
+RULES_SPEC 11.2 [CoL p.7]: a bid is a whole number > 0 and > previous
+bid, "and may not exceed the maximum colonization force the bidder can
+actually send. Pass = drop out permanently. ... last remaining bidder
+wins and MUST colonize (no backing out), forming a force >= their
+final bid."
+RULES_SPEC 11.3 [CoL p.7; FAQ p.16]: colonization force = printed
+strength of the sacrificed units (>= 1 unit mandatory) + tactical
+strength of complete armies formed among them; strength-rating
+modifiers EXCLUDED.
+RULES_SPEC 11.4 [RB p.17, CoL p.7]: sent units' yellow tokens go to
+the YELLOW BANK; bonus cards used are discarded; strength rating
+updated.
+
+So the bid number B is a FLOOR on the force, and the force is the
+sacrifice. Bidding higher does two and only two things:
+  (i)  it commits a larger sacrifice (more/better units off the
+       board, tokens to the bank, strength rating down); and
+  (ii) it wins the territory against rivals who would have beaten a
+       lower bid -- i.e. it is the price of the WIN, and the win's
+       value is the territory card, already credited at the same
+       share in (2) above.
+Note the bid does NOT buy the force: 11.3 says the force may EXCEED
+the bid. The extra force is pure cost. And the bid does not buy
+anything except the win itself.
+
+
+THE CASE FOR NonPositive
+----------------------------------------------------------------
+NonPositive test: "more of this is never better for me" -- i.e. is
+there a rules-imposed cost such that a larger value is a pure
+penalty? The argument:
+
+  1. The coordinate holds the sacrifice, not the win. The win's value
+     is booked twice over elsewhere (auction_committed for the
+     commitment, dc.gains for the card effects) at the same share.
+     What auction_bid alone carries is share x B: units committed to
+     the bank. RULES_SPEC 11.4 makes that a one-way transfer -- units
+     leave the board, tokens go to the bank, bonus cards are
+     discarded, strength rating falls. None of that ever comes back
+     through this coordinate.
+
+  2. B is a floor, and the overshoot is pure cost. The player must
+     send force >= B (11.2); anything above B buys nothing (the win
+     is already decided by the auction). So within a settled auction,
+     a higher B is strictly more sacrifice for the same territory.
+
+  3. The sacrifice is a real opportunity cost. The units were the
+     player's strength (11.4: strength rating updated) and their
+     yellow tokens were workers (CoL p.5: "any yellow token in your
+     play area that is not in your yellow bank is a worker").
+     Sacrificing them for a colony is a trade the rules charge --
+     which is exactly the shape of the NonPositive citations this
+     codebase uses elsewhere (e.g. Discontent/Uprising/StrengthDeficit/
+     FamineDeficit at weights.rs:1618: "prices a penalty the rules
+     impose").
+
+  4. The authored default already prices it negative: -0.4
+     (weights.rs:975). The sign has been negative since authoring;
+     what the league has been allowed to move it is the MAGNITUDE
+     only, if the sign is locked.
+
+
+THE CASE AGAINST (where the argument breaks)
+----------------------------------------------------------------
+The NonPositive bucket in this codebase is for quantities the player
+NEVER chooses to be larger -- penalties the rules impose (discontent,
+uprisk, deficits). The sign_intent comment for the pair at
+weights.rs:1904-1906 says the opposite for auction_bid: "a genuine
+trade-off (paying more to win a colony/aggression slot), not a
+rules-imposed penalty the player never chooses." That is a real
+objection, and it is the strongest one:
+
+  A. The bid IS the player's choice. The player CHOSE to bid B (or to
+     stay in the auction until B was the last bid). NonPositive keys
+     in this codebase are ones the player would never want to be
+     larger -- the value is a symptom, not a decision. auction_bid is
+     the decision itself, priced by what it bought.
+
+  B. Bigger B can be better in a DIFFERENT auction instance. The
+     coordinate is a per-decision feature, not a board quantity: it
+     is 0 in every decision except the high bidder's. Across auction
+     instances, a higher bid wins territories a lower bid would have
+     lost. The "more is never better" test is over the VALUE of the
+     coordinate at a fixed decision; the trade-off argument is over
+     the CHOICE that produced the value. Both are true; the question
+     is which one the bucket is for.
+
+  C. The two-limb split is not clean. auction_committed and
+     auction_bid are emitted as a pair at the same share; the
+     commitment (1.0 per active auction) is the "I am in this" part
+     and the bid is the "how much I am committed" part. Calling the
+     bid limb NonPositive while the commitment limb stays Free means
+     the pair is split by the bucket rather than by the rules -- the
+     rules charge the WHOLE commitment (sacrifice + win), not just
+     the number.
+
+  D. The overshoot is the only truly free cost. Within a settled
+     auction, yes: B + overshoot is pure cost. But the coordinate
+     holds B, not B + overshoot -- the overshoot (force - bid) is
+     not in any coordinate at all. The coordinate is the COMMITTED
+     floor, which is the part that WON something.
+
+
+VERDICT
+----------------------------------------------------------------
+NOT CITABLE as NonPositive. The "more is never better" case is real
+but it is the trade-off case wearing the penalty costume. The rules
+charge the sacrifice (11.4) -- true -- but the sacrifice is the
+PRICE the player chose to pay for the territory (11.2 "MUST colonize
+(no backing out)"), and NonPositive in this codebase is reserved for
+quantities the player never chooses. The sign_intent comment at
+weights.rs:1904-1906 is the correct reading: a genuine trade-off,
+not a rules-imposed penalty.
+
+The split of the pair does NOT change this. auction_committed is the
+commitment (I am in, discounted by win probability); auction_bid is
+the price (how much I committed). Both are the player's choice, both
+are the trade-off. Splitting the bucket would price the PRICE
+negative and the COMMITMENT free, which is a sign the rules do not
+support: the rules charge the whole deal, not just the number.
+
+The -0.4 authored default is consistent with this: it prices the
+sacrifice negative (it IS a cost) but not NonPositive (it is also the
+price of a win the player chose). The league should be allowed to
+move the sign if it finds the trade-off net positive in some arms
+-- which is exactly what the 4p champion did (+3.477, see below).
+
+
+LIVE EVIDENCE (champions read 2026-08-27)
+----------------------------------------------------------------
+  2p  auction_bid  -0.5066570947150919   (authored -0.4)
+  3p  auction_bid  -0.09498611753743
+  4p  auction_bid   3.4769700269627286   (SIGN FLIPPED POSITIVE)
+
+The 4p sign flip is the decisive datum. If auction_bid were
+NonPositive -- "more is never better" -- the 4p climb should not have
+been able to price it +3.48: that would be pricing the sacrifice as a
+BENEFIT, which the NonPositive bucket exists to forbid. The 4p
+champion found that, at 4p, committing to a higher bid is NET
+POSITIVE (the territory won outweighs the units sacrificed, at 4p
+board density). That is the trade-off, priced in the direction the
+league found it. Locking the sign NonPositive would forbid a
+measured, champion-level finding.
+
+P95 context (no row changes, per the job): the current 2p bound is
+823.689416/10.0 = 82.37 (uncapped). The 2p pin at -22.446 (gen
+107515-107574) is at 27% of that rail -- it fell off the old
+pre-remeasure rail (300.449105/13.0 = 23.111) and is NOT pinned at
+the new one. The key is free to move in both directions under the
+current rail; nothing is constraining it.
+
+
+BOTTOM LINE
+----------------------------------------------------------------
+The reason at weights.rs:1904-1906 SURVIVES the split. auction_bid
+is the price limb of a trade the player chose; the rules charge the
+sacrifice but the sacrifice is the price, not a penalty. NonPositive
+is for penalties the player never chooses. The 4p champion's +3.477
+is the empirical proof that "more is never better" is false for this
+coordinate: at 4p, more IS better, and the league priced it that
+way. Do not give AuctionBid a NonPositive sign_intent.
+
+Sources:
+  rust/src/bots/weighted/weights.rs:975 (authored default -0.4)
+  rust/src/bots/weighted/weights.rs:1904-1907 (sign_intent Free arm)
+  rust/src/bots/weighted/features.rs:966 (emit)
+  rust/src/bots/weighted/rivals.rs:417-493 (deferred_credit)
+  rust/src/bots/weighted/rivals.rs:458-489 (the two arms)
+  rust/src/bots/weighted/rivals.rs:299-350 (add_permanent/immediate_effects)
+  rust/src/bots/weighted/features.rs:570 (g = |gf| dc.gains.get(gf))
+  docs/RULES_SPEC.md 11.2-11.6 (colonization auction rules)
+  sources/ubg_subsequent-rounds.txt:79-88 (UB guide, auction)
+  experiments/rust_champion_{2p,3p,4p}.json (live weights)
+  analysis/uprising_pin_history_2026-08-27.txt (erratum, auction_bid cross-ref)
+================================================================
