@@ -1,0 +1,101 @@
+
+rival_free_ca: reconciliation of the two instruments (2026-08-27)
+=================================================================
+
+CONFLICT AS STATED
+My decisive-mode all-counts run reported rival_free_ca spread 0 at 2p/3p and
+p95_spread 1.0 at 4p (class B at 2p/3p, class neither at 4p). The live table
+WeightKey::p95_candidate_spread in rust/src/bots/weighted/weights.rs:2137 reads
+[0.000000, 2.000000, 4.000000]. The two instruments agree at 2p and disagree at
+both 3p (0 vs 2.0) and 4p (1.0 vs 4.0).
+
+ANSWER: NEITHER INSTRUMENT IS WRONG. THE DISAGREEMENT IS CHAMPION AGE.
+The table row was emitted on the preclimb_2026-08-25 champion lineages
+(gen 108828/59204/19885, md5 9bfb3c06587f909d258a34deaf694e61 /
+119be25daa43fbcb09f7e1ed7a81e943 / 904e6b68acc5beb1089554cc089cd0bf, frozen at
+analysis/frozen/preclimb_2026-08-25/). My decisive run used the
+frozen_run_2026-08-27 champions (gen 21300 lineages, md5
+ac2c745839776f8ee404e19f258d827a / 8d371de0f25382660475f27631a04c67 /
+1e9a48c30f96807a0b18cb09598e95c3, frozen at
+analysis/frozen_run_2026-08-27_decisive_all_counts/). Re-running featspread
+EMIT mode on the EXACT preclimb champions reproduces the table's row to the
+digit: [0.0, 2.0, 4.0] at 2p/3p/4p over 8955/15088/21138 decisions. No bug in
+either instrument. (A second re-run on the postclimb_2026-08-26 champions,
+gen 63150/20951 lineages, gives [2.0, 2.0, 0.0] -- a THIRD row, confirming the
+value is a fast-moving property of the champion, not of the sample or the
+quantile.)
+
+WHAT EACH MODE REPORTS (one sentence each)
+- EMISSIVE/EMIT MODE: p95, over FIRING decisions only, of spread_k =
+  max - min of the key's candidate value at every real self-play decision the
+  champion reaches. This is the quantity p95_candidate_spread splices into
+  weights.rs and clamp_bound divides by.
+- DECISIVE MODE: the same spread_k statistic (my report's p95_spread column is
+  the same firing-only p95) PLUS mean_level = mean |candidate value| (the
+  alive-vs-dead split) and swing/capable_frac vs the actual best-minus-runner-up
+  margin. Its spread column is directly comparable to emit mode's p95_spread.
+So the two numbers ARE comparable: same statistic, same seed (0), same game
+count (40), same feature code (eval::candidate_features, freeze pinned to the
+champion), different CHAMPION VECTORS. The modes measure the same thing; the
+instruments agree perfectly when pointed at the same champion.
+
+THE NUMBERS, SIDE BY SIDE (p95 spread over firing decisions)
+                    emit@preclimb_0825  table row   emit@frozen_0827  decisive@frozen_0827
+  2p:                    0.0               0.0           0.0                0.0
+  3p:                    2.0               2.0           0.0                0.0
+  4p:                    4.0 (p95 6.0)     4.0           1.0                1.0
+Firing rates: preclimb 4p 0.0006 (13/21138), 3p 0.0006 (9/15088); frozen 4p
+0.0001 (3/24251); 2p never fires in any run. Max spread is 2.0 (3p) / 4.0 or
+6.0 (4p) / 1.0 (frozen 4p) -- small integers because the key is
+rival_free_ca = max over rivals of civil_actions (features.rs:625-638), a
+bounded counter in {0,1,2}.
+
+WHY THE VALUE JUMPS BETWEEN CHAMPIONS (mechanism, measurement only)
+The key varies across candidates only when a candidate move changes some
+rival's civil_actions or changes WHICH rival holds the max (the loop never
+touches dc). A champion that frequently plays moves touching rival CA state
+makes the key fire; a champion that does not, reads spread 0. The champion
+lineages in question sit 3.5-4 weeks of climb apart and their rival-context
+weights moved substantially (frozen_0827 4p: rival_science_rate 13.85 vs
+preclimb 4p 11.47; rival_free_ca -0.24 vs -0.08). The monotone 0/2.0/4.0
+pattern in the OLD row is a sample property of that old champion at that
+moment, not a law of player count: the NEW row is 0/0/1.0 and the
+postclimb_0826 row is 2.0/2.0/0.0. The table's own doc comment (weights.rs
+lines 2097-2100) already says the rows are "a property of the CHAMPION as
+much as of the game" and "rerunning after a few thousand generations of
+climbing moves the noisier rows by tens of percent".
+
+THE PRACTICAL CONSEQUENCE FOR CLAMP_BOUNDS (weights.rs:2078-2086)
+clamp_bound divides by p95_candidate_spread and returns CLAMP_BLIND (60.0)
+when spread <= 0.0. The stale row currently gives rival_free_ca a 3p bound of
+CLAMP_T * 483.787396 / 2.0 and a 4p bound of CLAMP_T * 545.274556 / 4.0 --
+TIGHTER than the 60.0 flat rail. My 2026-08-27 measurement says the current
+champion reads 0.0 at 3p (and the frozen-0827 4p spread is 1.0, not 4.0).
+Either way the live row is 2-4x out of date for this key. That is the row
+refresh you have reserved to your own call; per the standing rule against a
+wholesale p95 table refresh, I am not touching weights.rs.
+
+WHAT WAS RUN (all nice -n 15, seed 0, 40 games/count, code at adcf6b7 in a
+detached worktree at /tmp/tta-recon so the live tree's uncommitted
+RivalWonderDeficit edits never entered the build; three climb arms untouched)
+  1. emit, frozen_run_2026-08-27 champions   -> rival_free_ca [0.0, 0.0, 1.0],
+     9714/16696/24251 decisions, p95_total 251.044/386.765/416.040  (log /tmp/emit_recon.log)
+  2. emit, preclimb_2026-08-25 champions     -> rival_free_ca [0.0, 2.0, 4.0],
+     8955/15088/21138 decisions              (log /tmp/emit_prec.log)
+  3. emit, postclimb_2026-08-26 champions    -> rival_free_ca [2.0, 2.0, 0.0],
+     10141/15871/24184 decisions             (log /tmp/emit_post.log)
+  4. decisive, frozen_run_2026-08-27 (my earlier all-counts run, adcf6b7)
+     -> p95_spread [0.0, 0.0, 1.0], same statistics as run 1's emit report.
+All runs exit 0, no move-cap warnings.
+
+BOTTOM LINE
+- The two instruments measure the same quantity (firing-only p95 candidate
+  spread) and agree when pointed at the same champion. No bug; no line to
+  name.
+- The 3p/4p disagreement is champion age: the table row is from the
+  preclimb_2026-08-25 champions (36c7c06, 2026-08-25), my numbers from the
+  frozen 2026-08-27 champions. Both are true of their own champion.
+- The rival_free_ca row is one of the noisiest (firing rate ~0.05-0.1% of
+  decisions), so it is the first to age; its current honest values on the
+  0827 champions are 0.0/0.0/1.0, not 0.0/2.0/4.0.
+- No redesign proposed, per the job. The row is yours to refresh or not.
