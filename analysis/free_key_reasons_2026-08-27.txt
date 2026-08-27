@@ -1,0 +1,338 @@
+free_key_reasons_2026-08-27.txt
+
+Extraction from the governing comments of the Free section of
+WeightKey::sign_intent (rust/src/bots/weighted/weights.rs, fn at line 1480).
+The 111 Free keys are NOT one undifferentiated bucket: they sit in several
+|-joined arms, each preceded by a comment giving a DIFFERENT reason. This file
+splits them into exactly two lists by reading the comment that governs each key:
+
+  (A) CITED COUNTEREXAMPLE -- a rules reason a BIGGER number CAN be bad is
+      written down in the governing comment. These are permanently off the table
+      for reclassification (the comment says "are not to be re-proposed").
+  (B) CITATION MERELY MISSING -- Free out of conservatism; no counterexample is
+      named, the sign is left to the league to price empirically.
+
+No key landed in a third AMBIGUOUS list: every Free key is governed by a comment
+that unambiguously falls in (A) or (B). (The one near-miss, LeaderReplacement,
+is (B): its comment says it INHERITS Leader cited counterexamples but that no
+citation supports a floor/ceiling for the REPLACEMENT key itself, so it is not
+"not to be re-proposed" the way Leader is.
+
+LIVE champion snapshots read for this file (files are rewritten mid-run by the climb):
+  2p gen 118330  md5 52703e23732f151144609ea0f999c620
+  3p gen  66096  md5 c9be153671d293069d482ea410f06ccf
+  4p gen  21591  md5 8a5d4eec2aa0cba96e4952ab2ac53daa
+
+COUNTS: (A) cited counterexample = 12 keys. (B) citation merely missing = 99 keys.
+Total 111. Of the 72 sign-disagreeing Free keys (from missing_sign_intents), 9 fall
+in (A) and 63 in (B).
+
+==========================================================================
+LIST (A) -- CITED COUNTEREXAMPLE (12 keys). Off the table for reclassification.
+==========================================================================
+
+Two governing comments, quoted verbatim:
+
+  weights.rs:1755-1769 (the big economy arm):
+      "Several of these now have a CITED counterexample rather than merely a
+       missing citation, and they are not to be re-proposed: `GovLevel`/
+       `TechLevels` (which sums p.government.level() in directly) are blocked by
+       Communism's `happy: -1` and Fundamentalism's `science: -2`; `Colonies`/
+       `HasColony` by Vast Territory's `blueTokens: -1`; `Leader` by Sid Meier's
+       `sciencePerLab: -1`; `PactBlocksAttack` because `NoAttacksBetweenParties` is
+       symmetric and costs the holder its own attack option; `TacticLevel` by
+       RULES_SPEC 10.4, where a higher-age tactic makes units 2+ levels below it
+       outdated. `StrengthLead` is the near-miss worth naming: unlike its siblings
+       it IS floored (rel.clamp(0.0, 6.0)) and only ever added, which is the shape
+       that earned other keys a gate -- but `Special::StrongestPlayer` (RULES_SPEC
+       5.3) makes being ranked strongest a targetable liability that nothing else
+       here prices."
+
+  weights.rs:2055-2067 (the Hand* residual/potential arm):
+      "`HandPotential`/`HandMilPotential` price hand cards by what playing them
+       would do, and that value is not floored: Vast Territory (I and II) prints
+       `blueTokens: -1` inside its yields, so a card in hand can price negative on
+       real card data." (HandCivil/HandMilitary are the residuals of the gated
+       hand_value/hand_mil_value; the same Vast Territory negative-yield citation
+       governs the whole four-key arm.)
+
+The 12 keys, with the specific counterexample and the live 2p/3p/4p fit:
+
+  key                cited counterexample                                           2p           3p           4p
+  Colonies           Vast Territory blueTokens:-1                         -25.757587959286333 94.8143568826157 -20.14933652617009
+  GovLevel           Communism happy:-1, Fundamentalism science:-2        -0.14554304950306646 0.9156579516745574 -0.03653417558681715
+  HandCivil          Vast Territory (I/II) blueTokens:-1 in yields        -0.015133258753683248 2.3858889862971955 -26.81159349895139
+  HandMilPotential   Vast Territory (I/II) blueTokens:-1 in yields        0.006405281705662276 0.008955009692432486 0.5046102282116902
+  HandMilitary       Vast Territory (I/II) blueTokens:-1; also events.rs negative sign 0.2687244787011618 -0.02415043866329306 -0.8996221034084211
+  HandPotential      Vast Territory (I/II) blueTokens:-1 in yields        1.432666710023341 1.2104393824800614 1.2715159587457612
+  HasColony          Vast Territory blueTokens:-1                         0.6964715048072432 0.30984142760617056 0.4435199230104413
+  Leader             Sid Meier sciencePerLab:-1                           16.8136417376615 0.31867093776363176 -13.764374052998857
+  PactBlocksAttack   NoAttacksBetweenParties symmetric (costs own attack) 0.06761729515265759 -1.9688577799923235 9.867262539886182
+  StrengthLead       Special::StrongestPlayer RULES_SPEC 5.3 (ranked strongest = targetable) 0.27396600907929025 -0.01990565207918271 -1.8690715271764984
+  TacticLevel        RULES_SPEC 10.4 (units 2+ levels below go outdated)  -0.05580019539375527 25.3217215265643 -14.694531987822742
+  TechLevels         Communism happy:-1, Fundamentalism science:-2        -1.5419106521916786 -0.5916897355960737 3.3144819573500137
+
+  Governing-comment lines: TechLevels/GovLevel/Colonies/HasColony/Leader/
+  PactBlocksAttack/TacticLevel/StrengthLead at 1755-1769; HandCivil/
+  HandPotential/HandMilitary/HandMilPotential at 2055-2067.
+
+  Of these 12, the 9 that ALSO flip sign across lineages (the dangerous ones --
+  a cited-counterexample key whose fit still wanders across arms):
+    Colonies           -25.757587959286333 94.8143568826157 -20.14933652617009   signs -/+/-
+    GovLevel           -0.14554304950306646 0.9156579516745574 -0.03653417558681715   signs -/+/-
+    HandCivil          -0.015133258753683248 2.3858889862971955 -26.81159349895139   signs -/+/-
+    HandMilitary       0.2687244787011618 -0.02415043866329306 -0.8996221034084211   signs +/-/-
+    Leader             16.8136417376615 0.31867093776363176 -13.764374052998857   signs +/+/-
+    PactBlocksAttack   0.06761729515265759 -1.9688577799923235 9.867262539886182   signs +/-/+
+    StrengthLead       0.27396600907929025 -0.01990565207918271 -1.8690715271764984   signs +/-/-
+    TacticLevel        -0.05580019539375527 25.3217215265643 -14.694531987822742   signs -/+/-
+    TechLevels         -1.5419106521916786 -0.5916897355960737 3.3144819573500137   signs -/-/+
+  (The 3 that do NOT flip: HasColony, HandMilPotential, TacticLevel -- see list.)
+
+==========================================================================
+LIST (B) -- CITATION MERELY MISSING (99 keys). Free out of conservatism.
+==========================================================================
+
+Each is governed by a comment that names NO rules counterexample -- the sign is
+left to the league. Grouped by governing comment (line range), with the live fit.
+The 72 sign-disagreeing members are marked [D].
+
+  [1899-1902] event-timing/targeting comparison; a lead or weakness measure is a signed difference by construction, not a one-directional magnitude
+    AttackTargetLead       -0.8464269821824043 0.23961554338168572 0.6936649250500304 [D]
+    AttackTargetWeakness   4.490738410048675 24.277805549258737 17.3006462863126
+    MyEventThreat          0.17647625309160497 0.7840736641078616 0.011712832472080973
+    MySeededPending        0.23772351145374382 0.9615416009012863 -0.020021338265887617 [D]
+    PactPartnerLead        -0.08607635252275415 -4.398067236363636 -0.11214518217843156
+
+  [1904-1906] auction bidding is a genuine trade-off (paying more to win a slot), not a rules-imposed penalty
+    AuctionBid             -3.15971631033971 -0.09420071955478995 3.4769700269627286 [D]
+    AuctionCommitted       0.05292143687824263 -0.5369748384522215 -0.08676212408912033 [D]
+
+  [1745-1752] raw economy/board magnitude or rate with no rulebook citation that a bigger number is never a downside (generalised conservatism)
+    BestArena              0.2327250526977 -16.563425567752194 0.08710382253488795 [D]
+    BestFarm               -0.4573033689144004 -2.9444478580586693 39.898972756484774 [D]
+    BestLab                -2.7459887511536314            -60 -0.3294232084007105
+    BestLibrary            0.10023318138675727 0.3703291670021819 38.85871837524164
+    BestMine               -0.144571441068925 16.254470045635145 -1.2099633867499564 [D]
+    BestTemple             -3.1207472884928587 1.9694365001781724 -0.033171881640710055 [D]
+    BestTheater            0.26194516703034315 40.4200588762461             60
+    BestUnit               8.49276246058094 22.74159480629661 19.45164015733346
+    BlueFree               0.03874732412189821 40.93804655645444 -0.3782837456714668 [D]
+    Culture                             1              1              1
+    CultureRate            57.50707567238392 54.35945205456451 53.6261470437995
+    FoodRate               -1.4770557386381933 -0.07623669290004984 0.6460863497615676 [D]
+    FoodStock              0.664913622387194 43.91490958456209 0.027131425902048534
+    FreeWorkers            4.6192022283426954 1.1919178912539403 -9.614608021911456 [D]
+    HappyMargin            1.5365791693385409 -0.05827163206621338 -1.646794860218793 [D]
+    HasUnit                -0.49815111749399155 -0.019409208210967175 0.0783699435973982 [D]
+    NumTechs               0.08478614873074437 36.53197856647619 2.0748985800412836
+    Pacts                  0.03574815754181753 -1.6858602732350236 -0.15363205094489435 [D]
+    ProdWorkers            2.0634022801802354 0.058873432433214135 -0.1942392331698708 [D]
+    RateHorizon            -0.7581299256711034 0.49875390482453236 0.1672363543987599 [D]
+    ResourceRate           0.7336648329535522 7.542671940718445 4.769162168459284
+    ResourceStock          0.2206602269267347 40.93804655645444 -0.03180669441079694 [D]
+    Science                -0.32370560623257727 -7.209779841309916 -0.713231316437307
+    ScienceRate            0.5955655090084837 0.3133246850814472 -0.062101346868442785 [D]
+    SpecialTechs           -0.1607386253622184 -0.6175531598384427 50.87903397444498 [D]
+    Strength               12.615854626405255 60.92459163257329 41.32459171880968
+    StrengthRel            0.1930324088771629 2.7648039185806477 -0.01432902292666062 [D]
+    UnitWorkers            -0.1301907853826956 -1.3653774528530178 -55.168544916016714
+    UrbanWorkers           0.2510950633438703 0.015071239011619556 0.04292945864251232
+    WonderInProgress       0.39571801262457723 0.06753846832396031 -0.025125787956182626 [D]
+    WonderProgress         -0.12020292463372262 14.816214509839693 -0.012574230248290179 [D]
+    Workers                0.2583829505704249 22.032052837991557 49.55064923084664
+    YellowBank             -0.25457453466959723 -12.211489682638568 0.22663601999265645 [D]
+
+  [1979-1987] scales printed CardEffects defense_bonus-1/colonization_bonus (YieldKind::Bonus), never negative in base-game data; gating would be a guess
+    BonusCardCredit        -0.2486852740088031 0.39916922774628627 -0.5475618710642545 [D]
+
+  [1830-1837] deliberately uncapped/unsigned mid-turn option value, no rulebook conversion to approximate; SIGNAUDIT out of scope
+    CaLeft                 -0.13819953406625604 -5.1339378946673495 0.6963147614436462 [D]
+
+  [1676-1712] composite constraint in another mechanism; base term legally negative as long as the SUM (CardBoardCredit+this) is not; classifying either NonNegative would over-constrain
+    CardBoardLeader        -0.11605031979726305 -0.020648480313357927 -0.1119706048808796
+
+  [1979-1987] scales printed CardEffects culture/science (YieldKind::Rate), per-card magnitudes never negative in base-game data; gating would be a guess the measurement does not support
+    CardRateCredit         0.3050292303521618 -3.380219228196265 -0.572250791134047 [D]
+
+  [1816-1820] headroom is a deterministic function of BlueFree/YellowBank; the two cannot move independently, league prices the pair
+    ConsumptionHeadroom    0.04226995851845628 6.084015257210379 -0.42145693969153947 [D]
+    CorruptionHeadroom     0.027034479239101815 -0.21322462004146234 -0.004491063867533945 [D]
+
+  [2074-2078] standing hinge gated at 0.0 by design; whether trailing in culture makes a marginal point worth more or less is what the hinge answers, not a foregone conclusion
+    CultureRateTrailing    -0.7211372985138755 -0.23324038442029307 -0.02378294140370514
+
+  [2103-2110] surplus half of a gated *Gap shortfall; whether banking more than you need is worth something is not unambiguous, so the league prices it unconstrained (CivilActionSurplus is the gated exception)
+    CultureSurplus         -0.10922490572028154 -0.31409489581910643 0.8560237186030523 [D]
+    FoodSurplus            0.05890308307537065 0.3101433309839823 0.2792517169956049
+    HappySurplus           -0.3476301554993269 0.2979529538365908 0.06073917828032454 [D]
+    MilitaryActionSurplus  0.07799116976190432 0.16105308680808514 0.05745696799014441
+    ResourceSurplus        0.13103994621679604 -0.08128045078924459 -0.39493181502146485 [D]
+    ScienceSurplus         -0.21158866495307102 -0.7272398180057089 0.054075630149451645 [D]
+    WorkerSurplus          0.08513634461859668 0.00014331908718462566 4.576491006432408
+
+  [2069-2072] WeightedBot::choose doc: DO NOT fix this asymmetry, empirically tuned search bias, not a board-position coefficient
+    EndTurnBias            -3.452909847364972 -9.511950252856163 -40.68543260658014
+
+  [1947-1949] a scoring MARGIN, signed by construction (ahead of or behind the field), not a one-directional magnitude
+    EventScoringMargin     0.38838104150858455 31.986788539222285 26.26959723714826
+
+  [2080-2091] need hinge: short-of-X-makes-X-worth-more is an intuition not a rules citation, and there is a real argument the other way; the gates exist only for rulebook-forced signs
+    FoodStockNeeded        0.048081704926717 -0.17049307046718884 -0.0232745881778049 [D]
+    FreeWorkersNeeded      0.3584378275547838 -0.32888873071396985 -0.0709122587129078 [D]
+    ResourceStockNeeded    0.06341908513574739 -0.062349136678889944 0.0855081953632149 [D]
+    ScienceNeeded          0.2368813733342783 -1.0200844762169536 -0.021540956853482507 [D]
+
+  [1933-1945] OPEN_ITEMS.md item 1: drift documented as signal-vs-noise not yet determined; explicitly not concluded rules-forced either way
+    GovActionCost          0.1429899695604761 -4.411469246122289 0.2840306572057959 [D]
+
+  [1950-1953] spare single-slot card incremental value; cards.rs calls it a free 0.0-default WEIGHT, deliberately the league's to find
+    HandSwapExtra          -3.4253834971785757 0.2288230882482989 0.0776811096683992 [D]
+
+  [1776-1783] no RULES_SPEC citation makes holding a REPLACEMENT leader strictly good/bad; inherits Leader's counterexamples (Sid Meier sciencePerLab) but no citation supports a floor/ceiling either way
+    LeaderReplacement      -0.0498947836168395 -0.09602508558907745 0.16039245701809707 [D]
+
+  [1830-1837] MaLeft end-of-turn draw is a cliff already capped elsewhere (board_yields::MA_DRAW_CAP), not by a sign gate
+    MaLeft                 -0.05089429602985603 27.39453878767645 -0.5409278295454036 [D]
+
+  [1855-1898] raw RIVAL board fact; whether more of a rival stock is something to race/ignore/exploit is the strategic judgement being fit; the deficit triples cost only opportunity, not a rules-imposed penalty
+    RivalBuildingWonder    -1.490160591937387 -0.4905652596671948 0.3938398342383197 [D]
+    RivalColonies          9.326546914053575 -0.5187741379337295 -0.5504658133656939 [D]
+    RivalCulture           6.263870570114859 0.4663006464603651 -0.11194863424901466 [D]
+    RivalCultureDeficit    -0.0996473697274024 0.017138869499776617            0.0 [D]
+    RivalCultureRate       3.39899815344644 -0.01982687580592359 -8.727808187989893 [D]
+    RivalFoodStock         0.20014474628239057 -0.15737811103974672 0.8484040954948118 [D]
+    RivalFreeCa            -33.38131689954983 -0.1516448910693164 -0.2392120767933097
+    RivalFreeWorkers       0.14815056690170272 0.5614775413391976 5.3376943494705795
+    RivalHandCivil         -0.22692752872060445 -0.013060937598202121 0.43428706778528536 [D]
+    RivalHandPotential     -0.17059321298889737 0.07260110703868883 9.987633802457452 [D]
+    RivalMeanCulture       8.709128707692244 -0.18529123268295247 -0.11742791720561427 [D]
+    RivalMilActions        0.13480149103077946 0.0656029827655495 1.8096529876800949
+    RivalResourceStock     5.607757565582674 0.3539172699678065 1.523130030898968
+    RivalScienceDeficit    0.12257204792081836 0.041873750993196            0.0
+    RivalScienceRate       -0.013707301193424556 0.04821769281431245 13.849492248178935 [D]
+    RivalScienceStock      0.2237995002874522 -0.06542533634333139 -2.138371440586708 [D]
+    RivalStrength          0.3788949285975896 0.020570908117168784 -0.7516389489613832 [D]
+    RivalWonderDeficit     0.09614492017355392 -0.22331843556635989            0.0 [D]
+    RivalWonders           -1.3711054185754614 -0.1070463757023091 -5.718446848925967
+    RivalYellowBank        -9.48958284111023 0.5634734753171244 0.8186203998409105 [D]
+
+  [1844-1853] row-reading / rival-row preference is a strategic read, not a rules fact; fixing RowLastCopy units established no sign any rule cites
+    RivalDesire            -0.22572745769435423 10.651578790401306 9.411107399262018 [D]
+    RivalTakeShare         -0.28249288318507193 0.005263045700331714 1.6725642819844355 [D]
+    RowBargainForgone      0.2706430611152056 2.7835368143368364 0.681108843664758
+    RowLastCopy            0.18763638457593376 0.2861270212839631 1.2222908224105837
+    RowUrgency             -0.014506200848885206 0.17463705385504005 -0.1679440886455715 [D]
+
+  [2074-2078] standing hinge gated at 0.0 by design; whether trailing in science makes a marginal point worth more or less is what the hinge answers
+    ScienceRateTrailing    55.38518088453495 0.00922137173102327 -0.4374180451566284 [D]
+
+  [2093-2101] phase partner of a Free PHASE_KEY (Workers/StrengthRel/TechLevels themselves Free, no rules citation); nothing non-arbitrary to anchor a sign gate to
+    StrengthRelEarly       -11.34032067604595 -22.690363733569267 15.744090863765322 [D]
+    StrengthRelLate        -0.23352704030292043 0.11039793759318912 2.466908455592315 [D]
+    TechLevelsLate         8.569762744116233 0.014291495995170128 2.129554083432933
+    WorkersLate            50.740275328352936 19.9497521230451             60
+
+  [1839-1842] spending actions on a card worth having is not a rules-level loss; sign is the league's to find (TakeCostShare numerator)
+    TakeCostPaid           -0.06928869481669969 -5.284016735306343 0.07447319513990922 [D]
+
+  [1839-1842] spending actions on a card worth having is not a rules-level loss, so its sign is the league's to find
+    TakeCostShare          3.5298918780493493 0.0034384185349386528 0.03558763508603832
+
+  [1924-1931] deterministic function of government; GovLevel already prices it; the two cannot move independently so a negative is a legitimate correction
+    UrbanLimit             0.14242582715838192 -1.3174770392386574 0.5859941280111693 [D]
+
+  [1822-1828] design note 3.3 expects negative (completion cliff) but a positive weight would be INFORMATIVE not wrong; no citation forces either sign
+    WonderOneStageShort    -0.002523557743858316 -0.18588007276935695 -0.08199918329597748
+
+  [1784-1791] no citation makes rival-claimed wonder pool uniformly good/bad; direction only exists combined with who is ahead in the race, which this coordinate does not measure
+    WonderPoolRivalClaimed -0.1821686249478505 -0.8385849303096633 0.10594080052837433 [D]
+
+==========================================================================
+THE 72 SIGN-DISAGREEING FREE KEYS, SPLIT (A) vs (B)
+==========================================================================
+
+All 72 are Free (expected: the gate holds NonNegative/NonPositive to their side,
+so only the unbounded Free class flips sign). 9 are (A) cited-counterexample --
+i.e. the fit wanders DESPITE a written-down rules reason it should not; 63 are (B).
+
+(A) cited counterexample AND sign-disagreeing (9):
+  Colonies             Vast Territory blueTokens:-1                       -25.757587959286333 94.8143568826157 -20.14933652617009
+  GovLevel             Communism happy:-1, Fundamentalism science:-2      -0.14554304950306646 0.9156579516745574 -0.03653417558681715
+  HandCivil            Vast Territory (I/II) blueTokens:-1 in yields      -0.015133258753683248 2.3858889862971955 -26.81159349895139
+  HandMilitary         Vast Territory (I/II) blueTokens:-1; also events.rs negative sign 0.2687244787011618 -0.02415043866329306 -0.8996221034084211
+  Leader               Sid Meier sciencePerLab:-1                         16.8136417376615 0.31867093776363176 -13.764374052998857
+  PactBlocksAttack     NoAttacksBetweenParties symmetric (costs own attack) 0.06761729515265759 -1.9688577799923235 9.867262539886182
+  StrengthLead         Special::StrongestPlayer RULES_SPEC 5.3 (ranked strongest = targetable) 0.27396600907929025 -0.01990565207918271 -1.8690715271764984
+  TacticLevel          RULES_SPEC 10.4 (units 2+ levels below go outdated) -0.05580019539375527 25.3217215265643 -14.694531987822742
+  TechLevels           Communism happy:-1, Fundamentalism science:-2      -1.5419106521916786 -0.5916897355960737 3.3144819573500137
+
+(B) citation-merely-missing AND sign-disagreeing (63):
+  AttackTargetLead     event-timing/targeting comparison; a lead or weakn -0.8464269821824043 0.23961554338168572 0.6936649250500304
+  AuctionBid           auction bidding is a genuine trade-off (paying mor -3.15971631033971 -0.09420071955478995 3.4769700269627286
+  AuctionCommitted     auction bidding is a genuine trade-off (paying mor 0.05292143687824263 -0.5369748384522215 -0.08676212408912033
+  BestArena            raw economy/board magnitude or rate with no rulebo 0.2327250526977 -16.563425567752194 0.08710382253488795
+  BestFarm             raw economy/board magnitude or rate with no rulebo -0.4573033689144004 -2.9444478580586693 39.898972756484774
+  BestMine             raw economy/board magnitude or rate with no rulebo -0.144571441068925 16.254470045635145 -1.2099633867499564
+  BestTemple           raw economy/board magnitude or rate with no rulebo -3.1207472884928587 1.9694365001781724 -0.033171881640710055
+  BlueFree             raw economy/board magnitude or rate with no rulebo 0.03874732412189821 40.93804655645444 -0.3782837456714668
+  BonusCardCredit      scales printed CardEffects defense_bonus-1/coloniz -0.2486852740088031 0.39916922774628627 -0.5475618710642545
+  CaLeft               deliberately uncapped/unsigned mid-turn option val -0.13819953406625604 -5.1339378946673495 0.6963147614436462
+  CardRateCredit       scales printed CardEffects culture/science (YieldK 0.3050292303521618 -3.380219228196265 -0.572250791134047
+  ConsumptionHeadroom  headroom is a deterministic function of BlueFree/Y 0.04226995851845628 6.084015257210379 -0.42145693969153947
+  CorruptionHeadroom   headroom is a deterministic function of BlueFree/Y 0.027034479239101815 -0.21322462004146234 -0.004491063867533945
+  CultureSurplus       surplus half of a gated *Gap shortfall; whether ba -0.10922490572028154 -0.31409489581910643 0.8560237186030523
+  FoodRate             raw economy/board magnitude or rate with no rulebo -1.4770557386381933 -0.07623669290004984 0.6460863497615676
+  FoodStockNeeded      need hinge: short-of-X-makes-X-worth-more is an in 0.048081704926717 -0.17049307046718884 -0.0232745881778049
+  FreeWorkers          raw economy/board magnitude or rate with no rulebo 4.6192022283426954 1.1919178912539403 -9.614608021911456
+  FreeWorkersNeeded    need hinge: short-of-X-makes-X-worth-more is an in 0.3584378275547838 -0.32888873071396985 -0.0709122587129078
+  GovActionCost        OPEN_ITEMS.md item 1: drift documented as signal-v 0.1429899695604761 -4.411469246122289 0.2840306572057959
+  HandSwapExtra        spare single-slot card incremental value; cards.rs -3.4253834971785757 0.2288230882482989 0.0776811096683992
+  HappyMargin          raw economy/board magnitude or rate with no rulebo 1.5365791693385409 -0.05827163206621338 -1.646794860218793
+  HappySurplus         surplus half of a gated *Gap shortfall; whether ba -0.3476301554993269 0.2979529538365908 0.06073917828032454
+  HasUnit              raw economy/board magnitude or rate with no rulebo -0.49815111749399155 -0.019409208210967175 0.0783699435973982
+  LeaderReplacement    no RULES_SPEC citation makes holding a REPLACEMENT -0.0498947836168395 -0.09602508558907745 0.16039245701809707
+  MaLeft               MaLeft end-of-turn draw is a cliff already capped  -0.05089429602985603 27.39453878767645 -0.5409278295454036
+  MySeededPending      event-timing/targeting comparison; a lead or weakn 0.23772351145374382 0.9615416009012863 -0.020021338265887617
+  Pacts                raw economy/board magnitude or rate with no rulebo 0.03574815754181753 -1.6858602732350236 -0.15363205094489435
+  ProdWorkers          raw economy/board magnitude or rate with no rulebo 2.0634022801802354 0.058873432433214135 -0.1942392331698708
+  RateHorizon          raw economy/board magnitude or rate with no rulebo -0.7581299256711034 0.49875390482453236 0.1672363543987599
+  ResourceStock        raw economy/board magnitude or rate with no rulebo 0.2206602269267347 40.93804655645444 -0.03180669441079694
+  ResourceStockNeeded  need hinge: short-of-X-makes-X-worth-more is an in 0.06341908513574739 -0.062349136678889944 0.0855081953632149
+  ResourceSurplus      surplus half of a gated *Gap shortfall; whether ba 0.13103994621679604 -0.08128045078924459 -0.39493181502146485
+  RivalBuildingWonder  raw RIVAL board fact; whether more of a rival stoc -1.490160591937387 -0.4905652596671948 0.3938398342383197
+  RivalColonies        raw RIVAL board fact; whether more of a rival stoc 9.326546914053575 -0.5187741379337295 -0.5504658133656939
+  RivalCulture         raw RIVAL board fact; whether more of a rival stoc 6.263870570114859 0.4663006464603651 -0.11194863424901466
+  RivalCultureDeficit  raw RIVAL board fact; whether more of a rival stoc -0.0996473697274024 0.017138869499776617            0.0
+  RivalCultureRate     raw RIVAL board fact; whether more of a rival stoc 3.39899815344644 -0.01982687580592359 -8.727808187989893
+  RivalDesire          row-reading / rival-row preference is a strategic  -0.22572745769435423 10.651578790401306 9.411107399262018
+  RivalFoodStock       raw RIVAL board fact; whether more of a rival stoc 0.20014474628239057 -0.15737811103974672 0.8484040954948118
+  RivalHandCivil       raw RIVAL board fact; whether more of a rival stoc -0.22692752872060445 -0.013060937598202121 0.43428706778528536
+  RivalHandPotential   raw RIVAL board fact; whether more of a rival stoc -0.17059321298889737 0.07260110703868883 9.987633802457452
+  RivalMeanCulture     raw RIVAL board fact; whether more of a rival stoc 8.709128707692244 -0.18529123268295247 -0.11742791720561427
+  RivalScienceRate     raw RIVAL board fact; whether more of a rival stoc -0.013707301193424556 0.04821769281431245 13.849492248178935
+  RivalScienceStock    raw RIVAL board fact; whether more of a rival stoc 0.2237995002874522 -0.06542533634333139 -2.138371440586708
+  RivalStrength        raw RIVAL board fact; whether more of a rival stoc 0.3788949285975896 0.020570908117168784 -0.7516389489613832
+  RivalTakeShare       row-reading / rival-row preference is a strategic  -0.28249288318507193 0.005263045700331714 1.6725642819844355
+  RivalWonderDeficit   raw RIVAL board fact; whether more of a rival stoc 0.09614492017355392 -0.22331843556635989            0.0
+  RivalYellowBank      raw RIVAL board fact; whether more of a rival stoc -9.48958284111023 0.5634734753171244 0.8186203998409105
+  RowUrgency           row-reading / rival-row preference is a strategic  -0.014506200848885206 0.17463705385504005 -0.1679440886455715
+  ScienceNeeded        need hinge: short-of-X-makes-X-worth-more is an in 0.2368813733342783 -1.0200844762169536 -0.021540956853482507
+  ScienceRate          raw economy/board magnitude or rate with no rulebo 0.5955655090084837 0.3133246850814472 -0.062101346868442785
+  ScienceRateTrailing  standing hinge gated at 0.0 by design; whether tra 55.38518088453495 0.00922137173102327 -0.4374180451566284
+  ScienceSurplus       surplus half of a gated *Gap shortfall; whether ba -0.21158866495307102 -0.7272398180057089 0.054075630149451645
+  SpecialTechs         raw economy/board magnitude or rate with no rulebo -0.1607386253622184 -0.6175531598384427 50.87903397444498
+  StrengthRel          raw economy/board magnitude or rate with no rulebo 0.1930324088771629 2.7648039185806477 -0.01432902292666062
+  StrengthRelEarly     phase partner of a Free PHASE_KEY (Workers/Strengt -11.34032067604595 -22.690363733569267 15.744090863765322
+  StrengthRelLate      phase partner of a Free PHASE_KEY (Workers/Strengt -0.23352704030292043 0.11039793759318912 2.466908455592315
+  TakeCostPaid         spending actions on a card worth having is not a r -0.06928869481669969 -5.284016735306343 0.07447319513990922
+  UrbanLimit           deterministic function of government; GovLevel alr 0.14242582715838192 -1.3174770392386574 0.5859941280111693
+  WonderInProgress     raw economy/board magnitude or rate with no rulebo 0.39571801262457723 0.06753846832396031 -0.025125787956182626
+  WonderPoolRivalClaimed no citation makes rival-claimed wonder pool unifor -0.1821686249478505 -0.8385849303096633 0.10594080052837433
+  WonderProgress       raw economy/board magnitude or rate with no rulebo -0.12020292463372262 14.816214509839693 -0.012574230248290179
+  YellowBank           raw economy/board magnitude or rate with no rulebo -0.25457453466959723 -12.211489682638568 0.22663601999265645
+
+No sign_intent changes are proposed and weights.rs is not edited -- this is
+extraction from the governing comments, not rules judgement. The (A) list is the
+"permanently off the table" set; any reclassification must cite a rule that
+overrides the named counterexample, not merely argue the fit looks wrong.
