@@ -1,0 +1,474 @@
+missing_sign_intents_2026-08-27.txt
+
+Audit of the whole `WeightKey::sign_intent` match in rust/src/bots/weighted/weights.rs
+(fn at line 1480, 174 arms, NO wildcard: every variant has an explicit arm).
+Parsed arm-by-arm after stripping `//` comments and string literals (the reason strings
+inside NonNegative("...")/NonPositive("...") are not intents). Counts: 111 Free /
+38 NonNegative / 25 NonPositive = 174.
+
+LIVE champion snapshots read for this file (files are rewritten mid-run by the climb):
+  2p gen 118330  md5 52703e23732f151144609ea0f999c620
+  3p gen  66096  md5 c9be153671d293069d482ea410f06ccf
+  4p gen  21591  md5 8a5d4eec2aa0cba96e4952ab2ac53daa
+
+LIST (1): every key WITH an intent (all 174). Grouped by intent, sorted by name.
+
+NonNegative (38):
+  ActionBoardCredit            action_board_credit
+  AggressionBoardCredit        aggression_board_credit
+  AttackCostDoubled            attack_cost_doubled
+  BuildDiscount                build_discount
+  BuildFreshCredit             build_fresh_credit
+  CardBoardCredit              card_board_credit
+  CivilActionSurplus           civil_action_surplus
+  CivilActions                 civil_actions
+  ColonizeBonus                colonize_bonus
+  DefenseBonus                 defense_bonus
+  EventBoardCredit             event_board_credit
+  FreeActionCredit             free_action_credit
+  GovBoardCredit               gov_board_credit
+  HandLimit                    hand_limit
+  HandMilValue                 hand_mil_value
+  HandValue                    hand_value
+  HandValueLate                hand_value_late
+  MilitaryActions              military_actions
+  PactBoardCredit              pact_board_credit
+  ResourceDiscount             resource_discount
+  RestrictedResourceCredit     restricted_resource_credit
+  RowPlayableCount             row_playable_count
+  TacticBoardCredit            tactic_board_credit
+  TacticGain                   tactic_gain
+  TacticReachCredit            tactic_reach_credit
+  TacticShortfallCost          tactic_shortfall_cost
+  TechBoardCredit              tech_board_credit
+  TechRedundancyDiscount       tech_redundancy_discount
+  TerritoryCredit              territory_credit
+  UnitStrengthCredit           unit_strength_credit
+  UnitTechCredit               unit_tech_credit
+  WarBoardCredit               war_board_credit
+  WarImmune                    war_immune
+  WonderBoardCredit            wonder_board_credit
+  WonderPotential              wonder_potential
+  WonderPromise                wonder_promise
+  WonderStagesPerAction        wonder_stages_per_action
+  Wonders                      wonders
+
+NonPositive (25):
+  CivilActionGap               civil_action_gap
+  CultureGap                   culture_gap
+  Discontent                   discontent
+  FamineDeficit                famine_deficit
+  FoodGap                      food_gap
+  FreeWorkerWall               free_worker_wall
+  HandOverCapacity             hand_over_capacity
+  HandPerishable               hand_perishable
+  HappyMarginAfterNextPop      happy_margin_after_next_pop
+  MilitaryActionGap            military_action_gap
+  NoAggression                 no_aggression
+  PopCost                      pop_cost
+  ResourceCommitmentTurns      resource_commitment_turns
+  ResourceGap                  resource_gap
+  ScienceGap                   science_gap
+  ScienceNeedRow               science_need_row
+  StrengthDeficit              strength_deficit
+  TacticShort                  tactic_short
+  Uprising                     uprising
+  WonderAgeOverrun             wonder_age_overrun
+  WonderOverrun                wonder_overrun
+  WonderRemaining              wonder_remaining
+  WonderStagesLeft             wonder_stages_left
+  WonderTurnsToFinish          wonder_turns_to_finish
+  WorkerGap                    worker_gap
+
+Free (111):
+  AttackTargetLead             attack_target_lead
+  AttackTargetWeakness         attack_target_weakness
+  AuctionBid                   auction_bid
+  AuctionCommitted             auction_committed
+  BestArena                    best_arena
+  BestFarm                     best_farm
+  BestLab                      best_lab
+  BestLibrary                  best_library
+  BestMine                     best_mine
+  BestTemple                   best_temple
+  BestTheater                  best_theater
+  BestUnit                     best_unit
+  BlueFree                     blue_free
+  BonusCardCredit              bonus_card_credit
+  CaLeft                       ca_left
+  CardBoardLeader              card_board_leader
+  CardRateCredit               card_rate_credit
+  Colonies                     colonies
+  ConsumptionHeadroom          consumption_headroom
+  CorruptionHeadroom           corruption_headroom
+  Culture                      culture
+  CultureRate                  culture_rate
+  CultureRateTrailing          culture_rate_trailing
+  CultureSurplus               culture_surplus
+  EndTurnBias                  end_turn_bias
+  EventScoringMargin           event_scoring_margin
+  FoodRate                     food_rate
+  FoodStock                    food_stock
+  FoodStockNeeded              food_stock_needed
+  FoodSurplus                  food_surplus
+  FreeWorkers                  free_workers
+  FreeWorkersNeeded            free_workers_needed
+  GovActionCost                gov_action_cost
+  GovLevel                     gov_level
+  HandCivil                    hand_civil
+  HandMilPotential             hand_mil_potential
+  HandMilitary                 hand_military
+  HandPotential                hand_potential
+  HandSwapExtra                hand_swap_extra
+  HappyMargin                  happy_margin
+  HappySurplus                 happy_surplus
+  HasColony                    has_colony
+  HasUnit                      has_unit
+  Leader                       leader
+  LeaderReplacement            leader_replacement
+  MaLeft                       ma_left
+  MilitaryActionSurplus        military_action_surplus
+  MyEventThreat                my_event_threat
+  MySeededPending              my_seeded_pending
+  NumTechs                     num_techs
+  PactBlocksAttack             pact_blocks_attack
+  PactPartnerLead              pact_partner_lead
+  Pacts                        pacts
+  ProdWorkers                  prod_workers
+  RateHorizon                  rate_horizon
+  ResourceRate                 resource_rate
+  ResourceStock                resource_stock
+  ResourceStockNeeded          resource_stock_needed
+  ResourceSurplus              resource_surplus
+  RivalBuildingWonder          rival_building_wonder
+  RivalColonies                rival_colonies
+  RivalCulture                 rival_culture
+  RivalCultureDeficit          rival_culture_deficit
+  RivalCultureRate             rival_culture_rate
+  RivalDesire                  rival_desire
+  RivalFoodStock               rival_food_stock
+  RivalFreeCa                  rival_free_ca
+  RivalFreeWorkers             rival_free_workers
+  RivalHandCivil               rival_hand_civil
+  RivalHandPotential           rival_hand_potential
+  RivalMeanCulture             rival_mean_culture
+  RivalMilActions              rival_mil_actions
+  RivalResourceStock           rival_resource_stock
+  RivalScienceDeficit          rival_science_deficit
+  RivalScienceRate             rival_science_rate
+  RivalScienceStock            rival_science_stock
+  RivalStrength                rival_strength
+  RivalTakeShare               rival_take_share
+  RivalWonderDeficit           rival_wonder_deficit
+  RivalWonders                 rival_wonders
+  RivalYellowBank              rival_yellow_bank
+  RowBargainForgone            row_bargain_forgone
+  RowLastCopy                  row_last_copy
+  RowUrgency                   row_urgency
+  Science                      science
+  ScienceNeeded                science_needed
+  ScienceRate                  science_rate
+  ScienceRateTrailing          science_rate_trailing
+  ScienceSurplus               science_surplus
+  SpecialTechs                 special_techs
+  Strength                     strength
+  StrengthLead                 strength_lead
+  StrengthRel                  strength_rel
+  StrengthRelEarly             strength_rel_early
+  StrengthRelLate              strength_rel_late
+  TacticLevel                  tactic_level
+  TakeCostPaid                 take_cost_paid
+  TakeCostShare                take_cost_share
+  TechLevels                   tech_levels
+  TechLevelsLate               tech_levels_late
+  UnitWorkers                  unit_workers
+  UrbanLimit                   urban_limit
+  UrbanWorkers                 urban_workers
+  WonderInProgress             wonder_in_progress
+  WonderOneStageShort          wonder_one_stage_short
+  WonderPoolRivalClaimed       wonder_pool_rival_claimed
+  WonderProgress               wonder_progress
+  WorkerSurplus                worker_surplus
+  Workers                      workers
+  WorkersLate                  workers_late
+  YellowBank                   yellow_bank
+
+LIST (2): keys that fall through to Free = EMPTY. There is no wildcard arm; every
+one of the 174 variants is named in exactly one arm. The 111 Free keys above are
+therefore EXPLICIT Free annotations, not fall-through. The coordinator's premise
+(FoodRate/ResourceRate/BestFarm/BestMine/FoodStock/ProdWorkers "have no sign_intent
+at all") is refuted by the source: each has its own `=> Free,` arm. The operative
+fact for the farm-defect is unchanged: they are Free, so nothing bounds their sign,
+and the live fits confirm the danger --
+  food_rate       2p -1.4770557386381933   3p -0.07623669290004984   4p +0.6460863497615676
+  best_farm       2p -0.4573033689144004   3p -2.9444478580586693   4p +39.898972756484774
+  best_mine       2p -0.144571441068925    3p +16.254470045635145  4p -1.2099633867499564
+  prod_workers    2p +2.0634022801802354   3p +0.058873432433214135 4p -0.1942392331698708
+food_rate negative at 2p AND 3p: a farm build is priced as a loss in the 3p opener,
+which is exactly the valuation problem behind farm_never_built (0890e08).
+
+LIST (3): live fitted values at 2p/3p/4p for all 174 keys (the 111 Free keys are
+list (2)-empty, so this is the full table; values above are the raw JSON numbers).
+Flag D = sign disagrees across the three lineages (ignoring 0.0 cells).
+
+variant                      intent                           2p                     3p                     4p  flag
+RateHorizon                  Free            -0.7581299256711034    0.49875390482453236     0.1672363543987599   D
+Culture                      Free                              1                      1                      1  
+CultureRate                  Free              57.50707567238392      54.35945205456451       53.6261470437995  
+Science                      Free           -0.32370560623257727     -7.209779841309916     -0.713231316437307  
+ScienceRate                  Free             0.5955655090084837     0.3133246850814472  -0.062101346868442785   D
+FoodRate                     Free            -1.4770557386381933   -0.07623669290004984     0.6460863497615676   D
+ResourceRate                 Free             0.7336648329535522      7.542671940718445      4.769162168459284  
+FoodStock                    Free              0.664913622387194      43.91490958456209   0.027131425902048534  
+FamineDeficit                NonPositive    -0.30430950776062426                    0.0                    0.0  
+ResourceStock                Free             0.2206602269267347      40.93804655645444   -0.03180669441079694   D
+BlueFree                     Free            0.03874732412189821      40.93804655645444    -0.3782837456714668   D
+CorruptionHeadroom           Free           0.027034479239101815   -0.21322462004146234  -0.004491063867533945   D
+ConsumptionHeadroom          Free            0.04226995851845628      6.084015257210379   -0.42145693969153947   D
+PopCost                      NonPositive   -0.008199176126065412   -0.14824340387606447  -0.004903769267663571  
+YellowBank                   Free           -0.25457453466959723    -12.211489682638568    0.22663601999265645   D
+FreeWorkers                  Free             4.6192022283426954     1.1919178912539403     -9.614608021911456   D
+FreeWorkerWall               NonPositive   -0.008687469231217992   -0.04153831444934594                    0.0  
+Workers                      Free             0.2583829505704249     22.032052837991557      49.55064923084664  
+ProdWorkers                  Free             2.0634022801802354   0.058873432433214135    -0.1942392331698708   D
+UrbanWorkers                 Free             0.2510950633438703   0.015071239011619556    0.04292945864251232  
+UnitWorkers                  Free            -0.1301907853826956    -1.3653774528530178    -55.168544916016714  
+HappyMargin                  Free             1.5365791693385409   -0.05827163206621338     -1.646794860218793   D
+Discontent                   NonPositive    -0.07172052931043488    -0.6709321778729734   -0.43947612534684105  
+Uprising                     NonPositive      -54.19674906612903     -8.097239033617681   -0.07318725380474292  
+CivilActions                 NonNegative       1.348501821997893     0.6732774983280437    0.13638044760058277  
+MilitaryActions              NonNegative       2.009371716279911    0.05989015418182028     1.8544626352548221  
+CaLeft                       Free           -0.13819953406625604    -5.1339378946673495     0.6963147614436462   D
+MaLeft                       Free           -0.05089429602985603      27.39453878767645    -0.5409278295454036   D
+TakeCostPaid                 Free           -0.06928869481669969     -5.284016735306343    0.07447319513990922   D
+RowUrgency                   Free          -0.014506200848885206    0.17463705385504005    -0.1679440886455715   D
+RowBargainForgone            Free             0.2706430611152056     2.7835368143368364      0.681108843664758  
+RowLastCopy                  Free            0.18763638457593376     0.2861270212839631     1.2222908224105837  
+RivalDesire                  Free           -0.22572745769435423     10.651578790401306      9.411107399262018   D
+RivalTakeShare               Free           -0.28249288318507193   0.005263045700331714     1.6725642819844355   D
+RivalFreeCa                  Free             -33.38131689954983    -0.1516448910693164    -0.2392120767933097  
+RivalHandCivil               Free           -0.22692752872060445  -0.013060937598202121    0.43428706778528536   D
+RivalWonders                 Free            -1.3711054185754614    -0.1070463757023091     -5.718446848925967  
+RivalWonderDeficit           Free            0.09614492017355392   -0.22331843556635989                    0.0   D
+RivalScienceDeficit          Free            0.12257204792081836      0.041873750993196                    0.0  
+RivalCultureDeficit          Free            -0.0996473697274024   0.017138869499776617                    0.0   D
+RivalHandPotential           Free           -0.17059321298889737    0.07260110703868883      9.987633802457452   D
+RivalScienceStock            Free             0.2237995002874522   -0.06542533634333139     -2.138371440586708   D
+RivalFoodStock               Free            0.20014474628239057   -0.15737811103974672     0.8484040954948118   D
+RivalResourceStock           Free              5.607757565582674     0.3539172699678065      1.523130030898968  
+RivalFreeWorkers             Free            0.14815056690170272     0.5614775413391976     5.3376943494705795  
+RivalYellowBank              Free              -9.48958284111023     0.5634734753171244     0.8186203998409105   D
+RivalColonies                Free              9.326546914053575    -0.5187741379337295    -0.5504658133656939   D
+RivalMilActions              Free            0.13480149103077946     0.0656029827655495     1.8096529876800949  
+RivalBuildingWonder          Free             -1.490160591937387    -0.4905652596671948     0.3938398342383197   D
+MySeededPending              Free            0.23772351145374382     0.9615416009012863  -0.020021338265887617   D
+MyEventThreat                Free            0.17647625309160497     0.7840736641078616   0.011712832472080973  
+AttackTargetLead             Free            -0.8464269821824043    0.23961554338168572     0.6936649250500304   D
+AttackTargetWeakness         Free              4.490738410048675     24.277805549258737       17.3006462863126  
+PactPartnerLead              Free           -0.08607635252275415     -4.398067236363636   -0.11214518217843156  
+Strength                     Free             12.615854626405255      60.92459163257329      41.32459171880968  
+StrengthRel                  Free             0.1930324088771629     2.7648039185806477   -0.01432902292666062   D
+StrengthDeficit              NonPositive     -1.6371165105399197  -0.004684381046731083     -0.970005018058673  
+StrengthLead                 Free            0.27396600907929025   -0.01990565207918271    -1.8690715271764984   D
+TacticLevel                  Free           -0.05580019539375527       25.3217215265643    -14.694531987822742   D
+TacticGain                   NonNegative      0.1322994036882604     1.1986253313451318     0.8342600845380299  
+TacticShort                  NonPositive     -1.0551804985711022    -0.1556280360806011    -0.1725944144494401  
+HasUnit                      Free           -0.49815111749399155  -0.019409208210967175     0.0783699435973982   D
+Colonies                     Free            -25.757587959286333       94.8143568826157     -20.14933652617009   D
+HasColony                    Free             0.6964715048072432    0.30984142760617056     0.4435199230104413  
+Pacts                        Free            0.03574815754181753    -1.6858602732350236   -0.15363205094489435   D
+PactBlocksAttack             Free            0.06761729515265759    -1.9688577799923235      9.867262539886182   D
+WarImmune                    NonNegative    0.004138954672811484    0.28020097873500777      33.75517786173667  
+AttackCostDoubled            NonNegative     0.02081617202160404     110.21938091223703    0.17912726211019342  
+AuctionCommitted             Free            0.05292143687824263    -0.5369748384522215   -0.08676212408912033   D
+AuctionBid                   Free              -3.15971631033971   -0.09420071955478995     3.4769700269627286   D
+TechLevels                   Free            -1.5419106521916786    -0.5916897355960737     3.3144819573500137   D
+GovLevel                     Free           -0.14554304950306646     0.9156579516745574   -0.03653417558681715   D
+BestFarm                     Free            -0.4573033689144004    -2.9444478580586693     39.898972756484774   D
+BestMine                     Free             -0.144571441068925     16.254470045635145    -1.2099633867499564   D
+BestLab                      Free            -2.7459887511536314                    -60    -0.3294232084007105  
+BestTemple                   Free            -3.1207472884928587     1.9694365001781724  -0.033171881640710055   D
+BestTheater                  Free            0.26194516703034315       40.4200588762461                     60  
+BestLibrary                  Free            0.10023318138675727     0.3703291670021819      38.85871837524164  
+BestArena                    Free                0.2327250526977    -16.563425567752194    0.08710382253488795   D
+BestUnit                     Free               8.49276246058094      22.74159480629661      19.45164015733346  
+NumTechs                     Free            0.08478614873074437      36.53197856647619     2.0748985800412836  
+SpecialTechs                 Free            -0.1607386253622184    -0.6175531598384427      50.87903397444498   D
+Wonders                      NonNegative    0.011053611700892536                    0.0                    0.0  
+WonderProgress               Free           -0.12020292463372262     14.816214509839693  -0.012574230248290179   D
+WonderRemaining              NonPositive    -0.00586645295457716    -1.3633991250007156   -0.06614485076501136  
+WonderStagesLeft             NonPositive     -2.3840382054189684   -0.03996758303306012     -0.621657354016189  
+WonderTurnsToFinish          NonPositive   -0.027645259233993757    -0.5457538367178626    -0.5893077128620824  
+WonderOverrun                NonPositive    -0.17161012258176522    -0.5620100286579907   -0.04390069839549266  
+WonderStagesPerAction        NonNegative     0.05121562716403574    0.06686906226568604    0.16453455249082008  
+WonderPotential              NonNegative      1.2458622918880364      2.469051782323729     2.9974094330537246  
+WonderPromise                NonNegative      0.8520203022100521     1.0211904886193526      2.127721893841132  
+WonderAgeOverrun             NonPositive    -0.11806980633659897   -0.12378327996801022    -0.1405514489892333  
+Leader                       Free               16.8136417376615    0.31867093776363176    -13.764374052998857   D
+WonderInProgress             Free            0.39571801262457723    0.06753846832396031  -0.025125787956182626   D
+HandLimit                    NonNegative    0.000494168085290049    0.21388711049255893    0.11177504100095396  
+ColonizeBonus                NonNegative       4.119305081214373    0.37247259531038374     0.9821840245126718  
+BuildDiscount                NonNegative     0.01836579431167424    0.03401050070081834    0.16350029869450916  
+ResourceDiscount             NonNegative      1.3494185174899338     0.5632400820753534      1.969111042429318  
+DefenseBonus                 NonNegative   0.0059419539891018835    0.22859064480169675     0.1536043998854582  
+UrbanLimit                   Free            0.14242582715838192    -1.3174770392386574     0.5859941280111693   D
+GovActionCost                Free             0.1429899695604761     -4.411469246122289     0.2840306572057959   D
+NoAggression                 NonPositive    -0.20763918462965505   -0.03256471317235445     -4.235542122267388  
+CardBoardCredit              NonNegative     0.11605031979726305    0.27009514011023256     0.2983903901041617  
+EventScoringMargin           Free            0.38838104150858455     31.986788539222285      26.26959723714826  
+CardBoardLeader              Free           -0.11605031979726305  -0.020648480313357927    -0.1119706048808796  
+HandSwapExtra                Free            -3.4253834971785757     0.2288230882482989     0.0776811096683992   D
+CardRateCredit               Free             0.3050292303521618     -3.380219228196265     -0.572250791134047   D
+UnitStrengthCredit           NonNegative      0.2548447362985467   0.016808683574238377                    0.0  
+UnitTechCredit               NonNegative    0.061739453671711124     0.8547001142871491  0.0044558941695780115  
+TechBoardCredit              NonNegative    0.027075890773329312    0.03557041953491308    0.08407066643196172  
+ActionBoardCredit            NonNegative        0.93809589340876     0.0760926648092454    0.04274935491586096  
+GovBoardCredit               NonNegative                     0.0     0.6279921048402999                    0.0  
+WonderBoardCredit            NonNegative   0.0014932417027228402    0.04215828620912749    0.16737136431655042  
+BuildFreshCredit             NonNegative      0.4840706889036223    0.10978640921960052   0.026485950042825487  
+RestrictedResourceCredit     NonNegative                     0.0   0.008623455691810967                    0.0  
+FreeActionCredit             NonNegative    0.028834654593433554     0.1499773805015192                    0.0  
+TerritoryCredit              NonNegative      1.2751377613916404     0.3154735417293678                    0.0  
+BonusCardCredit              Free            -0.2486852740088031    0.39916922774628627    -0.5475618710642545   D
+TacticBoardCredit            NonNegative     0.17891897174037028      0.251925523239958    0.09398546807070882  
+AggressionBoardCredit        NonNegative      0.1321558672462904       0.33835511747942    0.11035016305320892  
+WarBoardCredit               NonNegative      0.8111594673188224   0.006551832484876407      0.833861485976848  
+PactBoardCredit              NonNegative      0.8914742157893627   0.018786193643425306                    0.0  
+EventBoardCredit             NonNegative      0.4062420193101532    0.10265734298728925  0.0063491634210091595  
+TacticShortfallCost          NonNegative     0.29728200418069695     0.3561755745267918    0.07557525194802486  
+TacticReachCredit            NonNegative                     0.0   0.006779146271941038    0.49798178313077357  
+HandCivil                    Free          -0.015133258753683248     2.3858889862971955     -26.81159349895139   D
+HandValue                    NonNegative     0.02010867671903168    0.03756214834613859     0.5990194342773899  
+HandPotential                Free              1.432666710023341     1.2104393824800614     1.2715159587457612  
+HandMilitary                 Free             0.2687244787011618   -0.02415043866329306    -0.8996221034084211   D
+HandMilValue                 NonNegative     0.18896574580031542     0.6792003690954846      0.733941338553459  
+HandMilPotential             Free           0.006405281705662276   0.008955009692432486     0.5046102282116902  
+HandPerishable               NonPositive    -0.18286018656176778     -4.833261765951538                    0.0  
+RivalCulture                 Free              6.263870570114859     0.4663006464603651   -0.11194863424901466   D
+RivalMeanCulture             Free              8.709128707692244   -0.18529123268295247   -0.11742791720561427   D
+RivalCultureRate             Free               3.39899815344644   -0.01982687580592359     -8.727808187989893   D
+RivalScienceRate             Free          -0.013707301193424556    0.04821769281431245     13.849492248178935   D
+RivalStrength                Free             0.3788949285975896   0.020570908117168784    -0.7516389489613832   D
+EndTurnBias                  Free             -3.452909847364972     -9.511950252856163     -40.68543260658014  
+CultureRateTrailing          Free            -0.7211372985138755   -0.23324038442029307   -0.02378294140370514  
+ScienceRateTrailing          Free              55.38518088453495    0.00922137173102327    -0.4374180451566284   D
+FoodStockNeeded              Free              0.048081704926717   -0.17049307046718884    -0.0232745881778049   D
+ResourceStockNeeded          Free            0.06341908513574739  -0.062349136678889944     0.0855081953632149   D
+ScienceNeeded                Free             0.2368813733342783    -1.0200844762169536  -0.021540956853482507   D
+FreeWorkersNeeded            Free             0.3584378275547838   -0.32888873071396985    -0.0709122587129078   D
+WorkersLate                  Free             50.740275328352936       19.9497521230451                     60  
+StrengthRelEarly             Free             -11.34032067604595    -22.690363733569267     15.744090863765322   D
+StrengthRelLate              Free           -0.23352704030292043    0.11039793759318912      2.466908455592315   D
+TechLevelsLate               Free              8.569762744116233   0.014291495995170128      2.129554083432933  
+HandValueLate                NonNegative     0.24826494770938487     1.2471976153544169    0.05528042709542521  
+FoodGap                      NonPositive    -0.41963857469430055    -0.3972811738160039 -0.00039767415866196615  
+FoodSurplus                  Free            0.05890308307537065     0.3101433309839823     0.2792517169956049  
+ResourceGap                  NonPositive    -0.33968496279522004    -1.2395855487441272    -1.2717610934115067  
+ResourceSurplus              Free            0.13103994621679604   -0.08128045078924459   -0.39493181502146485   D
+ScienceGap                   NonPositive      -4.547690802369031    -1.8316226073171278    -24.522375076858573  
+ScienceSurplus               Free           -0.21158866495307102    -0.7272398180057089   0.054075630149451645   D
+CultureGap                   NonPositive   -0.028425478184047757    -1.9832330859742047    -0.3570533976843598  
+CultureSurplus               Free           -0.10922490572028154   -0.31409489581910643     0.8560237186030523   D
+HappySurplus                 Free            -0.3476301554993269     0.2979529538365908    0.06073917828032454   D
+CivilActionGap               NonPositive     -1.6136245018262634  -0.003632355919710888  -0.023069897923304602  
+CivilActionSurplus           NonNegative     0.06110204667550984   0.037566586144648126     1.2780428714346421  
+TakeCostShare                Free             3.5298918780493493  0.0034384185349386528    0.03558763508603832  
+MilitaryActionGap            NonPositive     -0.2527087114162143    -0.3119633126765835                    0.0  
+MilitaryActionSurplus        Free            0.07799116976190432    0.16105308680808514    0.05745696799014441  
+WorkerGap                    NonPositive     -1.7983693669552734    -0.6153144903428425    -2.4291167342020024  
+WorkerSurplus                Free            0.08513634461859668 0.00014331908718462566      4.576491006432408  
+TechRedundancyDiscount       NonNegative     0.16307469421894724     12.054273026801612      1.921818969799246  
+LeaderReplacement            Free            -0.0498947836168395   -0.09602508558907745    0.16039245701809707   D
+WonderPoolRivalClaimed       Free            -0.1821686249478505    -0.8385849303096633    0.10594080052837433   D
+HandOverCapacity             NonPositive   -0.062164432499820364    -1.1270591441750681    -0.6135617099633401  
+HappyMarginAfterNextPop      NonPositive    -0.06907034092875085                    0.0                    0.0  
+ResourceCommitmentTurns      NonPositive      -0.019641945768034  -0.045351092987872876  -0.009135783735503018  
+WonderOneStageShort          Free          -0.002523557743858316   -0.18588007276935695   -0.08199918329597748  
+ScienceNeedRow               NonPositive    -0.11274735425865905  -0.020628886875388462   -0.05309088100781366  
+RowPlayableCount             NonNegative     0.12484512472703038    0.18837694557330179                    0.0  
+
+SIGN DISAGREEMENT ACROSS LINEAGES: 72 keys, all Free. (No NonNegative or NonPositive
+key flips sign, as expected: dominance_repair holds the gated keys to their side and
+the zero cells are gate zeros, not sign flips.) Full list (variant: 2p / 3p / 4p signs):
+  RateHorizon                  -/+/+
+  ScienceRate                  +/+/-
+  FoodRate                     -/-/+
+  ResourceStock                +/+/-
+  BlueFree                     +/+/-
+  CorruptionHeadroom           +/-/-
+  ConsumptionHeadroom          +/+/-
+  YellowBank                   -/-/+
+  FreeWorkers                  +/+/-
+  ProdWorkers                  +/+/-
+  HappyMargin                  +/-/-
+  CaLeft                       -/-/+
+  MaLeft                       -/+/-
+  TakeCostPaid                 -/-/+
+  RowUrgency                   -/+/-
+  RivalDesire                  -/+/+
+  RivalTakeShare               -/+/+
+  RivalHandCivil               -/-/+
+  RivalWonderDeficit           +/-/0
+  RivalCultureDeficit          -/+/0
+  RivalHandPotential           -/+/+
+  RivalScienceStock            +/-/-
+  RivalFoodStock               +/-/+
+  RivalYellowBank              -/+/+
+  RivalColonies                +/-/-
+  RivalBuildingWonder          -/-/+
+  MySeededPending              +/+/-
+  AttackTargetLead             -/+/+
+  StrengthRel                  +/+/-
+  StrengthLead                 +/-/-
+  TacticLevel                  -/+/-
+  HasUnit                      -/-/+
+  Colonies                     -/+/-
+  Pacts                        +/-/-
+  PactBlocksAttack             +/-/+
+  AuctionCommitted             +/-/-
+  AuctionBid                   -/-/+
+  TechLevels                   -/-/+
+  GovLevel                     -/+/-
+  BestFarm                     -/-/+
+  BestMine                     -/+/-
+  BestTemple                   -/+/-
+  BestArena                    +/-/+
+  SpecialTechs                 -/-/+
+  WonderProgress               -/+/-
+  Leader                       +/+/-
+  WonderInProgress             +/+/-
+  UrbanLimit                   +/-/+
+  GovActionCost                +/-/+
+  HandSwapExtra                -/+/+
+  CardRateCredit               +/-/-
+  BonusCardCredit              -/+/-
+  HandCivil                    -/+/-
+  HandMilitary                 +/-/-
+  RivalCulture                 +/+/-
+  RivalMeanCulture             +/-/-
+  RivalCultureRate             +/-/-
+  RivalScienceRate             -/+/+
+  RivalStrength                +/+/-
+  ScienceRateTrailing          +/+/-
+  FoodStockNeeded              +/-/-
+  ResourceStockNeeded          +/-/+
+  ScienceNeeded                +/-/-
+  FreeWorkersNeeded            +/-/-
+  StrengthRelEarly             -/-/+
+  StrengthRelLate              -/+/+
+  ResourceSurplus              +/-/-
+  ScienceSurplus               -/-/+
+  CultureSurplus               -/-/+
+  HappySurplus                 -/+/+
+  LeaderReplacement            -/-/+
+  WonderPoolRivalClaimed       -/-/+
+
+Notes:
+ - Zero cells: 3 Free keys have an exact 0.0 at 4p (rival_wonder/science/culture_deficit,
+   the untouched C-bucket of zero_bucket_split); 9 NonNegative and 5 NonPositive keys
+   carry gate-zero cells consistent with the earlier pinned/snap censuses.
+ - The 72-way sign disagreement is a property of the FREE class: with no sign gate,
+   each lineage fits its own optimum and the sign is whatever the data says. The 3p
+   arm (gen 66096) carries the largest magnitudes (resource_stock 40.94, ma_left 27.39,
+   tactic_level 25.32, colonies 94.81), so 3p is the arm where the farm-defect class
+   of unbounded Free fits is most likely to bite.
