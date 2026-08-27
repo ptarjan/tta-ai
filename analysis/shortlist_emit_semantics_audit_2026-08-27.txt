@@ -1,0 +1,149 @@
+AUDIT OF analysis/shortlist_emit_semantics_2026-08-27.txt (38c1fb9)
+==================================================================
+2026-08-27. That file describes what each of the corrected six shortlist keys
+physically holds and rules on whether a "a bigger number is never a downside"
+citation is even possible. Re-checked here in source rather than accepted,
+because the verdicts decide where rules-reading time gets spent.
+
+Four of the six descriptions are exactly right. Two are imprecise. One framing
+error is MINE, not the report's, and it inverts the two most actionable
+verdicts. And checking best_farm turned up something bigger than the question
+that was asked.
+
+
+CONFIRMED EXACTLY
+-----------------
+auction_bid  rivals.rs:459-464. `Pending::Auction(auc) if auc.high == Some(idx)`,
+  `rivals_still_bidding = auc.active().iter().filter(|&&p| p != idx).count()`,
+  `share = 1.0 / (1.0 + rivals_still_bidding as f64)`, then
+  `out.auction_bid += share * auc.bid as f64`. The Colonize branch
+  (rivals.rs:483) is `out.auction_bid += c.bid as f64`, share 1.0, and its own
+  comment states why: a Colonize decision only exists after the winner is
+  settled, so there is no chance-of-winning left to discount. Reported share
+  formula and both branches are correct to the line.
+
+best_farm / best_mine  features.rs:971-972 off `BestTypes { farm: u8, mine: u8 }`
+  (features.rs:118), filled at features.rs:214 by
+  `CardType::Farm if lv > best.farm => best.farm = lv`. Max-not-sum: correct,
+  and the lossiness the report flags is real.
+
+strength_rel_early  a phase blend off StrengthRel (registry.rs:399);
+  `rel = strength - rival_str` at features.rs:679 with no clamp. Signed and
+  rival-relative as described.
+
+
+TWO IMPRECISIONS
+----------------
+free_workers is NOT "floored at 0 by type". The emitted value is a SUM:
+
+    features.rs:840
+    f.set(WeightKey::FreeWorkers, f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
+
+`p.workers_free` is u8, but the gain term is f64 and is written at
+rivals.rs:353 as `gains.add(GainFeature::FreeWorkers, scale * eff.population as f64)`.
+Nothing in the type system floors that sum. The floor is a property of the
+CARD DATA -- no `population` field is negative anywhere in base-2015 data, per
+analysis/production_counterexample_audit_2026-08-27.txt -- not of the u8. The
+distinction is not pedantry: a data-derived floor silently stops holding if a
+card ever prints negative population, whereas a type-derived one cannot.
+
+rival_culture_rate is NOT floored at 0 by any visible clamp. features.rs:654
+seeds it `f64::from(ctx.rival_culture_rate)` and features.rs:673 maxes it with
+`f64::from(base_culture) + pg.get(GainFeature::CultureRate)`. There is no
+`.max(0.0)`. (The DIFFERENCE key at features.rs:1144 does carry `.max(0.0)` --
+that is a different coordinate.) `cultureProduction` has two negative entries in
+base-2015 card data, so a negative value is not structurally impossible; it is
+merely unlikely as a max over rivals. Describe it as unclamped.
+
+
+THE FRAMING ERROR IS MINE, AND IT INVERTS TWO VERDICTS
+-------------------------------------------------------
+My dispatch asked only whether "a bigger number is never a downside" could be
+cited. That is the NonNegative question. `sign_intent` is THREE-valued
+(weights.rs:2562): Free, NonNegative, NonPositive. The live split is
+111 Free / 38 NonNegative / 25 NonPositive by key, and NonPositive is a
+well-populated, well-precedented category whose 20 authored arms are all phrased
+in exactly this shape:
+
+    weights.rs:1647  PopCost => NonPositive("prices a rulebook population-growth cost as an upside")
+    weights.rs:1633  FreeWorkerWall => NonPositive("prices being locked out of Build by zero free workers")
+    weights.rs:1666  HandPerishable => NonPositive("prices a hand about to expire as an upside")
+
+So the report's two IMPOSSIBLE verdicts are correct about NonNegative and, for
+that very reason, are the file's two strongest POSITIVE results:
+
+  rival_culture_rate  "a higher value means rivals are producing more culture,
+    which is a threat in a race game" IS the NonPositive citation, stated. Every
+    rival key is currently Free -- RivalCulture, RivalMeanCulture,
+    RivalCultureRate, RivalScienceRate, RivalStrength, RivalWonders,
+    RivalFreeCa, RivalHandCivil, all in one |-joined Free arm. A single citation
+    that a rival's higher production is never good for me would bound eight keys
+    at once, not one.
+
+  auction_bid  "the bid is a resource expenditure; a higher bid costs more
+    regardless of outcome" is likewise the NonPositive case, and the code
+    supports it: the card's own value is credited SEPARATELY at rivals.rs:466-468
+    (`add_permanent_effects` / `add_immediate_effects`) and the win probability
+    separately again as `auction_committed`. `auction_bid` is the cost limb
+    alone. Its authored default is already -0.4 (weights.rs:975).
+
+Neither is proposed here. Both move from "structurally unavailable" to
+"NonPositive candidate, citation search worth doing".
+
+
+THE BIGGER FINDING: best_farm CANNOT RESPOND TO A FARM BUILD
+-------------------------------------------------------------
+`best.farm` is filled from `p.techs.iter()` with `let lv = id.level()`
+(features.rs:191, :214), and `CardId::level()` is the card's AGE:
+
+    cards.rs   /// Age as a number: A=0, I=1, II=2, III=3, IV=4.
+               pub fn level(self) -> u8 { self.get().age as u8 }
+
+Agriculture is `age: Age::A` (card_table.rs:185-188), so it maps to 0. Every
+player starts with Agriculture and Bronze already in the tableau
+(game.rs:120-121). Therefore:
+
+  1. best_farm reads exactly 0.0 for a player holding only Agriculture -- the
+     same value as a player with no farm tech at all. 0 aliases "no farm" and
+     "Age-A farm". Same for best_mine and Bronze.
+
+  2. best_farm moves ONLY on Develop of a higher-age farm tech (Irrigation,
+     age: Age::I, card_table.rs:204-207). A Build places a worker on a tech
+     already owned; it does not change which techs are owned, so it does not
+     change `best.farm`. Move::Build cannot move this feature at all.
+
+That materially corrects analysis/farm_never_built_2026-08-27.txt, which reads
+best_farm@4p = +37.78 (now +39.899) as a positively-priced farm channel that
+somehow still fails to buy farms. It never could. best_farm prices farm TECH
+AGE, not farm capacity, and is constant across every Build candidate in a
+decision set -- and a feature that is constant across the candidates contributes
+nothing to their ranking, whatever its weight. The huge 4p value is late-game
+signal, inert in the opener window openerprobe measures.
+
+The 4p relative-pricing story survives but must be restated: the channels that
+can actually respond to a farm Build are food_rate (+0.65 at 4p) and the worker/
+production terms, against resource_rate (+4.54) on the mine side. best_farm is
+not one of them, and neither is best_mine.
+
+This also weakens best_farm and best_mine as sign_intent targets, for a reason
+neither the report nor my own shortlist audit saw: whatever a citation says
+about them, it cannot touch the opener farm defect, because the coordinate is
+not live in that decision.
+
+
+WHAT TO DO WITH THE SIX NOW
+---------------------------
+  NonPositive citation search, in this order (both bound existing Free keys, and
+  the first bounds eight keys with one citation):
+    rival_culture_rate   -- and the seven sibling rival keys with it
+    auction_bid
+
+  NonNegative, still needs a rules read, unchanged in priority:
+    free_workers         -- the 2p "end turn beats spending" mechanism
+    strength_rel_early
+
+  Deprioritised by the finding above, not by the report:
+    best_farm, best_mine -- inert across Build; a sign_intent on either cannot
+                            address the opener defect it was shortlisted for.
+
+Nothing lands in weight space before the clamp-ceiling A/B is judged 2026-08-30.
