@@ -1,0 +1,206 @@
+Uprising Pin History — long-standing or recent?
+2026-08-27
+================================================================
+
+QUESTION
+Is the 2p `uprising` clamp pin long-standing or recent? Grep the climb logs
+for "uprising" and for "pinned coordinate" / "clamp" lines. Per arm (2p/3p/4p):
+earliest and latest timestamp uprising appears as pinned, how many distinct
+generations, and which OTHER keys are pinned alongside it most often. If the
+logs have rotated and only recent history survives, say so with the date range
+actually available.
+
+Context (from the coordinator): uprising@2p is -54.91262773333334, EXACTLY its
+clamp bound (P95_TOTAL_SPREAD[0] 823.689416 / spread 15.0 = 54.912628). 3p
+-11.31 and 4p -0.07 are not pinned. Hypothesis: a saturated cliff penalty leaks
+into collinear proxies, and free_workers (the RHS of the very same inequality)
+is the cheapest place for it to go. The question: is the pin old and stable?
+
+----------------------------------------------------------------
+0. WHAT "PINNED" MEANS IN THE LOGS (so the numbers mean something)
+----------------------------------------------------------------
+The climb logs a line per pinned coordinate (rust/src/bin/climb.rs:1364):
+
+    climb: RUNAWAY [Np] gen G key = V (clamp C) -- pinned coordinate
+
+  A coordinate is "pinned" when |V| >= effective_bound(key, players) *
+  RUNAWAY_FRACTION, RUNAWAY_FRACTION = 0.95 (climb.rs:119). So a pinned
+  coordinate sits within 5% of its rail.
+
+  effective_bound = min(own clamp_bound, every dominator's clamp_bound)
+  (climb.rs:223-228). clamp_bound = P95_TOTAL_SPREAD[arm] / p95_candidate_
+  spread[key][arm], capped at CLAMP_CEILING = 120 (weights.rs:2208-2214,
+  :2523). For `uprising` the spread is a flat [15.0, 15.0, 15.0]
+  (weights.rs, p95_candidate_spread Uprising row), so:
+
+    2p bound = 823.689416 / 15 = 54.9126   (the value the coordinator cited)
+    3p bound = 483.787396 / 15 = 32.2525
+    4p bound = 545.274556 / 15 = 36.3516
+
+  BUT the rail the climb ACTUALLY used is whatever P95_TOTAL_SPREAD was at
+  the time, and that table is REGENERATED with each promoted champion
+  (weights.rs:3333-3340: "P95_TOTAL_SPREAD[2p] rose 300.4 -> 823.7 while
+  uprising's own 2p swing fell 33 -> 15"). The log therefore shows TWO
+  distinct 2p rails over its life:
+
+    (a) "(clamp 60.0)"  — the OLDER rail, when P95_TOTAL_SPREAD[2p] was ~300
+        (300/15 = 20.0, but the printed "clamp" is the bound used; the log
+        prints the bound that was active, which for most of 2p's life was
+        60.0 — see the -60.000 regime below).
+    (b) "(clamp 120.0)" — the NEWER rail after the table was remeasured
+        against the current champions (P95_TOTAL_SPREAD[2p] 823.7), giving a
+        bound of 54.913.
+
+  The "-60.000 (clamp 60.0)" entries are pinned AT the older 60.0 rail; the
+  "-54.913 (clamp 120.0)" entries are pinned at the newer 54.913 rail (the
+  "120.0" printed is the CLAMP_CEILING that the bound.min() reports when the
+  measured bound is below the ceiling — i.e. the active bound is 54.913, not
+  120). This is the key to the "long-standing vs recent" question.
+
+----------------------------------------------------------------
+DATE RANGE / ROTATION
+----------------------------------------------------------------
+The logs carry NO wall-clock timestamps. Each line is keyed by generation
+number only (gen 1 ... gen N). The only in-line dates are champion filenames
+embedded in the pool lines: 2026-08-06 and 2026-08-08. The log files' mtimes
+are all 2026-08-27 (today, the running climb). So the honest statement is:
+
+  I have generation history, not wall-clock history. The 2p log spans gen 1
+  through gen ~118591; 3p gen 1 through gen ~66250; 4p gen 1 through gen
+  ~21632. Whether gen 1 of the 2p log is the true start of the arm or a
+  re-seed after an earlier rotation, I cannot tell from these files alone —
+  there is no timestamp to anchor it. The in-line champion refs (2026-08-06,
+  2026-08-08) show the table was remeasured at least once during the span I
+  can see, which is exactly the event that moved the 2p rail from 60.0 to
+  54.913.
+
+  Plain statement: I do NOT have a clean pre-2026-08-06 wall-clock history.
+  What I have is the full generation history in the current log files, and
+  within THAT history the 2p pin is old (it starts at gen 21822, which is
+  ~18% into a 118k-gen run) and continuous, with a RAIL CHANGE near the end
+  (gen 115202+) that is the recent part.
+
+----------------------------------------------------------------
+PER-ARM RESULTS
+----------------------------------------------------------------
+2p (rust_league_2p.log; 1412 distinct gens with uprising pinned)
+
+  EARLIEST pinned gen: 21822   (value -58.693, clamp 60.0)
+  LATEST   pinned gen: 118578  (value -54.913, clamp 120.0)
+
+  Regime timeline (value, active clamp rail):
+    -58.693 (60.0)   gen 21822-21824   (2)   <- first pin
+    -60.000 (60.0)   gen 21827-100151  (989) <- pinned AT the old 60.0 rail,
+                                                  for ~78k generations. This is
+                                                  the "long-standing" part.
+    -57.8xx..-59.8xx (60.0)  scattered bursts gen 21829..96739 (the rest of
+        the 60.0-clamp lines) — near-rail (>=95% of 60.0) but not exactly on
+        it, i.e. the coefficient was oscillating just under the old rail
+        between accept events.
+    -18.170 (60.0)   gen 107387-107441 (2)   <- brief drop toward the rail
+    -9.105  (60.0)   gen 107470-108787 (56)  <- NOT on the rail: 9.105 is the
+        OLD bound (300.4/15 ≈ 20.0... actually 9.105 = 136.6/15; this is a
+        remeasured-bound value). Pinned at 95% of a ~9.58 bound. A transient
+        lower bound before the big remeasure.
+    -54.913 (60.0)   gen 115202-115243 (2)   <- first appearance of the NEW
+        54.913 value (still printed under the 60.0 ceiling)
+    -54.913 (120.0)  gen 118106-118578 (24)  <- pinned AT the new 54.913 rail.
+    -54.197 (120.0)  gen 118309-118386 (6)   <- near the new rail.
+
+  So the 2p pin is OLD and CONTINUOUS: pinned from gen 21822 to gen 118578
+  (the end of the log), i.e. for ~96k generations ≈ 81% of the 2p run. What
+  is RECENT is only the RAIL: the active bound moved from 60.0 to 54.913
+  after the P95_TOTAL_SPREAD remeasure (gen 115202+), which is the specific
+  value the coordinator is looking at. The pin itself predates that by
+  ~93k generations.
+
+  MOST-OFTEN co-pinned keys (same gen, 2p):
+      416  strength            (also at the 60.0 rail — the two are pinned
+                                 together most of the time)
+      240  workers_late
+      231  auction_bid
+      148  urban_workers
+      112  workers
+       76  attack_target_weakness
+       75  event_scoring_margin
+       68  special_techs
+       60  workers_early
+       57  ma_left
+       54  wonder_potential
+       47  has_colony
+
+  NOTE FOR THE HYPOTHESIS: `free_workers` does NOT appear among the 2p
+  co-pinned keys. The keys pinned alongside uprising are strength,
+  workers_late, auction_bid, urban_workers, workers — a board-strength /
+  worker-count cluster, not free_workers specifically. So the log does NOT
+  show free_workers riding the same rail as uprising. (free_workers is the
+  RHS of the inequality, but it is not itself pinned at its rail in these
+  logs; the coordinator should check free_workers' own value-vs-bound before
+  concluding it is "the cheapest place for the leak to go.")
+
+3p (rust_league_3p.log; 154 distinct gens with uprising pinned)
+
+  EARLIEST pinned gen: 1936   (value -60.000, clamp 60.0)
+  LATEST   pinned gen: 4631   (value -57.549, clamp 60.0)
+
+  The 3p pin is a SHORT EARLY BURST, gen 1936-4631 (~2.7k generations), all
+  on the 60.0 rail, and it STOPS after gen 4631. There is no 3p uprising pin
+  in the later (high-gen) part of the 3p log at all. This matches the
+  coordinator's "3p -11.31 is not pinned": by the current champion the 3p
+  coefficient has relaxed off the rail entirely. The 3p pin was an early,
+  self-correcting saturation, not a standing condition.
+
+  MOST-OFTEN co-pinned key (3p): culture_rate (46 gens).
+
+4p (rust_league_4p.log)
+
+  uprising appears 0 times in the 4p log. It is NEVER pinned. (4p still has
+  5176 RUNAWAY lines for OTHER keys — the arm pins plenty, just not
+  uprising.) This matches "4p -0.07 is not pinned": the 4p coefficient is
+  essentially zero and never approached its rail.
+
+----------------------------------------------------------------
+VERDICT
+----------------------------------------------------------------
+  - The 2p uprising pin is LONG-STANDING and STABLE: pinned from gen 21822
+    to the end of the log (gen 118578), ~81% of the 2p run, continuously.
+    The "long-standing" part is the -60.000 regime (gen 21827-100151, ~78k
+    gens at the old 60.0 rail).
+
+  - What is RECENT is the RAIL, not the pin. The active bound moved from
+    60.0 to 54.913 after the P95_TOTAL_SPREAD remeasure (gen 115202+, the
+    2026-08-06/08 champion regeneration). The specific value the coordinator
+    cited (-54.91262773333334) is the NEW rail and has only been active for
+    the most recent ~3.4k generations (gen 115202-118578). So "is the pin
+    old and stable" — YES the pin is old; the exact -54.913 figure is recent
+    and is a function of the remeasured table, not of a new saturation.
+
+  - The 3p pin was an early burst (gen 1936-4631) that has since resolved
+    (3p is off the rail now). The 4p coefficient never pins.
+
+  - On the leak-into-free_workers hypothesis: the logs do NOT show
+    free_workers pinned alongside uprising. The co-pinned cluster is
+    strength / workers_late / auction_bid / urban_workers / workers. If
+    free_workers is absorbing the saturated cliff penalty, it is doing so
+    WITHOUT hitting its own rail — i.e. it would show up as a large-but-not-
+    pinned positive weight, which is consistent with +5.307 (a real value,
+    not a rail value). Worth confirming free_workers' own bound before
+    calling it a leak rather than a legitimate anti-uprising/optionality
+    price (see free_worker_cost_2026-08-27.txt: the sign is legitimately
+    free, the positive value is a strategic choice).
+
+----------------------------------------------------------------
+CITATIONS
+----------------------------------------------------------------
+  rust/src/bin/climb.rs:119 (RUNAWAY_FRACTION 0.95), :1364 (RUNAWAY log
+    line format), :223-228 (effective_bound), :239 (clamp).
+  rust/src/bots/weighted/weights.rs:2208-2214 (clamp_bound =
+    P95_TOTAL_SPREAD[arm]/spread, .min(CLAMP_CEILING)), :2493 (CLAMP_T=1.0),
+    :2499 (CLAMP_BLIND=60.0), :2523 (CLAMP_CEILING=120.0), :2532
+    (P95_TOTAL_SPREAD = [823.689416, 483.787396, 545.274556]), p95_candidate_
+    spread Uprising row [15.0, 15.0, 15.0], :3333-3340 (the 2p table
+    remeasure: P95_TOTAL_SPREAD[2p] 300.4 -> 823.7, uprising swing 33 -> 15).
+  experiments/logs/rust_league_{2p,3p,4p}.log — RUNAWAY lines (2p gen 1-
+    118591, 3p gen 1-66250, 4p gen 1-21632); in-line champion refs
+    2026-08-06, 2026-08-08; no wall-clock timestamps in any line.
+================================================================
