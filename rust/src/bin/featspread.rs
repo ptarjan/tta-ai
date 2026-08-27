@@ -73,17 +73,24 @@ struct Args {
     /// hand out of a text table.
     emit_rust: bool,
     /// `decisive` mode -- see [`play_decisive`]'s own doc comment. Mutually
-    /// exclusive with `emit_rust`; restricted to 3p only (loads
-    /// `champion_dir/rust_champion_3p.json`, same join `play_count` already
-    /// uses for every other mode -- no new file-naming convention).
+    /// exclusive with `emit_rust`. The player count is a PARAMETER: an
+    /// optional fifth argument `2`/`3`/`4` selects a single count (the
+    /// historical default, unchanged); with no fifth argument `decisive`
+    /// runs ALL THREE counts in order (2p, 3p, 4p), loading the matching
+    /// champion file per count -- the same join `play_count` already uses
+    /// for every other mode, no new file-naming convention.
     decisive: bool,
+    /// `decisive` mode's player count: `None` = all three counts
+    /// (2p/3p/4p in order), `Some(p)` = that single count. Ignored outside
+    /// `decisive` mode (emit and plain modes always run all three).
+    decisive_count: Option<u8>,
 }
 
-const USAGE: &str = "usage: featspread <games_per_count> <seed> <champion_dir> [emit|decisive]";
+const USAGE: &str = "usage: featspread <games_per_count> <seed> <champion_dir> [emit|decisive] [2|3|4]";
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
-    if argv.len() != 3 && argv.len() != 4 {
-        return Err(format!("{USAGE}\ngot {} argument(s), expected 3 or 4", argv.len()));
+    if !(3..=5).contains(&argv.len()) {
+        return Err(format!("{USAGE}\ngot {} argument(s), expected 3 to 5", argv.len()));
     }
     let (emit_rust, decisive) = match argv.get(3) {
         None => (false, false),
@@ -91,12 +98,22 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         Some(flag) if flag == "decisive" => (false, true),
         Some(flag) => return Err(format!("{USAGE}\nfourth argument must be \"emit\" or \"decisive\", got {flag:?}")),
     };
+    let decisive_count = match argv.get(4) {
+        None => None,
+        Some(flag) if decisive => match flag.as_str() {
+            "2" => Some(2),
+            "3" => Some(3),
+            "4" => Some(4),
+            other => return Err(format!("{USAGE}\nfifth argument (decisive player count) must be 2, 3 or 4, got {other:?}")),
+        },
+        Some(flag) => return Err(format!("{USAGE}\nfifth argument is only valid in \"decisive\" mode, got {flag:?}")),
+    };
     let games: usize = argv[0].parse().map_err(|_| format!("games_per_count: {:?} is not a number", argv[0]))?;
     let seed: u64 = argv[1].parse().map_err(|_| format!("seed: {:?} is not a number", argv[1]))?;
     if games == 0 {
         return Err("games_per_count must be at least 1".to_string());
     }
-    Ok(Args { games, seed, champion_dir: argv[2].clone(), emit_rust, decisive })
+    Ok(Args { games, seed, champion_dir: argv[2].clone(), emit_rust, decisive, decisive_count })
 }
 
 /// Nearest-rank percentile (`rank = ceil(p/100 * n)`, 1-indexed) over an
@@ -315,7 +332,7 @@ struct DecisiveResult {
     margin_max: f64,
 }
 
-/// `decisive` mode: at every real 3p self-play decision (same
+/// `decisive` mode: at every real self-play decision at `players` (same
 /// `candidates.len() > 1` gate [`play_count`] uses), computes per
 /// [`WeightKey`] the candidate-set spread exactly as [`play_count`] does,
 /// PLUS two things [`play_count`]'s own report never computes:
@@ -349,7 +366,7 @@ struct DecisiveResult {
 /// binary and every real self-play bot -- see this file's top doc comment
 /// and `eval::linear_features`'s own doc comment for why that is not a
 /// second, independently-chosen vector.
-fn play_decisive(games: usize, base_seed: u64, weights: &Weights) -> DecisiveResult {
+fn play_decisive(players: u8, games: usize, base_seed: u64, weights: &Weights) -> DecisiveResult {
     let bot = WeightedBot::new(*weights);
     let n_keys = WeightKey::ALL.len();
     let mut key_agg: Vec<DecisiveKeyAgg> = (0..n_keys).map(|_| DecisiveKeyAgg::default()).collect();
@@ -362,7 +379,7 @@ fn play_decisive(games: usize, base_seed: u64, weights: &Weights) -> DecisiveRes
 
     for g in 0..games {
         let game_seed = base_seed.wrapping_add(g as u64);
-        let mut state = game::new_game(3, game_seed);
+        let mut state = game::new_game(players, game_seed);
         let outcome = game::play_game(&mut state, MOVE_CAP, |s, legal| {
             let candidates = eval::candidate_features(s, legal.as_slice(), bot.allow_resign, weights);
             if candidates.len() > 1 {
@@ -409,7 +426,7 @@ fn play_decisive(games: usize, base_seed: u64, weights: &Weights) -> DecisiveRes
             bot.choose(s, legal.as_slice())
         });
         if outcome.move_cap_hit {
-            eprintln!("featspread: WARNING decisive 3p game (seed {game_seed}) hit the {MOVE_CAP}-move cap");
+            eprintln!("featspread: WARNING decisive {players}p game (seed {game_seed}) hit the {MOVE_CAP}-move cap");
         }
     }
 
@@ -448,14 +465,16 @@ fn play_decisive(games: usize, base_seed: u64, weights: &Weights) -> DecisiveRes
     }
 }
 
-/// Prints the `decisive`-mode report: method recap, the shared margin
-/// distribution, then the per-key table sorted by `zero_frac` descending
-/// (the task's own required sort order).
-fn print_decisive_report(args: &Args, result: &DecisiveResult) {
+/// Prints the `decisive`-mode report for ONE player count: method recap,
+/// the shared margin distribution, then the per-key table sorted by
+/// `zero_frac` descending (the task's own required sort order).
+fn print_decisive_report(args: &Args, players: u8, result: &DecisiveResult) {
     println!("================================================================================");
-    println!("THROUGH THE AGES -- FEATURE DECISIVENESS (featspread --decisive, 3p only)");
+    println!(
+        "THROUGH THE AGES -- FEATURE DECISIVENESS (featspread --decisive, {players}p)"
+    );
     println!("================================================================================");
-    println!("METHOD: at every real 3p self-play decision (candidates.len() > 1) reached by");
+    println!("METHOD: at every real {players}p self-play decision (candidates.len() > 1) reached by");
     println!("WeightedBot::choose under the champion vector, every legal move is applied to a");
     println!("scratch clone and eval::candidate_features()/eval::dot() scored, freeze pinned to");
     println!("the SAME champion vector. Per WeightKey k, per decision:");
@@ -656,23 +675,34 @@ fn main() -> ExitCode {
     };
 
     if args.decisive {
-        let path = Path::new(&args.champion_dir).join("rust_champion_3p.json");
-        let weights = match load_weights(&path) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("featspread: {e}");
-                return ExitCode::FAILURE;
-            }
+        let counts: Vec<u8> = match args.decisive_count {
+            Some(p) => vec![p],
+            None => PLAYER_COUNTS.to_vec(),
         };
-        let started = Instant::now();
-        let result = play_decisive(args.games, args.seed, &weights);
+        let overall = Instant::now();
+        for &players in &counts {
+            let path = Path::new(&args.champion_dir).join(format!("rust_champion_{players}p.json"));
+            let weights = match load_weights(&path) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("featspread: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let count_started = Instant::now();
+            let result = play_decisive(players, args.games, args.seed, &weights);
+            eprintln!(
+                "featspread: decisive {players}p done ({} games, {} decisions, {:.1}s)",
+                args.games,
+                result.decisions,
+                count_started.elapsed().as_secs_f64()
+            );
+            print_decisive_report(&args, players, &result);
+        }
         eprintln!(
-            "featspread: decisive 3p done ({} games, {} decisions, {:.1}s)",
-            args.games,
-            result.decisions,
-            started.elapsed().as_secs_f64()
+            "featspread: decisive done in {:.1}s total",
+            overall.elapsed().as_secs_f64()
         );
-        print_decisive_report(&args, &result);
         return ExitCode::SUCCESS;
     }
 
