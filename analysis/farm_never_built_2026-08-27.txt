@@ -38,8 +38,27 @@ produced and then placed somewhere other than a farm.
 So the bot is not BLOCKED from farming. It prices farming last, every time.
 
 
-THE WEIGHTS SAY THE SAME THING
-------------------------------
+IT IS ZERO AT ALL THREE PLAYER COUNTS
+-------------------------------------
+Same tool, same 60 games, same seed, live champion of each count:
+
+              decisions   Build Farm   Build Mine   Build Urban   Pop   EndTurn
+    2p            741        0 (0.0%)     1 (0.1%)    94 (12.7%)   6.5%   48.6%
+    3p           1851        0 (0.0%)   180 (9.7%)   155 ( 8.4%)  16.7%   29.2%
+    4p           2432        0 (0.0%)   228 (9.4%)   131 ( 5.4%)  12.8%   29.6%
+
+Zero farms in 5024 opener decision points across 180 games. This is not a 3p
+quirk.
+
+2p is a separate and worse failure: it builds essentially NOTHING (one mine in
+741 decisions) and ends its turn on 48.6% of them. That is the "end turn beats
+spending" defect resurfacing at 2p specifically, on a lineage whose free_workers
+weight is +6.31 -- i.e. holding an idle worker is REWARDED, so nothing is ever
+worth the worker.
+
+
+THE WEIGHTS SAY THE SAME THING -- BUT NOT THE SIMPLE VERSION
+------------------------------------------------------------
 Live champions, gens 2p 116992 / 3p 65552 / 4p 21459:
 
                     2p         3p         4p
@@ -56,6 +75,25 @@ The three lineages do not merely differ in size, they disagree in SIGN on
 best_farm and best_mine, and by two orders of magnitude on food_stock. That is
 the signature of a collinear family whose fitted signs flip on noise, not of
 three lineages that have each discovered a different real strategy.
+
+IMPORTANT REFINEMENT, and it weakens the simple story: at 4p, best_farm is
++37.78 and food_rate is +0.65 -- both POSITIVE -- and the bot still builds zero
+farms in 2432 decisions. So "the food weights are negative" cannot be the whole
+explanation. Two distinct mechanisms are visible, one per lineage:
+
+  4p: food is priced positively but resource_rate (+4.54) is seven times
+      food_rate (+0.65), and free_workers is NEGATIVE (-8.86) so a worker
+      wants to be spent. The farm loses the head-to-head against the mine on
+      every board, which is exactly the "min rank 3, never top two" shape.
+
+  2p: food_rate is negative (-1.05) AND free_workers is positive (+6.31), so an
+      idle worker is worth more than anything it could be spent on. Nothing gets
+      built at all; EndTurn wins 48.6% of decisions.
+
+A NonNegative sign_intent on food_rate addresses the 2p mechanism directly and
+the 4p one not at all. The 4p mechanism is a RELATIVE pricing failure between
+two production channels, which is the coarse-feature problem: one scalar per
+card type cannot say "a farm is worth more when my food rate is low".
 
 
 THE STRUCTURAL FACT BEHIND IT
