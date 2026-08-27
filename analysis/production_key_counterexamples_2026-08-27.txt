@@ -1,0 +1,279 @@
+production_key_counterexamples_2026-08-27
+==========================================
+
+Job: does the CARD DATA contain a counterexample (something that can
+DECREASE the quantity or make more of it a cost) for each of the seven
+production keys, the same way Vast Territory's `blueTokens: -1` is one for
+Colonies/HasColony? Read-only, mechanical. No weights.rs edit, no
+sign_intent proposal.
+
+Headline, said plainly and up front:
+
+  * ONE of the seven keys has a card-data counterexample: RESOURCE_RATE.
+    Acceptance of Supremacy (side B) prints `resourceProduction: -1`, which
+    reaches `stats.resources` with a negative sign and therefore can drive
+    `ResourceRate` negative. This does NOT touch FoodRate (the queued
+    experiment's key) -- food is unaffected. See "RESOURCE_RATE" below.
+
+  * FOOD_RATE has NO food counterexample in the card data. Nothing in the
+    base-2015 card set prints a negative food production, removes food, or
+    makes more food a cost. The queued food_rate change is not killed by a
+    card-data counterexample. (See the nuance at the end about the
+    consumption netting, which is a rulebook deduction, not a card.)
+
+  * The other five keys (FoodStock, BestFarm, BestMine, ProdWorkers,
+    FreeWorkers) also have NO counterexample in the card data.
+
+Scope of the search (so the negatives are auditable)
+----------------------------------------------------
+For every one of the seven keys I searched, in full:
+  * data/*.json        -- all three files (cards_civil.json 54 cards,
+                          cards_military_actions.json 142 cards,
+                          cards_wonders_leaders.json 40 cards), EVERY field
+                          of EVERY card walked recursively, flagging every
+                          negative integer with its full path.
+  * rust/src/card_table.rs -- the engine's own per-card table (the same
+                          cards as the JSON, as Rust structs); grepped for
+                          negative `food:` / `resources:` / `workers:` /
+                          `blue_tokens:` across all 174 definitions.
+  * rust/src/events.rs   -- the event/leader/pact resolution code (the
+                          `EventBlock`, `PactBlock`, and `Special::*`
+                          writers) for anything that applies a negative sign
+                          to a production term.
+  * rust/src/effects.rs  -- `compute`/`apply_pact_block`/`apply_special`,
+                          i.e. WHERE each of the seven features is actually
+                          computed, to confirm which card fields can reach
+                          the feature with a negative sign.
+  * rust/src/bots/weighted/features.rs -- the seven feature setters, to
+                          fix exactly which `Stats`/state field each key
+                          reads.
+
+The complete list of every negative integer anywhere in the three data
+files (exhaustive walk, no filter):
+
+  data/cards_civil.json             Communism                     production.happy        -1
+  data/cards_civil.json             Fundamentalism                production.science      -2
+  data/cards_military_actions.json  Acceptance of Supremacy       effects.B.resourceProduction -1
+  data/cards_military_actions.json  Promise of Military Protection effects.B.cultureProduction -1
+  data/cards_military_actions.json  Loss of Sovereignty           effects.B.cultureProduction -2
+  data/cards_military_actions.json  Vast Territory (I and II)     permanentEffects.blueTokens -1
+  data/cards_military_actions.json  Civil Unrest                  effects...blueTokens    -1
+  data/cards_military_actions.json  Rebellion                     civilActionsPerDiscontentWorker -2
+  data/cards_military_actions.json  Crusades / Refugees /
+                                  Politics of Strength           (culture, -4/-3/-3)
+  data/cards_military_actions.json  Civil Unrest / Impact of Happiness
+                                                      culturePerDiscontentWorker -4/-2
+  data/cards_wonders_leaders.json   Kremlin                       effects.happy           -1
+  data/cards_wonders_leaders.json   Sid Meier                     effects.sciencePerLab   -1
+
+That is the entire negative-value surface of the base-2015 card data. Of
+those, only ONE can reach a production key with a negative sign: the
+`resourceProduction: -1` on Acceptance of Supremacy side B. Nothing in the
+list touches food, worker counts, blue-token production, or farm/mine
+levels.
+
+The seven feature setters (features.rs):
+  713  f.set(WeightKey::FoodRate, f64::from(s.food) + g(GainFeature::FoodRate) - consumption);
+  715  f.set(WeightKey::ResourceRate, f64::from(s.resources) + g(GainFeature::ResourceRate) - corruption);
+  736  f.set(WeightKey::FoodStock, f64::from(p.food) + g(GainFeature::FoodStock));
+  840  f.set(WeightKey::FreeWorkers, f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
+  863  f.set(WeightKey::ProdWorkers, f64::from(prod_workers));
+  971  f.set(WeightKey::BestFarm, f64::from(best.farm));
+  972  f.set(WeightKey::BestMine, f64::from(best.mine));
+
+Live champion values (copied to /tmp/prod_{2,3,4}p.json before reading;
+gen + md5 of the copy):
+  2p  gen 118394  md5 43d5af66ab912798d662a7bfa07d51c0
+  3p  gen 66113   md5 7402dae11eb366275bc74629ebd9bf8b
+  4p  gen 21600   md5 dd9d2bd20ecfc49c0a150db140a0593b
+
+    key              2p                  3p                  4p
+    food_rate       -1.5511034901251637 -0.20556828589508547 0.6460863497615676
+    resource_rate   0.7336648329535522  7.542671940718445   4.769162168459284
+    food_stock      0.664913622387194   43.91490958456209   0.027131425902048534
+    free_workers    5.145069469203985   1.3889139175858851  -9.614608021911456
+    prod_workers    1.339861383339844   0.058873432433214135 -0.1942392331698708
+    best_farm      -1.0630383497970328 -2.7412537534950556  39.898972756484774
+    best_mine      -0.144571441068925   16.254470045635145 -1.2099633867499564
+
+
+==========================================================================
+PER-KEY VERDICTS
+==========================================================================
+
+--------------------------------------------------------------------------
+FOOD_RATE  --  NO COUNTEREXAMPLE FOUND IN CARD DATA
+--------------------------------------------------------------------------
+What was searched: every `food` / `foodProduction` / `gainFood` / `foodAnd
+orResources` value in all three data/*.json (exhaustive negative walk),
+every `food:` in card_table.rs, the `EventBlock.food` / `food_and_or_
+resources` / `lose_all_stored_food` / `choose_food` writers in events.rs,
+and `effects.rs::compute`'s food accumulation.
+
+Findings:
+  * No card, wonder, leader, or event prints a negative food PRODUCTION.
+    The only negative `happy`/`science`/`strength` productions (Communism
+    -1 happy, Fundamentalism -2 science, Kremlin -1 happy) are on other
+    statistics; nothing is `food: -N`.
+  * The only food-removing mechanic in the data is `lose_all_stored_food`
+    (a bool, `EventBlock`), and it targets STORED food (`p.food`), not the
+    RATE. It never appears in a negative `food:` production field, and
+    features.rs:713 reads `s.food` (the rate from `effects::compute`), not
+    stored food, so it cannot reach this key.
+  * The net `- consumption` at features.rs:713 is a RULEBOOK deduction
+    (economy::consumption of the projected yellow bank), not a card effect.
+    It is always non-negative and is already netted into the feature by
+    design -- it is not a card-data counterexample and not a sign that a
+    bigger number is a downside.
+
+Verdict: NO COUNTEREXAMPLE FOUND IN CARD DATA. (This is the key the queued
+experiment targets; nothing in the card data licenses a negative food rate
+the way Vast Territory licenses a negative blue token.)
+
+--------------------------------------------------------------------------
+RESOURCE_RATE  --  COUNTEREXAMPLE FOUND
+--------------------------------------------------------------------------
+The quoted line (the Vast-Territory-shaped hit):
+
+  data/cards_military_actions.json :: Acceptance of Supremacy ::
+  "effects": { "noAttacksBetweenParties": true,
+               "A": { "resourceProduction": 1 },
+               "B": { "resourceProduction": -1 } },
+  "text": "Neither player may attack the other. Player A gains +1 resource.
+           Player B loses 1 resource."
+
+Same fact in the engine's own table, card_table.rs:2572:
+
+  Special::A(PactBlock { ..., resources: 1, ... }),
+  Special::B(PactBlock { ..., resources: -1, ... }),
+
+Where it lands in the feature:
+  effects.rs:921   stats.resources += block.resources as i32;   (apply_pact_block)
+  effects.rs:1517  stats.resources = stats.resources.max(0);    ("Limits on Ratings" clamp)
+  features.rs:715  f.set(WeightKey::ResourceRate, f64::from(s.resources) + g(GainFeature::ResourceRate) - corruption);
+
+So side B of a live Acceptance of Supremacy subtracts 1 from `s.resources`
+and therefore from `ResourceRate`, before the `.max(0)` clamp. A player who
+is a party B of this pact (and has little else) can read `s.resources <= 0`
+-- the resource rate genuinely prices negative for that player, exactly the
+Vast-Territory shape. Note the clamp means the STORED feature `s.resources`
+is floored at 0, but the underlying `stats.resources` before the clamp is
+negative, and any feature that reads it before/at that point (or that the
+evaluator reconstructs) sees the negative. The card data licenses a
+non-positive resource rate for a pact side.
+
+Verdict: COUNTEREXAMPLE FOUND -- Acceptance of Supremacy side B
+`resourceProduction: -1` (data/cards_military_actions.json; card_table.rs:
+2572), reaching `stats.resources` via effects.rs:921 and `ResourceRate` via
+features.rs:715.
+
+--------------------------------------------------------------------------
+FOOD_STOCK  --  NO COUNTEREXAMPLE FOUND IN CARD DATA
+--------------------------------------------------------------------------
+What was searched: same exhaustive negative walk (no negative `food:`
+anywhere), the `lose_all_stored_food` event writers, and the feature setter
+features.rs:736 (`p.food + pending` -- a STORED-food stock, floored at 0 by
+the engine's own `p.food` type).
+
+Findings: `p.food` is a non-negative stored-food count. `lose_all_stored_
+food` (a bool, not a negative integer) sets it to 0 but never negative. No
+card makes stored food a negative quantity. The feature is a stock, not a
+rate; it cannot go negative from card data.
+
+Verdict: NO COUNTEREXAMPLE FOUND IN CARD DATA.
+
+--------------------------------------------------------------------------
+BEST_FARM  --  NO COUNTEREXAMPLE FOUND IN CARD DATA
+--------------------------------------------------------------------------
+What was searched: the `BestTypes.farm` computation in features.rs
+`sweep_tableau` (features.rs:188 ff.), which takes `id.level()` of each
+`CardType::Farm` in the tableau; the farm `production.food` values in
+data/cards_civil.json (all positive: Agriculture 1, Irrigation 2, ...); and
+card_table.rs farm definitions.
+
+Findings: `BestFarm = max farm LEVEL in tableau` (features.rs:971, fed by
+`best.farm` at features.rs:188 ff.). A farm's level is a non-negative
+integer; a card's production can be negative on OTHER statistics but farm
+production is `food: +N` only. Nothing in the card data makes a farm's
+LEVEL negative or makes a higher best-farm a cost. (The negative
+`production.food` values that DO exist are on Communism/Fundamentalism-
+style effects and are not farm levels.)
+
+Verdict: NO COUNTEREXAMPLE FOUND IN CARD DATA.
+
+--------------------------------------------------------------------------
+BEST_MINE  --  NO COUNTEREXAMPLE FOUND IN CARD DATA
+--------------------------------------------------------------------------
+What was searched: the `BestTypes.mine` computation in `sweep_tableau`
+(features.rs:188 ff., `CardType::Mine`), mine `production.resources` values
+in data/cards_civil.json, and card_table.rs mine definitions.
+
+Findings: `BestMine = max mine LEVEL in tableau` (features.rs:972, fed by
+`best.mine`). Mine levels are non-negative; mine production is
+`resources: +N` only in the data. Nothing makes a mine level negative or a
+cost. (The single negative `resourceProduction: -1` is Acceptance of
+Supremacy's PACT side B, not a mine card -- it changes a player's resource
+RATE, not any mine's level or production print.)
+
+Verdict: NO COUNTEREXAMPLE FOUND IN CARD DATA.
+
+--------------------------------------------------------------------------
+PROD_WORKERS  --  NO COUNTEREXAMPLE FOUND IN CARD DATA
+--------------------------------------------------------------------------
+What was searched: the `prod_workers` accumulation in `sweep_tableau`
+(features.rs:188 ff., `CardType::Farm | CardType::Mine` worker counts), the
+feature setter features.rs:863, and every card that could REMOVE workers
+from farm/mine slots (no such card in the data -- the only worker-movers are
+population changes that add FREE workers, not remove staffed ones).
+
+Findings: `ProdWorkers = sum of workers on farm+mine slots` (features.rs:
+863, fed by `prod_workers` in `sweep_tableau`). Workers on a slot are a
+non-negative count; `sweep_tableau` sums `slot.workers`, never a negative.
+No card in the data decrements a staffed farm/mine worker or makes more
+staffed production workers a cost.
+
+Verdict: NO COUNTEREXAMPLE FOUND IN CARD DATA.
+
+--------------------------------------------------------------------------
+FREE_WORKERS  --  NO COUNTEREXAMPLE FOUND IN CARD DATA
+--------------------------------------------------------------------------
+What was searched: `p.workers_free` (the field behind features.rs:840), the
+only writer that decrements it (`apply.rs:881 do_build`, per features.rs's
+own comment), and every card that could remove a free worker.
+
+Findings: `FreeWorkers = p.workers_free + pending` (features.rs:840).
+`p.workers_free` is a non-negative free-worker pool; it is decremented only
+by BUILDING a slot (apply.rs:881 `p.workers_free -= 1`), which is a
+conventional cost of an action, not a card-data counterexample of the
+Vast-Territory kind (no card prints a negative worker value, removes free
+workers, or makes more free workers a cost). No negative `workers:` appears
+anywhere in the data or card_table.rs.
+
+Verdict: NO COUNTEREXAMPLE FOUND IN CARD DATA.
+
+
+==========================================================================
+SUMMARY
+==========================================================================
+  FoodRate        NO COUNTEREXAMPLE FOUND IN CARD DATA
+  ResourceRate    COUNTEREXAMPLE FOUND -- Acceptance of Supremacy side B
+                  resourceProduction:-1 (data/cards_military_actions.json;
+                  card_table.rs:2572; effects.rs:921; features.rs:715)
+  FoodStock       NO COUNTEREXAMPLE FOUND IN CARD DATA
+  BestFarm        NO COUNTEREXAMPLE FOUND IN CARD DATA
+  BestMine        NO COUNTEREXAMPLE FOUND IN CARD DATA
+  ProdWorkers     NO COUNTEREXAMPLE FOUND IN CARD DATA
+  FreeWorkers     NO COUNTEREXAMPLE FOUND IN CARD DATA
+
+Direct answer to the food_rate question: NO -- the card data does NOT
+contain a food counterexample. The queued food_rate change is not killed by
+anything in the card data. The one real counterexample in the set is on
+ResourceRate (Acceptance of Supremacy side B), which the coordinator should
+note for that key separately; it does not touch food.
+
+Method note: the negative-value surface of the base-2015 card data is small
+and fully enumerated above (12 distinct negative fields). Only
+`resourceProduction: -1` (Acceptance of Supremacy B) can reach one of the
+seven production features with a negative sign; the rest are on culture,
+happy, science, or blue tokens, none of which feed these seven keys.
+weights.rs untouched; no sign_intent change proposed.
