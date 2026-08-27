@@ -1,0 +1,194 @@
+pinned_key_absorbers_2026-08-27.txt
+
+For each of the 11 effective proven snaps (ambiguous_key_ages_2026-08-27.txt OLD group), its
+WeightGroup per WeightKey::group in rust/src/bots/weighted/weights.rs (the climb's own
+grouping, 14 groups, 174 keys) and every sibling in that group with its LIVE value from
+experiments/rust_champion_Np.json at the SAME player count. Sorted with the most lopsided
+groups first (pinned key 0.0 vs a sibling carrying large magnitude = max |sibling|).
+LIVE champion generations at read time: 2p 116942, 3p 65519, 4p 21451; md5 2p 737e65aee1b669f95d2b724ced886f00,
+3p 50a27fe8399b73170ab161cc9feb5d4e, 4p f1ddd865da736c107150159c173bf211.
+
+hand_perishable 4p -- group Cards (max sibling |w| = 23.620430292554897)
+    hand_civil                   = -23.620430292554897  <-- likely absorber
+    hand_potential               = 1.1201778838919063  <-- likely absorber
+    hand_military                = -0.7925474919657907
+    hand_mil_value               = 0.6465863443291585
+    hand_value                   = 0.5277230833664599
+    hand_over_capacity           = -0.5251571736987084
+    hand_mil_potential           = 0.4297133449587217
+    hand_swap_extra              = 0.06843536681407979
+    hand_value_late              = 0.04870085303960849
+
+free_action_credit 3p -- group Priced (max sibling |w| = 17.4455659452047)
+    card_rate_credit             = -17.4455659452047  <-- likely absorber
+    tech_redundancy_discount     = 5.8763522130744335  <-- likely absorber
+    bonus_card_credit            = 0.8540212095193013
+    unit_tech_credit             = 0.8306868892191697
+    gov_board_credit             = 0.4765826861005108
+    resource_discount            = 0.4404473503122227
+    defense_bonus                = 0.26956317068069935
+    aggression_board_credit      = 0.17046866733209542
+    territory_credit             = 0.1551732621771613
+    tactic_reach_credit          = 0.15489740523219708
+    tactic_shortfall_cost        = 0.14069698022130306
+    restricted_resource_credit   = 0.13366830577253352
+    action_board_credit          = 0.11443158064053276
+    build_fresh_credit           = 0.09199110038135412
+    tactic_board_credit          = 0.07124520679566125
+    build_discount               = 0.06559932471903665
+    pact_board_credit            = 0.054333388613761795
+    event_board_credit           = 0.04767060295671538
+    war_board_credit             = 0.03847050799410003
+    hand_limit                   = 0.026640752665473194
+    tech_board_credit            = 0.024663579934308292
+    colonize_bonus               = 0.02025664786522416
+    wonder_board_credit          = 0.011582499518294688
+    unit_strength_credit         = 0.004206759669251179
+
+resource_commitment_turns 4p -- group Wonders (max sibling |w| = 13.764374052998857)
+    leader                       = -13.764374052998857  <-- likely absorber
+    wonder_potential             = 2.9974094330537246  <-- likely absorber
+    wonder_promise               = 2.127721893841132  <-- likely absorber
+    wonder_stages_left           = -0.621657354016189
+    wonder_turns_to_finish       = -0.5893077128620824
+    leader_replacement           = 0.1939671984457146
+    wonder_stages_per_action     = 0.16453455249082008
+    wonder_age_overrun           = -0.1405514489892333
+    wonder_pool_rival_claimed    = 0.10594080052837433
+    wonder_one_stage_short       = -0.08199918329597748
+    wonder_remaining             = -0.06614485076501136
+    wonder_overrun               = -0.04390069839549266
+    wonder_in_progress           = -0.025125787956182626
+    wonder_progress              = -0.012574230248290179
+    wonders                      = 0.0
+
+military_action_gap 2p -- group Actions (max sibling |w| = 6.926789766143685)
+    take_cost_share              = 6.926789766143685  <-- likely absorber
+    civil_action_gap             = -1.1801855021306678  <-- likely absorber
+    military_actions             = 1.068320691029637  <-- likely absorber
+    civil_actions                = 0.8451627970612089
+    row_playable_count           = 0.18659560084939913
+    take_cost_paid               = -0.09965957447640354
+    military_action_surplus      = 0.07447380065487627
+    ca_left                      = -0.04769324359659686
+    ma_left                      = -0.017366354032304725
+    civil_action_surplus         = 0.010575846584872825
+
+hand_limit 2p -- group Priced (max sibling |w| = 5.195184512893864)
+    colonize_bonus               = 5.195184512893864  <-- likely absorber
+    resource_discount            = 1.568114237353193  <-- likely absorber
+    action_board_credit          = 1.2289111138451403  <-- likely absorber
+    territory_credit             = 1.1621812117527388  <-- likely absorber
+    war_board_credit             = 1.0722176680132272  <-- likely absorber
+    pact_board_credit            = 0.6024254058609048
+    event_board_credit           = 0.48517147869523014
+    bonus_card_credit            = -0.3731261755526506
+    card_rate_credit             = 0.34405506908196865
+    tactic_shortfall_cost        = 0.2841146054214071
+    build_fresh_credit           = 0.25062598286900406
+    aggression_board_credit      = 0.21342787521759532
+    tactic_board_credit          = 0.19489392685672002
+    tech_redundancy_discount     = 0.14074989521313788
+    unit_tech_credit             = 0.11391277425678609
+    defense_bonus                = 0.07194841661896406
+    unit_strength_credit         = 0.05993534297986034
+    tech_board_credit            = 0.030170189681266113
+    build_discount               = 0.0043857667602918236
+    restricted_resource_credit   = 0.0002591989087123005
+    free_action_credit           = 0.0
+    gov_board_credit             = 0.0
+    wonder_board_credit          = 0.0
+    tactic_reach_credit          = 0.0
+
+wonder_board_credit 2p -- group Priced (max sibling |w| = 5.195184512893864)
+    colonize_bonus               = 5.195184512893864  <-- likely absorber
+    resource_discount            = 1.568114237353193  <-- likely absorber
+    action_board_credit          = 1.2289111138451403  <-- likely absorber
+    territory_credit             = 1.1621812117527388  <-- likely absorber
+    war_board_credit             = 1.0722176680132272  <-- likely absorber
+    pact_board_credit            = 0.6024254058609048
+    event_board_credit           = 0.48517147869523014
+    bonus_card_credit            = -0.3731261755526506
+    card_rate_credit             = 0.34405506908196865
+    tactic_shortfall_cost        = 0.2841146054214071
+    build_fresh_credit           = 0.25062598286900406
+    aggression_board_credit      = 0.21342787521759532
+    tactic_board_credit          = 0.19489392685672002
+    tech_redundancy_discount     = 0.14074989521313788
+    unit_tech_credit             = 0.11391277425678609
+    defense_bonus                = 0.07194841661896406
+    unit_strength_credit         = 0.05993534297986034
+    tech_board_credit            = 0.030170189681266113
+    hand_limit                   = 0.012167552521971792
+    build_discount               = 0.0043857667602918236
+    restricted_resource_credit   = 0.0002591989087123005
+    free_action_credit           = 0.0
+    gov_board_credit             = 0.0
+    tactic_reach_credit          = 0.0
+
+military_action_gap 4p -- group Actions (max sibling |w| = 2.144587685292562)
+    military_actions             = 2.144587685292562  <-- likely absorber
+    civil_action_surplus         = 1.2780428714346421  <-- likely absorber
+    ca_left                      = 0.6963147614436462
+    ma_left                      = -0.5409278295454036
+    civil_actions                = 0.13638044760058277
+    take_cost_paid               = 0.07447319513990922
+    military_action_surplus      = 0.05745696799014441
+    take_cost_share              = 0.03558763508603832
+    civil_action_gap             = -0.023069897923304602
+    row_playable_count           = 0.0
+
+row_playable_count 4p -- group Actions (max sibling |w| = 2.144587685292562)
+    military_actions             = 2.144587685292562  <-- likely absorber
+    civil_action_surplus         = 1.2780428714346421  <-- likely absorber
+    ca_left                      = 0.6963147614436462
+    ma_left                      = -0.5409278295454036
+    civil_actions                = 0.13638044760058277
+    take_cost_paid               = 0.07447319513990922
+    military_action_surplus      = 0.05745696799014441
+    take_cost_share              = 0.03558763508603832
+    civil_action_gap             = -0.023069897923304602
+    military_action_gap          = 0.0
+
+free_action_credit 4p -- group Priced (max sibling |w| = 1.969111042429318)
+    resource_discount            = 1.969111042429318  <-- likely absorber
+    tech_redundancy_discount     = 1.921818969799246  <-- likely absorber
+    colonize_bonus               = 0.8206290668104353
+    war_board_credit             = 0.7861357374698899
+    card_rate_credit             = -0.572250791134047
+    bonus_card_credit            = -0.5475618710642545
+    tactic_reach_credit          = 0.49798178313077357
+    defense_bonus                = 0.2070842506062657
+    wonder_board_credit          = 0.16737136431655042
+    build_discount               = 0.16350029869450916
+    hand_limit                   = 0.11177504100095396
+    aggression_board_credit      = 0.11035016305320892
+    tactic_board_credit          = 0.09398546807070882
+    tech_board_credit            = 0.08407066643196172
+    tactic_shortfall_cost        = 0.05465894020913773
+    action_board_credit          = 0.04274935491586096
+    build_fresh_credit           = 0.026485950042825487
+    event_board_credit           = 0.0063491634210091595
+    unit_tech_credit             = 0.0044558941695780115
+    unit_strength_credit         = 0.004395016163127229
+    territory_credit             = 0.0
+    gov_board_credit             = 0.0
+    restricted_resource_credit   = 0.0
+    pact_board_credit            = 0.0
+
+happy_margin_after_next_pop 4p -- group Happiness (max sibling |w| = 1.646794860218793)
+    happy_margin                 = -1.646794860218793  <-- likely absorber
+    discontent                   = -0.43947612534684105
+    uprising                     = -0.07318725380474292
+    happy_surplus                = 0.06073917828032454
+
+no_aggression 2p -- group Board (max sibling |w| = 0.3249896753038906)
+    card_board_credit            = 0.3249896753038906
+    gov_action_cost              = 0.24945052986757518
+    card_board_leader            = -0.23892409394369768
+    urban_limit                  = 0.09821755549699665
+    FLAG: no sibling carries a large magnitude (max < 1.0) -- weak absorber case
+
+Flag summary: pinned keys whose group has NO sibling of magnitude >= 1.0:
+  no_aggression 2p (group Board, max |w| = 0.3249896753038906)
+
