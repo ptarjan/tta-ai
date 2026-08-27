@@ -1,0 +1,57 @@
+Clamp-bound census: weight keys sitting at exactly their clamp bound in each
+champion file.
+
+Copies read (champions are rewritten by the running climb; copied to /tmp
+before any read -- same copies as the boundary-pinning census):
+  2p: /tmp/zero_count_2p.json (md5 74eb5255be60bfff532fdcc47f791d64), gen 115974, 172 keys
+  3p: /tmp/zero_count_3p.json (md5 a47a56324a75eded75857671b9f5fa64), gen 65079, 169 keys
+  4p: /tmp/zero_count_4p.json (md5 e96b7f675b44939afef984070b8cc2c7), gen 21350, 172 keys
+
+Method: a key is at its bound when |w| == clamp_bound(key, count) within
+1e-9. The bound is computed from the LIVE source, not re-read from a file:
+  clamp_bound(k, n) = min(CLAMP_T * P95_TOTAL_SPREAD[n] / spread_k(n), CLAMP_BLIND)
+  (weights.rs:2207-2213), with CLAMP_T = 1.0 (2484), CLAMP_BLIND = 60.0 (2491),
+  P95_TOTAL_SPREAD = [823.689416, 483.787396, 545.274556] (2500), and spread_k(n)
+from p95_candidate_spread (2232+). 82 of the 522 (key,count) pairs have a
+tightened bound below 60.0; the rest fall back to the flat 60.0 rail.
+
+Totals at bound: 2p 0/172, 3p 3/169, 4p 3/172.
+
+Listed with values and signs:
+  2p:
+      (none)
+
+  3p:
+      attack_cost_doubled      +60   bound 60
+      hand_potential           +0.717414578   bound 0.717414578
+      strength                 +60   bound 60
+
+  4p:
+      best_theater             +60   bound 60
+      special_techs            +60   bound 60
+      workers_late             +60   bound 60
+
+Observations:
+1. The OTHER boundary is also a handful, not large: at most 3 keys per count,
+   and 2p has none.
+2. 3p: strength +60.0 (bound 60.0 -- its p95 spread of 5.0 gives bound 96.76,
+   capped at CLAMP_BLIND), attack_cost_doubled +60.0 (spread 1.0 gives bound
+   483.79, capped at 60.0), and hand_potential +0.7174145783436774, which
+   EQUALS its tightened bound (483.787396 / 674.348) to the last bit --
+   the one key pinned at a tightened, sub-60 rail.
+3. 4p: best_theater +60.0 (spread 0.0 -> CLAMP_BLIND fallback), special_techs
+   +60.0 (spread 1.0, capped), workers_late +60.0 (spread 1.05028 -> bound
+   519.18, capped).
+4. None of the six at-bound keys is at a NEGATIVE bound: every one is a
+   positive fit pushed up to the ceiling. The clamp pins to bound.copysign(x)
+   (climb.rs:235-242), so a negative optimum below -60 would show as -60.0;
+   none does.
+5. The coordinator's 3p strength reading is confirmed: strength +60.0 at 3p,
+   15.2207 at 2p, 41.3246 at 4p -- clamped only at three players, where the
+   strength family (strength 60.0, strength_rel -1.7683) shows the linear
+   term absorbing the signal and the hinge flipping on residual noise.
+6. hand_potential is the only tightened-rail pin in all three files: its
+   bound is 0.7174 (not 60), so it is pinned where the spread-derived rail
+   sits, not at the historical ceiling.
+
+Source: /Users/pt/tta-ai (read-only; no source file edited).
