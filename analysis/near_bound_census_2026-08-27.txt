@@ -1,0 +1,59 @@
+Near-bound census: every (key, count) pair with |weight| / clamp_bound >= 0.80,
+sorted by ratio descending. Companion to the exact-bound census (a8d2d0a).
+
+Champion files read (copied to /tmp at the moment of reading; the climb
+rewrites them every few minutes, so counts taken minutes apart genuinely
+disagree -- see zero_count_reconcile_2026-08-27.txt):
+  2p: /tmp/near_bound_2p.json  md5 29413c0fe04e672d081b2b43978643bd  gen 116085  172 keys
+  3p: /tmp/near_bound_3p.json  md5 ce5f3d96dc9034fb18df50e41e3731f0  gen 65124  169 keys
+  4p: /tmp/near_bound_4p.json  md5 ac49efe12bc5d1883946d5245f1b168a  gen 21370  172 keys
+
+bound = min(P95_TOTAL_SPREAD[n] / p95_candidate_spread(k)[n], 60.0), from the
+live table in weights.rs (clamp_bound at 2207-2213; CLAMP_T = 1.0 at 2484;
+CLAMP_BLIND = 60.0 at 2491; P95_TOTAL_SPREAD at 2500; p95_candidate_spread
+at 2232+). A spread of 0.0 means the flat 60.0 ceiling; a bound below 60.0
+is spread-derived.
+
+14 pairs qualify (>= 0.80). Key, count, weight, bound, ratio, bound kind:
+  2p  workers_late                            +60  bound             60  ratio  1.00000  flat 60.0
+  3p  attack_cost_doubled                     +60  bound             60  ratio  1.00000  flat 60.0
+  3p  hand_potential                 +0.717414578  bound    0.717414578  ratio  1.00000  spread-derived (674.348)
+  3p  strength                                +60  bound             60  ratio  1.00000  flat 60.0
+  4p  best_theater                            +60  bound             60  ratio  1.00000  flat 60.0
+  4p  special_techs                           +60  bound             60  ratio  1.00000  flat 60.0
+  4p  workers_late                            +60  bound             60  ratio  1.00000  flat 60.0
+  3p  culture_rate                     +58.580173  bound             60  ratio  0.97634  flat 60.0
+  2p  culture_rate                    +58.1408393  bound             60  ratio  0.96901  flat 60.0
+  3p  attack_target_weakness          +28.7495594  bound     30.2367123  ratio  0.95082  spread-derived (16)
+  4p  culture_rate                    +55.4614787  bound             60  ratio  0.92436  flat 60.0
+  3p  colonies                        +55.4296299  bound             60  ratio  0.92383  flat 60.0
+  4p  unit_workers                    -55.1685449  bound             60  ratio  0.91948  flat 60.0
+  4p  workers                         +52.6225214  bound             60  ratio  0.87704  flat 60.0
+
+Observations:
+1. Seven pairs sit exactly AT their bound (ratio 1.0). Compared to the
+   exact-bound census (a8d2d0a: 3p strength, attack_cost_doubled,
+   hand_potential; 4p best_theater, special_techs, workers_late), 2p
+   workers_late +60.0 is new at bound -- it had moved out by gen 116085 --
+   and all seven are positive fits at the ceiling.
+2. The stale-spread situation is NOT a one-off: 7 of the 14 pairs sit at a
+   SPREAD-DERIVED bound, and every one of those 7 is at ratio 1.0 -- pinned
+   exactly at a tightened rail, not drifting near the flat ceiling. The
+   coordinator's hand_potential finding (3p, bound 0.717414578 derived from a
+   stale spread of 674.348) is the clearest case, but the same shape appears
+   at 3p attack_target_weakness (weight +28.7495594, bound 30.2367123 from
+   spread 16.0) and at 3p strength (weight +60.0; its spread-derived bound
+   would be 483.787396/5.0 = 96.76, capped at the flat 60.0).
+3. The remaining 7 near-bound pairs all sit at the FLAT 60.0 ceiling with
+   ratios 0.80-1.0: culture_rate at all three counts (58.58/+0.976 @3p,
+   58.14/+0.969 @2p, 55.46/+0.924 @4p) -- the one key persistently within
+   8% of the ceiling in every lineage -- plus 3p colonies +55.43 (0.924),
+   4p unit_workers -55.17 (0.919, the only negative near-bound key), and
+   4p workers +52.62 (0.877).
+4. culture_rate is the pattern to watch: at or near the flat ceiling at all
+   three counts (ratios 0.976, 0.969, 0.924), while its siblings (food_rate,
+   science_rate, resource_rate) stay well inside. If the flat 60.0 rail is
+   stale-low for culture_rate, the same mechanism as hand_potential is at
+   work, just at the ceiling instead of at a sub-60 rail.
+
+Source: /Users/pt/tta-ai (read-only; this file is the only one committed).
