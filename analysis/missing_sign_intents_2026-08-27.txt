@@ -207,6 +207,23 @@ and the live fits confirm the danger --
 food_rate negative at 2p AND 3p: a farm build is priced as a loss in the 3p opener,
 which is exactly the valuation problem behind farm_never_built (0890e08).
 
+AMENDED (same day, after coordinator's 7359a62): the Free class is not a gap --
+it is a DOCUMENTED DECISION. The comment at weights.rs:1745-1752 (above the
+|-joined arm containing these six keys, :1753-1791) states the policy: "Raw
+economy/board magnitudes and rates with no rulebook citation that a bigger
+number is never a downside ... guessing its sign is exactly what this table
+exists to refuse to do." Several keys in that arm carry CITED counterexamples
+rather than merely missing citations (GovLevel/TechLevels: Communism's
+happy:-1 / Fundamentalism's science:-2; Colonies/HasColony: Vast Territory's
+blueTokens:-1; Leader: Sid Meier's sciencePerLab:-1; PactBlocksAttack:
+NoAttacksBetweenParties is symmetric; TacticLevel: RULES_SPEC 10.4 outdated
+units; StrengthLead: Special::StrongestPlayer 5.3). Any proposed reclassification
+(e.g. NonNegative on FoodRate) is a citation-backed reclassification that must
+argue against that comment, not fill a gap. Parsing trap recorded by the
+coordinator: sign_intent opens with `use WeightKey::*` (:1482), so arms use BARE
+variant names and `grep 'WeightKey::FoodRate'` returns nothing and reads exactly
+like absence.
+
 LIST (3): live fitted values at 2p/3p/4p for all 174 keys (the 111 Free keys are
 list (2)-empty, so this is the full table; values above are the raw JSON numbers).
 Flag D = sign disagrees across the three lineages (ignoring 0.0 cells).
