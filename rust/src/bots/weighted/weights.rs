@@ -2258,10 +2258,19 @@ impl WeightKey {
         WeightKey::PopCost => [1.000000, 1.000000, 2.000000],
         WeightKey::YellowBank => [2.000000, 2.000000, 2.000000],
         WeightKey::FreeWorkers => [2.000000, 2.000000, 2.000000],
-        // Placeholder -- measured and replaced with `featspread`'s emit row
-        // in the follow-up commit, matching the `FamineDeficit`/
-        // `RivalScienceDeficit` precedent.
-        WeightKey::FreeWorkerWall => [0.000000, 0.000000, 0.000000],
+        // Measured: `featspread 40 0 <frozen champions> emit`, 2026-08-27,
+        // against `rust_champion_{2,3,4}p.json` frozen under
+        // `analysis/freeworkerwall_champions_2026-08-27/` (deleted after
+        // measuring). Fires on 54.75%/47.57%/55.19% of decisions at
+        // 2p/3p/4p -- far higher than `FamineDeficit`'s ~13% or
+        // `RivalWonderDeficit`'s 1-2%: random self-play (this instrument's
+        // sample) spends workers into Build far faster than it recovers
+        // them via population increase, so sitting at zero free workers is
+        // the COMMON case, not a rare one. p95 spread 19.0/22.0/18.0 --
+        // scaled by the queued civil hand, so a wide spread is expected
+        // (the hand's own value swings widely turn to turn) and the hinge
+        // genuinely enters the argmax on more than half of all decisions.
+        WeightKey::FreeWorkerWall => [19.000000, 22.000000, 18.000000],
         WeightKey::Workers => [1.644737, 1.458824, 1.296089],
         WeightKey::ProdWorkers => [2.000000, 2.000000, 2.000000],
         WeightKey::UrbanWorkers => [2.000000, 2.000000, 1.000000],
