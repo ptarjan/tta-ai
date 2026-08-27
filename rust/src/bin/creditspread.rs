@@ -98,11 +98,12 @@
 //! decision where that fails counts toward the key's GATED_FRAC. gated
 //! frac is the headline: most keys are expected to drop to a small
 //! gated_frac and carry a usable slope, while a few keep a high one --
-//! those few are the genuine finding, and for them the right move is
-//! still CLAMP_BLIND. Keys gated at more than half their firing
-//! decisions emit NO bound (the RUST TABLE row is 0.000000, so
-//! `clamp_bound`'s own `<= 0.0` fallback keeps them at `CLAMP_BLIND`);
-//! no slope is emitted for a key that cannot be defended.
+//! those few are the genuine finding. A key gated at more than half its
+//! firing decisions emits NO bound (the RUST TABLE row is 0.000000, so
+//! `clamp_bound`'s own `<= 0.0` fallback keeps it at `CLAMP_BLIND`); a
+//! key below that threshold still earns a real bound from its own
+//! measured slope, capped at `CLAMP_CEILING` like every other measured
+//! row -- no slope is emitted for a key that cannot be defended.
 //!
 //! # T is re-measured in the SAME run (spec section 5, step 6)
 //!
@@ -139,7 +140,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use tta::bots::weighted::eval::{self, load_weights, WeightedBot};
-use tta::bots::weighted::weights::{CLAMP_BLIND, CLAMP_T, WeightKey, Weights};
+use tta::bots::weighted::weights::{CLAMP_BLIND, CLAMP_CEILING, CLAMP_T, WeightKey, Weights};
 use tta::game::{self, MOVE_CAP};
 
 /// The probe DISPLACEMENT, FIXED for every key (spec section 4.3,
@@ -281,14 +282,22 @@ fn synthetic_sd(probe_w: &Weights, phi_p: &[Vec<f64>], base: &[f64]) -> f64 {
 }
 
 /// The bound (spec section 5, step 6): `CLAMP_T * T / p95_slope` capped at
-/// `CLAMP_BLIND`; `CLAMP_BLIND` when `p95_slope <= 0` (no firing decisions
-/// observed) -- the same fallback `clamp_bound` (weights.rs:2042-2048)
-/// applies to a zero spread row.
+/// `CLAMP_CEILING` (a measured row was seen firing, so it gets the room a
+/// measurement earns); `CLAMP_BLIND` when `p95_slope <= 0` (no firing
+/// decisions observed -- invisible to this instrument, same as a zero row
+/// in `p95_candidate_spread`).
+///
+/// MIRRORS `WeightKey::clamp_bound` (weights.rs) exactly -- same two
+/// constants, same shape, same fallback condition -- because this function
+/// exists only to report what the live rule will do for the credit keys
+/// before their measured rows are spliced into that match. If
+/// `clamp_bound` ever changes its cap or its fallback, this must change
+/// with it or the report starts lying about the rule it mirrors.
 fn bound_from_slope(p95_slope: f64, t_players: f64) -> f64 {
     if p95_slope <= 0.0 {
         return CLAMP_BLIND;
     }
-    (CLAMP_T * t_players / p95_slope).min(CLAMP_BLIND)
+    (CLAMP_T * t_players / p95_slope).min(CLAMP_CEILING)
 }
 
 /// One credit key's running totals over one player count's whole self-play
@@ -656,16 +665,18 @@ fn print_method_header(args: &Args, results: &[CountResult], md5s: &[String; 3])
     println!("(a gate threshold lies between w_k and w_k + 2.0). gated_frac is the");
     println!("HEADLINE column: most keys are expected to drop to a small gated_frac and");
     println!("carry a usable slope; a few keep a high one -- those few are the genuine");
-    println!("finding and stay at CLAMP_BLIND, named with their gated_frac in the");
-    println!("GATED-FRACTION section. Keys gated at more than half their firing decisions");
-    println!("emit NO bound (the RUST TABLE row is 0.000000; clamp_bound's own <= 0.0");
-    println!("fallback keeps them at CLAMP_BLIND).");
+    println!("finding, named with their gated_frac in the GATED-FRACTION section. A key");
+    println!("gated at more than half its firing decisions emits NO bound (the RUST TABLE");
+    println!("row is 0.000000; clamp_bound's own <= 0.0 fallback keeps it at CLAMP_BLIND);");
+    println!("a key below that threshold still earns a real bound, capped at CLAMP_CEILING");
+    println!("like every other measured row.");
     println!();
     println!("T_players is re-measured in THIS run (p95 over decisions of the TOTAL spread");
     println!("max-min dot(champion, phi_c) over C) -- P95_TOTAL_SPREAD (weights.rs) is a");
     println!("stale sample from featspread's own run and must not be mixed with this one.");
     println!();
-    println!("bound(k, players) = CLAMP_T * T / p95_slope, capped at CLAMP_BLIND.");
+    println!("bound(k, players) = CLAMP_T * T / p95_slope, capped at CLAMP_CEILING (falls");
+    println!("back to CLAMP_BLIND when p95_slope <= 0, i.e. no firing decisions observed).");
     println!();
     println!("[REQUIRED CAVEAT, verbatim]");
     println!("{CAVEAT}");
@@ -749,16 +760,17 @@ fn print_gated_keys(results: &[CountResult]) {
     println!("(a gate threshold lies between w_k and w_k + 2.0, spec section 4.3,");
     println!("displacement form). gated_frac is the HEADLINE: most keys are expected to");
     println!("drop to a small gated_frac and carry a usable slope; a few keep a high one.");
-    println!("Those few are the genuine finding and the right move for them is still");
-    println!("CLAMP_BLIND -- they are named here with their gated_frac, on the record.");
-    println!("Keys gated at more than half their firing decisions (the GATED? column of");
-    println!("the key table) emit NO bound: the RUST TABLE row is 0.000000, so");
-    println!("clamp_bound's own <= 0.0 fallback applies.");
+    println!("Those few are the genuine finding; they are named here with their gated_frac,");
+    println!("on the record. A key gated at more than half its firing decisions (the");
+    println!("GATED? column of the key table) emits NO bound: the RUST TABLE row is");
+    println!("0.000000, so clamp_bound's own <= 0.0 fallback applies and its bound below");
+    println!("reads CLAMP_BLIND. A key below that threshold still earns a real bound from");
+    println!("its own measured slope, capped at CLAMP_CEILING like every other measured row.");
     println!("Raw p95 readings over FIRING decisions, both probes:");
     println!("================================================================================");
     println!(
         "{:<28} {:>8} {:>9} {:>10} {:>12} {:>14} {:>14} {:>12}",
-        "key", "count", "fire", "gated_frac", "p95 S_d(1.0)", "p95 S_d(2.0)", "bound", "(CLAMP_BLIND)"
+        "key", "count", "fire", "gated_frac", "p95 S_d(1.0)", "p95 S_d(2.0)", "bound", "(BLIND/CEIL)"
     );
     for (k, players) in &rows {
         println!(
@@ -1064,12 +1076,15 @@ mod tests {
     #[test]
     fn bound_formula_matches_the_spec_by_hand() {
         // spec section 5, step 6: bound = CLAMP_T * T / p95_slope, capped
-        // at CLAMP_BLIND; zero slope falls back to CLAMP_BLIND.
+        // at CLAMP_CEILING (a measured slope earns the full measured cap);
+        // zero slope (no firing decisions, invisible to the instrument)
+        // falls back to CLAMP_BLIND.
         assert_eq!(bound_from_slope(0.0, 500.0), CLAMP_BLIND);
         assert_eq!(bound_from_slope(10.0, 500.0), 50.0); // 1.0 * 500 / 10
-        assert_eq!(bound_from_slope(1.0, 5000.0), CLAMP_BLIND); // 5000 capped to 60
-        // 50000 / 5 = 10000 > CLAMP_BLIND: the cap, not the raw ratio.
-        assert_eq!(bound_from_slope(5.0, 50000.0), CLAMP_BLIND);
+        // 5000 / 1 = 5000 and 50000 / 5 = 10000 both dwarf CLAMP_CEILING =
+        // 120: the cap, not the raw ratio.
+        assert_eq!(bound_from_slope(1.0, 5000.0), CLAMP_CEILING);
+        assert_eq!(bound_from_slope(5.0, 50000.0), CLAMP_CEILING);
     }
 
     /// The formulation-pinning test required by spec section 7, as
@@ -1108,8 +1123,13 @@ mod tests {
     ///   c = 2.0: value = 2.5, deltas 5.0 / -5.0; S_d = 5.0 - (-5.0)
     ///            = 10.0
     ///   S_d(c) = 4.0 * (w_k + c) = 2.0 + 4.0c  -- linear in the VALUE.
-    ///   s_k = S_d / 1.0 = 6.0; with T = 500.0: bound = 1.0*500/6
-    ///       = 83.33.. capped at CLAMP_BLIND = 60.0.
+    ///   s_k = S_d / 1.0 = 6.0; with T = 1000.0: bound = 1.0*1000/6
+    ///       = 166.67.. capped at CLAMP_CEILING = 120.0. (T = 500.0 gave
+    ///       83.33, which was capped at the old single CLAMP_BLIND = 60.0;
+    ///       since CLAMP_CEILING = 120.0 replaced it as the cap on a
+    ///       MEASURED bound, 83.33 sits below the cap and no longer
+    ///       exercises it -- T = 1000.0 is chosen so the ratio still
+    ///       clears CLAMP_CEILING.)
     ///
     /// The per-decision linearity check is |S_d(2.0) - 2*S_d(1.0)|
     /// <= TOL*S_d(1.0): here |10.0 - 12.0| = 2.0 > 0.06, so it GATES --
@@ -1222,7 +1242,12 @@ mod tests {
         assert!(!linear, "the displacement form makes the spread linear in w_k + c, not in c: the check must gate here");
 
         let slope = sd1 / C;
-        let bound = bound_from_slope(slope, 500.0);
-        assert_eq!(bound, CLAMP_BLIND, "500/6 = 83.33 exceeds CLAMP_BLIND = 60.0");
+        // T = 1000.0, not the hand-computed T = 22.0 from base above: this
+        // plugs an arbitrary total into the bound formula purely to
+        // exercise CLAMP_CEILING. T = 500.0 gave 83.33, which sat below
+        // CLAMP_CEILING = 120.0 once that cap replaced the old single
+        // CLAMP_BLIND = 60.0, so it stopped exercising the cap at all.
+        let bound = bound_from_slope(slope, 1000.0);
+        assert_eq!(bound, CLAMP_CEILING, "1000/6 = 166.67 exceeds CLAMP_CEILING = 120.0");
     }
 }
