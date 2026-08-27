@@ -1,0 +1,134 @@
+CA-waste reconcile: where "20.3% of civil actions wasted" came from,
+and whether it conflicts with 1.06 non-EndTurn decisions/turn (2026-08-27)
+============================================================
+Read-only: grep of analysis/ + git log. No new measurement, no
+estimate.
+
+The two figures
+---------------
+(A) 1.06 non-EndTurn DECISIONS per turn, 2p, rounds 1-3, frozen
+    champion (openerprobe: 360 non-EndTurn / 713 total own-turn
+    decision points). Definition: how many times in a round-1-3
+    civil phase the bot picked a non-EndTurn move, per turn.
+    One decision debits 1-4 CA (takes), 1 MA (unit build), or 0
+    (nothing 0-cost ever offers EndTurn).
+(B) "20.3% of civil actions wasted", recorded as a standing
+    headline defect in the project notes.
+
+Where (B) came from
+-------------------
+The exact denominator was NEVER re-derived in this repo. The
+earliest file that quotes it, analysis/opening_census_2026-08-24.txt
+(Q1 section), says so explicitly:
+
+  "the '20.3%' figure's exact denominator was not re-derived
+   here, so the two percentages are of the same order but not
+   proven to be the same unit"
+
+and compares it against its own measured ">=1 unused CA in rounds
+1-3" rate of 28.0% (84/300 2p player-games, bot, champion gen
+108239), calling 28.0% "higher than the '20.3% wasted overall'
+standing figure quoted in the task, i.e. the opener is WORSE than
+the whole-game average". So (B) was already a second-hand "whole
+game" number by 2026-08-24: whole game (not opener-only),
+fraction-of-CAs (not fraction-of-player-games), 2p champion of the
+era (gen ~108k, pre the 2026-08-25 climb restart).
+
+The tool family that produced the underlying CA-waste numbers:
+analysis/wasted_actions.py (deleted in 80314c7 "Delete dead
+analysis/", 3 weeks old) + analysis/wasted_summary.py.
+wasted_actions.py self-played the champion, recorded EVERY turn
+that ended with civil actions unspent, and printed exactly:
+
+  {n}/{turns} turns end with CA unspent ({share:.1%}),
+  {ca_left} CA wasted = {ca_left/turns:.2f}/turn
+
+i.e. two distinct rates: (i) turns-ending-unspent / total turns,
+and (ii) total CA wasted / total turns. wasted_summary.py
+aggregated the per-event dumps (ca_wasted_total,
+ca_wasted_with_no_option, declined_a_move, ...). The 20.3% is one
+of these two rates on a whole-game self-play run; which of the two,
+and on how many games, is not recoverable from the repo (the .json
+dumps and the script are both gone with 80314c7). What IS
+recoverable: the rate family (CA wasted per turn, or turns ending
+unspent) is NOT "player-games with >=1 unused", and the 28.0%
+opener number from the same era is in the same order, which
+brackets the 20.3% whole-game figure between the opener rate and
+something milder — consistent with "whole game is better than the
+opener" (later census: 4p 24.0% vs 2p 2.3% opening rates in
+analysis/opener_census_postclimb_2026-08-26.txt).
+
+Subsequent history of the defect:
+- Root cause, analysis/ca_waste_cause_2026-08-24.txt (46b88e6):
+  the 1-ply scoring asymmetry -- EndTurn is the only candidate
+  whose apply arm runs economy::end_of_turn, so it was scored
+  post-production against pre-production rivals. A timing bug in
+  WeightedBot::choose, not a weight.
+- Fixed in eval.rs (score EndTurn on the unmoved state, learned
+  end_turn_bias instead); greedy.rs and quiescent.rs audited and
+  fixed the same way (analysis/endturn_sibling_fix_2026-08-24.txt,
+  1e145e6/02086c6/5ee71a3).
+- Post-fix censuses: opening ">=1 unused CA in rounds 1-3" is now
+  2.3% (2p) / 1.4% (3p) of player-games
+  (analysis/opener_census_postclimb_2026-08-26.txt) and 3.3% /
+  1.7% in the 2026-08-27 recheck
+  (analysis/opener_recheck_2026-08-27.txt). The 20.3% figure has
+  not been re-measured since the fix because its original
+  denominator was never pinned down; both follow-up censuses
+  explicitly say "NOT the same denominator as the original claim".
+
+Do they conflict?
+-----------------
+No. They measure different things, at different times, with
+different denominators:
+
+  1.06 (A): DECISIONS per turn, opener-only (rounds 1-3),
+            current frozen champion, openerprobe. Counts how
+            often the bot chose to act vs pass. One decision can
+            debit 1-4 CA, so points/turn >= 1.06.
+  20.3% (B): CA WASTED per turn (or turns ending unspent), whole
+            game, champion of ~gen 108k (2026-08-24 era),
+            wasted_actions.py self-play. Counts CAs that reached
+            EndTurn unspent, over all rounds.
+
+Three separate gaps make the "70%+ unspent" reading invalid:
+1. Denominator: (A) is per turn, (B) is a FRACTION of CAs, over
+   the whole game. 1.06 decisions/turn against 4 CA is NOT a
+   waste rate -- it is a decision rate, and multi-CA takes plus
+   carry-over (unspent CAs roll into the next round and are
+   spent there; the bot's r2-5 CA spend in
+   analysis/opening_r2_5_actions_2026-08-26.txt runs NEGATIVE
+   unused in rounds 2-5, i.e. it spends into carried CAs) mean
+   points-per-turn comfortably exceeds 1.06.
+2. Rounds: (A) covers rounds 1-3 only; (B) covers the whole
+   game, where the bot spends more per turn (its later-round CA
+   spend is not the opener's).
+3. Era: (B) predates the EndTurn-scoring fix (46b88e6 et seq.).
+   The defect it measured is gone: current opening waste is 2.3%
+   of 2p player-games leaving any CA unused in rounds 1-3, i.e.
+   the bot now spends essentially everything it holds. (B) is a
+   historical defect figure, not a current-state one.
+
+Plain statement: 1.06 says "the bot acts on ~half its decision
+opportunities in rounds 1-3" (the pass-rate problem); 20.3% said
+"the old bot ended whole-game turns holding unspent CAs in about
+a fifth of the cases that mattered" (the EndTurn-scoring bug,
+fixed). Neither number implies the other's denominator, and after
+the fix the CA-waste side of the ledger is near zero while the
+pass-rate side (1.06) is the live defect. They do not conflict.
+
+Files consulted
+---------------
+- analysis/opening_census_2026-08-24.txt (Q1: 28.0% opener, quotes
+  the "20.3% wasted overall" standing figure, names the
+  denominator gap)
+- analysis/ca_waste_cause_2026-08-24.txt (root cause; 46b88e6)
+- analysis/endturn_sibling_fix_2026-08-24.txt (greedy/quiescent
+  twins; fix)
+- analysis/wasted_actions.py + wasted_summary.py (deleted in
+  80314c7; git show 80314c7~1: for the printed-rate format)
+- analysis/opener_census_postclimb_2026-08-26.txt (Defect 4:
+  post-climb 2.3%/1.4%/24.0%)
+- analysis/opener_recheck_2026-08-27.txt (recheck: 3.3%/1.7%/6.7%)
+- analysis/opening_r2_5_actions_2026-08-26.txt (r2-5 CA spend,
+  negative-unused carry-over)
