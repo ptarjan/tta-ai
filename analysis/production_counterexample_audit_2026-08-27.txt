@@ -1,0 +1,95 @@
+AUDIT OF analysis/production_key_counterexamples_2026-08-27.txt (89141ca)
+========================================================================
+2026-08-27. That file is the outstanding precondition for the queued
+NonNegative sign_intent on FoodRate: if the CARD DATA supplies a counterexample
+for a production key the way Vast Territory (blueTokens:-1) supplies one for the
+Hand* keys, the reclassification is dead. Its verdicts were re-checked in source
+here rather than accepted, because a NO COUNTEREXAMPLE FOUND is the verdict that
+unblocks a change dominance_repair makes permanent.
+
+
+VERDICT 1 -- ResourceRate: COUNTEREXAMPLE CONFIRMED, citation exact
+------------------------------------------------------------------
+data/cards_military_actions.json:847   "resourceProduction": -1
+card_table.rs  Acceptance of Supremacy (name confirmed at the card's own
+  `name:` field), Special::B(PactBlock { ... resources: -1 ... })
+effects.rs:921 stats.resources += block.resources as i32;   <-- verbatim, the
+  line number is right to the line
+features.rs (rust/src/bots/weighted/features.rs):716
+  f.set(WeightKey::ResourceRate, f64::from(s.resources) + g(...) - corruption)
+
+So the side-B party of a live Acceptance of Supremacy carries a -1 into
+stats.resources and out through ResourceRate. This is the Vast Territory shape
+and it closes ResourceRate to reclassification on the same grounds as the
+weights.rs:2055-2067 block. ResourceRate was never the queued experiment, but it
+must not become one.
+
+
+VERDICT 2 -- FoodRate: NO COUNTEREXAMPLE, INDEPENDENTLY REPRODUCED
+-----------------------------------------------------------------
+Enumerated every negative-valued field across all three data/*.json:
+
+    culture 3, blueTokens 3, happy 2, cultureProduction 2,
+    culturePerDiscontentWorker 2, sciencePerLab 1, science 1,
+    resourceProduction 1, civilActionsPerDiscontentWorker 1
+
+Nine distinct field names. (The peer's report says twelve; the discrepancy is in
+the counting, not in the set -- no field it lists reaches food.) There is no
+"food": -N, no foodProduction, no population and no worker field anywhere in
+base-2015 card data. Nothing prints negative food.
+
+
+THE METHOD'S BLIND SPOT -- worth more than either verdict
+---------------------------------------------------------
+The sweep enumerated negative INTEGER LITERALS IN CARD DATA. Two card TEXTS
+describe losses that are implemented in event code, not as negative data fields,
+and so are invisible to that method:
+
+    cards_military_actions.json:1655  "The weakest player (2p) / the two
+      weakest players (3-4p) lose up to 2 food and/or resources."
+    cards_military_actions.json:1681  "The player with the most culture
+      decreases population if he or she is the weakest ..."
+
+So "no negative literal in the data" does NOT mean "no mechanism can reduce this
+quantity". Food stock and population CAN be reduced, by events.
+
+It changes no verdict, and the reason is the one that actually matters for a
+sign_intent: NonNegative constrains the WEIGHT, i.e. it asserts that a LARGER
+value is never worse. A subtractive event is not that. Losing 2 food from a
+larger stock still leaves a player strictly better off than losing 2 from a
+smaller one -- the event is a subtraction, not a penalty scaled to holdings.
+A counterexample has to be a mechanism where MORE IS WORSE, and neither of these
+is one. Do not re-raise them as if they were.
+
+
+A CORRECTION TO HOW THE EXPERIMENT MUST BE ARGUED
+--------------------------------------------------
+FoodRate is NOT gross food production. features.rs:713:
+
+    f.set(WeightKey::FoodRate, f64::from(s.food) + g(GainFeature::FoodRate)
+                               - consumption);
+
+It is a NET SURPLUS, production minus consumption(proj_yellow), exactly as
+ResourceRate is production minus corruption(proj_blue). The queued writeup was
+framed as "more food PRODUCTION is never a downside"; that argues about a
+quantity the feature does not hold.
+
+The rules argument survives the restatement and is in fact stronger. Consumption
+is already deducted, so the feature IS the famine margin, and RULES_SPEC 6.6-3d
+charges 4 culture per missing food -- a larger margin is strictly less exposed.
+6.6-3b makes food the corruption shortfall buffer on top of that. No rule
+charges a player for a larger surplus, and the worker's opportunity cost is
+carried by the other production terms, not by this one. The feature's VALUE may
+legitimately go negative in a famine; that is not in tension with a NonNegative
+weight, which is a claim about direction, not about range.
+
+Restate the writeup in terms of net food surplus before landing it.
+
+
+BOTTOM LINE
+-----------
+The precondition is met for FoodRate: proceed after the clamp-ceiling A/B is
+judged on 2026-08-30, with the argument restated as above. ResourceRate is now
+closed. The five others (FoodStock, BestFarm, BestMine, ProdWorkers,
+FreeWorkers) have no counterexample either, subject to the blind spot named
+above -- which is a limit on the search, not a finding against them.
