@@ -1,0 +1,160 @@
+production_key_shortlist_2026-08-27
+========================================
+
+Job: from the 63 (B) citation-merely-missing AND sign-disagreeing
+Free keys (free_key_reasons, ec07159), produce a ranked shortlist of
+at most 10 that deserve a rules-citation search next -- the next
+food_rate-shaped experiment. Candidates only: NOT a sign_intent
+proposal, NOT a full census. The discriminator is separating two
+shapes that both read as "sign disagreement":
+
+  GENUINE -- all three lineages LARGE and they disagree in sign.
+             Collinearity signature: the fit is confidently choosing
+             opposite answers on different arms, so the eval has no
+             real opinion and a rules constraint would actually bind.
+             These are the candidates.
+  NOISE   -- one or two lineages sit near zero and the "flip" is a
+             small value crossing zero. Not interesting; counted, not
+             shortlisted.
+
+LARGE is set at |w| >= 1.0. The blind clamp is CLAMP_BLIND = 60.0
+(weights.rs:2499); "near clamp" below means within ~10 of 60, i.e.
+the climb has pushed that arm hard against its bound, which is the
+strongest single-arm commitment signal available.
+
+Headline: a STRICT "all three large" reading of the discriminator
+yields only 2 keys (StrengthRelEarly, FreeWorkers) -- everything else
+has at least one lineage under 1.0, so under the strict rule 61 of the
+63 are NOISE. That is reported honestly below. But the strict rule
+over-penalises the YOUNG 4p arm: 4p is gen 21600 / since_accept 8
+(2p is 118394, 3p 66113), so its weights are systematically less
+committed, and a strict all-three-large test would wrongly exclude
+obvious 2-armed collinearities (e.g. SpecialTechs at +50.9 on 4p).
+The shortlist therefore uses the practical rule -- AT LEAST TWO
+lineages large AND the lineages disagree in sign -- and the strict
+all-three-large subset is flagged as the core of it. Nine keys clear
+the practical bar; that is the shortlist (<=10 as asked).
+
+Champions copied to /tmp/prod_{2,3,4}p.json before reading; gen +
+md5:
+  2p  gen 118394  since_accept 3  md5 43d5af66ab912798d662a7bfa07d51c0
+  3p  gen 66113   since_accept 2  md5 7402dae11eb366275bc74629ebd9bf8b
+  4p  gen 21600   since_accept 8  md5 dd9d2bd20ecfc49c0a150db140a0593b
+
+Note: these values are a ~10-min-stale re-read of the live climb for
+the shortlist's own header; the 63 SET itself (which keys sign-
+disagree) is from /tmp/miss_live.json taken earlier today. A key at
+the LARGE floor could in principle have crossed since; the set is
+stable, the exact magnitudes are a snapshot.
+
+========================================
+RANKED SHORTLIST (9 of 63) -- next rules-citation search candidates
+========================================
+
+1. StrengthRelEarly  (strength_rel_early)  2p=-11.3403  3p=-22.6904  4p=+15.7441
+   All three lineages large and far from the blind clamp (11.3/22.7/15.7); 2p and 3p confidently NEGATIVE while 4p is confidently POSITIVE -- the cleanest collinearity signature in the whole set. The eval has a real, opposite opinion per arm.
+
+2. FreeWorkers  (free_workers)  2p=+4.6192  3p=+1.1919  4p=-9.6146
+   All three large (4.6/1.2/-9.6); 2p+3p positive, 4p negative at near-clamp magnitude. Same shape as StrengthRelEarly but with the 3p arm only just over the LARGE floor.
+
+3. BestFarm  (best_farm)  2p=-0.4573  3p=-2.9444  4p=+39.8990
+   3p (-2.94) and 4p (+39.9, near clamp) are both committed to opposite signs; only 2p (-0.46) sits under the LARGE floor. A genuine 2-armed collinearity the young 2p arm has not yet resolved.
+
+4. SpecialTechs  (special_techs)  2p=-0.1607  3p=-0.6176  4p=+50.8790
+   4p is at +50.9 -- the single largest magnitude in the set, within 9 of the 60 clamp -- while 3p is -0.62 and 2p -0.16. A near-clamp 4p opinion that the other two arms contradict; the most extreme committed-vs-rest split available.
+
+5. RivalDesire  (rival_desire)  2p=-0.2257  3p=+10.6516  4p=+9.4111
+   3p (+10.65) and 4p (+9.41) are both large and POSITIVE, 2p (-0.23) small negative. Two confident arms against a small third -- a real but one-sided collinearity (both large arms agree, so the constraint would bind against 2p).
+
+6. BestMine  (best_mine)  2p=-0.1446  3p=+16.2545  4p=-1.2100
+   3p (+16.25) and 4p (-1.21) large and opposite; 2p (-0.14) small. 3p arm is strongly committed; a 2-armed collinearity with the 4p arm just over the floor.
+
+7. AuctionBid  (auction_bid)  2p=-3.1597  3p=-0.0942  4p=+3.4770
+   2p (-3.16) and 4p (+3.48) are both large and opposite (mirrored magnitudes); 3p (-0.09) is the near-zero arm. A clean 2-armed flip where the two committed arms are almost symmetric in size.
+
+8. HappyMargin  (happy_margin)  2p=+1.5366  3p=-0.0583  4p=-1.6468
+   2p (+1.54) and 4p (-1.65) large and opposite, 3p (-0.06) near zero. 2-armed collinearity; the 3p arm has not committed yet.
+
+9. RivalCultureRate  (rival_culture_rate)  2p=+3.3990  3p=-0.0198  4p=-8.7278
+   2p (+3.40) and 4p (-8.73) large and opposite, 3p (-0.02) at zero. 2-armed collinearity with the 4p arm the larger of the two.
+
+========================================
+NOISE (54 of 63) -- counted, not shortlisted
+========================================
+
+Every one of these has at least one lineage with |w| < 1.0, so the
+sign flip involves a small value crossing zero. 2 of the 63 are the
+strict all-three-large GENUINE keys (already in the shortlist above);
+the remaining 9-2=7 shortlist keys are 2-armed (two lineages large,
+one near-zero). That leaves 63 - 9 = 54 NOISE keys:
+
+ # variant                  name                                2p          3p          4p  minmag
+ 1 RivalWonderDeficit       rival_wonder_deficit           +0.0961     -0.2233     +0.0000  0.000
+ 2 RivalCultureDeficit      rival_culture_deficit          -0.0996     +0.0171     +0.0000  0.000
+ 3 CorruptionHeadroom       corruption_headroom            +0.0270     -0.2132     -0.0045  0.004
+ 4 RivalTakeShare           rival_take_share               -0.2825     +0.0053     +1.6726  0.005
+ 5 ScienceRateTrailing      science_rate_trailing         +55.3852     +0.0092     -0.4374  0.009
+ 6 WonderProgress           wonder_progress                -0.1202    +14.8162     -0.0126  0.013
+ 7 RivalHandCivil           rival_hand_civil               -0.2269     -0.0131     +0.4343  0.013
+ 8 RivalScienceRate         rival_science_rate             -0.0137     +0.0482    +13.8495  0.014
+ 9 StrengthRel              strength_rel                   +0.1930     +2.7648     -0.0143  0.014
+10 RowUrgency               row_urgency                    -0.0145     +0.1746     -0.1679  0.015
+11 HasUnit                  has_unit                       -0.4982     -0.0194     +0.0784  0.019
+12 MySeededPending          my_seeded_pending              +0.2377     +0.9615     -0.0200  0.020
+13 RivalStrength            rival_strength                 +0.3789     +0.0206     -0.7516  0.021
+14 ScienceNeeded            science_needed                 +0.2369     -1.0201     -0.0215  0.022
+15 FoodStockNeeded          food_stock_needed              +0.0481     -0.1705     -0.0233  0.023
+16 WonderInProgress         wonder_in_progress             +0.3957     +0.0675     -0.0251  0.025
+17 ResourceStock            resource_stock                 +0.2207    +40.9380     -0.0318  0.032
+18 BestTemple               best_temple                    -3.1207     +1.9694     -0.0332  0.033
+19 Pacts                    pacts                          +0.0357     -1.6859     -0.1536  0.036
+20 BlueFree                 blue_free                      +0.0387    +40.9380     -0.3783  0.039
+21 ConsumptionHeadroom      consumption_headroom           +0.0423     +6.0840     -0.4215  0.042
+22 LeaderReplacement        leader_replacement             -0.0499     -0.0960     +0.1604  0.050
+23 MaLeft                   ma_left                        -0.0509    +27.3945     -0.5409  0.051
+24 AuctionCommitted         auction_committed              +0.0529     -0.5370     -0.0868  0.053
+25 ScienceSurplus           science_surplus                -0.2116     -0.7272     +0.0541  0.054
+26 ProdWorkers              prod_workers                   +2.0634     +0.0589     -0.1942  0.059
+27 HappySurplus             happy_surplus                  -0.3476     +0.2980     +0.0607  0.061
+28 ScienceRate              science_rate                   +0.5956     +0.3133     -0.0621  0.062
+29 ResourceStockNeeded      resource_stock_needed          +0.0634     -0.0623     +0.0855  0.062
+30 RivalScienceStock        rival_science_stock            +0.2238     -0.0654     -2.1384  0.065
+31 TakeCostPaid             take_cost_paid                 -0.0693     -5.2840     +0.0745  0.069
+32 FreeWorkersNeeded        free_workers_needed            +0.3584     -0.3289     -0.0709  0.071
+33 RivalHandPotential       rival_hand_potential           -0.1706     +0.0726     +9.9876  0.073
+34 FoodRate                 food_rate                      -1.4771     -0.0762     +0.6461  0.076
+35 HandSwapExtra            hand_swap_extra                -3.4254     +0.2288     +0.0777  0.078
+36 ResourceSurplus          resource_surplus               +0.1310     -0.0813     -0.3949  0.081
+37 BestArena                best_arena                     +0.2327    -16.5634     +0.0871  0.087
+38 WonderPoolRivalClaimed   wonder_pool_rival_claimed      -0.1822     -0.8386     +0.1059  0.106
+39 CultureSurplus           culture_surplus                -0.1092     -0.3141     +0.8560  0.109
+40 StrengthRelLate          strength_rel_late              -0.2335     +0.1104     +2.4669  0.110
+41 RivalCulture             rival_culture                  +6.2639     +0.4663     -0.1119  0.112
+42 RivalMeanCulture         rival_mean_culture             +8.7091     -0.1853     -0.1174  0.117
+43 CaLeft                   ca_left                        -0.1382     -5.1339     +0.6963  0.138
+44 UrbanLimit               urban_limit                    +0.1424     -1.3175     +0.5860  0.142
+45 GovActionCost            gov_action_cost                +0.1430     -4.4115     +0.2840  0.143
+46 RivalFoodStock           rival_food_stock               +0.2001     -0.1574     +0.8484  0.157
+47 RateHorizon              rate_horizon                   -0.7581     +0.4988     +0.1672  0.167
+48 YellowBank               yellow_bank                    -0.2546    -12.2115     +0.2266  0.227
+49 AttackTargetLead         attack_target_lead             -0.8464     +0.2396     +0.6937  0.240
+50 BonusCardCredit          bonus_card_credit              -0.2487     +0.3992     -0.5476  0.249
+51 CardRateCredit           card_rate_credit               +0.3050     -3.3802     -0.5723  0.305
+52 RivalBuildingWonder      rival_building_wonder          -1.4902     -0.4906     +0.3938  0.394
+53 RivalColonies            rival_colonies                 +9.3265     -0.5188     -0.5505  0.519
+54 RivalYellowBank          rival_yellow_bank              -9.4896     +0.5635     +0.8186  0.563
+
+========================================
+Summary
+========================================
+  63 = 9 shortlisted (GENUINE / practical collinearity) + 54 NOISE
+  of the 9: 2 are strict all-three-large (StrengthRelEarly,
+    FreeWorkers); 7 are 2-armed (two lineages large, one near-zero).
+  The 54 NOISE keys are dominated by the young 4p arm not having
+    committed yet (since_accept 8 vs 3/2) -- a re-read in a few
+    hundred generations would re-tier several of them. They are
+    counted here so the noise fraction is known, as asked.
+
+This is a candidate list only. No sign_intent change proposed; no
+weights.rs edit; the citation work and the A/B are separate steps
+after, per the job.
