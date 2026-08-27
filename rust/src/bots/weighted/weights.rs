@@ -2168,9 +2168,15 @@ impl WeightKey {
         // [0,0,0], identical on every candidate by construction), the hinge
         // genuinely enters the argmax.
         WeightKey::RivalWonderDeficit => [1.000000, 1.000000, 1.000000],
-        // Placeholder -- measured and replaced with `featspread`'s emit row
-        // in the follow-up pass (see the commit that lands this key).
-        WeightKey::RivalScienceDeficit => [0.000000, 0.000000, 0.000000],
+        // Measured: `featspread 40 0 <frozen champions> emit`, 2026-08-27,
+        // against `rust_champion_{2,3,4}p.json` frozen under
+        // `analysis/rivalsciencedeficit_champions/`. Fires on 21.37%/35.77%/
+        // 44.03% of decisions at 2p/3p/4p -- far more than `RivalWonderDeficit`
+        // above (1-2%), because a science-rate gap between players is
+        // continuous and common, unlike a rare wonder-completion race. p95
+        // spread 1.0/2.0/2.0, mean spread when firing 1.01/1.06/1.17: the
+        // hinge genuinely enters the argmax at every count.
+        WeightKey::RivalScienceDeficit => [1.000000, 2.000000, 2.000000],
         WeightKey::RivalHandPotential => [147.637444, 110.078904, 11.859491],
         WeightKey::RivalScienceStock => [6.000000, 5.000000, 5.000000],
         WeightKey::RivalFoodStock => [4.000000, 3.000000, 3.000000],
