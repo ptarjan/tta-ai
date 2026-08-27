@@ -1,0 +1,76 @@
+THE "NO ABSORBER" RESIDUAL: CLOSED
+==================================
+2026-08-27. Follows analysis/pinned_key_absorbers_2026-08-27.txt (7936fbd),
+which grouped the 11 effective proven snaps by WeightGroup and found 3 with no
+sign-consistent nonzero sibling to absorb their signal: no_aggression@2p, and
+military_action_gap at both 2p and 4p. If collinearity is the mechanism behind
+the sign gate pinning a key, these three had no mechanism.
+
+All three are now explained, and none of them is a gate victim.
+
+
+1. military_action_gap@2p -- ESCAPED. Not a snap at all.
+--------------------------------------------------------
+  frozen (gen 116808) = 0        live (gen 116956) = -0.08091218942484857
+
+It crossed off zero in 148 generations, the FOURTH observed escape from the
+sign gate and by far the fastest (wonder_remaining took ~834). A key that
+escapes in 148 generations was never pinned in any meaningful sense; it was
+sitting at zero on the day the census happened to be taken. This is
+tta-champion-file-is-live biting a static census.
+
+
+2. military_action_gap@4p -- almost certainly the same, just on the slow arm.
+----------------------------------------------------------------------------
+  frozen (gen 21445) = 0         live (gen 21455) = 0
+
+4p advanced only 10 generations since the freeze, against 148 at 2p. Its 2p twin
+escaped, the two counts price the family similarly (military_action_surplus
++0.082 at 2p vs +0.057 at 4p), and the key simply has not been given comparable
+climb time. Re-read it, do not theorise about it.
+
+
+3. no_aggression@2p -- the one real residual, and the answer is that its true
+   coefficient at 2 players is approximately zero.
+-----------------------------------------------------------------------------
+  frozen (gen 116808) = 0        live (gen 116956) = 0    (still exactly 0
+  after 148 more generations, unlike military_action_gap)
+
+  cross-count live values:   2p  0        3p -0.030369      4p -4.235542
+  (4p was -2.854 at the earlier census -- it is still growing more negative)
+
+The feature is a plain binary indicator, features.rs:1057:
+    f.set(WeightKey::NoAggression, if s.no_aggression { 1.0 } else { 0.0 });
+so its spread row is 1.000000 at all three counts in every measurement (live
+table, 40-game run and 160-game run all agree). It is not invisible and it is
+not thinly sampled.
+
+Its sign_intent is NonPositive with the reason "strips the holder's own
+aggression and war moves" (weights.rs:1923, asserted in a test at :3202). That
+is rules-correct and is not the problem.
+
+The problem was never a missing absorber. The cross-count profile is monotone in
+the number of opponents you could attack: 0 / -0.03 / -4.24. Losing your own
+aggression and war moves is a real cost at 4 players, where there are three
+targets; it is worth essentially nothing at 2 players, where there is one
+opponent and the aggression options are thin to begin with. The true 2p
+coefficient is ~0, the fit lands slightly positive on noise, and the gate rounds
+it to exactly 0.
+
+That is the BENIGN case. The gate is not destroying accumulated magnitude here,
+because there is no magnitude to destroy. No absorber is needed, because there
+is nothing to absorb.
+
+
+VERDICT
+-------
+The sign gate has no unexplained victim among the 11 effective proven snaps:
+8 have a sign-consistent absorber in their WeightGroup, 1 escaped in 148
+generations, 1 is the same key on the slow arm, and the last has a true
+coefficient of about zero at the count where it is pinned.
+
+The general rule this yields: a pinned key with NO absorber AND a cross-count
+profile that is MONOTONE in player count is a key whose true coefficient at that
+count is ~0 -- read the rules for why the count matters and stop. Reserve
+suspicion for a pinned key that the other lineages price strongly and
+NON-monotonically, which is the shape that says information is being lost.
