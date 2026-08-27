@@ -1,0 +1,40 @@
+ambiguous_vs_spread_2026-08-27.txt
+
+The 14 AMBIGUOUS zeros from zero_bucket_split_2026-08-27.txt (authored default 0.0 AND
+sign-gated, frozen champions) crossed against their live p95_candidate_spread row in
+weights.rs (lines 2232-2477) at the SAME player count where the weight sits at 0.0.
+Spread table index = player count - 2 (0->2p, 1->3p, 2->4p). P95_TOTAL_SPREAD
+[823.689416, 483.787396, 545.274556] (weights.rs:2532); bound = min(P95/spread, 120.0),
+spread 0.0 falls back to CLAMP_BLIND = 60.0.
+
+(i) SPREAD ROW IS 0.0 -- doubly invisible: the feature never varies across the candidate
+set at that count, so a 0.0 weight is unsurprising, and the key also falls back to the
+loosest clamp rail (60.0):
+
+  count: 0
+
+(ii) SPREAD ROW HEALTHY NONZERO -- the interesting bucket: the feature demonstrably
+MOVES across candidates at that count, yet the weight still sits at exactly 0.0.
+Sorted by spread descending:
+
+  name                       count intent               spread   bound
+  free_worker_wall           4   NonPositive       18.000000   30.2930
+  resource_commitment_turns  4   NonPositive       16.000000   34.0797
+  row_playable_count         4   NonNegative       13.000000   41.9442
+  wonder_board_credit        2   NonNegative        5.008904   120.0000
+  military_action_gap        2   NonPositive        3.000000   120.0000
+  military_action_gap        4   NonPositive        3.000000   120.0000
+  hand_limit                 2   NonNegative        2.000000   120.0000
+  famine_deficit             3   NonPositive        2.000000   120.0000
+  famine_deficit             4   NonPositive        2.000000   120.0000
+  happy_margin_after_next_pop 4   NonPositive        2.000000   120.0000
+  hand_perishable            4   NonPositive        1.393517   120.0000
+  no_aggression              2   NonPositive        1.000000   120.0000
+  free_action_credit         4   NonNegative        0.027570   120.0000
+  free_action_credit         3   NonNegative        0.006957   120.0000
+  count: 14
+
+Note: no ambiguous zero sits in bucket (i) -- every one of the 14 has a healthy nonzero
+spread at its count, so all 14 are the interesting bucket (ii). The nearest misses are
+free_action_credit 3p (spread 0.006957) and 4p (0.027570): near-invisible but not 0.0.
+
