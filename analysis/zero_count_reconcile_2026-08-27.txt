@@ -1,0 +1,32 @@
+Reconciliation: 3p exact-zero count, my 7 (census 918a7f6) vs the coordinator's 5.
+
+Live re-read of /Users/pt/tta-ai/experiments/rust_champion_3p.json just now:
+  md5 8b7f05602fd77646a35ebac87dfe425c, gen 65100, 169 keys total.
+  exact zeros (== 0.0): 5
+    free_action_credit, hand_limit, happy_margin_after_next_pop,
+    strength_deficit, wonder_stages_per_action
+  within 1e-12 of zero but not exactly zero: 0
+
+Verdict: the file has CHANGED since my census. My copy was md5 a47a5632...,
+gen 65079; the live file is now 8b7f0560..., gen 65100. The climb rewrote it
+between the two reads, so a moving target is the whole answer: my 7 is
+correct for the snapshot I read (a47a5632), the coordinator's 5 is correct
+for the later frozen copy. Neither count is wrong.
+
+What moved: two keys left exactly 0.0 in the newer snapshot,
+restricted_resource_credit (0.0 -> 0.005747988807787762) and
+unit_strength_credit (0.0 -> 0.016268617677789587). No key gained 0.0,
+and there is no near-zero ambiguity -- the 1e-12 window is empty at both
+snapshots, so the difference is a snapshot difference, not a threshold one.
+
+Both of those two are NonNegative sign-gated keys (sign_intent in
+weights.rs:1480+): restricted_resource_credit scales an already-clamped
+marginal, unit_strength_credit scales a printed benefit. In my census
+snapshot their fitted values had crossed to the wrong side and been snapped
+to 0.0 by the NonNegative gate (eval.rs:997); by gen 65100 the next mutation
+had moved them back to small positive fits, so the gate no longer snaps.
+Boundary-pinning at the zero bound is transient per lineage, as the earlier
+census found -- a handful of keys, and which handful depends on the
+snapshot.
+
+Source: /Users/pt/tta-ai (read-only; this file is the only one committed).
