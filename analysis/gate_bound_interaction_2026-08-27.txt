@@ -1,0 +1,77 @@
+gate_bound_interaction_2026-08-27.txt
+
+Question: the sign gate (eval.rs dominance_repair, the NonNegative/NonPositive arms of
+WeightKey::sign_intent in weights.rs) snaps any gated weight whose fitted sign is wrong back to
+0.0 on every load and every mutation; the clamp (weights.rs clamp_bound, CLAMP_CEILING = 120.0,
+CLAMP_BLIND = 60.0) pins the rest to the bound. For the three frozen champions, how often do the
+two mechanisms meet at the same point, and how many gated keys have been zeroed outright?
+
+Setup: 522 (key, count) pairs from analysis/frozen/clamp_ceiling_2026-08-27/ (generations
+116808 / 65450 / 21445, 174 keys each, weights under the "weights" key), bounds from the LIVE table in
+weights.rs (P95_TOTAL_SPREAD [823.689416, 483.787396, 545.274556], weights.rs:2532;
+p95_candidate_spread lines 2232-2477), sign intent from the live sign_intent match (174/174
+variants: 111 Free / 38 NonNegative / 25 NonPositive, no wildcard arm). A gated key's
+effective range is [0, bound] (NonNegative) or [-bound, 0] (NonPositive); the gate and the
+clamp meet at that range's bound if the weight is pinned exactly there.
+
+1. GATED AND NONZERO, SIGN-CONSISTENT (the gate is dormant, the clamp may still act): 166
+   2p: 56   3p: 60   4p: 50   (NonNegative 101, NonPositive 65)
+   All 166 sit strictly INSIDE the open interval (0, bound) or (-bound, 0) -- NONE is at its
+   bound. So for every gated key that the gate let through, the sign gate and the clamp are
+   acting on disjoint parts of the range right now: the gate would only fire on a sign flip,
+   the clamp only on a magnitude overshoot.
+
+2. GATED AT THE BOUND -- the meeting point the question asks about: 0
+   No (key, count) pair has a gated weight pinned exactly at its bound. The two mechanisms
+   never meet at the same point on this champion set.
+   The closest is the free-side pair best_theater 4p at 60.0 = CLAMP_BLIND, but that key is
+   Free, so no gate applies to it at all; the clamp alone owns that pin.
+
+3. GATED AND EXACTLY 0.0 (zeroed outright -- the gate, not the clamp, owns these): 23
+   2p: 7   3p: 3   4p: 13   (NonNegative 13, NonPositive 10)
+   gov_board_credit             2p  NonNegative
+   hand_limit                   2p  NonNegative
+   military_action_gap          2p  NonPositive
+   no_aggression                2p  NonPositive
+   restricted_resource_credit   2p  NonNegative
+   wonder_board_credit          2p  NonNegative
+   wonders                      2p  NonNegative
+   famine_deficit               3p  NonPositive
+   free_action_credit           3p  NonNegative
+   strength_deficit             3p  NonPositive
+   famine_deficit               4p  NonPositive
+   free_action_credit           4p  NonNegative
+   free_worker_wall             4p  NonPositive
+   gov_board_credit             4p  NonNegative
+   hand_perishable              4p  NonPositive
+   happy_margin_after_next_pop  4p  NonPositive
+   military_action_gap          4p  NonPositive
+   pact_board_credit            4p  NonNegative
+   resource_commitment_turns    4p  NonPositive
+   restricted_resource_credit   4p  NonNegative
+   row_playable_count           4p  NonNegative
+   territory_credit             4p  NonNegative
+   wonders                      4p  NonNegative
+   For each of these, the fitted value was on the wrong side of the gate (or never crossed
+   the 1e-12 repair threshold) and dominance_repair snapped it to 0.0, where it is held on
+   every subsequent load and mutation. The clamp is irrelevant to them: their effective
+   bound is [0, bound] or [-bound, 0] and 0.0 is inside it. These are the "misclassified
+   sign_intent silently kills a key" coordinates -- a key here can only leave 0.0 if its
+   sign intent is reclassified, not by any amount of clamping.
+
+4. GATED AND SIGN-OPPOSITE (should be empty if the gate ran at load): 0
+   Confirms the repair ran on the champion files as written.
+
+5. FREE KEYS AT EXACTLY THEIR BOUND (for contrast -- the clamp meeting a free weight): 2
+   event_scoring_margin         3p  w=+34.556243  bound=34.556243
+   best_theater                 4p  w=+60.000000  bound=60.000000
+   event_scoring_margin 3p is at its live spread-derived bound 34.556243; best_theater 4p
+   at the 60.0 blind bound (spread 0.0 fallback). These are the only clamp-owned pins on the
+   set; both are Free, so the gate cannot touch them.
+
+Answer to the question: the sign gate and the clamp meet at exactly one point in the design --
+the gated key's bound -- and on this champion set that meeting happens 0 times. The gate owns
+23 zeroed coordinates (all held at 0.0, inside their effective bounds, where the clamp cannot
+reach them), and the clamp owns 2 free-coordinate pins at their bounds (where no gate applies).
+The 166 nonzero gated keys all sit in the open interval between the gate and the clamp, so
+the two mechanisms are currently operating on disjoint subsets of the weight space.
