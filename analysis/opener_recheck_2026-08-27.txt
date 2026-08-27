@@ -1,0 +1,127 @@
+OPENER RECHECK -- 2026-08-27
+=============================
+Purpose: re-measure whether opener behaviour has moved after the leaf-eval
+features landed over the preceding two weeks. Baseline figures being compared
+against (as cited in analysis/opener_census_postclimb_2026-08-26.txt, which
+itself compares to pre-climb behavcensus/openerprobe runs):
+  - bot food production DECLINES from round 2 onward; strong humans climb to ~4.95
+  - bot takes ~17.5 cards/game and plays ~61% of them; humans take ~26.9 and play ~78%
+  - ~20.3% of civil actions are wasted
+
+STATUS: IN PROGRESS -- this is a stub, being appended to as runs complete.
+
+Tools used (read-only, live champion files, --threads 2, --seed 0):
+  rust/target/release/behavcensus --games 60 --players {2,3,4} --seed 0 --threads 2 --weights <champion>
+  rust/target/release/openerprobe  --games 60 --players {2,3,4} --seed 0 --threads 2 --weights <champion>
+
+Champion files used (LIVE, rewritten continuously by the running climb --
+recorded gen + md5 at time of measurement so results are reproducible):
+  2p: /Users/pt/tta-ai/experiments/rust_champion_2p.json  gen=116959  md5=c61f7f1183f8bcc1879ea6aeeda7a0b0
+  3p: /Users/pt/tta-ai/experiments/rust_champion_3p.json  gen=65547   md5=e8e4e1e7543a0bdafddae3b12d19dc8e
+  4p: /Users/pt/tta-ai/experiments/rust_champion_4p.json  gen=21457   md5=fed78033e73cac3c85379ad5f33dde88
+
+Runtimes (60 games, threads=2): behavcensus 2p=8.1s 3p=23.3s 4p=64.8s;
+openerprobe 2p=0.2s 3p=1.0s 4p=1.5s. openerprobe's own decision-point counts are
+also multi-hundred to multi-thousand per report, so 60 games is plenty of signal
+for both tools.
+
+=====================================================================
+RESULTS
+=====================================================================
+
+--- Food production by round (behavcensus "Production curve", food mean) ---
+round:        1     2     3     4     5     6     7     8
+2p (n=120): 2.00  2.00  2.00  1.98  1.96  1.84  1.84  1.79
+3p (n=180): 2.00  2.00  2.00  2.00  1.96  1.91  1.80  1.72
+4p (n=240): 2.00  2.00  2.00  1.98  1.93  1.91  1.89  1.91
+All three player counts sit flat at 2.00 through round 2-3, then either decline
+(2p, 3p) or decline-then-flatten around 1.9 (4p). None climb anywhere near a
+human-comparable 4.95; peak food production at any round in any player count in
+this run is 2.00 (round 1-3).
+
+--- Civil actions left unused across rounds 1-3 (behavcensus, exact denominator
+    the 2026-08-26 postclimb census used for "wasted civil actions", NOT the
+    original defect's whole-game-share denominator -- see note below) ---
+2p: 4/120 player-games leave >=1 CA unused (3.3%)
+3p: 3/180 player-games leave >=1 CA unused (1.7%)
+4p: 16/240 player-games leave >=1 CA unused (6.7%)
+2026-08-26 postclimb comparison figures (same metric): 2p 2.3%, 3p 1.4%, 4p 24.0%.
+
+--- Civil cards taken per game, and fraction ever played (behavcensus, EARLY+LATE
+    wonder-tempo groups combined -- see caveat below) ---
+                taken/game   n games   fraction played
+2p:                19.24        51         67.4% (661/981)
+3p:                19.98       119         62.6% (1489/2378)
+4p:                21.26       211         82.2% (3688/4486)
+
+CAVEAT on the taken/played numbers: behavcensus only reports the full
+"taken/played" card-fate breakdown split by EARLY (first wonder-stage build by
+round 5) vs LATE (round 10+ or never) wonder tempo, per analysis/opener_census_
+postclimb_2026-08-26.txt's own methodology. There is a "middle" group (first
+wonder round 6-9) that is NOT covered by either bucket. Coverage of the full
+population: 2p 51/120 (42.5%), 3p 119/180 (66.1%), 4p 211/240 (87.9%). The
+taken/game and played% figures above are therefore averages over that partial
+population, not the whole game population. behavcensus does not print a
+whole-population "cards taken per game" or "% played" figure anywhere else in
+its output.
+
+--- What openerprobe reports (players=2/3/4, rounds 1-3 only, 60 games each) ---
+openerprobe does NOT report food production, cards-taken-per-game, played-
+fraction, or civil-action-waste at all. It reports something orthogonal: for
+each decision point in rounds 1-3, the chosen move's kind, and for Farm/Pop/
+Develop specifically, why the move was illegal when it was. None of this is
+directly comparable to the four baseline figures. Two possibly-relevant
+sub-findings that did come out of it (3p, rounds 1-3, 1841 own-turn decisions):
+Farm build illegal 1487/1841 times, of which 44.0% "no free worker", 34.8%
+"no resources", 21.2% "no civil action"; Pop illegal 1000/1841 times, of which
+43.5% "no civil action available", 38.5% "food unaffordable". This corroborates
+the 2026-08-26 census's finding that the bottleneck is production/workers, not
+civil-action supply -- but it is not one of the four requested metrics.
+
+=====================================================================
+BASELINE COMPARISON
+=====================================================================
+
+1. "Food production DECLINES from round 2 onward; strong humans climb to ~4.95"
+   -> DID NOT MOVE. Confirmed again today: food stays flat at 2.00 through
+   round 2-3 then declines (2p, 3p) or flattens around 1.9 (4p) at every
+   player count. Never approaches 4.95 at any round measured. Same shape as
+   the 2026-08-26 postclimb finding.
+
+2. "Bot takes ~17.5 cards/game and plays ~61% of them; humans take ~26.9 and
+    play ~78%"
+   -> PARTIALLY MOVED, but not cleanly measurable against the same
+   denominator as the original baseline (see caveat above -- these are
+   EARLY+LATE-only averages, not whole-population). Taken/game is UP at all
+   three player counts (19.2-21.3 vs the baseline's 17.5), moving toward the
+   human 26.9 but still well short. Played fraction is UP at all three player
+   counts vs both the original 61% baseline AND yesterday's 57-58%
+   postclimb-census figure (2p 67.4%, 3p 62.6%, 4p 82.2% -- 4p now exceeds the
+   human 78% figure outright). Call this MOVED IN THE RIGHT DIRECTION since
+   the 2026-08-26 check, with the caveat that the metric excludes ~12-58% of
+   games (the "middle" wonder-tempo group) depending on player count.
+
+3. "~20.3% of civil actions are wasted"
+   -> WAS NOT MEASURABLE with these tools using the ORIGINAL denominator
+   (behavcensus has no whole-game civil-action-waste stat; this was already
+   true on 2026-08-26). Using the same substitute metric the 2026-08-26 census
+   used (player-games leaving >=1 CA unused in rounds 1-3): 2p and 3p are
+   essentially unchanged and near-zero (2.3%->3.3%, 1.4%->1.7%, both still far
+   below 20.3%, i.e. still NOT the same denominator as the original claim and
+   still not comparable to it). 4p MOVED substantially: 24.0% -> 6.7%, a real
+   drop in opening-round CA waste at 4p specifically since yesterday.
+
+VERDICT: The recent leaf-eval feature work has NOT moved the headline food-
+production defect at all -- production is still flat-then-declining at every
+player count, nowhere close to a human-like climb. It HAS moved card economy
+in the right direction since yesterday's postclimb check: the bot takes more
+cards and plays a higher fraction of what it takes at all three player counts,
+with 4p now playing a higher fraction than the cited human baseline. The
+civil-action-waste picture is mixed and mostly not measurable against the
+original claim; the one real signal is a large drop in 4p opening CA waste.
+Net read: the climb is fixing symptoms downstream of production (card
+economy) while the production shortfall itself -- which the 2026-08-26 census
+already identified as the root cause behind the card-play defect -- remains
+untouched. Until food/resource production actually rises, "the opener" is not
+fixed; it is playing its bad hand slightly better.
+
