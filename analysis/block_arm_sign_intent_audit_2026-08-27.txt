@@ -1,0 +1,253 @@
+Block-arm sign_intent audit
+2026-08-27 -- read-only; no code edits.
+================================================================
+
+SCOPE
+----------------------------------------------------------------
+`pub const fn sign_intent(self) -> SignIntent` (weights.rs:1480-2114)
+is a pure const match: 174 WeightKey variants (verified against the
+`weight_key_table!` list, weights.rs:766-790 et seq -- 174 entries,
+0 missing, 0 duplicated arms), each covered by exactly one arm.
+The arms split into two shapes:
+
+  * FLAT arms -- `A | B | C => Kind("reason")`, a single constant
+    returned for every key named. 12 such arms cover 147 keys.
+    Every grep-shaped sign audit so far classified only these.
+
+  * BLOCK arms -- `A | B => { Kind(...) }`, a braced single-return
+    block. 7 such arms cover the remaining 27 keys. No audit has
+    ever classified them, because a grep for `=> NonNegative` /
+    `=> NonPositive` / `=> Free` matches the flat arms only: the
+    block arm's `=>` is followed by `{`, and the returned Kind is
+    on a line of its own, separated from the key list by the brace.
+
+The 27 (exactly as briefed; all 27 verified present in the 7
+block arms, none in any flat arm):
+FamineDeficit, Discontent, Uprising, CivilActions, StrengthDeficit,
+WarImmune, AttackCostDoubled, Wonders, WonderPotential,
+WonderPromise, UnitTechCredit, TechBoardCredit, ActionBoardCredit,
+GovBoardCredit, WonderBoardCredit, BuildFreshCredit,
+RestrictedResourceCredit, TerritoryCredit, AggressionBoardCredit,
+WarBoardCredit, EventBoardCredit, TacticReachCredit, HandValue,
+HandValueLate, CivilActionSurplus, TechRedundancyDiscount,
+ResourceCommitmentTurns.
+
+KEY FINDING (the one that matters)
+----------------------------------------------------------------
+ZERO of the 27 block arms can return Free on any path.
+
+Every block arm returns exactly one SignIntent, unconditionally --
+there is no `if`, no state read, no player-count branch, no
+dispatch inside any of the seven blocks (they are `const fn`
+arms; a `const` match arm cannot inspect runtime state at all).
+The "computed intent" in the brief is the braced syntax, not a
+conditional: the intent is computed per-arm and constant
+per-key. So there is no key that is "silently unconstrained on
+some path" -- every one of the 27 carries a fixed, permanent
+gate at every load, every mutation, every player count. The
+hole the block syntax creates is the OPPOSITE of the one feared:
+the keys are GATED, but the gate was invisible to every audit
+that only greps flat arms, so the 27 have never been re-checked
+against measured champion weights the way the flat-arm keys
+were (SIGNAUDIT.txt's per-key measurements all run over the
+grep-reachable set).
+
+Condition per key: constant at runtime, for all 27. Genuinely
+varies: none.
+
+
+THE SEVEN BLOCK ARMS, KEY BY KEY
+----------------------------------------------------------------
+
+BLOCK 1 -- weights.rs:1495-1497
+  TechRedundancyDiscount => { NonNegative("discounts a redundant
+      card, never rewards one") }
+  * 1 key. Returns NonNegative unconditionally.
+  * Condition: constant. (A single-key block -- the brace buys
+    nothing over the flat form; pure formatting.)
+
+BLOCK 2 -- weights.rs:1511-1513
+  WonderPotential | WonderPromise => { NonNegative("prices the
+      in-progress wonder's completion value") }
+  * 2 keys. Returns NonNegative unconditionally for both.
+  * Condition: constant. (Citation shape: the gate rests on the
+    COEFFICIENT's meaning -- it scales an estimate of what
+    finishing the wonder is worth -- not on the inner sum being
+    gains-only; the block's comment at 1498-1510 records that
+    Kremlin (II)'s `happy: -1` can reach the sum, which is why
+    the reasoning is written out instead of a one-liner.)
+
+BLOCK 3 -- weights.rs:1562-1564
+  CivilActions | CivilActionSurplus | Wonders => { NonNegative(
+      "prices an available/completed stock the rules never
+      subtract for") }
+  * 3 keys. Returns NonNegative unconditionally for all three.
+  * Condition: constant. (Former STOCK_NONNEG_GATES. Note the
+    bucket's own comment, 1553-1561, deliberately refuses to
+    extend this to the other stock-shaped keys -- workers,
+    culture, science_rate -- which stay Free in the big
+    catch-all at 1753-1791 on the missing-citation ground.)
+
+BLOCK 4 -- weights.rs:1618-1620
+  Discontent | Uprising | StrengthDeficit | FamineDeficit => {
+      NonPositive("prices a penalty the rules impose") }
+  * 4 keys. Returns NonPositive unconditionally for all four.
+  * Condition: constant. (Former LOSS_GATES. The block carries
+    the FamineDeficit sub-derivation at 1609-1617: why it joins
+    the imposed-penalty bucket rather than the *Gap shortfall
+    bucket -- RULES_SPEC 6.6 step 3d converts the shortfall into
+    an immediate 4*missing culture loss the very turn it is
+    positive.)
+
+BLOCK 5 -- weights.rs:1660-1662
+  ResourceCommitmentTurns => { NonPositive("prices an
+      outstanding resource obligation, in turns, as an upside") }
+  * 1 key. Returns NonPositive unconditionally.
+  * Condition: constant. (Single-key block; the formula
+    `(wonder_remaining + unstaffed printed resource costs) /
+    max(resource_rate, 1)` is always >= 0 by construction, so
+    the gate is structural, not empirical.)
+
+BLOCK 6 -- weights.rs:1734-1736
+  HandValue | HandValueLate => { NonNegative("hand_value's
+      feature is always >= 0 (a convex blend of two such
+      endpoints is too)") }
+  * 2 keys. Returns NonNegative unconditionally for both.
+  * Condition: constant -- and this is the one block whose
+    reasoning is about a RUNTIME-DEPENDENT quantity: the
+    coefficient `evaluate` actually applies at lateness L is the
+    convex blend `start*(1-L) + end*L` of the two keys (the
+    PHASECUT T1-D collapse, 1713-1733). The gate holds at every
+    L in [0,1] iff BOTH endpoints are >= 0, which is exactly the
+    per-key NonNegative on each. The net is runtime-conditional;
+    the per-key intent is not. (Found net-negative in every
+    champion snapshot carrying nonzero phase pairs -- as low as
+    -27.48 under the old basis; the per-snapshot evidence is in
+    the SIGNAUDIT worker notes, e.g.
+    analysis/worker_notes_2026-08-13/basiscut__SIGNAUDIT.txt
+    section 7. The old composite mechanism
+    `eval::NET_NONNEG_PHASE` is now EMPTY -- the per-key gate
+    subsumes it.)
+
+BLOCK 7 -- weights.rs:2041-2046
+  UnitTechCredit | TechBoardCredit | ActionBoardCredit |
+  GovBoardCredit | WonderBoardCredit | BuildFreshCredit |
+  TerritoryCredit | AggressionBoardCredit | WarBoardCredit |
+  EventBoardCredit | TacticReachCredit => { NonNegative("scales
+      a dedicated function's signed output; a negative scale
+      inverts good and bad rather than repricing one card") }
+  * 11 keys. Returns NonNegative unconditionally for all 11.
+  * Condition: constant. (The "eleven proven multipliers",
+    re-audited per key 2026-08-24 in
+    analysis/multiplier_decisiveness_all_counts_2026-08-24.txt:
+    each is `w.get(key) * <dedicated function's signed output>`
+    with no other use site. The block carries two further
+    constants-of-record: (a) for the eight dispatch-switch keys
+    -- Unit/Tech/Action/Gov/WonderBoardCredit,
+    Aggression/War/EventBoardCredit -- `0.0` is NOT a neutral
+    value, it routes the card type to a different pricing
+    implementation in `cards::card_potential_core` (2015-2040),
+    so dominance_repair raising a violator to 0.0 changes code
+    PATH, not just magnitude; GovBoardCredit is the one where
+    the fallback is reached in production (the 4p champion's
+    -0.1722 is repaired to exactly 0.0 on every load). (b)
+    BuildFresh/Territory/TacticReach are plain inline scales
+    where 0.0 is ordinary and safe.)
+
+
+TALLY
+----------------------------------------------------------------
+  NonNegative arms: 5 blocks, 19 keys
+      Block 1: TechRedundancyDiscount (1)
+      Block 2: WonderPotential, WonderPromise (2)
+      Block 3: CivilActions, CivilActionSurplus, Wonders (3)
+      Block 6: HandValue, HandValueLate (2)
+      Block 7: UnitTechCredit, TechBoardCredit, ActionBoardCredit,
+               GovBoardCredit, WonderBoardCredit, BuildFreshCredit,
+               TerritoryCredit, AggressionBoardCredit,
+               WarBoardCredit, EventBoardCredit, TacticReachCredit
+               (11)
+  NonPositive arms: 2 blocks, 5 keys
+      Block 4: Discontent, Uprising, StrengthDeficit, FamineDeficit (4)
+      Block 5: ResourceCommitmentTurns (1)
+  Free arms: 0 blocks, 0 keys
+  Total: 7 blocks, 27 keys.
+
+Every block returns a CONSTRAINED intent. No block can return
+Free. No key among the 27 is silently unconstrained on any
+path.
+
+WHY THE 27 ARE STILL AUDIT-DUE (bookkeeping, but real)
+----------------------------------------------------------------
+Cross-reference first: analysis/missing_sign_intents_2026-08-27.txt
+(a same-day whole-match parse) already classified all 174 arms
+arm-by-arm (111 Free / 38 NonNegative / 25 NonPositive) and its
+counts agree with this file's tally exactly (the 38 NonNegative
+= 19 flat + the 19 in blocks 1/2/3/6/7; the 25 NonPositive =
+20 flat + the 5 in blocks 4/5; no block key appears in its Free
+list). Its "LIST (2): keys that fall through to Free = EMPTY"
+confirms there is no wildcard arm. What that file did NOT do is
+the block-structure distinction this audit draws: it read the
+intent, not the arm SHAPE, so it could not state that 27 of the
+174 sit in braced arms invisible to grep-shaped audits. And the
+evidence base below still does not exist for the 27:
+
+  1. SIGNAUDIT's measured-inversions findings (the per-snapshot
+     "found X in N snapshots" measurements in
+     analysis/worker_notes_2026-08-13/*__SIGNAUDIT.txt, section 7
+     of each -- e.g. pop_cost, tactic_gain negative in 8/10
+     snapshots, tactic_short positive in 6/10) all live in
+     flat-arm keys. The 27 block-arm keys were never in that
+     measured set, so if any of them has drifted the same way,
+     nothing on record says so. The gate clamps it at load
+     (dominance_repair) and at mutation (climb.rs's guard), so
+     the drift cannot act -- but the per-snapshot evidence base
+     simply does not exist for these 27.
+  2. Block 6 (HandValue/HandValueLate) and Block 7 (the eleven
+     multipliers) have the richest conditional reasoning of any
+     arm in the file -- convex-blend netting and dispatch-
+     switch semantics -- and that reasoning was written inside a
+     brace that the greps skip. It has been read by humans, not
+     by audits.
+  3. The single-key blocks (TechRedundancyDiscount,
+     ResourceCommitmentTurns) are formatting, not logic: they
+     could be flat arms, and their presence in block form is
+     what makes them invisible to the grep pattern.
+
+Suggested follow-up (not done here -- read-only): run the
+SIGNAUDIT snapshot scan (section 7 shape) over the 27, reporting
+for each the measured weight vs its gate (violations should be
+zero post-repair; pre-repair values are the audit datum),
+exactly as the SIGNAUDIT worker notes did for the flat-arm keys.
+
+Sources:
+  rust/src/bots/weighted/weights.rs:1480-2114 (sign_intent, all
+      174 arms read in full)
+  rust/src/bots/weighted/weights.rs:1484-1491 (flat NonNegative
+      benefit arm)
+  rust/src/bots/weighted/weights.rs:1495-1497 (block 1)
+  rust/src/bots/weighted/weights.rs:1498-1513 (block 2 + Kremlin
+      sub-derivation)
+  rust/src/bots/weighted/weights.rs:1553-1564 (block 3 + STOCK
+      conservatism comment)
+  rust/src/bots/weighted/weights.rs:1604-1620 (block 4 +
+      FamineDeficit sub-derivation)
+  rust/src/bots/weighted/weights.rs:1653-1662 (block 5)
+  rust/src/bots/weighted/weights.rs:1713-1736 (block 6 + T1-D
+      convex-blend derivation)
+  rust/src/bots/weighted/weights.rs:1955-2046 (block 7 + hazard
+      comment)
+  rust/src/bots/weighted/weights.rs:766-790 (weight_key_table --
+      174 variants, the count basis)
+  rust/src/bots/weighted/eval.rs:888-902 (non_positive_gates /
+      non_negative_gates derive the gate sets from sign_intent --
+      block arms are armed identically to flat arms)
+  rust/src/bots/weighted/eval.rs:860-888 (gates enforced at load
+      and mutation time)
+  analysis/missing_sign_intents_2026-08-27.txt (same-day whole-
+      match parse; counts cross-checked against this file)
+  analysis/worker_notes_2026-08-13/*__SIGNAUDIT.txt (the flat-arm
+      measured-inversions base, section 7 of each)
+  analysis/multiplier_decisiveness_all_counts_2026-08-24.txt
+      (the per-key re-audit behind block 7)
+================================================================
