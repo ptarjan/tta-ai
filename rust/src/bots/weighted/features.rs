@@ -1076,6 +1076,10 @@ pub fn features(
     f.set(WeightKey::RivalFreeCa, f64::from(rival_free_ca));
     f.set(WeightKey::RivalHandCivil, rival_hand_civil as f64);
     f.set(WeightKey::RivalWonders, rival_wonders as f64);
+    f.set(
+        WeightKey::RivalWonderDeficit,
+        (rival_wonders as f64 - p.completed_wonders.len() as f64).max(0.0),
+    );
 
     // --- the events I planted myself (GAP 4). Legal by construction --
     // `my_seeds` filters on `seeded_by == idx` and reads no pile order.
@@ -2518,5 +2522,57 @@ mod tests {
         w.set(WeightKey::RowPlayableCount, 1.0);
         let priced = features(&state, 0, None, Some(&w), true);
         assert_eq!(priced.get(WeightKey::RowPlayableCount), full.get(WeightKey::RowPlayableCount), "a nonzero weight must not be skipped");
+    }
+
+    /// `WeightKey::RivalWonders` (the local `rival_wonders` this key nets
+    /// against, `--- rivals` block above) is the SAME number on every
+    /// candidate move at a given turn -- it depends only on rivals, who no
+    /// candidate touches -- so it drops out of the argmax entirely. Netting
+    /// it against MY OWN completed-wonder count (which candidates DO move,
+    /// same as `Wonders`) is the only way this fact enters search at all,
+    /// following `StrengthRel`/`StrengthDeficit`'s exact `max(0, rival -
+    /// self)` shape. One-sided by construction: tied or ahead of the best
+    /// rival reads exactly 0.0 regardless of margin; behind reads exactly
+    /// the gap, `N`.
+    #[test]
+    fn the_rival_wonder_deficit_is_zero_when_i_am_not_behind() {
+        let pyramids = crate::cards::CardId::by_name("Pyramids").expect("an Age A wonder");
+        let hanging_gardens = crate::cards::CardId::by_name("Hanging Gardens").expect("an Age A wonder");
+        let colossus = crate::cards::CardId::by_name("Colossus").expect("an Age A wonder");
+        let great_wall = crate::cards::CardId::by_name("Great Wall").expect("an Age A wonder");
+
+        // Tied at zero each.
+        let mut state = G::new_game(2, 51);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalWonderDeficit),
+            0.0,
+            "tied at zero wonders each must not read as a deficit"
+        );
+
+        // Ahead: I complete one, the rival still has none.
+        state.players[0].completed_wonders.push(pyramids);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalWonderDeficit),
+            0.0,
+            "leading the rival must not read as a deficit"
+        );
+
+        // Behind by 1: the rival completes two against my one.
+        state.players[1].completed_wonders.push(hanging_gardens);
+        state.players[1].completed_wonders.push(colossus);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalWonderDeficit),
+            1.0,
+            "rival at 2 vs my 1 must read as a deficit of exactly 1.0"
+        );
+
+        // Behind by 2: one more rival completion widens the gap by exactly
+        // one -- pinning the hinge as `N`, not a 0/1 indicator.
+        state.players[1].completed_wonders.push(great_wall);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalWonderDeficit),
+            2.0,
+            "rival at 3 vs my 1 must read as a deficit of exactly 2.0"
+        );
     }
 }
