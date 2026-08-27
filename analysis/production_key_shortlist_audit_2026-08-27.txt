@@ -1,0 +1,101 @@
+AUDIT OF analysis/production_key_shortlist_2026-08-27.txt (83d58f7)
+==================================================================
+2026-08-27. The shortlist ranks 9 of the 63 keys that are BOTH sign-disagreeing
+across lineages AND in the "citation merely missing" bucket (the 99), as
+candidates for a rules-citation search. Re-read here against the LIVE champion
+files rather than the report's snapshot, because the champion is rewritten on
+promotion and the report's magnitudes were already minutes old.
+
+Live at audit time: 2p gen 118450 since_accept 0 / 3p gen 66137 sa 9 /
+4p gen 21610 sa 18.
+
+                            2p        3p        4p    min|w|  #large  signs
+    strength_rel_early   -11.580   -20.557   +15.744   11.580     3   DISAGREE
+    free_workers          +5.145    +1.389    -9.615    1.389     3   DISAGREE
+    best_farm             -1.192    -2.887   +39.899    1.192     3   DISAGREE
+    best_mine             -0.172   +17.121    -1.210    0.172     2   DISAGREE
+    auction_bid           -2.680    -0.084    +3.477    0.084     2   DISAGREE
+    rival_culture_rate    +2.501    -0.020    -8.728    0.020     2   DISAGREE
+    special_techs         -0.106    -0.650   +50.879    0.106     1   agree
+    rival_desire          -0.233   +10.652    +9.411    0.233     2   agree
+    happy_margin          +0.737    -0.038    -1.647    0.038     1   agree
+
+"#large" counts lineages with |w| >= 1.0; "signs" is computed over the LARGE
+arms only, which is what the discriminator was actually asking.
+
+
+ONE PROMOTION
+-------------
+best_farm has crossed the floor at 2p since the report was written: -0.46 ->
+-1.192. It is now all-three-large and sign-disagreeing, i.e. it joins
+strength_rel_early and free_workers in the core tier rather than sitting in the
+2-armed tier. That matters more than a tier label: best_farm is the 4p
+relative-pricing channel named in analysis/farm_never_built_2026-08-27.txt, and
+the core tier is now exactly the three keys that file already implicates.
+
+
+THREE DEMOTIONS -- they fail the report's OWN stated rule
+---------------------------------------------------------
+The report's practical rule is "at least TWO lineages large AND the lineages
+disagree in sign". Three entries do not meet it:
+
+  special_techs   only ONE arm is large (+50.879 at 4p). 2p -0.106 and 3p -0.650
+                  are both under the floor. A single large arm against two
+                  near-zero arms is the report's own NOISE shape.
+  happy_margin    same: only -1.647 at 4p clears the floor. 2p has drifted to
+                  +0.737, under it.
+  rival_desire    two large arms, but they AGREE (+10.65, +9.41). The only
+                  "flip" is the near-zero 2p arm at -0.233 -- again the report's
+                  own NOISE definition, and it is flagged in the report itself
+                  ("both large arms agree").
+
+rival_desire has a second, harder disqualification. It is not a linear-eval
+coordinate at all: row.rs:323 reads
+
+    let desire = w.get(WeightKey::RivalDesire).clamp(0.0, 1.0);
+
+so it is a Class A hyperparameter clamped to [0,1]. A sign_intent on it would
+not mean "more is never worse"; and the clamp makes the 2p value of -0.233
+behaviourally identical to 0.0, so the 2p/3p "sign disagreement" is really
+off-versus-on, not a disagreement about direction. Do not put it back on a
+sign_intent list.
+
+The other six are all raw emitted coordinates, verified at
+features.rs:840 (FreeWorkers), :971/:972 (BestFarm/BestMine), :966 (AuctionBid),
+:1109 (RivalCultureRate), so a sign_intent is at least the right SHAPE of
+question for them.
+
+
+CORRECTED SHORTLIST -- six, not nine
+-------------------------------------
+  CORE  (all three lineages large, large arms disagree)
+    1. strength_rel_early
+    2. free_workers
+    3. best_farm            <- promoted since the report
+
+  TWO-ARMED (one arm under the floor; re-tier when 4p commits)
+    4. best_mine
+    5. auction_bid
+    6. rival_culture_rate
+
+  DROPPED: special_techs, happy_margin (one large arm each),
+           rival_desire (agreeing large arms; and a clamped hyperparameter).
+
+
+WHAT THE HEADLINE RESULT ACTUALLY SAYS
+---------------------------------------
+Under the strict reading, 61 of 63 are noise. That is not a disappointing
+answer, it is the useful one: the "63 unexplained sign flips" figure does NOT
+describe 63 places where the rules could bind. It describes a mostly-uncommitted
+4p arm (gen 21610 against 2p's 118450) crossing zero on keys whose other arms
+are already near zero. The set to re-read in a few hundred generations, not to
+act on.
+
+And free_workers surviving the strict cut is the point. It was predicted into
+this list from completely independent evidence -- the 2p opener, where
+free_workers is the weight rewarding an idle worker and EndTurn takes 48.6% of
+741 opener decisions. Two unrelated instruments now name the same key. The same
+is now true of best_farm, from the 4p side.
+
+No sign_intent is proposed here. Nothing lands in weight space before the
+clamp-ceiling A/B is judged on 2026-08-30.
