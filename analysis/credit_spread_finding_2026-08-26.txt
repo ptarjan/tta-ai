@@ -1,64 +1,81 @@
 ================================================================================
-CREDIT-SPREAD FINDING -- second measurement (delta form), 2026-08-26
-Supersedes the first finding of the same date (which measured the total
-score and found S_d pinned at T for all 20 keys).
+CREDIT-SPREAD FINDING -- third measurement (displacement form), 2026-08-26
+Supersedes the second finding of the same date (delta form, set-to-c probe,
+binary ade726b), which itself superseded the first (total-score form,
+S_d pinned at T for all 20 keys). This run is the displacement form: the
+probe SETS the credit weight k to w_k + c (c = 1.0 and 2.0), per the
+coordinator's correction; binary at fad6123, spec af57966 untouched.
 ================================================================================
 
-COORDINATOR CORRECTIONS APPLIED (binary at ade726b; spec af57966 untouched)
-  1. S_d is now the spread over candidates of the per-move DELTA the probe
-     causes:  d_m = dot(pw, phi_p(m)) - dot(champion, phi_c(m))
-              = dot(champion, phi_p(m) - phi_c(m))
-     (pw and champion differ only in coordinate k, and k has no linear
-     feature coordinate, so both forms are identical: the delta is purely
-     the pricer re-pricing effect, baseline removed.)
-  2. The flip rates are CREDIT-CLASS, not per-key: both flip vectors
-     perturb all 20 credit keys at once, so the flip rate is ONE number
-     per count ("flip rate for the credit half as a whole"), not a column
-     on 20 rows. The per-key `touched` column is per-key and stands.
+WHY THE SECOND RUN WAS VOID
+  The set-to-c probe made S_d(c) = h(c) - h(w_k), where h is the pricer's
+  response as a function of the credit weight. The c = 1.0/2.0 linearity
+  test then passed iff h was linear on an interval containing {w_k, 1.0,
+  2.0} -- trivially true at w_k = 0 (the pass set was EXACTLY the
+  zero-champion-weight keys: verified against the second run's tables,
+  4p's four passes were its four zero-weight keys, 2p/3p passed their
+  near-zero keys within tolerance) and a second-difference test otherwise.
+  The "pricer nonlinearity" verdict recorded after that run is RETRACTED:
+  it was a test artifact, not a property of the pricers. Displacing by c
+  instead (set k to w_k + c) measures the pricer's response AT THE
+  CHAMPION'S OWN OPERATING POINT, where |c|-linearity is the correct test
+  and gated_frac is a per-key property of the pricers.
 
-WHAT THE DELTA FORM FOUND
-  The linearity test (S_d(2.0) ~= 2*S_d(1.0), within 1% relative, at each
-  firing decision; a key is GATED when it fails at MORE than half its
-  firing decisions) now FAILS for MOST keys, every count -- and the
-  readings are REAL per-key quantities, not the total spread:
-    2p: 17 of 18 firing keys gated (2 keys never fire)
-    3p: 16 of 19 firing keys gated (1 never fires)
-    4p: 16 of 19 firing keys gated (1 never fires)
-  So per the spec's escape hatch, the table is NOT forced: the 20 rows
-  stay at CLAMP_BLIND, and the RUST TABLE emits 0.000000 for every gated
-  key. Only a handful of (key, count) pairs pass linearity and carry a
-  defensible slope; none is a consistent champion across counts (a key
-  that passes at one count is usually gated at another).
+WHAT THE DISPLACEMENT RUN SHOWS
+  Per key: p95_slope = p95 over FIRING decisions of S_d(1.0) (S_d(2.0) =
+  2*S_d(1.0) is then exact by linearity); a firing decision is one with
+  S_d(1.0) > 0; it is GATED (counts toward the key's gated_frac) when
+  S_d(2.0) is not ~2*S_d(1.0), i.e. within 1% relative (LINEAR_TOL =
+  0.01; SD_EPS = 1e-9 for S_d(1.0) itself). gated_frac is the headline.
+  A key GATED at more than half its firing decisions emits NO bound
+  (RUST TABLE row 0.000000; clamp_bound's own <= 0.0 fallback keeps it at
+  CLAMP_BLIND).
 
-  The gated readings are NOT the flat-at-T artifact of the first run.
-  S_d(1.0) and S_d(2.0) are distinct per-key numbers (e.g. 2p:
-  card_board_credit 333.97 / 775.72; unit_tech_credit 151.69 / 309.96),
-  and the ratios S_d(2.0)/S_d(1.0) scatter around 2.0 with a wide spread
-  (roughly 0.24 to 1.76), i.e. the pricer output is NOT linear in c
-  between the two probes for most keys. This is the genuine finding about
-  the credit pricers the first run could not test: the per-key |c|-linearity
-  the bound relies on does not hold, so no per-key normalized slope is
-  defensible at the two probes the spec pins (c = 1.0, c = 2.0).
+  GENUINE GATES (gated_frac > 0.5) -- the finding, on the record:
+    3p tech_board_credit   gated_frac 0.6283   fire 11909
+                           p95 S_d(1.0) 145.757114   p95 S_d(2.0) 173.736799
+                           ratio 1.192 -- the pricer response is
+                           SUBLINEAR across the displacement, so a gate
+                           threshold sits between w_k and w_k + 2.0.
+                           No bound. Stays at CLAMP_BLIND (emitted 0.0).
+    3p wonder_board_credit gated_frac 0.7500   fire 4
+                           n = 4 firing decisions, 3 gated. No bound.
+                           Stays at CLAMP_BLIND (emitted 0.0). The
+                           fraction is statistically hollow; what is
+                           honest is: the pricer's response is not
+                           linearly verifiable at all at this (key, count)
+                           pair (almost no firing), so no bound exists
+                           and CLAMP_BLIND is the honest value.
+  Every other (key, count) pair carries a usable slope; the 20 rows do
+  NOT all gate -- the second run's "most keys fail linearity" was the
+  artifact the displacement removed.
 
-  A few (key, count) pairs DO pass linearity and carry a defensible
-  slope in the RUST TABLE (all others 0.000000):
-    2p: bonus_card_credit 0.391117
-    3p: aggression_board_credit 7.967209, pact_board_credit 1.955373
-    4p: unit_strength_credit 503.905097, territory_credit 63.607113,
-        gov_board_credit 175.810309, pact_board_credit 26.711877,
-        unit_tech_credit 796.642824, restricted_resource_credit 3.456802,
-        free_action_credit 0.027570
-  The RUST TABLE as emitted is therefore almost all zeros and is NOT
-  suitable for splicing into p95_candidate_spread as-is: a row with two
-  zeros and one number would clamp two of the three player counts to
-  CLAMP_BLIND on the strength of a single-count reading -- exactly the
-  mixing the spec forbids. Treat the table as evidence, not as a paste.
+  NEAR-THE-LINE, NOT GATED (named for the record): 4p unit_tech_credit
+  gated_frac 0.4665 (fire 17040), 2p gov_board_credit 0.4581 (fire 4927),
+  2p wonder_board_credit 0.3918 (fire 3402). All below the 0.5 line;
+  they carry their bound but a second probe pair would be a prudent
+  check before any of the three is trusted at the edge.
 
-WHAT STOOD FROM THE FIRST RUN (unchanged, re-confirmed)
+  LOW-CONFIRMATION READINGS (not gated, but the slope is measured over
+  few firings -- usable, but do not cite them as if the count were
+  deep): 4p pact_board_credit (fire 2187, gated_frac 0.0000),
+  4p wonder_board_credit (fire 899, 0.0000), 3p tactic_reach_credit
+  (fire 876, 0.0000).
+
+  Ties to the champion weights (context only, no claim): the two 3p
+  gates are exactly two of the three 3p zero-weight credit keys
+  (aggression_board_credit, the third, is not gated: fire 1950,
+  gated_frac 0.0000). The 2p near-line keys include 2p's two
+  zero-weight credit keys (gov_board_credit 0.4581,
+  wonder_board_credit 0.3918). w_k = 0 is not a gate condition under
+  the displacement probe -- the pass set is no longer the zero-weight
+  set, which is the correction working as intended.
+
+WHAT STOOD FROM THE PRIOR RUNS (unchanged, re-confirmed in this run)
   T re-measured in this run (p95 of the TOTAL spread, the bound's
   denominator):
     2p: 214.092659   3p: 427.826433   4p: 416.507771
-  (Same sample protocol as the first run: 40 games, seed 0, 4 threads,
+  (Same sample protocol as before: 40 games, seed 0, 4 threads,
   champions frozen at analysis/champion_freeze_2026-08-26/.)
   CREDIT-CLASS flip rates (one row per count):
     flip_zero: 2p 0.462720   3p 0.180852   4p 0.448492
@@ -73,25 +90,37 @@ CHAMPIONS (frozen, md5 cross-checked against python hashlib)
   4p: rust_champion_4p.json md5 6f9dd8abd394cfea4b3c3c674149ede5
 
 RUN DETAILS
-  binary: rust/src/bin/creditspread.rs at ade726b (the delta form;
-          the first run was 74a2cd9, the total-score form)
+  binary: rust/src/bin/creditspread.rs at fad6123 (the displacement
+          form; the second run was ade726b, the delta/set-to-c form; the
+          first run was 74a2cd9, the total-score form)
   games/count: 40   seed: 0   threads: 4
   decisions: 2p 10153, 3p 16002, 4p 24433
-  total elapsed: 1159.1 s   move-cap hits: 0
+  total elapsed: 1169.6 s   move-cap hits: 0   RUN_EXIT: 0
   clippy --all-targets -- -D warnings: exit 0
   cargo test: exit 0 (1549 lib + all integration suites; 12/12
-              creditspread unit tests, including the rewritten
-              synthetic-decision test that now pins the delta form)
+              creditspread unit tests, including the synthetic-decision
+              test rewritten to pin the displacement form: a pricer
+              modeled linear in VALUE (w_k + c) at nonzero wk = 0.5
+              legitimately GATES the per-decision linearity check, which
+              the test asserts)
 
 GATES FOR THE COORDINATOR
   1. Nothing from this run goes into p95_candidate_spread: the 20 rows
-     stay at CLAMP_BLIND until a defensible per-key slope exists. The
-     RUST TABLE in the measurement file is evidence, not a paste.
-  2. The per-key |c|-linearity the bound needs does not hold between
-     c = 1.0 and c = 2.0 for most keys. If a bound is still wanted, the
-     linearity test needs a different probe pair (or a per-PRICER-TERM
-     delta instrument, which is a NEW spec, not this one).
-  3. The flip rates are a credit-class statistic; cite multcheck for
+     stay at CLAMP_BLIND by gate. The RUST TABLE in the measurement file
+     is evidence, not a paste.
+  2. The two genuine gates are named with their gated_frac above (3p
+     tech_board_credit 0.6283, 3p wonder_board_credit 0.7500/4 fires);
+     the right move for them is CLAMP_BLIND, which is what the table
+     does (emitted 0.000000).
+  3. The per-key |c|-linearity the bound needs DOES hold at the
+     champion's own operating point for the other 58 of 60 (key, count)
+     pairs (gated_frac small; a handful of never-firing keys carry no
+     reading at all and are 0.0 for want of data, not for gating).
+     The second run's "pricer nonlinearity" verdict stands retracted.
+  4. If a bound is still wanted, the linearity test needs a different
+     probe pair (or a per-PRICER-TERM delta instrument, which is a NEW
+     spec, not this one).
+  5. The flip rates are a credit-class statistic; cite multcheck for
      per-key influence, or spec a per-key flip run (2 extra
      candidate_features calls per key per decision -- the cost the
      coordinator flagged, left out of this run).
