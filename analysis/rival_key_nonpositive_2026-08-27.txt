@@ -1,0 +1,265 @@
+NONPOSITIVE CITATION SEARCH: RIVAL KEY FAMILY
+==============================================
+2026-08-27. Eight keys sit in ONE |-joined Free arm in sign_intent
+(weights.rs:1861-1875, the "Raw RIVAL board facts" arm): RivalCulture,
+RivalMeanCulture, RivalCultureRate, RivalScienceRate, RivalStrength,
+RivalWonders, RivalFreeCa, RivalHandCivil. The question: is there a RULES_SPEC
+citation that a rival having MORE of this is never GOOD for me? That is the
+NonPositive test. Verdict per key: citable / not-citable / needs-care.
+
+The emit sites (features.rs:1107-1114) and the quantity each holds:
+- RivalCulture: max over non-resigned rivals of q.culture (features.rs:629)
+- RivalMeanCulture: mean over non-resigned rivals of q.culture
+  (features.rs:639-640)
+- RivalCultureRate: max over non-resigned rivals of s.culture (projected
+  culture production), adjusted for pending pact gains (features.rs:654,673;
+  rivals.rs:658)
+- RivalScienceRate: max over non-resigned rivals of s.science (projected
+  science production), same pact adjustment (features.rs:655,674; rivals.rs:659)
+- RivalStrength: max over non-resigned rivals of s.strength (projected
+  strength), same pact adjustment (features.rs:656,675; rivals.rs via
+  effects::compute)
+- RivalFreeCa: max over non-resigned rivals of q.civil_actions (features.rs:632)
+- RivalHandCivil: max over non-resigned rivals of q.hand_size_civil()
+  (features.rs:636)
+- RivalWonders: max over non-resigned rivals of q.completed_wonders.len()
+  (features.rs:637)
+
+All eight are MAX-over-rivals (except RivalMeanCulture, which is the MEAN).
+All are rival-board quantities: they read no own-board state. The NonPositive
+test asks: does the rulebook cite a mechanic where a rival having MORE of this
+is NEVER good for me?
+
+
+THE ONE CITATION THAT COULD BOUND ALL EIGHT
+--------------------------------------------
+RULES_SPEC 5.3 [CoL p.7]: "Statistic comparisons ('strongest/weakest' =
+strength rating [FAQ p.11])..." and the card data confirms ~16 events that
+target "the strongest player" / "the weakest player" / "the player with the
+most culture" / "the player with the least culture" (card_table.rs:3247-3741:
+Raiders, Foray, Reign of Terror, Uncertain Borders, Border Conflict, Crusades,
+Crime Wave, Independence Declaration, Cold War, Refugees, International
+Agreement, Politics of Strength, plus the "player with most/least culture"
+events in data/cards_military_actions.json:1671,1983,2027).
+
+The official UB guide (sources/ubg_subsequent-rounds.txt:72-73) states this
+explicitly: "Many events help the strongest players, punish the weakest
+players, or both." And the critical line: "having the most culture points is
+sometimes a disadvantage."
+
+This is the citation. But it does NOT make a rival's high statistic
+NonPositive for me. Here is why, and why it is a needs-care citation rather
+than a citable one:
+
+The events target ME, not my rival. "The strongest player gains 4 culture.
+The weakest player loses 4 culture" (Politics of Strength, card_table.rs
+~line 3741) means that if I am the strongest, I gain 4 culture and the weakest
+loses 4. It does NOT mean that my rival being strong is bad for me. In fact,
+for that specific event, a rival being strong (and me not) means the rival
+gains 4 and I (as the weakest) lose 4 — which IS bad for me, but the mechanism
+is "I am the weakest", not "my rival is the strongest". The NonPositive test
+is about the RIVAL's quantity, not my relative position.
+
+The events cut BOTH ways. "The strongest player gains 3 food/resources"
+(Crusades, card_table.rs ~line 3380) means a strong rival GAINS resources,
+which is bad for me (they are stronger). But "The strongest player takes a
+yellow token from the weakest player's yellow bank" (card_table.rs ~line
+3762) means a strong rival STEALS from the weakest — if I am the weakest, a
+strong rival is bad; if I am the strongest, a strong rival is irrelevant (they
+take from someone else). The direction depends on my own position relative to
+the rival, which a single max-over-rivals coordinate does not capture.
+
+The UB guide's own tip confirms this is a STRATEGIC read, not a rules fact:
+"It is not a bad idea to end your turn with higher strength than the other
+players. This may lead to a cold war even in a game with no direct attacks."
+Being strong is a STRATEGY, not a liability. The events that target the
+strongest are as likely to REWARD the strongest as to punish them.
+
+
+PER-KEY VERDICTS
+-----------------
+
+1. RivalCulture
+   Quantity: max rival culture points (a stock, not a rate).
+   NonPositive test: Is a rival having MORE culture never good for me?
+   Verdict: NOT-CITABLE.
+   Reason: Culture is the victory condition (RULES_SPEC 12.5: "Most culture
+   points wins"). A rival having more culture means they are ahead in the race
+   — bad for me. But "never good" is too strong: a rival with a large culture
+   stock is a TARGET for culture-stealing aggressions (Armed Intervention,
+   RULES_SPEC 5.5: "take up to 7 culture") and for the "player with most
+   culture" events (card_table.rs:1671: "The player with the most culture
+   decreases population if he or she is the weakest"). A rival with a huge
+   culture stock is a rich target — exploiting them is GOOD for me. The
+   direction depends on whether I can attack them, which is a strategic read,
+   not a rules fact. No citation makes a rival's high culture "never good".
+
+2. RivalMeanCulture
+   Quantity: mean rival culture points.
+   Verdict: NOT-CITABLE.
+   Reason: Same as RivalCulture, but the mean dilutes the "rich target"
+   signal. A high mean means all rivals are moderately ahead, which is
+   uniformly bad (I am behind everyone). But "never good" still fails: a high
+   mean culture across rivals means the game is culture-active, which paces
+   age advancement (RULES_SPEC 12.1: ages end when the civil deck runs out,
+   not when culture hits a threshold — so culture does NOT directly pace ages,
+   but a high-culture game means more events have resolved, which can be good
+   or bad depending on which events). No citation.
+
+3. RivalCultureRate
+   Quantity: max rival projected culture production (a rate, not a stock).
+   Verdict: NOT-CITABLE.
+   Reason: A high rival culture rate means they are producing culture fast —
+   they will catch up or pull ahead. Bad for me in the race. But "never good"
+   fails: a rival with a high culture rate is a future rich target (same
+   logic as RivalCulture, one turn earlier). Also, the rate is a PROJECTION
+   (effects::compute), not a committed stock — it can change if the rival
+   loses a culture-producing card to antiquation or an aggression. The
+   NonPositive test requires "never good under any reading", and the
+   projection's mutability means a high rate today is not a guaranteed
+   liability tomorrow. No citation.
+
+4. RivalScienceRate
+   Quantity: max rival projected science production.
+   Verdict: NOT-CITABLE.
+   Reason: Science does NOT directly affect the victory condition (culture
+   wins the game, RULES_SPEC 12.5). A rival's high science rate means they
+   will develop technologies faster, which gives them better production,
+   better units, better wonders — all indirectly bad for me. But "never good"
+   fails: a rival burning science on a technology I do not want is irrelevant
+   to me; a rival with a high science rate is a target for Spy aggressions
+   (RULES_SPEC 5.5: "take up to 5 science") and for War over Technology
+   (RULES_SPEC 5.8: "science points equal to advantage"). A scientifically
+   strong rival is a rich science target. No citation makes a rival's science
+   rate "never good".
+
+5. RivalStrength
+   Quantity: max rival projected strength.
+   Verdict: NEEDS-CARE.
+   Reason: This is the one key where the RULES_SPEC 5.3 citation is MOST
+   relevant. Strength is the combat statistic: aggressions are illegal if the
+   rival's strength >= mine (RULES_SPEC 5.4 step 2), and wars are resolved by
+   strength comparison (RULES_SPEC 5.7). A rival with high strength means I
+   cannot aggression them (illegal) and may lose a war against them. That is
+   a rules-imposed constraint on MY options, not just a strategic race.
+   However, "never good" still fails: a strong rival is a target for me to
+   become stronger than (I can upgrade units, build armies, form a pact that
+   grants strength — RULES_SPEC 5.9). Also, the UB guide's own tip
+   (ubg_subsequent-rounds.txt:72) says being strong is a STRATEGY, not a
+   liability: "It is not a bad idea to end your turn with higher strength
+   than the other players." A strong rival is a challenge, not an automatic
+   bad. The citation supports "a strong rival constrains my military options"
+   (which is the existing FreeWorkerWall/StrengthDeficit shape), but it does
+   NOT support "a rival's high strength is never good for me". Verdict:
+   needs-care — the citation is relevant but does not pass the strict
+   NonPositive test.
+
+6. RivalWonders
+   Quantity: max rival completed wonders count.
+   Verdict: NOT-CITABLE.
+   Reason: Completed wonders give their holder permanent effects (RULES_SPEC
+   9.2). A rival with many completed wonders has many permanent bonuses —
+   bad for me in the long run. But "never good" fails: a rival with many
+   completed wonders has spent a lot of civil actions and resources on them,
+   which means they had less available for other things (opportunity cost).
+   Also, wonders are not directly attackable (no aggression targets "a
+   rival's wonder" except Infiltrate, RULES_SPEC 5.5: "remove rival's leader
+   or unfinished wonder from game" — note: UNFINISHED, not completed). A
+   rival's completed wonders are a sunk cost for them; they are not a target
+   I can exploit. No citation makes a rival's wonder count "never good".
+
+7. RivalFreeCa
+   Quantity: max rival civil action total (from their government).
+   Verdict: NOT-CITABLE.
+   Reason: A rival's CA total is a function of their government (RULES_SPEC
+   8.1: Despotism = 4 CA; higher governments have more or fewer). A rival
+   with more CAs can take more cards, build more, research more — bad for me
+   in the race. But "never good" fails: a rival with a high CA total from a
+   high-level government has already invested science in a revolution or
+   peaceful change (RULES_SPEC 8.2-8.3), which means they spent science they
+   could have used elsewhere. Also, the CA total is a GOVERNMENT property, not
+   a stock that changes turn-to-turn — it is fixed for the duration of that
+   government. A rival with 5 CAs (Democracy) is not a "threat" in the same
+   way a rival with 3 free CAs this turn is; the total is an allowance, not a
+   current availability. No citation.
+
+8. RivalHandCivil
+   Quantity: max rival civil hand size.
+   Verdict: NOT-CITABLE.
+   Reason: A rival with a large civil hand has many options — they can play a
+   leader, develop a technology, take a card — bad for me in the race. But
+   "never good" fails: a large hand means the rival has NOT played those cards,
+   which means they are waiting for a better moment (or they are stuck with
+   cards they cannot use). Also, at age end, antiquated cards are discarded
+   from hands (RULES_SPEC 12.2 step 1), so a large hand of old-age cards is a
+   liability for the rival, not a threat. A rival with a full hand of Age II
+   cards at the end of Age II is about to discard them all — that is GOOD for
+   me (they lose options). No citation makes a rival's hand size "never good".
+
+
+SUMMARY TABLE
+-------------
+key                  quantity type          verdict        key reason
+RivalCulture         max rival culture      NOT-CITABLE    rich target for
+                   (stock)                         aggressions; direction
+                                                   depends on my position
+RivalMeanCulture     mean rival culture     NOT-CITABLE    dilutes the target
+                   (stock)                         signal; no citation
+RivalCultureRate     max rival culture      NOT-CITABLE    projection, mutable;
+                   (rate)                           future target
+RivalScienceRate     max rival science      NOT-CITABLE    science not the
+                   (rate)                           victory condition; target
+                                                   for Spy/War over Tech
+RivalStrength        max rival strength     NEEDS-CARE     rules-imposed
+                   (rate)                           constraint on my options
+                                                   (aggression legality, war
+                                                   resolution), but "never
+                                                   good" fails: being strong
+                                                   is a strategy (UB guide),
+                                                   and I can become stronger
+RivalWonders         max rival completed    NOT-CITABLE    sunk cost for the
+                   wonders (count)                     rival; not attackable
+                                                   (only unfinished wonders
+                                                   are Infiltrate targets)
+RivalFreeCa          max rival CA total     NOT-CITABLE    government
+                   (allowance)                       property, not a stock;
+                                                   opportunity cost of the
+                                                   science spent on the
+                                                   government
+RivalHandCivil       max rival hand size    NOT-CITABLE    hand cards can be
+                   (count)                          discarded at age end
+                                                   (12.2); a full hand of
+                                                   old-age cards is a
+                                                   liability for the rival
+
+
+HEADLINE
+---------
+NO key passes the strict NonPositive test. The RULES_SPEC 5.3 citation
+("strongest/weakest" targeting) is relevant to RivalStrength but does not make
+a rival's high strength "never good" — it makes it a CONSTRAINT on my options
+(a different shape, already priced by StrengthDeficit's NonPositive gate) and
+a STRATEGY the rival is pursuing (UB guide: "It is not a bad idea to end your
+turn with higher strength"). The other seven keys have no citation at all that
+a rival having more of the quantity is "never good" for me. The existing Free
+classification (weights.rs:1861-1875) is correct: these are strategic race
+coordinates, not rules-imposed penalties.
+
+The one key that deserves a second look is RivalStrength, but the second look
+should ask a DIFFERENT question: not "is a rival's high strength never good
+for me?" (No — it is a strategy they are pursuing, and I can match it) but
+"does a rival's high strength CONSTRAIN my options in a way that is already
+priced elsewhere?" (Yes — StrengthDeficit's NonPositive gate prices "I am
+weaker than the max rival" as a rules-imposed penalty, RULES_SPEC 5.4/5.7.
+RivalStrength is the same quantity measured from the rival's side. The two
+are not redundant: StrengthDeficit is max(0, rival - me), which is 0 when I
+lead; RivalStrength is the raw rival value, which is high even when I lead.
+But the NonPositive test is not the right test for RivalStrength — the right
+test is whether it is REDUNDANT with StrengthDeficit, which is a different
+question for a different job.)
+
+No sign_intent change proposed. No weights.rs edit. No citation looked up
+beyond the ones already in RULES_SPEC and the sources/ files. The web
+cross-check (fandom, BGG, UB official) returned the same conclusion: the UB
+guide's own tip (ubg_subsequent-rounds.txt:72-73) is the closest thing to a
+citation, and it says being strong is a STRATEGY, not a liability.
