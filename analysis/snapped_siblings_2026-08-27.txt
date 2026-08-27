@@ -1,0 +1,127 @@
+snapped_siblings_2026-08-27.txt
+
+Collinearity check on the 11 EFFECTIVE PROVEN SNAPS from ambiguous_key_ages_2026-08-27.txt
+OLD group: gate-pinned at exactly 0.0 despite live spread rows and full climb age.
+Hypothesis under test: a sign-consistent sibling at the same player count absorbed
+the signal, so the pinned key fits only residual noise, its sign flips on noise,
+and the gate froze it. Values from the frozen champions (analysis/frozen/
+clamp_ceiling_2026-08-27/, gens 116808 / 65450 / 21445); the worked example 3p
+strength family (strength 60.0 pinned at CLAMP_BLIND, strength_deficit 0.0) is the
+template: a large Free sibling dominating a gated residual. A sibling is a plausible
+absorber when it is nonzero and its sign is consistent with the pinned key's intent
+(NonNegative key: a positive sibling; NonPositive key: a negative sibling).
+
+The 11, each with its family and the candidate absorbers:
+
+hand_limit 2p -- hand-size family
+  pinned: hand_limit=0.0 (NonNegative, snapped)
+    hand_civil               = -0.06082309531386977  (Free)
+    hand_mil_potential       = -0.004936439428338161  (Free)
+    hand_mil_value           = 0.2757154910975059  (NonNegative)  <-- sign-consistent candidate
+    hand_military            = 0.3874767910979809  (Free)  <-- sign-consistent candidate
+    hand_over_capacity       = -0.00249125849448081  (NonPositive)
+    hand_perishable          = -0.21427159773694338  (NonPositive)
+    hand_potential           = 0.7436819467270143  (Free)  <-- sign-consistent candidate
+    hand_swap_extra          = -2.407621266602436  (Free)
+    hand_value               = 0.09536071122964578  (NonNegative)  <-- sign-consistent candidate
+    hand_value_late          = 0.043400061049768075  (NonNegative)  <-- sign-consistent candidate
+    rival_hand_civil         = -0.2233894398796511  (Free)
+    rival_hand_potential     = -0.16059252209350663  (Free)
+  verdict: hand_mil_value; hand_military; hand_potential; hand_value; hand_value_late
+
+no_aggression 2p -- aggression family
+  pinned: no_aggression=0.0 (NonPositive, snapped)
+    aggression_board_credit  = 1.8717044457481913  (NonNegative)
+  verdict: NO sign-consistent nonzero sibling in this family at this count
+
+wonder_board_credit 2p -- wonder family
+  pinned: wonder_board_credit=0.0 (NonNegative, snapped)
+    rival_building_wonder    = -0.45235407432337077  (Free)
+    rival_wonder_deficit     = 0.006368412944688781  (Free)  <-- sign-consistent candidate
+    rival_wonders            = -1.4812571745509562  (Free)
+    wonder_age_overrun       = -0.005729648501949396  (NonPositive)
+    wonder_in_progress       = 0.3166216690434127  (Free)  <-- sign-consistent candidate
+    wonder_one_stage_short   = -0.06287820380886203  (Free)
+    wonder_overrun           = -0.535133302052559  (NonPositive)
+    wonder_pool_rival_claimed = -0.13251800418950083  (Free)
+    wonder_potential         = 1.293273142810925  (NonNegative)  <-- sign-consistent candidate
+    wonder_progress          = -0.11297809498191437  (Free)
+    wonder_promise           = 0.921472760064289  (NonNegative)  <-- sign-consistent candidate
+    wonder_remaining         = -0.017868165426176794  (NonPositive)
+    wonder_stages_left       = -3.4147833973403707  (NonPositive)
+    wonder_stages_per_action = 0.08651864546451332  (NonNegative)  <-- sign-consistent candidate
+    wonder_turns_to_finish   = -0.5414153375211151  (NonPositive)
+    wonders                  = 0.0 (NonNegative)   -- also zero, not an absorber
+  verdict: rival_wonder_deficit; wonder_in_progress; wonder_potential; wonder_promise; wonder_stages_per_action
+
+military_action_gap 2p -- military-action family
+  pinned: military_action_gap=0.0 (NonPositive, snapped)
+    military_action_surplus  = 0.04629279100772643  (Free)
+    military_actions         = 1.1288104546297764  (NonNegative)
+    rival_mil_actions        = 0.10317018085350767  (Free)
+  verdict: NO sign-consistent nonzero sibling in this family at this count
+
+military_action_gap 4p -- military-action family
+  pinned: military_action_gap=0.0 (NonPositive, snapped)
+    military_action_surplus  = 0.05745696799014441  (Free)
+    military_actions         = 2.144587685292562  (NonNegative)
+    rival_mil_actions        = 1.798363628566826  (Free)
+  verdict: NO sign-consistent nonzero sibling in this family at this count
+
+free_action_credit 3p -- civil-action family
+  pinned: free_action_credit=0.0 (NonNegative, snapped)
+    civil_action_gap         = -2.199230915005614  (NonPositive)
+    civil_action_surplus     = 0.037759400152668425  (NonNegative)  <-- sign-consistent candidate
+    civil_actions            = 0.529035009936773  (NonNegative)  <-- sign-consistent candidate
+    gov_action_cost          = -4.666124184584276  (Free)
+  verdict: civil_action_surplus; civil_actions
+
+free_action_credit 4p -- civil-action family
+  pinned: free_action_credit=0.0 (NonNegative, snapped)
+    civil_action_gap         = -0.023069897923304602  (NonPositive)
+    civil_action_surplus     = 1.2780428714346421  (NonNegative)  <-- sign-consistent candidate
+    civil_actions            = 0.13638044760058277  (NonNegative)  <-- sign-consistent candidate
+    gov_action_cost          = 0.2749451823967877  (Free)  <-- sign-consistent candidate
+  verdict: civil_action_surplus; civil_actions; gov_action_cost
+
+hand_perishable 4p -- hand-value family
+  pinned: hand_perishable=0.0 (NonPositive, snapped)
+    hand_civil               = -23.620430292554897  (Free)  <-- sign-consistent candidate
+    hand_mil_potential       = 0.4297133449587217  (Free)
+    hand_mil_value           = 0.6465863443291585  (NonNegative)
+    hand_military            = -0.7925474919657907  (Free)  <-- sign-consistent candidate
+    hand_over_capacity       = -0.5251571736987084  (NonPositive)  <-- sign-consistent candidate
+    hand_potential           = 1.1201778838919063  (Free)
+    hand_swap_extra          = 0.06843536681407979  (Free)
+    hand_value               = 0.5277230833664599  (NonNegative)
+    hand_value_late          = 0.04870085303960849  (NonNegative)
+    rival_hand_civil         = 0.43428706778528536  (Free)
+    rival_hand_potential     = 11.355383340259396  (Free)
+  verdict: hand_civil; hand_military; hand_over_capacity
+
+happy_margin_after_next_pop 4p -- happiness family
+  pinned: happy_margin_after_next_pop=0.0 (NonPositive, snapped)
+    happy_margin             = -1.646794860218793  (Free)  <-- sign-consistent candidate
+    happy_surplus            = 0.06073917828032454  (Free)
+  verdict: happy_margin
+
+resource_commitment_turns 4p -- resource family
+  pinned: resource_commitment_turns=0.0 (NonPositive, snapped)
+    resource_discount        = 1.969111042429318  (NonNegative)
+    resource_gap             = -1.2717610934115067  (NonPositive)  <-- sign-consistent candidate
+    resource_rate            = 4.543421415518373  (Free)
+    resource_stock           = -0.03180669441079694  (Free)  <-- sign-consistent candidate
+    resource_stock_needed    = 0.0855081953632149  (Free)
+    resource_surplus         = -0.24320079274821796  (Free)  <-- sign-consistent candidate
+    restricted_resource_credit = 0.0 (NonNegative)   -- also zero, not an absorber
+    rival_resource_stock     = 1.523130030898968  (Free)
+  verdict: resource_gap; resource_stock; resource_surplus
+
+row_playable_count 4p -- row/leaf family
+  pinned: row_playable_count=0.0 (NonNegative, snapped)
+    science_need_row         = -0.05309088100781366  (NonPositive)
+    row_bargain_forgone      = 0.681108843664758  (Free)  <-- sign-consistent candidate
+    row_last_copy            = 1.2222908224105837  (Free)  <-- sign-consistent candidate
+    row_urgency              = -0.1679440886455715  (Free)
+  verdict: row_bargain_forgone; row_last_copy
+
