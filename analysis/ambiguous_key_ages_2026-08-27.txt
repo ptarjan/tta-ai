@@ -27,6 +27,21 @@ youth. TREAT THESE AS EFFECTIVE PROVEN SNAPS.
 
   11 of the 14 zero-pairs are OLD, i.e. 11 are now effectively proven snaps.
 
+  WHY the 2026-08-26 trio is OLD, not a date-rule artifact (the mechanism):
+  The climb's mutation policy (rust/src/bin/climb.rs:418-490) is Scatter 45% of
+  generations sampling 25% of the movable keys, Group 33%, Kick 10% sampling 60%,
+  Rescale 12% -- so a single key is proposed for movement on roughly a quarter to
+  a half of all generations. "Never mutated" over even 100 generations has
+  probability on the order of 0.7^100: not a real possibility. And the sharper
+  point: proposals do not persist, only ACCEPTED generations do -- the right unit
+  of climb age is the ACCEPT count, not the generation count. since_accept read
+  from the live champions on 2026-08-27: 2p 10, 3p 31, 4p 4 (accepts land every
+  few dozen generations). The 2026-08-26 trio at 4p has roughly 2900 generations
+  behind it -- on the order of a hundred accepted mutations, each touching a
+  quarter to three fifths of the vector. Those keys have been moved by accepted
+  mutations many times over and are still exactly 0.0. That is the gate, not
+  youth. OLD is correct for them.
+
 NEW -- introduced 2026-08-27: genuinely too young to judge, especially at 4p, the slow
 arm (21450 generations total).
 
