@@ -101,9 +101,13 @@ const FROZEN: &[WeightKey] = &[WeightKey::Culture];
 /// typical decision is worth by how far this key's own feature actually
 /// swings between the moves on offer. A flat rail is 162 different rules
 /// wearing a costume: 60 on `culture` moves a decision by ~780 points and 60
-/// on `take_cost_share` moves it by 48. Keeping `CLAMP` as the ceiling means
-/// the per-key bound can only ever tighten a coordinate, never loosen one.
-const CLAMP: f64 = weights::CLAMP_BLIND;
+/// on `take_cost_share` moves it by 48.
+///
+/// This is the ceiling on a MEASURED bound only; a coordinate the spread
+/// instrument cannot see still gets `CLAMP_BLIND`. The two were one number
+/// until 2026-08-27, which meant the flat rail rather than the measurement
+/// was holding almost every pinned coordinate -- see [`weights::CLAMP_CEILING`].
+const CLAMP: f64 = weights::CLAMP_CEILING;
 
 /// How close to `CLAMP` counts as "pinned" for [`runaway_weights`]. `0.95`
 /// (57.0 at the current `CLAMP`) is tight enough that a healthy vector
@@ -1672,17 +1676,25 @@ mod tests {
 
     /// The whole point of a per-key bound: a coefficient's ceiling has to
     /// track how far its own feature actually swings between the moves on
-    /// offer. `hand_potential` moves the score by hundreds of points between
-    /// candidates at three players and `take_cost_share` moves it by less
-    /// than one, so a rail that gives them the same ceiling is giving one of
-    /// them a hundredfold more authority than the other by accident.
+    /// offer. `hand_potential` moves the score by over a hundred points
+    /// between candidates at three players and `take_cost_share` moves it by
+    /// less than one, so a rail that gives them the same ceiling is giving
+    /// one of them a hundredfold more authority than the other by accident.
+    ///
+    /// The ratio is asserted, never the absolute. An earlier version of this
+    /// test pinned the wide bound under 1.0, which quietly became an
+    /// assertion that a specific spread row was current: that row aged 5.8x
+    /// and the test kept passing on the stale number right up until it was
+    /// remeasured.
     #[test]
     fn a_wide_swinging_feature_is_bounded_far_tighter_than_a_narrow_one() {
         let wide = WeightKey::HandPotential.clamp_bound(3);
         let narrow = WeightKey::TakeCostShare.clamp_bound(3);
-        assert!(wide < 1.0, "hand_potential's 3p bound should be under one point, got {wide}");
         assert_eq!(narrow, CLAMP, "take_cost_share swings so little its bound saturates the rail");
-        assert!(wide < narrow / 50.0, "{wide} is not meaningfully tighter than {narrow}");
+        // An order of magnitude is a sanity floor, not a measurement. The
+        // live gap is ~29x (4.15 against the 120 ceiling); asserting anything
+        // near that would re-create the brittleness described above.
+        assert!(wide < narrow / 10.0, "{wide} is not meaningfully tighter than {narrow}");
     }
 
     /// The same key at a different table size is a different feature, and

@@ -2137,10 +2137,11 @@ impl WeightKey {
     ///
     /// Two deliberate conservatisms:
     ///
-    /// - The result is capped at [`CLAMP_BLIND`], the historical flat rail,
-    ///   so this can only ever TIGHTEN a coordinate and never hand one more
-    ///   room than it has today. 80 of the 365 measurable (key, count) pairs
-    ///   tighten; the rest are held where they already were.
+    /// - The result is capped at [`CLAMP_CEILING`], which guards against a
+    ///   near-zero spread dividing into a bound so large it bounds nothing.
+    ///   That cap was [`CLAMP_BLIND`] until 2026-08-27, which meant the flat
+    ///   rail and not the measurement was holding most of the champion; see
+    ///   [`CLAMP_CEILING`] for the census and for the frozen A side.
     /// - A key reading `0.0` in the p95 row is not "measured zero"; it is
     ///   INVISIBLE TO THE INSTRUMENT, and invisibility comes in four
     ///   distinct kinds (which is why the row is prose here and never
@@ -2210,7 +2211,7 @@ impl WeightKey {
             return CLAMP_BLIND;
         }
         let bound = CLAMP_T * P95_TOTAL_SPREAD[player_index(players)] / spread;
-        bound.min(CLAMP_BLIND)
+        bound.min(CLAMP_CEILING)
     }
 
     /// This key's own p95 candidate-set spread, over the decisions where it
@@ -2408,7 +2409,15 @@ impl WeightKey {
         WeightKey::TacticReachCredit => [0.781131, 0.211469, 24.407310],
         WeightKey::HandCivil => [2.000000, 2.000000, 2.000000],
         WeightKey::HandValue => [2.789474, 2.847059, 2.860335],
-        WeightKey::HandPotential => [197.027878, 674.348432, 304.224789],
+        // Remeasured alone on 2026-08-27, against the champions live that
+        // day, because the stored row had aged 5.8x at three players
+        // (674.348432 -> 116.563117) and was pinning the live 3p weight at
+        // its bound of 0.717 -- below the value BOTH other lineages freely
+        // chose. Its numerator is still the older `P95_TOTAL_SPREAD` sample,
+        // which leaves the resulting bound ~23% looser than a matched pair
+        // would give; that error is second-order against the 5.8x it
+        // replaces, and it errs toward room for a coordinate that is pinned.
+        WeightKey::HandPotential => [36.806801, 116.563117, 58.461273],
         WeightKey::HandMilitary => [4.000000, 4.000000, 4.000000],
         WeightKey::HandMilValue => [11.000000, 12.000000, 11.000000],
         WeightKey::HandMilPotential => [185.417899, 240.000000, 780.000000],
@@ -2484,11 +2493,34 @@ impl WeightKey {
 pub const CLAMP_T: f64 = 1.0;
 
 /// The flat magnitude rail the league used for every weight before
-/// [`WeightKey::clamp_bound`] existed, kept as the CEILING on every derived
-/// bound and as the fallback for coordinates the spread instrument cannot
-/// see. Because it is a ceiling and not a floor, the per-key bound can only
-/// tighten a coordinate relative to the old behaviour.
+/// [`WeightKey::clamp_bound`] existed, kept as the fallback for coordinates
+/// the spread instrument cannot see. Nothing has been measured about those
+/// coordinates, so nothing justifies moving their rail.
 pub const CLAMP_BLIND: f64 = 60.0;
+
+/// The cap on a MEASURED bound -- a distrust-the-instrument guard, not a
+/// statement about the evaluation. A key whose own spread is tiny divides
+/// into a derived bound in the hundreds of thousands, which is no bound at
+/// all, so the ratio needs a cap somewhere.
+///
+/// It used to be [`CLAMP_BLIND`] itself, one number doing both jobs, and
+/// that conflation is what made the measured table nearly decorative: on
+/// 2026-08-27, 440 of 522 (key, count) cells had a derived bound ABOVE 60,
+/// so the flat rail -- not the measurement -- was what actually held the
+/// champion. Of the 16 coordinates then sitting within 80% of their bound,
+/// 14 were pressed against the flat 60 rather than against anything
+/// measured, `culture_rate` among them at 0.89 / 0.91 / 0.92 in all three
+/// lineages independently. Two cells refuted the rail on its own terms:
+/// `strength` at 3p was held at 60 when its own measurement permitted 96.8.
+///
+/// `120.0` is an EXPERIMENT, not a fitted value, and it is the only
+/// deliberately unmeasured number here: it doubles the room available to
+/// coordinates the instrument CAN see, frees 12 of those 16, and leaves the
+/// blind ones exactly where they were. The A side is frozen under
+/// `analysis/frozen/clamp_ceiling_2026-08-27/`. If the climb does not beat
+/// that frozen champion from here, put this back to 60.0 -- do not split the
+/// difference, which would only make the number look fitted.
+pub const CLAMP_CEILING: f64 = 120.0;
 
 /// The p95, over decisions, of the range the FULL evaluation score takes
 /// across a decision's candidate set, at 2/3/4 players -- "what one typical
@@ -3219,26 +3251,40 @@ mod tests {
         }
     }
 
-    /// The per-key bound is a CEILING-limited tightening, never a loosening.
-    /// Whatever the measurement says, no coordinate comes out of
-    /// `clamp_bound` with more room than the flat rail the league used
-    /// before it existed -- so landing this can only ever constrain the
-    /// climb, and a stale or badly-regenerated spread table cannot silently
-    /// hand a coordinate the run of the evaluation.
+    /// Every bound is finite and positive, and no measurement can talk its
+    /// way past `CLAMP_CEILING` -- a stale or badly-regenerated spread table
+    /// divides a small number into the total and would otherwise hand a
+    /// coordinate the run of the evaluation.
+    ///
+    /// This test used to assert the cap was `CLAMP_BLIND`, i.e. that the
+    /// per-key bound could only ever TIGHTEN against the old flat rail. That
+    /// guarantee was given up deliberately on 2026-08-27, with a measurement
+    /// and a frozen A side; the reasoning is on `CLAMP_CEILING`. What is
+    /// asserted instead is the property that keeps the change honest --
+    /// loosening applies ONLY where something was measured.
     #[test]
-    fn no_key_is_ever_bounded_more_loosely_than_the_old_flat_rail() {
+    fn only_a_measured_coordinate_may_exceed_the_old_flat_rail() {
         for &k in WeightKey::ALL {
             for players in [2u8, 3, 4] {
                 let bound = k.clamp_bound(players);
                 assert!(
-                    bound <= CLAMP_BLIND,
-                    "{} at {}p is bounded at {}, looser than the {} rail",
+                    bound <= CLAMP_CEILING,
+                    "{} at {}p is bounded at {}, above the {} cap",
                     k.name(),
                     players,
                     bound,
-                    CLAMP_BLIND
+                    CLAMP_CEILING
                 );
                 assert!(bound > 0.0, "{} at {}p is bounded at {}", k.name(), players, bound);
+                if k.p95_candidate_spread()[player_index(players)] <= 0.0 {
+                    assert_eq!(
+                        bound,
+                        CLAMP_BLIND,
+                        "{} at {}p is invisible to the instrument, so its rail must not move",
+                        k.name(),
+                        players
+                    );
+                }
             }
         }
     }
