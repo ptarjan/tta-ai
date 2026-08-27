@@ -21,7 +21,7 @@ The arms split into two shapes:
     block arm's `=>` is followed by `{`, and the returned Kind is
     on a line of its own, separated from the key list by the brace.
 
-The 27 (exactly as briefed; all 27 verified present in the 7
+The 27 (exactly as briefed; all 27 verified present in the 9
 block arms, none in any flat arm):
 FamineDeficit, Discontent, Uprising, CivilActions, StrengthDeficit,
 WarImmune, AttackCostDoubled, Wonders, WonderPotential,
@@ -38,11 +38,19 @@ ZERO of the 27 block arms can return Free on any path.
 
 Every block arm returns exactly one SignIntent, unconditionally --
 there is no `if`, no state read, no player-count branch, no
-dispatch inside any of the seven blocks (they are `const fn`
+dispatch inside any of the nine blocks (they are `const fn`
 arms; a `const` match arm cannot inspect runtime state at all).
 The "computed intent" in the brief is the braced syntax, not a
 conditional: the intent is computed per-arm and constant
-per-key. So there is no key that is "silently unconstrained on
+per-key. The strongest form of the argument is the signature:
+`pub const fn sign_intent(self)` takes ONLY `self`, and a const
+fn may not call non-const fns -- so the function structurally
+CANNOT read runtime state (no player count, no horizon, no game
+position is even available to branch on), independent of whether
+any block contains an `if`. The four `if` hits a grep of the
+body turns up are all inside comments (:1629, :1725, :2018,
+:2027); there are zero executable conditionals in the 174 arms,
+braced or flat. So there is no key that is "silently unconstrained on
 some path" -- every one of the 27 carries a fixed, permanent
 gate at every load, every mutation, every player count. The
 hole the block syntax creates is the OPPOSITE of the one feared:
@@ -56,7 +64,7 @@ Condition per key: constant at runtime, for all 27. Genuinely
 varies: none.
 
 
-THE SEVEN BLOCK ARMS, KEY BY KEY
+THE NINE BLOCK ARMS, KEY BY KEY
 ----------------------------------------------------------------
 
 BLOCK 1 -- weights.rs:1495-1497
@@ -87,6 +95,20 @@ BLOCK 3 -- weights.rs:1562-1564
     extend this to the other stock-shaped keys -- workers,
     culture, science_rate -- which stay Free in the big
     catch-all at 1753-1791 on the missing-citation ground.)
+
+BLOCK 3b -- weights.rs:1550-1552
+  RestrictedResourceCredit => { NonNegative("scales an
+      already-clamped marginal, same reroute as the gate above") }
+  * 1 key. Returns NonNegative unconditionally.
+  * Condition: constant. (Single-key block. `cards::priced_marginal`'s
+    restricted-resource reroute clamps the marginal `.max(0.0)` BEFORE
+    this credit multiplies it, so a negative credit could only invert an
+    established gain -- structurally identical to the `ResourceDiscount`
+    gate at 1489-1491, through the sibling `yield_marginal` reroute that
+    `priced_marginal` delegates to for every ordinary key. The comment at
+    1538-1549 also records why no `restricted_resources` key of its own
+    survives: it is retired, so there is nothing here for a hill climb to
+    have driven negative.)
 
 BLOCK 4 -- weights.rs:1618-1620
   Discontent | Uprising | StrengthDeficit | FamineDeficit => {
@@ -154,24 +176,43 @@ BLOCK 7 -- weights.rs:2041-2046
     BuildFresh/Territory/TacticReach are plain inline scales
     where 0.0 is ordinary and safe.)
 
+BLOCK 7b -- weights.rs:1813-1815
+  WarImmune | AttackCostDoubled => { NonNegative("a protective
+      flag that removes no option from its holder") }
+  * 2 keys. Returns NonNegative unconditionally for both.
+  * Condition: constant. (Protective flags: `WarImmune` exits combat
+    legality on the DEFENDER's side, removing no option from its holder;
+    `AttackCostDoubled` reads the DEFENDER's leader in
+    `combat::start_aggression` -- it means "rivals pay double to attack
+    me", not "my attacks cost double"; Gandhi's matching self-restriction
+    is `NoAggression`, which sits in the flat NonNegative arm above. The
+    one pact granting WarImmune also carries `cultureProduction: -2`, but
+    that is priced by the culture coordinates and floored at 0 by the
+    rulebook's rating limits, so the block's comment at 1804-1812 records
+    why it does not reach this gate. The citation rests on the
+    COEFFICIENT's meaning -- it scales a flag that can only remove
+    options aimed AT the holder -- not on a monotone feature value.)
+
 
 TALLY
 ----------------------------------------------------------------
-  NonNegative arms: 5 blocks, 19 keys
+  NonNegative arms: 7 blocks, 22 keys
       Block 1: TechRedundancyDiscount (1)
       Block 2: WonderPotential, WonderPromise (2)
       Block 3: CivilActions, CivilActionSurplus, Wonders (3)
+      Block 3b: RestrictedResourceCredit (1)
       Block 6: HandValue, HandValueLate (2)
       Block 7: UnitTechCredit, TechBoardCredit, ActionBoardCredit,
                GovBoardCredit, WonderBoardCredit, BuildFreshCredit,
                TerritoryCredit, AggressionBoardCredit,
                WarBoardCredit, EventBoardCredit, TacticReachCredit
                (11)
+      Block 7b: WarImmune, AttackCostDoubled (2)
   NonPositive arms: 2 blocks, 5 keys
       Block 4: Discontent, Uprising, StrengthDeficit, FamineDeficit (4)
       Block 5: ResourceCommitmentTurns (1)
   Free arms: 0 blocks, 0 keys
-  Total: 7 blocks, 27 keys.
+  Total: 9 blocks, 27 keys.
 
 Every block returns a CONSTRAINED intent. No block can return
 Free. No key among the 27 is silently unconstrained on any
@@ -182,10 +223,11 @@ WHY THE 27 ARE STILL AUDIT-DUE (bookkeeping, but real)
 Cross-reference first: analysis/missing_sign_intents_2026-08-27.txt
 (a same-day whole-match parse) already classified all 174 arms
 arm-by-arm (111 Free / 38 NonNegative / 25 NonPositive) and its
-counts agree with this file's tally exactly (the 38 NonNegative
-= 19 flat + the 19 in blocks 1/2/3/6/7; the 25 NonPositive =
-20 flat + the 5 in blocks 4/5; no block key appears in its Free
-list). Its "LIST (2): keys that fall through to Free = EMPTY"
+counts agree with this file's tally exactly. The decomposition is
+checked against the FLAT census, not just the total: flat
+NonNegative 16 + block 22 = 38; flat NonPositive 20 + block 5 =
+25; Free 111 + block 0 = 111; flat keys 16+20+111 = 147 = 174 -
+27. (No block key appears in that file's Free list.) Its "LIST (2): keys that fall through to Free = EMPTY"
 confirms there is no wildcard arm. What that file did NOT do is
 the block-structure distinction this audit draws: it read the
 intent, not the arm SHAPE, so it could not state that 27 of the
@@ -228,13 +270,15 @@ Sources:
   rust/src/bots/weighted/weights.rs:1495-1497 (block 1)
   rust/src/bots/weighted/weights.rs:1498-1513 (block 2 + Kremlin
       sub-derivation)
-  rust/src/bots/weighted/weights.rs:1553-1564 (block 3 + STOCK
-      conservatism comment)
+  rust/src/bots/weighted/weights.rs:1538-1564 (block 3 + block 3b
+      RestrictedResourceCredit + STOCK conservatism comment)
   rust/src/bots/weighted/weights.rs:1604-1620 (block 4 +
       FamineDeficit sub-derivation)
   rust/src/bots/weighted/weights.rs:1653-1662 (block 5)
   rust/src/bots/weighted/weights.rs:1713-1736 (block 6 + T1-D
       convex-blend derivation)
+  rust/src/bots/weighted/weights.rs:1804-1815 (block 7b + defensive
+      comment)
   rust/src/bots/weighted/weights.rs:1955-2046 (block 7 + hazard
       comment)
   rust/src/bots/weighted/weights.rs:766-790 (weight_key_table --
