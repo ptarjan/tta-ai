@@ -1,0 +1,78 @@
+end_turn_bias sensitivity — does it still control the 2p pass rate?
+============================================================
+Verdict: YES, it controls it strongly and monotonically. The
+coordinate is NOT inert. With the champion frozen at gen 119049
+(end_turn_bias = -2.9570330419228377, live re-read at freeze time)
+and only end_turn_bias varied, EndTurn% of opener decisions sweeps
+23.3% -> 75.2% over [-60, +10], with no plateau anywhere in the
+range.
+
+Method (per coordinator's job spec)
+------------------------------------------------------------
+1. Frozen copy: /Users/pt/tta-scratch/etb_base.json, gen 119049
+   (live champion re-read at the moment of the cp; it was not
+   rewritten between freeze and the last run).
+2. Six variants, ONLY end_turn_bias changed (weights nested under
+   ["weights"], 174 keys otherwise identical):
+   /Users/pt/tta-scratch/etb_{-60,-20,-10,-3,0,+10}.json
+3. Binary present (no build needed):
+   /Users/pt/tta-ai/rust/target/release/openerprobe
+   (1079352 bytes, built 2026-08-27 07:34)
+4. Each run: openerprobe --games 60 --players 2 --seed 0
+   --threads 2 --weights <variant>. 60 games each, seeds 0..59,
+   rounds 1-3 own-turn decision points. ~0.1 s per run.
+   Full outputs: /Users/pt/tta-scratch/etb_out_{-60,-20,-10,-3,0,+10}.txt
+
+Table (end_turn_bias -> opener action mix)
+------------------------------------------------------------
+etb    total  EndTurn%   Pop%    Urban%   Mine%   Farm%
+-60     1545   23.3%    12.8%    7.8%     7.6%    0.0%
+-20     1229   29.3%    14.6%    8.6%    10.2%    0.0%
+-10      954   37.7%    12.6%    9.5%    11.9%    0.0%
+ -3      713   50.5%     6.3%   10.1%    10.8%    0.0%
+ +0      570   63.2%     3.3%   14.0%     7.9%    0.0%
++10      479   75.2%     0.0%   21.5%     1.0%    0.0%
+
+Mechanics of the table (important for reading it)
+------------------------------------------------------------
+- The ABSOLUTE number of EndTurn choices is IDENTICAL across all
+  six runs: 360 every time. What end_turn_bias changes is how many
+  OTHER decisions get made before a player ends the turn: at -60
+  the bot plays on into 1545 total decision points (1185 more
+  actions), at +10 it stops at 479 (234 fewer than at -3). The
+  pass rate is therefore 360/total — the knob rescales the
+  denominator, and it does so monotonically with no knee.
+- The action mix reshuffles, not just the count: at +10 Urban
+  climbs to 21.5% and Mine collapses to 1.0%, while Pop goes to
+  0.0% — the bot that refuses to pass also stops popping in the
+  opener. Farm is 0.0% everywhere (no farm-building happens in
+  rounds 1-3 at any setting).
+- -3 is nearly the frozen value (-2.957): 50.5% EndTurn, close to
+  the 48.6% the coordinator quoted for the live champion, so the
+  probe reproduces the defect's scale.
+
+Reading
+------------------------------------------------------------
+- The trace (analysis/end_turn_bias_trace_2026-08-27.txt) found
+  the 2p coordinate walked from a -60.0 pin to -2.957 — i.e. back
+  to its un-trained default of -3.0. This table says that walk
+  was not cosmetic: at -60 the same bot ends only 23.3% of
+  opener decisions, at the current -2.957 it ends ~50%. The
+  relaxation toward default roughly DOUBLED the pass rate.
+- "Inert" is ruled out in both directions: raising the weight to
+  0 or +10 pushes the pass rate to 63-75%; pushing it back toward
+  its old pin (-60) would halve it. The defect is directly
+  manipulable by this one coordinate.
+- Caveat: 60 games per cell, seed 0; the 360-EndTurn constancy
+  makes the denominator shifts structural rather than noise, but
+  per-cell percentages carry sampling error of a few points at
+  the small-n cells.
+
+Sources
+-------
+- /Users/pt/tta-scratch/etb_base.json (frozen gen 119049) and the
+  six variant files, etb_out_*.txt (raw probe outputs).
+- rust/target/release/openerprobe (pre-existing binary, not built
+  for this job).
+- companion: analysis/end_turn_bias_trace_2026-08-27.txt (value
+  history; the -60 pin era and the walk to -2.957).
