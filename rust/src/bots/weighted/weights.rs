@@ -3365,4 +3365,34 @@ mod tests {
             .collect();
         assert_eq!(outside, NAMED, "authored defaults outside their bounds");
     }
+
+    /// The stale-climb-binary detection procedure infers "this champion file
+    /// predates key K" from "K is absent from the file's JSON". That
+    /// inference is only sound if `parse_weights` treats an absent field as
+    /// the key's *authored default* rather than `0.0` -- if omission silently
+    /// became `0.0`, every champion on disk would be quietly zeroed on each
+    /// new `WeightKey` added to the enum, indistinguishable from an
+    /// intentional zero, and nobody would see it. This drives a bare
+    /// `{name: value}` map (the shape `parse_weights` accepts alongside the
+    /// trainer's `{"weights": {...}}` wrapper) through the real parser with
+    /// one key present and one key omitted, so a parser that ignored its
+    /// input entirely could not pass it either.
+    #[test]
+    fn parse_weights_leaves_an_omitted_key_at_its_authored_default() {
+        let present = WeightKey::Culture;
+        let omitted = WeightKey::CultureRate;
+        let given = 2.5;
+        assert_ne!(given, omitted.default_weight());
+        assert_ne!(omitted.default_weight(), 0.0);
+
+        let text = format!(r#"{{"{}": {given}}}"#, present.name());
+        let w = crate::bots::weighted::eval::parse_weights(&text).unwrap();
+
+        assert_eq!(w.get(present), given, "a present key must round-trip to its given value");
+        assert_eq!(
+            w.get(omitted),
+            omitted.default_weight(),
+            "an omitted key must parse to its authored default, not 0.0"
+        );
+    }
 }
