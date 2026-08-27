@@ -1,0 +1,80 @@
+Boundary-pinning census: weight keys sitting at exactly 0.0 in each champion
+file, split by authored default and by sign_intent.
+
+Copies read (champions are rewritten by the running climb; these were
+copied to /tmp before any read):
+  2p: /tmp/zero_count_2p.json (md5 74eb5255be60bfff532fdcc47f791d64), gen 115974, 172 keys
+  3p: /tmp/zero_count_3p.json (md5 a47a56324a75eded75857671b9f5fa64), gen 65079, 169 keys
+  4p: /tmp/zero_count_4p.json (md5 e96b7f675b44939afef984070b8cc2c7), gen 21350, 172 keys
+
+Method: exact 0.0 in the champion's 'weights' map; 'authored default' is
+the key's row in weight_key_table! (weights.rs:788+); sign_intent is the
+live match at weights.rs:1480+. The three buckets below OVERLAP: a key can
+be both default-0 and sign-gated, so the three counts do not sum to the
+zero total. The disjoint residual (zero, default != 0, Free) is empty at
+all three counts.
+
+Per-count totals (zero / total keys in file):
+  2p: 8/172  (4.7% of the vector)
+  3p: 7/169  (4.1% of the vector)
+  4p: 12/172  (7.0% of the vector)
+
+Split (overlapping; names listed):
+  2p: default-also-0.0: 5 | NonPositive: 3 | NonNegative: 3 | residual: 0
+      d0 : hand_limit, happy_margin_after_next_pop, no_aggression, rival_science_deficit, rival_wonder_deficit
+      NP : happy_margin_after_next_pop, no_aggression, wonder_remaining
+      NN : gov_board_credit, hand_limit, wonders
+
+  3p: default-also-0.0: 5 | NonPositive: 2 | NonNegative: 5 | residual: 0
+      d0 : free_action_credit, hand_limit, happy_margin_after_next_pop, unit_strength_credit, wonder_stages_per_action
+      NP : happy_margin_after_next_pop, strength_deficit
+      NN : free_action_credit, hand_limit, restricted_resource_credit, unit_strength_credit, wonder_stages_per_action
+
+  4p: default-also-0.0: 8 | NonPositive: 3 | NonNegative: 6 | residual: 0
+      d0 : free_action_credit, happy_margin_after_next_pop, military_action_gap, resource_commitment_turns, rival_culture_deficit, rival_science_deficit, rival_wonder_deficit, row_playable_count
+      NP : happy_margin_after_next_pop, military_action_gap, resource_commitment_turns
+      NN : free_action_credit, gov_board_credit, pact_board_credit, restricted_resource_credit, row_playable_count, territory_credit
+
+Every zero key, with its authored default and sign_intent (live tree):
+  gov_board_credit                   default +1  NonNegative
+  hand_limit                         default +0  NonNegative
+  happy_margin_after_next_pop        default +0  NonPositive
+  no_aggression                      default +0  NonPositive
+  rival_science_deficit              default +0  Free
+  rival_wonder_deficit               default +0  Free
+  wonder_remaining                   default -0.3  NonPositive
+  wonders                            default +3  NonNegative
+  free_action_credit                 default +0  NonNegative
+  restricted_resource_credit         default +1  NonNegative
+  strength_deficit                   default -0.6  NonPositive
+  unit_strength_credit               default +0  NonNegative
+  wonder_stages_per_action           default +0  NonNegative
+  military_action_gap                default +0  NonPositive
+  pact_board_credit                  default +0.3  NonNegative
+  resource_commitment_turns          default +0  NonPositive
+  rival_culture_deficit              default +0  Free
+  row_playable_count                 default +0  NonNegative
+  territory_credit                   default +1  NonNegative
+
+Observations:
+1. Boundary-pinning is a HANDFUL, not a large fraction: 8, 7, 12 keys out of
+   172/169/172 (about 4.7%, 4.1%, 7.0%).
+2. At every count, EVERY zero key is either default-0.0 or sign-gated
+   (NonPositive or NonNegative). No zero key is a Free-intent key with a
+   nonzero default that climbed to exactly 0.0 -- the disjoint residual is
+   empty at all three counts.
+3. The sign-gated zeros are exactly the class the coordinator's finding
+   names: keys whose sign gate can only snap toward 0.0. NonPositive zeros
+   (happy_margin_after_next_pop at all three counts, plus no_aggression/@2p,
+   wonder_remaining/@2p, strength_deficit/@3p, military_action_gap and
+   resource_commitment_turns/@4p) are small positive fits clamped to 0.0 by
+   eval.rs:984 on every load/mutation; NonNegative zeros (e.g. wonders/@2p,
+   hand_limit at all three, territory_credit/@4p) are small negative fits
+   clamped to 0.0 by eval.rs:997. wonder_remaining (default -0.3) and
+   strength_deficit (default -0.6) are the notable cases: nonzero-default
+   NonPositive keys whose fitted value crossed to the wrong side and got
+   pinned at the boundary.
+4. happy_margin_after_next_pop is zero at ALL THREE counts -- the one key
+   pinned at the boundary in every lineage.
+
+Source: /Users/pt/tta-ai (read-only; no source file edited).
