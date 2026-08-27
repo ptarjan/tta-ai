@@ -1,0 +1,279 @@
+EMIT-SITE SEMANTICS FOR THE CORRECTED SIX
+==========================================
+2026-08-27. Read-only pass over the six keys the audit (bf0479f) corrected
+from the shortlist: strength_rel_early, free_workers, best_farm, best_mine,
+auction_bid, rival_culture_rate. For each: what the feature PHYSICALLY holds
+at its emit site, and whether a "a bigger number is never a downside" rules
+citation is even POSSIBLE for that quantity. No citation was looked up. No
+sign_intent proposed. No weights.rs edit.
+
+Keys in the audit's corrected order: core tier first, then two-armed.
+
+
+1. strength_rel_early
+----------------------
+PHYSICS: A phase-blend weight, NOT a feature. registry.rs:399 documents it as
+"phase blend off StrengthRel": the early-phase partner of the ONE remaining
+PHASE_KEYS member (weights.rs:1188-1225, `WeightKey::early()` panics on any
+key but StrengthRel). The underlying feature is StrengthRel, set at
+features.rs:932 to `rel` where (features.rs:680-682) `strength` =
+f64::from(s.strength) + g(GainFeature::Strength) and `rel` = strength -
+rival_str. So the quantity is: my projected strength MINUS the maximum
+projected strength over all non-resigned rivals (rival_str is the max over
+rivals of s.strength, computed in rivals.rs via effects::compute per rival).
+UNITS: a signed strength difference (units of "strength", the same unit as a
+single Infantry). NOT clamped, NOT floored — the full signed value is
+emitted (the sibling StrengthLead at features.rs:934 is the clamped/floored
+variant: `rel.clamp(0.0, STRENGTH_LEAD_CAP)` with STRENGTH_LEAD_CAP = 6.0 at
+features.rs:86; StrengthRel itself is the raw difference). Rival-relative:
+yes, by construction — it is the difference, not my strength in isolation.
+The `_early` suffix is a weight, not a feature: it is blended into evaluate
+as (1 - lateness) * w[strength_rel_early] (weights.rs:1188-1192), so the
+"feature" it multiplies is the same StrengthRel value.
+
+CITATION: needs-a-rules-read. The quantity is a rival-relative difference
+that can be negative (I am behind) or positive (I lead). A positive value
+(leading) is not unambiguously good: leading in strength makes me the target
+of attacks and wars (the sibling keys StrengthLead and StrengthDeficit exist
+precisely to price the two directions separately). A negative value (trailing)
+is not unambiguously bad: a small deficit is survivable and a large deficit is
+a war I cannot win. "More strength lead is never a downside" is not a rule
+that holds in TTA — leading is a target. "Trailing is never a downside" is
+also not a rule — a large deficit loses wars. The citation would have to say
+something about WHEN leading vs trailing matters (phase, rival composition,
+wonder threat), which is a rules read, not a one-line sign.
+
+
+2. free_workers
+---------------
+PHYSICS: The raw count of my unassigned workers in reserve, PLUS a
+pending-gain adjustment. features.rs:840:
+  f.set(WeightKey::FreeWorkers, f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
+`p.workers_free` is a u8 (state.rs:497) — the number of workers in my
+reserve that are not assigned to any tableau slot. UNITS: a non-negative
+integer count (0 to my total worker count, which is at most ~10-12 in a full
+game). FLOORED at 0 by the type (u8 cannot be negative); no upper clamp at
+the emit site (the u8 type bounds it). OWN-BOARD: yes, reads only my
+`p.workers_free`. The `g(GainFeature::FreeWorkers)` term adds any
+pending-gain that would increase free workers (e.g. a bonus card that
+grants a worker), so the emitted value is the projected count after pending
+effects, not just the current raw count.
+
+CITATION: needs-a-rules-read. More free workers is not unambiguously good:
+idle workers are workers that are not producing. A large free_workers count
+means I have not assigned workers to production, which is a sign of a
+stalled economy. However, free workers are also the raw material for
+assigning to new tableau slots (farms, mines, units), so a positive count is
+necessary to do anything. The quantity is a resource with an opportunity
+cost: more is better only up to the point where I have nothing to assign
+them to. A "more is never worse" citation would have to address the
+opportunity cost of idling workers, which is a game-strategy read, not a
+card-data read. The 2p-opener finding (EndTurn 48.6%, idle worker rewarded
+at +5.1) is independent evidence that the fit is pricing this as "reward
+idling", which is a sign that the citation should be about WHEN idling is
+good, not whether more is ever worse.
+
+
+3. best_farm
+------------
+PHYSICS: The maximum level of any Farm card in my tableau. features.rs:971:
+  f.set(WeightKey::BestFarm, f64::from(best.farm));
+`best.farm` is computed in `sweep_tableau` (features.rs:188-235): for each
+tech in my tableau, if the kind is CardType::Farm and its level exceeds
+`best.farm`, update it. UNITS: a non-negative integer level (0 = no farm,
+1 = Level 1 Farm, 2 = Level 2 Farm, 3 = Level 3 Farm). FLOORED at 0 by the
+type (u8, initialized to 0 in BestTypes::default()). No upper clamp at the
+emit site (u8 type bounds it, but the max Farm level in TTA is 3, so the
+effective range is 0-3). OWN-BOARD: yes, reads only my tableau.
+
+CITATION: needs-a-rules-read. A higher best_farm level means I have a more
+productive farm (Level 3 Farm produces 3 food per worker vs Level 1's 1).
+More is better in the sense that a higher-level farm is more productive.
+However, the quantity is a MAX over my tableau — it does not capture how
+many farms I have, only the best one. A player with one Level 3 Farm and no
+other farms has best_farm = 3, same as a player with one Level 3 Farm and
+two Level 1 Farms. The quantity is a proxy for "I have invested in
+production" but it is lossy. A "more is never worse" citation would have to
+say that having a higher-level farm is never a disadvantage, which is
+plausible (a Level 3 Farm is strictly better than a Level 1 Farm) but the
+quantity's lossiness (max, not sum) means it does not capture the full
+economy. The citation is about the level, not the count, so "a Level 3 Farm
+is never worse than a Level 1 Farm" is a defensible rules statement. But the
+feature's sign (negative at 2p, positive at 4p) is about the WEIGHT, not the
+quantity — the quantity itself is always "more productive is better". The
+citation question is whether the weight's sign can be justified by a rules
+reason, which is a different question from whether the quantity's direction
+is unambiguous.
+
+
+4. best_mine
+------------
+PHYSICS: The maximum level of any Mine card in my tableau. features.rs:972:
+  f.set(WeightKey::BestMine, f64::from(best.mine));
+Identical structure to best_farm: `best.mine` is the max level over
+CardType::Mine in my tableau, computed in the same `sweep_tableau` pass
+(features.rs:200-235). UNITS: a non-negative integer level (0 = no mine,
+1-3 = Level 1-3 Mine). FLOORED at 0 (u8, BestTypes::default()). No upper
+clamp at emit site. OWN-BOARD: yes.
+
+CITATION: needs-a-rules-read. Same structure as best_farm. A higher-level
+mine produces more resources per worker (Level 3 Mine: 3 resources per
+worker vs Level 1's 1). "A Level 3 Mine is never worse than a Level 1 Mine"
+is a defensible rules statement. The same lossiness applies (max, not sum).
+The quantity's direction is unambiguous (more productive is better); the
+weight's sign is a separate question.
+
+
+5. auction_bid
+--------------
+PHYSICS: My committed bid in the current auction, discounted by the
+probability I am still the high bidder. features.rs:966:
+  f.set(WeightKey::AuctionBid, dc.auction_bid);
+`dc.auction_bid` is computed in `deferred_credit` (rivals.rs:405, 464, 483).
+Two cases:
+- Pending::Auction (rivals.rs:459-467): if I am the current high bidder
+  (auc.high == Some(idx)), `out.auction_bid += share * auc.bid as f64` where
+  `share = 1.0 / (1.0 + rivals_still_bidding)` — the fraction of the bid
+  that is "committed" given that N rivals are still active. `auc.bid` is
+  the current bid amount in resources.
+- Pending::Colonize (rivals.rs:479-487): if the auction has resolved and I
+  am the winner (c.player == idx), `out.auction_bid += c.bid as f64` with
+  share = 1.0 (the full bid, no discount).
+UNITS: a non-negative resource amount (the bid is in resources; `auc.bid` is
+an i32 resource count). FLOORED at 0 by construction (bids are non-negative;
+the sum of non-negative terms). No upper clamp at the emit site. Rival-
+relative: PARTIALLY — the discount factor `share` depends on how many rivals
+are still bidding (a rival-relative quantity), but the base amount `auc.bid`
+is the absolute bid level. OWN-BOARD + RIVAL-RELATIVE: the committed
+fraction is my board's commitment, but its size depends on the rival
+landscape.
+
+CITATION: needs-a-rules-read. A higher auction_bid means I have committed
+more resources to winning the auction. This is a cost: I lose those
+resources regardless of whether I win (the bid is forfeited to the bank or
+the loser pool, per TTA auction rules). "A higher bid is never a downside"
+is FALSE — a higher bid costs more resources. However, a higher bid also
+means I am more likely to win a valuable card, so there is a benefit side.
+The quantity is a cost with an expected-benefit tradeoff, not a monotone
+good thing. A "more is never worse" citation is IMPOSSIBLE for this
+quantity: the bid is a resource expenditure, and more expenditure is
+inherently a cost. The weight's sign (negative at 2p, positive at 4p) is
+about whether the fit is pricing the bid as a cost (negative weight =
+avoiding high bids) or as a commitment signal (positive weight =
+rewarding high bids), which is a strategy question, not a rules question.
+The rules citation would have to say "bidding more is always good" which is
+flatly contradicted by the fact that the bid is a resource cost.
+
+
+6. rival_culture_rate
+---------------------
+PHYSICS: The maximum culture production rate over all non-resigned rivals,
+adjusted for pending pact effects. features.rs:1109:
+  f.set(WeightKey::RivalCultureRate, rival_culture_rate);
+Computed in two stages:
+- Base: `rival_culture_rate` is initialized to `f64::from(ctx.rival_culture_rate)`
+  (features.rs:654), where `ctx.rival_culture_rate` is computed in
+  `rivals::rival_context` (rivals.rs:658) as `best_rate` — the maximum of
+  `s.culture` over all non-resigned, non-self players (rivals.rs:636-642:
+  `best_rate = best_rate.max(s.culture)` where `s = effects::compute(state, q)`).
+- Pact adjustment: for each rival, if a pending pact would raise that rival's
+  culture rate (via `dc.partner_gains[pi].get(GainFeature::CultureRate)`),
+  the max is recomputed: `rival_culture_rate = rival_culture_rate.max(f64::from(base_culture) + pg.get(GainFeature::CultureRate))`
+  (features.rs:670-676).
+UNITS: a non-negative integer rate (culture per turn; `s.culture` is the
+projected culture production from `effects::compute`, which is an i32
+accumulated from card effects). FLOORED at 0 by initialization
+(`best_rate = 0` at rivals.rs:630, and the max over non-negative rates). No
+upper clamp at the emit site. RIVAL-RELATIVE: YES — this is entirely a
+rival-board quantity; it reads no own-board state. It is the maximum culture
+rate among my opponents, not a difference.
+
+CITATION: needs-a-rules-read. A higher rival_culture_rate means my opponents
+are producing more culture, which is a threat to my culture lead. "A higher
+rival culture rate is never a downside" is FALSE — it means my rivals are
+catching up or pulling ahead in culture, which threatens my culture lead
+and my ability to score on culture-heavy wonders/events. However, a higher
+rival culture rate is also a signal that the game is progressing and that
+culture production is active, which is not inherently bad. The quantity is a
+threat metric: more is worse (rivals are stronger in culture). A "more is
+never worse" citation is IMPOSSIBLE for this quantity: the quantity is a
+rival's strength, and more rival strength is a threat. The weight's sign
+(positive at 2p, negative at 3p/4p) is about whether the fit is pricing
+rival culture as a threat to defend against (negative weight = penalizing
+high rival culture) or as a signal of a healthy game state (positive weight
+= rewarding high rival culture), which is a strategy question. The rules
+citation would have to say "rivals producing more culture is never bad for
+me" which is contradicted by the basic dynamic of a race game.
+
+
+SUMMARY TABLE
+-------------
+key                  units/clamp            scope              citation verdict
+strength_rel_early   signed strength diff,  rival-relative,    needs-a-rules-read
+                     no clamp/floor         own-vs-max-rival   (leading is a target;
+                                                                        trailing is a
+                                                                        war I may lose)
+free_workers         non-negative int count, own-board         needs-a-rules-read
+                     floored at 0 (u8)                          (idle workers have an
+                                                                        opportunity cost;
+                                                                        more is better only
+                                                                        up to the point
+                                                                        where I have nothing
+                                                                        to assign them to)
+best_farm            non-negative int level, own-board         needs-a-rules-read
+                     floored at 0 (u8), eff. 0-3              (higher level is more
+                                                                        productive, but the
+                                                                        quantity is a max,
+                                                                        not a sum — lossy)
+best_mine            non-negative int level, own-board         needs-a-rules-read
+                     floored at 0 (u8), eff. 0-3              (same as best_farm)
+auction_bid          non-negative resource own-board +         IMPOSSIBLE
+                     amount, floored at 0,    rival-relative    (the bid is a resource
+                     no upper clamp           (discount factor)  cost; more expenditure
+                                                                        is inherently a
+                                                                        cost)
+rival_culture_rate   non-negative int rate,  rival-board only   IMPOSSIBLE
+                     floored at 0, no upper   (no own-board)    (rival culture is a
+                     clamp                                        threat; more rival
+                                                                        strength is a
+                                                                        threat in a race
+                                                                        game)
+
+CITATION VERDICTS — one line each:
+- strength_rel_early: needs-a-rules-read. A signed rival-relative difference;
+  leading makes me a target, trailing means a war I may lose. "More is never
+  worse" does not hold in either direction without a phase/context read.
+- free_workers: needs-a-rules-read. A non-negative own-board count of idle
+  workers. More is better only up to the point where I have nothing to
+  assign them to; the opportunity cost of idling is a strategy read.
+- best_farm: needs-a-rules-read. A non-negative own-board level (0-3). A
+  higher level is strictly more productive, but the quantity is a max over my
+  tableau, not a sum, so it is lossy. "A Level 3 Farm is never worse than a
+  Level 1 Farm" is defensible as a rules statement.
+- best_mine: needs-a-rules-read. Same structure as best_farm.
+- auction_bid: IMPOSSIBLE. The bid is a resource expenditure; a higher bid
+  costs more resources regardless of outcome. "More is never worse" is
+  contradicted by the cost.
+- rival_culture_rate: IMPOSSIBLE. A non-negative rival-board rate; a higher
+  value means my rivals are producing more culture, which is a threat in a
+  race game. "More rival strength is never a downside" is false.
+
+
+EMIT-SITE CITATIONS (file:line)
+--------------------------------
+- strength_rel_early: registry.rs:399 (phase-blend doc), features.rs:932
+  (StrengthRel set site), features.rs:680-682 (strength/rel computation),
+  features.rs:86 (STRENGTH_LEAD_CAP = 6.0, the sibling clamp),
+  weights.rs:1188-1225 (early()/late() phase-blend mechanism)
+- free_workers: features.rs:840 (set site), state.rs:497 (workers_free: u8)
+- best_farm: features.rs:971 (set site), features.rs:213-214
+  (CardType::Farm max in sweep_tableau), features.rs:188 (sweep_tableau fn)
+- best_mine: features.rs:972 (set site), features.rs:214
+  (CardType::Mine max in sweep_tableau)
+- auction_bid: features.rs:966 (set site), rivals.rs:405 (field def),
+  rivals.rs:464 (Auction branch: share * auc.bid), rivals.rs:483
+  (Colonize branch: c.bid, share = 1.0)
+- rival_culture_rate: features.rs:1109 (set site), features.rs:654
+  (initialization from ctx), features.rs:670-676 (pact-adjusted max),
+  rivals.rs:583 (field def), rivals.rs:658 (best_rate assignment),
+  rivals.rs:630-642 (max-over-rivals computation)
