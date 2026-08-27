@@ -2189,10 +2189,18 @@ impl WeightKey {
         WeightKey::FoodRate => [3.638703, 2.583029, 2.939278],
         WeightKey::ResourceRate => [5.716622, 4.110245, 3.121540],
         WeightKey::FoodStock => [4.000000, 4.000000, 5.000000],
-        // Placeholder -- measured and replaced with `featspread`'s emit row
-        // in the follow-up commit, matching the `RivalScienceDeficit`/
-        // `RivalCultureDeficit` precedent.
-        WeightKey::FamineDeficit => [0.000000, 0.000000, 0.000000],
+        // Measured: `featspread 40 0 <frozen champions> emit`, 2026-08-27,
+        // against `rust_champion_{2,3,4}p.json` frozen under
+        // `analysis/faminedeficit_champions_2026-08-27/` (deleted after
+        // measuring). Fires on 13.40%/13.33%/13.53% of decisions at
+        // 2p/3p/4p -- a real, non-trivial rate: going hungry this turn is a
+        // common candidate-move outcome (many legal moves spend food/blue
+        // tokens down into the yellow bank without producing enough back),
+        // far more often than `RivalWonderDeficit`'s 1-2% but less than
+        // `RivalScienceDeficit`'s ~21-44% (a continuous rate gap is more
+        // often nonzero than a discrete famine threshold crossing). p95
+        // spread 2.0/2.0/2.0: the hinge genuinely enters the argmax.
+        WeightKey::FamineDeficit => [2.000000, 2.000000, 2.000000],
         WeightKey::ResourceStock => [6.000000, 5.000000, 6.000000],
         WeightKey::BlueFree => [7.000000, 7.000000, 6.000000],
         WeightKey::CorruptionHeadroom => [4.000000, 4.000000, 4.000000],
