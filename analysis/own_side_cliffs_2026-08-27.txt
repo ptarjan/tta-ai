@@ -1,0 +1,188 @@
+================================================================================
+OWN-SIDE RULE CLIFFS -- IS PHI HINGED? -- 2026-08-27
+================================================================================
+Read first: analysis/rival_class_a_keys_2026-08-27.txt (the RivalDesire/
+RivalTakeShare trap -- a WeightKey can be a `w.get` hyperparameter inside a
+pricer and never be a `Features::set` phi coordinate at all; that distinction
+matters below, twice).
+
+Method: grepped every `f.set(WeightKey::` call in
+rust/src/bots/weighted/features.rs (the only file that writes `Features`),
+cross-checked every candidate key against `registry.rs`'s
+`NOT_SET_BY_FEATURES` table (the list of keys that are read as hyperparameters
+via `w.get` and never appear in phi under their own coordinate), and read the
+RULES_SPEC/economy.rs/apply.rs source of each cliff directly.
+
+RANKED ANSWER (best candidate -- i.e. most likely to be a real, exploitable
+gap -- first):
+
+--------------------------------------------------------------------------------
+RANK 1 (best candidate for a real gap): FOOD vs CONSUMPTION -- the famine/
+starvation cliff, RULES_SPEC 6.6 step 3d / CoL p.6 ("pay food = consumption;
+if short, pay what you can and lose 4 culture points per missing food").
+UNREPRESENTABLE TODAY as its own coordinate.
+--------------------------------------------------------------------------------
+The rule (economy.rs:1057-1065, inside `end_of_turn`):
+  let need = consumption(p.yellow_bank) as u16;
+  if p.food >= need { pay_food(p, need); }
+  else { let missing = need - p.food; clear_food(p); p.culture -= 4*missing; }
+-- an ASYMMETRIC hinge: surplus food buys nothing extra, but a deficit costs
+4 culture per missing point, floored so it can never go positive. The formula
+itself is `4 * max(0, need - food_after_production)`.
+
+What phi actually carries for food:
+  * features.rs:736  f.set(WeightKey::FoodStock, f64::from(p.food) + g(GainFeature::FoodStock));
+      -- RAW current stock (before this turn's production/consumption). LINEAR.
+  * features.rs:711-713
+      let consumption = f64::from(economy::consumption(proj_yellow));
+      f.set(WeightKey::FoodRate, f64::from(s.food) + g(GainFeature::FoodRate) - consumption);
+      -- a NET RATE, income minus the SAME consumption() step table the rule
+      uses, but as a PLAIN, UNCLAMPED DIFFERENCE. It can go negative and a
+      linear weight prices that negative region with the identical slope it
+      prices the positive region -- exactly backwards from the rule, which
+      pays nothing for surplus and only bites (nonlinearly, at 4x) in deficit.
+      No `.max(0.0)` anywhere on this term.
+  * features.rs:1135-1137 (WeightKey::FoodGap / FoodSurplus) IS a hinge
+      (`(needs.food - food_have).max(0.0)` / the mirror), but `needs.food`
+      here is `MarginalNeed::food` = `economy::pop_food_cost(...)`
+      (features.rs:317) -- the cost to raise POPULATION (§3.1), a completely
+      different rulebook price from `economy::consumption()` (§6.1/6.6). This
+      is a real, correctly-hinged coordinate for a DIFFERENT cliff (see
+      "adjacent but distinct" note below), not the famine one.
+  * rivals.rs:933-948 `need_fraction`, gated by `WeightKey::FoodStockNeeded`
+      (a `w.get`-only hyperparameter, registry.rs:315 "rivals.rs need-hinge
+      marginal" -- NOT a Features::set coordinate, same class as
+      RivalDesire) -- also built off `features::marginal_needs`, i.e. the
+      SAME pop-cost threshold, not consumption. Confirmed by its own test
+      fixture rivals.rs:1052-1080 (`food_boards()`), which empties the yellow
+      bank to size the POPULATION-INCREASE price, not a consumption band.
+  * `economy::consumption(` has exactly 3 call sites in the whole weighted
+      bot; features.rs:711 (above) and two in a test (features.rs:1294/1298).
+      No other call site exists that compares consumption to food and hinges
+      the shortfall.
+
+CONCLUSION: no phi coordinate, and no `feature_marginal` need-hinge, computes
+`(consumption(yellow_bank) - food_available_this_turn).max(0.0)` or any
+indicator for "I am about to eat the 4-culture-per-point famine penalty".
+`FoodStock` is a raw level, `FoodRate` is a raw (if net) rate, and the one
+hinge that exists on food (`FoodGap`/`FoodStockNeeded`) prices a different
+rule (population-increase affordability) that happens to share the English
+word "food". A linear eval literally cannot see this cliff: it can only ever
+price "more food is linearly better" via `FoodStock`'s weight, never "falling
+short of this turn's consumption is catastrophically worse than falling short
+of next turn's population cost."
+EMIT SITE where a hinge would go: features.rs:711-713, alongside the existing
+`WeightKey::FoodRate` line (needs `proj_yellow`/`economy::consumption`,
+already computed right there) -- or as a new coordinate next to
+`WeightKey::FoodGap` at features.rs:1135-1137, keyed off `economy::
+consumption(proj_yellow)` and end-of-turn-projected food, not
+`marginal_needs`'s pop-cost `needs.food`.
+
+--------------------------------------------------------------------------------
+RANK 2: FREE WORKERS -- the workers_free==0 Build-legality wall
+(apply.rs:881, the only decrementer). UNREPRESENTABLE as a specific "zero is a
+wall" cliff, though a RELATED shortfall hinge exists.
+--------------------------------------------------------------------------------
+What phi carries:
+  * features.rs:825  f.set(WeightKey::FreeWorkers, f64::from(p.workers_free) + g(GainFeature::FreeWorkers));
+      -- RAW count. LINEAR: a weight on this prices "5 free workers" as five
+      times "1 free worker", with no special treatment of the 1->0 edge where
+      `do_build` (apply.rs:876-881) becomes flatly illegal.
+  * features.rs:1177-1179 (WeightKey::WorkerGap / WorkerSurplus) IS a genuine
+      hinge: `(needs.worker - worker_have).max(0.0)` / mirror, where
+      `needs.worker` = `TableauSweep::unbuilt_slots` (features.rs:167,
+      197-211: a tech already in `p.techs` with `slot.workers == 0`  --
+      "known, not yet built"). This is real and correctly non-linear, but it
+      prices a DIFFERENT question than the one flagged: "do I have enough
+      free workers to staff every ALREADY-DEVELOPED-but-empty slot" -- it is
+      0.0 whenever `workers_free >= unbuilt_slots`, including the common case
+      `unbuilt_slots == 0` (tableau fully staffed) with `workers_free == 0`.
+      In that exact position the bot is one civil action away from
+      Take+Develop+wanting to Build a brand-new tech and cannot -- WorkerGap
+      reads 0.0 there, identical to a board with 5 free workers, because it
+      was never designed to see "zero spare capacity for whatever comes
+      next", only "shortfall against slots I already know about."
+  * `WeightKey::FreeWorkersNeeded` (weights.rs:345) is the `feature_marginal`
+      need-hinge for `FreeWorkers`, but per rivals.rs:933-948 it is built off
+      the SAME `unbuilt_slots` threshold, not a "have I hit zero" indicator.
+      It is also, per registry.rs:318, a `w.get`-only hyperparameter, not a
+      phi coordinate itself (same non-feature class as `RivalDesire`).
+  * Grepped for any indicator: no `workers_free == 0`, `CanBuild`,
+      `BuildBlocked`, `NoFreeWorker` or `ZeroWorker` construct exists anywhere
+      in rust/src/bots/weighted/*.rs.
+
+CONCLUSION: the raw count (`FreeWorkers`) is linear, and the one existing
+hinge (`WorkerGap`) is scoped to "known unbuilt slots", which is 0.0-blind to
+the specific position the audit named: workers_free at exactly 0 with no
+currently-empty slot, one civil action from wanting to Build. There is no
+`(1 - workers_free).max(0.0)` or boolean "am I at the wall" term.
+EMIT SITE where a hinge would go: features.rs:825, right after
+`WeightKey::FreeWorkers` is set (`p.workers_free` is already read there).
+
+--------------------------------------------------------------------------------
+RANK 3 (lowest priority -- already fully hinged, listed for completeness):
+HAPPY vs HAPPY_REQUIRED and the PRODUCTION-SKIP CLIFF are BOTH already
+non-linear in phi.
+--------------------------------------------------------------------------------
+
+3a. Happy vs happy_required (task item 3). Already hinged, in the deficit
+direction, TWICE:
+  * economy.rs:242-245 `discontent()` is ITSELF a hinge:
+      `(happy_required(p.yellow_bank) as i32 - s.happy).max(0)`.
+  * features.rs:572-574 recomputes the identical shape inline (own margin,
+      own pending-gain adjustment) and:
+      features.rs:833  f.set(WeightKey::Discontent, discontent);
+        -- discontent = (-margin).max(0.0), i.e. exactly the deficit hinge.
+      features.rs:834  f.set(WeightKey::HappyMarginAfterNextPop, discontent_next_pop);
+        -- the SAME hinge one population-increase forward, so the bot can see
+        a pop increase about to CREATE discontent before it happens (guarded
+        by 3 tests, features.rs:1957-2062, all named and passing per their
+        own doc comments).
+      features.rs:832  f.set(WeightKey::HappyMargin, margin.min(3.0));
+        -- the raw (capped) margin, kept for the SURPLUS side.
+      features.rs:1161 f.set(WeightKey::HappySurplus, margin.max(0.0));
+        -- the deliberate surplus-direction twin of Discontent (comment:
+        "Happiness already has a shortfall coordinate (Discontent, above,
+        max(0, -margin)); this is only the missing surplus half").
+  All four keys are confirmed real `Features::set` coordinates (none appear
+  in registry.rs's `NOT_SET_BY_FEATURES` exemption table).
+
+3b. THE PRODUCTION-SKIP CLIFF (task item 1, "highest value" in the prompt) is
+ALSO already hinged -- and hinged with an indicator, exactly the shape the
+prompt asked whether existed:
+  features.rs:855-858
+    let uprising_production_at_stake = f64::from(s.science + s.culture + s.food + s.resources);
+    f.set(
+        WeightKey::Uprising,
+        if discontent > f64::from(p.workers_free) { uprising_production_at_stake } else { 0.0 },
+    );
+  This is `indicator(discontent > workers_free) * production_at_stake` -- a
+  genuine non-linear (step) feature, not a raw level or a plain difference.
+  Its own doc comment (features.rs:835-854) records that it used to be a bare
+  0/1 indicator and was deliberately changed ("UNITS FIX") to scale by the
+  real production forfeited (RULES_SPEC 6.3's science+culture+food+resources)
+  because a flat 0/1 term forced one fitted coefficient to price a
+  catastrophic mid-game uprising and a nearly-free turn-1 one identically,
+  driving the weight to its clamp. Pinned by
+  features.rs:1312-1353's `uprising_scales_with_the_production_actually_at_
+  stake_not_a_flat_0_1` test (two boards, identical discontent-vs-
+  workers_free overshoot, different production bases -> feature must scale).
+  `WeightKey::Uprising` is not in registry.rs's exemption table -- confirmed
+  a real phi coordinate, read by the ordinary linear dot product in
+  eval::evaluate, not a gated non-linear side-channel.
+
+CONCLUSION for Rank 3: "the entire rule contains a non-linear feature for
+each" is TRUE for both Discontent-vs-happy_required and the uprising/
+production-skip cliff. Nothing to fix here; do not manufacture a gap.
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+Cliff                          | Hinged in phi? | Emit site
+--------------------------------+-----------------+------------------------------
+Production-skip (uprising)      | YES (indicator) | features.rs:855-858
+Discontent vs happy_required    | YES (max(0,.))  | features.rs:833 (economy.rs:242-245)
+Food vs CONSUMPTION (famine)    | NO              | features.rs:711-713 (or new coord near 1135)
+FreeWorkers == 0 (Build wall)   | NO (only a      | features.rs:825 (WorkerGap at 1177-1179
+                                 |  different      |  is the wrong-scoped existing hinge)
+                                 |  shortfall hinge)|

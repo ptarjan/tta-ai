@@ -736,6 +736,21 @@ pub fn features(
     f.set(WeightKey::FoodStock, f64::from(p.food) + g(GainFeature::FoodStock));
     f.set(WeightKey::ResourceStock, f64::from(p.resources) + g(GainFeature::ResourceStock));
 
+    // RULES_SPEC 6.6 step 3d's famine cliff (economy.rs:1057-1065):
+    // `missing = need - food_after_production`, `need = economy::
+    // consumption(yellow_bank)`. Reading back the two coordinates just set
+    // above rather than a third `economy::consumption` call: `FoodStock =
+    // p.food + pending` and `FoodRate = production_this_turn + pending -
+    // consumption`, so their SUM is `available_food_this_turn -
+    // consumption`, and negating it (floored at zero) is exactly the
+    // rule's own `missing` -- surplus (sum >= 0) reads 0.0, a deficit reads
+    // the exact shortfall, the identical asymmetry the rule itself has
+    // ("pay food = consumption; if short, lose 4 culture per missing
+    // food" -- surplus buys nothing). See `WeightKey::FamineDeficit`'s own
+    // doc comment for why this is NOT `FoodGap` (a different rulebook
+    // threshold, the population-increase price).
+    f.set(WeightKey::FamineDeficit, (-(f.get(WeightKey::FoodStock) + f.get(WeightKey::FoodRate))).max(0.0));
+
     // --- `WeightKey::ScienceNeedRow` (3.1) / `WeightKey::RowPlayableCount`
     // (3.6): ONE shared, allocation-free pass over the 13-slot card row --
     // design note section 5's mandate, not two separate walks. Placed here,
@@ -2695,6 +2710,52 @@ mod tests {
             features(&state, 0, None, None, false).get(WeightKey::RivalCultureDeficit),
             4.0,
             "rival rate 9 vs my rate 5 must read as a deficit of exactly 4.0"
+        );
+    }
+
+    /// RULES_SPEC 6.6 step 3d: `missing = need - food_after_production`,
+    /// `need = economy::consumption(yellow_bank)`, and a positive `missing`
+    /// costs `4 * missing` culture -- the asymmetric famine cliff
+    /// `WeightKey::FoodRate` (a plain, unclamped difference, identical
+    /// slope either side of zero) and `WeightKey::FoodGap` (a DIFFERENT
+    /// rulebook threshold, the population-increase price) both miss; see
+    /// `WeightKey::FamineDeficit`'s own doc comment. A fresh 2p game's Age A
+    /// tableau starts with Agriculture staffed at 2 workers (1 food each,
+    /// `card_table.rs`) -- the only food producer among the five
+    /// `START_TECHS` -- so this turn's production is a known, fixed 2.0.
+    #[test]
+    fn the_famine_deficit_prices_the_shortfall_against_consumption_not_the_population_cost() {
+        let mut state = G::new_game(2, 53);
+        // yellow_bank 0 -> consumption(0) = 6 (economy::consumption's own
+        // "cannot pay at all" band). Empty stock plus 2.0 Agriculture
+        // production: shortfall = 6 - (0 + 2) = 4.0.
+        state.players[0].yellow_bank = 0;
+        state.players[0].food = 0;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::FamineDeficit),
+            4.0,
+            "consumption 6 against 0 stock + 2 production must read as a shortfall of exactly 4.0"
+        );
+
+        // Banking exactly the remaining need (4, on top of Agriculture's own
+        // 2) floors the shortfall to 0.0 -- surplus buys nothing, the rule's
+        // own asymmetry.
+        state.players[0].food = 4;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::FamineDeficit),
+            0.0,
+            "stock + production exactly covering consumption must read as zero, not a negative credit"
+        );
+
+        // One food short of covering it reads as a deficit of exactly 1.0 --
+        // the feature carries the raw shortfall `N`, never the rule's own 4x
+        // culture multiplier (that belongs to the WEIGHT the league fits,
+        // not the feature).
+        state.players[0].food = 3;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::FamineDeficit),
+            1.0,
+            "one food short of consumption must read as a shortfall of exactly 1.0"
         );
     }
 }

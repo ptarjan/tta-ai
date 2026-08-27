@@ -1,0 +1,50 @@
+WORKER NOTES -- landing two own-side cliff hinges, 2026-08-27
+================================================================================
+Source audit: analysis/own_side_cliffs_2026-08-27.txt
+Reference commits (rival-side hinge pattern to follow): a320960 (add key),
+fa3ccc2 (land measured p95 row), same pair for RivalCultureDeficit
+(fb2af8b/7edbe01).
+
+KEY 1: famine cliff (RULES_SPEC 6.6 step 3d, economy.rs:1057-1065)
+  formula: 4 * max(0, consumption(yellow_bank) - food_after_production)
+  new key: WeightKey::FamineDeficit
+  feature: (-(FoodStock + FoodRate)).max(0.0)
+    derivation: FoodStock = p.food + g(FoodStock)      (raw stock + pending)
+                FoodRate  = s.food + g(FoodRate) - consumption
+                sum       = (p.food + s.food + pending) - consumption
+                          = available_food_this_turn - need
+                -(sum).max(0) = max(0, need - available) = exactly `missing`
+    reads back the two already-set coordinates -- no recompute, no new
+    economy:: call, avoids double-hinging FoodGap (population-cost gap,
+    a different rulebook price).
+  emit site: features.rs, right after FoodStock is set (~line 737).
+  sign_intent: NonPositive -- joins Discontent|Uprising|StrengthDeficit
+    ("penalty the rules impose"), not the FoodGap/*Gap bucket -- famine is a
+    DIRECT, certain culture-point loss the instant it fires, not an
+    opportunity-cost shortfall against a future purchase.
+  group: Economy (alongside FoodStock/FoodRate/FoodGap).
+
+KEY 2: zero-free-workers wall (apply.rs:881, only decrementer of workers_free)
+  new key: WeightKey::FreeWorkerWall
+  feature: if p.workers_free == 0 { hand_value } else { 0.0 }
+    hand_value = the LOCAL var at features.rs:610 (sum of level()+1 over
+    hand_civil) -- NOT WeightKey::HandPotential, which is registry.rs's
+    NOT_SET_BY_FEATURES class (a w.get-only hyperparameter read in eval.rs's
+    gated block, never Features::set -- reading f.get(HandPotential) inside
+    features() would silently read 0.0; this is the exact
+    RivalDesire-shaped trap the audit's own header warns about).
+  emit site: features.rs, right after FreeWorkers is set (~line 825) --
+    hand_value is already in scope (declared line 610, before 825).
+  sign_intent: NonPositive -- being locked out of Build with a growing
+    develop-ready hand queued behind it is never good.
+  group: Economy (alongside FreeWorkers/Workers/WorkerGap).
+
+Both keys: authored default 0.0, added to WeightGroup, sign_intent,
+weight_key_table!, and the early/late/trailing/needed exemption match arms
+(no phase/need partner, like RivalScienceDeficit). p95_candidate_spread
+placeholder [0,0,0] first commit, measured row second commit via
+`featspread 40 0 <throwaway dir> emit` against a COPY of
+experiments/rust_champion_{2,3,4}p.json (frozen copy deleted after
+measuring -- live files are rewritten by the running climb).
+
+Progress log below, appended as each step lands.
