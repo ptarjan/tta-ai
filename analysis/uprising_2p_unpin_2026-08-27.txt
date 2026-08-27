@@ -1,0 +1,191 @@
+uprising@2p — the unpin, traced (2026-08-27)
+============================================
+
+Scope. READ-ONLY trace over experiments/logs/rust_league_2p.log
+(117487 lines) and experiments/logs/rust_climb_2p.jsonl (gens 1-118887).
+No build, no clone, rust/src read for constants only. Live champion
+experiments/rust_champion_2p.json read at gen 118883 (mtime
+2026-08-27 22:32 UTC); the coordinator's −45.4325 is from gen 118842,
+same value, the champion is still writing every accept.
+
+TERMINOLOGY FIRST (the trap)
+----------------------------
+In these logs "pinned" / "RUNAWAY" means |weight| >= 0.95 x bound
+(climb.rs:106 RUNAWAY_FRACTION = 0.95; emitted at climb.rs:1343-1351
+and as the per-gen `runaway` field in the jsonl). It is NOT "exactly at
+the bound." The jsonl `runaway` values are RAW weight values, not
+bounds; the league-log line carries `(bound B)` explicitly.
+
+The three regimes of the 2p rail
+--------------------------------
+  flat 60.0                    : CLAMP_BLIND fallback (weights.rs:2499)
+  bound 9.1045 (300.449105/33.0): the intermediate measured table; the
+                                  league log shows it ONLY as clamp-repair
+                                  lines (105000 `uprising -18.1698 ->
+                                  -9.1045 (bound 9.1045)`), because 60.0 is
+                                  6.56x the bound, so 95%-pin never fired
+                                  and the RUNAWAY lines that era produced
+                                  are the −9.105 ones around gen 105000.
+  bound 54.91263               : current table. Uprising's 2p spread is
+                                  15.0 (weights.rs:2281); bound =
+                                  min(120.0, 823.689416/15.0) = 54.91263
+                                  (weights.rs:2208-2215, P95_TOTAL_SPREAD
+                                  weights.rs:2532, CLAMP_CEILING weights.rs:
+                                  2523). The log prints `(clamp 120.0)` —
+                                  that is the CEILING, not the bound; the
+                                  RUNAWAY trigger is 0.95 x 54.91263 =
+                                  52.16700.
+
+Q1 — first gen below 52.167, and has it stayed off?
+---------------------------------------------------
+Under the CURRENT 54.913 bound, the last (and only) pinned observation is
+gen 118670 at −52.790 (league log line 117263; jsonl gen 118670).
+From gen 118671 to 118887 — 217 generations, through every accept —
+uprising appears in NO runaway list and emits NO RUNAWAY line. So:
+
+  |uprise@2p| first dropped below 52.167 no later than gen 118671.
+
+The exact crossing gen cannot be fixed from these logs: runaway is only
+measured at accepts and the league line is periodic, so a value in (52.167,
+52.790] is indistinguishable from one below. The jsonl proves the value
+was still pinned (−52.790) at 118670 and unpinned by 118671.
+
+  It has stayed off since. Not oscillating. Zero re-entries across
+  217 gens, including 13 accepts.
+
+The descent under this regime was a two-step walk, not a slide:
+  -54.913 (pinned)  ... through gen 118286
+  -54.197 (pinned)  gens 118309-118386 (accept 118309, ops rescale:row +
+                    scatter, sigma 0.116; REVERTED at accept 118390)
+  -54.913 (pinned)  gens 118390-118611
+  -52.790 (pinned)  gens 118612-118670 (accept 118612, ops group:military
+                    + scatter, sigma 0.116)
+  < -52.167         from ~118671 to now, last read -45.4325 (gen 118883)
+
+So the last 7.48 units of the 9.105-era-to-now walk happened after the
+118612 step: −52.790 → −45.4325. That segment is the one that crossed
+the trigger. Note also the pattern of the steps: each step is ONE accept
+that moved a broad group, the pinned value walks, and the walk is
+monotonic in the direction the group was pushed.
+
+Q2 — what else moved in the same window
+---------------------------------------
+The five historical 2p co-pins (strength, workers_late, auction_bid,
+urban_workers, workers) all ran under the flat-60 regime (bounds 60.0);
+none of them has a RUNAWAY line under the current bounds, and the live
+champion confirms they are far from their measured bounds:
+
+  key               live@118883   current bound@2p   95% trigger
+  strength          13.156        120.0 (spread 6.0) 114.0
+  workers           0.322         120.0 (spread 1.644737) 114.0
+  workers_late      120.000       120.0 (spread 1.592105) 114.0  <-- AT ceiling
+  urban_workers     0.193         120.0 (spread 2.0)   114.0
+  auction_bid       0.136         82.369 (spread 10.0)  78.250
+  uprising          -45.4325      54.9126 (spread 15.0) 52.167  <-- UNPINNED
+  rival_mean_culture +27.4563     27.456 (spread 30.0)  26.084  <-- AT bound
+  rival_free_ca     -51.798       60.0  (blind, spread 0)  57.0
+  science_rate_trailing +51.3826  60.0  (blind, spread 0)  57.0
+
+(All spreads from the live p95_candidate_spread body, weights.rs
+2233-2460; bounds computed per clamp_bound, weights.rs:2208.)
+
+The ACTUAL co-pins of the current window, from the jsonl:
+
+  117061  science_rate_trailing 60.0 (blind 60) starts pinning; runs
+          through 118530, then drifts (51.38 live).
+  118106  uprising -54.913 (54.913) first 120-clamp-CEILING line; pinned
+          through 118670, then off (see above).
+  118519  rival_mean_culture 27.456 (bound 27.456) AND rival_free_ca
+          -59.159 (blind 60) join. The 118519 accept was a
+          group:rivals op at sigma 0.500 — the largest sigma of the
+          window — and it pinned BOTH rival keys at once.
+  118530  rival_free_ca reaches exactly -60.0 (blind bound).
+  118612  workers_late 120.0 (ceiling) joins in the SAME gen as
+          uprising's −52.790 step; the accept's ops were group:military
+          + scatter at sigma 0.116.
+
+So in the exact window of the unpin (118519-118887) the pinned set is:
+uprise (until 118670), rival_mean_culture, rival_free_ca (until ~118750),
+workers_late (still at 120.0 in the live champion).
+
+Q3 — cause or coincidence
+-------------------------
+Cause, and the mechanism is legible in the logs. Three independent
+supports:
+
+(a) The unpin is the DIRECT consequence of the regime change. The whole
+    54.913-bounded era runs gens ~115243-118887 (the 823.689416/15.0
+    table). Under the OLD flat rail the same weight sat at −58.693…
+    −54.913 against 60.0 — 91-98% pinned. The measured table cut the
+    effective trigger for THIS key from 57.0 to 52.167 while the weight
+    was still walking at −54.9. The key did not suddenly start behaving
+    differently; the line it was already standing on moved under its
+    feet. That the first step OFF the bound (−52.790 at 118612) is a
+    normal mutation step (0.116 sigma, group:military+scatter — neither
+    op is happiness-scoped) and that the walk then continued to −45.43
+    without any rail event in between says the coordinate is under
+    genuine pressure: it wants to be more negative than its measured
+    bound permits. A coincidence would not produce a monotonic walk out
+    of the pin.
+
+(b) The window's other moves are the same pressure from adjacent keys,
+    not independent noise. The 118519 group:rivals accept pinned
+    rival_mean_culture exactly at its measured bound (27.456) and drove
+    rival_free_ca to its blind bound (−60.0) in one step. The 118612
+    group:military+scatter accept stepped uprising −2.12 AND pinned
+    workers_late at the 120.0 ceiling in the same generation. Both
+    accepts were broad-group moves at the window's moderate sigmas;
+    the pinned keys are the coordinates those groups price. The
+    happiness/rival/military/economy groups are overlapping neighborhoods
+    in the weight vector, so a group op that wins on one coordinate
+    drags its neighbors — and the neighbors that are already near their
+    bounds are exactly the ones that show up in the runaway list.
+
+(c) The two-step-and-revert structure (118309 → revert 118390) is the
+    selection working as designed, not a glitch: a rescale:row+scatter
+    accept at −54.197 held for 81 gens, then a kick+scatter accept
+    re-pinned it to −54.913. The pin is a RESTORING condition under this
+    rail — the weight returns to the bound whenever a move off it is not
+    good enough to win. The −52.790 step at 118612 was the first off-pin
+    move that won AND was never reverted, and it was the first one that
+    crossed 52.167.
+
+What is NOT going on:
+  - No clamp-repair event in this window. The log's only three
+    clamp-repair lines are at 105000/105001 (the 300.449105/33.0
+    era) and 106636. Since the current table landed, no coordinate has
+    been repaired — the gate is being respected at load and at
+    mutation, not violated and patched.
+  - No oscillation. 217 clean gens off the pin, 13 accepts, zero
+    re-entries.
+  - No restart confounding. The last "resumed from" line is 116903
+    (resume at gen 118374, inside the pinned plateau); the jsonl is
+    contiguous through the window.
+
+Residual question (for whoever owns the rail, not for this trace):
+the current 54.913 bound for uprising@2p is measured (spread 15.0), but
+the weight is now WALKING THROUGH the bound, not resting on it. That is
+the first time under any regime that the pin has been shed rather than
+held — either the coordinate genuinely wants a larger magnitude (the
+rail is too tight for a real signal) or the pressure is an artifact of
+the neighbors being pinned (a pinned rival_mean_culture and a
+ceiling-pinned workers_late both shift what the other coordinates see).
+Distinguishing those two needs the per-feature contributions, which the
+climb logs do not carry; the jsonl `runaway` list only says which keys
+are at 95%+, not why.
+
+Sources
+-------
+- experiments/logs/rust_league_2p.log: RUNAWAY lines (1421 total;
+  uprising 118106-118670 under the 120-clamp print), clamp-repair lines
+  105000/105001/106636, resumed-from lines, last at 116903.
+- experiments/logs/rust_climb_2p.jsonl: per-gen accepts/rejects, ops,
+  sigma, runaway (raw values), pool; window reads above.
+- rust/src/bots/weighted/weights.rs:2208-2215 (clamp_bound),
+  2281 (Uprising spread [15,15,15]), 2292 (RivalFreeCa), 2426
+  (RivalMeanCulture), 2432 (ScienceRateTrailing), 2437 (WorkersLate),
+  2493-2523 (CLAMP_T, CLAMP_BLIND, CLAMP_CEILING), 2532
+  (P95_TOTAL_SPREAD).
+- rust/src/bin/climb.rs:106 (RUNAWAY_FRACTION 0.95), 277-283
+  (runaway_weights), 1343-1351 (emission).
+- experiments/rust_champion_2p.json: live, gen 118883 at read time.
