@@ -1,0 +1,93 @@
+
+gov_board_credit: dead-key trace, the card_rate_credit way (2026-08-27)
+=======================================================================
+
+VERDICT: NO. gov_board_credit is LIVE, not the card_rate_credit shape. Its
+credit is applied (cards.rs:1958-1962), and nothing before it returns for a
+Government card -- the only two branches that return before the gov branch
+(unit_tech_credit at cards.rs:1952-1955, tech_board_credit at
+cards.rs:1956-1958) are both gated on card types Government never is. The
+"earlier gated branch" the coordinator asked about (the board-aware swap-diff
+return at cards.rs:2049-2050) runs AFTER the gov credit site, and a
+Government card never reaches it anyway: the gov branch returns first, and
+`board_yields` (board_yields.rs:856-858) returns None for every non-swap
+type regardless.
+
+WHAT THE CREDIT MULTIPLIES
+The credit multiplies `gov_value` (cards.rs:1365-1388), a board-aware price:
+sum over the government's gain triples of amt * priced_marginal(feature),
+plus the cheapest placement route (min over routes of sum over cost triples),
+each marginal priced through the live feature weights. It is NOT a flat
+printed-value multiplier: `gov_value` returns 0.0 when
+`board_yields::government_plans` (board_yields.rs:683) finds no placement
+route.
+
+WHO PRODUCES THOSE QUANTITIES
+`board_yields::government_plans` reads the government card's effects
+(its civil/military action counts and any rate effects) against the
+player's current board: it emits the gain triples the government would
+produce and the legal placement routes (which slot it would replace, at
+what cost). So the quantities are produced by the CARD's data plus the
+BOARD state, exactly like tech_value/action_value.
+
+WHICH CARD IDS PRINT THEM -- AND WHY IT DOES NOT MATTER
+`card_rate_credit`'s death was structural: `sum_yields` multiplies ONLY
+`YieldKind::Rate` triples by the credit (cards.rs:543, and the parallel
+sum at cards.rs:1166), and only 10 cards in the whole deck print Rate
+fields (8 worker builds -- Lab/Temple/Library/Theater families -- and 2
+leaders, per the 2026-08-24 census), which all take the board-aware early
+return before `card_yields` is ever reached, so the credit multiplies
+nothing anywhere.
+gov_board_credit has no such reach problem: it multiplies `gov_value`, and
+ALL 33 government cards (data/cards_civil.json, type "government") pass
+through the same dispatch (cards.rs:1956-1962). It is irrelevant that only
+3 of the 33 print a rate field (Theocracy culture=1, Fundamentalism
+science=-2, Democracy culture=3): the credit scales the WHOLE `gov_value`,
+whose gain triples include action counts and route costs, not rate fields.
+A government card with no rate effect still has `gov_value` > 0 on a board
+with a placement route, and the credit multiplies that.
+
+THE EARLIER GATED BRANCH, CHECKED EXPLICITLY
+For a Government card entering `card_potential_core` (cards.rs:1919):
+  - cards.rs:1952-1955 unit_tech_credit: gated on `kind.is_unit()` --
+    Government is not a unit (cards.rs:129-131). Never fires.
+  - cards.rs:1956-1958 tech_board_credit: gated on
+    `board_yields::is_levelled_type(kind)` (board_yields.rs:253-255:
+    worker types + SpecialTech) AND `tb != 0.0`. Government takes no
+    workers (cards.rs:141-143) and is not SpecialTech. Never fires.
+  - cards.rs:1959-1963 gov_board_credit: fires whenever gb != 0.0.
+So when `gov_board_credit != 0.0` the function RETURNS the board-aware
+price at cards.rs:1961 -- before the `credit_board` gate (cards.rs:2034),
+before the swap-diff return (cards.rs:2049-2050), before `card_yields`
+(cards.rs:2056-2058). The "interception" documented at cards.rs:2088-2094
+is real and it is the LIVE path, not a shadow.
+The reverse direction matters for the champion: when `gov_board_credit ==
+0.0` (the 2p and 4p champions), a Government card falls through to the
+generic `credit_board` path. Government is a swap type (board_yields.rs:
+240-242) and `board_credit_key` returns None for it (cards.rs:597-640
+bucket; card_board_government retired 2026-08-13), so it is priced by
+`card_board_credit` * swap-diff (cards.rs:2049-2050). That is the fallback,
+and it is a different credit -- consistent with the 2p/4p champions
+carrying card_board_credit != 0.
+
+WHY THE 3p VALUE IS NOT A LATENT LANDMINE LIKE -5.94
+The -5.94 shape was: a weight the climb could mutate, on a key that can
+never fire, so a fitted nonzero value is pure noise that a future
+structural change could suddenly activate. gov_board_credit at 3p (0.5677
+per the coordinator; the frozen 2026-08-27 3p champion carries 0.7889)
+sits on a key that DOES fire: every government-card decision the 3p
+champion reaches with a placement route available is priced through it.
+Its magnitude is a fitted price, not a latent landmine. (Corroboration,
+not proof: the 2026-08-24 credit-sensitivity duel,
+analysis/credit_sensitivity_2026-08-24.txt:69-72, found gov_board_credit
+LIVE at 10x/1.0 on both counts -- win shares 6.39 / -0.213 -- while
+card_rate_credit was SILENCED at 2p.)
+
+ONE-SENTENCE ANSWER
+gov_board_credit is live at every count where it is nonzero: it is applied
+at cards.rs:1958-1962, no earlier branch can return for a Government card
+(unit/levelled gates both exclude the type), the board-aware swap-diff
+return it could theoretically shadow (cards.rs:2049-2050) is unreachable
+for governments whether or not the credit fires, and it multiplies a
+board-aware price all 33 government cards flow through -- it does not have
+the card_rate_credit problem.
