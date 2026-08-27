@@ -1,0 +1,249 @@
+Uprising Cliff — does the leaf eval see it?
+2026-08-27
+================================================================
+
+CONTEXT
+The rules make an uprising a STEP FUNCTION, not a slope. RULES_SPEC 6.3 /
+6.6 step 2 (docs/RULES_SPEC.md:181, :189):
+
+    "Uprising check (end of turn, after discarding excess military cards):
+     if discontent workers > unused workers, skip the entire Production
+     Phase (score/corruption/production/consumption all skipped)."
+
+  - "discontent workers" = happy_required(yellow_bank) − happiness rating,
+    min 0  (RULES_SPEC 6.3; economy::happy_required).
+  - "unused workers" = p.workers_free (state.rs:497) — the unassigned
+    tokens; per RULES_SPEC 6.3 they "do not reduce discontent workers; they
+    only prevent the uprising."
+
+So the cliff is the comparison  discontent > workers_free, and when it trips
+the ENTIRE production phase (science + culture scoring, corruption, food
+production, consumption, resource production) is forfeited — a 0/1 gate
+with no slope below it.
+
+Question: is that cliff represented in the weighted leaf eval, and if so by
+which coordinate?
+
+----------------------------------------------------------------
+Q1. EVERY WeightKey whose emitted feature touches discontent workers,
+     happiness rating, or unused/free workers (rust/src/bots/weighted/
+     features.rs)
+----------------------------------------------------------------
+The happiness/discontent locals (features.rs:572-591):
+
+    572  let happy_req = economy::happy_required(p.yellow_bank);
+    573  let margin = f64::from(s.happy) - f64::from(happy_req)
+                      + g(GainFeature::Happy);
+    574  let discontent = (-margin).max(0.0);
+    589  let happy_req_next = economy::happy_required(next_yellow_bank);
+    590  let margin_next = f64::from(s.happy) - f64::from(happy_req_next)
+                           + g(GainFeature::Happy);
+    591  let discontent_next_pop = (-margin_next).max(0.0);
+
+    610  let hand_value: f64 = p.hand_civil.as_slice().iter()
+                      .map(|&c| f64::from(c.level()) + 1.0).sum();
+
+The emits (file:line — rust/src/bots/weighted/features.rs):
+
+  1. FreeWorkers          :840   f.set(WeightKey::FreeWorkers,
+                                           f64::from(p.workers_free)
+                                           + g(GainFeature::FreeWorkers));
+  2. FreeWorkerWall       :861   f.set(WeightKey::FreeWorkerWall,
+                                           if p.workers_free == 0
+                                             { hand_value } else { 0.0 });
+  3. Workers              :862   f.set(WeightKey::Workers, f64::from(workers));
+  4. ProdWorkers          :863   f.set(WeightKey::ProdWorkers, f64::from(prod_workers));
+  5. UrbanWorkers         :864   f.set(WeightKey::UrbanWorkers, f64::from(urban_workers));
+  6. UnitWorkers          :865   f.set(WeightKey::UnitWorkers, f64::from(unit_workers));
+  7. HappyMargin          :868   f.set(WeightKey::HappyMargin, margin.min(3.0));
+  8. Discontent           :869   f.set(WeightKey::Discontent, discontent);
+  9. HappyMarginAfterNextPop :870
+                             f.set(WeightKey::HappyMarginAfterNextPop,
+                                           discontent_next_pop);
+ 10. Uprising             :893   f.set(WeightKey::Uprising,
+                                           if discontent > f64::from(p.workers_free)
+                                             { uprising_production_at_stake }
+                                             else { 0.0 });
+                             where :891
+                             let uprising_production_at_stake =
+                               f64::from(s.science + s.culture + s.food
+                                         + s.resources);
+ 11. RivalFreeCa          :1112  f.set(WeightKey::RivalFreeCa, f64::from(rival_free_ca));
+ 12. RivalFreeWorkers     :1160  f.set(WeightKey::RivalFreeWorkers, rboard.rival_free_workers);
+ 13. HappySurplus         :1197  f.set(WeightKey::HappySurplus, margin.max(0.0));
+
+Notes on the near-misses:
+  - Workers/ProdWorkers/UrbanWorkers/UnitWorkers (3-6) are counts of workers
+    PLACED ON CARDS (sweep_tableau, features.rs:189-192; `workers` =
+    total placed, `prod_workers` = farm+mine, etc.). They do NOT count
+    workers_free — a worker on a farm is ProdWorkers, not FreeWorkers.
+    They touch "free workers" only in the sense "the complement," and
+    carry no happiness/discontent term. Listed for completeness; they are
+    not part of the discontent/free-worker surface.
+  - RivalFreeCa / RivalFreeWorkers are RIVAL-board facts (rivals.rs:112,
+    :123 — `q.workers_free` max/mean over non-resigned rivals). They touch a
+    rival's free workers, not the player's own discontent-vs-free comparison
+    that the uprising check uses. Listed because they grep-hit "free
+    worker"; they are not on the own-board uprising surface.
+  - There is NO WeightKey::Unhappy / "Unhappy*" coordinate. The grep
+    candidates "Unhappy*" do not exist in this crate; the shortfall side of
+    happiness is `Discontent` (hinged) and `HappyMargin` (capped), and the
+    surplus side is `HappySurplus`.
+
+So the own-board discontent/happiness/free-worker surface is exactly:
+  FreeWorkers, FreeWorkerWall, HappyMargin, Discontent,
+  HappyMarginAfterNextPop, Uprising, HappySurplus.
+  (plus the Workers-family card counts and the Rival* facts, which are not
+   on the uprising surface.)
+
+----------------------------------------------------------------
+Q2. For each: LINEAR or HINGED?
+----------------------------------------------------------------
+A "hinge" = max(0, a-b) or a clamp/step. "Linear" = passes the quantity
+through (optionally + a pending-gain offset, or × a scale) with no max/clamp.
+
+  1. FreeWorkers          :840   LINEAR.
+       f64::from(p.workers_free) + g(FreeWorkers). Raw count + pending gain.
+       No max, no clamp. Monotone in workers_free.
+
+  2. FreeWorkerWall       :861   HINGED (step / indicator).
+       `if p.workers_free == 0 { hand_value } else { 0.0 }`. A 0/1 gate on
+       workers_free == 0, scaled by hand_value (features.rs:610), not a
+       slope. Hinged at exactly zero.
+
+  3. Workers              :862   LINEAR (raw placed-worker count).
+  4. ProdWorkers          :863   LINEAR.
+  5. UrbanWorkers         :864   LINEAR.
+  6. UnitWorkers          :865   LINEAR.
+     (3-6 are plain i32->f64 of card-placement counts; not on the
+      discontent surface, but linear.)
+
+  7. HappyMargin          :868   HINGED (one-sided clamp).
+       margin.min(3.0). margin = happy − happy_required + g(Happy)
+       (features.rs:573) is LINEAR in the rating, but the EMIT clamps the
+       upper side at 3.0. So: linear below 3, flat above. The lower side is
+       NOT clamped here — it runs to −inf, which is exactly why Discontent
+       exists as the hinged mirror.
+
+  8. Discontent           :869   HINGED.
+       discontent = (-margin).max(0.0) (features.rs:574) = max(0,
+       happy_required − happy − g(Happy)). A max(0, ·) hinge: 0 when the
+       player is content, positive shortfall when not. Linear in the
+       shortfall, zero on the surplus side.
+
+  9. HappyMarginAfterNextPop :870   HINGED.
+       discontent_next_pop = (-margin_next).max(0.0)
+       (features.rs:591), the same max(0,·) hinge evaluated one population
+       increase forward (happy_req_next off next_yellow_bank, :589).
+
+ 10. Uprising             :893   HINGED (step / indicator), and the ONLY
+       coordinate that hinges on the COMPARISON, not on a single quantity.
+       `if discontent > f64::from(p.workers_free)
+          { uprising_production_at_stake } else { 0.0 }`
+       The predicate `discontent > workers_free` IS the cliff. When it trips
+       the emit is scaled by the production actually at stake
+       (s.science + s.culture + s.food + s.resources, :891) — a UNITS FIX
+       from a bare 0/1 indicator (see the doc comment at features.rs:872-
+       890 and the test `uprising_scales_with_the_production_actually_at_
+       stake_not_a_flat_0_1`, :1361). 0 below the cliff, production-at-
+       stake above it. No slope anywhere.
+
+ 11. RivalFreeCa          :1112  LINEAR (rival max, f64::from).
+ 12. RivalFreeWorkers     :1160  LINEAR (rival max, rivals.rs:123).
+ 13. HappySurplus         :1197  HINGED (one-sided).
+       margin.max(0.0) (features.rs:1197) = max(0, happy − happy_required
+       + g(Happy)). The surplus mirror of Discontent: 0 when short, linear
+       in the surplus when content.
+
+Summary table (own-board surface):
+  FreeWorkers            LINEAR
+  FreeWorkerWall         HINGED  (step at workers_free == 0, × hand_value)
+  HappyMargin            HINGED  (upper clamp .min(3.0); linear below)
+  Discontent             HINGED  (max(0, happy_req − happy − gain))
+  HappyMarginAfterNextPop HINGED (max(0,·) one pop forward)
+  Uprising               HINGED  (step: discontent > workers_free ? prod : 0)
+  HappySurplus           HINGED  (max(0, margin))
+
+  (Workers/Prod/Urban/Unit: LINEAR card counts; RivalFreeCa/RivalFreeWorkers:
+   LINEAR rival facts — not on the uprising surface.)
+
+----------------------------------------------------------------
+Q3. Is there a coordinate that fires specifically on discontent > free_workers
+    — i.e. the cliff itself?
+----------------------------------------------------------------
+YES. It is `Uprising` (features.rs:893).
+
+    f.set(WeightKey::Uprising,
+          if discontent > f64::from(p.workers_free)
+            { uprising_production_at_stake } else { 0.0 });
+
+  The predicate `discontent > p.workers_free` is EXACTLY the rules'
+  uprising condition (RULES_SPEC 6.3: "if discontent workers > unused
+  workers, skip the entire Production Phase"). When it is true, the
+  coordinate is non-zero (scaled by the production the rules actually
+  forfeit: science + culture + food + resource rates, features.rs:891);
+  when it is false, it is exactly 0.0. This is a step function with the
+  hinge placed precisely on the cliff — not a slope, not a smoothed proxy.
+
+  It is classified NonPositive in sign_intent (weights.rs,
+  `Discontent | Uprising | StrengthDeficit | FamineDeficit =>
+  NonPositive("prices a penalty the rules impose")`), i.e. the eval treats
+  a positive Uprising as a pure cost, matching the rulebook (a tripped
+  uprising forfeits production, never gains it).
+
+  The companion coordinates that feed the SAME comparison but do NOT hinge
+  on it:
+    - Discontent (features.rs:869) — the LHS of the comparison, hinged at
+      0. It is large when the player is unhappy, independent of how many
+      free workers there are.
+    - FreeWorkers (features.rs:840) — the RHS of the comparison, LINEAR.
+      It is large when the player has many idle workers, independent of
+      discontent.
+  Neither Discontent nor FreeWorkers alone knows about the cliff: you can
+  have big Discontent and big FreeWorkers (no uprising, because
+  free > discontent) or vice versa. Only Uprising's PREDICATE combines the
+  two into the inequality. So the cliff is visible to the leaf eval —
+  exclusively through Uprising's `discontent > workers_free` gate.
+
+  Plain statement for the coordinator: the cliff is NOT invisible to the
+  leaf eval. It is represented by a single dedicated coordinate,
+  `Uprising`, whose emit is a step on exactly `discontent > workers_free`
+  (features.rs:893), scaled by the production at stake. Below the cliff the
+  coordinate is 0.0; above it, production-at-stake. No other coordinate
+  hinges on that comparison.
+
+----------------------------------------------------------------
+Caveats
+----------------------------------------------------------------
+  - `discontent` and `p.workers_free` inside the Uprising predicate are the
+    CURRENT board values (features.rs:574, :840's source p.workers_free).
+    The pending-gain `g(GainFeature::FreeWorkers)` is added to the EMITTED
+    FreeWorkers coordinate (features.rs:840) but NOT to the workers_free
+    term inside the Uprising predicate — the predicate uses the raw
+    `p.workers_free` field. So Uprising is a same-turn cliff test, not a
+    projected one. (HappyMarginAfterNextPop, by contrast, is the
+    projection — but it projects the next POPULATION increase's happiness,
+    not the free-worker count.)
+  - The test `uprising_scales_with_the_production_actually_at_stake_not_a_
+    flat_0_1` (features.rs:1361) pins: same discontent/workers_free
+    overshoot + bigger production base ⇒ bigger Uprising; and
+    `discontent == workers_free` (not strictly greater) ⇒ exactly 0.0
+    (features.rs:1385-1389), matching the rules' strict `>`.
+
+CITATIONS
+  docs/RULES_SPEC.md:181, :189 — uprising = step; "discontent > unused
+    workers ⇒ skip the entire Production Phase."
+  docs/RULES_SPEC.md 6.3 — "Unused workers do not reduce discontent workers;
+    they only prevent the uprising."
+  rust/src/bots/weighted/features.rs:572-591 (margin/discontent locals),
+    :610 (hand_value), :840 (FreeWorkers), :861 (FreeWorkerWall), :862-865
+    (Workers family), :868 (HappyMargin), :869 (Discontent), :870
+    (HappyMarginAfterNextPop), :891-894 (Uprising), :1112 (RivalFreeCa),
+    :1160 (RivalFreeWorkers), :1197 (HappySurplus).
+  rust/src/bots/weighted/rivals.rs:112, :123 (rival_free_workers max/mean).
+  rust/src/bots/weighted/weights.rs sign_intent — `Discontent | Uprising |
+    StrengthDeficit | FamineDeficit => NonPositive`; `FreeWorkerWall =>
+    NonPositive`; `FreeWorkers` / `Workers` / `ProdWorkers` /
+    `HappyMargin` in the Free arm.
+  rust/src/state.rs:497 (workers_free).
+================================================================
