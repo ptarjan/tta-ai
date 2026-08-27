@@ -90,6 +90,13 @@ explanation. Two distinct mechanisms are visible, one per lineage:
       idle worker is worth more than anything it could be spent on. Nothing gets
       built at all; EndTurn wins 48.6% of decisions.
 
+RE-READ LATER THE SAME DAY at higher generations (#local-model, 40aad62, gens 2p
+118330 / 3p 66096 / 4p 21591), the direction is not drifting back toward zero --
+food_rate 2p went -1.0516 -> -1.4770 and 3p -0.0657 -> -0.0760, while 4p held
+positive at +0.646 and best_farm@4p rose +37.78 -> +39.899. The climb is actively
+driving food_rate FURTHER negative on the two arms where it is negative. This is
+a fitted preference being reinforced, not noise settling.
+
 A NonNegative sign_intent on food_rate addresses the 2p mechanism directly and
 the 4p one not at all. The 4p mechanism is a RELATIVE pricing failure between
 two production channels, which is the coarse-feature problem: one scalar per
@@ -98,10 +105,42 @@ card type cannot say "a farm is worth more when my food rate is low".
 
 THE STRUCTURAL FACT BEHIND IT
 -----------------------------
-FoodRate, ResourceRate, BestFarm, BestMine, FoodStock and ProdWorkers have NO
-sign_intent -- none of them appears in weights.rs's sign_intent match, so all six
-fall through to Free. Nothing in the code prevents food production from being
-priced as a liability.
+CORRECTED 2026-08-27, after #local-model's census (analysis/
+missing_sign_intents_2026-08-27.txt, 40aad62) contradicted the first draft of
+this section and was verified against the source.
+
+An earlier draft said the six production keys "have NO sign_intent -- none of
+them appears in the sign_intent match". That is FALSE, and the way it was
+reached is a trap worth naming: `sign_intent` opens with `use WeightKey::*`
+(weights.rs:1482), so its 174 match arms are BARE variant names. Grepping for
+`WeightKey::FoodRate` returns nothing and looks exactly like absence.
+
+The truth: the match at weights.rs:1480 has 174 arms, ONE per key, and NO
+wildcard (111 Free / 38 NonNegative / 25 NonPositive). FoodRate, ResourceRate,
+FoodStock, BestFarm, BestMine and ProdWorkers all sit in a single |-joined arm
+at weights.rs:1753-1791 that resolves to Free.
+
+That makes this WORSE, not better. They are not Free by oversight; they are Free
+by a documented decision, and the comment above the arm (weights.rs:1745-1752)
+states the policy outright:
+
+    Raw economy/board magnitudes and rates with no rulebook citation that a
+    bigger number is never a downside -- the same conservatism
+    STOCK_NONNEG_GATES's own doc comment already states for science_rate ("no
+    RULES_SPEC citation establishing that more science production can never be
+    a downside... guessing its sign is exactly what this table exists to refuse
+    to do").
+
+So the code is not missing a constraint. It is declining to assert one for want
+of a citation. The rules paragraph below is exactly the citation it asks for --
+which is why the queued intervention is a citation-backed RECLASSIFICATION of a
+deliberate Free, not the filling of a gap, and its writeup has to argue against
+that comment rather than around it.
+
+Two things in that same arm matter for this file. FreeWorkers is in it
+(weights.rs:1754) -- so the +6.31 at 2p driving the "end turn beats spending"
+mechanism is unbounded for the same stated reason. And BestFarm/BestMine are in
+it too (weights.rs:1771), which is the 4p relative-pricing channel.
 
 By the rules it cannot be one. Checked against RULES_SPEC §6.1/§6.2/§6.6 and
 cross-checked on the open web (UltraBoardGames' rules pages and the BGG food-
