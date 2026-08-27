@@ -924,6 +924,7 @@ mod tests {
         WeightKey::RivalHandCivil,
         WeightKey::RivalWonders,
         WeightKey::RivalWonderDeficit,
+        WeightKey::RivalScienceDeficit,
         WeightKey::RivalScienceStock,
         WeightKey::RivalFoodStock,
         WeightKey::RivalResourceStock,

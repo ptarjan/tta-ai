@@ -1080,6 +1080,19 @@ pub fn features(
         WeightKey::RivalWonderDeficit,
         (rival_wonders as f64 - p.completed_wonders.len() as f64).max(0.0),
     );
+    // `rival_science_rate` (set just above) is class B: the rival loop that
+    // computes it (this function, `--- rivals` section start) never consults
+    // the candidate move, so it is identical across every candidate at a
+    // given turn and drops out of the argmax on its own. My own science rate
+    // DOES vary across candidates, and is already on `f` at `ScienceRate`
+    // (`--- economy`, above) in the same units (`science + ScienceRate`
+    // gain, both sides) -- netting against it, the same
+    // `StrengthRel`/`StrengthDeficit`/`RivalWonderDeficit` hinge shape, is
+    // the only way this fact enters search at all.
+    f.set(
+        WeightKey::RivalScienceDeficit,
+        (rival_science_rate - f.get(WeightKey::ScienceRate)).max(0.0),
+    );
 
     // --- the events I planted myself (GAP 4). Legal by construction --
     // `my_seeds` filters on `seeded_by == idx` and reads no pile order.
@@ -2573,6 +2586,53 @@ mod tests {
             features(&state, 0, None, None, false).get(WeightKey::RivalWonderDeficit),
             2.0,
             "rival at 3 vs my 1 must read as a deficit of exactly 2.0"
+        );
+    }
+
+    /// `WeightKey::RivalScienceRate` (the local `rival_science_rate` this key
+    /// nets against, `--- rivals` block above) is class B: the rival loop
+    /// that computes it (this function, `--- rivals` section start) never
+    /// consults the candidate move, so it is the SAME number on every
+    /// candidate at a given turn and drops out of the argmax entirely.
+    /// Netting it against MY OWN science rate (`WeightKey::ScienceRate`,
+    /// which candidates DO move) is the only way this fact enters search at
+    /// all, following `RivalWonderDeficit`'s exact `max(0, rival - self)`
+    /// shape. One-sided by construction: tied or ahead of the best rival's
+    /// rate reads exactly 0.0 regardless of margin; behind reads exactly the
+    /// gap, `N`.
+    #[test]
+    fn the_rival_science_deficit_is_zero_when_i_am_not_behind() {
+        // Tied at zero each (fresh game, Philosophy un-staffed both sides).
+        let mut state = G::new_game(2, 51);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalScienceDeficit),
+            0.0,
+            "tied at zero science rate each must not read as a deficit"
+        );
+
+        // Ahead: I hold a permanent science-rate bonus, the rival still has none.
+        state.players[0].science_rate_extra = 5;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalScienceDeficit),
+            0.0,
+            "leading the rival's science rate must not read as a deficit"
+        );
+
+        // Behind: the rival's rate rises past mine.
+        state.players[1].science_rate_extra = 8;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalScienceDeficit),
+            3.0,
+            "rival rate 8 vs my rate 5 must read as a deficit of exactly 3.0"
+        );
+
+        // Widen the gap by exactly one more -- pinning the hinge as the gap
+        // `N`, not a 0/1 indicator.
+        state.players[1].science_rate_extra = 9;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalScienceDeficit),
+            4.0,
+            "rival rate 9 vs my rate 5 must read as a deficit of exactly 4.0"
         );
     }
 }
