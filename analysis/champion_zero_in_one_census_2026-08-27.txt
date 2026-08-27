@@ -1,0 +1,49 @@
+champion_zero_in_one_census_2026-08-27
+============================================================
+Census of experiments/rust_champion_{2,3,4}p.json for weight keys
+whose value is EXACTLY 0.0 in one player count but non-zero in
+both of the other two.
+
+COPIES READ (champion files are rewritten by the running climb, so I
+copied them to /tmp/champ_census_2026-08-27/ before reading, and the census
+reads those copies, not the live experiments/ files):
+  2p: gen=115921  md5 6ae8c5821722d3d6937f7d9cf703f443
+  3p: gen=65065   md5 658bfe0eacd28b9fb41613199c29b903
+  4p: gen=21350   md5 e96b7f675b44939afef984070b8cc2c7
+
+  A concurrent climb rewrite therefore cannot shift the numbers below.
+
+KEY SET
+  2p has 172 keys, 3p has 169, 4p has 172.
+  3p is missing 3 keys present in the other two:
+    rival_culture_deficit, rival_science_deficit, rival_wonder_deficit.
+  Those are absent (not zero) at 3p, so they cannot be 'zero in one and
+  non-zero in both'; they are excluded from the census. Keys present in all
+  three: 169.
+
+RESULT: 11 keys are exactly 0.0 in one count and non-zero in both others.
+
+key                              zero at            2p           3p           4p
+--------------------------------------------------------------------------------
+hand_limit                       3p          0.044495     0.000000     0.111775
+military_action_gap              4p         -0.099852    -0.007982     0.000000
+no_aggression                    2p          0.000000    -0.030369    -2.854044
+pact_board_credit                4p          0.447324     0.077634     0.000000
+resource_commitment_turns        4p         -0.216606    -0.038092     0.000000
+row_playable_count               4p          0.095706     0.276772     0.000000
+strength_deficit                 3p         -1.923663     0.000000    -0.970005
+territory_credit                 4p          0.300664     0.219590     0.000000
+unit_strength_credit             3p          0.075714     0.000000     0.004395
+wonder_stages_per_action         3p          0.090348     0.000000     0.211552
+wonders                          2p          0.000000    16.332876     0.010229
+
+BREAKDOWN BY WHICH COUNT IS THE ZERO:
+  2p zero (2): no_aggression, wonders
+  3p zero (4): hand_limit, strength_deficit, unit_strength_credit, wonder_stages_per_action
+  4p zero (5): military_action_gap, pact_board_credit, resource_commitment_turns, row_playable_count, territory_credit
+
+NOTE ON 'ZERO': these are literal 0.0 in the JSON (not near-zero). The
+climb's dominance_repair silently clamps negative weights to 0.0 at
+load, so a fitted small-near-zero that clipped to exactly 0.0 in one
+lineage while staying non-zero in the other two is the expected shape
+here -- a fitted zero in one count, not an unreachable key.
