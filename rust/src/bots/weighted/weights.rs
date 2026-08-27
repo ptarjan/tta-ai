@@ -2016,8 +2016,21 @@ impl WeightKey {
     ///      (the same freeze discipline as the identity-aware gates in
     ///      [`super::eval`]), the candidate-set swing of that value is a
     ///      p95-spread-shaped quantity in the same units as every measured
-    ///      row. Measuring it would replace the blind rail with a real
-    ///      one; until then these keep [`CLAMP_BLIND`].
+    ///      row. MEASURED on 2026-08-26 by `bin/creditspread.rs` and landed:
+    ///      the credit rows above are its readings, not `featspread`'s.
+    ///      Its probe DISPLACES the key from the champion's own value
+    ///      (`w_k + c`, `c` = 1.0 and 2.0) rather than setting it to a fixed
+    ///      absolute `c`; that distinction is the whole measurement. A
+    ///      set-to-`c` probe measures `h(c) - h(w_k)`, so its linearity test
+    ///      is a second-difference test over a stretch of the weight axis
+    ///      the champion never occupies, and it passes if and only if
+    ///      `w_k == 0.0`. Two confident negative results were produced that
+    ///      way before the probe was fixed; see
+    ///      `analysis/credit_spread_finding_2026-08-26.txt`.
+    ///      Rows still at zero are the ones this instrument could not see
+    ///      either: `card_rate_credit` (never fires, at any count) and 3p
+    ///      `tech_board_credit`/`wonder_board_credit` (gated). They keep
+    ///      [`CLAMP_BLIND`].
     ///   4. The rival-context keys. A genuinely different zero: they ARE
     ///      written by [`super::features`] into the linear feature vector,
     ///      so the row is well-defined for them -- it reads 0.0 only
@@ -2163,29 +2176,29 @@ impl WeightKey {
         WeightKey::UrbanLimit => [2.000000, 1.000000, 1.000000],
         WeightKey::GovActionCost => [0.000000, 0.000000, 0.000000],
         WeightKey::NoAggression => [1.000000, 1.000000, 1.000000],
-        WeightKey::CardBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::CardBoardCredit => [440.293944, 257.969239, 555.766676],
         WeightKey::EventScoringMargin => [12.000000, 14.000000, 12.000000],
-        WeightKey::CardBoardLeader => [0.000000, 0.000000, 0.000000],
+        WeightKey::CardBoardLeader => [444.221547, 75.852318, 639.120835],
         WeightKey::HandSwapExtra => [0.000000, 0.000000, 0.000000],
         WeightKey::CardRateCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::UnitStrengthCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::UnitTechCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::TechBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::ActionBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::GovBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::WonderBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::BuildFreshCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::RestrictedResourceCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::FreeActionCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::TerritoryCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::BonusCardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::TacticBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::AggressionBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::WarBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::PactBoardCredit => [0.000000, 0.000000, 0.000000],
-        WeightKey::EventBoardCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::UnitStrengthCredit => [0.000000, 0.000000, 503.905097],
+        WeightKey::UnitTechCredit => [157.532462, 12.531155, 796.642824],
+        WeightKey::TechBoardCredit => [141.213174, 0.000000, 340.149556],
+        WeightKey::ActionBoardCredit => [30.951381, 60.270880, 8.980789],
+        WeightKey::GovBoardCredit => [103.608714, 40.765199, 175.810309],
+        WeightKey::WonderBoardCredit => [5.008904, 0.000000, 35.990065],
+        WeightKey::BuildFreshCredit => [5.088772, 163.578218, 26.668300],
+        WeightKey::RestrictedResourceCredit => [1.222799, 12.011099, 3.456802],
+        WeightKey::FreeActionCredit => [1.358827, 0.006957, 0.027570],
+        WeightKey::TerritoryCredit => [1.153157, 13.357448, 63.607113],
+        WeightKey::BonusCardCredit => [0.323400, 0.058798, 1.135809],
+        WeightKey::TacticBoardCredit => [0.711767, 4.537967, 247.104292],
+        WeightKey::AggressionBoardCredit => [0.376610, 7.967209, 2.273367],
+        WeightKey::WarBoardCredit => [0.367623, 0.401146, 3.999759],
+        WeightKey::PactBoardCredit => [0.000000, 1.955373, 26.975213],
+        WeightKey::EventBoardCredit => [0.117639, 0.071633, 0.974300],
         WeightKey::TacticShortfallCost => [0.000000, 0.000000, 0.000000],
-        WeightKey::TacticReachCredit => [0.000000, 0.000000, 0.000000],
+        WeightKey::TacticReachCredit => [0.781131, 0.211469, 24.407310],
         WeightKey::HandCivil => [2.000000, 2.000000, 2.000000],
         WeightKey::HandValue => [2.789474, 2.847059, 2.860335],
         WeightKey::HandPotential => [197.027878, 674.348432, 304.224789],
@@ -3024,15 +3037,24 @@ mod tests {
     }
 
     /// A key measuring zero spread is INVISIBLE to the instrument, not
-    /// harmless: `linear_features` prices the credit and multiplier keys at
-    /// the caller's frozen vector, so their candidate-set spread is zero by
-    /// construction while they still move real move ranking. They keep the
-    /// flat rail rather than an invented number -- `tech_board_credit` alone
-    /// sits at -27 in the live 3p champion, and a tighter fallback would
-    /// rewrite it on no evidence at all.
+    /// harmless, and it keeps the flat rail rather than an invented number.
+    /// `featspread` cannot see a credit key at all -- `linear_features`
+    /// prices those at the caller's frozen vector, so their candidate-set
+    /// spread is zero by construction there. `creditspread`'s displacement
+    /// probe can, and the credit rows above are its readings; the ones still
+    /// at zero are the ones IT could not see either, which is a stronger
+    /// statement than "no instrument existed".
+    ///
+    /// `card_rate_credit` is the clean case: zero firing decisions at every
+    /// player count, because the board-aware branch of `cards.rs` returns
+    /// before the key is ever read whenever `card_board_credit != 0.0` --
+    /// true on all three live champions. `tech_board_credit` at 3p is the
+    /// other kind: it fires 11909 times but is GATED, its response sublinear
+    /// across the probe, so no slope is defensible and the rail stands.
     #[test]
     fn a_key_the_spread_instrument_cannot_see_keeps_the_flat_rail() {
-        assert_eq!(WeightKey::TechBoardCredit.p95_candidate_spread(), [0.0, 0.0, 0.0]);
+        assert_eq!(WeightKey::CardRateCredit.p95_candidate_spread(), [0.0, 0.0, 0.0]);
+        assert_eq!(WeightKey::CardRateCredit.clamp_bound(3), CLAMP_BLIND);
         assert_eq!(WeightKey::TechBoardCredit.clamp_bound(3), CLAMP_BLIND);
     }
 
@@ -3068,6 +3090,19 @@ mod tests {
     /// typical decision.
     #[test]
     fn no_authored_default_starts_outside_its_measured_bound() {
+        // Named, with the reason, per this test's own doc comment. Landing
+        // `creditspread`'s table on 2026-08-26 put exactly one default back
+        // outside: `unit_tech_credit` at 4p, authored 1.0 against a bound of
+        // 0.68. Its 4p slope, 796.64, is the largest in the credit class, so
+        // the authored 1.0 would command 1.46 whole typical decisions on its
+        // own -- above the `CLAMP_T` budget by construction. The 1.0 is the
+        // NEUTRAL multiplier (price unit-tech gains at face value), not a
+        // fitted value, so it is not evidence about the right magnitude; and
+        // the live 4p champion already carries 0.0000 on this key, so the
+        // rail trimming the start point to 0.68 takes nothing the 4p climb
+        // was using. A SECOND entry appearing here is a fresh finding and
+        // must be justified the same way, not appended to.
+        const NAMED: [(&str, u8); 1] = [("unit_tech_credit", 4)];
         let w = Weights::defaults();
         let outside: Vec<(&str, u8)> = WeightKey::ALL
             .iter()
@@ -3075,6 +3110,6 @@ mod tests {
             .filter(|(k, p)| w.get(**k).abs() > k.clamp_bound(*p))
             .map(|(k, p)| (k.name(), p))
             .collect();
-        assert_eq!(outside, Vec::new(), "authored defaults outside their bounds");
+        assert_eq!(outside, NAMED, "authored defaults outside their bounds");
     }
 }
