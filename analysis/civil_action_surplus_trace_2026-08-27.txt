@@ -1,0 +1,42 @@
+civil_action_surplus trace (2026-08-27)
+========================================
+Read-only trace: where WeightKey::CivilActionSurplus is set, its exact
+expression, and whether anything gates it by player count. No edits.
+
+ANSWER
+------
+Set at rust/src/bots/weighted/features.rs:1202, inside `features()`
+(defined line 515).
+
+    f.set(WeightKey::CivilActionSurplus, (ca_have - ca_need).max(0.0));
+
+The two operands are read through the same Features buffer (lines 1199-1200):
+    let ca_have = f.get(WeightKey::CaLeft);
+    let ca_need = f.get(WeightKey::HandCivil);
+So the value is max(0.0, CaLeft - HandCivil): the number of civil actions
+still left in the pool beyond what the current civil hand needs.
+
+The operands are plain per-player coordinates, set earlier in the same
+function:
+  - CaLeft    = f64::from(p.civil_actions)      (features.rs:900)
+  - HandCivil = p.hand_civil.len() as f64        (features.rs:1060)
+Neither is computed from the player count. `marginal_needs` (features.rs:308,
+the only shared helper feeding the gap/surplus block) also never reads
+state.num_players -- it derives food/resource/science/worker needs from the
+player's own tableau.
+
+PLAYER-COUNT GATING
+-------------------
+NONE. Line 1202 is not inside any `if`, `match`, or count branch. The block
+runs unconditionally for every evaluated player, at every player count. There
+is no `num_players` / `players` / `count` reference anywhere between the
+block's start (features.rs:1166, the "marginal need" comment) and the close of
+`features()` at line 1217.
+
+It is also not gated by weight: `features()` computes and `set()`s every key
+regardless of `w` (the weight vector) -- whether a key is dead/zero is the
+WEIGHTS' business (weights.rs), not the feature's. `features()` has no
+`if w.get(key) != 0.0` guard around any `set`.
+
+So CivilActionSurplus is a live, unconditional, player-count-agnostic
+coordinate: it is set to max(0, CaLeft - HandCivil) on every evaluation.
