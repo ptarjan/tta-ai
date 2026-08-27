@@ -65,12 +65,28 @@ sign_intent -- none of them appears in weights.rs's sign_intent match, so all si
 fall through to Free. Nothing in the code prevents food production from being
 priced as a liability.
 
-By the rules it cannot be one. Food has no corruption analogue: resources over
-the corruption threshold are destroyed, food is only ever spent (consumption at
-end of production, and the cost of increasing population). Owning a higher food
-RATE is never worse than owning a lower one, holding workers fixed; the
-opportunity cost of the worker is carried by the other production terms, not by
-food_rate itself. A negative food_rate is a fit the rules forbid.
+By the rules it cannot be one. Checked against RULES_SPEC §6.1/§6.2/§6.6 and
+cross-checked on the open web (UltraBoardGames' rules pages and the BGG food-
+consumption thread), because an earlier draft of this paragraph had the rule
+slightly wrong:
+
+  - Corruption is levied on the BLUE BANK, not on stock (§6.2, RULES_SPEC:174):
+    it is a function of how many blue tokens remain unspent, so it penalizes not
+    BUILDING, and it is indifferent to how much food you hold.
+  - Food is the corruption SHORTFALL BUFFER (§6.6 step 3b, RULES_SPEC:192):
+    "pay resources = corruption; shortfall paid in food". So holding more food
+    strictly helps when corruption exceeds your resources.
+  - Food consumption (§6.6 step 3d) charges food = the consumption number, and
+    a shortfall costs 4 CULTURE per missing food. More food production strictly
+    reduces exposure to that.
+  - Nothing anywhere charges a player for holding or producing MORE food.
+
+So the correct statement is not "food has no corruption analogue" — it is that
+food is on the RECEIVING end of corruption, never the paying end. Owning a
+higher food RATE is never worse than owning a lower one, holding workers fixed;
+the opportunity cost of the worker sitting on a farm is carried by the other
+production terms, not by food_rate itself. A negative food_rate is a fit the
+rules forbid.
 
 
 WHAT NOT TO DO
