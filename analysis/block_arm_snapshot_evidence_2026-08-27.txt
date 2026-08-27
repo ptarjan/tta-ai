@@ -1,0 +1,277 @@
+Block-arm snapshot evidence -- section-7-shaped scan over the 27
+block-arm keys of sign_intent
+2026-08-27 -- read-only; no code touched, no builds.
+================================================================
+
+WHY THIS FILE EXISTS
+----------------------------------------------------------------
+analysis/block_arm_sign_intent_audit_2026-08-27.txt (commits a464670,
+91739cc) established the GATES for the 27 WeightKey variants that sit in
+braced arms of sign_intent: 22 NonNegative / 5 NonPositive / 0 Free, and
+proved structurally that no block can return Free (pub const fn
+sign_intent(self) takes only self -- it cannot read runtime state at
+all). What that audit did NOT have, and flagged as the one genuine
+residual: every "found X in N snapshots" measurement in the SIGNAUDIT
+work ran over grep-reachable flat arms only, so the 27 block-arm keys
+have had ZERO snapshot evidence base. This file supplies it: each key's
+measured value across every reachable champion snapshot, with the gate
+checked at every cell.
+
+SCOPE / SNAPSHOT CENSUS
+----------------------------------------------------------------
+12 snapshots, all in the on-disk champion format (top-level "weights"
+dict, "gen" field):
+
+  LIVE (untracked in git since ca89c0e 2026-08-15; the climb rewrites
+       them on promotion -- re-read for this scan, gens below are the
+       values read AT SCAN TIME 2026-08-27, not the gens quoted in
+       earlier files; the file moves between reads):
+    experiments/rust_champion_2p.json  gen 118815
+    experiments/rust_champion_3p.json  gen 66395
+    experiments/rust_champion_4p.json  gen 21660
+       (174 keys each -- the current full vocabulary)
+  FROZEN COPIES (byte-identical cp of the live champion at the moment
+       of freezing; md5 cross-checked below):
+    analysis/frozen/clamp_ceiling_2026-08-27/rust_champion_{2,3,4}p.json
+       gens 116808 / 65450 / 21445 (frozen by f942741, 2026-08-27 07:24;
+       174 keys)
+    analysis/frozen/postclimb_2026-08-26/champ{2,3,4}p.json
+       gens 113181 / 63150 / 20951 (frozen by 57ec12e, 2026-08-26 11:50;
+       163 keys)
+    analysis/frozen/preclimb_2026-08-25/champ{2,3,4}p.json
+       gens 108828 / 59204 / 19885 (frozen by cdcece5, 2026-08-25 10:31;
+       160 keys)
+       Provenance of the preclimb md5s (9bfb3c06587f909d258a34deaf694e61 /
+       119be25daa43fbcb09f7e1ed7a81e943 / 904e6b68acc5beb1089554cc089cd0bf):
+       identical to the "MATCH" md5s recorded in
+       analysis/clamp_spread_2026-08-25.txt for the live champions at
+       that moment, and re-verified by md5 for the frozen files today.
+
+The 163-key (postclimb) and 160-key (preclimb) vectors predate the
+current 174-key vocabulary; ABSENT means the key was not in that file
+(and would be filled from its authored default at load -- the table
+below lists the default per key). FamineDeficit and
+ResourceCommitmentTurns are ABSENT from all four postclimb/preclimb
+files: they entered the vocabulary after those freezes.
+
+GATE SEMANTICS (as always: the gate constrains the WEIGHT)
+----------------------------------------------------------------
+NN = NonNegative gate: forbids NEGATIVE weights (0.0 is legal).
+NP = NonPositive gate: forbids POSITIVE weights (0.0 is legal).
+Evaluated per cell below; a violation cell is bolded.
+
+THE 27 x 12 MATRIX (gen in each column header)
+----------------------------------------------------------------
+| key | gate | def | live 2p (118815) | live 3p (66395) | live 4p (21660) | clamp 2p (116808) | clamp 3p (65450) | clamp 4p (21445) | postclimb 2p (113181) | postclimb 3p (63150) | postclimb 4p (20951) | preclimb 2p (108828) | preclimb 3p (59204) | preclimb 4p (19885) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `TechRedundancyDiscount` | NN | +0.0 | +0.115132 | +12.0543 | +2.5015 | +0.342504 | +5.8764 | +1.9218 | +1.7445 | +7.8215 | +1.9224 | +0.668698 | +1.8832 | +0.493733 |
+| `WonderPotential` | NN | +0.0 | +2.9728 | +2.8224 | +2.9974 | +1.2933 | +2.1491 | +3.0784 | +1.9969 | +3.1101 | +5.2345 | +2.0655 | +1.9377 | +6.4072 |
+| `WonderPromise` | NN | +0.0 | +1.6690 | +1.0212 | +2.1277 | +0.921473 | +0.983461 | +2.1852 | +1.9969 | +0.784236 | +2.6790 | +1.0387 | +0.568086 | +2.7900 |
+| `RestrictedResourceCredit` | NN | +1.0 | 0.0 | +0.058276 | 0.0 | 0.0 | +0.133668 | 0.0 | +0.0722139 | +0.0248727 | 0.0 | +0.397211 | +0.488052 | 0.0 |
+| `CivilActions` | NN | +2.0 | +1.4046 | +0.759248 | +0.13638 | +0.884527 | +0.529035 | +0.13638 | +0.455627 | +0.0696086 | +0.112085 | +0.401166 | +0.00979638 | +0.0246359 |
+| `CivilActionSurplus` | NN | +0.0 | +0.0178634 | 0.0 | +1.2780 | +0.0855701 | +0.0377594 | +1.2780 | +0.549574 | 0.0 | +1.1182 | +0.073076 | 0.0 | +0.0609392 |
+| `Wonders` | NN | +3.0 | 0.0 | 0.0 | 0.0 | 0.0 | +18.1246 | 0.0 | 0.0 | +13.8447 | +0.0337608 | +0.0571535 | +5.6956 | 0.0 |
+| `HandValue` | NN | +0.5 | +0.429561 | +0.0354496 | +0.609363 | +0.0953607 | +0.0617886 | +0.527723 | 0.0 | +0.0105028 | +0.445476 | 0.0 | 0.0 | +0.778173 |
+| `HandValueLate` | NN | +0.1 | +0.0329026 | +1.1771 | +0.056235 | +0.0434001 | +0.228845 | +0.0487009 | +0.133749 | +0.201489 | +0.0514469 | +0.453526 | +0.112975 | +0.0502247 |
+| `WarImmune` | NN | +0.0 | +0.0234309 | +0.201677 | +33.7552 | +0.0675481 | +0.208894 | +33.7552 | +0.00371171 | +0.0638731 | +24.5070 | +0.250954 | +0.00639925 | +23.7933 |
+| `AttackCostDoubled` | NN | +0.0 | +0.000228009 | +108 | +0.179127 | +0.110313 | +60.0000 | +0.179127 | +0.037436 | +58.9422 | +0.0304912 | +0.145922 | +41.1712 | 0.0 |
+| `UnitTechCredit` | NN | +1.0 | +0.125233 | +0.961045 | 0.0 | +0.113913 | +0.830687 | +0.00445589 | +0.0447474 | +1.1788 | 0.0 | **-0.0240777** | +1.9276 | +0.0405084 |
+| `TechBoardCredit` | NN | +1.0 | +0.00322966 | +0.0653851 | +0.257795 | +0.0301702 | +0.0246636 | +0.0840707 | +0.00573934 | 0.0 | +0.0526186 | **-0.316818** | **-25.4575** | **-0.105535** |
+| `ActionBoardCredit` | NN | +1.0 | +1.1376 | +0.0760927 | +0.0559499 | +1.2289 | +0.114432 | +0.0427494 | +0.675036 | +0.14484 | +0.0524401 | +0.171899 | +0.0676581 | **-0.0715652** |
+| `GovBoardCredit` | NN | +1.0 | 0.0 | +0.773875 | 0.0 | 0.0 | +0.476583 | 0.0 | 0.0 | +0.615308 | 0.0 | +0.112752 | +0.855364 | **-0.172195** |
+| `WonderBoardCredit` | NN | +0.0 | +0.119367 | +0.0421583 | +0.111142 | 0.0 | +0.0115825 | +0.167371 | 0.0 | +0.122692 | +0.108665 | +0.0248488 | +0.525331 | +0.0894513 |
+| `BuildFreshCredit` | NN | +0.0 | +0.467595 | +0.118365 | +0.0123157 | +0.250626 | +0.0919911 | +0.026486 | +0.00392097 | 0.0 | +0.0201343 | **-0.0517446** | +1.3948 | **-0.672819** |
+| `TerritoryCredit` | NN | +1.0 | +1.9167 | +0.394136 | +0.23245 | +0.569801 | +0.155173 | 0.0 | +0.0642715 | +0.0493274 | 0.0 | +0.0653957 | **-0.0685327** | **-0.275074** |
+| `AggressionBoardCredit` | NN | +0.3 | +0.156812 | +0.338355 | +0.399979 | +1.8717 | +0.170469 | +0.11035 | +1.1260 | +0.00862696 | +0.127335 | +0.112494 | **-0.0667255** | **-0.245198** |
+| `WarBoardCredit` | NN | +0.3 | +1.5285 | +0.0279503 | +0.759591 | +1.8480 | +0.0384705 | +0.786136 | +2.8861 | +0.0479469 | +1.1565 | +0.316544 | **-0.461114** | +0.432121 |
+| `EventBoardCredit` | NN | +0.3 | +0.658848 | +0.0982355 | 0.0 | +0.418877 | +0.0476706 | +0.00634916 | +0.180647 | +0.127068 | +0.0201114 | **-0.184416** | **-1.9751** | **-0.351836** |
+| `TacticReachCredit` | NN | +0.3 | +0.00785607 | +0.0164323 | +0.382872 | +0.0339193 | +0.154897 | +0.497982 | +0.0470875 | +0.0872033 | +0.846235 | **-0.411641** | **-0.071109** | +0.197084 |
+| `Discontent` | NP | -3.0 | -0.0561315 | -0.635331 | -0.439476 | -0.0158402 | -1.0816 | -0.439476 | -0.00588459 | -13.0172 | -0.295065 | -0.246148 | -0.764645 | -0.718499 |
+| `Uprising` | NP | -12.0 | -45.4325 | -11.3148 | -0.0731873 | -20.5170 | -5.3197 | -0.0731873 | -16.8512 | -12.4948 | 0.0 | -9.1045 | -6.8876 | 0.0 |
+| `StrengthDeficit` | NP | -0.6 | -0.278379 | -0.0416948 | -0.970005 | -2.0513 | 0.0 | -0.970005 | -0.452711 | -0.0483516 | -0.901234 | -1.7832 | -0.0575296 | -0.636358 |
+| `FamineDeficit` | NP | +0.0 | -0.241268 | 0.0 | 0.0 | -0.0170923 | 0.0 | 0.0 | ABSENT | ABSENT | ABSENT | ABSENT | ABSENT | ABSENT |
+| `ResourceCommitmentTurns` | NP | +0.0 | -0.0892406 | 0.0 | -0.00913578 | -0.150242 | -0.0380917 | 0.0 | ABSENT | ABSENT | ABSENT | ABSENT | ABSENT | ABSENT |
+LEGEND
+----------------------------------------------------------------
+  0.0       exact zero (see "EXACT 0.0" section -- for a gated key this
+            is the gate snapping the value, not unreachability)
+  ABSENT    key not present in that file (older basis; load fills it
+            from the authored default shown in the def column)
+  **bold**  gate violation in that cell
+
+EXACT 0.0 CELLS (28 of 348; 16 distinct keys)
+----------------------------------------------------------------
+  RestrictedResourceCredit (NN, def +1.0): 6 cells -- live 2p, live 4p,
+    clamp 2p, clamp 4p, postclimb 4p, preclimb 4p
+  CivilActionSurplus (NN, def 0.0): 3 -- live 3p, postclimb 3p, preclimb 3p
+  Wonders (NN, def +3.0): 7 -- live 2p/3p/4p, clamp 2p/4p, postclimb 2p,
+    preclimb 4p
+  HandValue (NN, def +0.5): 3 -- postclimb 2p, preclimb 2p, preclimb 3p
+  Uprising (NP, def -12.0): 2 -- postclimb 4p, preclimb 4p
+  StrengthDeficit (NP, def -0.6): 1 -- clamp 3p
+  FamineDeficit (NP, def 0.0): 4 -- live 3p/4p, clamp 3p/4p
+  ResourceCommitmentTurns (NP, def 0.0): 2 -- live 3p, clamp 4p
+  AttackCostDoubled (NN, def 0.0): 1 -- preclimb 4p
+  UnitTechCredit (NN, def +1.0): 2 -- live 4p, postclimb 4p
+  TechBoardCredit (NN, def +1.0): 1 -- postclimb 3p
+  GovBoardCredit (NN, def +1.0): 6 -- live 2p/4p, clamp 2p/4p,
+    postclimb 2p/4p
+  WonderBoardCredit (NN, def 0.0): 2 -- clamp 2p, postclimb 2p
+  BuildFreshCredit (NN, def 0.0): 1 -- postclimb 3p
+  TerritoryCredit (NN, def +1.0): 2 -- clamp 4p, postclimb 4p
+  EventBoardCredit (NN, def +0.3): 1 -- live 4p
+
+Reading: for a GATED key, exact 0.0 is the sign gate snapping the value
+to the boundary -- it does NOT mean the key is unreachable or dead.
+The same key is non-zero in other columns (e.g. Wonders is +18.1246 in
+clamp 3p and 0.0 in the other six 3p-adjacent cells; UnitTechCredit is
++0.8307 in clamp 3p and 0.0 in live 4p). Two structural notes:
+  * Wonders at 0.0 in ALL THREE live columns and in clamp 2p/4p, with
+    the 3p column carrying +18.1246 (clamp) / 0.0 (live): the 3p climb
+    is the one that has priced wonders; 2p/4p sit at the gate boundary.
+  * GovBoardCredit at 0.0 in 6 of 12 cells is the production case the
+    block-arm audit cited: the 4p champion's -0.1722 (preclimb) is
+    repaired to exactly 0.0 on every load -- visible in this matrix as
+    the value staying 0.0 across live/clamp/postclimb 4p.
+  * The NP keys FamineDeficit and ResourceCommitmentTurns sit at 0.0 in
+    half their cells: the climb has not found a negative to drive them
+    to, and the gate makes 0.0 the resting state, not a violation.
+
+GATE VIOLATIONS: 18 CELLS, ALL IN THE TWO PRE-FIX FROZEN COPIES
+----------------------------------------------------------------
+Zero violations in: all three LIVE files and all three clamp_ceiling
+2026-08-27 files (the current 174-key vocabulary).
+All 18 violations in: postclimb_2026-08-26 (8) + preclimb_2026-08-25
+(10), spread over 8 keys:
+
+  postclimb (frozen 2026-08-26 11:50, 57ec12e) -- 8 cells, 6 keys:
+    UnitTechCredit      2p  -0.0240777
+    TechBoardCredit     2p  -0.316818
+    TechBoardCredit     3p  -25.4575
+    BuildFreshCredit    2p  -0.0517446
+    BuildFreshCredit    4p  -0.672819
+    TerritoryCredit     3p  -0.0685327
+  preclimb (frozen 2026-08-25 10:31, cdcece5) -- 10 cells, 6 keys:
+    ActionBoardCredit   4p  -0.0715652
+    GovBoardCredit      4p  -0.172195
+    TechBoardCredit     2p  -0.316818
+    TechBoardCredit     3p  -25.4575
+    TechBoardCredit     4p  -0.105535
+    TerritoryCredit     3p  -0.0685327
+    TerritoryCredit     4p  -0.275074
+    AggressionBoardCredit 3p -0.0667255
+    AggressionBoardCredit 4p -0.245198
+    WarBoardCredit      3p  -0.461114
+    EventBoardCredit    2p  -0.184416
+    TacticReachCredit   2p  -0.411641
+    TacticReachCredit   3p  -0.071109
+    EventBoardCredit    3p  -1.97508
+    EventBoardCredit    4p  -0.351836
+  (8 + 10 = 18; 11 distinct (key, player-count) pairs; all 18 are
+  NN-gate keys -- the five NP keys are clean in every cell.)
+
+NOT A LIVE BUG. Explanation, dated:
+  * The frozen copies are byte-identical cp snapshots of the live
+    champion AT THE FREEZE MOMENT (md5 cross-checked: preclimb md5s
+    equal the "MATCH" values in analysis/clamp_spread_2026-08-25.txt).
+  * Commit 8576d25 (2026-08-25 10:33) -- "Write the dominance-repaired
+    value into every champion JSON" -- landed TWO MINUTES AFTER the
+    preclimb freeze (cdcece5, 2026-08-25 10:31). Before that commit the
+    climb repaired in memory (dominance_repair in load_weights and in
+    mutate, since f3ca694 2026-08-24 22:58 and earlier) but WROTE THE
+    UNREPAIRED VECTOR back to disk on promotion. The preclimb files
+    capture exactly that era: the on-disk champion carried the
+    pre-repair values.
+  * The postclimb files (frozen 2026-08-26, 163-key basis) carry the
+    same 6 violations on the older basis; the 08-26 climb was still on
+    the pre-8576d25 write path for those keys, or the violations
+    predate the write fix and the frozen vector is the last on-disk
+    state from before the repair wrote them back. Either way: the
+    frozen files are HISTORICAL, and the live/clamp files (all
+    post-fix) are clean.
+  * The 0.0 cells that appear in the live/clamp columns for the same
+    keys (GovBoardCredit 4p, TerritoryCredit 4p, UnitTechCredit 4p,
+    TechBoardCredit 3p, BuildFreshCredit 3p) are the REPAIRED values:
+    dominance_repair clamped the violator to exactly 0.0 and 8576d25
+    made that the value that gets written. The block-arm audit's
+    "GovBoardCredit's fallback is reached in production (the 4p
+    champion's -0.1722 is repaired to exactly 0.0 on every load)" is
+    confirmed by this matrix: -0.1722 in preclimb/postclimb 4p, 0.0 in
+    live/clamp 4p.
+
+WHY THE VIOLATIONS ARE IN THE OLD FILES AND NOT THE NEW ONES
+----------------------------------------------------------------
+The gate mechanism has been correct at both load time
+(load_weights -> dominance_repair, eval.rs:1099) and mutation time
+(mutate -> dominance_repair, climb.rs:401) since the SIGNAUDIT
+structural fix. What 8576d25 changed is the PERSISTED value: the
+champion JSON now stores the repaired vector, not the raw post-mutation
+one. So:
+  * Any champion file written BEFORE 2026-08-25 10:33 can carry a
+    gate violation in a block-arm key (or any gated key) -- the repair
+    ran in memory during the climb but the on-disk file was the raw
+    vector. The preclimb/postclimb frozen copies are exactly such
+    files.
+  * Any champion file written AFTER that timestamp is repaired by
+    construction. The live and clamp_ceiling files all postdate it
+    (clamp_ceiling frozen 2026-08-27 07:24; live gens 118815/66395/
+    21660 are well past the fix), and they show zero violations.
+  * This is consistent with the SIGNAUDIT finding that the gates were
+    "very nearly decorative" before the write fix: the climb could
+    walk a penalty weight positive (or a credit negative) in memory,
+    repair it for the next mutation, and still persist the illegal
+    value. The repair was doing its job in the run; the file just
+    didn't reflect it.
+
+FINDINGS (per the brief)
+----------------------------------------------------------------
+1. Zero of the 27 block-arm keys ever violates its own gate in any
+   LIVE or CURRENTLY-FROZEN snapshot. The 18 violations are all in
+   the two pre-8576d25 frozen copies and are a HISTORICAL ARTIFACT of
+   the pre-fix write path, not a live bug. The gate is holding.
+2. No block-arm key is at 0.0 in ALL 12 snapshots (no universally
+   dead key). The 16 keys that hit 0.0 in some cells are non-zero in
+   others; the 0.0 is the gate's resting boundary, not unreachability.
+3. The richest-magnitude cells are in the NN multipliers and the NN
+   stock keys: AttackCostDoubled +107.912 (live 3p), WarImmune
+   +33.7552 (live 4p), Uprising -45.4325 (live 2p, NP), TechRedundancy
+   Discount +12.0543 (live 3p), Wonders +18.1246 (clamp 3p). These are
+   the keys the climb has actually priced; the rest sit near their
+   authored defaults or at the gate boundary.
+4. The ABSENT cells (FamineDeficit, ResourceCommitmentTurns in the
+   four 163/160-key files) are vocabulary-age, not gate-related: those
+   keys postdate those freezes.
+
+RESIDUAL / SUGGESTED FOLLOW-UP
+----------------------------------------------------------------
+None. This was the one genuine residual the block-arm audit flagged
+("the 27 have no snapshot evidence base"). It is now closed: all 27
+keys have a measured value in every reachable snapshot, the gate is
+checked at every cell, and the only violations are accounted for by a
+dated, understood, already-fixed write-path artifact. The block-arm
+sign audit can be considered complete with no open items.
+
+Sources:
+  rust/src/bots/weighted/weights.rs:766-1177 (weight_key_table --
+      174 variants, snake_case names, authored defaults)
+  rust/src/bots/weighted/weights.rs:1480-2114 (sign_intent, the 9
+      block arms; gate classification)
+  rust/src/bots/weighted/eval.rs:860-902 (non_positive_gates /
+      non_negative_gates derived from sign_intent)
+  rust/src/bots/weighted/eval.rs:923 (dominance_repair)
+  rust/src/bots/weighted/eval.rs:1099 (load_weights applies
+      dominance_repair)
+  rust/src/bin/climb.rs:391-401 (mutate applies dominance_repair;
+      the "very nearly decorative" doc comment)
+  analysis/block_arm_sign_intent_audit_2026-08-27.txt (commits
+      a464670, 91739cc -- the gate structure this file measures
+      against)
+  analysis/missing_sign_intents_2026-08-27.txt (same-day whole-match
+      parse; the 16/20/111 flat census this reconciles with)
+  analysis/clamp_spread_2026-08-25.txt (the preclimb md5s' MATCH
+      provenance)
+  git: 8576d25 (2026-08-25 10:33, write-repair fix), cdcece5
+      (2026-08-25 10:31, preclimb freeze), 57ec12e (2026-08-26 11:50,
+      postclimb freeze), f942741 (2026-08-27 07:24, clamp_ceiling
+      freeze), ca89c0e (2026-08-15, untrack live champions)
+================================================================
