@@ -1,0 +1,71 @@
+zero_bucket_split_2026-08-27.txt
+
+Question: which of the frozen champions weights that sit at exactly 0.0 were zeroed by
+the sign gate (dominance_repair snapping a wrong-sign value to 0.0) and which are
+simply never-moved authored defaults? The two look identical on disk but only the
+first is a gate effect. Split: A = non-zero authored default AND gated -> PROVEN
+snap; B = authored default 0.0 AND gated -> ambiguous; C = authored default 0.0 AND
+Free -> untouched, nothing to explain.
+
+Setup: 522 (key, count) pairs from analysis/frozen/clamp_ceiling_2026-08-27/ (generations
+116808 / 65450 / 21445, 174 keys each; md5 2p 3235237de6f91a47ff3c4731c6bdae10,
+3p fb76db9f1c50bce98148c9783d07c0c0, 4p e350ff5dad785e30dbfe19b3b7626c30). Authored
+defaults from the weight_key_table! invocation in weights.rs (174 rows; 85 non-zero,
+89 at 0.0). Sign intent from the live sign_intent match, re-parsed fresh for this
+run: 174/174 variants, 111 Free / 38 NonNegative / 25 NonPositive.
+
+Zero (key, count) pairs on the frozen set: 26  (2p: 7, 3p: 3, 4p: 16)
+
+Per bucket, per player count:
+
+                 A (proven snap)    B (ambiguous)     C (untouched Free)   total zeros
+  2p              3                  4                  0                   7
+  3p              1                  2                  0                   3
+  4p              5                  8                  3                   16
+  TOTAL             9                  14                 3                   26
+
+Bucket A -- PROVEN snap (non-zero authored default, gated, sitting at 0.0): 9
+These CANNOT be untouched defaults, so the gate (or the repair threshold) took real
+magnitude away. These are the only ones worth attention.
+
+  gov_board_credit                 2p   intent=NonNegative  authored default=1.0
+  restricted_resource_credit       2p   intent=NonNegative  authored default=1.0
+  wonders                          2p   intent=NonNegative  authored default=3.0
+  strength_deficit                 3p   intent=NonPositive  authored default=-0.6
+  gov_board_credit                 4p   intent=NonNegative  authored default=1.0
+  pact_board_credit                4p   intent=NonNegative  authored default=0.3
+  restricted_resource_credit       4p   intent=NonNegative  authored default=1.0
+  territory_credit                 4p   intent=NonNegative  authored default=1.0
+  wonders                          4p   intent=NonNegative  authored default=3.0
+
+  Note: restricted_resource_credit escaped 0.0 on the LIVE 3p arm (0.0 -> +0.0057479888
+  between gens 65079 and 65100, and unit_strength_credit 0.0 -> +0.0162686177 in the
+  same window), i.e. a gate-zeroed key CAN leave zero via a mutation landing on the
+  allowed side -- so "proven snap" means the snap happened, not that the zero is
+  permanent.
+
+Bucket B -- AMBIGUOUS (authored default 0.0, gated): 14
+Equally could be a snap of a wrong-sign excursion or a key the climb has not mutated
+yet; no way to tell from the file.
+
+  2p: hand_limit  military_action_gap  no_aggression  wonder_board_credit
+  3p: famine_deficit  free_action_credit
+  4p: famine_deficit  free_action_credit  free_worker_wall  hand_perishable  happy_margin_after_next_pop  military_action_gap  resource_commitment_turns  row_playable_count
+
+Bucket C -- UNTOUCHED (authored default 0.0, Free intent): 3
+Nothing to explain: default is 0.0, no gate applies.
+
+  rival_culture_deficit            4p   Free   authored default=0.0
+  rival_science_deficit            4p   Free   authored default=0.0
+  rival_wonder_deficit             4p   Free   authored default=0.0
+
+Amendment to gate_bound_interaction_2026-08-27.txt section 3: it listed 23 gated zeros
+(7/3/13) and called them gate-owned; that framing is superseded in two ways.
+  (a) The zero set is actually 26 (7/3/16): the 4p arm of the frozen file carries 3 more
+  zeros than that census had (rival_culture_deficit, rival_science_deficit,
+  rival_wonder_deficit -- all Free, bucket C). The 23 gated zeros are unchanged, but
+  of those 23 only 9 are proven snaps (bucket A); the other 14 are ambiguous (bucket B).
+  (b) Of the 14 ambiguous, several are the hinge keys authored at 0.0 on 2026-08-27
+  (famine_deficit, free_worker_wall, ...), so "the climb has not mutated it yet" is the
+  likelier explanation on the young 4p arm in particular.
+
