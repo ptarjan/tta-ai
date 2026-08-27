@@ -1,0 +1,62 @@
+RivalCultureDeficit trace notes, 2026-08-27
+=============================================
+
+Task: add WeightKey::RivalCultureDeficit following the RivalScienceDeficit
+template (commits a320960 + fa3ccc2) and RivalWonderDeficit (21a3c3e + c86ac9f).
+
+UNIT-COMPARABLE RATE CHECK (the one thing that could stop this)
+-----------------------------------------------------------------
+Traced rust/src/bots/weighted/features.rs's `--- rivals` block (function
+`features`, same function RivalScienceDeficit's hinge lives in):
+
+  - features.rs:654  let mut rival_culture_rate = f64::from(ctx.rival_culture_rate);
+  - features.rs:667-676  loop over rivals, maxing in
+      ctx.rival_rates[pi].0 (base_culture) + pg.get(GainFeature::CultureRate)
+    the SAME shape as rival_science_rate's max-loop two lines below it
+    (base_science + pg.get(GainFeature::ScienceRate)).
+  - ctx comes from rivals::rival_context / rivals::rival_rates (rivals.rs),
+    which computes (culture_rate, science_rate, strength) triples per rival
+    with the SAME formula family for culture as for science -- confirmed by
+    reading rivals.rs's rival_rates: it derives all three from the same
+    per-player GainFeature-based projection, so rival_culture_rate is class B
+    exactly like rival_science_rate (never consults the candidate move; this
+    loop only reads state.players and ctx, both fixed for the turn).
+
+  - Own side: features.rs:686
+      f.set(WeightKey::CultureRate, f64::from(s.culture) + g(GainFeature::CultureRate));
+    computed in the SAME "--- economy" block, two lines above
+    WeightKey::ScienceRate (features.rs:688), in the SAME units: both sides
+    are "culture + CultureRate gain", exactly mirroring the science pair
+    ("science + ScienceRate gain") the spec commit cites.
+
+  - f.set(WeightKey::CultureRate, ...) runs BEFORE the `--- rivals` emit
+    block (same ordering as ScienceRate/RivalScienceDeficit), so
+    f.get(WeightKey::CultureRate) is available when the hinge is computed.
+
+CONCLUSION: rival_culture_rate (local, class B, computed in the same rival
+max-loop as rival_science_rate) and WeightKey::CultureRate (own side, already
+on `f`, same units) are unit-comparable exactly the way rival_science_rate /
+WeightKey::ScienceRate are. The RivalScienceDeficit/RivalWonderDeficit hinge
+design TRANSFERS. Proceeding to implement RivalCultureDeficit.
+
+SIGN_INTENT classification (my own verdict, not copied from StrengthDeficit)
+-----------------------------------------------------------------------------
+Free. Checked RULES_SPEC for any chapter that ties trailing an opponent's
+culture RATE to a rules-imposed penalty the way the combat chapter ties
+relative military weakness to losing fights (StrengthDeficit = NonPositive).
+Culture in this game scores points and unlocks age advancement pace; there is
+no rules mechanism that punishes a player merely for having a lower culture
+RATE than a rival -- unlike military strength, a lagging culture rate does
+not expose the player to a rules-triggered adverse outcome, only to the same
+kind of long-run opportunity cost RivalScienceDeficit and RivalWonderDeficit
+were both already classified Free for (RivalScienceDeficit's science-rate
+lag costs "opportunity ... to reach later techs first"; RivalWonderDeficit's
+wonder-count lag has no established direction). RivalCultureRate itself
+(the key this new key nets against) is already classified Free in the
+existing WeightKey table, same as RivalScienceRate was before
+RivalScienceDeficit landed. No new chapter citation changes that reading for
+the netted/hinged form either. Verdict: Free.
+
+Result (to be filled in after featspread measurement): see weights.rs comment
+on WeightKey::RivalCultureDeficit's p95_candidate_spread table entry, and the
+commit message for the fire-rate numbers.

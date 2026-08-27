@@ -1093,6 +1093,20 @@ pub fn features(
         WeightKey::RivalScienceDeficit,
         (rival_science_rate - f.get(WeightKey::ScienceRate)).max(0.0),
     );
+    // `rival_culture_rate` (set above) is class B for the identical reason
+    // `rival_science_rate` is (this function's own comment two lines above):
+    // the rival max-loop that computes it never consults the candidate move,
+    // so it drops out of the argmax on its own. My own culture rate DOES
+    // vary across candidates, and is already on `f` at `CultureRate`
+    // (`--- economy`, above) in the same units (`culture + CultureRate`
+    // gain, both sides -- both read off `effects::compute`'s `.culture`
+    // field, own vs. rival) -- netting against it, the same
+    // `StrengthRel`/`StrengthDeficit`/`RivalScienceDeficit` hinge shape, is
+    // the only way this fact enters search at all.
+    f.set(
+        WeightKey::RivalCultureDeficit,
+        (rival_culture_rate - f.get(WeightKey::CultureRate)).max(0.0),
+    );
 
     // --- the events I planted myself (GAP 4). Legal by construction --
     // `my_seeds` filters on `seeded_by == idx` and reads no pile order.
@@ -2631,6 +2645,54 @@ mod tests {
         state.players[1].science_rate_extra = 9;
         assert_eq!(
             features(&state, 0, None, None, false).get(WeightKey::RivalScienceDeficit),
+            4.0,
+            "rival rate 9 vs my rate 5 must read as a deficit of exactly 4.0"
+        );
+    }
+
+    /// `WeightKey::RivalCultureRate` (the local `rival_culture_rate` this key
+    /// nets against, `--- rivals` block above) is class B for the identical
+    /// reason `RivalScienceRate` is (this file's own comment on that key's
+    /// emit): the rival max-loop that computes it (this function, `---
+    /// rivals` section start) never consults the candidate move, so it is
+    /// the SAME number on every candidate at a given turn and drops out of
+    /// the argmax entirely. Netting it against MY OWN culture rate
+    /// (`WeightKey::CultureRate`, which candidates DO move) is the only way
+    /// this fact enters search at all, following `RivalWonderDeficit`'s and
+    /// `RivalScienceDeficit`'s exact `max(0, rival - self)` shape. One-sided
+    /// by construction: tied or ahead of the best rival's rate reads exactly
+    /// 0.0 regardless of margin; behind reads exactly the gap, `N`.
+    #[test]
+    fn the_rival_culture_deficit_is_zero_when_i_am_not_behind() {
+        // Tied at zero each (fresh game, no culture-rate bonus either side).
+        let mut state = G::new_game(2, 51);
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalCultureDeficit),
+            0.0,
+            "tied at zero culture rate each must not read as a deficit"
+        );
+
+        // Ahead: I hold a permanent culture-rate bonus, the rival still has none.
+        state.players[0].culture_rate_extra = 5;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalCultureDeficit),
+            0.0,
+            "leading the rival's culture rate must not read as a deficit"
+        );
+
+        // Behind: the rival's rate rises past mine.
+        state.players[1].culture_rate_extra = 8;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalCultureDeficit),
+            3.0,
+            "rival rate 8 vs my rate 5 must read as a deficit of exactly 3.0"
+        );
+
+        // Widen the gap by exactly one more -- pinning the hinge as the gap
+        // `N`, not a 0/1 indicator.
+        state.players[1].culture_rate_extra = 9;
+        assert_eq!(
+            features(&state, 0, None, None, false).get(WeightKey::RivalCultureDeficit),
             4.0,
             "rival rate 9 vs my rate 5 must read as a deficit of exactly 4.0"
         );
