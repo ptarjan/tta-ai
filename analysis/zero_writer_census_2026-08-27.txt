@@ -1,0 +1,110 @@
+exact-zero weight writers, rust/src (2026-08-27)
+==================================================
+Hypothesis under test: a repair/clamp step writes a literal 0.0 over a fitted
+near-zero, so a key sits at exactly 0.0 in one player-count lineage while the
+other two lineages keep a non-zero fit.
+
+CONCLUSION: CONFIRMED. There are exactly TWO code sites in rust/src that assign
+an exact 0.0 to a weight value, and both are in dominance_repair
+(rust/src/bots/weighted/eval.rs). Both are the sign-gate repair, and BOTH are
+the mechanism that explains a key at exactly 0.0 in one lineage. Every other
+0.0 that ever reaches a champion file is either a default or a value the climb
+itself happened to fit -- never a repair.
+
+THE TWO EXACT-0.0 WRITERS (both in dominance_repair, eval.rs)
+-------------------------------------------------------------
+1. NonPositive gate -- eval.rs:984
+     for (k, why) in non_positive_gates() {          // SignIntent::NonPositive
+         let v = out.get(k);
+         if v > 1e-12 {                              // a POSITIVE violator
+             ... out.set(k, 0.0);                    // eval.rs:984
+         }
+     }
+   Condition: the key's SignIntent is NonPositive AND its loaded value is
+   strictly > 1e-12. A key that a climb drove slightly positive (a "fitted
+   near-zero" that crossed to +0.0004, for example) is snapped to EXACTLY 0.0.
+
+2. NonNegative gate -- eval.rs:997
+     for (k, why) in non_negative_gates() {          // SignIntent::NonNegative
+         let v = out.get(k);
+         if v < -1e-12 {                             // a NEGATIVE violator
+             ... out.set(k, 0.0);                    // eval.rs:997
+         }
+     }
+   Condition: the key's SignIntent is NonNegative AND its loaded value is
+   strictly < -1e-12. A key the climb drove slightly negative is snapped to
+   EXACTLY 0.0.
+
+Both are pure, idempotent, and run on EVERY load (parse_weights calls
+dominance_repair on the way out, eval.rs:1099) and again after every climb
+mutation (climb.rs:278 repair_to_bounds, and the mutation pass at
+climb.rs:410). So a key can be at exactly 0.0 in a saved champion file ONLY if
+(a) it was authored/fitted at 0.0, or (b) dominance_repair snapped a small
+wrong-sign value to 0.0 on the load that produced that file.
+
+WHY THIS IS THE WHOLE EXPLANATION FOR THE CENSUS
+-----------------------------------------------
+The census (champion_zero_in_one_census_2026-08-27.txt) found 11 keys exactly
+0.0 in one count and non-zero in both others. Every one of the 11 is a
+sign-gated key, so each of its 0.0s is either a genuine fit OR a dominance_repair
+snap:
+
+  key                          zero at   SignIntent      gate that can snap it
+  hand_limit                   3p        NonNegative     eval.rs:997 (neg -> 0.0)
+  pact_board_credit            4p        NonNegative     eval.rs:997
+  row_playable_count           4p        NonNegative     eval.rs:997
+  territory_credit             4p        NonNegative     eval.rs:997
+  unit_strength_credit         3p        NonNegative     eval.rs:997
+  wonder_stages_per_action     3p        NonNegative     eval.rs:997
+  wonders                      2p        NonNegative     eval.rs:997
+  military_action_gap          4p        NonPositive     eval.rs:984 (pos -> 0.0)
+  no_aggression                2p        NonPositive     eval.rs:984
+  resource_commitment_turns    4p        NonPositive     eval.rs:984
+  strength_deficit             3p        NonPositive     eval.rs:984
+
+SignIntent assignments (weights.rs sign_intent arms): HandLimit 1489,
+UnitStrengthCredit 1490, WonderStagesPerAction 1491 (arm 1489-1491,
+NonNegative); PactBoardCredit 1532 (NonNegative); Wonders 1562 (arm
+1562-1564, NonNegative); RowPlayableCount 1573 (NonNegative);
+TerritoryCredit 2042 (arm 2041-2046, NonNegative); MilitaryActionGap 1589
+(arm 1588-1603, NonPositive); StrengthDeficit 1618 (arm 1618-1620,
+NonPositive); NoAggression 1923 (NonPositive); ResourceCommitmentTurns 1660
+(arm 1660-1662, NonPositive).
+
+Because each of the 11 is gated, a small wrong-sign fit in ONE lineage is
+snapped to exactly 0.0 by the matching gate, while the same key in the other
+two lineages carries a small CORRECT-sign fit (non-zero, below the 1e-12
+threshold so it is left alone). That is precisely "0.0 in one, non-zero in
+both" -- and it is a fitted near-zero, not an unreachable key, exactly as the
+coordinator's framing predicted.
+
+WHAT DOES NOT WRITE AN EXACT 0.0
+--------------------------------
+- clamp() (climb.rs:235-242) and repair_to_bounds (267-279): these pin to
+  `bound.copysign(x)`, a NON-zero boundary value. They never produce 0.0 (a
+  value whose |x| > bound is set to ±bound, not 0; a value already inside the
+  bound is left as-is). So the clamp rail cannot create an exact 0.0.
+- The NET_NONNEG_PHASE loop (eval.rs:927-941) and the CardBoardCredit
+  per-type loop (eval.rs:961-973) write `out.set(mk, -base)` / `out.set(k,
+  -card_board_base)` -- a value that is -base, which is 0.0 only if base is
+  0.0. These CAN write a 0.0, but only when the base is itself 0.0 (a
+  degenerate case); in the census's 11 keys none of these bases is the
+  operative mechanism -- the two sign-gate loops are. (Listed here for
+  completeness; not the explanation.)
+- The DOMINATES loop (eval.rs:1010-1022) writes `out.set(hi, b)`, copying the
+  dominated key's value. It is 0.0 only if `b` is 0.0. Same degenerate caveat.
+- parse_weights (eval.rs:1067): missing keys keep `Weights::defaults()`
+  (eval.rs:1067), many of which are authored 0.0 -- but those are DEFAULTS
+  (the key was never specified in the file), not a repair over a fitted value.
+  The census explicitly excluded keys absent from a file (the 3p missing
+  keys), so this is not what produced the 11.
+
+BOTTOM LINE
+-----------
+A repair DOES write an exact 0.0 over a fitted near-zero: dominance_repair's
+NonNegative gate (eval.rs:997) for keys the climb drove slightly negative, and
+its NonPositive gate (eval.rs:984) for keys it drove slightly positive. Both
+run on every load and every mutation. All 11 census keys are sign-gated, so
+each 0.0 is either a genuine 0.0 fit or one of these snaps -- in either case a
+fitted near-zero in one lineage, not an unreachable key. The clamp rail and the
+other repair loops do not independently create an exact 0.0.
