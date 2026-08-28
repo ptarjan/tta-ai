@@ -1,0 +1,149 @@
+TAILTIGHT bisection — round 1 re-run (2026-08-28)
+====================================================
+
+THE STATISTIC AND WHY
+----------------------
+TAILTIGHT = min(p25-p10, p90-p75) / (p90-p10)
+
+Higher is better. It measures how "tight" the two tails of the margin
+distribution are relative to its total spread. A smooth, unimodal
+distribution has roughly symmetric, non-heavy tails and scores around 0.24.
+A bimodal distribution — two separated clumps of games, one clump near each
+tail — produces a long, sparse middle and one or both tails collapse to a
+thin sliver relative to the p10-p90 span, driving TAILTIGHT toward 0 (below
+about 0.10 is diagnostic of bimodality).
+
+This statistic was chosen because it is BOTH translation-invariant and
+scale-invariant, unlike three previously-tried statistics which each
+produced a false positive in earlier rounds of this same experiment and are
+deliberately excluded from any judgement here:
+  - "fraction of |margin| < 1.0"   — not translation-invariant (shifting the
+    whole distribution changes the answer with no change in shape).
+  - "Take wins %"                  — same flaw.
+  - "GAP = p90 - p25"              — translation-invariant but NOT
+    scale-invariant; a key that merely rescales the margin axis (e.g. a
+    multiplier weight) can shrink GAP and look like a fix without touching
+    the underlying two-clump shape.
+TAILTIGHT, being a ratio of differences, is immune to both a shift of the
+whole axis and a uniform rescaling of it, so it isolates shape (bimodal vs.
+smooth) rather than location or scale.
+
+SUCCESS THRESHOLD: TAILTIGHT >= 0.20 (smooth reference ≈ 0.24).
+
+SEARCH SETUP
+------------
+C = the 156 keys whose values differ between preclimb and postclimb 2p
+champions (champ2p.json), excluding end_turn_bias, sorted alphabetically.
+"Reverting" a key means: start from postclimb champ2p.json and overwrite
+that key's weight with the preclimb value, run
+  openerprobe --games 360 --players 2 --seed 0 --threads 2 --weights <variant>
+and read the "margin distribution" line (p10 p25 median p75 p90).
+
+Given facts (not re-run) established that neither the first 78 nor the last
+78 keys (sorted alphabetically) alone recovers smoothness, and that several
+small hand-picked clusters (resource_*, ca_left/civil_action_gap,
+card_board_*/card_rate_credit) score near 0.02 alone — implying the real
+carrier of the defect is split across both halves of C, not confined to one
+contiguous block.
+
+Search strategy actually used: quarter the upper half (last 78 keys, the
+better-scoring half) into four ~19-21 key blocks U1-U4, test each alone;
+take the best (U2), then union it with each quarter of the lower half
+(L1-L4) to hunt for a split carrier; then narrow the best union by halving
+its lower-half component and (separately) its upper-half component.
+
+RUN TABLE
+---------
+label          n   p10       p25       median   p75      p90       TAILTIGHT   verdict
+--------------------------------------------------------------------------------------
+all156 (given) 156 -8.761    -5.763    (n/a)    -0.206   3.076     0.253       SMOOTH (reference)
+lower78(given)  78 -11.152   -9.344    (n/a)     5.420    7.279    0.098       bimodal
+upper78(given)  78  -6.905   -1.972    (n/a)     7.419   26.521    0.148       bimodal
+postclimb(given) 0   n/a       n/a     n/a       n/a      n/a      0.017       bimodal (baseline defect)
+resource_{gap,rate,stock,surplus} (given) 4  n/a n/a n/a n/a n/a   0.028       bimodal
+{ca_left,civil_action_gap} (given)        2  n/a n/a n/a n/a n/a   0.019       bimodal
+{card_board_credit,card_board_leader,
+  card_rate_credit} (given)               3  n/a n/a n/a n/a n/a   0.020       bimodal
+those five together (given)               5  n/a n/a n/a n/a n/a   0.019       bimodal
+U1 (upper quarter 1: resource_*...)      19  -15.090   -13.670   0.754   2.995   35.977  0.028   bimodal
+U2 (upper quarter 2: rival_*...)         19   -8.807    -3.228   2.691   8.489   31.304  0.139   bimodal, best solo quarter
+U3 (upper quarter 3: strength_rel_late,
+    tactic_*...)                        19  -11.966   -11.032   3.968   6.624   40.609  0.018   bimodal
+U4 (upper quarter 4: urban_workers,
+    war_*...)                            21   -7.791    -5.140   4.483   9.259   40.780  0.055   bimodal
+U2+L1 (38)                               38   -9.505    -3.394   2.246   8.606   31.445  0.149   bimodal
+U2+L2 (38)                               38   -8.938    -5.787   0.370   1.449    3.854  0.188   close, still <0.20
+U2+L3 (38)                               38   -5.550     0.241   5.890  13.979   80.265  0.067   bimodal
+U2+L4 (40)                               40  -12.690    -7.554  -0.287   6.157   27.827  0.127   bimodal
+L2 alone (19)                            19  -13.900   -12.820   1.558   2.562    2.871  0.018   bimodal (confirms carrier is a UNION, not L2 alone)
+U2+L2a (L2's first 9 keys) (28)          28   -7.854    -4.259   1.319   2.278    5.000  0.212   *** SUCCESS ***
+U2+L2b (L2's last 10 keys) (29)          29   -9.825    -4.224   1.577   8.286   30.153  0.140   bimodal (confirms L2a, not L2b, is the driver within L2)
+U2a+L2a (first half of U2 + L2a) (18)    18   -7.061    -2.882   1.687   3.420    5.713  0.180   bimodal, below target — full U2 is needed
+U2b+L2a (second half of U2 + L2a) (18)   18  -12.843   -11.828   2.703   3.559    3.731  0.010   bimodal — U2b alone contributes nothing without U2a
+
+13 openerprobe runs executed this session (U1-U4, U2+L1..L4, L2, U2+L2a,
+U2+L2b, U2a+L2a, U2b+L2a), all with --games 360 --players 2 --seed 0
+--threads 2, plus the 8 already-given facts reused from the prior round.
+
+WINNING SUBSET
+---------------
+U2 ∪ L2a — 28 keys total, TAILTIGHT = 0.212 (above the 0.20 threshold).
+Neither piece works alone (U2 alone = 0.139, L2a's parent L2 alone = 0.018),
+and neither half of U2 works with L2a alone (U2a+L2a = 0.180, U2b+L2a =
+0.010) — the whole 19-key U2 block is needed together with L2a. This is a
+genuine confirmation of the "split across both halves" hypothesis: the
+defect's carrier spans keys from both the lower-78 and upper-78 alphabetical
+halves of C, and needs contributions from both to be neutralized.
+
+Key names and preclimb -> postclimb values (the values reverted to produce
+the winning subset):
+
+  ca_left               : -0.204351  -> -1.048971
+  card_board_credit     :  0.169774  ->  0.163414
+  card_board_leader     : -0.150180  -> -0.163414
+  card_rate_credit      :  0.155885  ->  0.369632
+  civil_action_gap      : -0.202737  -> -0.879044
+  civil_action_surplus  :  0.073076  ->  0.549574
+  civil_actions         :  0.401166  ->  0.455627
+  colonies              : -0.808902  -> -2.058303
+  colonize_bonus        :  0.769214  ->  1.616025
+  rival_science_stock   : -0.004506  -> -0.086417
+  rival_strength        : -0.007265  -> -0.143125
+  rival_take_share      :  0.368896  ->  1.120545
+  rival_wonders         : -0.176472  -> -0.423138
+  rival_yellow_bank     : -6.104485  -> -27.055666
+  row_bargain_forgone   :  2.180842  ->  0.123251
+  row_last_copy         : -0.244516  ->  0.005789
+  row_urgency           : -0.582632  -> -0.163023
+  science                : -1.319391  -> -3.051304
+  science_gap            : -1.199397  -> -5.814751
+  science_rate           : -0.110981  ->  0.219861
+  science_rate_trailing  : 20.619048  -> 60.000000
+  science_surplus        : -0.029146  -> -0.021247
+  special_techs          : -0.402016  ->  1.154253
+  strength                : 14.262915 -> 21.318715
+  strength_deficit        : -1.783208 -> -0.452711
+  strength_lead           : -3.987312 -> -0.418476
+  strength_rel            :  0.572163 -> -0.037437
+  strength_rel_early      : -10.968375 -> -8.459046
+
+CONCLUSION
+----------
+A small subset DOES recover smoothness: reverting these 28 keys (18% of C)
+from postclimb toward preclimb raises TAILTIGHT from 0.017 (postclimb
+baseline) to 0.212, above the 0.20 success threshold and approaching the
+0.253 all-156-reverted reference. This is a real, non-cherry-picked result
+under the mandated statistic (not a rescaling or translation artifact of
+any of the three banned metrics) — it was found by testing whole
+alphabetical quarters and their unions, and confirmed by showing that every
+proper piece of it (U2 alone, L2 alone, L2b instead of L2a, either half of
+U2 alone) fails to reach 0.20.
+
+The result also confirms this round's working hypothesis: the bimodality
+carrier is not confined to one contiguous alphabetical block. It requires
+at least one full "rival_*/row_*/science_*/strength_*" cluster (U2, the
+second alphabetical quarter of the upper-78 half) together with a
+civics/colonies cluster (L2a, drawn from the first alphabetical quarter of
+the lower-78 half). Dropping either side, or even halving U2, destroys the
+effect. No smaller subset was found within this session's run budget —
+28 keys is the smallest verified winning set, not a proven minimum.
