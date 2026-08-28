@@ -11,17 +11,29 @@ name: CI
 # automatically without it.
 #
 # Deliberately minimal: no secrets, no deploy step, no network fetch beyond
-# the standard toolchain action below (dtolnay/rust-toolchain, pinned to a
-# commit-addressable ref-less `stable` channel the same way `rustup` on the
-# dev boxes tracks stable).
+# the toolchain update below.
+#
+# This runs on a SELF-HOSTED runner (the mac mini, `actions-runner-tta/`),
+# not a GitHub-hosted one: this repo is private, so hosted minutes are
+# metered, and every run for a week was killed before its first step. Self-
+# hosted minutes are free. The repo must stay private for that to be safe --
+# a self-hosted runner executes whatever a workflow says, and this one runs
+# as the `pt` login with that account's full access.
 
 on:
   push:
   pull_request:
 
+# One machine, shared with the training league. Superseding a run instead of
+# queueing it keeps a push burst from stacking builds against the climb.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 60
     defaults:
       run:
         # Cargo commands run from rust/, never the repo root -- this crate's
@@ -32,12 +44,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      # The whole point of the gate is that it runs the LATEST stable clippy,
+      # which has caught lints the box's older toolchain could not see. But
+      # this box also builds the league binaries, so the toolchain step must
+      # update the `stable` CHANNEL and select it explicitly with `+stable` --
+      # never `rustup default`, which would repoint every other build here.
+      # `$HOME/.cargo/bin` is not on a launchd service's PATH.
+      - name: Update the stable toolchain
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup update stable --no-self-update
+          rustup component add clippy --toolchain stable
+          cargo +stable --version
 
       - name: cargo clippy (all targets, warnings deny)
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo +stable clippy --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo +stable test
