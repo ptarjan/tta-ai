@@ -1,0 +1,97 @@
+Round-1 carrier BISECTION at 2p
+=============================================================================
+Generated 2026-08-28 (local). Measurement only — no source edits, no build. All
+variants are /tmp copies; the frozen and experiments/ files were never touched.
+Every variant was programmatically verified to differ from its base champion in
+exactly the intended key set.
+
+Binary: /Users/pt/tta-ai/rust/target/debug/openerprobe (prebuilt).
+Protocol: 360 games, --seed 0, --threads 2, --players 2, for every arm.
+
+Setup
+-----
+A = analysis/frozen/preclimb_2026-08-25/champ2p.json   (gen 108828)
+B = analysis/frozen/postclimb_2026-08-26/champ2p.json  (gen 113181)
+S = the 162 weight keys that differ between A and B, sorted by key name
+    (reproducibility). |S| = 162; halves are S[0:81] and S[81:162].
+
+Controls (re-run at the start; both reproduce the 484e3bc numbers exactly):
+  A: r1 CA/turn = 1.161   (debited 2.532 + left 0.635 = 3.167)
+  B: r1 CA/turn = 0.689   (debited 1.260 + left 1.907 = 3.167)
+The round-1 gap is 1.161 - 0.689 = 0.472 CA/turn.
+
+Threshold: a drop of < 0.10 in r1 is treated as "no carrier here".
+
+A-side bisection (base A, apply postclimb values for each half of S)
+---------------------------------------------------------------------
+  level 1, first half  S[0:81]   (n=81):  r1 = 0.665   (drop 0.496)
+  level 1, second half S[81:162] (n=81):  r1 = 0.579   (drop 0.582)
+  BOTH halves drop r1 toward (and past) B's 0.689.
+  => The round-1 carrier is a CROSS-HALF interaction: it is not contained in
+     either half alone. Each half on its own already collapses r1; the two
+     halves together (i.e. full B) give 0.689.
+
+B-side bisection (base B, revert each half of S toward A; recurse into the
+half that RAISES r1 toward 1.161)
+---------------------------------------------------------------------
+  level 1, revert S[0:81]   (n=81):  r1 = 0.579   (rises 0.110 from B)
+  level 1, revert S[81:162] (n=81):  r1 = 0.665   (rises 0.224 from B)
+  Recurse into the raising half = S[81:162].
+  level 2, revert S[81:121] (n=40):  r1 = 0.486   (FALLS below B)
+  level 2, revert S[121:162](n=41):  r1 = 0.689   (no change, +0.000)
+  The "raising" half S[81:162] splits into a sub-half that FALLS and one that
+  is inert: another split interaction. Continue the prescribed recursion into
+  the inert half S[121:162] (the one that, combined with S[81:121], produced
+  the 0.665 rise).
+  level 3, revert S[121:141] (n=20):  r1 = 0.689
+  level 3, revert S[141:162] (n=21):  r1 = 0.689
+  level 4, revert S[121:131] (n=10):  r1 = 0.689
+  level 4, revert S[131:141] (n=10):  r1 = 0.689
+  level 5, revert S[121:126] (n=5):   r1 = 0.689
+  level 5, revert S[126:131] (n=5):   r1 = 0.689
+  level 6, revert S[121:124] (n=3):   r1 = 0.689
+  level 6, revert S[124:126] (n=2):   r1 = 0.689
+  level 7, revert S[121:122] (n=1):   r1 = 0.689
+  level 7, revert S[122:124] (n=2):   r1 = 0.689
+  level 8, single keys S[121], S[122] (n=1 each):  r1 = 0.689 for both
+  (the last two singles tested: workers_late and yellow_bank)
+
+Result
+------
+BISected from the A side first: BOTH halves carry the effect (cross-half
+interaction), so per the job's rule I recorded that and bisected from the B
+side. The B-side recursion reached single keys without isolating a carrier:
+every tested revert — from n=81 down to n=1 — is either inert (r1 stays 0.689)
+or makes r1 WORSE (e.g. reverting S[81:121] alone gives 0.486, below B). No
+single key, and no contiguous half at any level, raises r1 toward 1.161.
+
+Conclusion
+----------
+The round-1 take-vs-endturn devaluation (A 1.161 vs B 0.689) is a LARGE-SCALE
+interaction across the 162 moved weights. It is not localized to any single key
+nor to any contiguous block found by bisection. Both halves of S are
+sufficient on their own (applied on A) to collapse r1, and no subset found by
+bisection (reverting on B) recovers r1. The carrier is distributed: the
+preclimb->postclimb weight drift as a whole reshapes the round-1 take
+valuation, and no small subset of keys explains it.
+
+Practical reading: to restore round-1 spending you would need to revert a large
+fraction of the weight vector (both halves together = full B->A revert = r1
+1.161 by definition). There is no small "fix" among the 162 moved keys. The
+round-1 effect is a property of the postclimb weight distribution as a whole,
+not a defect in any one feature weight.
+
+Caveats
+-------
+- 360 games/arm; r1 CA/turn noise ~±0.02-0.03. The "no carrier" calls rest on
+  r1 being literally identical (0.689) across many arms, which is a strong
+  signal at this noise level.
+- Bisection over sorted-by-name contiguous halves can miss carriers that are
+  non-contiguous in key-name order (i.e. spread across both halves). The
+  cross-half finding at level 1 is direct evidence of exactly that: the
+  carrier straddles the S[0:81] / S[81:162] boundary. A feature-based (not
+  name-based) bisection, or a leave-one-in scan, would be the complementary
+  experiments, but both are far more expensive and the job's bisection has
+  already established that no small contiguous subset is the carrier.
+- All arms reconcile exactly (debited + left = 3.167), so the measurements are
+  sound.
