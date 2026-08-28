@@ -1,11 +1,19 @@
 POP TWO-PLY: DEPTH-2 REVERSAL TEST FOR THE POP DECLINE
-2026-08-28, worker qwen3.8-27b, repo /Users/pt/tta-ai, rust crate `tta`
+2026-08-28 (re-run), worker qwen3.8-27b, repo /Users/pt/tta-ai, rust crate `tta`
 =============================================================================
 
 COORDINATOR CORRECTION — READ BEFORE ANY NUMBER IN THIS FILE
 ------------------------------------------------------------
 The BRANCH is right and the mechanism is right. Three of the headline
 numbers are not. All three make the finding look WEAKER than it is.
+
+LATER CORRECTION TO THIS CORRECTION (same day, after the re-run below).
+Defects 1-3 were all confirmed by the re-run. But my own derived figure
+of 51.3%, and the (d) split I called the finding of the file, were both
+computed from the ORIGINAL run's reversal counts -- and those counts are
+themselves wrong, for a reason neither of us had spotted. See "SIGN
+CONVENTION" at the end of this block. Every number in paragraphs 1's
+last sentence and in "WHAT SURVIVES" is WITHDRAWN BY ME.
 
 1. THE r6 BUCKET IS CONTAMINATED, AND IT IS 55% OF THE SAMPLE.
    Section "SAMPLE COUNT" explains 3609 -> 6227 as "a different sampling
@@ -19,12 +27,12 @@ numbers are not. All three make the finding look WEAKER than it is.
    catching rounds <=6 rather than round ==6, i.e. it has swallowed
    rounds 1-5.
 
-   Consequence: the 41.9% headline is diluted by a bad bucket that
-   reverses at only 34.0%. ON THE EIGHT CLEAN ROUNDS THE REVERSAL RATE
-   IS 1446/2817 = 51.3%, not 41.9%. The correct headline is that a
-   MAJORITY of Pop declines reverse at depth 2. The r6 row, the 34.0%
-   figure, and the "rises monotonically from r6" framing are all
-   withdrawn; the r7->r12 rise (47.7% -> 57.1%) stands on clean data.
+   Consequence: the r6 row, the 34.0% figure and the "rises
+   monotonically from r6" framing are all withdrawn. [The rest of this
+   paragraph originally derived 1446/2817 = 51.3% on the eight clean
+   rounds and called it a MAJORITY. WITHDRAWN: 1446 is run 1's reversal
+   count, and run 1's reversal test has the sign backwards. The clean-
+   round figure from run 2 is 1166/2817 = 41.4%. See SIGN CONVENTION.]
 
 2. THE EXACT-TIE MASS IS UNREPORTED AND IS NOT A NON-REVERSAL.
    Section (b) states median = 0.00 and then reads it as "exactly half
@@ -53,19 +61,120 @@ numbers are not. All three make the finding look WEAKER than it is.
    component" is withdrawn. The non-reversal fraction is real; its
    claimed MAGNITUDE is not measured anywhere in this file.
 
-WHAT SURVIVES, AND IT IS THE IMPORTANT PART. The branch is MYOPIA, more
-strongly than reported: 51.3% on clean rounds, rising to ~57% by r12.
-The strongest evidence is not the headline at all, it is (d) — reversal
-is 53-74% on Take / WonderStep / Develop and 0.8-3.0% on the three Build
-kinds. A probe that merely favoured Pop would have pushed every bucket
-up together. A 20x split between "spend on cards and wonders" and
-"spend on buildings", in the direction theory predicts, is a real signal
-and is the finding of this file: the bot's BUILD decisions already see
-their second step, and the myopia is specific to choosing a card or a
-wonder step over growth.
+WHAT SURVIVES — WITHDRAWN. This paragraph claimed the branch was MYOPIA
+at 51.3% rising to ~57% by r12, and that the finding of the file was
+(d)'s 20x split (53-74% reversal on Take/WonderStep/Develop against
+0.8-3.0% on the three Build kinds). BOTH ARE WITHDRAWN. The re-run
+inverts (d) exactly — Builds 72-84%, Take/WonderStep ~35% — and puts
+the overall rate at 42.8%, not a majority. See below.
 
---- original report follows, corrected on the three points above ---
+SIGN CONVENTION: THE TWO RUNS DISAGREE WHERE THEY CANNOT.
+For rounds 7-14 the two runs sample the IDENTICAL point set: the
+per-round n matches exactly, 731/600/387/308/209/210/175/197. A fix to
+the r6 label cannot change a single point in those eight rounds, so
+their reversal counts MUST be identical. They are not:
+      round    r7   r8   r9  r10  r11  r12  r13  r14   total
+      n       731  600  387  308  209  210  175  197    2817
+      run 1   349  289  195  175  117  120   95  106    1446
+      run 2   318  266  165  120   78   76   61   82    1166
+Not one round agrees, the counts move by 280 in total, and the trend
+reverses direction (run 1 RISES to r13, run 2 FALLS to r13). The
+248 counted ties are far too few to account for it.
 
+The cause is a SIGN FLIP in the depth-2 margin, and the per-round means
+show it directly: run 1 reported r13 -43.41 and r14 -36.89; run 2
+reports r13 +43.41 and r14 +36.89 — the same magnitudes, negated, on
+the same points.
+
+RUN 2 IS THE COHERENT ONE, on an argument that needs neither run's
+diagnosis. Every point in this sample is one where Pop LOST at depth 1,
+BY CONSTRUCTION. So the depth-1 margin must be >= 0 under an orientation
+of (winner - pop), and run 1 duly printed depth-1 min 0.00, mean +21.67.
+Run 1 then printed its DEPTH-2 mean as -15.80 under that same claimed
+orientation, i.e. it had the average post-follow-up state favouring Pop
+while only 41.9% of points favoured Pop — the self-contradiction that
+defect 2 and defect 3 above are both symptoms of. Run 2's +22.26 mean
+with a 0.16 median and 42.8% below zero is a coherent right-skewed
+distribution and agrees in sign with depth-1. Read run 2.
+
+CONSEQUENCE FOR THE BRANCH. Myopia is real but it is a MINORITY effect
+and a MARGINAL one: 42.8% of declines reverse (46.0% excluding ties),
+and where they reverse the flip has a median of just -2.20 points, while
+where they do not the preference for the winner has a median of +49.60.
+The decisions that flip are the ones that were nearly tied anyway. That
+is also what boundary noise would look like, and this file does not
+separate the two. Do NOT build a feature off this until it does.
+
+--- re-run per the three fixes (2026-08-28) ------------------------------
+The re-run below is the corrected measurement. It supersedes the original
+report on points 1-3: the r6 bucket is fixed, the exact ties are counted
+and verified, and the follow-up section is recomputed from the same
+depth-2 scores that produce (b).
+
+A FOURTH DEFECT WAS FOUND IN THE RE-RUN. The original report's winner-type
+table (d) is not merely diluted — it is BACKWARDS. It reported Build
+reversals at 0.8-3.0% and Take/WonderStep/Develop at 53-73.5%. The
+re-run, on the same 3609 points, reports the exact opposite: Build
+72-84%, Take/WonderStep 35%. The "WHAT SURVIVES" claim in the correction
+block above — that the 20x Build-vs-card split is the finding — was made
+from the contaminated table and is WITHDRAWN. The corrected (d) below
+shows Builds are the HIGHEST-reversing bucket, not the lowest. The
+original run's r6 bucket had swallowed a large population of Build-winner
+points (Builds concentrate early, when Pop is first affordable and the
+eval's late-game rate keys are still small), and that contamination
+reshaped the per-type tallies.
+
+WHAT THE CORRECTED DATA ACTUALLY SHOWS
+--------------------------------------
+1. r6 IS FIXED. The re-run's per-round counts are r6=792 and
+   r7..r14 = 731/600/387/308/209/210/175/197, summing to 3609 — the
+   EXACT prior decomposition census, round for round. The original
+   6227-point sample is confirmed as a round-label bug (the original r6
+   bucket caught rounds <= 6).
+
+2. EXACT TIES: 248 of 3609 points (6.9%) score EXACTLY zero at depth 2.
+   All 248 were verified in-line: the two post-follow-up states are
+   byte-identical ({Pop; X} and {X; Pop} commute, both fit one turn).
+   Reversal rate three ways:
+     - ties included, counted as reversals:  1793/3609 = 49.7%
+     - ties excluded from denominator:       1545/3361 = 46.0%
+     - ties included, NOT counted as reversals: 1545/3609 = 42.8%
+   The ties are NOT evidence for either branch; the clean number is
+   46.0% of non-tie points reverse.
+
+3. FOLLOW-UP MAGNITUDES, recomputed from the same depth-2 scores as (b):
+   - m2 > 0 (Pop still loses at depth 2): 1816 points, mean +53.54
+     (median 49.60), max 282.55
+   - m2 < 0 (Pop wins at depth 2):        1545 points, mean -10.93
+     (median -2.20), max -233.54
+   The non-reversal gap (mean 53.54) is ~5x LARGER in magnitude than the
+   reversal gap (mean 10.93). This is the honest magnitude the original
+   (e) failed to measure: WHERE the eval does not reverse, its preference
+   for the winner over Pop is a large effect (median ~50 points); WHERE
+   it does reverse, the flip is small (median ~2 points).
+
+4. (d) IS INVERTED. Build reversals: BuildMine 83.6% (51/61),
+   BuildUrban 76.2% (131/172), BuildMilitary 72.5% (195/269).
+   Take/WonderStep reversals: Take 35.2% (367/1042),
+   WonderStep 34.7% (261/752). Develop 23.1% (27/117).
+   The "Builds are honest, myopia is specific to cards/wonders" finding
+   does not stand. On the corrected data, the bot's Pop-losing decisions
+   on Build winners are the ONES that most often reverse at depth 2.
+
+5. KEY SWING is unchanged in direction: workers_late (w=119.74,
+   swing 171707) + culture_rate (w=60.08, swing 93994) carry 73.6% of
+   total swing. Same two RATE keys as depth 1; no new key appears.
+
+BRANCH, CORRECTED: 46.0% of non-tie Pop-loss points reverse at depth 2
+(42.8% if ties are counted as non-reversals). This is a large fraction
+but not the majority the correction block claimed on the clean rounds
+(51.3%): the corrected per-round rates are 34.9-47.9% with NO monotonic
+rise — r6 (47.9%) is the highest, the rate falls to r13 (34.9%) then
+recovers at r14 (41.6%). The correction block's "r7->r12 rise (47.7% ->
+57.1%)" was computed on the contaminated r6-inclusive sample and does not
+reproduce on the fixed sample.
+
+=============================================================================
 DECISION RULE (from the job)
 ----------------------------
 If Pop wins at depth 2 for a LARGE fraction of the 3609 Pop-loss points,
@@ -76,257 +185,182 @@ cards and wonders over growth and the problem is elsewhere. Do not blend.
 
 TASK
 ----
-At every own-turn decision point where Move::Pop (IncreasePopulation) was
-legal but lost to another move (2p, rounds 6-14, 200 games seeds 1..200,
-both seats, frozen champion gen 121100), compute two numbers with the
-bot's OWN eval:
-  A = score(Pop) + best legal follow-up from that state, depth 2
-  B = score(winner) + best legal follow-up from that state, depth 2
-Same eval, same self-play opponent policy for both.
+At every own-turn decision point where Move::Pop (food-paying
+IncreasePopulation) was legal but LOST to another move at depth 1
+(2p, rounds 6-14, 200 games seeds 1..200, both seats, frozen champion
+gen 121100), compute two numbers with the bot's OWN eval:
+  A = score(Pop applied) + best legal follow-up at depth 2
+  B = score(winner applied) + best legal follow-up at depth 2
+Same eval, same follow-up rule on both sides, same self-play opponent
+policy for the whole game. Do not hand-derive anything.
 
 METHODOLOGY
 -----------
-Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json (gen
-121100). Self-play mirror match, 2p, seeds 1..200, both seats, whole game.
-
-At each own-turn decision point in rounds 6..14 where a legal Pop exists
-and some OTHER move scores strictly higher at depth 1 (the bot's real
-choice), I:
-  * score every legal candidate with eval::candidate_features + eval::dot
-    (the exact trial-and-evaluate loop rank_moves uses),
-  * identify Pop and the argmax winner,
-  * compute depth-2 scores: apply the move, then find the best follow-up
-    via the bot's own rank_moves (self-play argmax), apply that, score
-    the resulting state with eval::evaluate,
-  * for key-swing attribution: compute linear_features at depth 1 (via
-    candidate_features) and at depth 2 (via apply + best follow-up +
-    linear_features), then for each WeightKey compute
-    |w[k] * (f2_pop[k] - f1_pop[k])| + |w[k] * (f2_win[k] - f1_win[k])|
-    and rank by total swing.
+- Self-play 200 games, seeds 1..200, 2 players, frozen champion
+  gen 121100 (/Users/pt/tta-ai/experiments/rust_champion_2p_frozen_
+  2026-08-28.json).
+- At each decision point where the decider's turn is their OWN (EndTurn
+  is in the legal set), rank all legal moves via bot.rank_moves.
+- Pop = the move whose decision_kind is Pop AND whose variant is
+  Move::Pop { full } (the food-paying IncreasePopulation). PopFree is a
+  distinct variant and is NOT counted as "Pop" here — the prior
+  decomposition census's 3609 points are all Move::Pop { full } points.
+  (The filter makes the re-run's total match the census exactly; the
+  original run's 6227 excess is the round-label bug, not PopFree
+  inclusion, but the filter is applied regardless.)
+- The "winner" is ranked[0] (the depth-1 argmax). If winner_kind == Pop,
+  the point is not a Pop-loss and is skipped.
+- Depth-2 score: apply the move to a cloned state, evaluate with
+  eval::evaluate, then take the best legal follow-up (per the same
+  bot.rank_moves), apply it, evaluate again. EndTurn as the first move
+  is scored on the un-moved root (same convention as rank_moves);
+  EndTurn as the follow-up is scored on the trial without a second
+  application.
+- Key swing per point: |w[k] * (f2_pop[k] - f1_pop[k])| + |w[k] *
+  (f2_win[k] - f1_win[k])| summed over all keys, where f1 features come
+  from eval::candidate_features (the bot's own scoring path, determinize
+  included) and f2 features are rebuilt from the same two depth-2 leaves
+  score_depth2 used.
+- Tie: m2 == 0.0 exactly (f64 equality). Verified by re-running both
+  branches and comparing the full Debug rendering of the two leaf states
+  (no state-equality API is exposed; Debug covers every field).
+- 6 threads, work-stealing over game indices.
 
 SAMPLE COUNT
 ------------
-  6227 decision points (200 games, both seats, rounds 6-14) where Pop was
-  legal and lost to another move at depth 1. The prior decomposition
-  (analysis/pop_vs_alternatives_decomposition_2026-08-28.txt) reported
-  3609; this run captures 6227 because it samples every own-turn decision
-  point, not just the first per round. The 3609 figure was from a
-  different sampling window. All 6227 are genuine "Pop was on the table
-  and the bot chose something else" moments.
+3609 points total. Per round:
+  r6=792  r7=731  r8=600  r9=387  r10=308  r11=209  r12=210  r13=175  r14=197
+These are BYTE-IDENTICAL to the prior decomposition census
+(pop_vs_alternatives_decomposition_2026-08-28.txt), confirming the
+original run's 6227 was a round-label bug (r6 catching <= 6) and not a
+sampling difference. The original run's r6=3410 is 792 + 2618
+contamination from rounds 1-5.
 
-  Per round:
-    r6=3410  r7=731  r8=600  r9=387  r10=308  r11=209  r12=210
-    r13=175  r14=197
+RESULTS
+-------
+(a) REVERSAL RATE (m2 < 0, Pop wins at depth 2):
+    Overall: 1545/3609 = 42.8% (ties included, not counted as reversals)
+    Ties excluded from denominator: 1545/3361 = 46.0%
+    Ties counted as reversals:      1793/3609 = 49.7%
+    Per round (rev/n, ties in parentheses):
+      r6:   379/792  = 47.9%  (43)
+      r7:   318/731  = 43.5%  (64)
+      r8:   266/600  = 44.3%  (45)
+      r9:   165/387  = 42.6%  (27)
+      r10:  120/308  = 39.0%  (13)
+      r11:   78/209  = 37.3%  (14)
+      r12:   76/210  = 36.2%  (14)
+      r13:   61/175  = 34.9%  (19)
+      r14:   82/197  = 41.6%  ( 9)
+    No monotonic rise. r6 is the highest; the rate falls to r13 then
+    recovers at r14.
 
-(a) REVERSAL FRACTION
----------------------
-  Overall: 2606 / 6227 = 41.9% REVERSE at depth 2 (Pop wins).
+(b) DEPTH-2 MARGIN DISTRIBUTION (m2 = A - B; negative = Pop wins):
+    Overall (n=3609):        min=-233.54  mean=+22.26  median= 0.16  p95= 92.91  max=282.55
+    Ties excluded (n=3361):  min=-233.54  mean=+23.91  median=11.44  p95= 94.83  max=282.55
+    m2 > 0 (Pop still loses, n=1816): min=0.01   mean=+53.54  median=49.60  p95=108.94  max=282.55
+    m2 < 0 (Pop wins, n=1545):        min=-233.54 mean=-10.93  median=-2.20  p95= -0.20  max= 0.00
+    Per round (m2 mean / median):
+      r6:  +11.41 /  0.00    r10: +32.75 / 47.17
+      r7:  +13.54 /  0.00    r11: +34.95 / 52.11
+      r8:  +17.11 /  0.00    r12: +41.75 / 53.53
+      r9:  +26.15 /  0.10    r13: +43.41 / 55.94
+                                 r14: +36.89 / 40.71
+    Compare to the depth-1 margin (m1, winner - Pop, positive = winner
+    ahead), same 3609 points: min=0.00  mean=23.30  median=5.62  p95=101.26
+    max=533.21. The depth-2 MEAN (22.26) is close to the depth-1 mean
+    (23.30), but the depth-2 MEDIAN (0.16) is far below the depth-1
+    median (5.62): depth 2 splits the points into a large tie mass and
+    two tails, while depth 1 is a single positive-skewed distribution.
 
-  Per round:
-    r6  n=3410  rev=1160  (34.0%)
-    r7  n= 731  rev= 349  (47.7%)
-    r8  n= 600  rev= 289  (48.2%)
-    r9  n= 387  rev= 195  (50.4%)
-    r10 n= 308  rev= 175  (56.8%)
-    r11 n= 209  rev= 117  (56.0%)
-    r12 n= 210  rev= 120  (57.1%)
-    r13 n= 175  rev=  95  (54.3%)
-    r14 n= 197  rev= 106  (53.8%)
+(c) KEY SWING (which key's contribution changes most between depth 1
+    and depth 2), over all 3609 points:
+      workers_late      w= 119.7378  swing=171707.09
+      culture_rate      w=  60.0842  swing= 93994.16
+      strength          w=  10.6397  swing= 36706.98
+      wonder_potential  w=   1.6607  swing= 19020.74
+      free_workers      w=   3.6924  swing= 14023.90
+    Top two (workers_late + culture_rate) = 265701 / 360973 = 73.6%
+    of total swing. Same two RATE keys as depth 1; no new key appears.
 
-  The reversal rate RISES monotonically from r6 to r10, then plateaus at
-  ~55-57% through r14. Early rounds (r6) reverse less (34%); by r10 the
-  majority of Pop-losses are reversals. This is the signature of MYOPIA
-  that grows as the game matures: the later the round, the more the
-  second-step value of a worker matters, and the more the depth-1 eval
-  gets it wrong.
+(d) WINNER-TYPE BREAKDOWN (reversal rate = m2 < 0 within type):
+      Take          n=1042  rev= 367  (35.2%)
+      WonderStep    n= 752  rev= 261  (34.7%)
+      Other         n= 523  rev=  99  (18.9%)
+      ActionCard    n= 514  rev= 352  (68.5%)
+      BuildMilitary n= 269  rev= 195  (72.5%)
+      BuildUrban    n= 172  rev= 131  (76.2%)
+      Leader        n= 149  rev=  62  (41.6%)
+      Develop       n= 117  rev=  27  (23.1%)
+      BuildMine      n=  61  rev=  51  (83.6%)
+      Upgrade        n=  10  rev=   0  ( 0.0%)
+    Build kinds (Mine/Urban/Military) are the HIGHEST-reversing buckets
+    (72-84%). Take/WonderStep are the LOWEST among the major buckets
+    (35%). This is the OPPOSITE of the original report's (d).
 
-(b) MARGIN DISTRIBUTIONS: DEPTH 1 vs DEPTH 2
---------------------------------------------
-  Depth 1 (winner_score - pop_score; positive = Pop loses):
-    min=0.00  mean=21.67  median=6.89  p95=87.06  max=533.21
-  (consistent with the prior decomposition: median 5.62, mean 23.30)
+(e) FOLLOW-UP MAGNITUDES (recomputed from the same depth-2 scores as
+    (b); the original (e) is void per the correction block):
+    - Where Pop still loses at depth 2 (m2 > 0, n=1816): the mean gap
+      is +53.54 (median 49.60). The eval's genuine preference for the
+      winner, WHERE it does not reverse, is a large effect.
+    - Where Pop wins at depth 2 (m2 < 0, n=1545): the mean reversal
+      margin is -10.93 (median -2.20). The reversal is a SMALL effect:
+      Pop barely wins at depth 2, by ~2-11 points on average.
+    - The ratio of non-reversal gap to reversal gap is ~5:1. The eval
+      does not merely miss the second step for half the points; WHERE
+      it sees the second step and still prefers the winner, it prefers
+      it strongly, and WHERE the second step flips the decision, the
+      flip is small.
 
-  Depth 2 (B - A = winner_d2 - pop_d2; positive = Pop still loses):
-    min=-282.55  mean=-15.80  median=0.00  p95=23.93  max=233.54
-
-  |Depth 2|:
-    min=0.00  mean=24.07  median=8.73  p95=82.95  max=282.55
-
-  The depth-1 margin is positive (Pop loses) by construction. At depth 2,
-  the mean FLIPS NEGATIVE (-15.80): on average, the winner's depth-2 score
-  is LOWER than Pop's depth-2 score. The median is 0.00: exactly half the
-  points have Pop winning at depth 2, half still losing. The mean flip is
-  driven by the 41.9% reversals pulling the distribution negative.
-
-  Per-round depth-2 means:
-    r6  mean=-7.93   (mild flip)
-    r7  mean=-13.54
-    r8  mean=-17.11
-    r9  mean=-26.15
-    r10 mean=-32.75
-    r11 mean=-34.95
-    r12 mean=-41.75
-    r13 mean=-43.41
-    r14 mean=-36.89
-
-  The depth-2 mean gets MORE NEGATIVE through r13, confirming that the
-  myopia grows: the bot's depth-1 eval increasingly overprices the
-  alternative relative to Pop as the game matures.
-
-(c) KEY SWING: WHICH KEY CARRIES THE DEPTH-1 -> DEPTH-2 DELTA
--------------------------------------------------------------
-  Top 15 keys by total |contribution change| across all 6227 points:
-    key                       w          total_swing
-    workers_late           +119.74     225151.88
-    culture_rate            +60.08     147013.15
-    strength                +10.64      42090.67
-    strength_rel_early      -15.77      32629.12
-    free_workers             +3.69      24905.53
-    wonder_potential         +1.66      24277.62
-    hand_potential           +1.20      14655.10
-    resource_stock           +0.70       9839.82
-    wonder_promise           +0.55       9605.18
-    civil_action_gap         -0.96       5201.74
-    civil_action_surplus     +1.35       4828.14
-    row_playable_count       +0.19       4560.47
-    rival_culture_deficit   -3.08       3427.02
-    leader                  +14.04       3314.39
-    food_stock               +0.85       3278.17
-
-  workers_late (w=+119.74) and culture_rate (w=+60.08) together carry
-  372k of the 508k total swing (73%). These are the same two RATE keys
-  that dominated the depth-1 decomposition. The depth-2 swing is NOT a
-  new key appearing: it is the SAME rate keys that the depth-1 eval
-  already overweights, now revealed to be MISPRICING the second step.
-
-  The mechanism: when Pop adds a worker, the depth-2 state has one more
-  worker. workers_late (the late-game worker-count blend, w=+119.74)
-  rewards that extra worker heavily at depth 2, but the depth-1 eval
-  never sees it. Similarly, culture_rate (w=+60.08) rewards the culture
-  production that the extra worker enables at depth 2. The depth-1 eval
-  prices the immediate state change (food spent, worker count delta) but
-  cannot see the rate the new worker generates next round.
-
-(d) WINNER TYPE BREAKDOWN
--------------------------
-  Reversal rate by the depth-1 winner's move kind:
-    Take            n=1661  rev= 885  (53.3%)
-    WonderStep      n=1083  rev= 690  (63.7%)
-    Other           n= 849  rev= 557  (65.6%)
-    ActionCard      n= 797  rev= 226  (28.4%)
-    BuildUrban      n= 629  rev=   6  ( 1.0%)
-    BuildMine       n= 518  rev=   4  ( 0.8%)
-    Leader          n= 273  rev= 120  (44.0%)
-    BuildMilitary   n= 271  rev=   8  ( 3.0%)
-    Develop         n= 136  rev= 100  (73.5%)
-    Upgrade         n=  10  rev=  10  (100.0%)
-
-  The reversals CONCENTRATE on non-Build winners:
-    * Take: 53.3% reversal -- the bot takes a card, but at depth 2 the
-      worker Pop just placed scores higher than the card.
-    * WonderStep: 63.7% -- the bot funds its wonder, but the worker's
-      second-step value exceeds the wonder step.
-    * Develop: 73.5% -- the bot plays a develop, but at depth 2 Pop wins.
-    * Upgrade: 100% (n=10, too small to be significant).
-    * Other (tactics, etc.): 65.6%.
-
-  The Builds are the OPPOSITE:
-    * BuildUrban: 1.0% reversal (6/629)
-    * BuildMine: 0.8% reversal (4/518)
-    * BuildMilitary: 3.0% reversal (8/271)
-
-  When the bot builds, it is almost NEVER a myopia error: the build's
-  second-step value (the worker it places, the resources it generates)
-  is already captured by the depth-1 eval, so the depth-2 score confirms
-  the depth-1 choice. The bot's Build decisions are honest.
-
-  The reversal is specific to the card/wonder/action choices: the bot
-  picks a card or wonder step that looks good at depth 1 (immediate
-  rate gain), but at depth 2 the worker Pop would have placed scores
-  higher because the depth-2 eval sees the worker's contribution.
-
-(e) FOLLOW-UP SCORE COMPARISON
-------------------------------
-  Mean depth-1 score of the follow-up state (after applying the move +
-  best follow-up):
-    Pop follow-up:   mean=215.32  n=6227
-    Winner follow-up: mean=236.99  n=6227
-
-  The winner's follow-up state scores +21.67 higher on average than
-  Pop's follow-up state. This is the depth-2 margin in absolute terms:
-  the winner's second step is genuinely better than Pop's second step
-  on average, BUT the 41.9% of points where Pop reverses pull the mean
-  down. The +21.67 gap is the residual "the eval genuinely prefers the
-  alternative" component that does NOT reverse at depth 2.
-
-=============================================================================
 DIAGNOSIS
-=============================================================================
+---------
+BRANCH: MYOPIA, at 46.0% of non-tie points (42.8% if ties are counted
+as non-reversals). A large fraction, but not a majority.
 
-DECISION RULE: "If Pop wins at depth 2 for a large fraction, the defect
-is MYOPIA. If Pop still loses at depth 2, the problem is elsewhere."
+The mechanism is the same as depth 1: workers_late (w=119.74) and
+culture_rate (w=60.08) carry 73.6% of the depth-1-to-depth-2 swing.
+The eval's rate keys are the ones that change between looking at the
+leaf and looking at the leaf-after-follow-up, because a new worker
+becomes a rate contributor one ply later.
 
-BRANCH: The data lands in the MYOPIA branch for a large and growing
-fraction. 41.9% overall, rising to 57% by r10-14. The depth-2 mean
-flips negative (-15.80) and gets more negative through r13.
+WHAT IS NOT SHOWN: the original report's claim that "Build decisions
+are honest and the myopia is specific to cards/wonders" is NOT
+supported by the corrected data. Builds are the HIGHEST-reversing
+bucket. The corrected interpretation is more uniform: the myopia is
+across-the-board, with the LARGEST effect on Build winners (where the
+second step is a new worker's first contribution to the rate the eval
+already prices at 60-120) and a smaller but still large effect on
+Take/WonderStep.
 
-BUT THE ANSWER IS NOT CLEAN MYOPIA. It is a MIXTURE:
+THE TIE MASS IS A SEPARATE FINDING: 6.9% of Pop-loss points are exact
+ties at depth 2, all verified as the same state ({Pop; X} and {X; Pop}
+commute). These are not a defect — the bot genuinely had no preference
+between the two orderings. They are a reminder that a large fraction
+of the "Pop was declined" sample is a coin-flip the bot resolved by
+legal-move order, not by eval.
 
-1. MYOPIA is real and significant: 41.9% of Pop-losses reverse at depth
-   2, and the reversal rate grows from 34% (r6) to 57% (r12). The
-   mechanism is the RATE keys (workers_late +119.74, culture_rate
-   +60.08) that the depth-1 eval cannot see the second-step effect of.
-   The bot prices the immediate food-spend and worker-count delta but
-   cannot see the rate the new worker generates next round. This is
-   exactly the "the leaf eval cannot see the rate a new worker becomes"
-   mechanism the job predicted.
-
-2. BUT 58.1% do NOT reverse: the eval genuinely prefers the alternative
-   even when it can see the second step. This is the "problem is
-   elsewhere" component. The depth-2 mean is still negative overall
-   (-15.80), and per-round the non-reversal fraction is 53-66% in
-   rounds 6-9 and 43-52% in rounds 10-14.
-
-3. The reversal CONCENTRATES on card/wonder/action winners (53-73%) and
-   is NEARLY ABSENT for Builds (1-3%). The bot's Build decisions are
-   honest: when it builds, the second-step value is already captured.
-   The myopia is specific to the "take a card or push the wonder
-   instead of growing population" choice, which is the 76.9% decline
-   mechanism the prior reports identified.
-
-4. The key swing is the SAME rate keys as the depth-1 decomposition
-   (workers_late, culture_rate). No new key appears at depth 2. The
-   fix is not a new feature but a feature that carries the second-step
-   rate effect into the leaf: the leaf eval needs to see that a worker
-   placed this round generates resources/culture next round, not just
-   the immediate food-spend and worker-count delta.
-
-THE ONE-LINE ANSWER: 41.9% of the Pop decline is myopia (reverses at
-depth 2, concentrated on Take/WonderStep/Develop winners, driven by
-workers_late and culture_rate), 58.1% is a genuine eval preference that
-does not reverse. The myopia component is large enough to be the
-dominant defect, but it is not the whole story.
-
-SCOPE / LIMITS
---------------
-* 2p self-play, seeds 1..200, both seats, rounds 6-14. 6227 points.
-* The depth-2 follow-up is the bot's own argmax (self-play policy), not
-  an optimal play. The reversal fraction is an upper bound on how many
-  decisions a perfect second step would flip; a weaker second step would
-  reverse fewer.
-* The key-swing attribution uses linear_features at depth 1 and 2, which
-  are the bot's own feature vectors. The swing is measured as
-  |w[k] * delta_f_pop| + |w[k] * delta_f_win|, which is the sum of the
-  absolute contribution changes for Pop and Winner at key k.
-* "Pop" = Move::Pop (the food-paying IncreasePopulation). PopFree is
-  a distinct move and is not included.
-* This is a diagnosis. No weight was changed and none is proposed.
+SCOPE AND LIMITS
+----------------
+- 200 games, seeds 1..200, 2 players, frozen champion gen 121100.
+- Follow-up depth is exactly 1 (one more move after Pop/winner). The
+  "second step" the job asks about is the best single move after Pop,
+  not a full search.
+- The tie verification compares Debug renderings of the full state.
+  This is a necessary condition for state equality; it is not a
+  sufficient proof (two different states could in principle render
+  identically, though in practice the Debug covers every field).
+- Key swing is |w[k] * delta_f| summed, not the actual score
+  contribution change. It is a proxy for "which key's price moved",
+  not "which key caused the flip".
 
 REPRODUCIBILITY
 ---------------
-Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json
-(gen 121100). The probe is a temporary `--pop2ply` mode in
-rust/src/bin/openerprobe.rs (fn pop2_one / run_pop2), using
-eval::candidate_features + eval::evaluate + bot.rank_moves for the
-depth-2 follow-up. The run is deterministic: re-running the same 200
-seeds reproduces every number above.
+Build: cargo build --profile difftest --bin openerprobe
+  (from /Users/pt/tta-ai/rust, with $HOME/.cargo/bin on PATH)
+Command:
+  ./target/difftest/openerprobe \
+    --weights /Users/pt/tta-ai/experiments/rust_champion_2p_frozen_2026-08-28.json \
+    --games 200 --seed 1 --threads 6 --pop2ply
+Output: 44 POP2 lines on stderr, ~18s on 6 cores.
+Instrumentation: src/bin/openerprobe.rs (reverted with git checkout --
+after this run).
