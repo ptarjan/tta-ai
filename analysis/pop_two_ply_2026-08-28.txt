@@ -686,3 +686,84 @@ be built off THAT evidence and A/B'd on its own, never off this file's
 shape is on file if that day comes.
 
 THE FILE IS CLOSED. Nothing further should be measured in it.
+
+(k) [5,20) REVERSAL SWING ATTRIBUTION (census passes: point count = 185
+    exactly, matching (h)'s rev column for the bucket; the run STOPS and
+    prints no table if the count is not 185):
+    Per-weight-key attribution of the depth-2 swing (m2 - m1) over the
+    185 [5,20) reversals, the SAME method that produced the earlier
+    73.6% figure (section (c)): per point, per key,
+        swing = |w_k * (pop_f2[k] - pop_f1[k])| + |w_k * (win_f2[k] - win_f1[k])|
+    where f1 = the bot's own depth-1 candidate features for that move
+    (candidate_features: determinized root, linear_features, EndTurnBias
+    indicator) and f2 = the same features at the depth-2 leaf the bot
+    reaches from that move. Sums are per key over the 185 points, ranked
+    descending. Top 10:
+
+        rank  key                 w          swing      share    cum
+        1     culture_rate      60.0842    13434.14    41.76%   41.76%
+        2     workers_late     119.7378     5677.30    17.65%   59.41%
+        3     wonder_potential   1.6607     2800.41     8.71%   68.12%
+        4     strength          10.6397     2340.74     7.28%   75.39%
+        5     strength_rel_early -15.7655   1999.00     6.21%   81.61%
+        6     hand_potential     1.1987     1540.17     4.79%   86.39%
+        7     wonder_promise     0.5526      529.31     1.65%   88.04%
+        8     free_workers       3.6924      446.79     1.39%   89.43%
+        9     leader            14.0440      308.97     0.96%   90.39%
+        10    resource_stock     0.6975      283.17     0.88%   91.27%
+
+    total swing 32168.39 over 87 nonzero keys; the 10 listed carry 91.3%.
+    READING: the [5,20) swing is dominated by the SAME two keys that
+    carry the pooled 73.6% (culture_rate, workers_late), but the order is
+    REVERSED and the concentration is much higher: here culture_rate alone
+    is 41.8% (top-2 = 59.4%), versus 50.3% / 26.0% in the pooled figure.
+    The [5,20) reversal is a culture-rate valuation swing, not a
+    worker-late one. Note the contrast with the FINAL VERDICT above: the
+    verdict's "if ever built, build off the pricing argument (free_workers
+    +3.69 vs rate group 60-120)" is about a DIFFERENT, larger piece of
+    evidence; this (k) shows the [5,20) swing itself is carried by
+    culture_rate/workers_late, NOT free_workers (only 1.39%, rank 8). So
+    even the one "real" bucket's swing does not point at the pricing key
+    the verdict names. The second-step feature line remains closed; (k)
+    exists so the shape is on file if the pricing argument is ever acted
+    on, as the FINAL VERDICT anticipated.
+
+COORDINATOR NOTE ON (k) — THE READING SURVIVES, TWO OF ITS NUMBERS DO NOT
+(2026-08-28)
+
+Census and arithmetic verified before the prose was read: point count 185
+exactly, matching (h)'s rev column; all ten shares reproduce against the
+32168.39 total; the cumulative column is consistent at every rank; rank 10
+at 0.88% closes to the stated 91.3% top-10. (k) passes its own checks.
+
+Two corrections to its READING paragraph, which is left above as written:
+
+1.  "50.3% / 26.0% in the pooled figure" is WRONG for the first term.
+    Section (c) line 283 gives workers_late 171707 and culture_rate 93994
+    over a 360973 total, i.e. 47.6% and 26.0%. The paragraph's own two
+    numbers sum to 76.3% while quoting 73.6% in the same sentence; that
+    internal contradiction is what makes it checkable. Correct pooled
+    split: workers_late 47.6%, culture_rate 26.0%.
+
+2.  "the concentration is much higher" is BACKWARDS at the top-2. Pooled
+    top-2 is 73.6%; here it is 59.4%. What is higher is the SINGLE-KEY
+    lead: culture_rate 41.8% here versus 26.0% pooled. The top of the
+    distribution is more concentrated; the top-2 is less.
+
+The finding itself stands, and it is the useful part: the pooled leader is
+workers_late, the [5,20) leader is culture_rate, so this bucket's swing is
+a culture-rate valuation move rather than a worker-late one — and
+free_workers, the key the FINAL VERDICT's pricing argument is about, is
+1.39% of it at rank 8.
+
+THE STANDING CAVEAT ON ANY |w * df| ATTRIBUTION. Swing is measured in
+score units, so a key's share is confounded with the SCALE of its weight:
+culture_rate at 60.08 and workers_late at 119.74 sit 16x to 32x above
+free_workers at 3.69, and would out-rank it on equal feature movement.
+This table says where the SCORE moves, not where a FIX belongs. In
+particular it is NOT evidence against the pricing argument, which is a
+claim about free_workers being mis-scaled in the first place; a key that
+is priced too low will always look small in a table denominated in its own
+underpriced units. Read (k) as the shape of the swing and nothing else.
+
+THE FILE REMAINS CLOSED.
