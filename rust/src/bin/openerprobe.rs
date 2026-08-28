@@ -608,6 +608,13 @@ struct ActionPointStats {
     ma_round2: u64,
     /// MA debited in round 3.
     ma_round3: u64,
+    /// Own-turns played in round 1 -- one `EndTurn` per turn, so this is the
+    /// only correct denominator for the round-1 rows.
+    turns_round1: u64,
+    /// Own-turns played in round 2.
+    turns_round2: u64,
+    /// Own-turns played in round 3.
+    turns_round3: u64,
 }
 
 impl ActionPointStats {
@@ -623,35 +630,31 @@ impl ActionPointStats {
     /// and `EndTurn` is what rotates it), so one call per decision point
     /// with `is_end_turn` disambiguates the per-turn counts without any
     /// player-index plumbing.
-    fn record(
-        &mut self,
-        round: u8,
-        chosen: &Move,
-        pre_ca: i8,
-        pre_ma: i8,
-        post_ca: i8,
-        post_ma: i8,
-    ) {
+    fn record(&mut self, round: u8, chosen: &Move, pools: PoolDelta) {
         let (ca, ma) = if *chosen == Move::EndTurn {
             (0, 0)
         } else {
             (
-                (pre_ca as i64 - post_ca as i64).max(0) as u64,
-                (pre_ma as i64 - post_ma as i64).max(0) as u64,
+                (pools.pre_ca as i64 - pools.post_ca as i64).max(0) as u64,
+                (pools.pre_ma as i64 - pools.post_ma as i64).max(0) as u64,
             )
         };
-        // `move_ca_cost` / `move_ma_cost` exist to document the debit arms
-        // the delta WOULD miss (Civil-Life 0-CA build, PlayAction's
-        // MA-funded exception). Rounds 1-3 never exercise either -- Civil
-        // Life is not developable in the opener window and Robespierre does
-        // not appear in Age I -- so the delta alone is authoritative here
-        // and no correction term is applied. Their unit tests pin the
-        // table; the production path above is deliberately delta-only.
-        // Referenced (not evaluated into the ledger) so the table stays
-        // compiled and its tests stay the only place it is exercised:
-        let _ = (move_ca_cost(chosen), move_ma_cost(chosen));
+        // Two debit arms the delta would miss: a Civil-Life 0-CA build, and
+        // PlayAction's MA-funded exception (Breakthrough funding
+        // Robespierre). Rounds 1-3 exercise neither -- Civil Life is not
+        // developable in the opener window and Robespierre does not appear
+        // in Age I -- so the delta alone is authoritative here and no
+        // correction term is applied.
         self.ca += ca;
         self.ma += ma;
+        if *chosen == Move::EndTurn {
+            match round {
+                1 => self.turns_round1 += 1,
+                2 => self.turns_round2 += 1,
+                3 => self.turns_round3 += 1,
+                _ => {}
+            }
+        }
         if ca > 0 {
             self.ca_decisions += 1;
             match round {
@@ -683,35 +686,21 @@ impl ActionPointStats {
         self.ma_round1 += o.ma_round1;
         self.ma_round2 += o.ma_round2;
         self.ma_round3 += o.ma_round3;
+        self.turns_round1 += o.turns_round1;
+        self.turns_round2 += o.turns_round2;
+        self.turns_round3 += o.turns_round3;
     }
 }
 
-/// The CA a chosen move debits, for the kinds whose debit cannot be read off
-/// the pool delta (see [`ActionPointStats::record`]): the Civil-Life grant
-/// makes a non-unit Build debit 0 instead of 1. Rounds 1-3 never have a
-/// Civil-Life tech in play (it is not a round-1 card and nothing in the
-/// opener window develops it), so the delta is authoritative there -- this
-/// exists to document the exception, not to be a second source of truth.
-fn move_ca_cost(m: &Move) -> u64 {
-    match m {
-        Move::Build { card } if card.kind() == CardType::Wonder => 0,
-        Move::Build { card } if card.kind().is_unit() => 0,
-        Move::Build { .. } => 1,
-        _ => 0,
-    }
-}
-
-/// Same for MA: unit Build and unit Upgrade debit 1 MA each; CopyTactic 2;
-/// the rest 0 (the delta carries PlayAction's MA-funded exception and every
-/// other debit). Unit-test pinned; the production path is delta-only in
-/// rounds 1-3 -- see `ActionPointStats::record`.
-fn move_ma_cost(m: &Move) -> u64 {
-    match m {
-        Move::Build { card } if card.kind().is_unit() => 1,
-        Move::Upgrade { to, .. } if to.get().kind.is_unit() => 1,
-        Move::CopyTactic { .. } => 2,
-        _ => 0,
-    }
+/// The decider's own action pools either side of one `game::step`. The debit
+/// a move actually cost is `pre - post`; see [`ActionPointStats::record`] for
+/// why that delta is the authoritative read in rounds 1-3.
+#[derive(Clone, Copy)]
+struct PoolDelta {
+    pre_ca: i8,
+    pre_ma: i8,
+    post_ca: i8,
+    post_ma: i8,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1071,29 +1060,12 @@ fn record_decision(
     idx: u8,
     legal: &[Move],
     ranked: &[(Move, f64)],
-    round_at_decide: u16,
-    pre_ca: i8,
-    pre_ma: i8,
-    post_ca: i8,
-    post_ma: i8,
 ) {
     report.decisions += 1;
 
     // Item 1: the chosen move's kind. `ranked[0].0 == WeightedBot::choose`'s
     // own pick, by `rank_moves`'s own contract (`eval.rs`).
     report.top_kind.record(decision_kind(ranked[0].0));
-
-    // Item 6: the action points the chosen move debits, as the pool delta
-    // around `apply::apply` (see `ActionPointStats::record` for the two
-    // arms the delta cannot carry and why neither occurs in rounds 1-3).
-    report.action_points.record(
-        round_at_decide.min(3) as u8,
-        &ranked[0].0,
-        pre_ca,
-        pre_ma,
-        post_ca,
-        post_ma,
-    );
 
     // Item 2: for each build-shaped kind, is it legal here at all, and if so
     // what rank does the best-scored one of that kind hold among every
@@ -1191,30 +1163,30 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> Report {
         let pre = &state.players[idx as usize];
         let (pre_ca, pre_ma) = (pre.civil_actions, pre.military_actions);
         let round_at_decide = state.round;
-        let ranked_opt = if is_own_turn {
+        // Items 1-5 read the state AS THE DECIDER SAW IT, so they must run
+        // before the step -- `legal` and `ranked` describe the pre-move
+        // position and classifying them against the post-move board
+        // misattributes every legality reason.
+        let mv = if is_own_turn {
             let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
-            Some(ranked)
+            record_decision(&mut report, &state, idx, legal.as_slice(), &ranked);
+            ranked[0].0
         } else {
-            None
-        };
-        let mv = match &ranked_opt {
-            Some(ranked) => ranked[0].0,
-            None => bots[idx as usize].choose(&state, legal.as_slice()),
+            bots[idx as usize].choose(&state, legal.as_slice())
         };
         game::step(&mut state, mv);
-        if let Some(ranked) = ranked_opt {
+        // Item 6 is the only thing that needs the post-move pools.
+        if is_own_turn {
             let post = &state.players[idx as usize];
-            record_decision(
-                &mut report,
-                &state,
-                idx,
-                legal.as_slice(),
-                &ranked,
-                round_at_decide,
-                pre_ca,
-                pre_ma,
-                post.civil_actions,
-                post.military_actions,
+            report.action_points.record(
+                round_at_decide.min(3) as u8,
+                &mv,
+                PoolDelta {
+                    pre_ca,
+                    pre_ma,
+                    post_ca: post.civil_actions,
+                    post_ma: post.military_actions,
+                },
             );
         }
         moves_played += 1;
@@ -1442,7 +1414,6 @@ fn print_report(players: u8, r: &Report) {
     // and per non-EndTurn decision (see `ActionPointStats` for the unit
     // distinction this section exists to keep visible).
     let ap = &r.action_points;
-    let decisions = r.decisions.max(1) as f64;
     let non_et = (r.top_kind.total() - r.top_kind.end_turn) as f64;
     println!("\n### Item 6: action points debited by the chosen move, rounds 1-3\n");
     println!("(CA/MA = the decider's own pool deltas around apply::apply -- the engine's debit itself)");
@@ -1469,17 +1440,28 @@ fn print_report(players: u8, r: &Report) {
         cd = ap.ca_decisions,
         md = ap.ma_decisions
     );
+    // Each round's own denominator: the own-turns played IN that round, so
+    // these three rows are a decomposition of the per-turn headline above and
+    // not a second, silently different rate.
+    let (t1, t2, t3) = (
+        ap.turns_round1.max(1) as f64,
+        ap.turns_round2.max(1) as f64,
+        ap.turns_round3.max(1) as f64,
+    );
     println!(
-        "- CA per turn by round:  r1 {:.3}   r2 {:.3}   r3 {:.3}",
-        ap.ca_round1 as f64 / decisions,
-        ap.ca_round2 as f64 / decisions,
-        ap.ca_round3 as f64 / decisions
+        "- CA per turn by round:  r1 {:.3}   r2 {:.3}   r3 {:.3}   (turns {} / {} / {})",
+        ap.ca_round1 as f64 / t1,
+        ap.ca_round2 as f64 / t2,
+        ap.ca_round3 as f64 / t3,
+        ap.turns_round1,
+        ap.turns_round2,
+        ap.turns_round3
     );
     println!(
         "- MA per turn by round:  r1 {:.3}   r2 {:.3}   r3 {:.3}",
-        ap.ma_round1 as f64 / decisions,
-        ap.ma_round2 as f64 / decisions,
-        ap.ma_round3 as f64 / decisions
+        ap.ma_round1 as f64 / t1,
+        ap.ma_round2 as f64 / t2,
+        ap.ma_round3 as f64 / t3
     );
 }
 
@@ -1687,61 +1669,10 @@ mod tests {
             ap.ma <= 3 * report.decisions,
             "no single decision debits more than a Culture war (3 MA)"
         );
-        assert!(ap.ca_decisions <= report.decisions && ap.ma_decisions <= report.decisions);
         assert!(
             ap.ca_decisions <= report.decisions && ap.ma_decisions <= report.decisions,
             "per-decision counts cannot exceed total decisions"
         );
-    }
-
-    #[test]
-    fn move_ca_cost_is_one_per_plain_build_and_zero_for_wonder_steps_and_unit_builds() {
-        // Age-A production cards (not units) vs a military unit vs a wonder.
-        let farm = &tta::card_table::CARDS
-            .iter()
-            .find(|c| c.name == "Agriculture")
-            .expect("Agriculture");
-        let infantry = &tta::card_table::CARDS
-            .iter()
-            .find(|c| c.name == "Infantry")
-            .expect("Infantry");
-        let wonder = &tta::card_table::CARDS
-            .iter()
-            .find(|c| c.kind == CardType::Wonder)
-            .expect("a wonder");
-        assert_eq!(move_ca_cost(&Move::Build { card: *farm }), 1);
-        assert_eq!(move_ca_cost(&Move::Build { card: *infantry }), 0);
-        assert_eq!(move_ca_cost(&Move::WonderStep { steps: 1 }), 0);
-        assert_eq!(move_ca_cost(&Move::EndTurn), 0);
-        assert_eq!(move_ca_cost(&Move::Take { slot: 0 }), 0, "Take's cost is state-dependent; the delta carries it");
-    }
-
-    #[test]
-    fn move_ma_cost_is_one_per_unit_build_or_upgrade_and_two_for_copy_tactic() {
-        let infantry_id = tta::card_table::CARDS
-            .iter()
-            .position(|c| c.name == "Infantry")
-            .map(|i| CardId(i as u16))
-            .expect("Infantry");
-        let farm_id = tta::card_table::CARDS
-            .iter()
-            .position(|c| c.name == "Agriculture")
-            .map(|i| CardId(i as u16))
-            .expect("Agriculture");
-        let tactic_id = tta::card_table::CARDS
-            .iter()
-            .position(|c| c.kind == CardType::Tactic)
-            .map(|i| CardId(i as u16))
-            .expect("a tactic");
-        assert_eq!(move_ma_cost(&Move::Build { card: *infantry_id.get() }), 1);
-        assert_eq!(
-            move_ma_cost(&Move::Upgrade { from: farm_id, to: infantry_id }),
-            1
-        );
-        assert_eq!(move_ma_cost(&Move::Build { card: *farm_id.get() }), 0);
-        assert_eq!(move_ma_cost(&Move::Upgrade { from: farm_id, to: farm_id }), 0);
-        assert_eq!(move_ma_cost(&Move::CopyTactic { card: tactic_id }), 2);
-        assert_eq!(move_ma_cost(&Move::EndTurn), 0);
     }
 
     #[test]
