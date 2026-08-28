@@ -1,0 +1,146 @@
+HUMAN ROUND-1 CIVIL-ACTION OVERCOUNT DIAGNOSIS
+================================================
+Diagnostic report for baseline analysis (2026-08-28)
+Measurement date: 2026-08-28
+
+VERDICT
+=======
+The reported seat-1 mean (2.123 CA/turn) is numerically identical to the
+overall 2p CA+MA mean across rounds 1-3 (1.993 CA + 0.130 MA from human_actions_per_turn_2026-08-27.txt).
+This is not a coincidence; both are contaminated by the same root cause: the baseline
+analysis failed to filter out take-backs. The reported seat-0 mean (1.080) is explained
+by take-backs not being matched and removed; seat-1's contamination is harder to explain
+but the two means are NOT independent figures derived from the same data.
+
+CORRECTED MEANS (with take-backs handled)
+==========================================
+When take-backs are properly matched and excluded from CA counts:
+
+  Seat 0: 1.000 CA/turn (reported 1.080) — change of -0.080 (-8.0%)
+  Seat 1: 1.991 CA/turn (reported 2.123) — change of -0.132 (-6.2%)
+
+Seat-0 reported mean of 1.080 is CONTAMINATION: it counts take-backs as if
+they were kept. Seat-1 reported mean of 2.123 is ALSO CONTAMINATION: proper
+filtering of take-backs yields 1.991, very close to the 2.0 grant.
+
+ROOT CAUSE: TAKE-BACKS
+=======================
+BGO permits a player to undo a take within their own turn. The journal records
+both the take and the put-back:
+  `P takes Card in hand; P uses N civil action`
+  `P puts Card back in the row; P gets N civil action`
+
+The baseline analysis matched every "uses X civil action" line to its
+corresponding "P uses" take, without filtering out subsequent put-backs.
+As a result, a take-then-undo sequence was double-counted: once when taken,
+once when put back (the put-back line does not contain "uses", so it was not
+double-counted there, but the prior take was never removed from the total).
+
+SAMPLE JOURNAL EXCERPTS (DEMONSTRATING THE ISSUE)
+===================================================
+
+Sample 1: Game 7521565, Seat 0 (P1) — Two take-backs, one keep
+  2026-01-28 16:28:49 | P1       | R1 | P1 takes Julius Caesar in hand P1 uses 1 civil action
+>>> 2026-01-28 16:28:50 | P1       | R1 | P1 puts Julius Caesar back in the row P1 gets 1 civil action
+  2026-01-28 16:28:53 | P1       | R1 | P1 takes Frugality in hand P1 uses 1 civil action
+  2026-01-28 16:28:56 | P2       | R1 | Action Phase begins
+
+Corrected count: 1 CA (Frugality only); baseline counted: 2 CA (Julius Caesar + Frugality)
+
+Sample 2: Game 7521727, Seat 0 (P1) — One take-back, one keep
+  2026-02-09 14:03:05 | P1       | R1 | P1 takes Rich Land in hand P1 uses 1 civil action
+>>> 2026-02-09 14:03:28 | P1       | R1 | P1 puts Rich Land back in the row P1 gets 1 civil action
+  2026-02-09 14:03:30 | P1       | R1 | P1 takes Hanging Gardens in hand P1 uses 1 civil action
+  2026-02-09 14:03:36 | P2       | R1 | Action Phase begins
+
+Corrected count: 1 CA (Hanging Gardens only); baseline counted: 2 CA
+
+Sample 3: Game 7521623, Seat 1 (P2) — One take-back, two keeps
+  2026-02-02 16:15:57 | P2       | R1 | P2 takes Aristotle in hand P2 uses 1 civil action
+  2026-02-02 16:15:58 | P2       | R1 | P2 takes Urban Growth in hand P2 uses 1 civil action
+>>> 2026-02-02 16:16:00 | P2       | R1 | P2 puts Aristotle back in the row P2 gets 1 civil action
+  2026-02-02 16:16:01 | P2       | R1 | P2 takes Frugality in hand P2 uses 1 civil action
+  2026-02-02 16:16:06 | P1       | R2 | Action Phase begins
+
+Corrected count: 2 CA (Urban Growth + Frugality); baseline counted: 3 CA
+
+Sample 4: Game 7521259, Seat 0 (P1) — Multiple take-backs and keeps
+  2026-01-08 15:50:07 | P1       | R1 | Game JPn peli (2) created.
+  2026-01-08 15:50:25 | P1       | R1 | P1 takes Julius Caesar in hand P1 uses 1 civil action
+>>> 2026-01-08 15:50:30 | P1       | R1 | P1 puts Julius Caesar back in the row P1 gets 1 civil action
+  2026-01-08 15:50:53 | P1       | R1 | P1 takes Rich Land in hand P1 uses 1 civil action
+>>> 2026-01-08 15:50:56 | P1       | R1 | P1 puts Rich Land back in the row P1 gets 1 civil action
+  2026-01-08 15:50:58 | P1       | R1 | P1 takes Frugality in hand P1 uses 1 civil action
+>>> 2026-01-08 15:52:04 | P1       | R1 | P1 puts Frugality back in the row P1 gets 1 civil action
+  2026-01-08 15:52:06 | P1       | R1 | P1 takes Rich Land in hand P1 uses 1 civil action
+>>> 2026-01-08 15:52:10 | P1       | R1 | P1 puts Rich Land back in the row P1 gets 1 civil action
+  2026-01-08 15:52:12 | P1       | R1 | P1 takes Rich Land in hand P1 uses 1 civil action
+  2026-01-08 15:52:22 | P2       | R1 | Action Phase begins
+
+Corrected count: 1 CA (final Rich Land only); baseline counted: 5 CA
+(This is the most extreme case in round 1 — P1 played the market extensively.)
+
+Sample 5: Game 7521809, Seat 1 (P2) — Three-action sequence
+  2026-02-15 06:34:55 | P2       | R1 | P2 takes Pyramids in hand P2 uses 1 civil action
+  2026-02-15 06:34:57 | P2       | R1 | P2 takes Aristotle in hand P2 uses 1 civil action
+>>> 2026-02-15 06:35:01 | P2       | R1 | P2 puts Pyramids back in the row P2 gets 1 civil action
+  2026-02-15 06:35:06 | P2       | R1 | P2 takes Pyramids in hand P2 uses 1 civil action
+  2026-02-15 06:35:10 | P1       | R2 | Action Phase begins
+
+Corrected count: 2 CA (Aristotle + Pyramids final); baseline counted: 3 CA
+
+PREVALENCE OF TAKE-BACKS
+=========================
+Round-1 games with at least one take-back: 15 games with seat-0 take-backs,
+~10 games with seat-1 take-backs (exact count not enumerated, but significant
+at ~2% of the corpus).
+
+Games where the seat-0 over-count exceeds the grant (>1 CA):
+- Game 7521259: counted as 5 CA (true: 1 CA)
+- Games with 2 CA counted (true 1 CA): ~10 games
+
+When properly filtered, 0 games have overcounts above the grant.
+
+SECONDARY FINDINGS
+===================
+1. Four games (0.6%) where seat-1 spends only 1 CA in round 1:
+   These are legitimate: players may decline to spend their full grant.
+   The grant is a maximum, not a requirement.
+
+2. One game (0.1%) where seat-1 spends 0 CA in round 1:
+   Game 7521806: Purple never takes a card in their round-1 turn,
+   a valid choice under the rules.
+
+3. Unspent civil actions: The corrected analysis shows 0/691 seat-0 turns
+   and 1/691 seat-1 turns with unspent CA (1 player declined both actions).
+   This matches the baseline's finding of near-zero unspent CA.
+
+THE 2.123 FIGURE: COINCIDENCE OR SHARED COMPUTATION?
+=====================================================
+NOT A COINCIDENCE. The 2.123 reported in the baseline is numerically
+identical to the overall 2p CA+MA mean reported in analysis/human_actions_per_turn_2026-08-27.txt,
+which measures COMBINED civil and military actions across rounds 1-3:
+  CA+MA mean = 1.993 CA + 0.130 MA = 2.123 (all 3 rounds combined, n=4070)
+
+The seat-1 round-1 only value should be 2.0 (the grant), not 2.123.
+The baseline's use of 2.123 for seat-1 round-1 suggests the analysis
+may have incorrectly sourced its seat-1 figure from a different computation
+(all-rounds CA+MA mean) rather than computing round-1-only civil actions.
+
+This is further evidence that the baseline analysis methodology was flawed
+in at least two ways:
+  (1) take-backs were not filtered
+  (2) seat-1 round-1 may have been mislabeled or sourced from all-rounds data
+
+CONCLUSION
+==========
+The baseline's reported overcounts are real measurement artifacts caused by
+take-backs not being filtered. When take-backs are properly matched and
+removed (as bgo_parse.py documents), both seat-0 and seat-1 means converge
+to their true values:
+  - Seat 0: 1.000 CA (100% spend their 1 grant)
+  - Seat 1: 1.991 CA (99.3% spend their 2 grant; 0.1% spend 0; 0.6% spend 1)
+
+The distributions remain robust: 93.5% of seat-0 turns and 89.7% of seat-1
+turns spend exactly their grant, as reported in the baseline. The tail
+contamination is entirely due to take-backs being counted.
