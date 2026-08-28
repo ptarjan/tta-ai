@@ -173,3 +173,64 @@ Method: read-only, narrow grep + sed over features.rs:925-945, cards.rs
 1595/1687/2320-2322, cards.rs:47, state.rs:425, RULES_SPEC 10.1-10.5. No .rs
 edits, no build. Champion values read from experiments/rust_champion_{2,3,4}p.json
 (all three arms). No scratch left in the repo.
+
+=============================================================================
+COORDINATOR CORRECTION (2026-08-28) -- the NonNegative gate is already
+REFUTED IN CODE, by the very rule the survey cites for it
+=============================================================================
+
+RECOMMENDATION REJECTED. `TacticLevel` is not an ungated key awaiting a sign
+decision. It sits inside the deliberately-Free block at weights.rs:1751, and
+the block's comment names it with a CITED COUNTEREXAMPLE:
+
+    weights.rs:1740-1741
+        // `TacticLevel` by RULES_SPEC 10.4, where a
+        // higher-age tactic makes units 2+ levels below it outdated.
+
+That is the same citation the survey offers as its rules argument FOR a
+positive sign, read the other way round -- and the other way round is the
+correct one. RULES_SPEC 10.4: "An army is outdated if ANY of its units is 2+
+levels below the tactics card's printed age (CARD age, not current age)."
+The comparison is against the TACTIC CARD, so raising your tactic's age is
+exactly what turns your existing units outdated. Playing an Age III tactic
+over an Age I one, with an Age I infantry still on the board, converts a
+normal army into a lesser one. A higher `TacticLevel` is a real and rules-
+grounded downside in that position, so the feature cannot be floored at >= 0.
+
+The survey's own §2 is what makes this decisive rather than merely arguable:
+it establishes that TacticLevel is the ONLY channel for "current tactic's age
+is N" -- TacticGain prices the strength upgrade, TacticShort the missing
+units, TacticBoardCredit and TacticReachCredit the card's board price. So the
+outdating cost has nowhere else to be priced. Gating the one coordinate that
+can express it to >= 0 would make the outdating penalty inexpressible, not
+merely mispriced.
+
+    STANDING RULE, now cited a second time: keys in the weights.rs
+    cited-counterexample block are CLOSED and are not to be re-proposed. Read
+    the block comment before proposing any sign_intent. It currently covers
+    GovLevel/TechLevels, Colonies/HasColony, Leader, PactBlocksAttack,
+    TacticLevel, and names StrengthLead as the deliberate near-miss.
+
+WHAT SURVIVES, AND IT IS THE USEFUL HALF. Everything before the verdict
+stands and is worth keeping:
+
+  - the feature is 0/1/2/3, the AGE of the tactic in play, and nothing else;
+  - the four siblings each price a DIFFERENT fact, so the family is not
+    redundant and nothing here is a duplicate channel;
+  - none of the four sits on a clamp wall on any arm, so the magnitudes are
+    fitted rather than rail artifacts;
+  - the self-correction of the 4p value (-14.8844 live, against the -36.15 in
+    the job brief, 4p gen 21874) is exactly right and is the champion-file-is-
+    live effect. The brief's number was the stale one.
+
+The residual question is therefore NOT the sign. It is why 4p prices a real
+cost at -14.88 while 3p prices what should be the same cost at +23.99. Both
+arms face the same rule. The survey's collinearity story -- TacticLevel
+absorbing magnitude against TacticGain (4p 1.4995 vs 3p 0.7071) while 4p is
+far from converged -- is the plausible one, and it predicts the gap narrows as
+4p converges. That is checkable for free at the next champion read, and it is
+the right thing to do instead of landing a gate.
+
+Not landing anything either way while the clamp-ceiling A/B is live, for the
+same reason the FoodRate gate is being held: a sign change inside the A/B
+window contaminates it.
