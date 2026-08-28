@@ -1,0 +1,175 @@
+TacticLevel sign analysis (2026-08-28)
+======================================
+
+QUESTION
+--------
+WeightKey::TacticLevel is priced +23.99 at 3p and -14.88 at 4p (see §3 for the
+current live values; the job's -36.15 was a slightly earlier 4p snapshot).
+Opposite signs on a live, frequently-firing key. Is that justified by the
+rules, or a modelling defect?
+
+1. WHAT THE FEATURE MEASURES (features.rs:935)
+----------------------------------------------
+    f.set(WeightKey::TacticLevel,
+          if p.tactic.is_none() { 0.0 } else { f64::from(p.tactic.level()) });
+
+`p.tactic: CardId` (state.rs:425) is the player's CURRENT tactic -- the card
+their tactics standard sits on. `CardId::level()` (cards.rs:47) returns the
+AGE as a number: A=0, I=1, II=2, III=3, IV=4.
+
+So the feature value is:
+    0  -- no tactic in play (standard in the common area on nothing)
+    1  -- an Age-I tactic in play
+    2  -- an Age-II tactic in play
+    3  -- an Age-III tactic in play
+(4 is unreachable in practice: no Age-IV tactics exist in the 236-card table,
+and Age-IV tactics are never the current one at Age-IV end anyway.)
+
+It is a SMALL-STEP feature: 0/1/2/3, integer, four distinct values. It says
+"you have a tactic in play, and it is of this age." It says nothing about the
+tactic's strength, about which unit types it depicts, about how many armies
+you can form with it, or about whether it is up to date. Those are exactly
+what the sibling channels in §2 price.
+
+p95 candidate spread (weights.rs:2320, from featspread self-play):
+    [2.0, 3.0, 2.0]  for (2p, 3p, 4p)
+It fires often enough to be a real decision channel, not a dead coordinate.
+
+2. SIBLING KEYS THAT PRICE THE SAME FAMILY
+------------------------------------------
+Four other keys sit on the tactic fact. What each one separately prices:
+
+(a) TacticGain (cards.rs:2423 `tactic_terms`; eval.rs:682)
+    gain = max(0, best_army_strength - current_army_strength) where the best
+    is over (a) tactics in hand, (b) state.available_tactics (copyable for
+    2 MA), (c) the one already in play. w-independent (no freeze).
+    Prices: the army-strength UPGRADE you can still get by switching to a
+    better tactic. Zero when the best tactic is already in play. It is a
+    "how much further can the tactic improve my strength" channel.
+
+(b) TacticShort (same `tactic_terms`; eval.rs:682; weights.rs:1687 NonPositive
+    gate -- "prices a marginal-need shortfall")
+    The number of unit workers still owed before the best reachable tactic
+    forms one more army. Prices: the missing-units gradient that TacticGain
+    lacks (a step function, e.g. flat at zero for the first two of a
+    three-cavalry tactic). Negative weight = the bot is penalizing the
+    shortfall, i.e. being pushed toward closing it.
+
+(c) TacticBoardCredit (cards.rs:2004 inside card_choice; registry.rs:346)
+    Multiplier on `tactic_value(id, ...)` (cards.rs:1428): the board-aware
+    price of THIS SPECIFIC tactic card, given the player's current unit mix,
+    cost-to-reach net, gated by its own credit. Prices: "is this tactic card
+    on the row worth taking right now, for MY units."
+
+(d) TacticReachCredit (cards.rs:1478 inside `tactic_value`)
+    Trust knob: scales (potential_strength * strength_weight - cost). A
+    "how much to trust this projection" multiplier, not a fitted constant of
+    its own (the function's own doc comment says so).
+
+None of the four prices "I currently have an age-N tactic in play." TacticLevel
+is the ONLY channel carrying that fact. It is not a duplicate of any of them:
+  * TacticGain/TacticShort are about future reachable strength, not current
+    in-play age.
+  * TacticBoardCredit/TacticReachCredit are about pricing a tactic card in
+    hand or on the row, not about the current tactic.
+So the sign question is not a duplicate-channel artifact.
+
+3. LIVE VALUES, ALL THREE ARMS (experiments/rust_champion_{2,3,4}p.json)
+------------------------------------------------------------------------
+key                 2p (gen 120584)    3p (gen 67295)     4p (gen 21874)
+tactic_level        -0.0625            +23.9901           -14.8844
+tactic_gain          0.4917             0.7071             1.4995
+tactic_board_credit  0.0806             0.4915             0.0094
+tactic_reach_credit  0.0949             0.0000             0.3804
+(strength, for ref) 10.2641            57.8075            44.1024
+(military_actions)    1.5939            0.0526             1.9436
+
+All three arms printed per the standing rule. 4p is the least-converged arm
+(gen 21874 vs 2p's 120584), so its negative sign is the weakest-evidenced of
+the three; 3p's +23.99 is on the more-converged arm and the larger-magnitude
+one.
+
+Clamp-wall check (job step 4): none of the four keys sits on a wall. The
+values are -0.0625 / +23.9901 / -14.8844 -- none is exactly 60.0000 or
+120.0000, and none is exactly 0.0 either. (TacticReachCredit at 3p is
+exactly 0.0, but that is a free zero, not a rail: it fell to zero and the
+fit found no gradient to climb, which is a legitimate "off" state, distinct
+from a 60/120 wall. TacticLevel itself is nowhere near a wall on any arm, so
+its magnitude is meaningful in the sense that it is a fitted value the fitter
+chose, not a clamp artifact.)
+
+4. RULES ARGUMENT (RULES_SPEC 5.x / 10.x on tactics and military)
+------------------------------------------------------------------
+Tactic age matters to play value for three rules reasons, all real:
+
+(a) Antiquation (RULES_SPEC 5.x end-of-age): at each age end, the current
+    tactic does NOT disappear (exclusive tactics remain in play even when
+    antiquated), but a tactic of the current or prior age stays relevant
+    while an older one is "outdated" for army purposes. RULES_SPEC 10.4:
+    an Age II/III tactic prints two values (normal / outdated); an army is
+    outdated if ANY of its units is 2+ levels below the tactic's printed
+    age. So a tactic's age directly controls whether your armies pay the
+    lesser outdated value. A bot that knows "my current tactic is age 2 in
+    Age 3" knows its armies are at the outdated rate. TacticLevel carries
+    exactly that.
+
+(b) Replacement horizon: tactics are cheap to switch (play 1 MA, copy 2 MA,
+    max one per Action Phase), so the in-play tactic is a short-lived
+    decision. A positive price on "having a current-age tactic in play"
+    rewards keeping your tactic fresh; a negative price would penalize it,
+    which would only make sense if the bot were being pushed to AVOID having
+    a tactic in play -- but that is never a rule-advantage: having a tactic
+    in play is strictly better than having none (armies form only from the
+    current tactic). So the RULES-sign expectation is: TacticLevel should be
+    >= 0, and the sign should track "currentness": a tactic of the current
+    age is good, an older one less so.
+
+(c) Strength interaction: tactical strength is additive on top of unit
+    strength (RULES_SPEC 10.3). The bigger the army, the more the tactic's
+    age-outdatedness costs. This is a board-scaled effect that TacticLevel
+    (a flat age number) cannot capture on its own -- which is why the
+    Strength/TacticGain/TacticShort channels exist. TacticLevel is the
+    crude "is my tactic fresh" bit; the rest is the sibling family's job.
+
+So the rules permit a POSITIVE TacticLevel (fresh tactic = good). They do not
+permit a meaningfully NEGATIVE one: there is no rules situation in which
+having an older tactic in play is worth more than having a current one. The
+4p value of -14.88 is therefore NOT justified by the rules as a genuine
+3p-vs-4p strategic difference.
+
+5. VERDICT
+----------
+TacticLevel is the ONLY channel for the fact "current tactic's age is N."
+It is not a duplicate of TacticGain/TacticShort (future-reachable strength)
+or TacticBoardCredit/TacticReachCredit (pricing a tactic card). So the sign
+disagreement is not a duplicate-channel artifact.
+
+The opposite signs are a MODELLING DEFECT, not a real 3p-vs-4p difference:
+  * 3p's +23.99 has a clear rules reading (fresh tactic in play is good) and
+    is on the more-converged arm. It is the defensible sign.
+  * 4p's -14.88 has no rules reading that makes a current tactic a downside.
+    4p is the least-converged arm (gen 21874), and the negative sign is most
+    plausibly an under-convergence artifact: at 4p the tactic family is
+    more crowded (more rivals copying, more common-area tactics to copy),
+    so the fitter has more collinear coordinates to trade off against
+    (TacticGain 1.4995, TacticReachCredit 0.3804 are both live at 4p and
+    absent-or-small at 3p), and it has not yet settled TacticLevel onto the
+    rules-consistent positive sign. The fitter can lean on TacticLevel being
+    negative to offset a positive TacticGain while it converges, and the
+    negative has not been pushed back to the rules-consistent side yet.
+
+Recommendation: do NOT treat the 4p negative as a real strategic signal.
+Treat TacticLevel's rules-consistent sign as positive (>= 0). If a fix is
+wanted, a NonNegative gate on TacticLevel (weights.rs already has the
+gating mechanism used for TacticGain NonNegative at 1595 and TacticShort
+NonPositive at 1687) would force the 4p arm to converge to the rules-consistent
+side instead of spending its negative magnitude collinearly offsetting
+TacticGain. That is a one-line gate addition, not an engine change. Until
+4p converges further (gen 21874 is far behind 2p's 120584), the 4p value
+should be read as "not yet converged," not "tactics are bad at 4p."
+
+Method: read-only, narrow grep + sed over features.rs:925-945, cards.rs
+1405-1520/1950-2020/2390-2480, eval.rs:580-700, weights.rs:916/1058/1068/
+1595/1687/2320-2322, cards.rs:47, state.rs:425, RULES_SPEC 10.1-10.5. No .rs
+edits, no build. Champion values read from experiments/rust_champion_{2,3,4}p.json
+(all three arms). No scratch left in the repo.
