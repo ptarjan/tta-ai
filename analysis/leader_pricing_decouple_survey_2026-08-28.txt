@@ -1,0 +1,240 @@
+Leader board pricing decouple survey (2026-08-28)
+====================================================
+
+Read-only survey of the four questions posed for decoupling leader board
+pricing (follow-up to the card_board_pair finding). No code proposed or
+edited. All paths relative to /Users/pt/tta-ai.
+
+(1) What does cards::card_yields return for a Leader id?
+--------------------------------------------------------
+
+NOT empty. card_yields (rust/src/bots/weighted/cards.rs:223) has no
+Leader-specific branch and no leader exclusion: for a leader id it pushes
+the general "effects block" triples from cards.rs:286-333 (the else-branch
+at :280): culture/science/food/resource stock gains, civil/military actions
+(the kind != Government guard at :296 passes for leaders), short-rate
+culture/science, strength, happy, yellow bank, blue free, hand limits,
+colonize bonus. How much a given leader actually returns depends on its
+printed effects data (a pure rider leader like Moses still pushes whatever
+its effects block prints; a leader with no printed fields in those buckets
+returns an empty vec). It is therefore data-dependent, not structurally
+empty.
+
+Why that does not make the static table the leader's board channel:
+card_potential_core (cards.rs:1920-2069) reaches the static-table lines
+(:2053-2054, sum_yields over card_yields) only when the swap branch at
+:2040-2050 does NOT fire. For a Leader that happens in exactly two cases:
+  - board is None (no board passed), or
+  - credit_board == 0.0 (the wall / degenerate-pair case).
+The swap branch comment at cards.rs:2044-2047 says it explicitly: a swap
+card (leader/government/wonder) is priced ONLY by the diff, because
+card_yields would count a leader's printed gain a second time on top of
+the delta that already contains it. board_yields::board_yields (board_yields.rs:852-896)
+builds the diff from swap_stats (board_yields.rs:303) via delta_triples
+(board_yields.rs:355) -- a real before/after stat recompute, NOT a call to
+card_yields -- plus for a Leader only the generic (Feature::Leader, 1.0)
+term when the player has no leader yet (board_yields.rs:876-882) and
+rider_delta (board_yields.rs:524).
+
+So: the static card_yields table is NOT a second board-value channel for a
+leader. It is only reached as a FALLBACK when board-aware pricing is
+unavailable (board None) or gated off (credit_board == 0.0). And when
+credit_board == 0.0 AND base != 0.0 the fallback's early-return gate at
+cards.rs:2034-2043 is not taken either (it requires base == 0.0 AND
+credit_board == 0.0), so a leader at the wall with nonzero base is priced
+by the plain sum_yields scratch path at :2053-2055 -- its printed static
+effects at the rate credit, with ZERO board awareness. The ONLY board-aware
+channel a leader has is the swap diff at cards.rs:2040-2050, and it is
+multiplied by exactly credit_board = card_board_credit + card_board_leader
+(cards.rs:2033, :2050). Confirmed: the swap diff at :2049-2050 is the only
+board-value channel a leader has.
+
+Caveat for the decouple design: the swap diff itself is board-aware in the
+strong sense (recomputed stats, rider deltas) and can be NEGATIVE (a
+replacement that makes things worse). A decoupling that simply routes
+leaders through the static table would turn "replace with a worse leader"
+from a negative board term into a positive static term. The wall at
+sum == 0.0 is what currently deletes this channel entirely (see (1) of the
+card_board_pair file).
+
+(2) Per-type keys in card_board_credit_keys() and wall status
+-------------------------------------------------------------
+
+card_board_credit_keys() (rust/src/bots/weighted/eval.rs:823-835) is
+derived at runtime from cards::board_credit_key over the card table.
+board_credit_key (cards.rs:597-659) has exactly ONE Some arm:
+
+  Leader => Some(WeightKey::CardBoardLeader)   (cards.rs:600)
+
+Every other CardType maps to None (cards.rs:656-659: Farm | Mine | Lab |
+Temple | Library | Arena | Theater | Infantry | Cavalry | Artillery | Air
+| SpecialTech | Tactic | Aggression | War | Pact | Territory | Event |
+Government | Action | Wonder | Bonus).
+
+So card_board_credit_keys() == [WeightKey::CardBoardLeader] and NOTHING
+else. The dominance_repair composite loop (eval.rs:962-973) therefore
+runs over exactly one key. The retired per-type keys (CardBoardGovernment
+2026-08-13, CardBoardAction 2026-08-13, CardBoardWonder 2026-08-13,
+CardBoardBonus 2026-08-24; weights.rs:2788-2790, :2837) are NOT members --
+they were shadowed by dedicated pricers (gov_value/action_value and the
+Wonder branch) before being retired, and board_credit_key was edited to
+return None for them.
+
+Wall status of the live champions (card_board_credit + card_board_leader
+vs 0; "wall" = sum exactly 0.0, i.e. the degenerate pair):
+
+  2p  rust_champion_2p.json gen 120327
+      card_board_credit =  0.1965856875309392
+      card_board_leader = -0.1965856875309392
+      sum = 0.0  -> AT THE WALL (exact equal-and-opposite)
+
+  3p  rust_champion_3p.json gen 67187
+      card_board_credit =  0.20084552274685408
+      card_board_leader =  0.009458936652382385
+      sum = 0.21030445939923647  -> NOT at the wall (positive sum; the
+      leader's board-aware price is active and positive here)
+
+  4p  rust_champion_4p.json gen 21838
+      card_board_credit =  0.3444198528104188
+      card_board_leader = -0.17919798330183695
+      sum = 0.16522186950858185  -> NOT at the wall (positive sum; active
+      and positive)
+
+Note: the degenerate equal-and-opposite state is a 2p-only observation in
+the live champions. The 3p and 4p vectors have a strictly positive sum, so
+their leaders ARE priced board-awar with a positive multiplier. This is a
+useful check: the "leader priced at zero on the board axis" pathology from
+the card_board_pair finding is specific to the 2p champion (and the 2p
+postclimb), not a property of all trained vectors.
+
+(3) Every call site that reads board_credit_key() or credit_board
+------------------------------------------------------------------
+
+board_credit_key (the function) -- non-test, non-comment call sites:
+
+  rust/src/bots/weighted/cards.rs:2033
+      let credit_board = base + board_credit_key(id).map_or(0.0, |k| w.get(k));
+      (the definition of credit_board in card_potential_core)
+  rust/src/bots/weighted/cards.rs:2099
+      swap_slot: let key = board_credit_key(id).expect("Leader always has a
+      board credit key"); then the priced_board_aware gate at :2100-2101
+      (w.get(CardBoardCredit) + w.get(key) != 0.0)
+  rust/src/bots/weighted/eval.rs:829
+      card_board_credit_keys() init: cards::board_credit_key(...) over the
+      card table (derives the composite-key list; today just CardBoardLeader)
+  rust/src/bin/leadersign.rs:79
+      let key = board_credit_key(id).expect("leaders always have a board
+      credit key"); (report-only diagnostic)
+
+board_credit_key is defined at cards.rs:597. The exhaustive test that pins
+every type's membership is at cards.rs:2742-2776 (every_card_types_board_
+credit_key_membership_is_pinned) -- a decouple that changes any arm must
+keep that test green or edit it deliberately.
+
+credit_board (the local in card_potential_core) -- every use:
+
+  rust/src/bots/weighted/cards.rs:2033  (definition, above)
+  rust/src/bots/weighted/cards.rs:2034  gate: if base == 0.0 && credit_board
+      == 0.0 { early return static table }
+  rust/src/bots/weighted/cards.rs:2042  swap-branch gate: (board, credit_board
+      != 0.0)
+  rust/src/bots/weighted/cards.rs:2050  the swap-diff multiplier:
+      credit_board * sum_board_triples(&swap, w) + type_bonus   <-- THE
+      leader's only board channel
+  rust/src/bots/weighted/cards.rs:2064  board_extra gate: (board, credit_board
+      != 0.0)
+  rust/src/bots/weighted/cards.rs:2066  board_extra multiplier:
+      credit_board * sum_board_triples(&extra, w)   <-- moot for leaders:
+      board_extra (board_yields.rs:908-940) only emits for
+      Special::CulturePerCivilizationWithMoreCulture and
+      Special::ResourcesForMilitaryUnitsPerStrongerCivilization, both of
+      which are Action cards, never Leader
+
+So the leader-relevant blast radius is small: cards.rs:2033 (compute),
+:2034 (early-return gate), :2042/:2050 (the swap diff), and cards.rs:2099-
+2101 (swap_slot gate). cards.rs:2064/:2066 do not touch leaders.
+card_choice (cards.rs:2056-2062) rides base, not credit_board, so it is
+unaffected. wonder_outlook (cards.rs:2313) reads base only.
+
+Downstream callers of card_potential (the function that contains
+credit_board), so an implementer knows who re-evaluates when the leader
+term changes:
+  rust/src/bots/weighted/row.rs:264, :356, :505, :780-781, :807, :856
+      (row_pressure / row_last_copy / rival-hand walks)
+  rust/src/bots/weighted/eval.rs:2137, :2143  (the LEADERSIGN tests)
+  cards.rs internal: _hand_total (the single-slot collapse that swap_slot
+      gates)
+Everything else that touches a leader's value goes through card_potential
+or board_yields directly; there is no other place that reads
+card_board_leader except via credit_board and the two gates above.
+
+(4) Existing emitted feature that already carries leader board value?
+---------------------------------------------------------------------
+
+NO. There is no emitted feature in features.rs that carries leader board
+value. The only leader-related features features.rs emits are:
+  features.rs:1023  WeightKey::Leader = 1.0 if the player has a leader, else
+      0.0  (the generic "I own a leader" indicator, not a per-card board
+      price)
+  features.rs:1031-1032  WeightKey::LeaderReplacement = 1.0 if the player
+      holds a leader AND has already taken 2+ leader ages, else 0.0  (a
+      replacement-urgency flag)
+features.rs has no call to card_yields, card_potential, card_choice,
+sum_yields, or board_yields, and no per-card leader price. This is by
+design: card_board_leader (and card_board_credit) are NOT_SET_BY_FEATURES
+-- registry.rs:323-324 lists both under "Multipliers the card-in-hand
+valuation layer (cards.rs) applies to a static/board yield-table ROW --
+there is nothing for features() to write". They are pure multipliers the
+climb tunes, read only inside card_potential_core.
+
+Implication for the decouple: there is no existing feature the implementer
+can reuse to carry a leader's board value as a first-class, board-aware,
+per-card quantity. The leader's board value today exists ONLY as the
+runtime-computed swap-diff triple list (board_yields::board_yields)
+multiplied by credit_board inside card_potential_core. To decouple leader
+pricing from the card_board_credit/card_board_leader sum (e.g. so a leader
+is not driven to zero on the 2p wall), the options are:
+  (a) introduce a brand-new WeightKey dedicated to leader board credit
+      (separate from card_board_credit and card_board_leader), wired into
+      card_potential_core's leader arm and swap_slot; OR
+  (b) keep the existing key but change how it is composed for leaders so
+      the dominance_repair composite wall cannot force it to cancel
+      card_board_credit.
+Either way a new WeightKey (or a re-composition) is required; no feature
+exists to fall back on. This is a design decision for the implementer, not
+something the survey can settle. Note also that card_board_leader is
+SignIntent::Free (weights.rs:1712) and card_board_credit is NonNegative
+(weights.rs:1489); the composite gate (eval.rs:961-973) is the ONLY
+constraint on card_board_leader, so a new independent key would inherit the
+same "only the composite gate touches it" status and the flat-valley
+behaviour would recur unless the new key is given a real measured bound
+(and is NOT_SET_BY_FEATURES, like its siblings).
+
+Summary of the four answers
+---------------------------
+(1) card_yields for a Leader is NOT structurally empty (general effects
+    table, cards.rs:286-333), but it is NOT a board channel: the swap
+    branch (cards.rs:2040-2050) intercepts and returns whenever
+    board.is_some() && credit_board != 0.0, and the static table is only
+    reached as a fallback (board None or credit_board == 0.0). The swap
+    diff at :2049-2050 is the ONLY board-aware value channel a leader has.
+    Caveat: that diff is a real before/after stat delta (can be negative),
+    not card_yields.
+(2) card_board_credit_keys() contains exactly one key: CardBoardLeader
+    (board_credit_key has a single Some arm at cards.rs:600; all other
+    types return None at :656-659; the four retired per-type keys are not
+    members). Wall status of live champions: 2p AT the wall (sum 0.0,
+    exact equal-and-opposite), 3p NOT at the wall (sum +0.2103), 4p NOT at
+    the wall (sum +0.1652). The degenerate zero-leader-price state is
+    2p-specific.
+(3) board_credit_key call sites: cards.rs:2033, cards.rs:2099, eval.rs:829,
+    bin/leadersign.rs:79. credit_board uses: cards.rs:2033, :2034, :2042,
+    :2050, :2064, :2066. Leader-relevant subset: :2033, :2034, :2042,
+    :2050, plus swap_slot :2099-2101. Downstream card_potential callers:
+    row.rs (six sites) and eval.rs LEADERSIGN tests.
+(4) No existing emitted feature carries leader board value. The only
+    leader features are the Leader ownership flag (features.rs:1023) and
+    the LeaderReplacement flag (features.rs:1031). card_board_leader and
+    card_board_credit are NOT_SET_BY_FEATURES (registry.rs:323-324). A
+    decouple would need either a brand-new WeightKey or a re-composition of
+    the existing key; nothing to reuse.
