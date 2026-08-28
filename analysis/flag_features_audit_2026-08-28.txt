@@ -246,3 +246,67 @@ flips by 1.0 between candidates" and cannot see "the 1.0 it scales is a flag
 with no within-class channel." That is the measurement-side half of this
 defect class: spread-based rails cannot distinguish a 1.0 swing on a
 continuous residual from a 1.0 swing on a Leader-shaped flag.
+
+=============================================================================
+COORDINATOR CORRECTION (2026-08-28) -- findings A and B are RE-DIAGNOSED
+=============================================================================
+
+The audit above reads the FROZEN 2026-08-26 champions. Between that freeze and
+now, commit f942741 raised CLAMP_CEILING from 60 to 120. That accident is a
+clean natural experiment, and it re-diagnoses the audit's two headline findings.
+
+Exactly three 3p keys sat at the OLD wall (60.0) in the freeze. Comparing them
+against the LIVE 3p champion (gen 67249), which has been climbing under the
+raised ceiling ever since:
+
+    key                  frozen@60-rail  ->  live      reading
+    -------------------  --------------      --------  -----------------------
+    tactic_level             60.0000    ->    23.9901  FELL OFF -- real gradient
+    strength                 60.0000    ->    57.8075  FELL OFF -- real gradient
+    attack_cost_doubled      60.0000    ->   120.0000  FOLLOWED THE WALL -- none
+    colonies (was 53.07)     53.0749    ->   120.0000  climbed to the new wall
+
+A key with a real fitness gradient, released from a wall, moves to where fitness
+wants it. A key with NO gradient random-walks and is pinned by whatever wall
+exists, so it tracks the wall wherever the wall goes. Therefore:
+
+  FINDING B IS WRONG AS STATED. `attack_cost_doubled` is not "a flag priced at
+  rank 1 with a dead discriminator". It is a DEAD KEY -- zero fitness gradient,
+  parked on the wall, and it followed the wall from 60 to 120 the moment the
+  wall moved. It flags Gandhi's OpponentsPayDoubleMilitaryActionsToAttackYou;
+  one Age III leader, essentially never reachable at 3p. This is the
+  `card_rate_credit` pattern (unreachable, yet the 3p climb drove it to -5.94),
+  not the Leader pattern. Its rank-1 magnitude is an artifact of the clamp, and
+  it changes no decision. Do not "fix" its discriminator.
+
+  FINDING A IS STALE, AND SHARPER FOR IT. `tactic_level` is NOT rail-pinned on
+  the live champion -- it is 23.99, having fallen 36 points the instant the
+  wall moved away. So it has a genuine, strong gradient and was really being
+  clamped before. The interesting fact survives the correction and is now
+  cleanly attributable: a live, frequently-firing key is priced +23.99 at 3p and
+  -36.15 at 4p. That sign disagreement is real, not a rail artifact.
+
+  FINDINGS C, D, E, F STAND. Checked against live: 4p `special_techs` is
+  +40.7033 (frozen +49.3279) -- alive, large, off any rail, and still one
+  constant over ~20 heterogeneous effects. Leader is confirmed independently by
+  the seat-0 survey.
+
+THE REUSABLE INSTRUMENT
+-----------------------
+Moving the clamp ceiling is a FREE REACHABILITY TEST for every rail-pinned key,
+and it costs nothing but a diff of two champion files across the change:
+
+    pinned at the old wall, FELL OFF after the raise  -> alive, was truly clamped
+    pinned at the old wall, FOLLOWED the wall up      -> dead, no gradient at all
+
+This is strictly better than inferring deadness from a spread row, because it
+observes the climb's own response rather than an instrument's blindness
+(cf. "a zero spread row is instrument blindness"). It also bears directly on the
+clamp-ceiling A/B due 2026-08-30: the raise DID buy something real -- it let
+`tactic_level` find 23.99 instead of sitting on a wall at 60 -- while also
+letting two gradient-free keys wander out to 120, which is cosmetic but makes
+"rank 1 of 169" meaningless as a way to read a champion vector.
+
+CAVEAT: `colonies` rose 53.07 -> 120 rather than starting at the wall, so it is
+ambiguous between a strong real gradient that was not previously binding and
+drift. Resolving it needs a THIRD ceiling value; do not read it either way yet.
