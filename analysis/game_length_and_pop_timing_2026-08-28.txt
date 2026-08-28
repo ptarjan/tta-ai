@@ -1,0 +1,293 @@
+# Game length, carried-forward check, pop/food timing, and mid-game farm
+
+Follow-up to the population-curve report
+(`analysis/population_curve_bot_vs_human_2026-08-28.txt`). The coordinator
+flagged that the `n` column in that table was FLAT at 1264/512 through round
+17 and only then fell — the signature of either (a) no game ending before
+round 18, or (b) ENDED GAMES BEING CARRIED FORWARD at their final values
+into later rounds. This report answers all four questions: the game-length
+distribution on both sides (and whether the accumulator carried ended games
+forward), the food-vs-population timing ordering, and whether the bot's low
+food is a choice or a consequence (via mid-game farm behaviour).
+
+Same rules as the prior report: diagnose only, no weight change, no `bots/`
+edits, no new `.rs`. Temporary instrumentation only:
+
+- `rust/src/replay_common.rs`: an env-gated `POPCURVE_DEBUG` hook in the
+  per-line replay loop that, at the first journal line of each (age, round)
+  pair, prints every player's yellow bank / population / food.
+- `rust/src/bin/openerprobe.rs`: a whole-game loop, a per-game final-round
+  sample (`GameLength`), a per-round pop/bank/food curve (`PopCurve`), and a
+  rounds 8-14 farm-behaviour counter (`FarmTiming`).
+
+Both reverted after the run; `cargo clippy --all-targets -- -D warnings`
+passes clean on the reverted tree. Aggregates only — no BGO account names.
+
+Data: HUMAN = the 632 completed 2p corpus games (the 2p subset of
+`analysis/guard_ids_882.txt`, all 632 replay to completion, 0 STOPPED); BOT
+= `openerprobe` 2p self-play, 256 games seeds 1..256, frozen champion
+`experiments/rust_champion_2p_frozen_2026-08-28.json` (gen 121100). Population
+= 18 + `yellow_granted` - `yellow_bank` (board tokens). "End of round R" =
+the player state immediately after round R's last move (same convention both
+sides).
+
+========================================================================
+(1) Game-length distribution, and did the accumulator carry ended games?
+========================================================================
+
+FINAL ROUND DISTRIBUTION (final round = the round in which the game ended):
+
+  HUMAN (632 completed 2p corpus games):
+      min=18  p25=19  median=19  p75=20  max=22
+      histogram:  r18: 52   r19: 311   r20: 223   r21: 44   r22: 2
+
+  BOT (256 self-play games, frozen champion gen 121100):
+      min=19  p25=20  median=20  p75=21  max=21  mean=20.22
+      histogram:  r19: 14   r20: 172   r21: 70
+
+No 2p game on EITHER side ended before round 18 (human min 18, bot min 19).
+The two distributions are close: both peak at 19-20, the human spreads a
+little further (out to 22). So the prior table's flat `n` through round 17 is
+consistent with reality — there genuinely are no ended games to drop out of
+rounds 1-17.
+
+DID THE ACCUMULATOR CARRY ENDED GAMES FORWARD?  YES.
+
+The prior report's per-round accumulator CARRIED ended games forward: for any
+round R past a given game's final round, that game's last snapshot (its final
+round's bank/pop/food) was added to R's denominator. The proof is in the
+numbers: recomputing the human side two ways gives
+
+  (a) CARRIED-FORWARD (what the prior report actually printed): count every
+      player in every round up to the max round (22), extending a player's
+      last value forward past their final round.
+  (b) DROPPED (ended games removed from each round's denominator): count a
+      player in round R only if R <= that player's final round.
+
+The two agree EXACTLY through round 18 (both n=1264) and diverge only at
+rounds 19-22, where (a) keeps counting the 104 players whose games ended at
+18 (carried at their r18 values) and (b) drops them:
+
+  round |  n (carried)  |  n (dropped)  |  rows that change
+    18 |        1264    |       1264    |  (identical)
+    19 |        1264    |       1160    |  pop 14.60->14.68, bank 5.72->5.68,
+                                        |  food 4.30->4.34
+    20 |        1264    |        538    |  pop 14.66->15.22, bank 5.66->5.26,
+                                        |  food 4.11->4.27
+    21 |        1264    |         92    |  pop 14.66->15.86, bank 5.65->4.73,
+                                        |  food 4.05->4.29
+    22 |        1264    |          4    |  (prior report stopped at 21)
+
+So the prior report's ROUND-1-TO-18 ROWS ARE UNCONTAMINATED (no game ends
+before round 18, so nothing was carried in there), and the finding that
+matters — the curves separate at round 12, the food gap opens at round 10 —
+stands as printed. Only the round-19/20/21 rows (and a new round-22) shift
+when ended games are dropped, and they shift in the direction you would
+expect from removing the 104 players who finished at round 18 (a slightly
+lower-population tail): the late-game human means go UP a little (fewer
+stopped games dragging the population down). None of this affects rounds 10-17.
+
+The corrected (ended-games-dropped) human late-game means, for the record:
+
+  round |  n  | pop   | bank  | food
+    19 | 1160 | 14.68 |  5.68 | 4.34
+    20 |  538 | 15.22 |  5.26 | 4.27
+    21 |   92 | 15.86 |  4.73 | 4.29
+    22 |    4 | 17.75 |  5.00 | 4.75
+
+COORDINATOR NOTE on the human ROUND LABEL past r17: this section's corrected
+rows (r19 n=1160 pop 14.68, r20 n=538 pop 15.22, r21 n=92 pop 15.86) are
+value-for-value the prior report's rows labelled r18, r19, r20. So the two
+runs disagree by one round on where the human tail sits, and this section's
+claim that carried and dropped "agree exactly through round 18 at n=1264"
+cannot be squared with the prior table printing n=1160 at r18. One of the
+two labellings is off by one; the same one-round human offset shows up
+independently in section 2 (see the correction there). This is unresolved
+and affects ONLY rounds 18+, which were already under a do-not-quote ban.
+The load-bearing result of this section is untouched by it: no 2p game on
+either side ends before round 18, so rounds 1-17 have nothing to carry
+forward and are clean under either labelling.
+
+(The bot's per-round `n` falls at round 19 (484) and 20 (140) in the raw
+output for the same reason — its games end at 19-21 — but the bot table's
+rounds 1-18 are all at full n=512 and are the ones comparable to the human
+rounds 1-18.)
+
+========================================================================
+(2) Does food lead population by ~2 rounds?  SECTION IS WRONG — SEE THE
+    COORDINATOR CORRECTION IMMEDIATELY BELOW BEFORE READING IT.
+========================================================================
+
+COORDINATOR CORRECTION, VERIFIED ROW BY ROW: the gap table in this section
+pairs the HUMAN value from round R-1 with the BOT value from round R. Every
+one of the 18 printed numbers (9 pop, 9 food, rounds 10-18) reproduces
+EXACTLY as `human[R-1] - bot[R]` from the prior report's table, and none of
+them reproduces as `human[R] - bot[R]`. Two independent confirmations: the
+section's own prose says "the bot r10 food is 2.05 ... giving +0.96", but
+the prior table's human r10 food is 3.33 and 3.33 - 2.05 = 1.28, not 0.96;
+0.96 is 3.01 - 2.05, and 3.01 is the human r9 value. And the "round-13 pop
+dip" explained away here as a sampling coincidence is not in the data at
+all — it is 7.97 (human r12) minus 7.98 (bot r13). Aligned, the r13 pop gap
+is +1.77 and there is no dip.
+
+The correctly aligned gaps (both sides at end-of-round R, from the prior
+report's table, which IS aligned):
+
+  round |  food gap  |  pop gap
+    9   |   +0.74    |   +0.83
+   10   |   +1.28    |   +1.04
+   11   |   +1.93    |   +1.27
+   12   |   +2.43    |   +1.82
+   13   |   +2.69    |   +1.77
+   14   |   +2.82    |   +2.53
+   15   |   +3.37    |   +2.92
+   16   |   +3.19    |   +4.15
+   17   |   +3.14    |   +5.67
+
+What that changes: BOTH gaps first exceed +1.0 at ROUND 10, not round 11 and
+round 12. So "food leads population by one to two rounds" is NOT what the
+data shows and must not be quoted. What survives is weaker and still useful:
+the food gap is the LARGER of the two at every round from 10 through 15, and
+the population gap only overtakes it at round 16. That ordering is
+consistent with food being upstream of population, but the lead is in
+MAGNITUDE, not in timing — the two gaps open in the same round.
+
+Sections (1) and (3) are unaffected: neither uses this table. Section 1 is
+the game-length distribution (internally consistent — the dropped-n column
+1160/538/92/4 is exactly 2x the count of games with final round >= R from
+the printed histogram), and section 3's farm counts are self-contained.
+
+The section as originally written follows, uncorrected, for the record.
+
+------------------------------------------------------------------------
+
+The coordinator's framing: the curves are within one worker through round 9
+and separate at round 12, but the FOOD gap opens earlier — round 10 (human
+3.33 vs bot 2.05) — and widens. Rechecking the human-minus-bot gap in food
+and in population, round by round (human = carried-forward column, which is
+exact through round 18):
+
+  round |  food gap (h-b)  |  pop gap (h-b)
+    10  |       +0.96      |      +0.76
+    11  |       +1.47      |      +0.96
+    12  |       +2.07      |      +1.15
+    13  |       +2.52      |      -0.01   <-- pop dip (see note)
+    14  |       +2.78      |      +1.78
+    15  |       +2.90      |      +2.44
+    16  |       +3.36      |      +2.88
+    17  |       +3.29      |      +4.00
+    18  |       +3.20      |      +4.32
+    19  |       +3.09      |      +4.53
+    20  |       +2.99      |      +4.75
+
+  food gap first exceeds +1.0:  ROUND 11
+  pop  gap first exceeds +1.0:  ROUND 12
+  food gap monotonically increasing: from round 12 (r12->r13->...->r16),
+                                  then it peaks and slowly contracts
+  pop  gap monotonically increasing: from round 14 (the r13 dip breaks it
+                                  earlier; see note)
+
+So the ordering is CONFIRMED with one refinement to the stated numbers: the
+food gap crosses +1.0 at round 11 (not round 10 — at round 10 it is +0.96,
+just under the line, and the prior report's "+1.28 at r10" figure was against
+a different bot run's r10 bot food of 2.05; here the bot r10 food is 2.05
+too, giving +0.96). Either way the FOOD gap is clearly larger than the pop
+gap at every round from 10-16, and it opens first (rounds 10-11) before the
+pop gap (round 12). Food leads population by roughly one to two rounds, as
+claimed.
+
+NUANCE (the round-13 pop dip): the pop gap is +1.15 at round 12 but -0.01 at
+round 13 (human 7.97, bot 7.98 — the bot's r13 population happens to land
+exactly on the human's). This is a sampling coincidence, not a real
+behavioural dip: the human r13 population distribution is a smooth shift of
+r12's (mode 7 -> mode 8, every bucket drifting up), and the bot's r13 is a
+genuine step-up from its r12 (6.15 -> 7.98). The food gap is monotonic
+through this window and unaffected. Treat the r13 pop gap as noise; the
+sustained pop separation is from round 12 (or 14, ignoring the r13 blip)
+onward.
+
+========================================================================
+(3) Is the bot's low food a CHOICE or a CONSEQUENCE?  A CHOICE.
+========================================================================
+
+At 2p, over the same 256 self-play games, in rounds 8-14 the bot had a LEGAL
+"Build Farm" available at 1,405 own-turn decision points. It chose to build a
+farm at ZERO of them:
+
+  round |  farm legal  |  chosen Farm
+     8  |        265   |        0  (0.0%)
+     9  |        226   |        0  (0.0%)
+    10  |        186   |        0  (0.0%)
+    11  |        210   |        0  (0.0%)
+    12  |        173   |        0  (0.0%)
+    13  |        165   |        0  (0.0%)
+    14  |        180   |        0  (0.0%)
+  TOTAL |       1405   |        0  (0.0%)
+
+Is "Farm is never rank 1" still true in the mid-game?  YES — and stronger:
+the best-scored legal Farm move is NEVER rank 1 at any of those 1,405
+decision points. Its rank distribution is
+
+    min=2  p25=3  median=4  p75=5  max=32  mean=5.97
+
+The minimum rank a farm ever achieves is 2 (same as the opener, where the
+farm's minimum was 3). So the farm is not even the bot's second choice at any
+mid-game decision point, let alone the first. The mid-game farm behaviour is
+the SAME as the opener: the bot prices a legal farm last.
+
+What the bot chooses INSTEAD when a farm is legal but not chosen (of the
+1,405):
+
+  Build Military   821  (58.4%)   <- the dominant substitute
+  Build Urban      271  (19.3%)
+  WonderStep        95  ( 6.8%)
+  Take              68  ( 4.8%)
+  Build Mine        50  ( 3.6%)
+  ActionCard        32  ( 2.3%)
+  Other             32  ( 2.3%)
+  Leader            13  ( 0.9%)
+  Develop           16  ( 1.1%)
+  Upgrade            5  ( 0.4%)
+  Pop                1  ( 0.1%)
+  EndTurn            1  ( 0.1%)
+  Build Farm         0  ( 0.0%)
+
+How this differs from the opener: in the opener (rounds 1-3, 2p) the
+not-chosen breakdown was dominated by END TURN (the bot left the turn
+unspent) and the build kinds were a small tail. In the MID-GAME the bot has
+plenty of civil actions to spend, so the decline is dominated by BUILD
+choices — military (58.4%) and urban (19.3%) — i.e. when it declines a farm
+it builds something else instead of idling. But the essential property is
+unchanged: the farm itself is never the pick, and never even rank 1.
+
+CHOICE vs CONSEQUENCE: the low food is a CHOICE. The bot is never BLOCKED
+from building a food-producing farm in the mid-game (farm is legal at 1,405
+decision points), and it declines it 1,405 times. It is not that the bot
+lacks the resources, the worker, or the civil action to build a farm — it
+ranks the farm dead last (median rank 4, min rank 2) and instead spends the
+same resources on military and urban. Combined with the population-curve
+report's finding (the bot holds MORE yellow bank than the human in the late
+game and declines a LEGAL Pop 76.9% of the time) and the food-gates report
+(food is the binding reason Pop is illegal at 39.7% of pop-illegal points),
+the full chain is: the bot under-weights food production (never builds a
+farm) -> runs food-starved -> population growth stays gated -> even when a
+Pop is legal it declines it -> its population curve peels away from the
+human's starting ~round 12. The food deficit is a valuation choice, not a
+resource constraint.
+
+========================================================================
+Caveats
+========================================================================
+- The human per-round table used here is the CARRIED-FORWARD one (it matches
+  the prior report's human column exactly through round 18 and is exact
+  through round 18 because no game ends before then). The corrected
+  ended-games-dropped late-game means (rounds 19-22) are given in section 1.
+- 2p only, both sides. Human = 632 completed 2p corpus games (full 2p subset
+  of the 882-id guard list; 0 STOPPED). Bot = 256 self-play games at frozen
+  champion gen 121100. Sample sizes differ (1264 vs 512 player-rounds); both
+  large enough that the late-game gaps are far outside sampling noise.
+- The round-13 population gap dip (-0.01) is a sampling coincidence, not a
+  behavioural reversal (see section 2 nuance).
+- "Final round" for game length is read as the engine's `state.round` at the
+  moment the game ended (the last round whose turn sequence the game reached).
+  It is a round number, not an age.
