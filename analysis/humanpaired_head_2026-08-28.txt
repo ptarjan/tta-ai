@@ -1,0 +1,69 @@
+humanpaired re-run at HEAD (post-f13707f), 2026-08-28
+=====================================================
+
+WHY THIS RUN EXISTS
+-------------------
+`humanpaired` is one of the four journal-driven binaries that scored candidate moves
+through `rank_moves`, which applied `Move::EndTurn` before scoring it until `f13707f`.
+Like `agreement` and `whydiverge`, it takes its positions from the human journal, so it
+saw the RIGHT positions and put WRONG numbers on them. The error is bounded and a re-run
+erases it. Every humanpaired figure taken before `f13707f` is superseded by this one.
+
+SETUP
+-----
+binary      rust/target/release/humanpaired (built 2026-08-28 04:59, at HEAD 1939ceb)
+index       sources/bgo/index.tsv
+journals    sources/bgo/journals
+min_tier    Prince   <-- lowest BGO tier, so this includes EVERY tier
+human side  analysis/frozen/human_weights.json
+bot side    frozen copy of experiments/rust_champion_{2,3,4}p.json, 2p champion gen 121046
+
+SCOPE IS NOT THE SAME AS agreement / whydiverge
+-----------------------------------------------
+Those two ran on `head -200 analysis/guard_ids_882.txt` (200 games). This ran on whatever
+`humanpaired` itself selects as held-out at tier >= Prince: 210 games, all 210 with a
+journal processed, 67688 paired decisions, 101 skipped for human_move-not-in-legal_moves.
+Do NOT place the three runs side by side as if they were the same sample.
+
+RESULT
+------
+                       n        HumanBot          WeightedBot (champion)
+  overall            67688   26479 = 39.1%        16286 = 24.1%
+  age A               1306     529 = 40.5%          764 = 58.5%
+  age I              19737    8272 = 41.9%         4764 = 24.1%
+  age II             20287    7772 = 38.3%         4358 = 21.5%
+  age III            20598    7670 = 37.2%         4756 = 23.1%
+  age IV              5760    2236 = 38.8%         1644 = 28.5%
+
+READING IT
+----------
+Both sides are scored on IDENTICAL decisions, so the comparison is paired and the gap is
+real: a weight vector fitted to imitate humans reproduces the human's move about 39% of
+the time; the climbed champion does so about 24%.
+
+Two things are worth noting and neither is an error to fix.
+
+1. The champion's 24.1% here lands on top of the independent `agreement` run's 24.11%
+   (different binary, different 200-game sample). Two instruments agreeing to two decimal
+   places on separate samples is a sanity check that both re-runs are sound.
+
+2. Age A INVERTS: the champion agrees with the human MORE than the human-fit weights do
+   (58.5% vs 40.5%), and it is the only age where that happens. n=1306 is small and Age A
+   is the most constrained part of the game -- few legal moves, so a high agreement rate
+   is cheap -- but it is the one slice where the champion is not the worse imitator.
+
+DO NOT FIT ON THESE NUMBERS. A higher agreement score is not a better bot. Fitting the
+leaf eval or a gate on human agreement has lost three separate ways and is on the
+do-not-do list; a divergence from a human is evidence to investigate, never an error to
+minimise. In particular, the 39.1% vs 24.1% gap is NOT a reason to move the champion
+toward human_weights.json -- HumanBot has never beaten the champion at playing the game.
+
+BATCH STATUS
+------------
+Three of the four journal instruments have been re-run at HEAD and persisted:
+  agreement   analysis/agreement_head_2026-08-28.txt   (135e819)
+  whydiverge  analysis/whydiverge_head_2026-08-28.txt  (29c82a0)
+  humanpaired this file
+`agreefit` was deliberately NOT re-run. Its entire purpose is fitting weights to maximise
+human agreement, which is on the do-not-do list, so its output would have to be caveated
+into uselessness. Omitted by choice, not by oversight.
