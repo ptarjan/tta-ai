@@ -1,0 +1,208 @@
+FOOD-FAMILY COLLINEARITY SURVEY (2026-08-28)
+
+Why: the farm-vs-mine arithmetic (2d4e83e / 7d3b350) showed the farm
+inherits a NEGATIVE food price (food_rate -0.184 at 2p). A rules-derived
+NonNegative floor on FoodRate is already queued as an experiment. This
+file answers, BEFORE that experiment runs: would the floor fix anything,
+or would the negative simply migrate to a collinear neighbour? Per the
+coordinator: NO sign_intent proposal is made here -- the experiment is
+already designed and this must not pre-empt it.
+
+Datable: experiments/rust_champion_{2,3,4}p.json read 2026-08-28 at
+gen 2p 120696, 3p 67330, 4p 21876 (live files; all moved since the
+farm-vs-mine read).
+
+1. EVERY WeightKey THAT READS THE PLAYER'S FOOD
+-----------------------------------------------
+Derived from features.rs (narrow grep + small sed windows). SIX keys read
+the evaluated player's own food, one reads a rival's:
+
+  1. FoodRate        features.rs:713
+  2. FoodStock       features.rs:736
+  3. FoodGap         features.rs:1172
+  4. FoodSurplus     features.rs:1173
+  5. FamineDeficit   features.rs:752
+  6. PopCost         features.rs:838  (needs.food, via marginal_needs,
+                                      features.rs:308-317, economy::
+                                      pop_food_cost)
+  7. Uprising        features.rs:891-894  (s.food inside
+                                      uprising_production_at_stake)
+  8. RivalFoodStock  features.rs:1158  (rival's food, rivals.rs:110,121 --
+                                      max over rivals of q.food; NOT the
+                                      evaluated player's food)
+
+Also checked and NOT a reader: the consumption/corruption tables read the
+PROJECTED BANKS (yellow_bank / blue_free, features.rs:711-712), not food;
+Discontent/HappyMargin are the happiness margin, not food. No other
+f.set touches p.food, s.food, needs.food, or a food hinge.
+
+2. WHAT EACH SEPARATELY PRICES (net vs gross)
+---------------------------------------------
+FoodRate (features.rs:713): `s.food + g(FoodRate) - consumption`.
+NET surplus / famine margin: gross production (s.food) plus pending food
+gains the trial state cannot show, MINUS the consumption bill read off
+the projected yellow bank. It is the per-turn food balance, not gross
+production. Test at features.rs:1327-1344 fixes its meaning: a bigger
+population must lower food_rate by exactly the consumption it owes.
+
+FoodStock (features.rs:736): `p.food + g(FoodStock)`. GROSS stock on the
+board plus pending food gains. Not net of anything -- the raw available
+food before this turn's production is added.
+
+FoodGap (features.rs:1172): `(needs.food - food_have).max(0.0)`, where
+food_have = FoodStock (features.rs:1171) and needs.food is the
+population-increase food price (marginal_needs, features.rs:308-317).
+The SHORTFALL against the pop threshold: "how much food short of being
+able to grow". It is net of the pop threshold, not of consumption; the
+features.rs:738-751 comment states explicitly that this is a DIFFERENT
+rulebook threshold from FamineDeficit's.
+
+FoodSurplus (features.rs:1173): the mirror hinge, `(food_have -
+needs.food).max(0.0)`. Food ABOVE the pop threshold. Same threshold,
+opposite side; together with FoodGap it is the two-coordinate gap/surplus
+idiom (weights.rs doc on that block).
+
+FamineDeficit (features.rs:752): `(-(FoodStock + FoodRate)).max(0.0)`.
+Net: by construction FoodStock + FoodRate = p.food + pending + s.food +
+pending - consumption = available food this turn MINUS consumption, so
+this is the RULE'S OWN famine shortfall (RULES_SPEC 6.6 step 3d,
+economy.rs:1057-1065): surplus reads 0.0, deficit reads the exact
+missing count (4 culture lost per missing food). It is the only key
+that prices the famine cliff itself, and it is a strict FUNCTION of
+FoodStock and FoodRate -- which is the collinearity that matters for
+this question (section 3).
+
+PopCost (features.rs:838): `needs.food`, the raw population-increase food
+price (the same number FoodGap/FoodSurplus threshold against). GROSS
+rulebook constant for this player (discount/bank-adjusted, but not net
+of any stock). It prices "how expensive the next population is".
+
+Uprising (features.rs:891-894): `uprising_production_at_stake =
+s.science + s.culture + s.food + s.resources`, set only when
+discontent > free workers. s.food enters as ONE of four additive terms
+scaling the production at stake if the player's workforce revolts (the
+entire production phase is forfeited, features.rs:880-890). It prices
+food only as its share of total production, inside a gated event term.
+
+RivalFoodStock (features.rs:1158): the strongest rival's gross food
+stock (rivals.rs:110-121, max over rivals of q.food). Not the evaluated
+player's food at all -- listed for completeness of "every food reader".
+
+3. THE COLLINEARITY THAT MATTERS FOR THE FLOOR
+---------------------------------------------
+The queued floor acts on FoodRate. Which neighbours could absorb a
+negative that the floor removes?
+
+(a) FamineDeficit is a STRICT FUNCTION of (FoodStock, FoodRate):
+FamineDeficit = max(0, -FoodStock - FoodRate). It carries no
+independent information. If FoodRate is floored at 0 and the fitter
+still needs to price "food is bad here", it can do so through
+FamineDeficit's weight -- but only in positions where FoodStock +
+FoodRate < 0 (the famine zone). In the SURPLUS zone (sum >= 0)
+FamineDeficit is identically 0 and cannot carry anything. So the
+famine-deficit channel is available as a migration sink ONLY in the
+famine zone; elsewhere it is structurally silent.
+
+(b) FoodStock is the other additive member of the same sum. A floor on
+FoodRate leaves FoodStock free to go negative and absorb the "food is a
+liability" price for every position, famine or not. This is the wide
+sink: unlike FamineDeficit it is live in every food state. If the
+negative migrates anywhere, this is the most likely home.
+
+(c) FoodGap / FoodSurplus are net of the POP threshold (needs.food), a
+different rulebook fact from consumption. They can carry "food relative
+to my pop plan" but not "food relative to my consumption bill". A
+migration here would change what is being said (pop-readiness, not
+survival), so a floor-induced move onto them would be a genuine
+re-pricing, not a silent substitution.
+
+(d) PopCost is a constant per player (no state dependence in the
+decision), so it cannot absorb a position-varying negative -- it can
+only shift the whole pop axis.
+
+(e) Uprising's s.food term is gated on discontent > free workers and
+diluted across four resources; it is not a meaningful sink for a
+general food-negative.
+
+LIVE EVIDENCE (gen 2p 120696 / 3p 67330 / 4p 21876):
+
+  key              2p            3p             4p
+  food_rate        -0.183861     -0.213849      +0.437517
+  food_stock       +0.943289     +46.455304     +0.021888
+  food_gap         -0.258007     -0.264086      -0.018226
+  food_surplus     -0.209687     +0.317951      +0.304382
+  famine_deficit   -0.198414     0.0            -0.027743
+  pop_cost         -0.029796     -0.052872      -0.008076
+  uprising         -37.271268    -13.613098     -0.049159
+  rival_food_stock +0.191805     +0.047481      +0.098059
+
+Read: food_rate is NEGATIVE on both converged arms (2p -0.184, 3p -0.214)
+and POSITIVE on 4p (+0.438, least-converged, gen 21876). The negative is
+not an arm-specific artifact -- two independent arms agree on it.
+
+Where has the rest of the family gone? food_stock is +0.94 at 2p and
++46.46 at 3p -- LARGE POSITIVE, not negative. If the fitter wanted to
+price "food is a liability" through the wide sink, food_stock is the
+place it would live, and it is pointing the other way on both converged
+arms: the family as a whole prices food stock as an ASSET. The
+negative lives in food_rate alone (with famine_deficit small-negative
+and food_gap/food_surplus small-negative, all < 0.27 in magnitude).
+So the negative is CONCENTRATED in the very coordinate the floor
+targets, not spread across collinear neighbours.
+
+p95 spread rows (weights.rs:2217-2420): FoodRate [3.64, 2.58, 2.94],
+FoodStock [4,4,5], FamineDeficit [2,2,2], PopCost [1,1,2], Uprising
+[15,15,15], RivalFoodStock [4,3,3], FoodGap [4,4,4], FoodSurplus
+[4,4,5]. None is 0.0 -- every food reader is a MEASURED coordinate on
+all three arms, so none of them is drifting under the blind rail, and
+the floor would not be acting on a blind cell. (Contrast best_farm's
+0.0 row at 4p from the farm-vs-mine correction.)
+
+4. ANSWER TO THE QUESTION
+-------------------------
+Would the NonNegative floor on FoodRate fix anything, or would the
+negative migrate to a collinear neighbour?
+
+The structural answer: the only strict-function neighbour is
+FamineDeficit, and it is silent outside the famine zone, so it cannot
+absorb a general food-negative. The wide sink is FoodStock, and the
+live evidence shows it already sits LARGE POSITIVE on both converged
+arms (+0.94 / +46.46) -- the family's "food as asset" price lives there
+and is stable. The negative is concentrated in food_rate itself
+(-0.184 / -0.214), with no collinear neighbour carrying a comparable
+negative (all others are within 0.27 of zero except the small
+famine_deficit).
+
+So the floor would NOT be defeated by silent migration: there is no
+live collinear channel through which "food is bad" is currently being
+expressed. If the floor holds, the negative has nowhere to go except
+FoodStock (a genuine re-pricing that would show up as food_stock going
+negative -- watchable at the next champion read) or the pop-threshold
+hinges (a change of meaning, also watchable). If instead the fitter
+re-asserts the negative through one of those, the floor did not fix a
+defect -- it met a real preference, and the experiment will show that
+directly.
+
+What the floor WOULD fix, if the negative is a defect: the farm-vs-mine
+gap. The gap was -0.761 at 2p, and the food-rate half of it was
+food_rate -0.184 vs resource_rate +0.402. Flooring food_rate at 0
+removes ~0.59 of the farm's penalty immediately (the rate term alone),
+which is most of the -0.761 gap. That is the mechanism by which the
+queued experiment would move the farm's rank, and it does not depend on
+any neighbour migrating.
+
+Caveat carried from the farm-vs-mine file: food_rate is NET of
+consumption, so part of its negativity may be a real opening fact (low
+population, idle food stock). The concentration evidence above says the
+family has NOT re-expressed that fact anywhere else, so the floor's
+experiment is the right instrument to separate "real opening fact" from
+"fitter artifact" -- but this file, per the job, makes no sign_intent
+proposal.
+
+5. REPRODUCIBILITY
+------------------
+All weights from the three live champion files at the gens recorded
+above. Emission lines: features.rs:713, 736, 752, 838, 891-894, 1158,
+1171-1173; marginal_needs features.rs:308-317; rivals.rs:110-121.
+Spread rows: weights.rs:2217, 2219, 2231, 2236, 2258, 2304, 2419, 2420.
+No code run.
