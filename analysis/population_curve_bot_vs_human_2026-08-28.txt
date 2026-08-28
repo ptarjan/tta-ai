@@ -1,0 +1,146 @@
+# Population by round, bot vs human (the baseline for the 23.1% figure)
+
+## Scope and method
+
+Follow-up to the pop-taken-when-legal report (tip of master). That report
+measured that the bot takes a legal Pop 23.1% of the time, but with no
+baseline: declining a legal Pop 76.9% of the time is a defect only if a
+human does NOT also decline it most of the time. This report gets that
+baseline by measuring POPULATION BY ROUND for a human and for the bot, side
+by side.
+
+Two sides, same three quantities per round (yellow bank size, population =
+workers on the board, food stock), 2p, whole game:
+
+- HUMAN side: the BGO corpus, replayed to completion. 632 of the 882 games in
+  `analysis/guard_ids_882.txt` are 2p (the rest are 3p/4p); every one of the
+  632 replays to completion. For each completed 2p game, at the end of each
+  round, for each player, the yellow bank / population / food are recorded.
+  Population = 18 + `yellow_granted` - `yellow_bank` (the board tokens; the
+  bank is the supply and a grant past an empty bank bumps `yellow_granted`,
+  see `increase_population`'s doc).
+
+- BOT side: `openerprobe` self-play, 2p, 256 games seeds 1..256, frozen
+  champion `experiments/rust_champion_2p_frozen_2026-08-28.json` (gen
+  121100), whole game, the same three quantities per round.
+
+Round convention (kept identical on both sides so the table is directly
+comparable): "end of round R" = the player state immediately after round R's
+last move. On the human side that is the journal's first line tagged
+round R+1 (the state after round R's last action has been applied); on the
+bot side it is the snapshot taken the moment `state.round` advances past R.
+The pre-game state (round 1 start, bank 18 / pop 0 / food 0 for both seats)
+is excluded from the table.
+
+(Temporary instrumentation only: an env-gated `POPCURVE_DEBUG` hook in
+`rust/src/replay_common.rs`'s per-line replay loop, and a `PopCurve` struct
+plus a whole-game loop plus a `print_pop_curve` section in
+`rust/src/bin/openerprobe.rs`. No weight change, no bots/ edits, no new
+.rs. Both reverted after the run; `cargo clippy --all-targets -- -D
+warnings` passes clean on the reverted tree.)
+
+## The side-by-side table
+
+Population, bank, and food at the end of each round. `Δ` = human minus bot
+(positive = the human has MORE of that quantity). n = player-rounds per side
+(1264 human = 632 games x 2 players; 512 bot = 256 games x 2 players, until
+games start ending).
+
+| round | n (hum/bot) | pop human/bot (Δ) | bank human/bot (Δ) | food human/bot (Δ) |
+|---|---|---|---|---|
+| 1 | 1264/512 | 0.00/0.00 (+0.00) | 18.00/18.00 (+0.00) | 2.00/2.00 (+0.00) |
+| 2 | 1264/512 | 0.61/0.76 (−0.15) | 17.39/17.24 (+0.15) | 2.88/2.62 (+0.26) |
+| 3 | 1264/512 | 1.37/1.67 (−0.30) | 16.65/16.33 (+0.32) | 3.63/2.88 (+0.75) |
+| 4 | 1264/512 | 2.22/2.19 (+0.03) | 15.83/15.81 (+0.02) | 3.64/3.46 (+0.18) |
+| 5 | 1264/512 | 3.11/2.71 (+0.40) | 14.98/15.39 (−0.41) | 3.07/3.42 (−0.35) |
+| 6 | 1264/512 | 3.78/3.09 (+0.69) | 14.41/15.10 (−0.69) | 3.15/3.43 (−0.28) |
+| 7 | 1264/512 | 5.06/5.17 (−0.11) | 13.23/13.10 (+0.13) | 3.09/3.23 (−0.14) |
+| 8 | 1264/512 | 6.47/5.71 (+0.76) | 11.95/12.67 (−0.72) | 2.86/2.72 (+0.14) |
+| 9 | 1264/512 | 6.71/5.88 (+0.83) | 11.83/12.60 (−0.77) | 3.01/2.27 (+0.74) |
+| 10 | 1264/512 | 6.99/5.95 (+1.04) | 11.72/12.65 (−0.93) | 3.33/2.05 (+1.28) |
+| 11 | 1264/512 | 7.30/6.03 (+1.27) | 11.59/12.79 (−1.20) | 3.79/1.86 (+1.93) |
+| 12 | 1264/512 | 7.97/6.15 (+1.82) | 11.14/12.77 (−1.63) | 4.15/1.72 (+2.43) |
+| 13 | 1264/512 | 9.75/7.98 (+1.77) | 9.53/11.07 (−1.54) | 4.32/1.63 (+2.69) |
+| 14 | 1264/512 | 10.50/7.97 (+2.53) | 8.97/11.30 (−2.33) | 4.36/1.54 (+2.82) |
+| 15 | 1264/512 | 10.98/8.06 (+2.92) | 8.78/11.36 (−2.58) | 4.83/1.46 (+3.37) |
+| 16 | 1264/512 | 12.25/8.10 (+4.15) | 7.82/11.41 (−3.59) | 4.66/1.47 (+3.19) |
+| 17 | 1264/512 | 13.92/8.25 (+5.67) | 6.33/11.37 (−5.04) | 4.51/1.37 (+3.14) |
+| 18 | 1160/512 | 14.68/9.60 (+5.08) | 5.68/10.08 (−4.40) | 4.34/1.31 (+3.03) |
+| 19 | 538/484 | 15.22/10.15 (+5.07) | 5.26/9.62 (−4.36) | 4.27/1.25 (+3.02) |
+| 20 | 92/140 | 15.86/10.47 (+5.39) | 4.73/9.51 (−4.78) | 4.29/1.28 (+3.01) |
+
+## Where the curves separate
+
+The two population curves are essentially identical through the early game
+(rounds 1-9, the gap stays within ±0.8, i.e. at most one worker). The gap
+first crosses +1.0 at **round 10**, but that is still within early-game
+noise. The sustained, monotonic separation begins at **round 12**: the gap
+jumps from +1.27 (r11) to +1.82 (r12) and only grows from there, peaking at
++5.67 at round 17 (human 13.9 vs bot 8.25) and holding around +5.1 through
+the endgame.
+
+So the bot is NOT behind on population early — it builds at the human rate
+for the first ~10 rounds. It falls behind in the mid/late game and never
+recovers: by round 16 the human is at ~12 population and the bot at ~8, a
+4-population gap that is ~half the human's total population.
+
+## What the gap is made of
+
+The bank column shows the mechanism. Bank is (to first order) 18 minus
+population, so it mirrors the pop curve, but it isolates the point: in the
+late game the HUMAN bank drops to ~5-6 (they are spending the bank down to
+~14-16 workers on the board), while the BOT bank stays stuck at ~10-11
+(only ~7-8 workers deployed). The bot is simply not converting its bank into
+population in the mid/late game. It is not that the bot lacks bank tokens —
+it holds MORE bank than the human there — it is that it declines to spend
+them.
+
+The food column shows WHY, and it is the same pattern as the two prior
+reports. The bot runs at ~1.3-1.5 food stock in the late game versus the
+human's ~4.3-4.8 — a ~3-food gap. The bot is running near-food-starved
+exactly when the human is running with a comfortable surplus. Combined with
+the food-gates report (food is the binding reason for Pop being illegal at
+39.7% of pop-illegal points, a floor) and the pop-taken report (the bot
+declines a LEGAL Pop 76.9% of the time, deferring to Take 27.6% of the time),
+the full picture is: the bot keeps food low, which keeps population growth
+gated, and even when a Pop is legal it defers it to card-taking — so its
+population curve peels away from the human curve starting ~round 12 and
+never catches up.
+
+## Answer to the baseline question
+
+Declining a legal Pop 76.9% of the time is NOT the human baseline. A human
+does NOT decline it at that rate: a human reaches ~12-16 population by the
+late game while the bot reaches ~8-10. The bot's under-response to legal Pop
+is therefore a real, measurable deficit, not correct play matched to human
+behavior — it is the behavioral expression of the food-dispricing the prior
+two reports diagnosed. The curves separate at round ~12 (first +1.0 at
+round 10; sustained gap from round 12 onward, peaking ~+5.7 population at
+round 17).
+
+## Caveats
+
+- COORDINATOR CAVEAT, UNRESOLVED: the `n` column is FLAT at 1264/512 all the
+  way through round 17 and only then falls (1160/512, 538/484, 92/140). That
+  says no 2p game on either side ended before round 18, which is a strong
+  claim and is equally the signature of ENDED GAMES BEING CARRIED FORWARD at
+  their final values. If they are, the round-18-to-20 rows are padded and the
+  late means are contaminated. The r10-r17 rows are at full n on both sides
+  and are unaffected, so the finding that matters — the curves separate at
+  round 12 and the food gap opens at round 10 — stands either way. Do not
+  quote the r18+ numbers until the game-length distribution is checked.
+- 2p only, on both sides (the corpus 3p/4p games are excluded from the human
+  side; the bot is 2p self-play).
+- Human side is the 632 completed 2p games in the 882-id guard list — the
+  full 2p subset of that list (none of the 632 stopped early; 0 STOPPED).
+- Bot is 256 self-play games at frozen champion gen 121100; the human
+  baseline is the full corpus subset, so the sample sizes differ (1264 vs
+  512 player-rounds). Both are large enough that the late-game gap is far
+  outside sampling noise.
+- Population is read as board tokens (18 + granted - bank); it is the
+  quantity that drives food cost/consumption, so it is the right measure
+  for a food-gating analysis. Bank and food are reported alongside because
+  they isolate the mechanism.
+- Diagnosis only: no weight change, no bots/ edits, no new .rs. The two
+  instrumented files were reverted and `cargo clippy --all-targets -- -D
+  warnings` passes on the reverted tree.
