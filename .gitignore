@@ -63,3 +63,6 @@ rust/pgo/
 # on every champion promotion does not belong in history.
 app/tta.wasm
 app/serve.log
+
+# BGO corpus journals extracted from tar.gz for analysis (regenerated, not committed)
+sources/bgo/journals/
