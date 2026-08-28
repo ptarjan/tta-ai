@@ -147,3 +147,23 @@ civics/colonies cluster (L2a, drawn from the first alphabetical quarter of
 the lower-78 half). Dropping either side, or even halving U2, destroys the
 effect. No smaller subset was found within this session's run budget —
 28 keys is the smallest verified winning set, not a proven minimum.
+
+=== NULL CONTROL (coordinator, 2026-08-28) ===
+The 28-key subset is two alphabetically contiguous blocks with no shared mechanism, and
+the reported progression (0.017 -> 0.139 -> 0.188 -> 0.212, all-156 = 0.253) rose smoothly
+with the COUNT of keys reverted. That is the signature of dose-response, not a carrier.
+Control: three RANDOM 28-key subsets of the same 156-key set C (python random.seed(1|2|3);
+random.sample(sorted(C), 28)), same openerprobe invocation
+(--games 360 --players 2 --seed 0 --threads 2).
+
+  win28   p10=  -7.854 p25=  -4.259 med=  1.319 p75=  2.278 p90=   5.000  TAILTIGHT=0.212
+  rand1   p10=  -9.436 p25=  -6.654 med=  5.977 p75= 10.920 p90= 107.444  TAILTIGHT=0.024
+  rand2   p10= -16.294 p25=  -9.827 med= -1.402 p75=  5.958 p90=   7.310  TAILTIGHT=0.057
+  rand3   p10=  -8.349 p25=  -1.383 med=  6.610 p75= 15.955 p90=  43.413  TAILTIGHT=0.135
+
+VERDICT: the 28-key result SURVIVES. 0.212 beats all three controls. But rand3 at 0.135
+shows a real dose component is mixed in, so no subset score may be read against the
+postclimb baseline (0.017) alone -- it must be read against a SAME-SIZE random draw.
+Next step is to shrink the 28 by FEATURE FAMILY (ca_*, card multipliers, colon*, rival_*,
+row_*, science_*, special_techs, strength_*), never alphabetically, with a same-size
+random control at each candidate size.
