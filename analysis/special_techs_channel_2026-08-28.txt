@@ -139,3 +139,73 @@ specific gap to close is the `BuildDiscount` arm at cards.rs:462, plus
 ensuring CivilActions and BlueFree are not dead on the live champion (they
 are dead at 4p; they may be alive at other player counts). No engine plumbing
 is needed.
+
+=============================================================================
+COORDINATOR CORRECTION (2026-08-28) -- the BuildDiscount gap does not exist,
+and finding C is a ONE-ARM finding
+=============================================================================
+
+1. BUILD_DISCOUNT IS ALREADY PUSHED. THE RECOMMENDED FIX WOULD DUPLICATE IT.
+
+The survey concludes: "The only gap is the BuildDiscount arm at cards.rs:462 --
+adding one push(out, WeightKey::BuildDiscount, ...) line closes it." That line
+already exists, in `card_yields` itself:
+
+    rust/src/bots/weighted/cards.rs:412-415
+        Special::BuildDiscount(ages) => {
+            let m = ages.iter().copied().max().unwrap_or(0);
+            push(out, WeightKey::BuildDiscount, m as i32, YieldKind::Gain);
+        }
+
+and it is covered by a production test at cards.rs:2462,
+`assert_eq!(amount_of("Masonry", WeightKey::BuildDiscount), 1.0)`. The arm even
+carries a long comment explaining why it takes the MAX over the age array rather
+than the sum (a build is of exactly one age, so the ages are ALTERNATIVES;
+summing would order the three Construction techs 3:5:6 instead of 1:2:3).
+
+WHERE THE SURVEY WENT WRONG, and it is a reusable trap: `Special::BuildDiscount`
+also appears inside two enormous `|`-joined wildcard arms at cards.rs:510 and
+cards.rs:1735. Those are DIFFERENT FUNCTIONS (`card_choice` and `pact_value`),
+each of which legitimately ignores the variant. Seeing a variant listed in a
+catch-all arm of one function is NOT evidence it is unpriced -- another function
+can have, and here does have, a dedicated arm for it that fires first.
+
+    RULE: before reporting a variant as dropped, grep for the variant name and
+    check every hit for a dedicated `=>` arm, not just the wildcard lists.
+
+2. THE ALIVENESS COLUMN IS 4p-ONLY, AND TWO ENTRIES FLIP AT OTHER COUNTS.
+
+Live champions, all three arms:
+
+    key                       2p        3p         4p
+    special_techs          0.3911   -0.3678    40.7033
+    strength              10.2641   57.8075    44.1024
+    blue_free             -0.1423   45.7451    -0.5208
+    civil_actions          0.7261    0.7592     0.1357
+    build_discount         0.0754    0.0143     0.0
+    wonder_stages_per_action 0.026    0.0261    0.1961
+
+  - `blue_free` is called DEAD in the table on the strength of its 4p value
+    (-0.52). It is +45.7451 at 3p, one of the largest weights on that arm. It is
+    not dead; it is arm-dependent.
+  - `special_techs` itself is LARGE ON ONE ARM ONLY: +40.70 at 4p against +0.39
+    at 2p and -0.37 at 3p. So "one flat count pays for twelve different techs"
+    is not a general property of the bot -- it is a 4p fact.
+
+3. WHAT THAT DOES TO FINDING C.
+
+Deflated, not deleted. The structural half of the survey stands and is useful:
+the twelve special techs fall into four families (wonder-stages, civil-action,
+military, colonize) and every distinguishing field is already carried in
+`CardEffects` and already mapped to a live WeightKey by `card_yields`. So there
+is no missing-channel problem here at all -- unlike Leader, where the
+discriminating channel was multiplied by zero, every special tech's
+distinguishing effect IS separately priced today.
+
+What remains is a much weaker claim: on 4p specifically, a flat +40.70 count
+sits ON TOP of channels that already price the individual effects, which is
+double-counting rather than blindness. And 4p is the least-converged arm
+(gen 21864 against 2p's 120482), so a large weight there is the weakest
+evidence available. Do NOT build a per-special-tech channel; the channels
+already exist. If anything is worth doing it is asking why 4p needs a +40.70
+constant that the other two arms price near zero.
