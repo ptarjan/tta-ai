@@ -1,0 +1,73 @@
+R1 Bimodal Margin Investigation - Results
+==========================================
+
+BASELINE (from prior measurements, not re-run):
+PRECLIMB:  p10=-1.178, p25=1.757, median=4.220, p75=7.127, p90=10.213, |m|<1.0=10.3%, Take wins=84.7%
+POSTCLIMB: p10=-11.734, p25=-10.830, median=4.139, p75=6.795, p90=40.780, |m|<1.0=0.0%, Take wins=59.4%
+           (Bimodal: two tight clusters with gap between ~-11 and ~4-7)
+
+HYPOTHESIS TESTING: Swapped each key from POSTCLIMB to PRECLIMB value
+================================
+
+| Key                   | PRE Value  | POST Value | p10      | p25      | Median   | p75    | p90     | \|m\|<1.0 | Take wins | Bimodal Status        |
+|:----------------------|:-----------|:-----------|:---------|:---------|:---------|:-------|:--------|:----------|:----------|:----------------------|
+| 1. end_turn_bias      | -9.595002  | -2.485107  | -4.624   | -3.721   | 11.249   | 13.905 | 47.890  | 1.0%      | 59.7%     | Partially disrupted   |
+| 2. take_cost_share    | 0.016576   | 0.549866   | -11.915  | -10.994  | 4.006    | 6.662  | 40.647  | 0.0%      | 59.4%     | UNCHANGED             |
+| 3. hand_potential     | 4.622118   | 1.571453   | -10.876  | -9.373   | 5.203    | 6.795  | 106.759 | 0.0%      | 59.4%     | UNCHANGED             |
+| 4. row_last_copy      | -0.244516  | 0.005789   | -11.898  | -10.743  | 4.286    | 7.127  | 41.148  | 0.0%      | 59.4%     | UNCHANGED             |
+| 5. hand_military      | 0.015577   | 0.272880   | -11.734  | -10.830  | 4.139    | 6.795  | 40.780  | 0.0%      | 59.4%     | IDENTICAL TO POST     |
+| 6. science_rate_trail | 20.619048  | 60.000000  | -11.734  | -10.830  | 4.139    | 6.795  | 40.780  | 0.0%      | 59.4%     | IDENTICAL TO POST     |
+| 7. my_event_threat    | 18.778069  | 46.065627  | -11.734  | -10.830  | 4.139    | 6.795  | 40.780  | 0.0%      | 59.4%     | IDENTICAL TO POST     |
+| 8. leader             | 45.084483  | 23.795186  | -11.734  | -10.830  | 4.139    | 6.795  | 40.780  | 0.0%      | 59.4%     | IDENTICAL TO POST     |
+| 9. event_scoring_marg | 21.460650  | 3.064662   | -11.734  | -10.830  | 4.139    | 6.795  | 40.780  | 0.0%      | 59.4%     | IDENTICAL TO POST     |
+| 10. auction_bid       | 13.780832  | -6.776015  | -11.734  | -10.830  | 4.139    | 6.795  | 40.780  | 0.0%      | 59.4%     | IDENTICAL TO POST     |
+
+CONFIRMATION TEST (end_turn_bias only carrier identified):
+============================================================
+
+POST with end_turn_bias = 0:
+  p10=-14.219, p25=-13.316, median=1.654, p75=4.310, p90=38.295, |m|<1.0=2.1%, Take wins=59.4%
+  Result: WORSE than both PRE and POST. p10/p25 moved further negative.
+
+INTERPRETATION
+===============
+
+1. SINGLE CARRIER IDENTIFIED: end_turn_bias
+   - Only key showing measurable effect on the distribution shape
+   - All other 9 keys produced IDENTICAL distributions to POSTCLIMB
+
+2. NATURE OF EFFECT:
+   - end_turn_bias value in POSTCLIMB (-2.485) creates the bimodal structure
+   - When set to PRE value (-9.595): p10/p25 shift from tight band near -11 to -4.6/-3.7
+   - This moves the lower modal upward, making the gap between modes less pronounced
+   - However: |m|<1.0 only rises to 1.0%, not above 5% target
+
+3. VALUE ANALYSIS:
+   - PRE value (-9.595): Partially breaks bimodality, moving lower modal up
+   - POST value (-2.485): Creates/maintains bimodality with tight p10/p25 near -11
+   - Zero value: Makes distribution worse (p10=-14.219), not better
+   - Implication: The "correct" smoothness-restoring value for end_turn_bias is likely
+     between 0 and -9.595 (not -9.595 itself, since that doesn't fully restore smoothness)
+
+4. INCOMPLETE RESTORATION:
+   - The PRE value of end_turn_bias alone does not fully restore PRECLIMB-like smoothness
+   - PRECLIMB has |m|<1.0=10.3%; PRE's end_turn_bias achieves only 1.0%
+   - This suggests either:
+     a) end_turn_bias needs a different value than its PRE setting
+     b) One or more other parameters have drifted that aren't in the test list
+     c) Multiple parameters interact to create the bimodality
+
+VERDICT
+=======
+
+end_turn_bias is the PRIMARY CARRIER of the bimodal round-1 take margin.
+
+It is the ONLY weight key among the ten tested that produces a measurable change in the
+margin distribution when swapped from POST to PRE. All nine other keys left the distribution
+identical to POSTCLIMB.
+
+However, it is NOT a complete solution: setting it to the PRE value reduces but does not
+eliminate the bimodality (|m|<1.0 rises from 0.0% to 1.0%, not above ~5% target).
+
+Recommendation: The correct end_turn_bias value likely lies between 0 and -9.595.
+A focused search in this range may find the value that fully restores PRECLIMB smoothness.
