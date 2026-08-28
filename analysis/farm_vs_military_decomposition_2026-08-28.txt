@@ -1,0 +1,404 @@
+FARM vs MILITARY score decomposition (diagnosis only — no weight change proposed)
+2026-08-28, worker qwen3.8-27b, repo /Users/pt/tta-ai, rust crate `tta`
+=============================================================================
+
+TASK
+----
+Explain which WeightKey terms price Build Farm below Build Military in rounds
+8-14 at 2p. The prior job (game_length_and_pop_timing_2026-08-28.txt) found
+that Build Farm was legal at 1405 decision points in rounds 8-14, chosen 0
+times, and Build Military won 821 of those (58.4%). This report decomposes
+the per-WeightKey w*delta for a sample of those 821 points to identify the
+terms that drive the military-farm margin.
+
+METHODOLOGY
+-----------
+Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json
+    "gen" field = 121100
+
+At each sampled decision point (rounds 8-14, exactly one legal Farm, the
+chosen move is a military Build, mil_score - farm_score > 1e-9) I:
+  * read the two scores from the bot's own rank_moves()  [the measured
+    mil_score / farm_score the bot actually ranks on],
+  * replicate evaluate() EXACTLY, term by term, on root / farm-trial /
+    mil-trial (each trial = root with the Build applied),
+  * report, for every WeightKey, the per-move delta
+        delta(k) = [contrib(k, mil-trial) - contrib(k, root)]
+                  - [contrib(k, farm-trial) - contrib(k, root)]
+    so that  sum_k delta(k)  ==  mil_score - farm_score  (the HARD
+    REQUIREMENT).
+
+Sample: 200 games (seeds 1..200), 2p, both seats, rounds 8-14.
+649 decision points matched the sampling gate.
+
+Reconciliation (the HARD REQUIREMENT)
+-------------------------------------
+  per-term sum_k delta(k)  reproduces  mil_score - farm_score
+  to < 1e-9 at EVERY sampled point.
+
+  Points checked:  649 (seeds 1..200, both seats, rounds 8-14).
+  Max |gap_sum| over all 649 points = 6.47e-13   (requirement < 1e-9)  PASS
+  (gap_sum = per-term sum - measured(mil-farm), computed at full f64
+  precision inside the binary and printed in the gapsum= field of each
+  sample header).
+
+  NOTE ON A BUG FIXED DURING THIS JOB: the first version of the dump
+  hard-coded the else-arm of the StrengthRel block (the branch taken when
+  combat_unreachable is FALSE). At rounds 8-14, combat_unreachable can be
+  either TRUE or FALSE depending on whether any active player currently
+  holds a military card in hand (eval.rs:285-292). When it is TRUE, the
+  gated arm applies, which uses a different formula:
+      gated:  total += early * early_full * v + late * late_full * v
+              where early_full = w[StrengthRel.early()],
+                    late_full  = w[StrengthRel] + w[StrengthRel.late()]
+      else:   total += w[StrengthRel] * v
+                 + early * w[StrengthRel.early()] * v
+                 + late  * w[StrengthRel.late()]  * v
+  The hard-coded else-arm produced gaps up to -8.99e-2 in 26 of 649
+  samples — all in positions where nobody had drawn a military card yet
+  (combat_unreachable = true). After branching on combat_unreachable per
+  trial-state (eval.rs:285), all 649 samples reconcile to < 6.5e-13.
+  The dump (rust/src/bin/openerprobe.rs, fn dump_farm_mil) was the ONLY
+  code touched and has been REVERTED; no .rs is left modified.
+
+=============================================================================
+THE ANSWER: which terms DIFFER between Farm and Military
+=============================================================================
+
+Unlike the round-2 Farm-vs-Mine case (where only 4-6 terms ever differed),
+the mid-game Farm-vs-Military comparison involves a LARGE set of terms
+because a military Build changes strength, worker count, and action
+economy simultaneously. Across all 649 points, 39 distinct terms ever
+contribute. The top terms by mean |contribution|:
+
+  term                      mean        %nonzero   mean|v|
+  ------------------------- ----------- ---------- ----------
+  strength                  +15.74      99.8%      15.74
+  strength_rel              -9.77       99.8%       9.77
+  worker_gap                +0.85       33.4%       0.85
+  prod_workers              -0.84       99.8%       0.84
+  unit_workers              -0.60       99.8%       0.60
+  civil_action_surplus      +0.57       42.5%       0.57
+  civil_action_gap          +0.55       57.5%       0.55
+  ca_left                   -0.40       99.8%       0.40
+  row_playable_count        +0.30       53.0%       0.30
+  strength_deficit          +0.26       51.5%       0.26
+  food_rate                 +0.20       99.8%       0.20
+  attack_target_weakness    +0.17        2.9%       0.17
+  resource_surplus          +0.08       30.8%       0.15
+  tactic_gain               +0.13       27.0%       0.14
+  resource_stock            -0.13       11.4%       0.13
+  (25 more terms, each < 0.08 mean|v|)
+
+  The two dominant terms (strength, strength_rel) together contribute
+  +15.74 - 9.77 = +5.97 of the mean +7.97 gap, i.e. 75% of the margin.
+
+Frozen-champion weights for the top terms (exactly from the JSON):
+  strength                 = +10.639704553093374
+  strength_rel             =  -0.08132025817613678
+  strength_rel_early       = -15.76546691167032
+  strength_rel_late        =  -0.18692034465050517
+  worker_gap               =  -2.5560290733133764
+  prod_workers             =  +0.8384603403588495
+  unit_workers             =  -0.6000816905303914
+  civil_action_surplus     =  +1.3482670520546647
+  civil_action_gap         =  -0.9604396458129976
+  ca_left                  =  -0.3988986866749163
+  row_playable_count       =  +0.19052769405164857
+  strength_deficit         =  -0.3558770189231995
+  food_rate                =  -0.19898116290884
+  attack_target_weakness   =  +3.6151720834811862
+  resource_surplus         =  +0.28051787536825434
+  tactic_gain              =  +0.4447478640193859
+  resource_stock           =  +0.6974639315136725
+
+-----------------------------------------------------------------------------
+THE TWO DOMINANT TERMS
+-----------------------------------------------------------------------------
+
+1. strength (w = +10.64, POSITIVE)
+   The military Build adds one unit, raising the player's strength by 1.
+   The Farm Build adds a farm (a worker-producing building), leaving
+   strength unchanged. Delta = +1 in the mil-trial, 0 in the farm-trial.
+   Contribution: +10.64 * 1 = +10.64 per Warriors build (the most common
+   mil card, 88.6% of samples). Higher-level units (Cavalrymen +2,
+   Riflemen +4, Cannon +6) give proportionally larger deltas, up to
+   +63.84 for a Cannon.
+   This term is present at 99.8% of samples (the 0.2% absence is when
+   the mil card is the same level as the player's existing best unit and
+   the strength feature does not change).
+
+2. strength_rel (w = -0.081 base, but the phase-blended coefficient is
+   what matters)
+   strength_rel measures the relative strength gap vs the rival. The
+   military Build narrows this gap (the player's strength rises), so the
+   strength_rel feature DECREASES (becomes less negative or more positive).
+   With the champion's phase-blended weights:
+     - combat_unreachable = FALSE (else arm):
+         effective coeff = base + (1-L)*early + L*late
+                          = -0.081 + (1-L)*(-15.765) + L*(-0.187)
+         At L=0.5:  -0.081 - 7.883 - 0.093 = -8.06 (NEGATIVE)
+         A DECREASE in strength_rel (good for the player) against a
+         NEGATIVE weight is a PENALTY. Delta: -8.06 * (-1) = +8.06.
+     - combat_unreachable = TRUE (gated arm):
+         effective coeff = (1-L)*early_full + L*late_full
+         where early_full = w[strength_rel_early] = -15.765,
+               late_full  = w[strength_rel] + w[strength_rel_late]
+                           = -0.081 + (-0.187) = -0.268
+         At L=0.5:  -7.883 - 0.134 = -8.02 (NEGATIVE, same sign)
+   In both branches the effective coefficient is strongly NEGATIVE
+   (dominated by strength_rel_early = -15.77), so the military Build's
+   narrowing of the strength gap is penalised. Mean contribution: -9.77.
+
+   The strength and strength_rel terms are partially offsetting:
+   +15.74 (strength) - 9.77 (strength_rel) = +5.97 net.
+
+-----------------------------------------------------------------------------
+THE SECONDARY TERMS (collectively ~2.0 of the mean gap)
+-----------------------------------------------------------------------------
+
+3. worker_gap (w = -2.56, NEGATIVE; 33.4% of samples)
+   The Farm Build adds a worker-producing building, which changes the
+   worker_gap feature. The mil Build does not. The negative weight means
+   a change in worker_gap that increases the gap is penalised. Mean
+   contribution: +0.85 (military-favouring).
+
+4. prod_workers (w = +0.84, POSITIVE; 99.8%)
+   The Farm Build adds a prod worker; the mil Build does not. The mil-trial
+   has 0 prod workers vs root, the farm-trial has +1. Delta = -1 * 0.84
+   = -0.84 (military-penalising, but small).
+
+5. unit_workers (w = -0.60, NEGATIVE; 99.8%)
+   The mil Build adds a unit that requires a worker to operate. The
+   unit_workers feature increases by 1 in the mil-trial. Against the
+   negative weight, this is a penalty: -0.60. (The Farm Build does not
+   add a unit, so no unit_workers change.)
+
+6. civil_action_surplus / civil_action_gap (w = +1.35 / -0.96)
+   The two builds have different CA costs. The mil Build (Warriors: 2 CA)
+   vs the Farm Build (Agriculture: 1 CA) leaves different CA remainders.
+   These terms partially offset each other. Mean: +0.57 + 0.55 = +1.12.
+
+7. ca_left (w = -0.40, NEGATIVE; 99.8%)
+   The mil Build spends more CA, leaving fewer CA. The negative weight
+   penalises the lower ca_left in the mil-trial: -0.40.
+
+8. row_playable_count (w = +0.19; 53%)
+   The Farm Build can affect the row's playable card count (if the farm
+   card was on the row). Mean: +0.30.
+
+9. strength_deficit (w = -0.36, NEGATIVE; 51.5%)
+   The mil Build narrows the strength deficit. Against the negative
+   weight, this is a gain: +0.26.
+
+10. food_rate (w = -0.20, NEGATIVE; 99.8%)
+    The Farm Build adds food production, raising food_rate by 1. Against
+    the NEGATIVE weight, this is a penalty for the Farm: +0.20 to the
+    mil-farm margin. (Same mechanism as in the round-2 Farm-vs-Mine case,
+    where food_rate's negative weight penalised the Farm build.)
+
+-----------------------------------------------------------------------------
+THE RARE-TRIGGER TERMS
+-----------------------------------------------------------------------------
+
+11. attack_target_weakness (w = +3.62, POSITIVE; 2.9% of samples)
+    Fires when the player's strength change makes a rival a viable attack
+    target. Mean when present: +6.23 (large, up to +18.08). This is the
+    largest single-term contribution in the entire dataset after
+    strength/strength_rel, but it only fires when the strength delta
+    crosses a threshold that makes an attack feasible.
+
+12. tactic_gain / tactic_short (w = +0.44 / -0.003; 27% / 83%)
+    The mil Build can affect tactic availability. Small contributions.
+
+13. wonder_potential / wonder_promise (w = +1.66 / +0.55; 4% each)
+    Eval-only, read on the post-move state. Fire when a wonder is in
+    play at the seat. Small mean contribution but can reach +3.0.
+
+-----------------------------------------------------------------------------
+THE GAP GROWS WITH ROUND
+-----------------------------------------------------------------------------
+  round   n    mean_gap   min    max
+  ------  ---  ---------  -----  -----
+     8    116     3.16    0.80   10.65
+     9    103     4.41    1.36   34.64
+    10    108     5.32    2.40   13.74
+    11    104     7.05    2.93   22.21
+    12     88     8.81    3.80   27.88
+    13     65    10.37    4.75   28.47
+    14     65    15.15    4.98   37.42
+
+The mean mil-farm gap grows from +3.16 at round 8 to +15.15 at round 14.
+The horizon rate multiplier (hz) grows from 0.88 to 1.12 over the same
+range, amplifying the RATE_KEYS (food_rate, resource_rate) contributions.
+The lateness (L) grows from 0.41 to 0.80, which shifts the phase-blended
+weights (strength_rel, workers, tech_levels, hand_value) toward their
+late-game values.
+
+The dominant driver of the round-dependence is the strength term: higher
+rounds have more existing units, so the marginal value of one more unit
+is larger (the strength feature is additive, but the game context makes
+the relative gain more significant in the later rounds where the rival
+also has more strength).
+
+-----------------------------------------------------------------------------
+CARD BREAKDOWN
+-----------------------------------------------------------------------------
+Military cards (88.6% Warriors):
+  Warriors:    575 (88.6%)   strength +1
+  Knights:      35 ( 5.4%)   strength +2
+  Swordsmen:    17 ( 2.6%)   strength +2
+  Cavalrymen:   10 ( 1.5%)   strength +2
+  Riflemen:      8 ( 1.2%)   strength +4
+  Cannon:        4 ( 0.6%)   strength +6
+
+Farm cards (100% Agriculture — the only Farm card in the game):
+  Agriculture:  649 (100%)   level 0, adds a food-producing worker
+
+-----------------------------------------------------------------------------
+DOMINATES PAIR CHECK (eval.rs:825-828)
+-----------------------------------------------------------------------------
+DOMINATES = [(ResourceStock, BlueFree), (WonderPotential, WonderPromise)]
+These are weight-repair pairs applied at load time (dominance_repair in
+parse_weights), ensuring w[dominant] >= w[dominated]. They do NOT alter
+evaluate()'s arithmetic directly.
+
+Of the terms cited above, none is the dominant side of a DOMINATES pair:
+  - ResourceStock (dominant) appears at 11.4% of samples, mean -0.13
+    (military-penalising, small). It is NOT the dominant side in any way
+    that would explain the large mil-farm margin.
+  - WonderPotential (dominant) appears at 3.9% of samples, mean +0.02
+    (negligible).
+The DOMINATES pairs are not a driver of the Farm-vs-Military margin.
+
+-----------------------------------------------------------------------------
+TOP-5 |contribution| at representative points
+-----------------------------------------------------------------------------
+(delta = mil_delta - farm_delta; sums to mil_score - farm_score)
+
+Point A  seed=5  round=8  seat=0  hz=0.889  late=0.428  measured gap=+2.93
+   1. strength                  delta = +21.279
+   2. strength_rel              delta = -18.370
+   3. civil_action_gap          delta = +0.960
+   4. row_playable_count        delta = +0.953
+   5. prod_workers              delta = -0.838
+   per-term sum = +2.927   gapsum = +7.5e-14
+
+Point B  seed=3  round=14  seat=1  hz=1.130  late=0.770  measured gap=+37.42
+   1. strength                  delta = +53.199
+   2. strength_rel              delta = -19.277
+   3. event_scoring_margin      delta = +3.760
+   4. worker_gap                delta = +2.556
+   5. resource_stock            delta = -2.092
+   per-term sum = +37.424   gapsum = -2.8e-14
+
+Point C  seed=12  round=9  seat=1  hz=0.936  late=0.507  measured gap=+34.64
+   (attack_target_weakness fires: strength delta crosses attack threshold)
+   1. strength                  delta = +53.199
+   2. strength_rel              delta = -39.775
+   3. attack_target_weakness    delta = +18.076
+   4. worker_gap                delta = +2.556
+   5. civil_action_surplus      delta = +1.348
+   per-term sum = +34.644   gapsum = -1.4e-14
+
+Point D  seed=1  round=9  seat=0  hz=0.932  late=0.487  measured gap=+5.71
+   (wonder in play at this seat)
+   1. strength                  delta = +10.640
+   2. strength_rel              delta = -8.262
+   3. wonder_potential          delta = +1.698
+   4. civil_action_gap          delta = +0.960
+   5. prod_workers              delta = -0.838
+   per-term sum = +5.709   gapsum = +1.2e-14
+
+-----------------------------------------------------------------------------
+THE DIAGNOSIS (why Military 821 : Farm 0 in rounds 8-14)
+-----------------------------------------------------------------------------
+1. The margin is ALWAYS in Military's favour and NEVER below +0.80.
+   Across all 649 sampled points the measured mil-farm margin ranged
+   from +0.80 to +37.42 and was positive at 100% of them. Farm's best
+   rank at these points is therefore never 1.
+
+2. The margin is driven by TWO partially-offsetting strength terms:
+   a) strength (w = +10.64): the mil Build adds a unit, raising
+      absolute strength. This is the LARGEST single positive term
+      (mean +15.74, up to +63.84 for high-level units).
+   b) strength_rel (effective w ≈ -8 to -16): the mil Build narrows the
+      relative strength gap, but the champion's strength_rel weights are
+      strongly NEGATIVE (dominated by strength_rel_early = -15.77), so
+      narrowing the gap is penalised. Mean contribution: -9.77.
+   Net: +15.74 - 9.77 = +5.97 (75% of the mean +7.97 gap).
+
+3. The secondary terms (worker_gap, prod_workers, unit_workers, CA terms,
+   food_rate) add ~+2.0 collectively. The food_rate term (w = -0.20,
+   NEGATIVE) is the same mechanism that prices the Farm out in the
+   round-2 Farm-vs-Mine case: the Farm Build's +1 food production is
+   penalised by the negative food_rate weight.
+
+4. The gap grows with round (mean +3.16 at r8 to +15.15 at r14) because
+   the strength term's contribution grows as the game progresses (more
+   existing units make the marginal unit more valuable in context) and
+   the horizon rate multiplier (hz) amplifies the RATE_KEYS.
+
+5. The margin is NOT driven by card quality / level (no level-sensitive
+   terms are in play at rounds 8-14 for these cards — Agriculture is
+   level 0, and the military cards' level effects are captured entirely
+   through the strength feature). It is driven ENTIRELY by the strength
+   terms plus the action-economy and rate terms.
+
+SCOPE / LIMITS
+--------------
+* Sampled rounds 8-14 only, 2p, seeds 1-200, both seats. 649 of the 821
+  target points were captured (the remaining ~172 are in games where the
+  sampling gate did not fire, e.g. multiple legal Farms or a non-military
+  top choice).
+* The per-term split replicates evaluate() EXACTLY (max residual 6.5e-13),
+  so the term attribution is exact, not approximate.
+* This is a diagnosis. No weight was changed and none is proposed. If the
+  goal is to ever build a Farm mid-game, the levers this data points at
+  are: (a) the strength weight (+10.64) which makes every military Build
+  a +10.64 bump, (b) the food_rate sign (negative, -0.20) which penalises
+  the Farm's food production, and (c) the strength_rel_early weight
+  (-15.77) which penalises the relative-strength narrowing. But that is a
+  tuning decision for the coordinator, out of scope here.
+
+REPRODUCIBILITY
+---------------
+Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json (gen
+121100). The dump was run through a temporary fn dump_farm_mil in
+rust/src/bin/openerprobe.rs (gated on rounds 8-14 with exactly one legal
+Farm and a military top choice) and has been REVERTED — the working tree
+is clean and no .rs is modified.
+Re-running the same seeds/weights through that dump reproduces every number
+above, including the <1e-9 reconciliation at each of the 649 points.
+
+=============================================================================
+COORDINATOR NOTES (verified before commit)
+=============================================================================
+
+1. SIGN SLIP IN THE DERIVATION, table is right. Line ~142 derives the
+   strength_rel contribution as "-8.06 * (-1) = +8.06", i.e. POSITIVE, then
+   the conclusion at ~151 and the summary table both give -9.77, NEGATIVE.
+   The table is correct and the derivation line is the error: if strength_rel
+   contributed +9.77 alongside strength's +15.74 the pair would total +25.5,
+   which cannot sit inside a mean margin of +7.97. The two terms partially
+   CANCEL (+15.74 - 9.77 = +5.97). Whichever way the strength_rel feature
+   moves on a military build, the eval takes ~10 points back off it.
+
+2. THE DECISION-GRADE READING: food is NOT what loses the farm mid-game.
+   food_rate contributes +0.20 of a mean +7.97 margin — 2.5% of it, and less
+   than worker_gap, prod_workers, unit_workers or either civil-action term.
+   The minimum margin over 649 samples is +0.80, so even zeroing food_rate
+   entirely flips no decision here. A food-pricing fix alone cannot change
+   mid-game farm behaviour; the farm loses to the warrior on STRENGTH
+   (w = +10.64 per unit, +63.84 for a Cannon), not on food.
+
+3. OPEN, NOT PROPOSED: two strength keys with large opposite-signed weights
+   (strength +10.64 against an effective strength_rel of about -8) that
+   cancel to a third of their size is the classic redundancy shape, and it
+   is the same pair already flagged as the RivalStrength/StrengthDeficit
+   question. Nothing here proposes a sign_intent or a reweight — a wrong
+   gate pins a key at zero forever.
+
+4. NOT ANSWERED HERE: whether +10.64 on strength is itself too high. That
+   needs a human baseline for military strength by round, the way the
+   population curve gave one for population. That is the next measurement.
