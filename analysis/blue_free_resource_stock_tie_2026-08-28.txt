@@ -1,0 +1,199 @@
+JOB: 3p blue_free / resource_stock bit-identical weight tie -- diagnosis only.
+Date: 2026-08-28. Read-only, no code changes, no sign_intent proposed.
+
+================================================================================
+1. THE VALUES (live champions, re-read at analysis time)
+================================================================================
+2p gen 120715:  blue_free -0.14226415310981458 / resource_stock +0.6444639749117015
+                card_board_credit +0.19371579053043603 / card_board_leader -0.19371579053043603
+                (the known composite-multiplier tie, |0.19371579...| exact; coordinator's fix
+                 landed in code, not live yet, so 2p still shows it)
+3p gen 67350:   blue_free 45.74514020088546 / resource_stock 45.74514020088546
+                (17 significant digits, sign and magnitude identical)
+                card_board_credit +0.20084552274685408 / card_board_leader +0.013744055448252305
+                (3p's pair is NOT tied -- the composite shape does not reproduce here)
+4p gen 21877:   blue_free -0.5207852697310226 / resource_stock -0.013430890879664887
+                (untied; both small, both negative)
+
+Note: the coordinator's brief carried 3p gen 67339; the live file had moved to gen 67350
+by read time. The tie value 45.74514020088546 is identical in both, so the diagnosis is
+unaffected. The file is live and moves between reads.
+
+================================================================================
+2. STEP 1+2: EVERY SITE THAT READS OR WRITES EACH KEY
+================================================================================
+--- BlueFree (WeightKey) ---
+features.rs:592   let blue_have = economy::blue_available(p);
+features.rs:593   let blue_free = f64::from(blue_have) + g(GainFeature::BlueFree);
+features.rs:697   comment: "(`BlueFree`, `YellowBank`), a positive price inverted the cliff and
+                  ... both are step functions of another weighted coordinate (`BlueFree`,
+                  `YellowBank`)..."
+features.rs:824   f.set(WeightKey::BlueFree, blue_free);          <-- THE SOLE EMISSION
+features.rs:833   comment: "deterministic function of `BlueFree`/`YellowBank`, so 'good all
+                  else equal' is vacuous here -- the two coordinates cannot move
+                  independently..."
+cards.rs:271      push(out, WeightKey::BlueFree, eff.blue_tokens as i32, YieldKind::Territory);
+cards.rs:330      push(out, WeightKey::BlueFree, eff.blue_tokens as i32, YieldKind::Gain);
+cards.rs:1094     F::BlueFree => Priced::Key(WeightKey::BlueFree),
+cards.rs:1256     add(Priced::Key(WeightKey::BlueFree), eff.blue_tokens);
+board_yields.rs:112  BlueFree,   (Feature enum variant)
+board_yields.rs:164  BlueFree => "blue_free",
+board_yields.rs:749  out.push((Feature::BlueFree, n as f64, Kind::Gain));
+economy.rs:123      comment: "already-priced `BlueFree` coordinate."
+eval.rs:812         (WeightKey::ResourceStock, WeightKey::BlueFree),   <-- DOMINATES pair
+eval.rs:1914        test: bad.set(WeightKey::BlueFree, 9.0);
+eval.rs:1994-1997   test: w.set(WeightKey::BlueFree, 0.4220);
+weights.rs:802      BlueFree => "blue_free", 0.15;
+weights.rs:1215     WeightKey::BlueFree in Free(...) list (sign_intent, no gate)
+weights.rs:2233     WeightKey::BlueFree => [7.000000, 7.000000, 6.000000],  (p95 spread)
+
+--- ResourceStock (WeightKey) ---
+features.rs:737     f.set(WeightKey::ResourceStock, f64::from(p.resources) + g(GainFeature::ResourceStock));
+                  <-- THE SOLE EMISSION (independent of blue_free)
+features.rs:757     comment: "right after `ResourceStock` is set, so the 'have + rate' read-backs"
+features.rs:782     let resource_have_rate = f.get(WeightKey::ResourceRate).max(0.0) + f.get(WeightKey::ResourceStock);
+features.rs:1175    let resource_have = f.get(WeightKey::ResourceStock);
+cards.rs:1096       F::ResourceStock => Priced::Key(WeightKey::ResourceStock),
+board_yields.rs:114  ResourceStock,   (Feature enum variant)
+board_yields.rs:166  ResourceStock => "resource_stock",
+board_yields.rs:787  out.push((Feature::ResourceStock, -(total as f64), Kind::Cost));  (wonder_cost)
+eval.rs:812         (WeightKey::ResourceStock, WeightKey::BlueFree),   <-- DOMINATES pair
+eval.rs:1993-1996   test: w.set(WeightKey::ResourceStock, 0.0); out.get(ResourceStock)==0.4220
+weights.rs:801      ResourceStock => "resource_stock", 0.3;
+weights.rs:1215     WeightKey::ResourceStock in Free(...) list (sign_intent, no gate)
+weights.rs:1281     WeightKey::ResourceStock => WeightKey::ResourceStockNeeded,  (paired key,
+                  separate mechanism, not a tie)
+weights.rs:2232     WeightKey::ResourceStock => [6.000000, 5.000000, 6.000000],  (p95 spread)
+
+NEITHER KEY IS COMPUTED FROM THE OTHER. Neither is a multiplier or gate on the other.
+features.rs:737 (ResourceStock) and features.rs:593/824 (BlueFree) are set from
+independent state reads (p.resources vs economy::blue_available(p)). The cards.rs
+sites are per-card yield pricers, not feature emissions -- they do not create a
+structural tie in the weight vector.
+
+================================================================================
+3. STEP 3: RULING OUT THE SHARED-RAIL (BORE) EXPLANATION
+================================================================================
+The coordinator's arithmetic: bound = P95_TOTAL_SPREAD[1] / spread, P95_TOTAL_SPREAD[1]=483.787396.
+
+Spread rows (weights.rs, p95_candidate_spread):
+  ResourceStock: [6.000000, 5.000000, 6.000000]   (weights.rs:2232)
+  BlueFree:      [7.000000, 7.000000, 6.000000]   (weights.rs:2233)
+
+3p (index 1) bounds, by the formula the coordinator gave:
+  ResourceStock: 483.787396 / 5.0 = 96.757479
+  BlueFree:      483.787396 / 7.0 = 69.112485
+
+The values 45.74514020088546 do NOT equal either bound. Neither key is sitting on
+its own clamp rail. This is NOT a shared-rail artifact. The boring explanation is
+ruled out.
+
+(For reference, the 3p clamp ceiling is 120.0; both values are interior to that.
+Neither value is at CLAMP_CEILING=120.0 or CLAMP_BLIND=60.0. The value 45.74514020088546
+is not a special constant anywhere in weights.rs -- it is the product of the
+structural tie below, not a pinned rail.)
+
+================================================================================
+4. THE STRUCTURAL TIE (the interesting explanation, confirmed)
+================================================================================
+eval.rs:811-814:
+    pub const DOMINATES: &[(WeightKey, WeightKey)] = &[
+        (WeightKey::ResourceStock, WeightKey::BlueFree),
+        (WeightKey::WonderPotential, WeightKey::WonderPromise),
+    ];
+
+eval.rs:934-943 (dominance_repair, ORDERINGS LAST):
+    for &(hi, lo) in DOMINATES {
+        let a = out.get(hi);
+        let b = out.get(lo);
+        if b > a + 1e-12 {
+            viol.push(...);
+            out.set(hi, b);    <-- ResourceStock is RAISED to BlueFree's value
+        }
+    }
+
+So whenever BlueFree > ResourceStock by more than 1e-12, dominance_repair
+COPIES BlueFree's value onto ResourceStock. The two become bit-identical.
+This runs on every load and on every accepted mutation (bin/climb.rs:269, 401,
+and repair_to_bounds at line ~270). The climb cannot separate them: any
+mutation that would make ResourceStock < BlueFree is immediately repaired
+back to ResourceStock = BlueFree. The two coordinates are locked together
+at the value the DOMINANT side (BlueFree) holds.
+
+bin/climb.rs:209-216 (effective_bound) tightens the DOMINATED side's clamp
+to the dominator's bound:
+    fn effective_bound(key: WeightKey, players: u8) -> f64 {
+        let own = key.clamp_bound(players);
+        DOMINATES
+            .iter()
+            .filter(|(_, dominated)| *dominated == key)
+            .fold(own, |acc, (dominator, _)| acc.min(dominator.clamp_bound(players)))
+    }
+So ResourceStock's effective 3p bound is min(96.757479, 69.112485) = 69.112485.
+The value 45.74514020088546 is interior to that -- it is not clamped, it is
+REPAIRED.
+
+COMPARISON TO THE 2p card_board_credit/card_board_leader SHAPE:
+The 2p bug (coordinator's known bug, fixed in code not yet live): card_board_leader
+was a COMPOSITE MULTIPLIER GATED ON card_board_credit -- the climb could not move
+them independently because one was computed as a function of the other in the
+EVALUATION (not in a repair step). The fix made CardBoardLeader an absolute
+multiplier (commit 83d1c2e, tests in 1ed6d38).
+
+The 3p blue_free/resource_stock tie is the SAME CLASS of defect -- two keys the
+climb sees as one coordinate -- but the MECHANISM is different:
+  2p card_board pair:  tied by EVALUATION (leader was a multiplier of credit).
+  3p blue_free pair:   tied by REPAIR (dominance_repair copies BlueFree onto
+                       ResourceStock whenever the ordering is violated).
+In both cases the hill-climb cannot move the two independently, so they
+converge to a single value. In the 2p case the tie was in the score function
+itself; in the 3p case the tie is in the constraint repair that runs after
+every mutation. The 3p case is a DESIGN INTENT (the DOMINATES pair was added
+deliberately to enforce ResourceStock >= BlueFree as a gameplay invariant)
+that has the SIDE EFFECT of making the two coordinates non-independent from
+the optimizer's perspective. The optimizer sees one coordinate, not two.
+
+WHY 2p AND 4p DO NOT SHOW THE SAME NUMBERS:
+2p:  blue_free -0.142264, resource_stock +0.644464.
+     Here ResourceStock (+0.644) > BlueFree (-0.142), so the DOMINATES repair
+     does NOT fire (b > a + 1e-12 is false: -0.142 > 0.644 + 1e-12 is false).
+     The two are free to differ. The structural tie EXISTS (the repair is
+     armed) but does not activate because the ordering is already satisfied.
+     The 2p pair that IS tied (card_board_credit/leader) is a different bug.
+4p:  blue_free -0.520785, resource_stock -0.013431.
+     a = ResourceStock = -0.013431, b = BlueFree = -0.520785.
+     Is b > a + 1e-12? -0.520785 > -0.013431? No. The repair does NOT fire.
+     The two are free. The structural tie exists but does not activate.
+3p:  blue_free 45.745140, resource_stock 45.745140.
+     The repair HAS fired and locked them together. At some point during the
+     climb BlueFree was > ResourceStock, the repair copied BlueFree onto
+     ResourceStock, and now they are equal. Any future mutation that would
+     lower ResourceStock below BlueFree is immediately repaired back. They are
+     stuck at the same value.
+
+So: the structural tie (DOMINATES pair) EXISTS on all three arms. It only
+PRODUCES EQUAL NUMBERS on 3p because that is the only arm where the repair
+has actually fired and locked the two together. On 2p and 4p the ordering is
+satisfied (ResourceStock >= BlueFree) so the repair is dormant and the two
+can (and do) differ.
+
+================================================================================
+5. SUMMARY
+================================================================================
+- NOT a shared rail. Spread-derived bounds are 96.76 and 69.11; the value
+  45.745 is interior to both.
+- IS a structural tie, same class as the 2p card_board pair: the climb cannot
+  move the two keys independently, so they converge to one value.
+- Mechanism: eval::DOMINATES pair (ResourceStock, BlueFree) at eval.rs:812,
+  enforced by dominance_repair (eval.rs:934-943) which copies BlueFree's
+  value onto ResourceStock whenever BlueFree > ResourceStock. This runs on
+  every load and every accepted mutation (bin/climb.rs:269, 401).
+- The tie is a deliberate design intent (gameplay invariant: resource_stock
+  >= blue_free) that has the side effect of making the two coordinates
+  non-independent from the optimizer's perspective.
+- The 2p card_board tie is the same class (climb sees one coordinate) but
+  different mechanism (evaluation-time composite vs repair-time copy).
+- 2p and 4p have the same structural tie (DOMINATES pair is armed on all
+  arms) but the repair does not fire on those arms because the ordering is
+  already satisfied, so the values differ. Only 3p shows the lock.
+- No code change proposed. No sign_intent proposed. Diagnosis only.
