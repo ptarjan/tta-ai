@@ -1,0 +1,92 @@
+Round-1 leave-one-out at 2p: which single weight moved the round-1 half of the collapse
+========================================================================================
+Generated 2026-08-28 (local). Measurement only — no source edits, no build. All
+counterfactuals are /tmp copies of the postclimb frozen champion with exactly one weight
+reverted to its preclimb value; each copy was programmatically verified to differ from
+/Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ2p.json in exactly that one
+weight. No frozen file was modified.
+
+Binary: /Users/pt/tta-ai/rust/target/debug/openerprobe (prebuilt). Protocol: 360 games,
+--seed 0, --threads 2, --players 2, for every arm.
+
+Why this job: the end_turn_bias counterfactual (previous job) recovered r2 almost fully
+(1.242 -> 2.668 vs preclimb 2.751) and about half of r3 (1.849 -> 2.667 vs 3.683), but
+recovered ROUND 1 not at all (0.689 -> 0.694 vs preclimb 1.161). Round 1 is takes-only by
+RULES_SPEC 1.9 (no builds, no develops, no politics), so the round-1 half of the collapse
+is a pure TAKE-vs-ENDTURN valuation change and end_turn_bias is not it. This job reverts
+one take-valuation key at a time to find which one(s) carry the round-1 effect.
+
+Reference arms (fresh runs this job; both reproduce the 484e3bc numbers exactly):
+  A) preclimb  champ2p (gen 108828):  r1 CA/turn 1.161; Take share (all rounds) 2102/6557 (32.1%); EndTurn 2160/6557 (32.9%)
+  B) postclimb champ2p (gen 113181):  r1 CA/turn 0.689; Take share (all rounds)  914/5084 (18.0%); EndTurn 2160/5084 (42.5%)
+
+The 8 keys, why each was chosen (all MOVED between the two champions per
+analysis/champ2p_collapse_diff_2026-08-28.txt):
+  1. take_cost_share      0.0166 -> 0.5499   (33x)   directly prices the CA cost of a take
+  2. card_board_bonus     0.2033 -> ABSENT                 board-bonus credit for the card; dropped key
+  3. row_last_copy       -0.2445 -> +0.0058   (flip)  prices copying the last card in a row
+  4. hand_potential        4.6221 -> 1.5715             value of the card once in hand (66% lost)
+  5. rival_hand_potential -0.6707 -> +0.2386   (flip)  denial value of taking a card the rival wants
+  6. hand_military         0.0156 -> 0.2729   (17x)   military share of hand potential
+  7. hand_swap_extra       0.1860 -> -0.0075   (flip)  extra credit when the take swaps with hand
+  8. has_colony           60.0000 -> 12.2781   (4.9x)  biggest abs mover; prices the colony a taken card builds
+
+Counterfactual results (B + one key reverted to preclimb value; r1 CA/turn is the
+round-1 column of "CA per turn by round"; Take% is all-rounds share of decisions):
+
+key reverted           r1 CA/turn   Take (all rounds)   Take %   EndTurn %   notes
+B (baseline, none)      0.689        914/5084           18.0%    42.5%
+take_cost_share         0.689        913/5085           18.0%    42.5%   r2 1.242 (same), r3 1.837 (-0.012)
+card_board_bonus        0.689        914/5084           18.0%    42.5%   ALL metrics identical to B
+row_last_copy           0.689        911/4960           18.4%    43.5%   r2 1.182 (-0.060), r3 1.789 (-0.060)
+hand_potential          0.689        932/5027           18.5%    43.0%   r2 1.174 (-0.068), r3 1.822 (-0.027)
+rival_hand_potential    0.689        914/5084           18.0%    42.5%   ALL metrics identical to B
+hand_military           0.689        917/5184           17.7%    41.7%   r2 1.312 (+0.070), r3 1.876 (+0.027)
+hand_swap_extra         0.689        914/5084           18.0%    42.5%   ALL metrics identical to B
+has_colony              0.689        914/5084           18.0%    42.5%   ALL metrics identical to B
+
+Every arm reconciles exactly: debited + left = 3.167 CA per own-turn.
+
+Findings
+--------
+1. NONE of the 8 single-key reverts moves round 1. r1 CA/turn stays 0.689 on every arm,
+   identical to baseline B (and to the previous end_turn_bias counterfactual's 0.694 up to
+   run noise — actually exactly 0.689 here). Take share stays 18.0% (911-932 of ~5000
+   decisions, the spread is noise). The round-1 half of the collapse is NOT carried by any
+   one of these keys.
+
+2. Three keys are provably INACTIVE at 2p rounds 1-3: card_board_bonus,
+   rival_hand_potential, and hand_swap_extra give byte-identical Item 1-6 output to
+   baseline B on every line (same decision counts, same all metrics). has_colony is
+   likewise inert in this window (its 60.0 -> 12.3 move is the biggest abs mover in the
+   whole diff, but it has zero measurable effect on rounds 1-3 — its feature is evidently
+   not firing in the opener). So has_colony, despite being the largest weight move in the
+   diff, is NOT a candidate for the collapse.
+
+3. The four ACTIVE keys all move rounds 2-3 slightly (row_last_copy and hand_potential
+   DOWN, hand_military UP, take_cost_share negligible) but never round 1.
+
+Conclusion
+----------
+The round-1 take-vs-endturn devaluation is a joint effect: no single key among these 8
+explains it. The likely culprits are the keys that moved in the same direction but are
+smaller/more diffuse (e.g. the cluster of sign flips in the hand/board features, or
+interactions between take_cost_share and hand_potential) — or the round-1 effect is
+mediated by a key not in this candidate set. The collapse's round-1 half (0.689 vs
+1.161) is real (A vs B differ cleanly) and is not attributable to any one of the 8
+plausible take-valuation keys.
+
+Caveats
+-------
+- 360 games/arm; r1 CA/turn noise at this sample size is on the order of ±0.02-0.03,
+  which is why the "identical to 0.689" readings on 7 of 8 arms are meaningful (they are
+  literally identical, not merely close).
+- Take% is reported all-rounds because openerprobe Item 1 does not split by round; the
+  round-1-specific take share would require a separate instrument. The all-rounds Take%
+  is nonetheless informative: it barely moves (18.0% on every arm) while r1 CA/turn also
+  does not move, consistent with the round-1 effect being small in absolute CA terms
+  (0.689 vs 1.161 = 0.47 CA/turn x 720 turns = ~340 CA total over the whole run).
+- This is a necessary-but-not-sufficient analysis: "none of these 8 single keys" does not
+  rule out that a combination of them (or a key outside this set) carries the round-1
+  effect. A full leave-ONE-IN (start from preclimb, add one postclimb key at a time)
+  would be the complementary experiment.
