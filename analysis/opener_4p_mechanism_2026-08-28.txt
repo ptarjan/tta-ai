@@ -1,0 +1,147 @@
+4P OPENER DECLINE MECHANISM (preclimb_2026-08-25 vs postclimb_2026-08-26)
+======================================================================
+
+VERDICT:
+The 4-player opener decline (3.177 → 2.398 CA/turn) shares the core 2-player mechanism
+(bot stopped taking cards), but 4p has a distinct compensatory pattern: rather than
+shifting primarily to EndTurn like 2p, the 4p bot shifted to Mine/Urban/Pop builds and
+only secondarily to EndTurn, suggesting a mixed rebalancing across move priorities.
+
+================================================================================
+
+ITEM 1: TOP-RANKED MOVE COMPOSITION DELTA
+
+Move Kind          Preclimb    Postclimb    Delta       Direction
+─────────────────────────────────────────────────────────────────
+Take               34.8%       22.0%        -12.8pp     ◄ MAJOR LOSS
+Build Mine         1.7%        7.2%        +5.5pp      ◄ MAJOR GAIN
+Pop                11.3%       17.0%        +5.7pp      ◄ MAJOR GAIN
+Build Urban        1.0%        5.3%        +4.3pp      ◄ MAJOR GAIN
+EndTurn            24.3%       31.7%        +7.4pp      ◄ GAIN
+Build Military     12.6%       6.8%        -5.8pp      ◄ LOSS
+Leader             8.6%        3.7%        -4.9pp      ◄ LOSS
+ActionCard         3.6%        3.2%        -0.4pp      ◄ LOSS
+WonderStep         1.2%        2.6%        +1.4pp      ◄ GAIN
+Develop            0.1%        0.0%        -0.1pp      ◄ LOSS
+Other              0.7%        0.5%        -0.2pp      ◄ LOSS
+
+HEADLINE: The 4-player bot stopped taking cards (Take share fell 34.8% → 22.0%,
+a -12.8 percentage point loss, which is 37% of its prior share). This core move
+loss was partially offset by increased selection of Mine (+5.5pp), Urban (+4.3pp),
+and Pop (+5.7pp) builds, rather than exclusively shifting to EndTurn (+7.4pp).
+The bot also reduced Build Military (-5.8pp) and Leader (-4.9pp) selections.
+
+MOVE LOSS RECOVERY:
+- Take lost 12.8pp
+- Recovered by: EndTurn +7.4pp, Pop +5.7pp, Mine +5.5pp, Urban +4.3pp = 23.0pp gained
+- Overcounted because Develop, Military, and Leader also lost
+
+================================================================================
+
+ITEM 6: ACTION POINT GRANT ACCOUNTING
+
+PRECLIMB (2026-08-25):
+  - Total CA debited: 13,725 over 17,772 decision points
+  - CA per player-TURN: 3.177 (over 4,320 turns)
+  - Per-round CA/turn: r1=2.442, r2=3.634, r3=3.456
+  - CA LEFT UNSPENT at EndTurn: r1=0.058, r2=0.366, r3=0.544
+  - Grant reconciliation: debited 3.177 + left 0.323 = 3.500 CA per own-turn ✓
+  - MA per turn: 0.601 (2596 total)
+
+POSTCLIMB (2026-08-26):
+  - Total CA debited: 10,360 over 13,643 decision points
+  - CA per player-TURN: 2.398 (over 4,320 turns)
+  - Per-round CA/turn: r1=2.263, r2=2.544, r3=2.388
+  - CA LEFT UNSPENT at EndTurn: r1=0.237, r2=1.456, r3=1.613
+  - Grant reconciliation: debited 2.398 + left 1.102 = 3.500 CA per own-turn ✓
+  - MA per turn: 0.231 (999 total)
+
+RECONCILIATION STATUS: Both runs close exactly at 3.500 CA per own-turn. ✓ VALID
+
+ROUND CONCENTRATION OF CA LOSS:
+  Round 1: 2.442 → 2.263  (LOSS: -0.179, -7.3%)   [smallest loss]
+  Round 2: 3.634 → 2.544  (LOSS: -1.090, -30.0%)  [LARGEST loss, was peak]
+  Round 3: 3.456 → 2.388  (LOSS: -1.068, -30.9%)  [LARGEST loss]
+
+The loss is concentrated in ROUNDS 2 and 3, not Round 1. This is where the bot's
+decision quality regarding action point expenditure declined most sharply. Round 2
+was the opener's peak CA debit in preclimb (3.634/turn) and fell to 2.544 in postclimb,
+a 30% drop. Round 3 similarly dropped 30.9%.
+
+================================================================================
+
+PATTERN COMPARISON: 4P VS 2P MECHANISM
+
+2-PLAYER (ESTABLISHED MECHANISM):
+  - Take share collapsed: 32.1% → 12.8% (19.3pp loss, 60% of prior share)
+  - EndTurn share rose: 32.9% → 47.0% (+14.1pp)
+  - Root cause: bot's end_turn_bias parameter RELAXED (became less negative)
+  - Interpretation: bot stopped valuing Takes and started valuing EndTurns
+
+4-PLAYER (THIS MEASUREMENT):
+  - Take share collapsed: 34.8% → 22.0% (12.8pp loss, 37% of prior share)
+  - EndTurn share rose: 24.3% → 31.7% (+7.4pp)
+  - BUT 4p's end_turn_bias TIGHTENED (became MORE negative): -29.494 → -37.336
+  - Interpretation: This parameter change OPPOSES EndTurn rise
+
+VERDICT ON PATTERN:
+The 4-player decline SHARES the 2-player core pattern (Take collapse) but the
+MECHANISM IS DIFFERENT. In 2p, the bot fundamentally stopped taking cards because
+end_turn_bias relaxed (the scoring function punished Takes less, or rewarded EndTurns
+more). In 4p, end_turn_bias TIGHTENED (became more negative), yet Takes still
+collapsed and EndTurns still rose. Instead of pure Take→EndTurn substitution, 4p
+also shifted to alternative high-value moves: Mine, Urban, and Pop. This suggests
+the 4p decline was not driven solely by end_turn_bias, but also by degradation in
+the scoring or evaluation of Take moves themselves, or an elevation of alternative
+build actions (Mine/Urban/Pop).
+
+================================================================================
+
+DETAILED FINDINGS
+
+1. CORE SIMILARITY: Both 2p and 4p show Take collapse as the headline.
+   - 2p: -19.3pp, EndTurn compensation +14.1pp
+   - 4p: -12.8pp, EndTurn compensation only +7.4pp
+
+2. MECHANISM DIFFERENCE:
+   - 2p: end_turn_bias RELAXED → bot downvalued Takes
+   - 4p: end_turn_bias TIGHTENED → yet Takes still collapsed
+
+   This contradiction means 4p's Take collapse is NOT explained by end_turn_bias
+   alone. The bot is choosing Mine (1.7%→7.2%), Urban (1.0%→5.3%), and Pop
+   (11.3%→17.0%) over Takes, even though it's trying harder to avoid EndTurns.
+
+   Possible root causes in 4p:
+   - Degraded Take move evaluation (some parameter downweighting Takes)
+   - Elevated alternative build move scores (Mine/Urban/Pop became more attractive)
+   - Changed opening strategy that deprioritizes early card draws in 4-player games
+   - Some tuning that decoupled Takes from the end_turn_bias mechanism
+
+3. ROUND CONCENTRATION: Rounds 2 and 3 suffered the largest CA loss (30% each).
+   This is where the opener's decision quality regarding action point use declined.
+   Round 1 held relatively stable (-7.3%), suggesting early-game strategy remained
+   consistent but mid-to-late opener decisions degraded.
+
+4. MILITARY BUILDS ALSO DECLINED: Build Military fell from 12.6% → 6.8% (-5.8pp),
+   while Mine/Urban rose significantly. This is not visible in the 2p pattern and
+   suggests a shift in the value function for build types, not just Takes.
+
+5. UNSPENT CA JUMPED SHARPLY: In postclimb, turns ending with >=1 unspent CA rose
+   from 18.1% → 55.9% (3x increase). This is evidence the bot is making worse
+   decisions about when to spend its allocation, or is running out of feasible
+   moves to spend CA on. The per-round unspent data shows this is especially acute
+   in Rounds 2 and 3 (r2: 0.366→1.456, r3: 0.544→1.613).
+
+================================================================================
+
+CONCLUSION
+
+The 4-player opener decline is NOT a simple consequence of the end_turn_bias
+tightening (which would be consistent with the parameter change). Instead, 4p
+appears to have experienced a mixed rebalancing: the bot both stopped taking
+cards AND shifted to alternative build moves (Mine/Urban/Pop), while barely
+increasing EndTurns relative to 2p's pattern. The accumulation of unspent CA
+in Rounds 2-3 suggests the bot is struggling to find high-value moves in the
+mid-to-late opener when facing 4 players, possibly because the presence of more
+players constrains the board state or card availability in ways that devalue
+Takes specifically.
