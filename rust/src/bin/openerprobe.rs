@@ -615,6 +615,23 @@ struct ActionPointStats {
     turns_round2: u64,
     /// Own-turns played in round 3.
     turns_round3: u64,
+    /// Civil actions still in the pool when the turn was ended, round 1.
+    ///
+    /// Read PRE-step at the `EndTurn` decision point, which is the last
+    /// moment the leftover exists: `economy::end_of_turn` step 5
+    /// (`economy.rs:1128`) refills the pool INSIDE `EndTurn`'s apply, so the
+    /// post-step value is already the next turn's grant. This is the same
+    /// read `behavcensus` uses for `ca_unused_r3`, printed alongside the
+    /// debit rows so the two can never be conflated: debits are what the
+    /// turn SPENT, this is what it left on the table, and their sum is the
+    /// grant.
+    ca_left_round1: u64,
+    /// Civil actions left unspent at `EndTurn`, round 2.
+    ca_left_round2: u64,
+    /// Civil actions left unspent at `EndTurn`, round 3.
+    ca_left_round3: u64,
+    /// Own-turns ending with at least one civil action unspent, rounds 1-3.
+    turns_with_ca_left: u64,
 }
 
 impl ActionPointStats {
@@ -648,10 +665,23 @@ impl ActionPointStats {
         self.ca += ca;
         self.ma += ma;
         if *chosen == Move::EndTurn {
+            let left = pools.pre_ca.max(0) as u64;
+            if left > 0 {
+                self.turns_with_ca_left += 1;
+            }
             match round {
-                1 => self.turns_round1 += 1,
-                2 => self.turns_round2 += 1,
-                3 => self.turns_round3 += 1,
+                1 => {
+                    self.turns_round1 += 1;
+                    self.ca_left_round1 += left;
+                }
+                2 => {
+                    self.turns_round2 += 1;
+                    self.ca_left_round2 += left;
+                }
+                3 => {
+                    self.turns_round3 += 1;
+                    self.ca_left_round3 += left;
+                }
                 _ => {}
             }
         }
@@ -689,6 +719,10 @@ impl ActionPointStats {
         self.turns_round1 += o.turns_round1;
         self.turns_round2 += o.turns_round2;
         self.turns_round3 += o.turns_round3;
+        self.ca_left_round1 += o.ca_left_round1;
+        self.ca_left_round2 += o.ca_left_round2;
+        self.ca_left_round3 += o.ca_left_round3;
+        self.turns_with_ca_left += o.turns_with_ca_left;
     }
 }
 
@@ -1463,6 +1497,29 @@ fn print_report(players: u8, r: &Report) {
         ap.ma_round2 as f64 / t2,
         ap.ma_round3 as f64 / t3
     );
+    // The other column of the same table, and the only one comparable with
+    // `behavcensus`'s `ca_unused_r3`: what the turn LEFT, read pre-step at
+    // `EndTurn` before `end_of_turn` refills the pool. Debits + leftover is
+    // the grant, so a sum below the §1.9 allotment (1/2/3/4 by seat in round
+    // 1, then the government's full total) means civil actions are being
+    // debited at decision points this probe never sees.
+    let turns = own_turns.max(1) as f64;
+    println!(
+        "- CA LEFT UNSPENT at EndTurn by round:  r1 {:.3}   r2 {:.3}   r3 {:.3}   (turns ending with >=1 unspent: {} of {}, {:.1}%)",
+        ap.ca_left_round1 as f64 / t1,
+        ap.ca_left_round2 as f64 / t2,
+        ap.ca_left_round3 as f64 / t3,
+        ap.turns_with_ca_left,
+        own_turns,
+        100.0 * ap.turns_with_ca_left as f64 / turns
+    );
+    let left = (ap.ca_left_round1 + ap.ca_left_round2 + ap.ca_left_round3) as f64;
+    println!(
+        "- reconciliation:  debited {:.3} + left {:.3} = {:.3} CA per own-turn (this is the grant IFF nothing is debited off-probe)",
+        ap.ca as f64 / turns,
+        left / turns,
+        (ap.ca as f64 + left) / turns
+    );
 }
 
 fn main() -> ExitCode {
@@ -1726,5 +1783,67 @@ mod tests {
         assert!(!develop_eligible_kind(CardType::Wonder));
         assert!(!develop_eligible_kind(CardType::Action));
         assert!(!develop_eligible_kind(CardType::Leader));
+    }
+
+    #[test]
+    fn civil_actions_debited_plus_left_unspent_equals_the_rulebook_grant_in_every_round() {
+        // The guard that makes item 6 readable at all. A debit total on its
+        // own cannot distinguish "the bot spent little" from "the probe
+        // missed debits at decision points it does not record", and that
+        // ambiguity is exactly what made `openerprobe` and `behavcensus`
+        // look irreconcilable. Adding the leftover column closes it: the two
+        // must sum to the grant RULES_SPEC 1.9 hands out -- 1 then 2 by seat
+        // in round 1 at 2 players, then Despotism's full 4 from round 2
+        // (6.6 step 5 resets the pools every turn, so nothing carries).
+        // If this ever fails, civil actions are moving somewhere the probe
+        // cannot see and no rate it prints means anything.
+        // Two bots, because the identity is only a real check when BOTH
+        // columns carry weight. The default weights spend their whole grant
+        // every turn -- forcing the leftover column to zero leaves this test
+        // green, which makes it vacuous on exactly the column it was written
+        // to guard. A large positive end-turn bias buys the other extreme:
+        // the bot ends the turn at its first decision point, so the whole
+        // grant lands in the leftover column and nothing in the debits.
+        let mut spendthrift = Weights::default();
+        spendthrift.set(tta::bots::weighted::weights::WeightKey::EndTurnBias, 500.0);
+        let mut ca = [0u64; 3];
+        let mut left = [0u64; 3];
+        let mut turns = [0u64; 3];
+        let mut any_left = false;
+        let mut any_debit = false;
+        for weights in [Weights::default(), spendthrift] {
+            for seed in 0..8 {
+                let ap = play_one(2, weights, seed).action_points;
+                any_left |= ap.ca_left_round2 > 0;
+                any_debit |= ap.ca_round2 > 0;
+                ca[0] += ap.ca_round1;
+                ca[1] += ap.ca_round2;
+                ca[2] += ap.ca_round3;
+                left[0] += ap.ca_left_round1;
+                left[1] += ap.ca_left_round2;
+                left[2] += ap.ca_left_round3;
+                turns[0] += ap.turns_round1;
+                turns[1] += ap.turns_round2;
+                turns[2] += ap.turns_round3;
+            }
+        }
+        assert!(any_left, "no run left an action unspent, so the leftover column is untested");
+        assert!(any_debit, "no run debited an action, so the debit column is untested");
+        // Round 1 gives seat 1 one action and seat 2 two, so the per-turn
+        // grant averages 1.5 only when both seats played equally -- which a
+        // truncated game guarantees, both players taking one turn per round.
+        assert_eq!(turns[0], turns[1], "each round must play the same number of own-turns");
+        assert_eq!(turns[1], turns[2]);
+        for (round, grant) in [(0usize, 1.5), (1, 4.0), (2, 4.0)] {
+            let per_turn = (ca[round] + left[round]) as f64 / turns[round] as f64;
+            assert!(
+                (per_turn - grant).abs() < 1e-9,
+                "round {}: debited {} + left {} over {} turns is {per_turn} per turn, not the {grant} the rules grant",
+                round + 1,
+                ca[round],
+                left[round],
+                turns[round]
+            );
+        }
     }
 }
