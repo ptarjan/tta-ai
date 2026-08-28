@@ -414,6 +414,34 @@ RESULTS
     two moves land on nearly the same state. The second-step feature
     line is closed.
 
+(h) ALL-FIVE-BUCKET DISCRIMINATOR (re-run, census passes: sum of five
+    n = 3361, sum of five rev = 1545):
+      m1 bucket   n      rev   (i) feq/rev  %      (ii) |m2|<5  |m2|<1
+      [0,1)      639    214    53/214      24.8%   239       200
+      [1,5)     1007    444    91/444      20.5%   433        75
+      [5,20)     788    185    43/185      23.2%    50        12
+      [20,50)    460    275   163/275      59.3%   162        58
+      [50,inf)   467    427   400/427      93.7%   257        93
+    (i) feq = reversals whose best Pop follow-up EQUALS the depth-1
+    winner. (ii) counts are over ALL bucket points (reversal and not),
+    matching (g)'s convention.
+    READING: (i) climbs monotonically with m1: 24.8%, 20.5%, 23.2%,
+    59.3%, 93.7%. In the low-m1 buckets Pop's best follow-up is RARELY
+    the depth-1 winner (~1 in 5), so the two branches reach genuinely
+    different states and m2 reflects a real valuation difference
+    (median +30 to +40, per (f)). In the high-m1 buckets the follow-up
+    IS the winner ~60-94% of the time, so the branches converge and m2
+    collapses to an ordering residual. (ii) shows the same split from
+    the magnitude side: 37-43% of the low-m1 buckets are within 5 of a
+    tie, but the [5,20) bucket is only 6.3% (a genuine large margin),
+    while [20,50) and [50,inf) are 35-55% (residual-scale).
+    BRANCH: the myopia branch holds only in the low-m1 buckets, where
+    the follow-up is a DIFFERENT move and the depth-2 preference for
+    the winner is genuine. In [20,50) and [50,inf) the reversals are
+    commutation / ordering residuals and no static leaf feature can
+    carry them. The second-step feature line is closed for the high-m1
+    buckets and remains open (but small) for the low-m1 ones.
+
 DIAGNOSIS
 ---------
 BRANCH: MYOPIA, established by the corrected (f). The reversal rate
@@ -522,3 +550,53 @@ of the search, not a valuation error, and no static leaf feature can
 express it. The open worker questions -- free_workers priced as
 inventory, and the bot running at zero worker slack against a human
 43-73% idle rate -- are untouched by this file in either direction.
+
+COORDINATOR NOTE ON (h) — THE VERDICT NARROWS, IT DOES NOT BROADEN
+------------------------------------------------------------------
+(h)'s census passes and every per-bucket number is internally
+consistent: feq <= rev in all five rows, the |m2|<1 counts nest inside
+the |m2|<5 counts in all five, every count is <= its bucket n, and all
+ten percentages reproduce from their own two numbers. Checked before
+the prose was read.
+
+TWO CORRECTIONS TO (h)'s READING.
+
+1. THE (i) SERIES IS NOT MONOTONIC. 24.8, 20.5, 23.2, 59.3, 93.7 FALLS
+   from the first bucket to the second. What the series actually shows
+   is a STEP, not a climb: ~20-25% across all three low buckets, then a
+   jump to 59.3/93.7. The step is the finding; "monotonic" is not.
+
+2. (ii) CANNOT SUPPORT THE CLAIM MADE FROM IT — SUPERSET/SUBSET ERROR.
+   (ii) is counted over ALL points in a bucket, and a bucket is mostly
+   NON-reversals, which have large positive m2 by definition. In
+   [5,20), 603 of the 788 points do not reverse and the bucket median
+   is +30.22, so "only 6.3% within 5 of a tie" is a fact about those
+   603. It says nothing whatever about the 185 reversals, which is the
+   only quantity that bears on the branch. Reading it as "a genuine
+   large margin" for the reversals is invalid. Section (j) re-runs the
+   magnitudes conditioned on the reversals.
+
+WHERE THE BRANCH ACTUALLY STANDS AFTER (h).
+  [50,inf), [20,50)  feq 93.7% / 59.3% -- COMMUTATION. Dead, proven.
+  [0,1), [1,5)       feq ~20-25%, so the branches genuinely differ,
+                     but the depth-1 margin being overturned is under
+                     5 points. The bot was INDIFFERENT at depth 1, and
+                     flipping a coin-flip is not a confident error. No
+                     myopia finding is available here at any (i).
+  [5,20)             THE ONLY LIVE CELL. 185 reversals, feq 23.2% so
+                     the branches differ, m1 large enough to be a real
+                     preference, and the reversal magnitudes UNMEASURED
+                     for the reason in correction 2 above.
+
+m1 bounds the size of a depth-1 error only if m2 is also small. If the
+[5,20) reversals turn out to carry large |m2| -- depth 1 saying "winner
+by 12" while depth 2 says "Pop by 45" -- that is a real error and not
+boundary noise, and it is the one result in this file that could
+reopen the feature line. If they are small, the file closes entirely.
+185 of 3361 points is 5.5% either way, so the ceiling on this is low.
+
+THE VERDICT ABOVE STANDS UNCHANGED: no second-step feature is built off
+this file today. What (h) changes is the REASON. It is not commutation
+everywhere -- commutation owns the high-m1 half only, and the low-m1
+half is closed by the smallness of the margin being overturned, which
+is a different argument that must not be reported as the same one.
