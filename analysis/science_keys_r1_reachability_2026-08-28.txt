@@ -1,0 +1,210 @@
+Science keys round-1 reachability analysis
+Date: 2026-08-28
+Repo: /Users/pt/tta-ai (read-only code read, no build/run)
+
+QUESTION: for each of the weight keys ScienceRateTrailing, ScienceGap,
+ScienceSurplus, ScienceRate -- where is it SET, is it a linear feature or a
+w.get(...) multiplier read deep in card valuation, and can it be non-zero
+during ROUND 1 of a 2-player game (round==1, empty hand, 1-2 civil
+actions, no techs yet)?
+
+Context: science_rate_trailing moved 20.619048 -> 60.000000 across the
+climb, i.e. it is pinned at the clamp ceiling, and the SCIENCE family is
+the #2 load-bearing family behind the bot's round-1 refusal to take cards.
+
+=== 1. The four set sites (exact f.set lines) ===
+
+ScienceRate
+  features.rs:688 (inside `pub fn features(...)`, features.rs:515):
+  `f.set(WeightKey::ScienceRate, f64::from(s.science) + g(GainFeature::ScienceRate));`
+  `s` = effects::state_stats (effects.rs:1571 -> compute, effects.rs:1385):
+  science = printed production of every staffed tech (Philosophy's 1/worker
+  at game start), + pacts + event permanents, floored at 0 (effects.rs:1514).
+  `g` = deferred pending gains (features.rs:570).
+
+ScienceGap / ScienceSurplus
+  features.rs:1180-1181 (same `features()`):
+  `f.set(WeightKey::ScienceGap, (needs.science - science_have).max(0.0));`
+  `f.set(WeightKey::ScienceSurplus, (science_have - science_need).max(0.0));`
+  with `science_have = f.get(WeightKey::Science)` (features.rs:1179) and
+  `needs = marginal_needs(...)` (features.rs:308). The science threshold is
+  the MINIMUM printed science_cost over LEVELLED cards in `p.hand_civil`
+  (features.rs:320-325): `for &c in p.hand_civil ... if
+  is_levelled_type(c.kind()) { science = Some(min(science, c.get().science_cost)) }`,
+  `unwrap_or(0)` when the hand holds no such card. `is_levelled_type`
+  (board_yields.rs:253) = takes_workers (urban|unit|production, cards.rs:141)
+  or SpecialTech -- NOT Government (its real price is peaceful_cost).
+
+ScienceRateTrailing
+  NOWHERE is there an f.set. No production code ever writes this key into a
+  feature vector: it is a WEIGHT-ONLY key, consumed by a single w.get()
+  inside rivals::feature_marginal (below). Grep across rust/src: the only
+  non-variant references are the name/default at weights.rs:1092 (default
+  0.0), the STANDING-partner exemption at registry.rs:166 and the
+  production-source string at registry.rs:311, plus two TEST-ONLY w.set
+  sites (rivals.rs:1135, rivals.rs:1177).
+
+=== 2. Linear feature vs w.get multiplier ===
+
+CLASS (a) -- plain linear coefficient on an emitted feature, consumed in
+the generic WeightKey::ALL dot-product of `evaluate` (eval.rs:133, loop at
+eval.rs:169-191; the loop skips only PHASE_KEYS, none of these four):
+
+  ScienceRate:     total += w[ScienceRate] * f.get(ScienceRate) * hz
+                   (hz = horizon::rate_multiplier, != 1.0 because
+                   ScienceRate IS in RATE_KEYS, horizon.rs:101-102. hz
+                   itself is a w.get(RateHorizon) read -- horizon.rs:441 --
+                   a multiplier on the term, not a multiplier reading
+                   ScienceRate.)
+  ScienceGap:      total += w[ScienceGap] * f.get(ScienceGap)
+  ScienceSurplus:  total += w[ScienceSurplus] * f.get(ScienceSurplus)
+
+CLASS (b) -- w.get multiplier read inside card valuation:
+
+  ScienceRateTrailing: rivals.rs:976-982, inside
+  `pub fn feature_marginal(key, state, idx, w, late, ctx)` (rivals.rs:951):
+      if STANDING_KEYS.contains(&key) {
+          let hinge = w.get(key.trailing());      // rivals.rs:977
+          if hinge != 0.0 {
+              m += hinge * trailing_fraction(key, state, idx);   // rivals.rs:982
+          }
+      }
+  `key.trailing()` maps ScienceRate -> ScienceRateTrailing (the only other
+  member is CultureRate). `feature_marginal` is the SINGLE definition of a
+  unit's worth and is called from every card-pricing site:
+  cards.rs:724/730 (priced_marginal / yield_marginal), cards.rs:770,
+  cards.rs:1289 (CA value). So this key enters the score of every card
+  candidate, and the Take-vs-EndTurn margin of round 1 prices its row
+  through exactly this path.
+  `trailing_fraction` (rivals.rs:873): mine/best = state_stats science of
+  decider vs best LIVE rival; `if best <= 0 || mine >= best { return 0.0; }`
+  else (best - mine)/best -- i.e. [0,1), strictly positive only when some
+  rival strictly out-produces this player in science.
+  Note the asymmetry: the feature (trailing_fraction) is weight-independent,
+  so the key acts as a pure multiplier on a state-determined fraction --
+  the same shape the prompt asked to distinguish.
+
+=== 3. Reachability at a round-1 decision (2p, round==1, empty hand,
+       1-2 CA, no techs yet) ===
+
+Setup facts (game.rs): round=1 with CA = seat+1 (1 for first, 2 for second);
+the 13-slot row is dealt IN FULL from the 20-card Age A deck before round 1
+begins (game.rs:426-434, same fact established in
+analysis/row_keys_r1_reachability_2026-08-28.txt). Both players start with
+Philosophy staffed in the tableau (effects.rs test at line ~1904: 1 science
+per player at game start), so s.science = 1 for both.
+
+  ScienceRate:
+    VALUE at round 1: exactly 1.0 (or 1 + pending ScienceRate gain) for
+    BOTH players.
+    NON-ZERO: YES, deterministically -- but IDENTICAL for every Take
+    candidate (taking a card does not change science production; a Take
+    never advances the round, so s.science is constant across all round-1
+    candidates). Its contribution to the Take-vs-EndTurn margin is a
+    constant that cancels. It can only differ across candidates if a
+    candidate changes p.science (stock, via gain) or a pending gain, which
+    a round-1 Take never does.
+    VERDICT: reachable, non-zero, margin-inert on its own.
+
+  ScienceGap:
+    VALUE at round 1: needs.science = 0.0 because hand_civil is EMPTY at the
+    first decision and marginal_needs unwraps to 0 (features.rs:324-325);
+    science_have = stock 0 + pending gain, so ScienceGap = 0.0 at the very
+    first decision.
+    After the FIRST take of a round-1 turn (the second decision point, where
+    seat 2 sits with 0 CA left -- the exact decision where the bot refuses
+    to take), the hand holds one taken card:
+      - taken card NOT levelled (farm/mine/leader/action/government/wonder):
+        needs.science stays 0 -> ScienceGap = 0.
+      - taken card IS levelled (Age A urban, unit, production, special tech --
+        all takeable in the opening row): needs.science = that card's
+        printed science_cost (1-5) -> ScienceGap = cost - 0 = cost, NON-ZERO.
+    NON-ZERO: YES, at the round-1 decision that follows a take of a levelled
+    card. This is the ONLY one of the four keys whose emitted feature
+    genuinely changes between the two decision points of a round-1 turn,
+    and it does so with a NEGATIVE champion weight (preclimb -1.199,
+    postclimb -5.815): the postclimb weight makes the margin MORE negative
+    exactly when a developable card sits in hand -- i.e. the climb trained
+    "a card you can develop now costs you X, and it is worse to be at that
+    state than to be at EndTurn". That is a direct linear path from this
+    family into the round-1 refusal.
+    VERDICT: reachable and margin-active at round 1, via the second
+    decision point; dead at the first.
+
+  ScienceSurplus:
+    VALUE at round 1: science_have (stock 0 + gain) vs needs (0 or a cost):
+      - first decision: 0 - 0 = 0.
+      - after a take of a non-levelled card: max(0 - 0, 0) = 0.
+      - after a take of a levelled card: max(0 - cost, 0) = 0 (no science
+        stock at round 1).
+    NON-ZERO: NO, at any round-1 decision of a 2p game with no techs:
+    science_have is 0 (or a pending gain) and can never EXCEED the need,
+    because the need is either 0 or a positive printed cost. Structurally
+    dead at round 1; champion weight is -0.029/-0.021 (irrelevant anyway).
+    VERDICT: NOT reachable non-zero at round 1.
+
+  ScienceRateTrailing:
+    VALUE at round 1: trailing_fraction(ScienceRate, ...) reads
+    state_stats science: mine = 1, best = 1 (both seats start at 1; a Take
+    never changes the other player's production, and in round 1 no build/
+    develop/politics can have happened). `mine >= best` -> 0.0.
+    NON-ZERO: NO, at any round-1 decision of a 2p game. Both players sit at
+    the same starting production (Philosophy x1) and nothing legal in round
+    1 changes production. The fraction is exactly 0.0 for every candidate
+    of every round-1 decision point.
+    VERDICT: NOT reachable non-zero at round 1, despite the weight being
+    pinned at the 60.0 clamp ceiling (see below). Its 20.619 -> 60.0 move
+    across the climb cannot have acted through round-1 Take-vs-EndTurn
+    margins at all -- it can only act in round 2+ (after one side has built
+    or developed, or after a wonder/event changes production), or in
+    candidate sets where a rival's production changed.
+
+=== 4. The "pinned at the clamp ceiling" fact, precisely ===
+
+  weights.rs:2499: `pub const CLAMP_BLIND: f64 = 60.0;`
+  weights.rs:2493/2523: CLAMP_T = 1.0, CLAMP_CEILING = 120.0
+  weights.rs:2208-2215: clamp_bound =
+      spread <= 0.0 ? CLAMP_BLIND : min(CLAMP_T * P95_TOTAL_SPREAD[players] / spread, CLAMP_CEILING)
+  weights.rs:2432: `WeightKey::ScienceRateTrailing => [0.0, 0.0, 0.0]`
+  -- the p95 candidate spread for this key is UNMEASURED (0.0), so
+  clamp_bound returns CLAMP_BLIND = 60.0. The 60.0 is not a fitted value
+  and not a "ceiling the climb pushed into"; it is the flat fallback rail
+  for any key whose spread featspread could not measure. The climb's value
+  of exactly 60.0 means "pushed hard against the blind rail and clamped" --
+  the climb found some round-2+ credit for the standing hinge and the rail
+  stopped it at 60. That is consistent with, but independent of, the
+  round-1 analysis above: the key contributes 0.0 to every round-1 score,
+  so the rail's location cannot move round-1 behaviour either way.
+
+=== 5. Verdict ===
+
+  - ScienceRate: reachable, non-zero (1.0) at round 1, but identical across
+    all round-1 candidates -> cancels out of the margin. Linear feature
+    (eval.rs dot-product), with hz = f(RateHorizon) as a global rate
+    multiplier, not a card-valuation multiplier on this key.
+  - ScienceGap: reachable, non-zero at the SECOND round-1 decision point
+    (after a take of a levelled card), zero at the first. Linear feature,
+    negative champion weight in BOTH frozen champions (-1.199 / -5.815),
+    and the climb made it 4.8x more negative. This is the one SCIENCE key
+    that can mechanically carry a round-1 Take-vs-EndTurn margin: the
+    postclimb weight punishes the "I just took a developable card" state
+    relative to EndTurn, which is exactly the refusal the bot shows at
+    decision 2 (ca=0, hand=1). If the round-1 refusal is to be attributed
+    to the SCIENCE family, this is the coordinate that does it.
+  - ScienceSurplus: structurally zero at every round-1 decision (no stock
+    to be in surplus). Dead at round 1.
+  - ScienceRateTrailing: structurally zero at every round-1 decision of a
+    2p game (both players start at the same production and nothing legal in
+    round 1 changes it). Its 60.0 value is the CLAMP_BLIND rail (unmeasured
+    spread), not a fitted ceiling. It cannot contribute to the round-1
+    margin at all; any effect it has is round 2+.
+
+  Practical reading of the climb: the 20.619 -> 60.0 move on
+  science_rate_trailing is real pressure on a round-2+ coordinate, clamped
+  at the blind rail. It is NOT the round-1 refusal. If the SCIENCE family
+  is load-bearing for the round-1 refusal, the load sits on ScienceGap
+  (linear, negative, 4.8x more negative postclimb, and the only science
+  key that is non-zero at the refusal decision), with ScienceRate's
+  constant 1.0 cancelling. The #2 load-bearing measurement should be
+  re-verified against the SECOND decision point specifically, since
+  ScienceGap is dead at the first.
