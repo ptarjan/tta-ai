@@ -1,0 +1,365 @@
+Opener Menu Ranking — 2p Round 1, Champion gen 120839
+======================================================
+Date: 2026-08-28
+Champion: experiments/rust_champion_2p.json, gen 120839
+Position: fresh 2p deal, round 1, seat 0, Actions phase, Age A
+  CA=4, MA=0, food=0, resources=0, science=0, culture=0
+  workers_free=1, yellow_bank=18, blue_total=16, blue_free=16
+  hand_civil=[], techs: Warriors(1)/Agriculture(2)/Bronze(2)/Philosophy(1)/Religion(0)
+  government: Despotism, no leader, no wonder, no pacts
+
+§1.9 LEGALITY
+-------------
+action_moves (legal.rs:412-424): EndTurn + every Take passing
+can_take_gated, then `if state.round == 1 { return moves; }`.
+NO Build, NO Develop, NO PlayLeader, NO Pop in round 1.
+The entire legal menu is: {EndTurn} ∪ {Take row[i] : can_take(row[i])}.
+
+With CA=4, spare_ca=4, hand_size_civil=0 < civil_hand_limit=4,
+every row slot with cost ≤ 4 passes can_take_gated.
+Row costs: idx 0-4 → 1, idx 5-8 → 2, idx 9-12 → 3.
+All 13 slots are affordable. All 13 cards are new (hand empty,
+techs = 5 starting techs, no overlap with Age A row cards).
+So the legal menu is: EndTurn + 13 Takes (5× cost 1, 4× cost 2, 4× cost 3).
+
+HORIZON PARAMETERS
+------------------
+cards_unseen = civil_deck.len() + tail(2, Age::A) = 7 + (44+44+44) = 139
+total (2p) = 20 + 44 + 44 + 44 = 152
+lateness = 1 - 139/152 = 0.085526
+early    = 1 - lateness = 0.914474
+rounds_left = 139 / (2 × (3 + 0.30)) + 2 = 139/6.6 + 2 = 23.0606
+horizon_scale = 23.0606 / (0.5 × (23.0606 + 0 + 1)) = 23.0606/12.0303 = 1.9169
+rate_multiplier = max(0, 1 + (-0.34581) × (1.9169 − 1)) = max(0, 0.68294) = 0.68294
+
+The rate_multiplier scales the four RATE_KEYS features
+(CultureRate, ScienceRate, FoodRate, ResourceRate) in
+linear_features (eval.rs:612-628). It does NOT affect the
+non-rate features that drive the opener ranking.
+
+BASELINE FEATURES (move-relevant, round 1 seat 0)
+-------------------------------------------------
+  CaLeft               =  4.0000    (p.civil_actions = 4)
+  TakeCostPaid         =  0.0000
+  TakeCostShare        =  0.0000    (0 / ca_total(4))
+  HandCivil            =  0.0000
+  HandValue            =  0.0000
+  CivilActionSurplus   =  4.0000    (max(0, 4−0))
+  HandOverCapacity     =  0.0000    (max(0, 0−0))
+  Science              =  0.0000
+  ScienceRate (raw)    =  1.0000    (Philosophy 1 worker × 1 sci)
+  ScienceGap           =  0.0000    (needs.science=0, have=0)
+  ScienceSurplus       =  0.0000
+  RowPlayableCount     =  R  (row-dependent, 0..=13)
+  ScienceNeedRow       =  T−1  (T = min tech_cost in row, or 0 if none;
+                                  science_have_rate = max(0,1)+0 = 1)
+  EndTurnBias          =  0.0000    (no indicator at baseline)
+  FreeWorkers          =  1.0000
+  FreeWorkerWall       =  0.0000    (workers_free ≠ 0)
+  Workers              =  6.0000
+  ProdWorkers          =  4.0000
+  UrbanWorkers         =  1.0000
+  UnitWorkers          =  1.0000
+  TechLevels           =  0.0000    (all Age A, level 0; Despotism level 0)
+  BestFarm/Mine/Lab/   =  0.0000    each (Age A level 0, guard lv>0 fails)
+  Temple/Theater/Lib/
+  Arena
+  NumTechs             =  5.0000
+  FoodRate (raw)       =  2.0000    (Agriculture 2w, consumption(18)=0)
+  ResourceRate (raw)   =  2.0000    (Bronze 2w, corruption(16)=0)
+  CultureRate (raw)    =  0.0000
+  FoodStock            =  0.0000
+  ResourceStock        =  0.0000
+  FamineDeficit        =  0.0000    (max(0, −(0+2)) = 0)
+  PopCost              =  2.0000    (pop_cost_base(18) = 2)
+  YellowBank           = 18.0000
+  BlueFree             = 16.0000
+  CorruptionHeadroom   =  4.0000    (min(16−11, 4) = 4)
+  ConsumptionHeadroom  =  3.0000    (min(18−17, 3) = 3)
+  HappyMargin          =  0.0000    (min(0, 3) = 0)
+  Discontent           =  0.0000
+  Uprising             =  0.0000    (discontent 0 ≤ workers_free 1)
+  CivilActions         =  4.0000    (s.civil_actions)
+  MilitaryActions      =  0.0000    (s.military_actions = 0 in round 1)
+  MaLeft               =  0.0000    (min(0, 3) = 0)
+  Strength             =  1.0000    (Warriors 1w × 1)
+  StrengthRel          =  1.0000    (rival_str = 0, no rival units)
+  HasUnit              =  1.0000    (unit_workers = 1 > 0)
+  Leader               =  0.0000
+  WonderInProgress     =  0.0000
+
+CHAMPION WEIGHTS (gen 120839, move-relevant)
+--------------------------------------------
+  end_turn_bias          =  −4.619539948402402
+  ca_left                =  −0.4825958270153861
+  take_cost_paid         =  −0.018256624092128894
+  take_cost_share        =   3.816965270195508
+  hand_civil             =  −0.13204790556238255
+  hand_value             =   0.31063059373101887
+  civil_action_surplus   =   2.0984292188190983
+  hand_over_capacity     =   0.0000000000000000
+  science_gap            =  −2.4323286168284057
+  science_surplus        =  −0.14767822837446634
+  row_playable_count     =   0.24416418968444684
+  science_need_row       =  −0.0761844401624513
+  rate_horizon           =  −0.34580934296719923
+  science_rate           =   0.01807879945051911
+  food_rate              =  −0.18386067778799542
+  resource_rate          =   0.4024727239148607
+  culture_rate           =  55.51839742189571
+  free_workers           =   3.4118556964724975
+  workers                =   0.049713783210588
+  tech_levels            =  −1.9270073822847194
+  best_farm              =  −0.3105437261239232
+  best_mine              =  −0.19471286927652007
+  best_lab               =  −0.9087148709856182
+  best_temple            =   0.5836178749582768
+  best_theater           =   0.6649460351986223
+  best_library           =   0.2860932496573948
+  best_arena             =   0.6403206738731714
+  food_stock             =   0.9432893117022877
+  resource_stock         =   0.6444639749117015
+  yellow_bank            =  −0.5624473231229827
+  blue_free              =  −0.14226415310981458
+  worker_gap             =  −2.361797624434031
+  worker_surplus         =   0.1909318681068232
+  civil_action_gap       =  −1.2852902428076434
+  pop_cost               =  −0.02979592932620398
+
+MOVE-DELTA ARITHMETIC
+---------------------
+Each candidate move is scored as w · f(trial_state) where f is the
+full feature vector for the state AFTER applying the move
+(candidate_features, eval.rs:708-733). The delta between two
+candidates is w · (f_A − f_B). Only features that DIFFER between
+candidates contribute.
+
+TAKE of a row card at slot i (cost c = row_cost(i)):
+  apply.rs h_take (line 564): pay_ca(c), ca_spent_taking += c, take_card.
+  Feature deltas (baseline → post-take):
+    CaLeft:              4  →  4−c          Δ = −c
+    TakeCostPaid:        0  →  c            Δ = +c
+    TakeCostShare:       0  →  c/4          Δ = +c/4
+    HandCivil:           0  →  1            Δ = +1
+    HandValue:           0  →  1            Δ = +1  (Age A level 0, +1)
+    CivilActionSurplus:  4  →  max(0,3−c)   Δ = max(0,3−c) − 4
+      cost 1: max(0,2)−4 = −2
+      cost 2: max(0,1)−4 = −3
+      cost 3: max(0,0)−4 = −4
+    HandOverCapacity:    0  →  max(0,1−aff) Δ = max(0,1−aff)
+      aff = hand_card_affordable(card, science=0)
+      For Age A techs (is_levelled_type, sci_cost > 0): aff = false, Δ = +1
+      For Actions/Leaders/Wonders: aff = true, Δ = 0
+      w[hand_over_capacity] = 0 → contributes 0 regardless
+    ScienceGap:          0  →  max(0, sc−0) Δ = +sc  (sc = printed sci_cost)
+      (marginal_needs reads hand_civil: min sci_cost of levelled cards)
+    ScienceSurplus:      0  →  0            Δ = 0
+    RowPlayableCount:    R  →  R−1 or R     Δ = −1 if taken card was playable
+      playable = can_take_gated ∧ row_card_playable
+      row_card_playable: levelled type → tech_cost ≤ science_have_rate(=1)
+                        Leader/Action → always true
+      So: techs with sci_cost ≤ 1 are playable; sci_cost > 1 are not;
+          Actions/Leaders are always playable
+    ScienceNeedRow:      T−1 → T'−1         Δ = (T'−T) if taken card was unique min
+      T = min tech_cost among developable cards in row (None filtered)
+      If the taken card was NOT the unique min: Δ = 0
+    All other features:  unchanged (economy, tableau, rival features,
+      etc. are unaffected by a single row Take in round 1)
+  No rate-key features change, so rate_multiplier is irrelevant to
+  the Take-vs-Take and Take-vs-EndTurn comparison.
+
+ENDTURN:
+  apply Move::EndTurn → economy::end_of_turn runs the full sequence:
+    3a: score science (+1) and culture (+0)
+    3b: corruption(16) = 0, pay nothing
+    3c: food production +2
+    3d: consumption(18) = 0, pay nothing
+    3e: resource production +2
+    4:  round 1 → no military draw
+    5:  CA reset to 4, MA reset to 2
+  candidate_features adds +1 to EndTurnBias indicator (eval.rs:728).
+  Feature deltas (baseline → post-endturn):
+    EndTurnBias:         0  →  1            Δ = +1
+    CaLeft:              4  →  4            Δ = 0  (refreshed to same value)
+    TakeCostPaid:        0  →  0            Δ = 0  (ca_spent_taking not reset)
+    TakeCostShare:       0  →  0            Δ = 0
+    HandCivil:           0  →  0            Δ = 0
+    HandValue:           0  →  0            Δ = 0
+    CivilActionSurplus:  4  →  4            Δ = 0
+    Science:             0  →  1            Δ = +1  (scored in 3a)
+    ScienceRate:         1  →  1            Δ = 0  (Philosophy unchanged)
+    ScienceGap:          0  →  0            Δ = 0
+    ScienceSurplus:      0  →  1            Δ = +1  (max(0, 1−0) = 1)
+    FoodStock:           0  →  2            Δ = +2  (produced in 3c)
+    FoodRate:            2  →  2            Δ = 0
+    ResourceStock:       0  →  2            Δ = +2  (produced in 3e)
+    ResourceRate:        2  →  2            Δ = 0
+    MaLeft:              0  →  2            Δ = +2  (min(2,3) = 2)
+    MilitaryActions:     0  →  2            Δ = +2
+    CivilActions:        4  →  4            Δ = 0
+    FamineDeficit:       0  →  0            Δ = 0  (max(0,−(2+2)) = 0)
+    All other features:  unchanged
+  Note: ScienceStock +1, FoodStock +2, ResourceStock +2, MaLeft +2 are
+  ALL positive deltas for EndTurn — the bot gets production and action
+  refresh for free.
+
+SCORE DELTAS (w · Δf)
+----------------------
+FIXED PART (card-independent, depends only on cost c):
+  w[ca_left]×(−c) + w[take_cost_paid]×(+c) + w[take_cost_share]×(c/4)
+  + w[hand_civil]×1 + w[hand_value]×1 + w[civil_action_surplus]×Δ_cas
+
+  cost 1: (−0.4826)(−1) + (−0.0183)(1) + (3.8170)(0.25) + (−0.1320)(1)
+         + (0.3106)(1) + (2.0984)(−2)
+        =  0.4826 − 0.0183 + 0.9542 − 0.1320 + 0.3106 − 4.1968
+        = −2.5997
+
+  cost 2: (−0.4826)(−2) + (−0.0183)(2) + (3.8170)(0.50) + (−0.1320)(1)
+         + (0.3106)(1) + (2.0984)(−3)
+        =  0.9652 − 0.0365 + 1.9085 − 0.1320 + 0.3106 − 6.2953
+        = −3.2795
+
+  cost 3: (−0.4826)(−3) + (−0.0183)(3) + (3.8170)(0.75) + (−0.1320)(1)
+         + (0.3106)(1) + (2.0984)(−4)
+        =  1.4478 − 0.0548 + 2.8627 − 0.1320 + 0.3106 − 8.3937
+        = −3.9594
+
+CARD-SPECIFIC PART (depends on the taken card's type and sci_cost):
+  w[science_gap]×(+sc) + w[row_playable_count]×(−1 if playable)
+  + w[science_need_row]×(ΔT if unique min)
+  + w[hand_over_capacity]×(Δhoc)   [w = 0, contributes 0]
+
+  For a tech with sci_cost = sc:
+    science_gap contribution: −2.4323 × sc
+    row_playable (if sc ≤ 1): −0.2442
+    row_playable (if sc > 1):  0
+
+  For an Action or Leader (not levelled):
+    science_gap contribution: 0 (sc = 0, not in marginal_needs)
+    row_playable: −0.2442 (always playable)
+
+ENDTURN DELTA:
+  w[end_turn_bias]×1 + w[science]×1 + w[science_surplus]×1
+  + w[food_stock]×2 + w[resource_stock]×2 + w[ma_left]×2
+  + w[military_actions]×2
+
+  = (−4.6195)(1) + (0.4071)(1) + (−0.1477)(1)
+    + (0.9433)(2) + (0.6445)(2) + (−0.1217)(2) + (1.7058)(2)
+  = −4.6195 + 0.4071 − 0.1477 + 1.8866 + 1.2890 − 0.2433 + 3.4116
+  = 1.9838
+
+WAIT — I need to double-check this. The EndTurn delta includes positive
+contributions from production (FoodStock +2, ResourceStock +2) and
+action refresh (MaLeft +2, MilitaryActions +2). Let me recompute:
+
+  w[end_turn_bias] = −4.6195, Δ = +1    → −4.6195
+  w[science]       =  0.4071, Δ = +1    →  +0.4071
+  w[science_surplus]= −0.1477, Δ = +1   →  −0.1477
+  w[food_stock]    =  0.9433, Δ = +2    →  +1.8866
+  w[resource_stock]=  0.6445, Δ = +2    →  +1.2890
+  w[ma_left]       = −0.1217, Δ = +2    →  −0.2433
+  w[military_actions]=1.7058, Δ = +2    →  +3.4116
+  TOTAL = −4.6195 + 0.4071 − 0.1477 + 1.8866 + 1.2890 − 0.2433 + 3.4116
+        = 1.9838
+
+So EndTurn's delta is actually POSITIVE (+1.9838), not negative!
+The production and action-refresh terms more than offset the
+end_turn_bias penalty.
+
+RANKED MENU
+-----------
+The score delta for each move relative to the baseline (no move):
+
+  Move                         Δscore     Components
+  ─────────────────────────────────────────────────────────────────────
+  EndTurn                      +1.9838   etb(−4.62) + prod(+6.13) + ma(+3.17)
+  Take 1-cost Action/Leader    −2.8439   fixed(−2.60) + rpc(−0.24)
+  Take 1-cost tech sci=1       −5.2762   fixed(−2.60) + sg(−2.43) + rpc(−0.24)
+  Take 1-cost tech sci=2       −7.4644   fixed(−2.60) + sg(−4.86)
+  Take 2-cost Action/Leader    −3.5237   fixed(−3.28) + rpc(−0.24)
+  Take 2-cost tech sci=1       −5.9560   fixed(−3.28) + sg(−2.43) + rpc(−0.24)
+  Take 2-cost tech sci=2       −8.1442   fixed(−3.28) + sg(−4.86)
+  Take 3-cost Action/Leader    −4.2035   fixed(−3.96) + rpc(−0.24)
+  Take 3-cost tech sci=2       −8.8240   fixed(−3.96) + sg(−4.86)
+  Take 3-cost tech sci=3       −11.2564  fixed(−3.96) + sg(−7.30)
+
+  (Exact row-dependent terms ScienceNeedRow and the precise
+  RowPlayableCount baseline R are omitted: they shift every Take
+  by the same small amount and do not change the ordering.)
+
+RANKING (best to worst):
+  1.  EndTurn                        +1.9838
+  2.  Take 1-cost Action/Leader      −2.8439
+  3.  Take 2-cost Action/Leader      −3.5237
+  4.  Take 3-cost Action/Leader      −4.2035
+  5.  Take 1-cost tech (sci=1)       −5.2762
+  6.  Take 2-cost tech (sci=1)       −5.9560
+  7.  Take 1-cost tech (sci=2)       −7.4644
+  8.  Take 2-cost tech (sci=2)       −8.1442
+  9.  Take 3-cost tech (sci=2)       −8.8240
+  10. Take 1-cost tech (sci=3)       −9.8967
+  11. Take 2-cost tech (sci=3)      −10.5765
+  12. Take 3-cost tech (sci=3)      −11.2564
+
+WHY ENDTURN WINS
+----------------
+EndTurn is the top-ranked move because its delta is the only POSITIVE
+one. The end_turn_bias penalty (−4.6195) is more than offset by:
+  • Production: FoodStock +2 (×0.9433 = +1.89) and ResourceStock +2
+    (×0.6445 = +1.29) — the bot "gets paid" for the turn's harvest.
+  • Action refresh: MaLeft +2 (×−0.1217 = −0.24) and
+    MilitaryActions +2 (×1.7058 = +3.41) — the MA reset to 2 is
+    worth +3.41 because w[military_actions] is strongly positive.
+  • Science: +1 (×0.4071 = +0.41) and ScienceSurplus +1
+    (×−0.1477 = −0.15) — net +0.26.
+
+Every Take is negative because:
+  1. CivilActionSurplus drops by 2–4 (×2.0984 = −4.20 to −8.39).
+     This is the dominant cost: spending a CA reduces the surplus
+     coordinate, which the champion prices at +2.0984 per unit.
+  2. ScienceGap rises by the card's printed sci_cost (×−2.4323).
+     Taking a tech card raises the marginal science need, and the
+     champion prices an unmet science need at −2.4323 per point.
+     At round 1 the bot has 0 science, so EVERY tech card's
+     sci_cost is an unmet need.
+  3. RowPlayableCount drops by 1 if the taken card was playable
+     (×0.2442 = −0.24).
+
+The gap between EndTurn and the best Take (1-cost Action/Leader)
+is +1.98 − (−2.84) = 4.82 points. The gap between EndTurn and the
+best tech Take (1-cost sci=1) is +1.98 − (−5.28) = 7.26 points.
+
+In practice, the row will contain a MIX of techs, Actions, Leaders,
+and possibly Wonders. If any 1-cost slot holds an Action or Leader
+card, that Take is the second-best move (−2.84), still 4.82 points
+below EndTurn. If all 1-cost slots are techs with sci_cost ≥ 1,
+the best Take is −5.28, and EndTurn leads by 7.26.
+
+The bot ends its turn because the linear evaluator, at this
+champion's weights, values the PRODUCTION AND ACTION REFRESH of
+ending the turn (worth +6.60 in the sum of food_stock, resource_stock,
+military_actions, ma_left, science deltas) more than it values
+holding a card in hand (worth at best −2.84 for an Action/Leader,
+and much worse for a tech). The end_turn_bias of −4.62 was fit to
+penalize early ending, but it was fit against a POPULATION in which
+the other features were at their then-current values; the production
+and MA-refresh terms have since climbed to positive values that
+partially cancel the bias.
+
+NOTES
+-----
+• Build and Develop are ILLEGAL in round 1 (§1.9, legal.rs:423-424).
+  The legal menu is only Takes and EndTurn.
+• The 13 row slots contain a random subset of the 20-card Age A
+  civil deck. The specific cards determine the exact ranking; the
+  above uses representative sci_cost values.
+• ScienceNeedRow and the exact RowPlayableCount baseline R are
+  row-dependent and were not computed (they require knowing the
+  exact 13 cards dealt). They shift all Takes by the same small
+  amount and do not affect the ordering.
+• The rate_multiplier (0.6829) scales the four RATE_KEYS features
+  in linear_features but does NOT affect the delta comparison
+  because no rate-key feature changes between candidates
+  (ScienceRate stays 1, FoodRate stays 2, etc. — the taken card
+  is in hand, not in the tableau).
+• No sign_intent proposed. No code changes. Read-only analysis.
