@@ -175,3 +175,61 @@ All weights from experiments/rust_champion_2p.json at gen 120648
 sweep_tableau (features.rs:184-248) and effects::compute (effects.rs:
 1415-1427, the Farm|Mine production arm). No code was run; the sums are
 hand arithmetic over the two tables in section 2.
+
+================================================================
+COORDINATOR CORRECTION (2026-08-28): TWO DELTAS ABOVE ARE ZERO
+================================================================
+
+Two rows in both totals do not fire on an Age-A build. Neither is a
+judgement call; both follow from the level arithmetic.
+
+1. best_farm / best_mine delta is 0, not +1.
+   features.rs:214-215 keeps a LEVEL, not a count:
+       CardType::Farm if lv > best.farm => best.farm = lv
+   CardId::level() maps Age A to 0 (cards.rs:45-48), and best.farm is a u8
+   initialised to 0. So "no farm" and "the Age-A farm" are the SAME
+   coordinate value, and building Agriculture cannot move it. The
+   comparison `lv > best.farm` is 0 > 0, false.
+
+2. tech_levels delta is 0, not +1.
+   tech_levels (features.rs:193, 230-242) SUMS the level of each tech card
+   in the tableau. A Move::Build places a worker on a tech already in play;
+   it develops no card. And even on the reading where the card is counted,
+   Age A contributes lv = 0. Zero either way.
+
+Corrected 2p totals (gen 120686, verified against the live champion --
+food_rate -0.183861, resource_rate +0.402473, free_workers +3.411856,
+best_farm -0.310544, best_mine -0.194713, tech_levels -1.927):
+
+   FARM  = -2.156081 + 0.310544 + 1.927 = +0.081463
+   MINE  = -1.279286 + 0.194713 + 1.927 = +0.842427
+   FARM - MINE = -0.760964   (unchanged in sign and nearly in size)
+
+WHAT SURVIVES AND WHAT DOES NOT.
+
+The verdict survives: the gap is the resource pair, the mine's +1 resource
+is priced as a gain and the farm's +1 food as a loss, and the farm inherits
+a negative food price rather than carrying a farm-specific defect.
+
+The supporting claim "both builds are NEGATIVE, and that is the 0/N part"
+does NOT survive. Both are slightly POSITIVE once the two spurious rows
+come out. The 0/N is therefore not an absolute-value failure but a RANKING
+failure -- consistent with the observed behaviour, where the mine ranks 1
+at the median and the farm never ranks above 3. Nothing needs both builds
+to be negative for the farm never to be chosen; it only needs everything
+else to outrank it.
+
+WHY THIS MATTERED MOST AT 4p. The correction is small at 2p and decisive at
+4p, where the live champion (gen 21875) reads best_farm +42.2362 against
+best_mine -1.3881. Credited as a +1 delta, that single row would have made
+the farm beat the mine by ~40 at 4p and falsified the whole verdict on the
+arm with the most legal farm chances (0 of 2432). It is zero, so it does
+not. The 4p asymmetry is the resource pair alone, resource_rate +3.9316
+against food_rate +0.4375 -- the same story as 2p and 3p.
+
+A STANDING CONSEQUENCE. best_farm and best_mine are blind to the Age-A
+buildings entirely: they cannot distinguish "no farm" from "the starting
+farm", and no opener build can move them. Any weight they carry is priced
+on Age-I-and-later upgrades only. Note best_farm is also one of the eight
+keys with a 0.0 live spread row, so its +42.2362 at 4p is drifting under
+the blind rail rather than fitted -- do not read it as importance.
