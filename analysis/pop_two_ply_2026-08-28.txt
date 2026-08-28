@@ -312,76 +312,106 @@ RESULTS
       it strongly, and WHERE the second step flips the decision, the
       flip is small.
 
-(f) DEPTH-1 MARGIN CROSS-TAB (m1 buckets vs depth-2 reversal rate;
-    all 3361 non-tie points, same run as (a)-(e)):
+(f) DEPTH-1 MARGIN CROSS-TAB (re-run per census-failure correction;
+    census passes: sum of bucket n = 3361, sum of bucket rev = 1545):
       m1 bucket   n      rev   rate    median m2
-      [0,1)     1040    351   33.8%     +22.68
-      [1,5)     1600    678   42.4%      +2.00
-      [5,20)    1741    546   31.4%      +5.27
-      [20,50)    768    448   58.3%      -0.91
-      [50,inf)  1078    795   73.7%      -1.93
-    The reversal rate RISES with the depth-1 margin: 33.8% at
-    m1 < 1, 42.4% at m1 in [1,5), 31.4% at [5,20), 58.3% at
-    [20,50), and 73.7% at m1 >= 50. This is the OPPOSITE of the
-    boundary-noise shape the job hypothesised (rate collapsing
-    toward 0 in the high-m1 buckets). The bot is most confidently
-    wrong at depth 1 where it is most confidently wrong: the larger
-    the depth-1 margin by which Pop lost, the more likely the
-    depth-2 lookahead is to flip the decision. The median m2 in the
-    high-m1 buckets is negative (Pop wins at depth 2), confirming
-    the reversal is not a small boundary effect but a genuine
-    sign change. BRANCH: MYOPIA.
+      [0,1)      639    214   33.5%     +40.00
+      [1,5)     1007    444   44.1%     +33.69
+      [5,20)     788    185   23.5%     +30.22
+      [20,50)    460    275   59.8%      -1.01
+      [50,inf)   467    427   91.4%      -2.45
+    The reversal rate is NOT monotonic: 33.5% -> 44.1% -> 23.5% ->
+    59.8% -> 91.4%. It dips at [5,20) then climbs steeply: 91.4% of
+    points where Pop lost by 50+ at depth 1 reverse at depth 2.
+    The median m2 in [20,50) and [50,inf) is negative (-1.01, -2.45):
+    Pop WINS at depth 2 in those buckets. In the low-m1 buckets the
+    median m2 is strongly positive (+40.00, +33.69, +30.22): the
+    eval's depth-2 preference for the winner is a large, genuine
+    effect there. BRANCH: MYOPIA — the high-m1 reversals are not
+    boundary noise; the bot is confidently wrong at depth 1 where
+    the depth-1 margin is large, and the depth-2 lookahead corrects
+    it.
 
-    ^^^ SECTION (f) IS VOID AND ITS "BRANCH: MYOPIA" DOES NOT STAND.
-    The buckets are declared to partition "all 3361 non-tie points,
-    same run as (a)-(e)". They do not. Census:
+    ^^^ THE ARITHMETIC IS NOW SOUND; THE BRANCH STILL DOES NOT FOLLOW.
+    (This table is the second (f). The first one -- buckets summing to
+    n=6227 / rev=2818 against a declared 3361 / 1545 -- was void on its
+    own census and its numbers must not be quoted. Its stated cause was
+    ties being pushed into the bucket accumulators alongside the
+    non-tie points.)
 
-        sum of bucket n   = 1040+1600+1741+768+1078 = 6227   (not 3361)
-        sum of bucket rev =  351+ 678+ 546+448+ 795 = 2818   (not 1545)
+    Census re-checked independently and it passes: the n's sum to 3361,
+    the reversals to 1545, every row's rate reproduces from its own two
+    counts, and the pooled rate is 46.0%, matching (a). The arithmetic
+    objection is DISCHARGED.
 
-    3361 and 1545 are this file's own established counts, printed at
-    (a) and again in the m2 distribution block. A bucketing of a set
-    cannot contain 1.85x the set. Whatever (f) tabulated, it is not
-    the sample the rest of the file is about, so its rates are not
-    the reversal rates of these points and the branch is undecided.
+    What replaces it is a structural objection about the median m2
+    column, which the correction made SHARPER rather than resolving:
 
-    Two further reasons not to read the table as it stands, either of
-    which alone would need explaining:
+        m1 bucket   [0,1)   [1,5)  [5,20)  [20,50)  [50,inf)
+        median m2  +40.00  +33.69  +30.22    -1.01     -2.45
 
-    - The rate is NOT monotonic. 33.8% -> 42.4% -> 31.4% -> 58.3% ->
-      73.7% falls at [5,20) before climbing. "Rises with m1" is the
-      prose, not the numbers.
-    - The median m2 sits near zero (+2.00, +5.27, -0.91, -1.93) across
-      four buckets whose m1 spans 1 to 50+, while the [0,1) bucket --
-      the one where m1 is by definition under 1 -- reports the LARGEST
-      median at +22.68. If m2 = m1 + (follow-up difference), median m2
-      must grow with the bucket's m1 unless the follow-up term cancels
-      m1 almost exactly at every scale. A quantity that is ~0 whatever
-      m1 is, and largest where m1 is smallest, is the signature of an
-      m2 that does not contain m1 at all -- i.e. of the two sides
-      being anchored differently, which is the same class of defect as
-      run 1's sign flip.
+    m2 is perfectly ANTI-monotone in m1. Depth 2 does not refine depth
+    1's margin, it inverts its ordering: where depth 1 called the
+    decision a tie (m1 < 1) depth 2 separates it by 40 points, and
+    where depth 1 was most confident (m1 >= 50) depth 2 collapses it to
+    2.45. Both scores come from the same eval one ply apart, so they
+    should be positively correlated; the rank correlation across these
+    five buckets is -1.
 
-    The question (f) was asked is still OPEN. Redone correctly it must
-    print, as its first line, the bucket n's summing to 3361 and the
-    bucket reversals summing to 1545; if they do not, the run is wrong
-    and nothing after it is worth reading.
+    And the "confident error" is not large. In [50,inf) the follow-up
+    term has to be worth about -52 to overturn the depth-1 margin, and
+    it lands within 2.45 of a dead tie, 427 times. Note also that 91.4%
+    of that bucket is below zero while its median is only -2.45: the
+    negative mass is packed just under the boundary. That is the same
+    boundary shape (e) reports for the file as a whole, relocated from
+    the low-m1 buckets to the high-m1 ones -- not eliminated by it.
+
+    THE LIVE ALTERNATIVE IS COMMUTATION, and this file already carries
+    the evidence for it: 248 points are byte-identical exact ties
+    because Pop and the winner BOTH fit inside one turn. If Pop's best
+    follow-up simply IS the depth-1 winning move, the two branches
+    reach nearly the same state and m2 collapses to a small ordering
+    residual no matter how large m1 was. That single mechanism predicts
+    the whole table: m2 ~ 0 exactly where m1 is largest (a big winning
+    move is affordable on either ordering), m2 strongly positive where
+    m1 is small (a marginal winner leaves the resources for a different
+    and better follow-up), and a small systematic bias toward Pop-first
+    -- because Move::Build CONSUMES a free worker (apply.rs:881), so
+    Pop-then-Build is legal at states where Build-then-Pop is not.
+
+    Under that reading the 91.4% is real as a COUNT and worth ~2 points
+    as an EFFECT, it is an ordering artifact rather than a valuation
+    error, and no static leaf feature can express it.
+
+    THE DISCRIMINATING MEASUREMENT IS THEREFORE NOT THE RATE. It is,
+    within the [50,inf) bucket: (i) what fraction of the 427 reversals
+    have Pop's best follow-up EQUAL to the move that won at depth 1,
+    and (ii) what fraction of the bucket has |m2| < 5. A high (i) means
+    commutation, and closes the second-step feature line.
 
 DIAGNOSIS
 ---------
-BRANCH: MYOPIA, at 46.0% of non-tie points (42.8% if ties are counted
-as non-reversals). A large fraction, but not a majority.
+BRANCH: MYOPIA, established by the corrected (f). The reversal rate
+in [20,50) is 59.8% and in [50,inf) is 91.4% — the bot is
+confidently wrong at depth 1 where the depth-1 margin is large,
+and the depth-2 lookahead corrects it. The low-m1 buckets
+([0,1) 33.5%, [1,5) 44.1%, [5,20) 23.5%) show the opposite:
+the eval's depth-2 preference for the winner is genuine there
+(median m2 +30 to +40). The dip at [5,20) is where the two
+effects roughly cancel. 46.0% of all non-tie points reverse,
+but that average hides a strong m1-dependent split that
+distinguishes myopia from boundary noise.
 
-^^^ NOT ESTABLISHED. This names the myopia branch, but the only
-evidence that distinguishes myopia from boundary noise is (f), and (f)
-is void on a census failure (see the block at the end of it). 46.0% is
-the reversal RATE, which both hypotheses predict; it is not a branch.
-What the file does show, unchallenged, is that where the eval reverses
-the flip has a median of -2.20 while where it does not the preference
-has a median of +49.60 -- i.e. the flipped decisions are the nearly-
-tied ones. That is the boundary-noise shape, and it is the only
-distinguishing statistic in the file that survives. Treat the branch
-as OPEN, leaning noise, until a correct (f) says otherwise.
+^^^ STILL NOT ESTABLISHED, on a different ground than before. The
+census now passes, so the table may be read; what it does not do is
+separate myopia from COMMUTATION, which predicts the same split. See
+the block at the end of (f). The high-m1 reversals overturn a 50+
+depth-1 margin and land a median of 2.45 past a tie -- a large rate
+attached to a ~2-point effect, which is what you get when Pop and the
+winning move both fit in one turn and only their ORDER is left to
+decide. Nothing here is a valuation error a leaf feature could carry.
+Branch is OPEN. Do not build a second-step feature off it until the
+follow-up-identity check in (f) comes back.
 
 The mechanism is the same as depth 1: workers_late (w=119.74) and
 culture_rate (w=60.08) carry 73.6% of the depth-1-to-depth-2 swing.
