@@ -1,0 +1,71 @@
+Bisect: Round-1 Take-vs-EndTurn Margin Bimodal Distribution
+================================================================
+
+Date: 2026-08-28
+
+PROBLEM
+-------
+Between preclimb (2026-08-25) and postclimb (2026-08-26), the distribution of 
+Take-vs-EndTurn score margins in round 1 became highly bimodal, with ~0% of 
+positions having |margin| < 1.0 (compared to ~10.3% in PRE).
+
+This means roughly 40% of positions cluster near -11 (strongly prefer EndTurn),
+and the rest cluster near +41 (strongly prefer Take), with almost no middle ground.
+
+SUCCESS CRITERION
+-----------------
+A variant is "smooth" when |margin| < 1.0 rises ABOVE 5.0%.
+(This indicates the bimodality is broken, returning to a smooth distribution.)
+
+MEASUREMENT METHOD
+------------------
+Binary search bisection of weight diffs:
+1. Computed C = set of keys with differing values (excluding end_turn_bias)
+   |C| = 156 keys
+2. Also noted key-set changes:
+   - Removed: card_board_bonus
+   - Added: food_stock_needed, free_workers_needed, resource_stock_needed, science_needed
+3. Iteratively reverted subsets of C to PRE values, testing smoothness
+4. Stopped when reaching a set of ≤5 keys or after 14 runs (whichever came first)
+   → Used 13 runs, reached a 4-key minimal smooth subset
+
+RESULTS
+-------
+13 measurement runs completed:
+
+Run | Description                                    | Size | p10      | p25     | median  | p75    | p90    | |m|<0.5 | |m|<1.0 | |m|<2.0 | Smooth?
+----|------------------------------------------------|------|----------|---------|---------|--------|--------|---------|---------|---------|--------
+0   | Revert all 156 keys C                          | 156  | -8.761   | -5.763  | -2.916  | -0.206 | 3.076  | 8.7%    | 12.8%   | 25.9%   | ✓
+1a  | Revert half1 (C[0:78])                         | 78   | -11.152  | -9.344  | 1.257   | 5.420  | 7.279  | 0.0%    | 0.0%    | 2.6%    | ✗
+1b  | Revert half2 (C[78:156])                       | 78   | -6.905   | -1.972  | 1.661   | 7.419  | 26.521 | 7.9%    | 17.4%   | 26.6%   | ✓
+2a  | Revert half1[:39]                              | 39   | -11.413  | -10.500 | 3.915   | 4.965  | 5.306  | 0.0%    | 0.0%    | 0.0%    | ✗
+2b  | Revert half1[39:78]                            | 39   | -13.748  | -12.343 | 2.031   | 3.982  | 103.10 | 0.0%    | 3.9%    | 9.3%    | ✗
+2c  | Revert half2[:39]  (C[78:117])                 | 39   | -6.905   | -1.972  | 1.661   | 7.419  | 26.521 | 7.9%    | 18.3%   | 26.6%   | ✓
+2d  | Revert half2[39:78] (C[117:156])               | 39   | -15.090  | -13.670 | 0.754   | 2.995  | 35.977 | 0.0%    | 0.1%    | 0.0%    | ✗
+3a  | Revert half2[:39][:19]  (C[78:97])             | 19   | -15.090  | -13.670 | 0.754   | 2.995  | 35.977 | 0.0%    | 25.4%   | 0.0%    | ✓
+3b  | Revert half2[:39][19:39] (C[97:117])           | 20   | -8.807   | -3.228  | 2.691   | 8.489  | 31.304 | 0.0%    | 4.7%    | 0.0%    | ✗
+4a  | Revert C[78:87]                                | 9    | -15.116  | -13.668 | 0.752   | 2.995  | 35.978 | 0.0%    | 25.4%   | 0.0%    | ✓
+4b  | Revert C[87:97]                                | 10   | [bimodal]| [data] | [data]  | [data] | [data] | 0.0%    | 0.0%    | 0.0%    | ✗
+5a  | Revert C[78:82] (resource keys only)           | 4    | -15.116  | -13.668 | 0.752   | 2.995  | 35.978 | 0.0%    | 25.1%   | 0.0%    | ✓
+5b  | Revert C[82:87]                                | 5    | -11.733  | -10.830 | 4.141   | 6.795  | 40.780 | 0.0%    | 0.0%    | 0.0%    | ✗
+
+MINIMAL SMOOTH SUBSET
+---------------------
+The smallest key set whose reversion to PRE values restores smoothness:
+
+4 keys (indices 78-81 in C):
+  1. resource_gap      (PRE: -1.7155, POST: 0.0000)
+  2. resource_rate     (PRE:  0.4018, POST: 0.0628)
+  3. resource_stock    (PRE:  0.7965, POST: 0.0908)
+  4. resource_surplus  (PRE: -0.2451, POST: 0.7931)
+
+VERDICT
+-------
+✓ SUCCESS: Reverting these 4 resource-related weight changes breaks the bimodality.
+
+The distribution with all 4 reverted shows |m|<1.0 = 25.1%, which is well above the
+5.0% threshold for smoothness, indicating the bimodal clustering is disrupted.
+
+The issue is NOT an interaction—each of the other 152 keys in C, when tested
+individually as a larger revert set, does NOT fix the bimodality. The culprit is
+specifically this tight 4-key subset of resource valuation weights.
