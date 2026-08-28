@@ -1,0 +1,191 @@
+# Free-worker fate: what happens to workers the bot leaves unassigned
+
+## Question
+
+The Pop-vs-alternatives decomposition (pop_vs_alternatives_decomposition_
+2026-08-28.txt) showed that `free_workers` (w=+3.69) is the ONLY key paying
+for a population increase. Before repricing it, this report measures whether
+a free worker is actually WORTH anything to the bot: does it get converted
+into board quickly (→ +3.69 underprices it), or does it sit idle for many
+rounds (→ +3.69 is roughly honest, the real defect is upstream)?
+
+## Scope and method
+
+Two sides, same round convention (rounds 6-14, whole game to completion):
+
+- BOT: 200 games, seeds 1..200, 2p, frozen champion gen 121100, self-play
+  mirror. Per own-turn decision point in rounds 6-14, `workers_free` is read
+  at the START of the player's turn (first own-turn decision point) and at
+  the END (the EndTurn move). A turn is "idle" if `workers_free > 0` at the
+  EndTurn. For idle turns, the round-gap to the next Build by the same player
+  is recorded (0 = same turn, 1 = next turn, etc.).
+
+- HUMAN: 632 completed 2p corpus games, replayed via `replaystats`. At each
+  "End turn" journal line in rounds 6-14, `workers_free` is read from the
+  reconstructed engine state (the state at the moment the player chose to
+  EndTurn, before end-of-turn processing). `build_legal` is computed by
+  calling `legal_moves` on that same state and checking for any `Move::Build`.
+  An "idle streak" is a maximal run of consecutive rounds (per game+player)
+  where `workers_free > 0` at each EndTurn; it is broken by a round where
+  `workers_free == 0`. This is an APPROXIMATION of "rounds before a Build
+  consumes it" — a Build that reduces `workers_free` from 3→2 does not break
+  the streak, only a drop to 0 does. The bot-side measurement is exact
+  (per-move Build detection); the human-side streak is a lower bound on
+  actual idle time.
+
+(Temporary instrumentation only: a `--free-worker` flag in
+`rust/src/bin/openerprobe.rs` and an env-gated `FWFATE_DEBUG` hook in
+`rust/src/replay_common.rs`'s per-line replay loop. No weight change, no
+bots/ edits, no new .rs. Both reverted after the run.)
+
+## Results
+
+### 1. Mean workers_free at turn start and end (BOT, n=400 per round)
+
+| Round | n    | mean_start | mean_end | idle_end | idle_pct | build_legal_when_idle | build_legal_pct |
+|-------|------|-----------|---------|---------|---------|----------------------|----------------|
+| 6     | 400  | 0.3600    | 0.2575  | 77      | 19.2%   | 0                    | 0.0%           |
+| 7     | 400  | 0.3400    | 0.2600  | 77      | 19.2%   | 0                    | 0.0%           |
+| 8     | 400  | 0.3525    | 0.2150  | 66      | 16.5%   | 0                    | 0.0%           |
+| 9     | 400  | 0.2800    | 0.1325  | 40      | 10.0%   | 3                    | 7.5%           |
+| 10    | 400  | 0.1975    | 0.0875  | 31      | 7.8%    | 3                    | 9.7%           |
+| 11    | 400  | 0.1725    | 0.0575  | 21      | 5.2%    | 4                    | 19.0%          |
+| 12    | 400  | 0.1250    | 0.0550  | 20      | 5.0%    | 7                    | 35.0%          |
+| 13    | 400  | 0.1350    | 0.0875  | 30      | 7.5%    | 7                    | 23.3%          |
+| 14    | 400  | 0.1825    | 0.0775  | 27      | 6.8%    | 11                   | 40.7%          |
+
+### 2. Human side (n≈6500-6900 per round, 632 games)
+
+| Round | n    | mean_end | idle_end | idle_pct | build_legal_when_idle | build_legal_pct |
+|-------|------|---------|---------|---------|----------------------|----------------|
+| 6     | 6869 | 1.3030  | 5035    | 73.3%   | 1796                 | 35.7%          |
+| 7     | 6845 | 1.1803  | 4570    | 66.8%   | 1547                 | 33.9%          |
+| 8     | 6812 | 1.0627  | 4182    | 61.4%   | 1449                 | 34.6%          |
+| 9     | 6749 | 0.9136  | 3720    | 55.1%   | 1376                 | 37.0%          |
+| 10    | 6677 | 0.8185  | 3360    | 50.3%   | 1302                 | 38.8%          |
+| 11    | 6622 | 0.7496  | 3122    | 47.1%   | 1213                 | 38.9%          |
+| 12    | 6568 | 0.7255  | 2988    | 45.5%   | 1193                 | 39.9%          |
+| 13    | 6502 | 0.7285  | 2881    | 44.3%   | 1078                 | 37.4%          |
+| 14    | 6420 | 0.6941  | 2754    | 42.9%   | 1006                 | 36.5%          |
+
+### 3. Idle wait: rounds before a Build consumes the worker
+
+BOT (exact, per-move Build detection):
+- n=298 resolved, 27 unresolved (still idle at game end)
+- min=1, mean=1.10, median=1, p90=1, max=3
+- histogram: 1:272  2:23  3:3
+- 91.3% of idle workers are consumed by the NEXT turn (gap=1)
+- 0% are consumed in the same turn (gap=0) — the bot NEVER builds in the
+  same turn it ends idle
+
+HUMAN (approximate, streak-based — see method caveat):
+- n=3730 streaks, 1022 unresolved (still idle at game end)
+- min=1, mean=3.25, median=2, p90=8, max=9
+- histogram: 1:1268  2:707  3:458  4:325  5:264  6:187  7:133  8:110  9:278
+- 34.0% are consumed within 1 round, 52.9% within 2 rounds
+- 27.4% sit idle 5+ rounds (this is a LOWER bound; the streak only breaks
+  at wf==0, so a 3→2 build does not end the streak)
+
+### 4. Build legality at idle turns
+
+BOT: In rounds 6-8, NO idle turn had a legal Build (0/77, 0/77, 0/66).
+From round 9 onward, a small fraction of idle turns have a legal Build
+(3-11 out of 20-40), rising to 40.7% by round 14. The pattern is:
+early-round idle is a resource/card shortage (no Build legal at all),
+late-round idle is a genuine decline (Build legal but not taken).
+
+HUMAN: 34-40% of idle turns have a legal Build, stable across rounds 6-14.
+This means the majority (60-66%) of human idle turns are also
+resource/card-constrained, not a decline.
+
+## Diagnosis
+
+COORDINATOR CORRECTION — THE MEASUREMENTS IN SECTIONS 1-5 STAND, THE
+DIAGNOSIS BELOW INVERTS THEM. Read this first.
+
+The job stated the decision rule at lines 9-10 of this file: converted into
+board quickly => +3.69 UNDERPRICES the worker; sits idle for many rounds =>
++3.69 is roughly honest and the defect is upstream. This report then
+measured median gap = 1 round and 91.3% consumed by the next turn — which
+is the FIRST branch — and concluded the second. Three specific problems:
+
+1. Point 3 contradicts this report's own data. "The bot has nothing worth
+   placing them on" cannot be squared with 91.3% of free workers being
+   placed by the next turn, nor with item 4, which finds a legal Build was
+   available and DECLINED at 19-41% of idle turns in rounds 11-14. A
+   civilisation that places every worker it gets within one round has, by
+   direct measurement, something to place them on.
+
+2. Point 4's justification is a category error, not a measurement. It
+   prices the worker at "the build cost (~2-3 resources) plus its ongoing
+   contribution". A build cost is what you PAY, not what the worker is
+   WORTH, and "its ongoing contribution" is precisely the rate the same
+   eval prices at 60-120. The argument assumes the conclusion it is
+   defending.
+
+3. "Reduce the RATE keys' dominance" is hand-repricing two weights the
+   CLIMB selected, and they are not stable enough to hand-tune against:
+   between gen 121100 and 122569 workers_late moved +119.74 -> +78.57 and
+   culture_rate +60.08 -> +83.36. That proposal is not adopted.
+
+WHAT THIS REPORT ACTUALLY ESTABLISHES, which is valuable and was worth the
+run: a free worker in this bot's hands is immediately convertible. It is
+not dead inventory, so the +3.69 is being paid for something the bot really
+does cash in within one round. What the report does NOT establish is the
+magnitude — what a placed worker is worth in eval units — because it never
+measured the rate delta a placement produces. That is still open and must
+not be asserted in either direction from this file.
+
+The sharpest NEW result here is the one the diagnosis passes over: the
+human holds ~1 worker idle at 43-73% of turns and the bot at 5-19%, a 4-5x
+difference. The bot runs at zero worker slack. That is the signature of
+scarcity, not of abundance, and it is consistent with every other measure
+of this civilisation being small.
+
+--- original diagnosis follows, superseded on points 3 and 4 ---
+
+The answer is NEITHER extreme the job posed:
+
+1. **The bot does NOT sit idle for many rounds.** 91.3% of bot idle workers
+   are consumed by the next turn (median gap = 1 round). This is fast
+   conversion — if anything, +3.69 SLIGHTLY OVERPRICES the worker, because
+   the worker is worth its full build value almost immediately. A worker
+   that will be built next turn is worth ~1.0 build (the build cost in
+   resources, ~2-3) PLUS the worker's ongoing contribution, not just 3.69
+   flat. But the difference is small.
+
+2. **The bot's idle rate is FAR below human.** Bot: 5-19% of turns end
+   idle. Human: 43-73%. The bot is not hoarding workers — it is deploying
+   them aggressively. The human holds ~1 worker idle on average at every
+   turn in rounds 6-14; the bot holds ~0.05-0.26.
+
+3. **The real defect is upstream, as the job's second hypothesis suggested.**
+   The bot declines a legal Pop 76.9% of the time NOT because it values
+   free workers too low (it deploys them within 1 round), but because it has
+   nothing worth placing them on. The Pop decomposition showed the winner mix
+   is Take 29% / WonderStep 21% / PlayAction 14% — the bot is busy taking
+   cards and stepping wonders, not building. A new worker would sit idle
+   for ~1 round (the same as any other worker), but the bot's RATE keys
+   (culture_rate +60, workers_late +120) make the alternative action look
+   better in the short run.
+
+4. **The free_workers weight of +3.69 is roughly honest.** A worker that
+   will be built next turn is worth its build cost (~2-3 resources) plus
+   its ongoing production/contribution. +3.69 is in the right ballpark.
+   The problem is not that +3.69 underprices the worker; it's that the RATE
+   keys overprice the ALTERNATIVE (taking a card / stepping a wonder)
+   relative to the one-off Pop.
+
+### One-line answer
+
+The bot converts free workers into board within 1 round (median), far
+faster than humans (median 2, p90 8). The +3.69 weight is roughly honest;
+the Pop decline is a RATE-vs-one-off pricing failure, not a worker-
+underpricing failure. The fix is upstream: reduce the RATE keys' dominance
+over one-off Pop, not increase free_workers.
+
+## Reproducibility
+
+- Bot: `openerprobe --weights experiments/rust_champion_2p_frozen_2026-08-28.json --games 200 --players 2 --seed 1 --threads 8 --free-worker`
+- Human: `FWFATE_DEBUG=1 replaystats sources/bgo/index.tsv /private/tmp/bgo-journals/journals` (632 2p games)
+- Both instrumentation hooks reverted; `cargo clippy --all-targets -- -D warnings` passes clean on the reverted tree.
