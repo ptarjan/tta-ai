@@ -1,0 +1,117 @@
+R1 MARGIN DECOMPOSITION (EMPIRICAL)
+===================================
+Date:        2026-08-28
+Champion:    experiments/rust_champion_2p.json  (gen 120960 at read time, sigma 0.08,
+             174 weights; the file moves between reads -- gen was 120859/120861/120903
+             on earlier reads this session, 120960 when this dump ran)
+Method:      TEMPORARY eprintln in rust/src/bin/openerprobe.rs (reverted after this
+             file was written; git status left clean of it). No new .rs file, no bots/
+             edits. Build: cargo build --bin openerprobe only. Gate R1_DUMP=1 fires at
+             the FIRST round-1 seat-1 own-turn decision (turn=2), dumps, exits.
+             Run:  ./target/debug/openerprobe --games 1 --players 2 --seed <s> \
+                   --threads 1 --weights experiments/rust_champion_2p.json
+             Four independent seeds dumped (0,1,2,3); CHECK 2/3 exact to 0.000000000
+             in all four.
+
+THE ~38 MISSING POINTS: ROOT CAUSE (CONFIRMED, gap 0.000000000)
+---------------------------------------------------------------
+The earlier job-J analysis (and the first draft of this dump) scored EndTurn on the
+UNMOVED root + end_turn_bias, mirroring WeightedBot::choose (eval.rs:493-499). That is
+WRONG for the measured ground truth, which is read off WeightedBot::rank_moves.
+
+rank_moves (eval.rs:546-553) APPLIES every candidate -- INCLUDING EndTurn -- before
+scoring:
+    for &mv in moves {
+        let mut trial = root.clone();
+        apply::apply(&mut trial, mv);          // <-- EndTurn IS applied here
+        let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
+        if matches!(mv, Move::EndTurn) { val += end_bias; }
+        ...
+    }
+apply.rs:314:  Move::EndTurn => crate::game::end_turn(state)
+So EndTurn is scored on the END-OF-TURN state: production collected, civil/military
+pools debited-then-refilled, turn advanced, age checked. choose skips the apply for
+EndTurn (it would otherwise double-count production); rank_moves does not. The two
+bots therefore price EndTurn differently by design, and the measured margin uses
+rank_moves.
+
+Direct probe (seed 0, seat 1, first R1 decision, turn=2):
+    evaluate(unmoved root)                       = -499.036588476
+    evaluate(apply(root, EndTurn)) + end_bias    = -464.071587614  == rank_moves endturn (gap 0.000000000e0)
+    => the EndTurn apply is worth +34.965 at this position. That is the ~38 missing
+       points. The earlier "unmoved root" analysis was ~35-39 points too optimistic
+       about Take (it charged Take the full production EndTurn collects for free).
+
+Also confirmed a NO-OP: determinize_current_events (plan.rs:129) reorders the 4-card
+Age-A event pile at game start, but the eval path reads current_events only
+order-independently (events::my_seeds filters by seeded_by, a per-player set), so the
+reorder moves the score by exactly 0.000000000. Not a contributor.
+
+DECOMPOSITION (best-take trial  minus  EndTurn trial, both APPLIED states)
+--------------------------------------------------------------------------
+margin = best_take - endturn = [take_state - et_state] - end_bias
+The per-term rows sum to (take_state - et_state); subtract end_bias (-4.619540) to
+get the measured margin. Seed 0 (Take slot 5):
+
+  rank:  term                    endturn_state     take_state      delta
+  -----  ----------------------  -------------  -------------  ----------
+    1    Workers                  +86.557976     +56.389638    -30.168338   <-- dominant
+    2    HandPotential            +0.000000      +13.518894    +13.518894   (favors Take)
+    3    CivilActionSurplus       +6.194862      +0.000000     -6.194862
+    4    RowPlayableCount         +2.264986      +0.000000     -2.264986
+    5    FoodStock                +1.886579      +0.000000     -1.886579
+    6    CaLeft                   -1.457223      -0.000000     +1.457223
+    7    TakeCostShare            +0.000000      +1.390152     +1.390152
+    8    ResourceStock            +1.288928      +0.000000     -1.288928
+    9    ResourceGap              -0.443325      -1.329976     -0.886651
+   10    CivilActionGap           -0.000000      -0.855273     -0.855273
+    ...  (15 more terms, each < 0.55 in magnitude)
+
+  sum of per-term deltas          = -28.415989
+  end_bias                        =  -4.619540
+  margin (reproduced)             = -23.796449   == measured best_take - endturn (gap 0.000000000)
+
+CHECK (all 4 seeds):
+  CHECK 2: my take evaluate      == rank_moves best take   (gap 0.000000000)
+  CHECK 3: my endturn eval+bias  == rank_moves endturn     (gap 0.000000000)
+  => the per-term rows + end_bias reproduce the measured margin EXACTLY.
+
+TOP 5 TERMS BY |contribution| (seed 0; Workers is IDENTICAL across all 4 seeds):
+  1.  Workers                -30.168   (phase-blended; workers_late=106.18 weight)
+  2.  HandPotential           +13.519   (eval-only block; the card just taken)
+  3.  CivilActionSurplus      -6.195
+  4.  RowPlayableCount        -2.265
+  5.  FoodStock               -1.887
+
+CROSS-SEED STABILITY (seeds 0,1,2,3):
+  seed  best_take  endturn   margin    Workers-delta   HandPot-delta
+    0   -487.868   -464.072  -23.796    -30.168         +13.519
+    1   -498.477   -464.523  -33.954    -30.168         +3.019
+    2   -498.205   -463.259  -34.946    -30.168         +3.019
+    3   -497.131   -463.540  -33.591    -30.168         +3.019
+  Workers delta is a state-CONSTANT (-30.168 in all four): the EndTurn apply collects
+  the same Age-A production regardless of which card is taken. HandPotential is the
+  only term that varies with the taken card (the card's identity value).
+
+MEASURED GROUND TRUTH (openerprobe --games 360 --players 2 --seed 0 --threads 2,
+live champ, item 7): round-1 best_take minus EndTurn, seat 1: mean -34.794,
+max -22.138, n=360 (EndTurn wins every time). Seat 0: mean -5.919, bimodal
+p25 -9.654 / p75 +2.283. Take wins only 97/720 = 13.5%.
+The four dumped seeds give seat-1 margins of -23.8 / -34.0 / -34.9 / -33.6, spanning
+the measured [max -22.1, mean -34.8] band. The structure (Workers-dominated,
+EndTurn-always-wins for seat 1) matches.
+
+WHY ENDTURN WINS AT ROUND 1 (the answer)
+----------------------------------------
+At the first round-1 decision the board is near-empty, so the Take's own value
+(HandPotential +3.0 to +13.5, plus small TakeCostShare/CaLeft/HandValue terms) is
+small. But rank_moves' EndTurn candidate has ALREADY collected the turn's production
+(Workers -30.2, FoodStock -1.9, ResourceStock -1.3, Science -0.5, CivilActionSurplus
+-6.2 -- all the stocks/gaps EndTurn's apply realizes) before it is scored. The Take
+candidate does NOT get that production yet (it is still mid-turn). So EndTurn is
+credited ~30-40 points of production the Take has not earned, and wins. The single
+dominant term is Workers (-30.17), the phase-blended workers key at workers_late=106.18.
+
+This is a RANKING artifact of rank_moves' apply-EndTurn convention (deliberate, to
+avoid double-counting production the way choose guards against), not a feature-vector
+error: every per-term contribution sums to the measured margin to 1e-9.

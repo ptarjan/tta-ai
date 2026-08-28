@@ -545,7 +545,15 @@ impl WeightedBot {
         let mut scored: Vec<(Move, f64)> = Vec::with_capacity(moves.len());
         for &mv in moves {
             let mut trial = root.clone();
-            apply::apply(&mut trial, mv);
+            // `choose`'s own same-point-in-time rule, for the same reason:
+            // `Move::EndTurn` is the only apply arm that reaches
+            // `economy::end_of_turn`, so applying it would score it against a
+            // board already holding this turn's production while every rival
+            // candidate is still charged the full negative `food_gap`/
+            // `resource_gap`. `end_bias` is what prices ending a turn.
+            if !matches!(mv, Move::EndTurn) {
+                apply::apply(&mut trial, mv);
+            }
             let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
             if matches!(mv, Move::EndTurn) {
                 val += end_bias;
@@ -722,7 +730,13 @@ pub fn candidate_features(
     let mut out = Vec::with_capacity(moves.len());
     for &mv in moves {
         let mut trial = root.clone();
-        apply::apply(&mut trial, mv);
+        // Same-point-in-time rule as `choose`/`rank_moves`: `Move::EndTurn`
+        // is scored on the unmoved root, its price carried by the
+        // `EndTurnBias` indicator below, so a `w . f` here reproduces
+        // `rank_moves`' own score for every candidate.
+        if !matches!(mv, Move::EndTurn) {
+            apply::apply(&mut trial, mv);
+        }
         let mut f = linear_features(&trial, idx, Some(&ctx), freeze);
         if matches!(mv, Move::EndTurn) {
             f[WeightKey::EndTurnBias as usize] += 1.0;
@@ -1579,6 +1593,44 @@ mod tests {
             let chosen = bot.choose(&state, moves.as_slice());
             let ranked = bot.rank_moves(&state, moves.as_slice());
             assert_eq!(ranked[0].0, chosen, "{n}p: rank_moves()[0] disagreed with choose()");
+        }
+    }
+
+    /// `rank_moves` must score `Move::EndTurn` on the UNMOVED root, exactly
+    /// as `choose` does. `EndTurn` is the only apply arm reaching
+    /// `economy::end_of_turn`, so applying it before scoring credits it with
+    /// this turn's production while every rival candidate is still charged
+    /// the full negative `food_gap`/`resource_gap`. That asymmetry is worth
+    /// tens of points at a round-1 decision -- far more than any card in the
+    /// row is worth -- so a `rank_moves` that applies it reports a ranking
+    /// the bot never plays, and every analysis binary reading it (agreement,
+    /// whydiverge, featspread, openerprobe, the advisor) reports that
+    /// phantom ranking as "the bot's opinion".
+    #[test]
+    fn rank_moves_scores_end_turn_on_the_unmoved_root_just_as_choose_does() {
+        for n in [2u8, 3, 4] {
+            let state = G::new_game(n, 11);
+            let moves = crate::legal::legal_moves(&state);
+            assert!(moves.as_slice().contains(&Move::EndTurn), "{n}p: fixture must offer EndTurn");
+            let bot = WeightedBot::default();
+
+            let idx = state.decider();
+            let ctx = rivals::rival_context(&state, idx, None, None);
+            let mut root = state.clone();
+            plan::determinize_current_events(&mut root, &mut plan::plan_rng(&state, idx));
+            let want = evaluate(&root, idx, &bot.weights, Some(&ctx), None)
+                + bot.weights.get(WeightKey::EndTurnBias);
+
+            let ranked = bot.rank_moves(&state, moves.as_slice());
+            let got = ranked
+                .iter()
+                .find(|(m, _)| matches!(m, Move::EndTurn))
+                .expect("EndTurn must be ranked")
+                .1;
+            assert!(
+                (got - want).abs() < 1e-9,
+                "{n}p: rank_moves scored EndTurn {got}, choose's own convention scores it {want}"
+            );
         }
     }
 
