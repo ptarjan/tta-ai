@@ -1,0 +1,127 @@
+champ2p COLLAPSE DIFF: which weights moved between the two frozen 2p champions
+==============================================================================
+old: /Users/pt/tta-ai/analysis/frozen/preclimb_2026-08-25/champ2p.json
+      gen 108828, 160 weight keys (nested under top-level "weights")
+new: /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ2p.json
+      gen 113181, 163 weight keys
+delta = new - old;  relative delta = delta / max(|old|, 0.01)
+
+Weight keys in common: 159; sign flips: 38; only in old: 1; only in new: 4
+
+(a) TOP 30 KEYS BY ABSOLUTE DELTA
+------------------------------------------------------------------------------
+key                                   old          new        delta    rel delta
+has_colony                        60.0000      12.2781     -47.7219      -0.7954
+science_rate_trailing             20.6190      60.0000     +39.3810      +1.9099
+my_event_threat                   18.7781      46.0656     +27.2876      +1.4532
+leader                            45.0845      23.7952     -21.2893      -0.4722
+rival_yellow_bank                 -6.1045     -27.0557     -20.9512      -3.4321
+auction_bid                       13.7808      -6.7760     -20.5568      -1.4917
+event_scoring_margin              21.4607       3.0647     -18.3960      -0.8572
+workers_late                      45.8767      56.9718     +11.0951      +0.2418
+uprising                          -9.1045     -16.8512      -7.7467      -0.8509
+end_turn_bias                     -9.5950      -2.4851      +7.1099      +0.7410
+strength                          14.2629      21.3187      +7.0558      +0.4947
+rival_culture                      4.9181      -0.6546      -5.5727      -1.1331
+science_gap                       -1.1994      -5.8148      -4.6154      -3.8481
+my_seeded_pending                  4.3728      -0.0070      -4.3798      -1.0016
+happy_surplus                      4.1492      -0.1230      -4.2722      -1.0296
+wonder_stages_left                -0.8706      -4.6312      -3.7606      -4.3193
+strength_lead                     -3.9873      -0.4185      +3.5688      +0.8950
+rival_colonies                    -0.9272      -4.3685      -3.4414      -3.7117
+attack_target_weakness             6.4653       3.1491      -3.3162      -0.5129
+hand_potential                     4.6221       1.5715      -3.0507      -0.6600
+food_rate                         -0.0850      -3.1055      -3.0205     -35.5276
+yellow_bank                       -5.2863      -2.3818      +2.9045      +0.5494
+best_library                      -0.0383       2.6455      +2.6838     +70.0942
+war_board_credit                   0.3165       2.8861      +2.5695      +8.1174
+strength_rel_early               -10.9684      -8.4590      +2.5093      +0.2288
+rival_mean_culture                -0.0254       2.2932      +2.3186     +91.1449
+culture_rate                      48.7476      46.5640      -2.1836      -0.0448
+row_bargain_forgone                2.1808       0.1233      -2.0576      -0.9435
+resource_discount                  0.8416       2.8447      +2.0031      +2.3802
+rival_hand_civil                  -2.0353      -0.0679      +1.9674      +0.9666
+
+(b) TOP 30 KEYS BY RELATIVE DELTA
+------------------------------------------------------------------------------
+key                                   old          new        delta    rel delta
+best_unit                         -0.0031      -1.6128      -1.6097    -160.9664
+rival_mean_culture                -0.0254       2.2932      +2.3186     +91.1449
+best_library                      -0.0383       2.6455      +2.6838     +70.0942
+pact_board_credit                  0.0129       0.8165      +0.8036     +62.3101
+rival_building_wonder             -0.0117      -0.5660      -0.5543     -47.2098
+tech_levels_late                   0.0300       1.4161      +1.3861     +46.2196
+food_rate                         -0.0850      -3.1055      -3.0205     -35.5276
+take_cost_share                    0.0166       0.5499      +0.5333     +32.1720
+military_action_surplus            0.0556      -1.3662      -1.4218     -25.5855
+hand_perishable                   -0.0078      -0.2421      -0.2344     -23.4361
+hand_military                      0.0156       0.2729      +0.2573     +16.5184
+build_discount                     0.0141       0.2353      +0.2211     +15.6486
+rival_strength                    -0.0073      -0.1431      -0.1359     -13.5860
+wonder_overrun                    -0.1071      -1.3140      -1.2069     -11.2651
+culture_gap                        0.0000      -0.1033      -0.1033     -10.3272
+best_lab                          -0.0149       0.1336      +0.1485      +9.9774
+free_action_credit                 0.0023       0.0971      +0.0948      +9.4825
+best_temple                       -0.0443      -0.4540      -0.4097      -9.2590
+aggression_board_credit            0.1125       1.1260      +1.0135      +9.0097
+rival_free_ca                     -0.2045      -2.0417      -1.8372      -8.9850
+best_theater                       0.0978       0.9420      +0.8442      +8.6337
+rival_science_stock               -0.0045      -0.0864      -0.0819      -8.1911
+war_board_credit                   0.3165       2.8861      +2.5695      +8.1174
+num_techs                         -0.1109       0.7222      +0.8331      +7.5095
+tactic_board_credit                0.0000       0.0727      +0.0727      +7.2723
+rival_science_rate                -0.1151      -0.9378      -0.8228      -7.1509
+tactic_shortfall_cost              0.0045       0.0700      +0.0656      +6.5573
+civil_action_surplus               0.0731       0.5496      +0.4765      +6.5206
+no_aggression                     -0.0287      -0.2141      -0.1854      -6.4514
+rival_resource_stock              -0.1967      -1.3937      -1.1970      -6.0840
+
+(c) SIGN FLIPS (old and new have opposite signs)
+------------------------------------------------------------------------------
+key                                   old          new        delta    rel delta
+auction_bid                       13.7808      -6.7760     -20.5568      -1.4917
+auction_committed                 -0.1617       0.0665      +0.2283      +1.4115
+best_arena                         0.0981      -0.1958      -0.2940      -2.9960
+best_lab                          -0.0149       0.1336      +0.1485      +9.9774
+best_library                      -0.0383       2.6455      +2.6838     +70.0942
+build_fresh_credit                -0.0517       0.0039      +0.0557      +1.0758
+corruption_headroom               -0.3354       0.0517      +0.3871      +1.1541
+culture_rate_trailing             -0.1458       0.3025      +0.4483      +3.0741
+event_board_credit                -0.1844       0.1806      +0.3651      +1.9796
+gov_action_cost                   -0.4807       0.2256      +0.7063      +1.4693
+gov_level                         -0.6178       0.2085      +0.8263      +1.3374
+hand_swap_extra                    0.1860      -0.0075      -0.1935      -1.0402
+happy_margin                      -0.0550       0.0007      +0.0557      +1.0129
+happy_surplus                      4.1492      -0.1230      -4.2722      -1.0296
+has_unit                           0.0369      -0.0098      -0.0467      -1.2667
+leader_replacement                 0.0612      -0.0870      -0.1483      -2.4215
+military_action_surplus            0.0556      -1.3662      -1.4218     -25.5855
+my_seeded_pending                  4.3728      -0.0070      -4.3798      -1.0016
+num_techs                         -0.1109       0.7222      +0.8331      +7.5095
+resource_surplus                  -0.2451       0.7931      +1.0382      +4.2354
+rival_culture                      4.9181      -0.6546      -5.5727      -1.1331
+rival_food_stock                   0.0062      -0.0171      -0.0233      -2.3305
+rival_free_workers                 0.0235      -0.0249      -0.0484      -2.0585
+rival_hand_potential              -0.6707       0.2386      +0.9093      +1.3557
+rival_mean_culture                -0.0254       2.2932      +2.3186     +91.1449
+row_last_copy                     -0.2445       0.0058      +0.2503      +1.0237
+science_rate                      -0.1110       0.2199      +0.3308      +2.9811
+special_techs                     -0.4020       1.1543      +1.5563      +3.8712
+strength_rel                       0.5722      -0.0374      -0.6096      -1.0654
+tactic_reach_credit               -0.4116       0.0471      +0.4587      +1.1144
+tech_board_credit                 -0.3168       0.0057      +0.3226      +1.0181
+tech_levels                       -0.0652       0.0109      +0.0761      +1.1668
+unit_tech_credit                  -0.0241       0.0447      +0.0688      +2.8585
+unit_workers                       0.2364      -0.2362      -0.4726      -1.9990
+urban_workers                      0.0880      -0.1020      -0.1900      -2.1592
+wonder_in_progress                 0.0515      -0.0645      -0.1160      -2.2511
+wonder_pool_rival_claimed          0.1144      -0.0114      -0.1258      -1.0996
+worker_surplus                     0.5079      -0.1405      -0.6484      -1.2767
+
+(d) KEYS PRESENT IN ONE FILE AND ABSENT IN THE OTHER
+------------------------------------------------------------------------------
+only in OLD: card_board_bonus  (+0.203257)
+only in NEW: food_stock_needed  (+0.241999)
+only in NEW: free_workers_needed  (+0.0881542)
+only in NEW: resource_stock_needed  (-0.154591)
+only in NEW: science_needed  (+0.0837385)
