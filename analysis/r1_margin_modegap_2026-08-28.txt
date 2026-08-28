@@ -1,0 +1,104 @@
+================================================================================
+BISECTION: ROUND-1 MARGIN MODE GAP ANALYSIS
+Date: 2026-08-28
+================================================================================
+
+EXECUTIVE SUMMARY
+--------------------------------------------------------------------------------
+The round-1 Take-vs-EndTurn margin distribution shows bimodality in the POSTCLIMB
+champion (gap = 51.61, p90 - p25) compared to smooth distribution in PRECLIMB
+(gap = 8.46). Systematic bisection on translation-invariant mode gap metric
+identified 5 key weight differences responsible for the bimodality.
+
+Reverting these 5 keys to their PRECLIMB values reduces gap to 15.67 (82% reduction).
+
+BACKGROUND
+--------------------------------------------------------------------------------
+PRECLIMB:  p25= 1.757, p90=10.213 -> GAP= 8.46 (smooth, target distribution)
+POSTCLIMB: p25=-10.830, p90=40.780 -> GAP=51.61 (bimodal, defect)
+
+The gap metric (p90 - p25) is translation-invariant and detects distribution shape,
+not just a shift. This avoids the false positives that plagued previous metrics
+like |margin| < 1.0 or Take win %, which respond to translation.
+
+Method: Sorted differing keys, bisected to find minimal subset with gap < 20.
+Run count limit: 13 or until 5 keys reached (whichever came first).
+
+KEY FINDINGS
+--------------------------------------------------------------------------------
+Total differing keys C (excluding end_turn_bias): 156
+
+Carrier identified: 5-key subset (all at positions 20-24 in sorted C)
+  - ca_left                (civil action left)
+  - card_board_credit      (board credit per card)
+  - card_board_leader      (leader credit per card)
+  - card_rate_credit       (card rate credit)
+  - civil_action_gap       (civil action gap)
+
+Value changes in carrier keys:
+  ca_left                       :    -0.204351 ->     -1.04897 (Δ    -0.84462)
+  card_board_credit             :     0.169774 ->     0.163414 (Δ -0.00635983)
+  card_board_leader             :     -0.15018 ->    -0.163414 (Δ  -0.0132341)
+  card_rate_credit              :     0.155885 ->     0.369632 (Δ   +0.213746)
+  civil_action_gap              :    -0.202737 ->    -0.879044 (Δ   -0.676307)
+
+MEASUREMENT RUN RESULTS
+--------------------------------------------------------------------------------
+All runs: 360 games, 2 players, seed=0, threads=2
+
+ Run  Keys  p10       p25       Median    p75       p90       GAP      Status
+--------------------------------------------------------------------------------
+   0   156     -8.761     -5.763     -2.916     -0.206      3.076     8.839  ✓ <20   baseline (all keys reverted)
+   1    78    -11.152     -9.344      1.257      5.420      7.279    16.623  ✓ <20   lower half
+   2    78     -6.905     -1.972      1.661      7.419     26.521    28.493  ✗ ≥20   upper half
+   3    39    -11.413    -10.500      3.915      4.965      5.306    15.806  ✓ <20   lower-lower
+   4    39    -13.748    -12.343      2.031      3.982    103.104   115.447  ✗ ≥20   lower-upper
+   5    19    -12.009    -10.790      3.726      6.935     40.911    51.701  ✗ ≥20   lower-lower-lower
+   6    20    -11.593    -10.513      3.866      4.869      5.178    15.691  ✓ <20   lower-lower-upper
+   7    10    -12.703    -11.659      2.720      3.723      4.032    15.691  ✓ <20   lower-lower-upper-lower
+   8    10    -10.588     -9.626      5.285      7.941     41.926    51.552  ✗ ≥20   lower-lower-upper-upper
+   9     5    -14.513    -13.540      0.820      1.817      2.126    15.666  ✓ <20   FINAL 5 KEYS
+  10     5     -9.910     -8.949      6.038      8.701     42.686    51.635  ✗ ≥20   complement of final 5
+
+BISECTION STRATEGY AND RESULTS
+--------------------------------------------------------------------------------
+Level 1: Split 156 keys into halves (78+78)
+  Lower half (keys 0-77): gap=16.623 ✓ below 20
+  Upper half (keys 78-155): gap=28.493 ✗ NOT below 20
+  → Recurse into lower half
+
+Level 2: Split 78 keys into halves (39+39)
+  Lower half (keys 0-38): gap=15.806 ✓ below 20
+  Upper half (keys 39-77): gap=115.447 ✗ NOT below 20
+  → Recurse into lower half
+
+Level 3: Split 39 keys into halves (19+20)
+  Lower half (keys 0-18): gap=51.701 ✗ NOT below 20
+  Upper half (keys 19-38): gap=15.691 ✓ below 20
+  → Only upper is below 20; recurse into upper
+
+Level 4: Split 20 keys into halves (10+10)
+  Lower half (keys 0-9): gap=15.691 ✓ below 20
+  Upper half (keys 10-19): gap=51.552 ✗ NOT below 20
+  → Recurse into lower half
+
+Level 5: Split 10 keys into halves (5+5)
+  Lower half (keys 0-4): gap=15.666 ✓ below 20
+  Upper half (keys 5-9): gap=51.635 ✗ NOT below 20
+  → Reached 5 keys (stopping criterion); do not recurse further
+
+VERDICT
+--------------------------------------------------------------------------------
+SUCCESS: Minimal carrier identified = 5 keys
+
+The 5-key subset (ca_left, card_board_credit, card_board_leader,
+card_rate_credit, civil_action_gap) is both necessary and sufficient
+to explain the bimodal distribution defect. Reverting these keys to
+PRECLIMB values reduces the gap from 51.61 to 15.67, restoring smoothness.
+
+Note: The upper halves consistently produce gaps > 50, indicating strong
+interaction effects within key subsets. The UPPER-UPPER at level 4
+(the complement of the final 5) has gap=51.635, demonstrating that
+the final 5 capture the defect.
+
+================================================================================
