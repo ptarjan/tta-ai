@@ -1,0 +1,163 @@
+# When Pop is legal, does the bot actually take it?
+
+## Scope and method
+
+Follow-up to the food-gates-population report (b4e1296). Question: at the
+decision points where a Pop-kind move is LEGAL, does the bot's CHOSEN move
+actually turn out to be a Pop?
+
+Measured with `openerprobe` at 2p, 256 games (seeds 1..256), frozen champion
+`experiments/rust_champion_2p_frozen_2026-08-28.json` (gen 121100), over the
+**whole game** (the `play_one` loop was extended from `round <= 3` to
+`!state.game_over`). At every own-turn civil-phase decision point the probe
+checks whether any Pop-kind move is legal; when it is, it records (a)
+whether the bot's chosen move is a Pop, (b) if not, what it chose instead,
+and (c) the rank of the best-scored legal Pop among every scored move.
+
+(Temporary instrumentation in `rust/src/bin/openerprobe.rs` only: a
+`PopTakenStats` struct, a whole-game loop, and a `print_pop_taken` section.
+No weight change, no bots/ edits, no new .rs; reverted after the run.)
+
+## Corrections to the food-gates report (both verified in source)
+
+1. The engine DOES reject an empty yellow bank for a PAID population
+   increase: `economy::pop_cost_base` (economy.rs:47) returns `None` at
+   `yellow_bank == 0`, so `pop_cost` is `None` and the move is illegal. The
+   `increase_population` guard test at economy.rs:1530 confirms a paid
+   increase is rejected on short food or empty bank. (A cost-0 GRANT does
+   succeed past an empty bank — that is the 7522397 fix — but a grant is not
+   the Pop move.) So the food-gates report's "always succeeds at bank 0"
+   line was wrong. The 0% "yellow bank empty" in that report is simply that
+   a 2p bank is never empty at a decision point, not that the gate is dead.
+
+2. The food-gates classifier names ONE binding reason per point, so the
+   food/civil-action split is order-dependent. The 39.7% "food
+   unaffordable" figure is therefore a FLOOR on food-shortage, not an exact
+   count: any point where BOTH food and civil action are lacking is
+   attributed to whichever the classifier checks first.
+
+## (a) How often is the chosen move a Pop, overall and by round
+
+Pop is legal at **11,371** own-turn decision points (whole game). Of those,
+the bot's chosen move is a Pop at **2,629 (23.1%)**. So **76.9% of the
+time, the bot declines a legal Pop.**
+
+By round (denominator = that round's pop-LEGAL points):
+
+| round | pop legal | chosen Pop | chosen % of legal |
+|-------|-----------|------------|-------------------|
+| 2     | 1,088     | 362        | 33.3%             |
+| 3     | 1,282     | 373        | 29.1%             |
+| 4     | 933       | 196        | 21.0%             |
+| 5     | 1,236     | 219        | 17.7%             |
+| 6     | 1,207     | 189        | 15.7%             |
+| 7     | 1,159     | 202        | 17.4%             |
+| 8     | 923       | 149        | 16.1%             |
+| 9     | 616       | 106        | 17.2%             |
+| 10    | 462       | 86         | 18.6%             |
+| 11    | 374       | 98         | 26.2%             |
+| 12    | 347       | 89         | 25.6%             |
+| 13    | 295       | 73         | 24.7%             |
+| 14    | 284       | 51         | 18.0%             |
+| 15    | 245       | 75         | 30.6%             |
+| 16+   | 920       | 361        | 39.2%             |
+| TOTAL | 11,371    | 2,629      | **23.1%**         |
+
+(Round 1 has no pop-legal points — it is take-only by SS1.9.)
+
+Grouped:
+- rounds 2-5 (early): 1,150 / 4,539 = **25.3%**
+- rounds 6-10 (mid): 732 / 4,367 = **16.8%**
+- rounds 11-15 (late): 386 / 1,545 = **25.0%**
+- round 16+ (end): 361 / 920 = **39.2%**
+
+The frequency is **lowest in the mid-game** (rounds 6-10, ~16%) and
+**highest in the endgame** (round 16+, 39.2%). This is the opposite of the
+food-gates report's finding that food-gating RISES over the game: even
+though food becomes a larger share of pop-illegal points late-game, when
+Pop IS legal the bot is *more* willing to take it late-game. The mid-game
+dip is the striking part — in the age where population growth should matter
+most, the bot is least likely to buy it.
+
+## (b) When legal but not chosen, what wins instead
+
+At the 8,742 points where Pop was legal but the bot chose something else:
+
+| chosen instead | count  | % of 8,742 |
+|----------------|--------|------------|
+| Take           | 2,415  | 27.6%      |
+| Build Urban    | 829    | 9.5%      |
+| Build Mine     | 664    | 7.6%      |
+| Build Military | 409    | 4.7%      |
+| Develop        | 239    | 2.7%      |
+| WonderStep     | 1,425  | 16.3%     |
+| Leader         | 384    | 4.4%      |
+| ActionCard     | 1,117  | 12.8%     |
+| Other          | 1,220  | 14.0%     |
+| Build Farm     | 1      | 0.0%      |
+| Upgrade        | 38     | 0.4%      |
+| EndTurn        | 1      | 0.0%      |
+| **subtotal (non-Pop)** | 8,742 | 100%  |
+
+The two dominant substitutes are **Take (27.6%)** and **WonderStep
+(16.3%)** — together 43.9% of declines. The build family
+(Farm+Mine+Urban+Military+Upgrade) accounts for 22.2%, and the
+"other" tail (Revolution/Destroy/trade/Bid/etc.) 14.0%.
+
+The Take dominance is the important signal: when the bot declines a legal
+Pop, it most often goes back to taking a card. That is a **caution/
+resource-gathering** move, not an alternative investment — the bot is
+deferring the population purchase rather than committing to a different
+board plan. Combined with the food-gates finding that the food stock at
+these points is tiny (median 1) and FoodRate is <= 0 at 72.8% of
+food-binding points, the pattern is consistent with a bot that sees
+population as expensive (food-gated) and prefers to keep taking cards while
+it waits for the food to arrive — even when the Pop move is currently legal.
+
+## (c) Pop's rank among scored moves when legal
+
+Rank of the best-scored legal Pop move, 1 = the bot's actual top pick
+(whole game, n=11,371):
+
+- min = 1
+- p25 = 2
+- median = 3
+- p75 = 5
+- max = 26
+- mean = 3.87
+
+Pop is **rank 1 at exactly 2,629 of 11,371 (23.1%)** — identical to the
+"chosen Pop" count in (a), which is a consistency check: the bot's chosen
+move is `ranked[0]`, so "chosen is Pop" is the same event as "Pop's best
+scored move is rank 1." At the other 76.9% of pop-legal points, some other
+move outscores every Pop, and Pop sits at median rank 3 — a middling but
+not top option.
+
+## Diagnosis
+
+The bot takes a legal Pop only **23.1%** of the time, and it declines most
+often to **Take** (27.6% of declines) and **WonderStep** (16.3%). The
+decline-to-Take pattern, together with the food-gates finding that food
+stock is tiny and FoodRate is non-positive at most food-binding points,
+points to a bot that treats population as expensive and defers it in favor
+of card-gathering. The mid-game dip (rounds 6-10, ~16%) is the most
+notable feature: in the age where population growth should matter most, the
+bot is least willing to buy it.
+
+This is a PREFERENCE, not a legality wall — the move is legal at 11,371
+points and the bot simply does not rank it first. The eval's food-related
+weights (food_rate -0.199, food_gap -0.274, food_surplus -0.181, all
+negative in the frozen champion) price food as a cost that does not pay
+back in population, which suppresses the value the eval assigns to a Pop
+move that spends food. The two reports together say: food is a real gate on
+population (food-gates report), AND the bot under-responds to legal
+population opportunities by deferring to Take (this report) — both
+consistent with the eval dispricing food's role as a population enabler.
+
+## Caveats
+
+- 2p only.
+- The "Other" bucket (14.0% of declines) folds every non-named move kind
+  (Revolution, Destroy, trade moves, Bid, ...); none is individually large.
+- The frozen champion is gen 121100; the live champion may have moved.
+- This is a diagnosis, not a weight change.
