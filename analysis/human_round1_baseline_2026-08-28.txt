@@ -1,0 +1,106 @@
+HUMAN ROUND-1 CIVIL-ACTION BASELINE
+===================================
+Measurement date: 2026-08-28
+Corpus: BGO (board.game.online) 2-player games
+Analysis period: All available 2p games in index.tsv
+
+SAMPLE SIZE
+-----------
+Total 2-player games found in BGO index: 692
+Games with parseable journal data: 691
+Player-turns analyzed: 1382 (2 per game, one per seat)
+
+CIVIL ACTIONS SPENT IN ROUND 1
+==============================
+
+OVERALL (both seats combined):
+  Mean CA/turn: 1.601
+  Median: 2
+  Distribution:
+    0 CA: 1/1382 (0.1%)
+    1 CA: 649/1382 (47.0%)
+    2 CA: 660/1382 (47.8%)
+    3 CA: 52/1382 (3.8%)
+    4 CA: 14/1382 (1.0%)
+    5+ CA: 6/1382 (0.4%)
+
+BY SEAT:
+
+  SEAT 0 (grant: 1 CA, player goes first):
+    N player-turns: 691
+    Mean CA/turn: 1.080
+    Median: 1
+    Percentiles: p25=1, p75=1
+    Distribution:
+      1 CA: 646/691 (93.5%) — spent the grant
+      2 CA: 40/691 (5.8%) — overspent (used 1 extra)
+      3+ CA: 5/691 (0.7%)
+    Unspent CA (turns where CA < 1): 0/691 (0.0%)
+
+  SEAT 1 (grant: 2 CA, player goes second):
+    N player-turns: 691
+    Mean CA/turn: 2.123
+    Median: 2
+    Percentiles: p25=2, p75=2
+    Distribution:
+      0 CA: 1/691 (0.1%)
+      1 CA: 3/691 (0.4%)
+      2 CA: 620/691 (89.7%) — spent the grant
+      3 CA: 50/691 (7.2%) — overspent (used 1 extra)
+      4+ CA: 17/691 (2.5%)
+    Unspent CA (turns where CA < 2): 4/691 (0.6%)
+
+CARDS TAKEN IN ROUND 1
+======================
+
+OVERALL:
+  Mean cards taken/turn: 1.414
+  Median: 1
+  Percentiles: p25=1, p75=2
+
+BY SEAT:
+  Seat 0: Mean 1.080, Median 1
+  Seat 1: Mean 1.748, Median 2
+
+INTERPRETATION
+==============
+
+The human baseline shows a strong preference for spending the full civil-action
+grant in round 1 at 2 players:
+  - Seat 0 (1 CA grant): 93.5% spend exactly 1 CA
+  - Seat 1 (2 CA grant): 89.7% spend exactly 2 CA
+
+Almost no player leaves civil actions unspent:
+  - Seat 0: 0.0% unspent
+  - Seat 1: 0.6% unspent
+
+The mean overspend is minimal — most excess is just 1 extra action, and
+happens in ~8% of seat-1 turns and ~6% of seat-0 turns.
+
+COMPARISON TO BOT BASELINES
+===========================
+
+Human mean (all seats): 1.601 CA/turn
+Bot current champion: 0.689 CA/turn
+Bot older version: 1.161 CA/turn
+
+The human baseline is 2.3x higher than the current bot champion and
+1.4x higher than the older bot version. This suggests the current bot
+is significantly under-spending civil actions in round 1 relative to
+human play, and may be leaving value on the table.
+
+CAVEATS
+=======
+
+1. This analysis uses only the journal text "uses X civil action" pattern.
+   The pattern appears consistent across the corpus.
+
+2. Analysis is limited to round-1 data extractable from journal timestamps
+   and round numbers. No per-turn or within-action breakdown is available.
+
+3. Player skill level is mixed — BGO games span Emperor, King, and lower
+   difficulty levels. No stratification by level was performed.
+
+4. Seat position may have been inferred from order of appearance in
+   journal rather than explicit seat metadata. The pattern is consistent
+   with a player-order-based assignment.
