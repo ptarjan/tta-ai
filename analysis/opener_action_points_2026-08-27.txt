@@ -1,344 +1,231 @@
-OPENER ACTION POINTS — 2026-08-27 (regenerated)
-================================================
-This file supersedes the 9dbde87 version. The old file's items 3 and 4
-were corrupted by the post-step state read in 9dbde87 (fixed in 059f901)
-and its by-round row used the wrong denominator; the whole file is
-regenerated from the prebuilt binary at /Users/pt/tta-ai/rust/target/
-debug/openerprobe (no rebuild, no live-tree edits).
+OPENER ACTION POINTS — 2026-08-27 (regenerated, frozen champions)
+==================================================================
+This file supersedes the eeccad5 version. The previous regen measured a
+three-day-stale champion (scratch copies dated 08-24); the live files at
+/Users/pt/tta-ai/experiments/rust_champion_{N}p.json are dated 08-27 19:10
+and differ. The champion file is rewritten by the running climb, so a
+clone's copy is a snapshot, never the current bot.
+
+Frozen input: /Users/pt/tta-ai/analysis/frozen/opener_2026-08-28/
+  rust_champion_2p.json  gen=119419  md5 a039ee71811b9df172c5d136d059dd8d
+  rust_champion_3p.json  gen=66647   md5 7c8f2f060dac623052fc129cbc31e968
+  rust_champion_4p.json  gen=21726   md5 a0eee1e9320646d1ecca08a6325ddcef
 
 Method: 360 self-play games per arm, --seed 0 --threads 2, for
---players 2, 3, 4, each with --weights
-/Users/pt/tta-scratch/experiments/rust_champion_{N}p.json.
+--players 2, 3, 4, each with --weights pointing at the FROZEN copies.
+Binary: /Users/pt/tta-ai/rust/target/debug/openerprobe (prebuilt, no
+rebuild, no live-tree edits).
 
 =====================================================================
 OUTPUT (2p)
 =====================================================================
 games        360
 players      2
-weights      /Users/pt/tta-scratch/experiments/rust_champion_2p.json
+weights      /Users/pt/tta-ai/analysis/frozen/opener_2026-08-28/rust_champion_2p.json
 seeds        0..359
-elapsed      12.8s  (28.2 games/s)
+elapsed      15.9s  (22.7 games/s)
 
-## 2p (n=360 games, 6557 own-turn decision points in rounds 1-3)
+## 2p (n=360 games, 4594 own-turn decision points in rounds 1-3)
 
 ### Item 1: top-ranked (chosen) move by kind
 
-- Take: 2102/6557 (32.1%)
-- Build Farm: 0/6557 (0.0%)
-- Build Mine: 262/6557 (4.0%)
-- Build Urban: 530/6557 (8.1%)
-- Build Military: 345/6557 (5.3%)
-- Develop: 0/6557 (0.0%)
-- Upgrade: 0/6557 (0.0%)
-- WonderStep: 17/6557 (0.3%)
-- Pop: 547/6557 (8.3%)
-- Leader: 356/6557 (5.4%)
-- ActionCard: 52/6557 (0.8%)
-- EndTurn: 2160/6557 (32.9%)
-- Other: 186/6557 (2.8%)
+- Take: 589/4594 (12.8%)
+- Build Farm: 0/4594 (0.0%)
+- Build Mine: 346/4594 (7.5%)
+- Build Urban: 625/4594 (13.6%)
+- Build Military: 18/4594 (0.4%)
+- Develop: 1/4594 (0.0%)
+- Upgrade: 0/4594 (0.0%)
+- WonderStep: 35/4594 (0.8%)
+- Pop: 545/4594 (11.9%)
+- Leader: 82/4594 (1.8%)
+- ActionCard: 35/4594 (0.8%)
+- EndTurn: 2160/4594 (47.0%)
+- Other: 158/4594 (3.4%)
 
 ### Item 2: rank of the best LEGAL move of each build-shaped kind
 
 (rank 1 = the bot's actual top pick at that decision point; only counted when legal)
 
-- Farm: legal at 2472/6557 decisions (37.7%), illegal at 4085
-  rank when legal: min=2 p25=5 median=6 p75=8 max=17 mean=6.47 n=2472
-- Mine: legal at 2472/6557 decisions (37.7%), illegal at 4085
-  rank when legal: min=1 p25=3 median=4 p75=6 max=16 mean=4.26 n=2472
-- Urban: legal at 720/6557 decisions (11.0%), illegal at 5837
-  rank when legal: min=1 p25=1 median=1 p75=2 max=3 mean=1.28 n=720
-- Military: legal at 2814/6557 decisions (42.9%), illegal at 3743
-  rank when legal: min=1 p25=3 median=7 p75=10 max=17 mean=6.97 n=2814
-- WonderStep: legal at 1248/6557 decisions (19.0%), illegal at 5309
-  rank when legal: min=1 p25=5 median=8 p75=10 max=20 mean=7.74 n=1248
+- Farm: legal at 1520/4594 decisions (33.1%), illegal at 3074
+  rank when legal: min=3 p25=3 median=3 p75=4 max=25 mean=3.28 n=1520
+- Mine: legal at 1520/4594 decisions (33.1%), illegal at 3074
+  rank when legal: min=1 p25=2 median=2 p75=2 max=24 mean=2.11 n=1520
+- Urban: legal at 627/4594 decisions (13.6%), illegal at 3967
+  rank when legal: min=1 p25=1 median=1 p75=1 max=4 mean=1.01 n=627
+- Military: legal at 1521/4594 decisions (33.1%), illegal at 3073
+  rank when legal: min=1 p25=4 median=5 p75=6 max=23 mean=5.23 n=1521
+- WonderStep: legal at 77/4594 decisions (1.7%), illegal at 4517
+  rank when legal: min=1 p25=1 median=2 p75=2 max=3 mean=1.56 n=77
 
 ### Item 3: Farm build legality in rounds 1-3
 
-Legal: 2472/6557 (37.7%)   Illegal: 4085/6557 (62.3%)
-Why illegal (of 4085 illegal decisions):
-- no such Farm card in play: 0/4085 (0.0%)
-- no free worker: 1435/4085 (35.1%)
-- no civil action: 1428/4085 (35.0%)
-- no resources: 1222/4085 (29.9%)
-(of which classified off a tableau with >1 Farm card owned: 0/4085)
+Legal: 1520/4594 (33.1%)   Illegal: 3074/4594 (66.9%)
+Why illegal (of 3074 illegal decisions):
+- no such Farm card in play: 0/3074 (0.0%)
+- no free worker: 1464/3074 (47.6%)
+- no civil action: 343/3074 (11.2%)
+- no resources: 1267/3074 (41.2%)
+(of which classified off a tableau with >1 Farm card owned: 0/3074)
 
 ### Item 4: Pop (increase population) legality in rounds 1-3
 
-Legal: 3078/6557 (46.9%)   Illegal: 3479/6557 (53.1%)
-Why illegal (of 3479 illegal decisions):
-- round 1 (taking a card is the only legal action, SS1.9): 1465/3479 (42.1%)
-- yellow bank empty (no worker available to place): 0/3479 (0.0%)
-- no civil action available: 1447/3479 (41.6%)
-- food unaffordable: 567/3479 (16.3%)
+Legal: 2834/4594 (61.7%)   Illegal: 1760/4594 (38.3%)
+Why illegal (of 1760 illegal decisions):
+- round 1 (taking a card is the only legal action, SS1.9): 813/1760 (46.2%)
+- yellow bank empty (no worker available to place): 0/1760 (0.0%)
+- no civil action available: 455/1760 (25.9%)
+- food unaffordable: 492/1760 (28.0%)
 
-Rank when legal (1 = bot's actual top pick): min=1 p25=2 median=4 p75=6 max=18 mean=4.34 n=3078
+Rank when legal (1 = bot's actual top pick): min=1 p25=2 median=4 p75=6 max=12 mean=4.09 n=2834
 
 When Pop is legal but NOT the top pick, what wins instead:
 
-- Take: 1225/2531 (48.4%)
-- Build Farm: 0/2531 (0.0%)
-- Build Mine: 30/2531 (1.2%)
-- Build Urban: 509/2531 (20.1%)
-- Build Military: 61/2531 (2.4%)
-- Develop: 0/2531 (0.0%)
-- Upgrade: 0/2531 (0.0%)
-- WonderStep: 17/2531 (0.7%)
-- Pop: 0/2531 (0.0%)
-- Leader: 331/2531 (13.1%)
-- ActionCard: 34/2531 (1.3%)
-- EndTurn: 317/2531 (12.5%)
-- Other: 7/2531 (0.3%)
+- Take: 292/2289 (12.8%)
+- Build Farm: 0/2289 (0.0%)
+- Build Mine: 339/2289 (14.8%)
+- Build Urban: 610/2289 (26.6%)
+- Build Military: 1/2289 (0.0%)
+- Develop: 0/2289 (0.0%)
+- Upgrade: 0/2289 (0.0%)
+- WonderStep: 35/2289 (1.5%)
+- Pop: 0/2289 (0.0%)
+- Leader: 44/2289 (1.9%)
+- ActionCard: 1/2289 (0.0%)
+- EndTurn: 842/2289 (36.8%)
+- Other: 125/2289 (5.5%)
 
 ### Item 5: Develop legality in rounds 1-3
 
-Legal: 261/6557 (4.0%)   Illegal: 6296/6557 (96.0%)
-Why illegal (of 6296 illegal decisions):
-- round 1 (taking a card is the only legal action, SS1.9): 1465/6296 (23.3%)
-- no develop-eligible card in hand: 2845/6296 (45.2%)
-- no civil action available: 1087/6296 (17.3%)
-- science-pact partner(s) cannot pay their share: 0/6296 (0.0%)
-- science unaffordable (every eligible card): 899/6296 (14.3%)
-(of which classified while holding >1 develop-eligible card: 412/6296)
+Legal: 3/4594 (0.1%)   Illegal: 4591/4594 (99.9%)
+Why illegal (of 4591 illegal decisions):
+- round 1 (taking a card is the only legal action, SS1.9): 813/4591 (17.7%)
+- no develop-eligible card in hand: 3626/4591 (79.0%)
+- no civil action available: 58/4591 (1.3%)
+- science-pact partner(s) cannot pay their share: 0/4591 (0.0%)
+- science unaffordable (every eligible card): 94/4591 (2.0%)
+(of which classified while holding >1 develop-eligible card: 0/4591)
 
-Rank when legal (1 = bot's actual top pick): min=5 p25=15 median=18 p75=21 max=29 mean=18.01 n=261
+Rank when legal (1 = bot's actual top pick): min=1 p25=5 median=5 p75=9 max=9 mean=5.00 n=3
 
 When Develop is legal but NOT the top pick, what wins instead:
 
-- Take: 70/261 (26.8%)
-- Build Farm: 0/261 (0.0%)
-- Build Mine: 5/261 (1.9%)
-- Build Urban: 119/261 (45.6%)
-- Build Military: 3/261 (1.1%)
-- Develop: 0/261 (0.0%)
-- Upgrade: 0/261 (0.0%)
-- WonderStep: 1/261 (0.4%)
-- Pop: 36/261 (13.8%)
-- Leader: 6/261 (2.3%)
-- ActionCard: 4/261 (1.5%)
-- EndTurn: 17/261 (6.5%)
-- Other: 0/261 (0.0%)
+- Take: 1/2 (50.0%)
+- Build Farm: 0/2 (0.0%)
+- Build Mine: 0/2 (0.0%)
+- Build Urban: 0/2 (0.0%)
+- Build Military: 0/2 (0.0%)
+- Develop: 0/2 (0.0%)
+- Upgrade: 0/2 (0.0%)
+- WonderStep: 0/2 (0.0%)
+- Pop: 0/2 (0.0%)
+- Leader: 0/2 (0.0%)
+- ActionCard: 0/2 (0.0%)
+- EndTurn: 1/2 (50.0%)
+- Other: 0/2 (0.0%)
 
 ### Item 6: action points debited by the chosen move, rounds 1-3
 
 (CA/MA = the decider's own pool deltas around apply::apply -- the engine's debit itself)
-- total: 5469 CA / 575 MA debited over 6557 own-turn decision points
-- per player-TURN (denominator = 2160 own-turns):  CA 2.532/turn   MA 0.266/turn   total 2.798/turn
-- per non-EndTurn DECISION:  CA 1.244/decision   MA 0.131/decision   total 1.375/decision   (n = 4397 non-EndTurn decisions; CA debiting 3737, MA debiting 575)
-- CA per turn by round:  r1 1.161   r2 2.751   r3 3.683   (turns 720 / 720 / 720)
-- MA per turn by round:  r1 0.000   r2 0.407   r3 0.392
-- CA LEFT UNSPENT at EndTurn by round:  r1 0.339   r2 1.249   r3 0.317   (turns ending with >=1 unspent: 589 of 2160, 27.3%)
-- reconciliation:  debited 2.532 + left 0.635 = 3.167 CA per own-turn (this is the grant IFF nothing is debited off-probe)
+- total: 2851 CA / 167 MA debited over 4594 own-turn decision points
+- per player-TURN (denominator = 2160 own-turns):  CA 1.320/turn   MA 0.077/turn   total 1.397/turn
+- per non-EndTurn DECISION:  CA 1.171/decision   MA 0.069/decision   total 1.240/decision   (n = 2434 non-EndTurn decisions; CA debiting 2189, MA debiting 167)
+- CA per turn by round:  r1 0.129   r2 1.583   r3 2.247   (turns 720 / 720 / 720)
+- MA per turn by round:  r1 0.000   r2 0.025   r3 0.207
+- CA LEFT UNSPENT at EndTurn by round:  r1 1.371   r2 2.417   r3 1.753   (turns ending with >=1 unspent: 1650 of 2160, 76.4%)
+- reconciliation:  debited 1.320 + left 1.847 = 3.167 CA per own-turn (this is the grant IFF nothing is debited off-probe)
 
 =====================================================================
 OUTPUT (3p)
 =====================================================================
 games        360
 players      3
-weights      /Users/pt/tta-scratch/experiments/rust_champion_3p.json
+weights      /Users/pt/tta-ai/analysis/frozen/opener_2026-08-28/rust_champion_3p.json
 seeds        0..359
-elapsed      23.9s  (15.1 games/s)
+elapsed      61.6s  (5.8 games/s)
 
-## 3p (n=360 games, 10198 own-turn decision points in rounds 1-3)
+## 3p (n=360 games, 10752 own-turn decision points in rounds 1-3)
 
 ### Item 1: top-ranked (chosen) move by kind
 
-- Take: 3069/10198 (30.1%)
-- Build Farm: 0/10198 (0.0%)
-- Build Mine: 651/10198 (6.4%)
-- Build Urban: 331/10198 (3.2%)
-- Build Military: 755/10198 (7.4%)
-- Develop: 10/10198 (0.1%)
-- Upgrade: 1/10198 (0.0%)
-- WonderStep: 169/10198 (1.7%)
-- Pop: 1029/10198 (10.1%)
-- Leader: 650/10198 (6.4%)
-- ActionCard: 161/10198 (1.6%)
-- EndTurn: 3240/10198 (31.8%)
-- Other: 132/10198 (1.3%)
+- Take: 2457/10752 (22.9%)
+- Build Farm: 0/10752 (0.0%)
+- Build Mine: 1090/10752 (10.1%)
+- Build Urban: 956/10752 (8.9%)
+- Build Military: 100/10752 (0.9%)
+- Develop: 11/10752 (0.1%)
+- Upgrade: 0/10752 (0.0%)
+- WonderStep: 81/10752 (0.8%)
+- Pop: 1896/10752 (17.6%)
+- Leader: 366/10752 (3.4%)
+- ActionCard: 20/10752 (0.2%)
+- EndTurn: 3240/10752 (30.1%)
+- Other: 535/10752 (5.0%)
 
 ### Item 2: rank of the best LEGAL move of each build-shaped kind
 
 (rank 1 = the bot's actual top pick at that decision point; only counted when legal)
 
-- Farm: legal at 1995/10198 decisions (19.6%), illegal at 8203
-  rank when legal: min=3 p25=3 median=4 p75=5 max=14 mean=4.01 n=1995
-- Mine: legal at 1995/10198 decisions (19.6%), illegal at 8203
-  rank when legal: min=1 p25=1 median=2 p75=2 max=11 mean=1.96 n=1995
-- Urban: legal at 335/10198 decisions (3.3%), illegal at 9863
-  rank when legal: min=1 p25=1 median=1 p75=2 max=2 mean=1.01 n=335
-- Military: legal at 2105/10198 decisions (20.6%), illegal at 8093
-  rank when legal: min=1 p25=1 median=2 p75=2 max=7 mean=1.88 n=2105
-- WonderStep: legal at 1574/10198 decisions (15.4%), illegal at 8624
-  rank when legal: min=1 p25=5 median=12 p75=16 max=22 mean=11.00 n=1574
+- Farm: legal at 2217/10752 decisions (20.6%), illegal at 8535
+  rank when legal: min=3 p25=3 median=3 p75=5 max=23 mean=4.48 n=2217
+- Mine: legal at 2217/10752 decisions (20.6%), illegal at 8535
+  rank when legal: min=1 p25=1 median=2 p75=3 max=22 mean=2.42 n=2217
+- Urban: legal at 957/10752 decisions (8.9%), illegal at 9795
+  rank when legal: min=1 p25=1 median=1 p75=2 max=2 mean=1.00 n=957
+- Military: legal at 2254/10752 decisions (21.0%), illegal at 8498
+  rank when legal: min=1 p25=2 median=2 p75=2 max=20 mean=2.46 n=2254
+- WonderStep: legal at 638/10752 decisions (5.9%), illegal at 10114
+  rank when legal: min=1 p25=2 median=4 p75=12 max=25 mean=7.27 n=638
 
 ### Item 3: Farm build legality in rounds 1-3
 
-Legal: 1995/10198 (19.6%)   Illegal: 8203/10198 (80.4%)
-Why illegal (of 8203 illegal decisions):
-- no such Farm card in play: 0/8203 (0.0%)
-- no free worker: 4706/8203 (57.4%)
-- no civil action: 1727/8203 (21.1%)
-- no resources: 1770/8203 (21.6%)
-(of which classified off a tableau with >1 Farm card owned: 0/8203)
+Legal: 2217/10752 (20.6%)   Illegal: 8535/10752 (79.4%)
+Why illegal (of 8535 illegal decisions):
+- no such Farm card in play: 0/8535 (0.0%)
+- no free worker: 3467/8535 (40.6%)
+- no civil action: 1926/8535 (22.6%)
+- no resources: 3142/8535 (36.8%)
+(of which classified off a tableau with >1 Farm card owned: 0/8535)
 
 ### Item 4: Pop (increase population) legality in rounds 1-3
 
-Legal: 5464/10198 (53.6%)   Illegal: 4734/10198 (46.4%)
-Why illegal (of 4734 illegal decisions):
-- round 1 (taking a card is the only legal action, SS1.9): 2251/4734 (47.5%)
-- yellow bank empty (no worker available to place): 0/4734 (0.0%)
-- no civil action available: 1954/4734 (41.3%)
-- food unaffordable: 529/4734 (11.2%)
+Legal: 4571/10752 (42.5%)   Illegal: 6181/10752 (57.5%)
+Why illegal (of 6181 illegal decisions):
+- round 1 (taking a card is the only legal action, SS1.9): 1080/6181 (17.5%)
+- yellow bank empty (no worker available to place): 0/6181 (0.0%)
+- no civil action available: 2647/6181 (42.8%)
+- food unaffordable: 2454/6181 (39.7%)
 
-Rank when legal (1 = bot's actual top pick): min=1 p25=2 median=5 p75=9 max=17 mean=5.65 n=5464
-
-When Pop is legal but NOT the top pick, what wins instead:
-
-- Take: 1534/4435 (34.6%)
-- Build Farm: 0/4435 (0.0%)
-- Build Mine: 633/4435 (14.3%)
-- Build Urban: 311/4435 (7.0%)
-- Build Military: 645/4435 (14.5%)
-- Develop: 10/4435 (0.2%)
-- Upgrade: 0/4435 (0.0%)
-- WonderStep: 168/4435 (3.8%)
-- Pop: 0/4435 (0.0%)
-- Leader: 636/4435 (14.3%)
-- ActionCard: 118/4435 (2.7%)
-- EndTurn: 307/4435 (6.9%)
-- Other: 73/4435 (1.6%)
-
-### Item 5: Develop legality in rounds 1-3
-
-Legal: 11/10198 (0.1%)   Illegal: 10187/10198 (99.9%)
-Why illegal (of 10187 illegal decisions):
-- round 1 (taking a card is the only legal action, SS1.9): 2251/10187 (22.1%)
-- no develop-eligible card in hand: 6250/10187 (61.4%)
-- no civil action available: 827/10187 (8.1%)
-- science-pact partner(s) cannot pay their share: 0/10187 (0.0%)
-- science unaffordable (every eligible card): 859/10187 (8.4%)
-(of which classified while holding >1 develop-eligible card: 116/10187)
-
-Rank when legal (1 = bot's actual top pick): min=1 p25=1 median=1 p75=1 max=2 mean=1.09 n=11
-
-When Develop is legal but NOT the top pick, what wins instead:
-
-- Take: 0/1 (0.0%)
-- Build Farm: 0/1 (0.0%)
-- Build Mine: 0/1 (0.0%)
-- Build Urban: 1/1 (100.0%)
-- Build Military: 0/1 (0.0%)
-- Develop: 0/1 (0.0%)
-- Upgrade: 0/1 (0.0%)
-- WonderStep: 0/1 (0.0%)
-- Pop: 0/1 (0.0%)
-- Leader: 0/1 (0.0%)
-- ActionCard: 0/1 (0.0%)
-- EndTurn: 0/1 (0.0%)
-- Other: 0/1 (0.0%)
-
-### Item 6: action points debited by the chosen move, rounds 1-3
-
-(CA/MA = the decider's own pool deltas around apply::apply -- the engine's debit itself)
-- total: 9421 CA / 815 MA debited over 10198 own-turn decision points
-- per player-TURN (denominator = 3240 own-turns):  CA 2.908/turn   MA 0.252/turn   total 3.159/turn
-- per non-EndTurn DECISION:  CA 1.354/decision   MA 0.117/decision   total 1.471/decision   (n = 6958 non-EndTurn decisions; CA debiting 6103, MA debiting 815)
-- CA per turn by round:  r1 1.794   r2 3.575   r3 3.355   (turns 1080 / 1080 / 1080)
-- MA per turn by round:  r1 0.000   r2 0.491   r3 0.264
-- CA LEFT UNSPENT at EndTurn by round:  r1 0.206   r2 0.425   r3 0.645   (turns ending with >=1 unspent: 494 of 3240, 15.2%)
-- reconciliation:  debited 2.908 + left 0.426 = 3.333 CA per own-turn (this is the grant IFF nothing is debited off-probe)
-
-=====================================================================
-OUTPUT (4p)
-=====================================================================
-games        360
-players      4
-weights      /Users/pt/tta-scratch/experiments/rust_champion_4p.json
-seeds        0..359
-elapsed      32.4s  (11.1 games/s)
-
-## 4p (n=360 games, 17772 own-turn decision points in rounds 1-3)
-
-### Item 1: top-ranked (chosen) move by kind
-
-- Take: 6185/17772 (34.8%)
-- Build Farm: 0/17772 (0.0%)
-- Build Mine: 306/17772 (1.7%)
-- Build Urban: 177/17772 (1.0%)
-- Build Military: 2248/17772 (12.6%)
-- Develop: 23/17772 (0.1%)
-- Upgrade: 0/17772 (0.0%)
-- WonderStep: 213/17772 (1.2%)
-- Pop: 2009/17772 (11.3%)
-- Leader: 1522/17772 (8.6%)
-- ActionCard: 644/17772 (3.6%)
-- EndTurn: 4320/17772 (24.3%)
-- Other: 125/17772 (0.7%)
-
-### Item 2: rank of the best LEGAL move of each build-shaped kind
-
-(rank 1 = the bot's actual top pick at that decision point; only counted when legal)
-
-- Farm: legal at 2720/17772 decisions (15.3%), illegal at 15052
-  rank when legal: min=2 p25=3 median=3 p75=3 max=5 mean=3.08 n=2720
-- Mine: legal at 2720/17772 decisions (15.3%), illegal at 15052
-  rank when legal: min=1 p25=2 median=2 p75=2 max=4 mean=1.95 n=2720
-- Urban: legal at 203/17772 decisions (1.1%), illegal at 17569
-  rank when legal: min=1 p25=1 median=1 p75=1 max=2 mean=1.13 n=203
-- Military: legal at 2722/17772 decisions (15.3%), illegal at 15050
-  rank when legal: min=1 p25=1 median=1 p75=1 max=4 mean=1.18 n=2722
-- WonderStep: legal at 1376/17772 decisions (7.7%), illegal at 16396
-  rank when legal: min=1 p25=4 median=4 p75=5 max=13 mean=4.24 n=1376
-
-### Item 3: Farm build legality in rounds 1-3
-
-Legal: 2720/17772 (15.3%)   Illegal: 15052/17772 (84.7%)
-Why illegal (of 15052 illegal decisions):
-- no such Farm card in play: 0/15052 (0.0%)
-- no free worker: 7106/15052 (47.2%)
-- no civil action: 3035/15052 (20.2%)
-- no resources: 4911/15052 (32.6%)
-(of which classified off a tableau with >1 Farm card owned: 17/15052)
-
-### Item 4: Pop (increase population) legality in rounds 1-3
-
-Legal: 9400/17772 (52.9%)   Illegal: 8372/17772 (47.1%)
-Why illegal (of 8372 illegal decisions):
-- round 1 (taking a card is the only legal action, SS1.9): 3691/8372 (44.1%)
-- yellow bank empty (no worker available to place): 0/8372 (0.0%)
-- no civil action available: 2265/8372 (27.1%)
-- food unaffordable: 2416/8372 (28.9%)
-
-Rank when legal (1 = bot's actual top pick): min=1 p25=2 median=3 p75=6 max=17 mean=3.98 n=9400
+Rank when legal (1 = bot's actual top pick): min=1 p25=1 median=2 p75=4 max=10 mean=2.68 n=4571
 
 When Pop is legal but NOT the top pick, what wins instead:
 
-- Take: 2423/7391 (32.8%)
-- Build Farm: 0/7391 (0.0%)
-- Build Mine: 301/7391 (4.1%)
-- Build Urban: 176/7391 (2.4%)
-- Build Military: 2190/7391 (29.6%)
-- Develop: 16/7391 (0.2%)
-- Upgrade: 0/7391 (0.0%)
-- WonderStep: 212/7391 (2.9%)
-- Pop: 0/7391 (0.0%)
-- Leader: 1102/7391 (14.9%)
-- ActionCard: 617/7391 (8.3%)
-- EndTurn: 243/7391 (3.3%)
-- Other: 111/7391 (1.5%)
+- Take: 469/2675 (17.5%)
+- Build Farm: 0/2675 (0.0%)
+- Build Mine: 1074/2675 (40.1%)
+- Build Urban: 789/2675 (29.5%)
+- Build Military: 13/2675 (0.5%)
+- Develop: 0/2675 (0.0%)
+- Upgrade: 0/2675 (0.0%)
+- WonderStep: 80/2675 (3.0%)
+- Pop: 0/2675 (0.0%)
+- Leader: 192/2675 (7.2%)
+- ActionCard: 6/2675 (0.2%)
+- EndTurn: 0/2675 (0.0%)
+- Other: 52/2675 (1.9%)
 
 ### Item 5: Develop legality in rounds 1-3
 
-Legal: 23/17772 (0.1%)   Illegal: 17749/17772 (99.9%)
-Why illegal (of 17749 illegal decisions):
-- round 1 (taking a card is the only legal action, SS1.9): 3691/17749 (20.8%)
-- no develop-eligible card in hand: 13926/17749 (78.5%)
-- no civil action available: 56/17749 (0.3%)
-- science-pact partner(s) cannot pay their share: 0/17749 (0.0%)
-- science unaffordable (every eligible card): 76/17749 (0.4%)
-(of which classified while holding >1 develop-eligible card: 1/17749)
+Legal: 11/10752 (0.1%)   Illegal: 10741/10752 (99.9%)
+Why illegal (of 10741 illegal decisions):
+- round 1 (taking a card is the only legal action, SS1.9): 1080/10741 (10.1%)
+- no develop-eligible card in hand: 9093/10741 (84.7%)
+- no civil action available: 398/10741 (3.7%)
+- science-pact partner(s) cannot pay their share: 0/10741 (0.0%)
+- science unaffordable (every eligible card): 170/10741 (1.6%)
+(of which classified while holding >1 develop-eligible card: 12/10741)
 
-Rank when legal (1 = bot's actual top pick): min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=23
+Rank when legal (1 = bot's actual top pick): min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=11
 
 When Develop is legal but NOT the top pick, what wins instead:
 
@@ -359,10 +246,129 @@ When Develop is legal but NOT the top pick, what wins instead:
 ### Item 6: action points debited by the chosen move, rounds 1-3
 
 (CA/MA = the decider's own pool deltas around apply::apply -- the engine's debit itself)
-- total: 13725 CA / 2596 MA debited over 17772 own-turn decision points
-- per player-TURN (denominator = 4320 own-turns):  CA 3.177/turn   MA 0.601/turn   total 3.778/turn
-- per non-EndTurn DECISION:  CA 1.020/decision   MA 0.193/decision   total 1.213/decision   (n = 13452 non-EndTurn decisions; CA debiting 10633, MA debiting 2596)
-- CA per turn by round:  r1 2.442   r2 3.634   r3 3.456   (turns 1440 / 1440 / 1440)
-- MA per turn by round:  r1 0.000   r2 1.017   r3 0.785
-- CA LEFT UNSPENT at EndTurn by round:  r1 0.058   r2 0.366   r3 0.544   (turns ending with >=1 unspent: 780 of 4320, 18.1%)
-- reconciliation:  debited 3.177 + left 0.323 = 3.500 CA per own-turn (this is the grant IFF nothing is debited off-probe)
+- total: 8605 CA / 584 MA debited over 10752 own-turn decision points
+- per player-TURN (denominator = 3240 own-turns):  CA 2.656/turn   MA 0.180/turn   total 2.836/turn
+- per non-EndTurn DECISION:  CA 1.146/decision   MA 0.078/decision   total 1.223/decision   (n = 7512 non-EndTurn decisions; CA debiting 6799, MA debiting 584)
+- CA per turn by round:  r1 0.000   r2 3.998   r3 3.969   (turns 1080 / 1080 / 1080)
+- MA per turn by round:  r1 0.000   r2 0.006   r3 0.535
+- CA LEFT UNSPENT at EndTurn by round:  r1 2.000   r2 0.002   r3 0.031   (turns ending with >=1 unspent: 1100 of 3240, 34.0%)
+- reconciliation:  debited 2.656 + left 0.677 = 3.333 CA per own-turn (this is the grant IFF nothing is debited off-probe)
+
+=====================================================================
+OUTPUT (4p)
+=====================================================================
+games        360
+players      4
+weights      /Users/pt/tta-ai/analysis/frozen/opener_2026-08-28/rust_champion_4p.json
+seeds        0..359
+elapsed      61.5s  (5.9 games/s)
+
+## 4p (n=360 games, 12006 own-turn decision points in rounds 1-3)
+
+### Item 1: top-ranked (chosen) move by kind
+
+- Take: 2265/12006 (18.9%)
+- Build Farm: 0/12006 (0.0%)
+- Build Mine: 780/12006 (6.5%)
+- Build Urban: 641/12006 (5.3%)
+- Build Military: 930/12006 (7.7%)
+- Develop: 15/12006 (0.1%)
+- Upgrade: 0/12006 (0.0%)
+- WonderStep: 434/12006 (3.6%)
+- Pop: 2003/12006 (16.7%)
+- Leader: 541/12006 (4.5%)
+- ActionCard: 6/12006 (0.0%)
+- EndTurn: 4320/12006 (36.0%)
+- Other: 71/12006 (0.6%)
+
+### Item 2: rank of the best LEGAL move of each build-shaped kind
+
+(rank 1 = the bot's actual top pick at that decision point; only counted when legal)
+
+- Farm: legal at 2892/12006 decisions (24.1%), illegal at 9114
+  rank when legal: min=2 p25=3 median=3 p75=4 max=7 mean=3.55 n=2892
+- Mine: legal at 2892/12006 decisions (24.1%), illegal at 9114
+  rank when legal: min=1 p25=1 median=2 p75=3 max=6 mean=2.08 n=2892
+- Urban: legal at 653/12006 decisions (5.4%), illegal at 11353
+  rank when legal: min=1 p25=1 median=1 p75=1 max=2 mean=1.02 n=653
+- Military: legal at 2882/12006 decisions (24.0%), illegal at 9124
+  rank when legal: min=1 p25=1 median=2 p75=2 max=28 mean=2.12 n=2882
+- WonderStep: legal at 1731/12006 decisions (14.4%), illegal at 10275
+  rank when legal: min=1 p25=1 median=4 p75=6 max=9 mean=3.85 n=1731
+
+### Item 3: Farm build legality in rounds 1-3
+
+Legal: 2892/12006 (24.1%)   Illegal: 9114/12006 (75.9%)
+Why illegal (of 9114 illegal decisions):
+- no such Farm card in play: 0/9114 (0.0%)
+- no free worker: 3888/9114 (42.7%)
+- no civil action: 1462/9114 (16.0%)
+- no resources: 3764/9114 (41.3%)
+(of which classified off a tableau with >1 Farm card owned: 1/9114)
+
+### Item 4: Pop (increase population) legality in rounds 1-3
+
+Legal: 6517/12006 (54.3%)   Illegal: 5489/12006 (45.7%)
+Why illegal (of 5489 illegal decisions):
+- round 1 (taking a card is the only legal action, SS1.9): 2699/5489 (49.2%)
+- yellow bank empty (no worker available to place): 0/5489 (0.0%)
+- no civil action available: 971/5489 (17.7%)
+- food unaffordable: 1819/5489 (33.1%)
+
+Rank when legal (1 = bot's actual top pick): min=1 p25=1 median=2 p75=5 max=10 mean=3.30 n=6517
+
+When Pop is legal but NOT the top pick, what wins instead:
+
+- Take: 528/4514 (11.7%)
+- Build Farm: 0/4514 (0.0%)
+- Build Mine: 754/4514 (16.7%)
+- Build Urban: 606/4514 (13.4%)
+- Build Military: 837/4514 (18.5%)
+- Develop: 0/4514 (0.0%)
+- Upgrade: 0/4514 (0.0%)
+- WonderStep: 433/4514 (9.6%)
+- Pop: 0/4514 (0.0%)
+- Leader: 423/4514 (9.4%)
+- ActionCard: 6/4514 (0.1%)
+- EndTurn: 862/4514 (19.1%)
+- Other: 65/4514 (1.4%)
+
+### Item 5: Develop legality in rounds 1-3
+
+Legal: 15/12006 (0.1%)   Illegal: 11991/12006 (99.9%)
+Why illegal (of 11991 illegal decisions):
+- round 1 (taking a card is the only legal action, SS1.9): 2699/11991 (22.5%)
+- no develop-eligible card in hand: 9104/11991 (75.9%)
+- no civil action available: 110/11991 (0.9%)
+- science-pact partner(s) cannot pay their share: 0/11991 (0.0%)
+- science unaffordable (every eligible card): 78/11991 (0.7%)
+(of which classified while holding >1 develop-eligible card: 0/11991)
+
+Rank when legal (1 = bot's actual top pick): min=1 p25=1 median=1 p75=1 max=1 mean=1.00 n=15
+
+When Develop is legal but NOT the top pick, what wins instead:
+
+- Take: 0/1 (0.0%)
+- Build Farm: 0/1 (0.0%)
+- Build Mine: 0/1 (0.0%)
+- Build Urban: 0/1 (0.0%)
+- Build Military: 0/1 (0.0%)
+- Develop: 0/1 (0.0%)
+- Upgrade: 0/1 (0.0%)
+- WonderStep: 0/1 (0.0%)
+- Pop: 0/1 (0.0%)
+- Leader: 0/1 (0.0%)
+- ActionCard: 0/1 (0.0%)
+- EndTurn: 0/1 (0.0%)
+- Other: 0/1 (0.0%)
+
+### Item 6: action points debited by the chosen move, rounds 1-3
+
+(CA/MA = the decider's own pool deltas around apply::apply -- the engine's debit itself)
+- total: 8843 CA / 990 MA debited over 12006 own-turn decision points
+- per player-TURN (denominator = 4320 own-turns):  CA 2.047/turn   MA 0.229/turn   total 2.276/turn
+- per non-EndTurn DECISION:  CA 1.151/decision   MA 0.129/decision   total 1.279/decision   (n = 7686 non-EndTurn decisions; CA debiting 6574, MA debiting 990)
+- CA per turn by round:  r1 1.627   r2 2.204   r3 2.310   (turns 1440 / 1440 / 1440)
+- MA per turn by round:  r1 0.000   r2 0.458   r3 0.229
+- CA LEFT UNSPENT at EndTurn by round:  r1 0.873   r2 1.796   r3 1.690   (turns ending with >=1 unspent: 2591 of 4320, 60.0%)
+- reconciliation:  debited 2.047 + left 1.453 = 3.500 CA per own-turn (this is the grant IFF nothing is debited off-probe)
