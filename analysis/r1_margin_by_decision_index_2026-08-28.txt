@@ -1,0 +1,115 @@
+Round-1 Take-vs-EndTurn margin, split by decision index, seat, and their pair
+==============================================================================
+
+Background: openerprobe's Item 7 reports the round-1 Take-vs-EndTurn score
+margin (best_take - end_turn) pooled over ALL round-1 civil decisions. At 2p
+the section-1.9 seating grant gives seat 0 ONE civil action and seat 1 TWO,
+so a player can face a FIRST take decision (hand empty) and then a SECOND
+one (hand has 1 card). The postclimb margin distribution is strongly
+bimodal (pooled TAILTIGHT 0.017); the preclimb one is smooth (0.258).
+
+Hypothesis 1 (decision index): the two modes are the two decision
+positions. Several weights (science_gap clearest: -1.199 preclimb ->
+-5.815 postclimb) read structurally 0 at the first decision (empty hand)
+and non-zero at the second (one card in hand).
+
+Hypothesis 2 (seat, added mid-task by the coordinator): `rank_moves` scores
+each candidate in its POST-APPLY trial state (eval.rs:548-554), and
+`civil_action_gap` reads 1 on Take trials but 0 on EndTurn at one seat, and
+0 everywhere at the other -- a seat-dependent constant offset on the Take
+side, independent of decision index. Seat and decision index correlate
+(seat 0's 1-CA grant structurally limits it), so both splits and their
+product (seat, decision index) are needed to separate the two candidates.
+
+Item 7's collection site (`record_decision`/`R1MarginStats` in
+rust/src/bin/openerprobe.rs) had been added in an EARLIER session but left
+in `git stash@{0}` ("WIP on master: 85eb086 ...") rather than committed --
+its base blob matched HEAD exactly, so it applied cleanly with no conflicts.
+One of its own tests
+(`r1_margin_rows_account_for_every_round1_own_turn_exactly_once`) was
+WRONG and failing (asserted `n + n_no_take == turns_round1`, i.e. one
+margin row per TURN; the real invariant is one row per round-1 own-turn
+DECISION POINT, and a turn can hold more than one when a seat's CA grant is
+more than 1) -- fixed to check against an independently replayed decision
+count instead of the turn count. This is very likely *why* that session's
+work never got committed. All 26 unit tests pass after the fix, plus the 6
+new ones added for this task (partition-of-samples checks for the index,
+seat, and (seat,index) splits).
+
+VALIDATION GATE (pooled postclimb numbers must reproduce known values):
+  expected: n=720, p10 -11.734, p25 -10.830, med 4.139, p75 6.795, p90 40.780
+  observed: n=720, p10 -11.734, p25 -10.830, med 4.139, p75 6.795, p90 40.780
+  PASSED (byte-identical).
+
+Runs: 360 games, 2p, seed 0, threads 2, debug build, against:
+  preclimb:  analysis/frozen/preclimb_2026-08-25/champ2p.json
+  postclimb: analysis/frozen/postclimb_2026-08-26/champ2p.json
+
+TAILTIGHT = min(p25-p10, p90-p75) / (p90-p10). Higher = more unimodal.
+Reference: postclimb pooled 0.017, preclimb pooled 0.258.
+
+PRECLIMB (880 sampled round-1 decisions total: 720 at index 1, 160 at index 2;
+seat 0 always index 1 only, seat 1 reaches index 2 in 160/360 = 44% of its
+games):
+
+  group                    n     p10      p25     p75     p90    TAILTIGHT
+  pooled                   880   -1.178   1.757   7.127   10.213   0.258  (reference)
+  by index -- index 1      720   -1.190   2.185   7.178   10.246   0.268
+  by index -- index 2      160   -0.951   0.874   5.439    8.310   0.197
+  by seat  -- seat 0       360    3.012   4.220   8.950   12.014   0.134
+  by seat  -- seat 1       520   -2.010  -0.073   5.197    8.215   0.189
+  seat 0, index 1          360    3.012   4.220   8.950   12.014   0.134  (= seat 0 pooled: seat 0 never reaches index 2)
+  seat 1, index 1          360   -2.223  -0.416   4.909    8.118   0.175
+  seat 1, index 2          160   -0.951   0.874   5.439    8.310   0.197  (= index-2 pooled: seat 0 never contributes to it)
+
+POSTCLIMB (720 sampled round-1 decisions total: ALL 720 at index 1, ZERO at
+index 2 -- see verdict below):
+
+  group                    n     p10       p25      p75     p90     TAILTIGHT
+  pooled                   720  -11.734  -10.830   6.795   40.780    0.017  (reference)
+  by index -- index 1      720  -11.734  -10.830   6.795   40.780    0.017  (= pooled: no index-2 rows exist to split off)
+  by index -- index 2        0     --       --       --       --      n/a
+  by seat  -- seat 0       360    3.812    4.161   40.713  40.891    0.005
+  by seat  -- seat 1       360  -12.467  -11.516   -9.639  25.120    0.025
+  seat 0, index 1          360    3.812    4.161   40.713  40.891    0.005  (= seat 0 pooled)
+  seat 1, index 1          360  -12.467  -11.516   -9.639  25.120    0.025  (= seat 1 pooled)
+
+VERDICT
+=======
+
+Hypothesis 1 (decision index) is FALSIFIED for the postclimb champion, and
+not by a close margin: splitting by decision index changes NOTHING, because
+there is nothing to split. Every one of the 720 sampled postclimb round-1
+Take-vs-EndTurn decisions is decision index 1 (n=720 both before and after
+the split; index 2 has n=0). The "second decision" does happen mechanically
+in some fraction of turns (n_no_take=428 decision points exist beyond the
+sampled 720), but under postclimb weights it NEVER lands as a live
+Take-vs-EndTurn tie -- it always falls into "Take illegal" once reached.
+Compare with preclimb, where index 2 is real and sampled 160 times (seat 1
+reaches a live second Take-vs-EndTurn choice in 44% of its games). So the
+postclimb weights have themselves eliminated the second-decision population
+this hypothesis needed; pooling can't be un-pooling something that isn't
+there. TAILTIGHT by index is 0.017 = the pooled value, i.e. still fully
+bimodal.
+
+Hypothesis 2 (seat) is PARTIALLY CONFIRMED but does NOT fully dissolve the
+bimodality either. Seat cleanly separates two very different distributions
+(seat 0 sits almost entirely positive, mostly 3-5 with a long tail out to
+41; seat 1 sits almost entirely negative, -12 to -10, with a smaller upper
+tail to 25-27), which is the shape `civil_action_gap`'s seat-dependent
+offset predicts. But NEITHER subgroup is unimodal by the TAILTIGHT
+threshold that separates preclimb (0.258) from postclimb (0.017): seat 1 is
+0.025 (better than pooled but still 10x below preclimb), and seat 0 is
+0.005 -- WORSE than the pooled value. Seat 0 alone (n=360, single decision
+index, single seat) still shows a sharp internal jump from its p25 (4.161)
+to its p75 (40.713): a two-cluster structure inside seat 0 that neither
+tested hypothesis explains. Something else is splitting seat 0's own games
+into a low cluster (~3-5) and a high cluster (~40-41); this is a real,
+reportable residual and a candidate for further bisection, but is outside
+this task's scope.
+
+Bottom line: decision index is not the mechanism (it's a non-factor for
+postclimb -- the subgroup doesn't exist in the data), seat is a real but
+incomplete factor (separates the pool into two differently-shaped
+distributions, neither of which clears the unimodal bar on its own), and at
+least one more undetermined factor drives an internal split within seat 0.

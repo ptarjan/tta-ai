@@ -90,6 +90,28 @@
 //!    the one that decides which of the two published brackets for the
 //!    bot's CA spend per turn is right
 //!    (`analysis/opener_action_points_2026-08-27.txt`).
+//! 7. [`Report::r1_margin`] -- at every round-1 own-turn decision point, the
+//!    SCORE MARGIN between the best-scoring Take candidate and the EndTurn
+//!    candidate, `best_take - end_turn`, read off [`WeightedBot::rank_moves`]'s
+//!    own per-candidate scores (the same scores `choose` argmaxes over --
+//!    `EndTurn` is scored on the unmoved root plus `end_turn_bias`, each Take
+//!    on its applied trial, so this is the eval's own opinion of the round-1
+//!    choice, not a re-derivation). Added 2026-08-28: the round-1 bisection
+//!    (`analysis/r1_bisection_2026-08-28.txt`) found no key set carrying the
+//!    opener collapse, which this item tests directly -- is round-1 Take a
+//!    near-tie in the eval (margin clustered within a point or two of zero,
+//!    decided by noise across the whole vector) or a large revaluation?
+//!    (`analysis/r1_take_margin_2026-08-28.txt`). Also printed split by
+//!    DECISION INDEX -- which civil decision this is within the deciding
+//!    player's current round-1 turn (1 = hand empty going in, 2 = one card
+//!    in hand from a first Take, and so on) -- because the postclimb
+//!    weights read structurally differently at an empty vs. non-empty hand,
+//!    and split by SEAT (0-based) and by (seat, decision index) jointly --
+//!    the section-1.9 grant and `civil_action_gap`'s post-apply trial read
+//!    are both seat-dependent, a candidate independent of decision index,
+//!    and the two correlate (seat 0's 1-CA grant only ever reaches decision
+//!    index 1) so neither split alone can tell them apart
+//!    (`analysis/r1_margin_by_decision_index_2026-08-28.txt`).
 //!
 //! ```text
 //! cargo run --profile difftest --bin openerprobe -- \
@@ -955,6 +977,85 @@ impl PopReasonCounts {
     }
 }
 
+#[derive(Default, Clone)]
+struct R1MarginStats {
+    /// Round-1 own-turn decision points at which BOTH a Take and an EndTurn
+    /// candidate were legal (the set this item is defined on).
+    n: u64,
+    /// Round-1 own-turn decision points with no legal Take (the take gate
+    /// -- CA, hand limit, row contents -- offers nothing -- EndTurn scored
+    /// alone, the margin is undefined, tracked not forced).
+    n_no_take: u64,
+    /// Round-1 own-turn decision points with no legal EndTurn (should be
+    /// zero: `legal.rs` always pushes EndTurn on an own turn -- tracked so a
+    /// future change there is visible instead of silently skipped).
+    n_no_end_turn: u64,
+    /// `best_take - end_turn` at every sampled decision point.
+    samples: Vec<f64>,
+    /// Sampled decision points whose margin is positive (Take wins).
+    take_wins: u64,
+    /// The same `samples` values, split by DECISION INDEX: which civil
+    /// decision this is within the deciding player's current round-1 turn
+    /// (1 = first, hand empty before it; 2 = second, one card already in
+    /// hand from the first Take; and so on -- a player's round-1 CA grant,
+    /// seat-dependent under section 1.9, can span more than one decision
+    /// before EndTurn). Keyed by decision index, 1-based. Added 2026-08-28
+    /// to test whether the postclimb item's bimodal margin distribution is
+    /// really two decision-index populations pooled together.
+    samples_by_index: std::collections::BTreeMap<u32, Vec<f64>>,
+    /// The same `samples` values, split by SEAT (0-based `state.decider()`
+    /// index). Added 2026-08-28 alongside `samples_by_index` as a SECOND
+    /// candidate explanation for the pooled distribution's bimodality: at 2p
+    /// the section-1.9 grant is itself seat-dependent (seat 0 gets 1 CA,
+    /// seat 1 gets 2), and `civil_action_gap` reads a seat-dependent
+    /// constant offset on the Take side of the score (0 on Take trials at
+    /// one seat, 1 at the other, `eval.rs`'s post-apply trial state) that is
+    /// independent of decision index. Seat and decision index correlate --
+    /// seat 0 (1 CA) only ever reaches decision index 1 -- so both splits
+    /// and their product are needed to tell the two apart.
+    samples_by_seat: std::collections::BTreeMap<u8, Vec<f64>>,
+    /// The same `samples` values, split by (seat, decision index) jointly.
+    samples_by_seat_index: std::collections::BTreeMap<(u8, u32), Vec<f64>>,
+}
+
+impl R1MarginStats {
+    fn record(&mut self, best_take: Option<f64>, end_turn: Option<f64>, seat: u8, decision_index: u32) {
+        match (best_take, end_turn) {
+            (Some(t), Some(e)) => {
+                self.n += 1;
+                let margin = t - e;
+                self.samples.push(margin);
+                self.samples_by_index.entry(decision_index).or_default().push(margin);
+                self.samples_by_seat.entry(seat).or_default().push(margin);
+                self.samples_by_seat_index.entry((seat, decision_index)).or_default().push(margin);
+                if margin > 0.0 {
+                    self.take_wins += 1;
+                }
+            }
+            (None, Some(_)) => self.n_no_take += 1,
+            (Some(_), None) => self.n_no_end_turn += 1,
+            (None, None) => {} // not an own-turn decision point; callers never reach this
+        }
+    }
+
+    fn merge(&mut self, mut o: R1MarginStats) {
+        self.n += o.n;
+        self.n_no_take += o.n_no_take;
+        self.n_no_end_turn += o.n_no_end_turn;
+        for (idx, mut v) in o.samples_by_index {
+            self.samples_by_index.entry(idx).or_default().append(&mut v);
+        }
+        for (seat, mut v) in o.samples_by_seat {
+            self.samples_by_seat.entry(seat).or_default().append(&mut v);
+        }
+        for (key, mut v) in o.samples_by_seat_index {
+            self.samples_by_seat_index.entry(key).or_default().append(&mut v);
+        }
+        self.samples.append(&mut o.samples);
+        self.take_wins += o.take_wins;
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 struct DevelopReasonCounts {
     round1_take_only: u64,
@@ -1032,6 +1133,10 @@ struct Report {
     develop_illegal_multi_candidate: u64,
     develop_rank: Vec<u32>,
     develop_legal_not_chosen_top_kind: DecisionKindCounts,
+
+    /// Item 7: round-1 Take-vs-EndTurn score margin -- see this file's top
+    /// doc comment, item 7.
+    r1_margin: R1MarginStats,
 }
 
 impl Report {
@@ -1059,6 +1164,8 @@ impl Report {
         self.develop_illegal_multi_candidate += o.develop_illegal_multi_candidate;
         self.develop_rank.append(&mut o.develop_rank);
         self.develop_legal_not_chosen_top_kind.merge(o.develop_legal_not_chosen_top_kind);
+
+        self.r1_margin.merge(o.r1_margin);
     }
 }
 
@@ -1084,6 +1191,41 @@ fn percentiles_u32(mut v: Vec<u32>) -> String {
     )
 }
 
+/// The margin distribution item 7 prints: min, p10, p25, median, p75, p90,
+/// max, mean, plus the fraction of samples inside each of the near-zero
+/// bands (|margin| < 0.5 / < 1.0 / < 2.0) -- the "is this a tie?" question
+/// this item exists to answer.
+fn margin_distribution(v: &[f64]) -> String {
+    if v.is_empty() {
+        return "n/a (no samples)".to_string();
+    }
+    let mut s = v.to_vec();
+    s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let at = |p: f64| -> f64 {
+        let i = ((s.len() - 1) as f64 * p).round() as usize;
+        s[i]
+    };
+    let mean: f64 = s.iter().sum::<f64>() / s.len() as f64;
+    let near = |band: f64| -> f64 {
+        100.0 * s.iter().filter(|x| x.abs() < band).count() as f64 / s.len() as f64
+    };
+    format!(
+        "min={:.3} p10={:.3} p25={:.3} median={:.3} p75={:.3} p90={:.3} max={:.3} mean={:.3} n={} | |m|<0.5: {:.1}%  |m|<1.0: {:.1}%  |m|<2.0: {:.1}%",
+        s[0],
+        at(0.10),
+        at(0.25),
+        at(0.50),
+        at(0.75),
+        at(0.90),
+        s[s.len() - 1],
+        mean,
+        s.len(),
+        near(0.5),
+        near(1.0),
+        near(2.0)
+    )
+}
+
 // ---------------------------------------------------------------------
 // One game
 // ---------------------------------------------------------------------
@@ -1094,6 +1236,7 @@ fn record_decision(
     idx: u8,
     legal: &[Move],
     ranked: &[(Move, f64)],
+    r1_decision_index: u32,
 ) {
     report.decisions += 1;
 
@@ -1169,6 +1312,24 @@ fn record_decision(
             report.develop_illegal_multi_candidate += 1;
         }
     }
+
+    // Item 7: round-1 Take-vs-EndTurn margin. Only round-1 decision points
+    // are sampled; `ranked` is the same scored legal set `choose` argmaxes
+    // over, so the two scores below ARE the eval's own opinions of those two
+    // candidates (EndTurn on the unmoved root + end_turn_bias, Take on its
+    // applied trial -- see `rank_moves`'s own doc comment).
+    if state.round == 1 {
+        let best_take = ranked
+            .iter()
+            .filter(|(m, _)| decision_kind(*m) == DecisionKind::Take)
+            .map(|(_, sc)| *sc)
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let end_turn = ranked
+            .iter()
+            .find(|(m, _)| decision_kind(*m) == DecisionKind::EndTurn)
+            .map(|(_, sc)| *sc);
+        report.r1_margin.record(best_take, end_turn, idx, r1_decision_index);
+    }
 }
 
 /// Plays one self-play mirror-match game, truncated the moment
@@ -1178,6 +1339,14 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> Report {
     let mut state = game::new_game(players, seed);
     let mut report = Report { games: 1, ..Report::default() };
 
+    // Item 7's DECISION INDEX: which civil decision this is within the
+    // player's CURRENT round-1 turn (1-based, reset to 0 -- "no decision
+    // yet" -- at the start of each own turn). One player can face more than
+    // one round-1 decision because the section-1.9 seating grant hands out
+    // more than one civil action to some seats, and each Take spent re-opens
+    // the same Take-vs-EndTurn choice with one more card in hand. Indexed by
+    // player, not global, because the two seats' turns interleave.
+    let mut r1_decision_index = vec![0u32; players as usize];
     let mut moves_played = 0usize;
     while !state.game_over && state.round <= 3 {
         if moves_played >= MOVE_CAP {
@@ -1202,12 +1371,21 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> Report {
         // position and classifying them against the post-move board
         // misattributes every legality reason.
         let mv = if is_own_turn {
+            if state.round == 1 {
+                r1_decision_index[idx as usize] += 1;
+            }
             let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
-            record_decision(&mut report, &state, idx, legal.as_slice(), &ranked);
+            record_decision(&mut report, &state, idx, legal.as_slice(), &ranked, r1_decision_index[idx as usize]);
             ranked[0].0
         } else {
             bots[idx as usize].choose(&state, legal.as_slice())
         };
+        // The chosen move ends this player's turn: the NEXT decision point
+        // this player faces (if any -- round 1 grants at most a handful of
+        // CA) is a new turn's first, so its index resets.
+        if mv == Move::EndTurn {
+            r1_decision_index[idx as usize] = 0;
+        }
         game::step(&mut state, mv);
         // Item 6 is the only thing that needs the post-move pools.
         if is_own_turn {
@@ -1520,6 +1698,50 @@ fn print_report(players: u8, r: &Report) {
         left / turns,
         (ap.ca as f64 + left) / turns
     );
+
+    // Item 7: the round-1 Take-vs-EndTurn score margin distribution. The
+    // "Take wins" fraction is the eval-level analogue of the chosen-move
+    // Take share item 1 prints: a Take is the argmax iff its margin is
+    // positive (ties keep legal.rs's order, EndTurn first, so a zero margin
+    // is EndTurn's), so the two must track and are printed to reconcile.
+    let m = &r.r1_margin;
+    println!("\n### Item 7: round-1 Take-vs-EndTurn score margin (best_take - end_turn)\n");
+    println!(
+        "Decision points: {} sampled (both legal), {} no-Take (take gate offered nothing), {} no-EndTurn (must stay 0)",
+        m.n, m.n_no_take, m.n_no_end_turn
+    );
+    println!("- margin distribution: {}", margin_distribution(&m.samples));
+    let n = m.n.max(1);
+    println!(
+        "- Take wins (margin > 0): {}/{} ({:.1}%)",
+        m.take_wins,
+        m.n,
+        100.0 * m.take_wins as f64 / n as f64
+    );
+    // Same margin values, split by DECISION INDEX (1 = the player's first
+    // round-1 civil decision, hand empty going in; 2 = the second, one card
+    // in hand from the first Take; etc. -- see `r1_decision_index` in
+    // `play_one`). Printed IN ADDITION to the pooled row above, which is
+    // left untouched so existing numbers stay reproducible. Added to test
+    // whether the pooled distribution's bimodality is really two
+    // decision-index populations superposed.
+    println!("- by decision index (within-player-turn position, 1 = first):");
+    for (idx, samples) in &m.samples_by_index {
+        println!("    index {idx}: {}", margin_distribution(samples));
+    }
+    // Split by SEAT (0-based) -- a second, independent candidate: the
+    // section-1.9 grant and `civil_action_gap`'s post-apply trial read are
+    // both seat-dependent, not decision-index-dependent, and seat 0 (1 CA)
+    // only ever reaches decision index 1, so the two splits correlate and
+    // must be told apart with both this row and the joint one below.
+    println!("- by seat (0-based):");
+    for (seat, samples) in &m.samples_by_seat {
+        println!("    seat {seat}: {}", margin_distribution(samples));
+    }
+    println!("- by (seat, decision index):");
+    for ((seat, idx), samples) in &m.samples_by_seat_index {
+        println!("    seat {seat}, index {idx}: {}", margin_distribution(samples));
+    }
 }
 
 fn main() -> ExitCode {
@@ -1783,6 +2005,188 @@ mod tests {
         assert!(!develop_eligible_kind(CardType::Wonder));
         assert!(!develop_eligible_kind(CardType::Action));
         assert!(!develop_eligible_kind(CardType::Leader));
+    }
+
+    #[test]
+    fn r1_margin_records_the_take_endturn_scores_at_round1_decision_points() {
+        // A 2p self-play game always has round-1 own-turn decision points,
+        // every one of which offers Takes plus EndTurn (legal.rs pushes
+        // EndTurn on any own turn), so at least one point is sampled and
+        // EndTurn is always present.
+        let report = play_one(2, Weights::default(), 7);
+        let m = &report.r1_margin;
+        assert!(m.n >= 1, "a round-1 game must sample at least one Take-vs-EndTurn decision point");
+        assert_eq!(m.samples.len(), m.n as usize);
+        assert_eq!(m.n_no_end_turn, 0, "EndTurn is always legal on an own turn");
+        assert!(m.take_wins <= m.n);
+    }
+
+    #[test]
+    fn r1_margin_rows_account_for_every_round1_own_turn_decision_point_exactly_once() {
+        // Item 7's branch in `record_decision` fires once per round-1
+        // own-turn DECISION POINT and always lands in exactly one of
+        // n / n_no_take / n_no_end_turn (see `R1MarginStats::record`'s
+        // match). Checked against an INDEPENDENT count of those decision
+        // points, replayed directly here -- NOT against `turns_round1`,
+        // which counts TURNS: a seat's round-1 CA grant (section 1.9 is
+        // seat-dependent) can span more than one decision before EndTurn
+        // (Take, Take, EndTurn is 3 decision points on 1 turn), so
+        // turns_round1 undercounts whenever any seat's grant exceeds 1 CA.
+        for seed in 0..6 {
+            let weights = Weights::default();
+            let report = play_one(2, weights, seed);
+            let m = &report.r1_margin;
+            assert!(m.samples.iter().all(|x| x.is_finite()), "seed {seed}");
+
+            let bots: Vec<WeightedBot> = (0..2).map(|_| WeightedBot::new(weights)).collect();
+            let mut state = game::new_game(2, seed);
+            let mut moves_played = 0usize;
+            let mut round1_decisions = 0u64;
+            while !state.game_over && state.round <= 3 {
+                if moves_played >= MOVE_CAP {
+                    break;
+                }
+                let idx = state.decider();
+                let legal = legal::legal_moves(&state);
+                let is_own = legal.as_slice().iter().any(|mv| matches!(mv, Move::EndTurn));
+                let mv = if is_own {
+                    if state.round == 1 {
+                        round1_decisions += 1;
+                    }
+                    let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
+                    ranked[0].0
+                } else {
+                    bots[idx as usize].choose(&state, legal.as_slice())
+                };
+                game::step(&mut state, mv);
+                moves_played += 1;
+            }
+
+            assert_eq!(
+                m.n + m.n_no_take + m.n_no_end_turn,
+                round1_decisions,
+                "seed {seed}: item 7 must fire exactly once per round-1 own-turn decision point"
+            );
+        }
+    }
+
+    #[test]
+    fn r1_margin_samples_by_index_partition_the_pooled_samples_exactly() {
+        // The by-decision-index rows Item 7 now prints alongside the pooled
+        // row are a partition of the SAME `samples` vec, keyed by
+        // `r1_decision_index` (1-based) -- never a re-derivation that could
+        // silently drop or duplicate a row.
+        for seed in 0..6 {
+            let report = play_one(2, Weights::default(), seed);
+            let m = &report.r1_margin;
+            let total: usize = m.samples_by_index.values().map(|v| v.len()).sum();
+            assert_eq!(
+                total,
+                m.samples.len(),
+                "seed {seed}: by-index rows must partition the pooled samples exactly"
+            );
+            assert!(m.samples_by_index.keys().all(|&k| k >= 1), "seed {seed}: decision index is 1-based");
+        }
+    }
+
+    #[test]
+    fn r1_margin_samples_by_seat_and_by_seat_index_partition_the_pooled_samples_exactly() {
+        // Same partition property as `samples_by_index`, for the seat split
+        // and the joint (seat, decision index) split added alongside it: at
+        // 2p seat 0 is always in `0..2`, and every sampled row belongs to
+        // exactly one seat and exactly one (seat, index) pair.
+        for seed in 0..6 {
+            let report = play_one(2, Weights::default(), seed);
+            let m = &report.r1_margin;
+
+            let by_seat: usize = m.samples_by_seat.values().map(|v| v.len()).sum();
+            assert_eq!(
+                by_seat,
+                m.samples.len(),
+                "seed {seed}: by-seat rows must partition the pooled samples exactly"
+            );
+            assert!(m.samples_by_seat.keys().all(|&s| s < 2), "seed {seed}: 2p seats are 0 and 1 only");
+
+            let by_seat_index: usize = m.samples_by_seat_index.values().map(|v| v.len()).sum();
+            assert_eq!(
+                by_seat_index,
+                m.samples.len(),
+                "seed {seed}: by-(seat,index) rows must partition the pooled samples exactly"
+            );
+
+            // The two splits are consistent with each other: for a fixed
+            // seat, summing its (seat, index) rows must reproduce that
+            // seat's samples_by_seat count exactly.
+            for (&seat, seat_samples) in &m.samples_by_seat {
+                let from_pairs: usize = m
+                    .samples_by_seat_index
+                    .iter()
+                    .filter(|((s, _), _)| *s == seat)
+                    .map(|(_, v)| v.len())
+                    .sum();
+                assert_eq!(
+                    from_pairs,
+                    seat_samples.len(),
+                    "seed {seed}, seat {seat}: (seat,index) rows for this seat must sum to samples_by_seat"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn margin_distribution_reports_the_near_zero_bands_and_percentiles() {
+        let s = margin_distribution(&[3.0, 0.4, -0.2, 1.5, -4.0]);
+        assert!(s.contains("min=-4.000"));
+        assert!(s.contains("max=3.000"));
+        assert!(s.contains("n=5"));
+        assert!(s.contains("|m|<0.5: 40.0%")); // {0.4, -0.2}
+        assert!(s.contains("|m|<1.0: 40.0%")); // adds none
+        assert!(s.contains("|m|<2.0: 60.0%")); // adds 1.5
+    }
+
+    #[test]
+    fn margin_distribution_reports_n_a_for_an_empty_sample_rather_than_indexing_zero() {
+        assert_eq!(margin_distribution(&[]), "n/a (no samples)");
+    }
+
+    #[test]
+    fn r1_margin_take_wins_fraction_tracks_the_chosen_take_share_on_the_same_games() {
+        // The eval-level identity this item exists to print: at a round-1
+        // decision point a Take is the argmax IFF its margin over EndTurn is
+        // positive (a zero margin keeps legal.rs's order, EndTurn first, so
+        // it is EndTurn's, not Take's). The two fractions must agree exactly
+        // over the same games.
+        let mut takes_chosen = 0u64;
+        let mut m = R1MarginStats::default();
+        let weights = Weights::default();
+        for seed in 0..6 {
+            let report = play_one(2, weights, seed);
+            m.merge(report.r1_margin.clone());
+            let bots: Vec<WeightedBot> = (0..2).map(|_| WeightedBot::new(weights)).collect();
+            let mut state = game::new_game(2, seed);
+            let mut moves_played = 0usize;
+            while !state.game_over && state.round <= 3 {
+                moves_played += 1;
+                if moves_played >= MOVE_CAP {
+                    break;
+                }
+                let idx = state.decider();
+                let legal = legal::legal_moves(&state);
+                let is_own = legal.as_slice().iter().any(|mv| matches!(mv, Move::EndTurn));
+                if is_own && state.round == 1 {
+                    let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
+                    if decision_kind(ranked[0].0) == DecisionKind::Take {
+                        takes_chosen += 1;
+                    }
+                }
+                let mv = bots[idx as usize].choose(&state, legal.as_slice());
+                game::step(&mut state, mv);
+            }
+        }
+        assert_eq!(
+            takes_chosen, m.take_wins,
+            "a Take is the argmax of a round-1 decision point iff its margin is positive"
+        );
     }
 
     #[test]
