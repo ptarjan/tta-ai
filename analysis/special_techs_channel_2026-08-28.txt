@@ -1,0 +1,141 @@
+SPECIAL-TECHS CHANNEL ANALYSIS (2026-08-28)
+
+Finding C from the flag audit: WeightKey::SpecialTechs (features.rs:980) is one
+flat count, priced +40.7033 on the LIVE 4p champion
+(experiments/rust_champion_4p.json, gen 21864). Every special tech pays the
+same. Is a per-special-tech pricing channel buildable from card data that
+already exists, or does it need new engine plumbing?
+
+=============================================================================
+PART 1 -- PER-TECH TABLE (12 special techs in card_table.rs)
+=============================================================================
+
+Each special tech's effect is stored in the `effects: CardEffects` struct
+(card_table.rs:980-1210), which `card_yields` (cards.rs:223) already maps to
+existing WeightKeys via its standard push sequence. The `special: &[Special]`
+array is either empty or carries one variant that cards.rs explicitly drops to
+None at one of the three sites.
+
+tech name          | age | effect (from card_table.rs)         | which WeightKey can tell it apart          | alive on live 4p?
+-------------------|-----|-------------------------------------|---------------------------------------------------|------------------
+Masonry            | I   | wonder_stages_per_action = 2;       | WonderStagesPerAction (cards.rs:223 push)          | 0.1961 (weak)
+                   |     | Special::BuildDiscount([0,1,1,1,0]) | + BuildDiscount (DROPPED at cards.rs:510)          |
+Architecture       | II  | wonder_stages_per_action = 3;       | WonderStagesPerAction + BuildDiscount (DROPPED)    | 0.1961 / 0.0
+                   |     | BuildDiscount([0,1,2,2,0])      |                                                   |
+Engineering        | III | wonder_stages_per_action = 4;       | WonderStagesPerAction + BuildDiscount (DROPPED)    | 0.1961 / 0.0
+                   |     | BuildDiscount([0,1,2,3,0])      |                                                   |
+Code of Laws       | I   | civil_actions = 1                   | CivilActions                                       | 0.1357 (weak)
+Justice System     | II  | civil_actions = 1; blue_tokens = 3  | CivilActions + BlueFree                            | 0.1357 / -0.52
+Civil Service      | III | civil_actions = 2; blue_tokens = 3  | CivilActions + BlueFree                            | 0.1357 / -0.52
+Warfare            | I   | strength = 1; military_actions = 1  | Strength + MilitaryActions                         | 44.10 / 1.94
+Strategy           | II  | strength = 3; military_actions = 2  | Strength + MilitaryActions                         | 44.10 / 1.94
+Military Theory    | III | strength = 5; military_actions = 3  | Strength + MilitaryActions                         | 44.10 / 1.94
+Cartography        | I   | strength = 1; colonize_bonus = 2    | Strength + ColonizeBonus                           | 44.10 / 2.15
+Navigation         | II  | strength = 2; colonize_bonus = 3    | Strength + ColonizeBonus                           | 44.10 / 2.15
+Satellites         | III | strength = 3; colonize_bonus = 4    | Strength + ColonizeBonus                           | 44.10 / 2.15
+
+Live 4p champion weights (experiments/rust_champion_4p.json, gen 21864):
+  special_techs             40.7033
+  strength                  44.1024
+  military_actions           1.9436
+  colonize_bonus             2.1506
+  wonder_stages_per_action   0.1961
+  build_discount             0.0000  (DEAD)
+  civil_actions              0.1357  (DEAD)
+  blue_free                 -0.5208  (DEAD)
+
+=============================================================================
+PART 2 -- WHICH CARD.RS SITE DROPS EACH ONE TO NONE
+=============================================================================
+
+The three sites are:
+  cards.rs:462  -- inside `card_yields` (fn at line 223): the wildcard Special
+                   arm that no-ops every Special variant. This is the site that
+                   drops `Special::BuildDiscount` for Masonry/Architecture/
+                   Engineering. `card_yields` already pushes the `effects`
+                   struct fields (wonder_stages_per_action, civil_actions,
+                   blue_tokens, strength, military_actions, colonize_bonus)
+                   BEFORE reaching this arm, so those fields ARE priced; only
+                   the `special` array contents are dropped here.
+  cards.rs:510  -- inside `card_choice` (fn at line 504): the wildcard Special
+                   arm that returns None for every variant except
+                   GainFoodOrResources. This is the site that drops
+                   `Special::BuildDiscount` for the same three cards when the
+                   card is being valued as a CHOICE (the max-of-two path used
+                   at cards.rs:1269 and :2072). For special techs the
+                   `effects` push in `card_yields` still applies, so this drop
+                   only matters in the choice-specific fallback path
+                   (cards.rs:2072) where `credit_board == 0.0`.
+  cards.rs:1735 -- inside `pact_value` (fn at line 1730): the wildcard Special
+                   arm that `continue`s for every variant except
+                   BothPlayers/A/B. This site is NEVER reached by special techs
+                   -- `pact_value` is only called for `CardType::Pact` cards,
+                   and no special tech is a Pact. Listed for completeness; it
+                   drops nothing from the special-tech set.
+
+Summary: `BuildDiscount` is dropped at cards.rs:462 (always) and cards.rs:510
+(choice path only). No special tech carries any other Special variant.
+cards.rs:1735 is irrelevant to special techs.
+
+=============================================================================
+PART 3 -- IS A PER-SPECIAL-TECH CHANNEL BUILDABLE?
+=============================================================================
+
+YES. No new engine plumbing is needed. Every field that distinguishes one
+special tech from another is already in the `CardEffects` struct and is
+already mapped to an existing WeightKey by `card_yields` (cards.rs:223):
+
+  wonder_stages_per_action  -> WeightKey::WonderStagesPerAction  (cards.rs:223)
+  civil_actions             -> WeightKey::CivilActions           (cards.rs:223)
+  blue_tokens               -> WeightKey::BlueFree               (cards.rs:223)
+  strength                  -> WeightKey::Strength               (cards.rs:223)
+  military_actions          -> WeightKey::MilitaryActions        (cards.rs:223)
+  colonize_bonus            -> WeightKey::ColonizeBonus          (cards.rs:223)
+
+The only effect that ISN'T mapped is `Special::BuildDiscount`, which is
+dropped at cards.rs:462 (and :510). Building the channel requires:
+
+  1. Add a `push(out, WeightKey::BuildDiscount, ...)` arm in `card_yields` for
+     `Special::BuildDiscount` (cards.rs:462 region). The discount array
+     [0,1,1,1,0] etc. is already in the card data; it needs a mapping to a
+     scalar (e.g. sum of the array, or the max, or a weighted sum by
+     building type). This is a ONE-LINE change to the existing push sequence.
+  2. The existing `card_yields` push for the `effects` struct fields already
+     gives each special tech a distinct WeightKey vector. The league can then
+     fit per-effect weights (civil_actions, blue_tokens, strength,
+     military_actions, colonize_bonus, wonder_stages_per_action,
+     build_discount) instead of one flat `special_techs` count.
+
+No new WeightKey, no new engine field, no new GameState access. The card data
+that exists is sufficient. The only gap is the `BuildDiscount` arm that was
+dropped to None at cards.rs:462.
+
+However, the live 4p champion shows that the discriminator channels are
+already ALIVE for most of the special-tech effects:
+  - Strength (44.10) is alive and large -- Warfare/Strategy/Military
+    Theory/Cartography/Navigation/Satellites are already discriminated.
+  - ColonizeBonus (2.15) is alive -- Cartography/Navigation/Satellites are
+    partially discriminated.
+  - MilitaryActions (1.94) is alive -- Warfare/Strategy/Military Theory are
+    partially discriminated.
+  - WonderStagesPerAction (0.196) is alive but weak -- Masonry/Architecture/
+    Engineering are barely discriminated.
+  - CivilActions (0.136) is DEAD -- Code of Laws/Justice System/Civil Service
+    are NOT discriminated from each other or from non-special-tech civil
+    action sources.
+  - BlueFree (-0.52) is DEAD -- Justice System/Civil Service are NOT
+    discriminated.
+  - BuildDiscount (0.0) is DEAD -- Masonry/Architecture/Engineering are NOT
+    discriminated.
+
+So the flat +40.70 `special_techs` count is currently doing double duty:
+  (a) pricing the "having a special tech on board" fact (which is legitimate
+      and already partially covered by the individual WeightKeys above), and
+  (b) acting as a CATCH-ALL for the effects whose individual channels are dead
+      (CivilActions, BlueFree, BuildDiscount).
+
+The per-special-tech channel is buildable from existing card data. The
+specific gap to close is the `BuildDiscount` arm at cards.rs:462, plus
+ensuring CivilActions and BlueFree are not dead on the live champion (they
+are dead at 4p; they may be alive at other player counts). No engine plumbing
+is needed.
