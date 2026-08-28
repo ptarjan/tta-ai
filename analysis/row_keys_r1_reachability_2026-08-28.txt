@@ -1,0 +1,200 @@
+Row keys round-1 reachability analysis
+Date: 2026-08-28
+Repo: /Users/pt/tta-ai (read-only code read, no build/run)
+
+QUESTION: does reverting row_bargain_forgone / row_last_copy / row_urgency
+change the round-1 Take-vs-EndTurn margin through (a) a linear coefficient
+on an emitted feature that happens to be non-zero in round 1, or (b) a
+w.get(...) multiplier consumed deep inside card valuation (phi depends on w)?
+
+=== 1. What row_pressure() and row_last_copy() sum, and their zero conditions ===
+
+row_pressure(state, idx, w, ctx) -> (urgency, bargain)
+  file: rust/src/bots/weighted/row.rs:312
+
+  - row.rs:315 `if visible.is_empty() { return (0.0, 0.0); }`
+    Both outputs are zero if the row (after ctx masking) has no visible
+    cards at all.
+  - row.rs:328 `let slide = (n * game::sweep_count(n)) as i32;`
+    n = horizon::live_count(state) (row.rs:320), sweep_count is a PURE
+    function of player count (game.rs:165-171: 2p->3, 3p->2, else 1). It is
+    NOT a function of round number or of how many cards have actually
+    slid. This is a fixed positional cutoff on row index, computed at
+    every call.
+  - row.rs:360-361 `let nxt = i as i32 - slide; if nxt < 0 { ... urgency
+    += val ... }` (or added into doomed_slots then folded into urgency at
+    row.rs:423-424): every visible, legally-takeable (costs::can_take_gated,
+    row.rs:350) card whose row index i is < slide contributes its
+    cards::card_potential to urgency (or to the doomed-leader/government
+    accumulator, same effect). This is the "about to slide off" sum. It is
+    zero only if no such card is both takeable and has card_potential > 0
+    (row.rs:352-353).
+  - row.rs:383-384 `let saving = costs::row_cost(i) - costs::row_cost(nxt);
+    if saving <= 0 { continue; }` then row.rs:420 `bargain += saving *
+    survive;`: every visible, takeable card at index i >= slide whose row
+    cost would drop if it survived to its post-slide position `nxt`
+    contributes `saving * P(no rival takes it first)` to bargain. Zero only
+    if no visible takeable card has a positive cost-saving at its future
+    slot (or every one is certain to be taken by a rival, survive -> 0).
+
+row_last_copy(state, idx, w, ctx) -> f64
+  file: rust/src/bots/weighted/row.rs:475
+
+  - row.rs:478-480 `if visible.is_empty() { return 0.0; }`
+  - row.rs:495 loop over ALL visible cards (NO slide/positional gate here,
+    unlike row_pressure -- confirmed by reading the whole loop body,
+    row.rs:495-509: there is no `i - slide` term anywhere in this function).
+  - row.rs:496 `if !costs::can_take_gated(...) { continue; }`
+  - row.rs:502-504 `let val = cards::card_potential(...); if val <= 0.0 {
+    continue; }` -- card_potential used ONLY as a >0 gate here (see the
+    function's own doc comment, row.rs:447-465: this is the "units fix",
+    deliberately not summing card_potential's magnitude).
+  - row.rs:507-509 `let gone = 1.0 - counting::lookup(outlook, name, 0.0);
+    if gone > 0.0 { total += gone; }` -- gone is 1 minus the expected
+    number of further copies of that card left in the deck
+    (counting::civil_outlook). Zero only if every takeable, wanted card in
+    the ENTIRE visible row has outlook >= 1 (deck still expected to hold
+    another copy).
+
+=== 2. Reachability at a round-1 decision (2p, round==1, hand_civil empty,
+       1-2 civil actions, 0 military actions, row just dealt for Age A) ===
+
+Checked game.rs's actual game setup, not assumed:
+  - game.rs:398 `card_row: [CardId::NONE; ROW_SIZE]` (ROW_SIZE = 13,
+    state.rs:16) is the zero-init.
+  - game.rs:426-434: `state.civil_deck = build_deck(Age::A, true, n)` (20
+    cards, comment at game.rs:428 confirms "That deck is 20 cards at every
+    player count"), shuffled, then `deal(&mut state, &mut lazy_rng)` is
+    called ONCE, BEFORE `new_game` returns and before any player has acted.
+  - `deal()` (game.rs:543-556) fills every NONE slot in card_row from
+    civil_deck until either ROW_SIZE is full or the deck is empty. Since
+    the Age A deck has 20 cards and ROW_SIZE is 13, this call fills ALL 13
+    row slots at game start, every time, at every player count.
+  - game.rs:379-381 confirms round=1, and civil_actions = seat_index+1
+    (1 for the first player, 2 for the second), military_actions=0 --
+    matches the scenario's "1-2 civil actions, 0 military" exactly. Hand is
+    empty because no card has been taken yet.
+
+  CONCLUSION: at the very first decision of a 2-player game (round 1,
+  before either player has picked), card_row already holds 13 real cards,
+  not an empty or partially-empty row. The premise "the row can have empty
+  slots in the first age because cards do not slide until everyone has
+  picked" does not hold for the OPENING decision -- the opening row is
+  dealt in full by game.rs:433-434 before round 1 begins. (It may become
+  true again LATER, mid Age A, after cards start being taken/replenished,
+  but that is a different decision, not the one in the scenario.)
+
+  row_urgency (row_pressure's `urgency`): for n=2, slide = 2 *
+  sweep_count(2) = 2*3 = 6 (game.rs:167). Row positions 0..5 (6 of the 13
+  freshly dealt cards) are inside the slide zone on the VERY FIRST decision
+  of the game, regardless of round number -- the cutoff (row.rs:328) is
+  positional, not round-gated.
+  VERDICT: YES, can be non-zero at round 1. Decided by row.rs:328 (slide is
+  a pure function of player count) together with game.rs:433-434 (row is
+  fully dealt before round 1's first decision) -- there is no round-number
+  or "cards have not slid yet" gate anywhere in row_pressure.
+
+  row_bargain_forgone (row_pressure's `bargain`): same fully-dealt row
+  applies to the non-slide-zone cards (positions 6..12) via row.rs:383-384
+  and 420. Whether `saving` is actually positive at position i=6..12 in the
+  opening row is a numeric fact about costs::row_cost's schedule (not
+  reverified here), but the code path that could produce a non-zero value
+  is unconditionally reachable at round 1: no round-number or empty-row
+  gate blocks it. Decided by row.rs:315 (visible is non-empty) and
+  row.rs:383-384 (saving > 0 test), both reachable given game.rs:433-434.
+  VERDICT: YES, reachable at round 1 (structurally; magnitude not
+  reverified here).
+
+  row_last_copy: has no positional/slide gate at all (see part 1). Its only
+  zero conditions are "row empty" (row.rs:478, false at round 1 per
+  game.rs:433-434) and "every takeable wanted card's outlook >= 1"
+  (row.rs:507-509), a numeric fact about counting::civil_outlook on the
+  freshly-built 20-card Age A deck, not something the code forces to zero
+  by construction at round 1.
+  VERDICT: YES, structurally reachable at round 1. Decided by row.rs:478-480
+  (row non-empty) and row.rs:507-509 (gone > 0 test).
+
+=== 3. Every read of the three keys under rust/src ===
+
+Exhaustive grep for `RowUrgency`, `RowBargainForgone`, `RowLastCopy`,
+`row_urgency`, `row_bargain_forgone`, `row_last_copy` across
+/Users/pt/tta-ai/rust/src (excluding target/):
+
+  Runtime reads of the WEIGHT VALUE (w.get(WeightKey::Row*)):
+  - eval.rs:372 `let ru = w.get(WeightKey::RowUrgency);`
+  - eval.rs:373 `let rb = w.get(WeightKey::RowBargainForgone);`
+  - eval.rs:385 `let rlc = w.get(WeightKey::RowLastCopy);`
+  All three are inside `pub fn evaluate(...)` (eval.rs:133), used exactly
+  as `total += ru * urgency;` (eval.rs:377), `total += rb * bargain;`
+  (eval.rs:380), `total += rlc * row::row_last_copy(state, idx, w, ctx);`
+  (eval.rs:387). This is CLASS (a): a plain linear coefficient
+  multiplying an already-computed feature. `urgency`, `bargain`, and
+  row_last_copy's return value do NOT depend on RowUrgency/
+  RowBargainForgone/RowLastCopy themselves anywhere in row.rs -- confirmed
+  by grep: those three identifiers do not appear inside row.rs's function
+  bodies at all (row.rs's only mentions of them are doc comments, e.g.
+  row.rs:447,821,845, and a test at row.rs:845 that explicitly asserts
+  row_last_copy's reading depends on NO weight but its own).
+
+  Feature-vector writes (not weight reads) in `pub fn linear_features(...)`
+  (eval.rs:612):
+  - eval.rs:686 `out[WeightKey::RowUrgency as usize] = row_urgency;`
+  - eval.rs:687 `out[WeightKey::RowBargainForgone as usize] = row_bargain;`
+  - eval.rs:688 `out[WeightKey::RowLastCopy as usize] = row::row_last_copy(state, idx, freeze, ctx);`
+  These write phi(state, freeze) into a feature vector for gradient/credit
+  purposes; they do not read the RowUrgency/RowBargainForgone/RowLastCopy
+  weight values, they use `freeze` (a full weights snapshot) only for the
+  OTHER keys row_pressure/row_last_copy internally consult (see below).
+  Also CLASS (a) in spirit: these three slots hold raw features, not
+  weight-gated magnitudes.
+
+  Metadata only, not runtime valuation reads:
+  - registry.rs:365-367 (name/owner-string registration table)
+  - weights.rs:160-162 (enum variant declarations)
+  - weights.rs:864-866 (name string + default value 0.0 for all three)
+  - weights.rs:1215,1232,1258,1284 (each key appears in the giant
+    early()/late()/trailing()/needed() exhaustive match arms that PANIC for
+    these keys -- i.e. these keys are declared to have NO phase-split
+    partner, confirming they are consumed flat/undifferentiated, exactly
+    once each, in eval::evaluate)
+  - weights.rs:1421 and weights.rs:1854 (sign-intent / clamp-category
+    classification arms, both group RowUrgency|RowBargainForgone|
+    RowLastCopy with RivalDesire|RivalTakeShare; weights.rs:1854 tags them
+    "Free" clamp category -- metadata about legal weight RANGE, not a
+    valuation read)
+  - weights.rs:2287-2289 (the champion/pre-climb numeric value TABLE itself
+    -- data, not a code read)
+  - features.rs:25 and bin/creditspread.rs:26 (doc-comment prose only)
+
+  No `w.get(WeightKey::RowUrgency)` / `RowBargainForgone` / `RowLastCopy`
+  exists anywhere OUTSIDE eval.rs. In particular, cards.rs (where
+  CardBoardCredit/CardBoardLeader/CardRateCredit ARE read via w.get as
+  documented multipliers, per the task's own precedent) contains ZERO
+  references to any of these three identifiers -- verified by the same
+  exhaustive grep (no hits in cards.rs).
+
+=== 4. Verdict ===
+
+There is no CLASS (b) site for row_urgency, row_bargain_forgone, or
+row_last_copy anywhere in rust/src: all three weight keys are read exactly
+once each, only inside eval::evaluate (eval.rs:372-373,385), as plain
+linear coefficients multiplying features computed by row::row_pressure /
+row::row_last_copy -- functions that never consult these three keys'
+values themselves. The falsification hypothesis in the prompt (these
+weights acting as w.get(...) multipliers deep inside card valuation, the
+way CardBoardCredit/CardBoardLeader/CardRateCredit do) does NOT hold for
+this family; that precedent does not apply here.
+
+The round-1 effect is real via CLASS (a) instead, because the premise that
+motivated the falsification test is false for the opening decision: the
+13-slot row is dealt IN FULL from the Age A deck at game.rs:433-434,
+before round 1's first turn -- not progressively/emptily as the "cards do
+not slide until everyone has picked" framing assumed. row_pressure's
+`urgency` sum is gated by a purely positional "slide zone" (row.rs:328,
+a function of player count only, not of round number or turns-taken), so
+6 of the 13 freshly-dealt cards (2p: slide = 2*sweep_count(2) = 6) sit in
+that zone on the very first decision of the game. row_last_copy has no
+positional gate at all and is live across the whole row from turn one.
+Reverting the three weights therefore changes the round-1 margin by
+rescaling these already non-zero, round-1-reachable features -- an
+ordinary linear-coefficient effect, not a hidden multiplier path.
