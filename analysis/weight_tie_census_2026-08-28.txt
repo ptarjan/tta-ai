@@ -1,0 +1,156 @@
+JOB: Weight-tie census across the three live champions.
+     Pairs equal in ABSOLUTE VALUE to >= 10 significant digits, same-sign
+     AND opposite-sign. Classify each: (a) DOMINATES repair, (b) evaluation-time
+     composite, (c) shared clamp rail, (d) unexplained.
+     Read-only. No code changes. No sign_intent.
+Date: 2026-08-28.
+
+================================================================================
+1. METHOD
+================================================================================
+- Scanned every unordered pair of keys in each champion's `weights` object.
+- Compared |a| and |b| rounded to 10 significant digits (a == b or a == -b).
+- Exact f64 equality was additionally checked for the pairs found.
+- Zero/zero pairs excluded (a free-zero is a fitter finding no gradient, not a tie).
+- Gens recorded at read time; the champion files are live and move between reads.
+
+================================================================================
+2. FINDINGS (full list per arm)
+================================================================================
+2p gen 120746:
+  card_board_credit  +0.19371579053043603
+  card_board_leader  -0.19371579053043603
+  (opposite sign, EXACT f64 negatives; sum is exactly 0.0)
+  -> one pair. (Same pair as the coordinator's earlier 2p finding at gen 120701/120715;
+     the value has not moved between those gens and this read.)
+
+3p gen 67365:
+  blue_free         +45.74514020088546
+  resource_stock    +45.74514020088546
+  (same sign, EXACT f64 equal; diff is exactly 0.0)
+  -> one pair. (Same pair as yesterday's blue_free/resource_stock job at gen 67339/67350;
+     the value has not moved.)
+
+4p gen 21878:
+  -> no pair.
+
+TOTAL: two pairs across the three arms. No other pair reaches 10 significant
+digits in absolute value.
+
+================================================================================
+3. CLASSIFICATION
+================================================================================
+--- 2p card_board_credit / card_board_leader: (b) evaluation-time composite ---
+
+The OLD mechanism (pre-commit 83d1c2e, which is the one the running 2p arm still
+executes): cards.rs credit_board composed the leader's board multiplier as
+  credit_board = base + board_credit_key(id)
+with base = w[CardBoardCredit] and board_credit_key(Leader) = CardBoardLeader.
+eval.rs dominance_repair carried a COMPOSITE gate (the `card_board_credit_keys()`
+loop, deleted from source by 83d1c2e) that fired when
+  CardBoardCredit + CardBoardLeader < -1e-12
+and whose remedy was exactly
+  CardBoardLeader := -CardBoardCredit
+projecting the pair onto the sum == 0 line in EXACT f64. That is the
+equal-and-opposite shape: both halves land at the same magnitude, opposite
+signs, sum exactly 0.0 -- which is precisely what the live file shows (the 2p
+champion's own value, carried through generations since the arm's binary last
+rebuilt). The climb cannot move the two independently: any candidate with a
+negative sum is repaired back onto the line, and any candidate with a positive
+sum is free but the pair then carries no information the search needs, so the
+pair parks on the line.
+
+Classification (b), not (a): the DOMINATES const at eval.rs:811-814 contains
+only (ResourceStock, BlueFree) and (WonderPotential, WonderPromise); the
+card_board pair is not in it. The repair that ties them is the separate
+composite loop, deleted from source at 83d1c2e but still present in the
+release binary the 2p arm is running.
+
+STATUS: the fix is in source (83d1c2e decoupled credit_board to an absolute
+multiplier; 1ed6d38 pins it with RED-confirmed tests) but NOT live: the release
+climb binary is from 2026-08-27 07:37, predating both commits. The tie will
+persist on the 2p arm until the arm is rebuilt and the pair re-mutates off the
+sum==0 line. Note for the rebuild: the live file also stores a NEGATIVE
+card_board_leader, which the NEW source's NonNegative gate (weights.rs:1503)
+will repair to 0.0 on load -- so after the rebuild the pair will show as
+(card_board_credit ~0.19, card_board_leader 0.0) until the league re-prices
+the leader key from scratch.
+
+--- 3p blue_free / resource_stock: (a) DOMINATES repair pair ---
+
+eval.rs:811-814:
+  pub const DOMINATES: &[(WeightKey, WeightKey)] = &[
+      (WeightKey::ResourceStock, WeightKey::BlueFree),
+      (WeightKey::WonderPotential, WeightKey::WonderPromise),
+  ];
+eval.rs:934-943 (dominance_repair, ORDERINGS LAST):
+  for &(hi, lo) in DOMINATES {
+      let a = out.get(hi); let b = out.get(lo);
+      if b > a + 1e-12 { ...; out.set(hi, b); }
+  }
+whenever BlueFree > ResourceStock + 1e-12, ResourceStock is set to EXACTLY
+BlueFree's f64 value -- a copy, hence bit-identical, same sign. This runs on
+every load and every accepted mutation (bin/climb.rs:269, 401), so once the
+pair locks, the climb cannot separate them: any candidate with ResourceStock
+< BlueFree is repaired back onto equality.
+
+Not (c): the spread rows (weights.rs:2232-2233) are ResourceStock
+[6.000000, 5.000000, 6.000000] and BlueFree [7.000000, 7.000000, 6.000000].
+3p derived bounds (CLAMP_T=1.0, P95_TOTAL_SPREAD[1]=483.787396, ceiling 120.0):
+  ResourceStock: 483.787396/5.0 = 96.757479
+  BlueFree:      483.787396/7.0 = 69.112485
+  effective (dominated side, bin/climb.rs effective_bound): min = 69.112485
+The value 45.74514020088546 is interior to all of these; it is not a rail.
+
+Not (b): neither key is a multiplier or gate on the other in the eval; both
+are set independently in features.rs (BlueFree from economy::blue_available(p)
+at :592-593/:824, ResourceStock from p.resources at :737).
+
+The tie is a deliberate design intent (gameplay invariant resource_stock >=
+blue_free) whose side effect is that the optimizer sees one coordinate where
+the vector has two. Diagnosis only; the coordinator decides the fix.
+
+--- 4p: none ---
+No pair. (The 4p arm also has no DOMINATES pair locked: blue_free
+-0.5207852697310226 < resource_stock -0.013430890879664887, so the repair is
+dormant; the wonder pair is likewise below its equality threshold.)
+
+================================================================================
+4. WHAT WAS CHECKED (so class (d) can be ruled out for every pair found)
+================================================================================
+For each pair found:
+- exact f64 relation (2p: exact negatives, sum exactly 0.0; 3p: exactly equal)
+- DOMINATES membership (eval.rs:811-814): 3p pair IS a member; 2p pair is not
+- evaluation-time composition in cards.rs/features.rs: 2p pair WAS composed
+  (credit_board = base + offset, pre-83d1c2e); 3p pair is not composed
+- clamp-rail check: both p95 spread rows read (weights.rs:2232-2233 for 3p;
+  weights.rs:2364/2366 for 2p), derived bounds computed, value interior in
+  both cases (2p bounds ~1.87/~1.85 vs value 0.1937; 3p bounds 96.76/69.11 vs
+  value 45.745)
+- sign_intent gates: CardBoardLeader is NonNegative in the NEW source
+  (weights.rs:1503) -- the live file's negative value is another marker that
+  the 2p arm runs pre-83d1c2e code; BlueFree/ResourceStock are both Free
+  (weights.rs:1215), no gate could produce the 3p equality
+- zero-key census (not a tie class, recorded for completeness):
+  2p gen 120746 (6): free_action_credit, free_worker_wall, gov_board_credit,
+    hand_over_capacity, military_action_gap, restricted_resource_credit
+  3p gen 67365 (7): famine_deficit, happy_margin_after_next_pop,
+    resource_commitment_turns, restricted_resource_credit, tactic_reach_credit,
+    unit_strength_credit, war_board_credit
+  4p gen 21878 (12): aggression_board_credit, build_discount,
+    civil_action_surplus, event_board_credit, gov_board_credit,
+    hand_perishable, happy_margin_after_next_pop, pact_board_credit,
+    restricted_resource_credit, row_playable_count, tactic_shortfall_cost,
+    wonders
+  (A zero/zero pair is a fitter finding no gradient on both keys -- a "free
+  zero", not a structural tie; excluded from the pair list.)
+- near-bound keys (within 0.5 of their own derived bound; the single-key
+  version of class (c)): 3p attack_cost_doubled +120 (ON the ceiling),
+  attack_target_weakness +30.2367 (exactly on its bound), best_theater +60
+  (ON the blind rail), pact_partner_lead -4.28085 (within 0.12 of 4.39807);
+  4p best_theater +60 (ON the blind rail), hand_mil_potential +0.454912
+  (within 0.24 of 0.69907); 2p none.
+
+RESULT: no pair falls in class (d). Every abs-equal pair found is explained
+by a known mechanism: 2p by the (now-fixed-in-source, not yet live)
+evaluation-time composite, 3p by the DOMINATES repair.
