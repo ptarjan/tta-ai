@@ -1,0 +1,165 @@
+# Is food gating population growth? (diagnosis only, no weight change)
+
+## Scope and method
+
+Question from the coordinator: is food actually the binding constraint on
+population growth? If so, food's real value is invisible to the eval, which
+is why the climb prices `food_rate` negative.
+
+Measured with `openerprobe` at 2p, 256 games (seeds 1..256), frozen champion
+`experiments/rust_champion_2p_frozen_2026-08-28.json` (gen 121100), over the
+**whole game** (the `play_one` loop was extended from `round <= 3` to
+`!state.game_over`). At every own-turn civil-phase decision point the
+probe asks `legal::legal_moves` whether any Pop-kind move is legal; if not,
+`classify_pop_illegal` (openerprobe.rs:456) names the single binding reason.
+
+Total: **70,922 own-turn decision points** across 256 games.
+
+## The four binding reasons (whole game)
+
+Pop is legal at only **11,371 / 70,922 (16.0%)** of decision points.
+It is illegal at **59,551 (84.0%)**. Of those:
+
+| reason                                   | count   | % of illegal |
+|------------------------------------------|---------|--------------|
+| round 1 (take-only, SS1.9)               | 1,128   | 1.9%         |
+| yellow bank empty (no worker to place)   | 0       | 0.0%         |
+| no civil action left                     | 34,790  | 58.4%        |
+| **food unaffordable**                    | **23,633** | **39.7%** |
+| already at max                           | 0       | 0.0%         |
+
+Note on "already at max": TTA has no population maximum other than the
+yellow bank itself, so that category is not a real gate and never fires.
+
+CORRECTION (coordinator, verified in source): the claim that
+`increase_population` "always succeeds once the food price is paid, even
+when the bank is at 0" is WRONG. `economy::pop_cost_base` (economy.rs:47)
+returns `None` at `yellow_bank == 0`, and `economy.rs:1530`
+(`increase_population_rejects_short_food_or_empty_bank`) is the guard test.
+The engine is correct; the 0.0% is simply because a 2p player's bank is
+never empty at a decision point. This does not change any number here.
+
+CAVEAT ON THE ORDERING (coordinator): the classifier names ONE binding
+reason, so the split depends on the order the checks run in, and the
+probe was reverted so the order can no longer be read. If food is checked
+last (as the table's order suggests), the 23,633 are the points where food
+is the ONLY remaining reason, and points where CA was also exhausted were
+charged to CA. Under either ordering, food is short at **at least** 39.7%
+of pop-illegal points — the figure is a floor, not a ceiling.
+
+So the real competition is **civil action (58.4%) vs food (39.7%)** for
+being the binding constraint, with food a substantial second.
+
+## At the food-binding points: food stock and FoodRate
+
+At the 23,633 points where food is the single binding reason:
+
+- **food stock (p.food)**: min=0, p25=0, median=1, p75=2, max=6, mean=1.25
+- **FoodRate (features.rs:713, NET of consumption)**: min=-3, p25=-1,
+  median=0, p75=1, max=5, mean=+0.019
+- **72.8%** (17,197/23,633) have **FoodRate <= 0** — at the margin the
+  player's food does not even grow.
+
+The food stock is tiny (median 1) because the pop price is 4-5 food at the
+bank sizes typical in mid-game (bank 9-12 → price 4, bank 5-8 → price 5).
+The player is almost always 3-4 food short of the price. The negative
+FoodRate at 72.8% of these points means that even if the player did not
+grow population, food would not accumulate on its own — the food deficit is
+structural, not a one-round timing issue.
+
+## Per-round breakdown (food % of pop-illegal, whole game)
+
+| round | own-turn pts | pop illegal | food-binding | food % of illegal |
+|-------|-------------|-------------|--------------|-------------------|
+| 1     | 1,128       | 1,128       | 0            | 0.0% (take-only)  |
+| 2     | 2,737       | 1,649       | 554          | 33.6%             |
+| 3     | 2,926       | 1,644       | 529          | 32.2%             |
+| 4     | 3,288       | 2,355       | 874          | 37.1%             |
+| 5     | 3,257       | 2,021       | 675          | 33.4%             |
+| 6     | 3,270       | 2,063       | 661          | 32.0%             |
+| 7     | 3,368       | 2,209       | 729          | 33.0%             |
+| 8     | 3,602       | 2,679       | 980          | 36.6%             |
+| 9     | 3,824       | 3,208       | 1,256        | 39.2%             |
+| 10    | 3,771       | 3,309       | 1,319        | 39.9%             |
+| 11    | 3,990       | 3,616       | 1,486        | 41.1%             |
+| 12    | 3,872       | 3,525       | 1,454        | 41.2%             |
+| 13    | 4,018       | 3,723       | 1,559        | 41.9%             |
+| 14    | 4,104       | 3,820       | 1,578        | 41.3%             |
+| 15    | 4,303       | 4,058       | 1,729        | 42.6%             |
+| 16+   | 19,464      | 18,544      | 8,250        | 44.5%             |
+| TOTAL | 70,922      | 59,551      | 23,633       | **39.7%**         |
+
+The food-gating fraction **rises monotonically** from ~32% in rounds 2-3 to
+~45% in round 16+. The late-game rise is the key signal: as the game
+progresses, the yellow bank grows (more workers placed), the pop price
+stays at 4-5 (the bank is in the 9-16 range), and the player's food stock
+does not keep pace — so food becomes the binding constraint more and more
+often. The early-game floor (~32%) is set by the pop price being 5-7 when
+the bank is small (1-8), but the bank grows fast, so the price drops to 4-5
+and stays there.
+
+## Why the eval prices food_rate negative — the mechanism
+
+The eval's food-related weights in the frozen champion are:
+
+- `food_rate` = **-0.199** (negative)
+- `food_stock` = +0.855
+- `food_gap` = **-0.274** (negative)
+- `food_surplus` = **-0.181** (negative)
+- `food_stock_needed` = -0.057
+- `pop_cost` = -0.037
+- `happy_margin_after_next_pop` = -0.066
+
+The climb learned to **disprice food** because, over the whole game, food
+gating population is real (39.7% of pop-illegal points) but the eval has no
+feature that says "food is the gate on population." The features it does
+have are:
+
+1. **FoodRate** (net of consumption): the climb sees that at food-binding
+   points the rate is ~0 or negative, and that food does not accumulate.
+   It prices the rate negative because the marginal food is not
+   converting into population — it is being consumed.
+
+2. **FoodGap** (needs.food - food_have, floored at 0): `needs.food` is the
+   pop price (economy.rs:189, `pop_food_cost` with no one-time discount).
+   The gap is positive whenever the player is short of the pop price —
+   which is 39.7% of the time. The climb prices the gap negative because
+   a large food gap does not mean "food is valuable"; it means "population
+   is gated," and the bot cannot act on it (it cannot build farms faster
+   than the climb wants, and the gap persists).
+
+3. **FoodStock / FoodSurplus**: the climb prices surplus negative because
+   surplus food is food that is not being used for population — it is
+   "dead" food. A player with food surplus is not growing population,
+   which is the outcome the climb is trying to maximize.
+
+The net effect: the climb has **no feature that measures the value of food
+as a population gate**, so it prices every food-related feature in the
+direction that is empirically correlated with the climb's objective
+(maximizing score, not population). Food's real value — its role in
+unlocking population, which unlocks production, which unlocks score — is
+invisible to the eval.
+
+## Diagnosis
+
+Food **is** gating population growth at a substantial fraction of decision
+points (39.7% of pop-illegal, 16.0% of all points). But the eval does not
+see it as a gate: it sees food as a cost that does not pay back in
+population. The climb therefore prices food features negative, which
+further suppresses food accumulation, which further gates population — a
+self-reinforcing loop.
+
+The eval would need a feature that measures **food's marginal value as a
+population enabler** — e.g., "if I had X more food, would I be able to
+grow population this turn, and what is the score value of that population?"
+— to see food's real value. Without such a feature, the climb will
+continue to disprice food.
+
+## Caveats
+
+- 2p only. In 3p/4p the yellow bank dynamics differ and the food-gating
+  fraction may be lower (more players share the bank, but the pop price
+  table is the same).
+- The frozen champion is gen 121100; the live champion may have moved.
+- This is a diagnosis, not a weight change. The fix (if desired) would be
+  a new feature, not a weight tweak.
