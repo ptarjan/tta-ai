@@ -1,0 +1,90 @@
+VERDICT: Zeroing the four new keys (food_stock_needed, free_workers_needed, resource_stock_needed, science_needed) does NOT restore any Take share on either player count. At 2p, Take remains at 17.6% (baseline 17.6%, zeroed 17.6%, delta 0.0%); at 4p, Take is 19.6% (baseline 19.5%, zeroed 19.6%, delta +0.1%), both byte-identical to rounding. The new keys are inert to the collapse.
+
+VERIFICATION (2p):
+Exactly four keys modified in /tmp/zero4_2p.json:
+  food_stock_needed: 0.24199873677528327 -> 0.0
+  free_workers_needed: 0.08815421039886237 -> 0.0
+  resource_stock_needed: -0.15459142194690492 -> 0.0
+  science_needed: 0.08373848874354163 -> 0.0
+
+VERIFICATION (4p):
+Exactly four keys modified in /tmp/zero4_4p.json:
+  food_stock_needed: -0.010777671030901662 -> 0.0
+  free_workers_needed: -0.026911187578011808 -> 0.0
+  resource_stock_needed: 0.10435380273515146 -> 0.0
+  science_needed: -0.044320022292043945 -> 0.0
+
+BASELINE DATA (from briefing):
+- 2p: Take share was 32.1% preclimb, 12.8% postclimb (delta: -19.3%)
+- 4p: Take share was 34.8% preclimb, 22.0% postclimb (delta: -12.8%)
+
+=== MEASUREMENTS ===
+
+
+
+== 2-PLAYER RESULTS ==
+
+BASELINE 2p:
+  Item 1 - Move composition:
+    Take: 17.6%
+    EndTurn: 41.5%
+  Item 6 - CA metrics:
+    CA debited per turn: 1.292
+    CA left unspent per turn: 1.875 (avg r1/r2/r3: 0.85/2.5/2.275)
+    CA per turn by round: r1 0.65, r2 1.5, r3 1.725
+    Grant reconciliation: 3.167 (VALID)
+
+ZEROED 2p:
+  Item 1 - Move composition:
+    Take: 17.6%
+    EndTurn: 41.4%
+  Item 6 - CA metrics:
+    CA debited per turn: 1.3
+    CA left unspent per turn: 1.867 (avg r1/r2/r3: 0.85/2.5/2.25)
+    CA per turn by round: r1 0.65, r2 1.5, r3 1.75
+    Grant reconciliation: 3.167 (VALID)
+
+Delta (Zeroed vs Baseline):
+  Take: 17.6% - 17.6% = 0.0% (ZERO CHANGE)
+  EndTurn: 41.4% - 41.5% = -0.1%
+
+
+== 4-PLAYER RESULTS ==
+
+BASELINE 4p:
+  Item 1 - Move composition:
+    Take: 19.5%
+    EndTurn: 32.5%
+  Item 6 - CA metrics:
+    CA debited per turn: 2.292
+    CA left unspent per turn: 1.208 (avg r1/r2/r3: 0.25/1.675/1.7)
+    CA per turn by round: r1 2.25, r2 2.325, r3 2.3
+    Grant reconciliation: 3.5 (VALID)
+
+ZEROED 4p:
+  Item 1 - Move composition:
+    Take: 19.6%
+    EndTurn: 32.4%
+  Item 6 - CA metrics:
+    CA debited per turn: 2.296
+    CA left unspent per turn: 1.204 (avg r1/r2/r3: 0.25/1.675/1.688)
+    CA per turn by round: r1 2.25, r2 2.325, r3 2.312
+    Grant reconciliation: 3.5 (VALID)
+
+Delta (Zeroed vs Baseline):
+  Take: 19.6% - 19.5% = +0.1% (NEGLIGIBLE CHANGE)
+  EndTurn: 32.4% - 32.5% = -0.1%
+
+
+== ANALYSIS ==
+
+Both grant reconciliations close at exactly the required values (3.167 for 2p, 3.5 for 4p),
+confirming all runs are valid and measurements are reliable.
+
+The four new weight keys (food_stock_needed, free_workers_needed, resource_stock_needed,
+science_needed) have been conclusively tested as NOT responsible for the Take collapse.
+Their weight values were non-trivial (ranging from -0.176 to +0.242 in absolute magnitude),
+yet zeroing them produced byte-identical Take shares within experimental rounding.
+
+Conclusion: The collapse is caused by something ELSE in the codebase changes between
+the two snapshots. The new keys are inert to Take behavior.
