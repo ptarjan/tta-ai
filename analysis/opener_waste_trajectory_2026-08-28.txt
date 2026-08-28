@@ -1,0 +1,96 @@
+opener-waste TRAJECTORY across the four frozen champion snapshots
+=================================================================
+Generated 2026-08-28 (local).
+Binary:   /Users/pt/tta-ai/rust/target/debug/openerprobe (prebuilt; no rebuild, no live-tree edits)
+Protocol: 360 games/arm, --seed 0 --threads 2, --players 2/3/4, --weights = the FROZEN
+          champion copy for that arm. Same binary, same seed, same game count for every
+          arm; only the champion differs. All numbers are openerprobe "Item 6" (engine
+          pool deltas around apply::apply: CA/MA debited by the chosen move, rounds 1-3,
+          per own-TURN with denominator = players x 3 x 360) plus the "CA LEFT UNSPENT at
+          EndTurn" line and the reconciliation line.
+
+Frozen sets (frozen first so the measurement has a fixed input):
+  analysis/frozen/preclimb_2026-08-25/    champ{2,3,4}p.json
+      gen: 2p 108828   3p 59204   4p 19885
+  analysis/frozen/postclimb_2026-08-26/   champ{2,3,4}p.json
+      gen: 2p 113181   3p 63150   4p 20951
+  analysis/frozen/clamp_ceiling_2026-08-27/  rust_champion_{2,3,4}p.json
+      gen: 2p 116808   3p 65450   4p 21445
+  analysis/frozen/opener_2026-08-28/      rust_champion_{2,3,4}p.json
+      gen: 2p 119419   3p 66647   4p 21726
+
+Trajectory table -- one row per (snapshot, player count)
+--------------------------------------------------------------------------------------------
+snapshot (frozen dir)          gen      CA debited/turn   CA left unspent/turn   % turns >=1 unspent   reconciliation total
+preclimb_2026-08-25            108828   2.532             0.635                  27.3%                 2.532 + 0.635 = 3.167
+preclimb_2026-08-25            59204    2.908             0.426                  15.2%                 2.908 + 0.426 = 3.333
+preclimb_2026-08-25            19885    3.177             0.323                  18.1%                 3.177 + 0.323 = 3.500
+postclimb_2026-08-26           113181   1.260             1.907                  70.6%                 1.260 + 1.907 = 3.167
+postclimb_2026-08-26           63150    2.665             0.668                  33.4%                 2.665 + 0.668 = 3.333
+postclimb_2026-08-26           20951    2.398             1.102                  55.9%                 2.398 + 1.102 = 3.500
+clamp_ceiling_2026-08-27       116808   1.136             2.031                  88.4%                 1.136 + 2.031 = 3.167
+clamp_ceiling_2026-08-27       65450    2.659             0.674                  33.8%                 2.659 + 0.674 = 3.333
+clamp_ceiling_2026-08-27       21445    2.868             0.632                  27.2%                 2.868 + 0.632 = 3.500
+opener_2026-08-28              119419   1.320             1.847                  76.4%                 1.320 + 1.847 = 3.167
+opener_2026-08-28              66647    2.656             0.677                  34.0%                 2.656 + 0.677 = 3.333
+opener_2026-08-28              21726    2.047             1.453                  60.0%                 2.047 + 1.453 = 3.500
+--------------------------------------------------------------------------------------------
+Column order per (snapshot, player count): rows are grouped by snapshot in chronological
+order (preclimb -> postclimb -> clamp_ceiling -> opener), and within each snapshot the
+three rows are 2p, 3p, 4p (gen number is the arm's, as listed above).
+
+The reconciliation identity (CA debited/turn + CA left unspent/turn = the per-own-turn CA
+grant) closes EXACTLY on all 12 arms: 3.167 at 2p, 3.333 at 3p, 3.500 at 4p. It holds on
+four different champions, so it is champion-independent: the grant is fully accounted for
+by the probe (nothing is debited off-probe).
+
+Trajectory by player count (CA debited/turn):
+  2p:  2.532 -> 1.260 -> 1.136 -> 1.320
+  3p:  2.908 -> 2.665 -> 2.659 -> 2.656
+  4p:  3.177 -> 2.398 -> 2.868 -> 2.047
+CA left unspent/turn:
+  2p:  0.635 -> 1.907 -> 2.031 -> 1.847
+  3p:  0.426 -> 0.668 -> 0.674 -> 0.677
+  4p:  0.323 -> 1.102 -> 0.632 -> 1.453
+
+What the trajectory shows
+-------------------------
+2p is where the opener broke. CA debited/turn collapsed 2.532 -> 1.260 between preclimb
+(08-25, gen 108828) and postclimb (08-26, gen 113181) -- a 50% drop in one day of climbing
+-- and then sat at 1.136 (clamp, gen 116808) and 1.320 (opener, gen 119419). The unspent
+CA went the other way: 0.635 -> 1.907 -> 2.031 -> 1.847, and the share of turns ending with
+>=1 unspent CA went 27.3% -> 70.6% -> 88.4% -> 76.4%. The climb is actively unlearning how
+to use civil actions at 2p. It is NOT monotonic: the last step (clamp -> opener) recovered
+a little (+0.184 CA/turn), but the level is nowhere near the preclimb one.
+
+3p barely moved: 2.908 -> 2.665 -> 2.659 -> 2.656, essentially flat after the first step.
+The 3p champions are tight spenders in every snapshot: ~4.0 CA/turn in rounds 2 and 3 (the
+full 4-grant), almost nothing left unspent (left-unspent r2/r3 ~0.000/0.02-0.03, ~34% of
+turns ending >=1, dominated by round 1's fixed 2.000 leftover). If anything the 3p opener
+got marginally TIGHTER over time, not looser.
+
+4p is non-monotonic and noisy: 3.177 -> 2.398 -> 2.868 -> 2.047. It fell hard at the
+postclimb step, recovered at clamp, then fell the hardest at the final step. Left unspent
+follows (0.323 -> 1.102 -> 0.632 -> 1.453). Same direction as 2p on net (the final
+snapshot is the weakest CA spender of the four at 4p) but with no clean monotone shape.
+
+Mechanism (2p, from openerprobe Item 1, same seed/games on the frozen champions):
+  preclimb (gen 108828): 6557 decision points; Take 2102 (32.1%), Build Urban 530 (8.1%),
+      Build Military 345 (5.3%), Pop 547 (8.3%), Leader 356 (5.4%), EndTurn 2160 (32.9%).
+  opener  (gen 119419): 4594 decision points; Take 589 (12.8%), Build Urban 625 (13.6%),
+      Build Military 18 (0.4%), Pop 545 (11.9%), Leader 82 (1.8%), EndTurn 2160 (47.0%).
+  The decision-point COUNT dropped 30% (6557 -> 4594) because the bot ends turns much more
+  often: EndTurn share 32.9% -> 47.0%. Take (the CA-heavy move) fell 32.1% -> 12.8% and
+  Build Military fell 5.3% -> 0.4%. Build Urban actually rose (8.1% -> 13.6%) but is a
+  lighter CA user than Take-heavy play. In short: the 2p bot learned to end turns early
+  and stopped taking, so it burns fewer CA per turn and leaves the rest unspent.
+
+Caveats
+-------
+- 360 games/arm is a small sample; per-arm numbers (especially 4p) carry meaningful noise,
+  and the non-monotonic 4p shape is partly that. The 2p collapse is far larger than the
+  noise, though, and the reconciliation identity closing exactly on every arm says the
+  measurements themselves are sound.
+- Same seed + same binary + same game count across all arms, so the only controlled
+  variable is the champion.
+- These are opener (rounds 1-3) numbers only; endgame CA behavior is not covered here.
