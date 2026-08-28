@@ -1,0 +1,265 @@
+CAVEAT: This file documents weight changes between preclimb (2026-08-25) and
+postclimb (2026-08-26) for the 3-player and 4-player champion models. At 2p
+during this same interval the opener metric collapsed. At 3p the opener
+metric remained flat across this period, and at 4p it moved non-monotonically.
+This analysis is reference data on the weight shifts themselves; it is not
+evidence of an opener effect at 3p or 4p. Large absolute weight movements
+(such as has_colony's -47.7 at 2p) can occur with zero measurable impact on
+early-round outcomes and should not be interpreted as proof of mechanism.
+
+================================================================================
+3-PLAYER ANALYSIS
+================================================================================
+Pre-climb  generation: 59204
+Post-climb generation: 63150
+
+Keys in pre-climb:  160
+Keys in post-climb: 163
+Keys in common:     159
+
+TOP 30 KEYS BY ABSOLUTE DELTA (old -> new, delta):
+--------------------------------------------------------------------------------
+ 1. best_lab                                     8.261084607 ->    -43.77448583  delta:    -52.03557044
+ 2. workers_late                                          60 ->      19.4182817  delta:     -40.5817183
+ 3. science                                     -42.75497864 ->     -5.11417861  delta:     37.64080003
+ 4. tactic_level                                -27.59383579 ->             -60  delta:    -32.40616421
+ 5. best_theater                                -7.948844633 ->    -38.19031475  delta:    -30.24147011
+ 6. workers                                      21.25334587 ->     47.49279566  delta:     26.23944979
+ 7. tech_board_credit                           -25.45750231 ->               0  delta:     25.45750231
+ 8. best_mine                                    5.603655134 ->     27.14305294  delta:     21.53939781
+ 9. best_temple                                  0.938015888 ->     19.81230411  delta:     18.87428822
+10. pacts                                       -22.01963248 ->    -3.649826672  delta:      18.3698058
+11. attack_cost_doubled                          41.17117941 ->     58.94216219  delta:     17.77098278
+12. rival_building_wonder                        13.44496934 ->    -3.414476541  delta:    -16.85944588
+13. strength_rel_early                          -4.126515655 ->    -20.51848416  delta:    -16.39196851
+14. discontent                                 -0.7646447131 ->     -13.0172167  delta:    -12.25257199
+15. rival_colonies                              -12.51406035 ->   -0.3712117971  delta:     12.14284856
+16. attack_target_weakness                       32.22229357 ->     20.96291183  delta:    -11.25938174
+17. resource_stock                                        60 ->     49.91396058  delta:    -10.08603942
+18. blue_free                                             60 ->     49.91396058  delta:    -10.08603942
+19. best_unit                                   0.7251738335 ->     9.017610766  delta:     8.292436932
+20. yellow_bank                                 -3.001172754 ->     -11.2701827  delta:    -8.269009947
+21. wonders                                      5.695594532 ->     13.84471006  delta:     8.149115528
+22. resource_rate                                13.41144069 ->     5.374300346  delta:    -8.037140344
+23. rival_mil_actions                            7.990689663 ->    0.4216693355  delta:    -7.569020327
+24. strength                                     53.48626651 ->              60  delta:     6.513733494
+25. num_techs                                    2.666372889 ->       8.7771746  delta:     6.110801711
+26. rival_resource_stock                         7.204992504 ->     1.105188004  delta:      -6.0998045
+27. colonies                                     47.07296896 ->     53.11416471  delta:     6.041195748
+28. rival_science_rate                           5.939967855 -> -0.001047862171  delta:    -5.941015717
+29. tech_redundancy_discount                     1.883209222 ->     7.821529168  delta:     5.938319946
+30. rival_culture                               -5.325096259 ->    0.6015510986  delta:     5.926647357
+
+TOP 30 KEYS BY RELATIVE DELTA:
+(Rule: for old_val=0, if new_val≠0 then rel_delta=inf, else 0)
+--------------------------------------------------------------------------------
+ 1. colonize_bonus                                         0 ->    0.0379854895  rel_delta: inf
+ 2. wonder_age_overrun                                     0 -> -0.008369421732  rel_delta: -inf
+ 3. hand_value                                             0 ->   0.01050279512  rel_delta: inf
+ 4. hand_limit                                             0 ->    0.0144134922  rel_delta: inf
+ 5. tactic_shortfall_cost                                  0 ->   0.08747152224  rel_delta: inf
+ 6. defense_bonus                                          0 ->    0.3386500748  rel_delta: inf
+ 7. wonder_pool_rival_claimed                   0.0152814602 ->    -2.136134616  rel_delta:    -140.7860275
+ 8. leader_replacement                       0.0003474325066 ->  -0.03034841381  rel_delta:    -88.35053062
+ 9. rival_free_ca                             -0.03323546088 ->     2.297731022  rel_delta:      70.1349228
+10. leader                                   -0.007231786545 ->    0.3970335499  rel_delta:     55.90117102
+11. best_temple                                  0.938015888 ->     19.81230411  rel_delta:     20.12150163
+12. discontent                                 -0.7646447131 ->     -13.0172167  rel_delta:     -16.0238759
+13. tactic_gain                                0.04669895872 ->    0.7853533786  rel_delta:     15.81736381
+14. best_library                               -0.2560283074 ->     3.154848179  rel_delta:     13.32226316
+15. best_unit                                   0.7251738335 ->     9.017610766  rel_delta:     11.43510225
+16. rival_desire                                0.3289786153 ->     3.878445525  rel_delta:     10.78935452
+17. my_event_threat                            0.09186502974 ->     1.029161752  rel_delta:     10.20297632
+18. war_immune                                0.006399248901 ->   0.06387306705  rel_delta:     8.981338128
+19. best_lab                                     8.261084607 ->    -43.77448583  rel_delta:    -6.298878769
+20. urban_limit                                0.09365257207 ->    0.6772824224  rel_delta:     6.231861415
+21. civil_actions                             0.009796382276 ->   0.06960864849  rel_delta:     6.105546367
+22. best_farm                                   -0.186043473 ->    -1.249591236  rel_delta:    -5.716662593
+23. attack_target_lead                          0.2455497104 ->     1.580957994  rel_delta:     5.438443734
+24. wonder_turns_to_finish                     -0.2332110953 ->    -1.423048967  rel_delta:    -5.101977974
+25. rival_culture_rate                         0.01559451886 ->  -0.06081926996  rel_delta:     -4.90004145
+26. wonder_overrun                            -0.07605705966 ->   -0.4152248989  rel_delta:    -4.459386686
+27. strength_rel_early                          -4.126515655 ->    -20.51848416  rel_delta:     -3.97235098
+28. unit_strength_credit                      0.009498421509 ->   0.04691619863  rel_delta:     3.939367935
+29. best_mine                                    5.603655134 ->     27.14305294  rel_delta:     3.843812171
+30. best_theater                                -7.948844633 ->    -38.19031475  rel_delta:     -3.804511411
+
+SIGN FLIPS: 31 keys changed sign
+--------------------------------------------------------------------------------
+aggression_board_credit                   -0.06672551663 ->   0.00862695988
+auction_committed                           0.8919461173 ->    -0.996493002
+best_lab                                     8.261084607 ->    -43.77448583
+best_library                               -0.2560283074 ->     3.154848179
+card_board_leader                          0.02782226401 ->  -0.02735392921
+culture_rate_trailing                      0.03030615555 ->  -0.06918928997
+event_board_credit                          -1.975080175 ->    0.1270677339
+food_rate                                  0.06657463279 ->   -0.1179871041
+hand_civil                                  0.1123171387 ->  -0.08644148562
+hand_mil_potential                          0.3928515006 ->  -0.02202571147
+happy_margin                               -0.5733664832 ->  0.007490512324
+has_unit                                   -0.4981484642 ->    0.1217171561
+leader                                   -0.007231786545 ->    0.3970335499
+leader_replacement                       0.0003474325066 ->  -0.03034841381
+my_seeded_pending                          -0.1632015623 ->    0.4500552382
+pact_blocks_attack                            2.81846469 ->    -1.060031537
+rival_building_wonder                        13.44496934 ->    -3.414476541
+rival_culture                               -5.325096259 ->    0.6015510986
+rival_culture_rate                         0.01559451886 ->  -0.06081926996
+rival_free_ca                             -0.03323546088 ->     2.297731022
+rival_hand_civil                           0.01923637576 -> -0.002712290102
+rival_hand_potential                       -0.3920299893 ->    0.3637429903
+rival_science_rate                           5.939967855 -> -0.001047862171
+rival_science_stock                         0.9616681966 ->   -0.1368551984
+rival_wonders                               0.6728809457 ->    -0.163036784
+rival_yellow_bank                          -0.4552961711 ->    0.5009008532
+row_urgency                               -0.06213903744 ->  0.008298740473
+tactic_reach_credit                       -0.07110897587 ->   0.08720334662
+territory_credit                          -0.06853265427 ->   0.04932744169
+war_board_credit                           -0.4611142942 ->   0.04794687746
+wonder_pool_rival_claimed                   0.0152814602 ->    -2.136134616
+
+KEYS ONLY IN PRE-CLIMB (1):
+--------------------------------------------------------------------------------
+card_board_bonus                         =   0.06532698674
+
+KEYS ONLY IN POST-CLIMB (4):
+--------------------------------------------------------------------------------
+food_stock_needed                        =    0.3698735539
+free_workers_needed                      =   -0.8518701397
+resource_stock_needed                    =    -0.190334734
+science_needed                           =    -0.368206098
+
+SPECIAL KEYS (from 2p investigation):
+--------------------------------------------------------------------------------
+end_turn_bias                               -7.451174894 ->    -10.48294898  delta:    -3.031774083
+take_cost_share                              0.538429095 ->    0.2809031189  delta:   -0.2575259761
+hand_potential                              0.4614204767 ->     0.369928241  delta:  -0.09149223567
+hand_military                              -0.3150138292 ->   -0.1562628805  delta:    0.1587509487
+row_last_copy                               0.3836389873 ->    0.2756000725  delta:   -0.1080389149
+food_rate                                  0.06657463279 ->   -0.1179871041  delta:   -0.1845617368
+has_colony                                   0.878517185 ->    0.9526700993  delta:   0.07415291424
+
+
+================================================================================
+4-PLAYER ANALYSIS
+================================================================================
+Pre-climb  generation: 19885
+Post-climb generation: 20951
+
+Keys in pre-climb:  160
+Keys in post-climb: 163
+Keys in common:     159
+
+TOP 30 KEYS BY ABSOLUTE DELTA (old -> new, delta):
+--------------------------------------------------------------------------------
+ 1. special_techs                                41.36404757 ->              60  delta:     18.63595243
+ 2. event_scoring_margin                         37.29669895 ->     20.59614974  delta:    -16.70054921
+ 3. hand_civil                                  -11.61386981 ->    -27.93526815  delta:    -16.32139834
+ 4. no_aggression                               -20.13406755 ->     -4.24008514  delta:     15.89398241
+ 5. best_theater                                 45.09063385 ->              60  delta:     14.90936615
+ 6. rival_hand_potential                         6.185695253 ->     19.74994971  delta:     13.56425446
+ 7. strength                                              60 ->     50.86352798  delta:    -9.136472023
+ 8. rival_free_workers                           14.13049475 ->     5.583558155  delta:    -8.546936593
+ 9. attack_target_weakness                       10.27932313 ->     18.82318553  delta:     8.543862406
+10. end_turn_bias                               -29.49427442 ->    -37.33585362  delta:    -7.841579199
+11. unit_workers                                         -60 ->    -53.28247077  delta:     6.717529229
+12. best_lab                                     3.828396313 ->    -2.262013417  delta:     -6.09040973
+13. science_gap                                 -18.27232087 ->     -24.2355595  delta:    -5.963238624
+14. rival_take_share                            -7.858198044 ->    -2.194354317  delta:     5.663843728
+15. rival_wonders                              -0.2803360559 ->    -5.718175374  delta:    -5.437839318
+16. tactic_level                                -43.21789227 ->    -48.53857416  delta:    -5.320681892
+17. strength_rel_late                            7.128524236 ->     2.356123281  delta:    -4.772400954
+18. workers                                      55.69263727 ->              60  delta:     4.307362729
+19. best_unit                                    11.74521291 ->      15.9885798  delta:     4.243366894
+20. leader                                      -18.93926617 ->    -22.43386024  delta:    -3.494594068
+21. hand_potential                              -1.195639911 ->     1.792340978  delta:     2.987980889
+22. rival_culture_rate                          -11.95136327 ->    -9.238383695  delta:     2.712979579
+23. free_workers                                 -11.5079946 ->    -8.858151753  delta:     2.649842842
+24. worker_surplus                               2.046466116 ->     4.327168738  delta:     2.280702622
+25. row_last_copy                                2.993785449 ->    0.7628792555  delta:    -2.230906193
+26. best_farm                                    20.48787363 ->      22.2167083  delta:     1.728834674
+27. best_library                                 43.00449349 ->     44.68643088  delta:     1.681937395
+28. wonder_in_progress                           1.542150238 ->   -0.1236240786  delta:    -1.665774317
+29. tech_levels                                  1.342051571 ->     2.835808362  delta:     1.493756791
+30. tech_redundancy_discount                    0.4937330714 ->     1.922407041  delta:      1.42867397
+
+TOP 30 KEYS BY RELATIVE DELTA:
+(Rule: for old_val=0, if new_val≠0 then rel_delta=inf, else 0)
+--------------------------------------------------------------------------------
+ 1. attack_cost_doubled                                    0 ->   0.03049122784  rel_delta: inf
+ 2. civil_action_gap                                       0 ->   -0.1784953995  rel_delta: -inf
+ 3. tactic_board_credit                                    0 ->    0.1137889112  rel_delta: inf
+ 4. wonders                                                0 ->   0.03376079245  rel_delta: inf
+ 5. tactic_short                                           0 ->  -0.04680797835  rel_delta: -inf
+ 6. pop_cost                                               0 ->    -0.017759307  rel_delta: -inf
+ 7. rival_strength                             0.03042105554 ->   -0.5776059136  rel_delta:    -19.98704379
+ 8. rival_wonders                              -0.2803360559 ->    -5.718175374  rel_delta:    -19.39757374
+ 9. civil_action_surplus                       0.06093921389 ->     1.118177346  rel_delta:     17.34906088
+10. wonder_age_overrun                        -0.02006394078 ->   -0.2693005006  rel_delta:      -12.422114
+11. hand_limit                                 0.01338444688 ->   0.09145810834  rel_delta:     5.833163086
+12. wonder_pool_rival_claimed                -0.005770403821 ->   0.01487129672  rel_delta:     3.577167419
+13. civil_actions                              0.02463592308 ->    0.1120846387  rel_delta:     3.549642338
+14. tactic_reach_credit                         0.1970842013 ->    0.8462348026  rel_delta:       3.2937729
+15. tech_redundancy_discount                    0.4937330714 ->     1.922407041  rel_delta:      2.89361611
+16. rival_desire                               -0.2873740185 ->    -1.054892659  rel_delta:     -2.67080039
+17. hand_potential                              -1.195639911 ->     1.792340978  rel_delta:     2.499064193
+18. strength_rel                              -0.03460663564 ->      0.04160026  rel_delta:     2.202089115
+19. rival_hand_potential                         6.185695253 ->     19.74994971  rel_delta:      2.19284234
+20. prod_workers                                 0.211240666 ->   -0.1942392332  rel_delta:    -1.919516288
+21. card_rate_credit                           -0.1571392795 ->   -0.4525770145  rel_delta:    -1.880101117
+22. action_board_credit                       -0.07156524285 ->   0.05244005941  rel_delta:     1.732758771
+23. rival_mil_actions                           0.4929420015 ->     1.339168501  rel_delta:     1.716685729
+24. war_board_credit                            0.4321206817 ->     1.156512381  rel_delta:     1.676364335
+25. best_lab                                     3.828396313 ->    -2.262013417  rel_delta:    -1.590851425
+26. best_temple                               -0.06855565449 ->     -0.17749648  rel_delta:    -1.589085924
+27. aggression_board_credit                    -0.2451978677 ->    0.1273351385  rel_delta:     1.519315848
+28. tech_board_credit                          -0.1055350073 ->   0.05261856082  rel_delta:     1.498588688
+29. my_seeded_pending                          0.09506505906 ->   -0.0432148484  rel_delta:    -1.454581829
+30. military_action_surplus                    0.07659837825 ->  -0.03225493188  rel_delta:    -1.421091577
+
+SIGN FLIPS: 23 keys changed sign
+--------------------------------------------------------------------------------
+action_board_credit                       -0.07156524285 ->   0.05244005941
+aggression_board_credit                    -0.2451978677 ->    0.1273351385
+best_arena                                 -0.2368411378 ->   0.09726210378
+best_lab                                     3.828396313 ->    -2.262013417
+build_fresh_credit                          -0.672819293 ->   0.02013429848
+corruption_headroom                         0.2576597159 -> -0.0008656951758
+event_board_credit                         -0.3518360789 ->   0.02011137173
+food_surplus                               -0.5916529224 ->    0.2249136921
+gov_action_cost                            -0.9630605446 ->    0.2720292364
+hand_potential                              -1.195639911 ->     1.792340978
+hand_swap_extra                           -0.05862136258 ->  0.009580185204
+happy_surplus                               0.2815936083 ->  -0.03607881045
+military_action_surplus                    0.07659837825 ->  -0.03225493188
+my_event_threat                            0.06304500998 ->  -0.02189684522
+my_seeded_pending                          0.09506505906 ->   -0.0432148484
+prod_workers                                 0.211240666 ->   -0.1942392332
+rival_culture                               0.3755549787 ->   -0.1429816547
+rival_strength                             0.03042105554 ->   -0.5776059136
+strength_rel                              -0.03460663564 ->      0.04160026
+tech_board_credit                          -0.1055350073 ->   0.05261856082
+wonder_in_progress                           1.542150238 ->   -0.1236240786
+wonder_pool_rival_claimed                -0.005770403821 ->   0.01487129672
+wonder_progress                            -0.1016772571 ->   0.01400833532
+
+KEYS ONLY IN PRE-CLIMB (1):
+--------------------------------------------------------------------------------
+card_board_bonus                         =     0.210327855
+
+KEYS ONLY IN POST-CLIMB (4):
+--------------------------------------------------------------------------------
+food_stock_needed                        =  -0.01077767103
+free_workers_needed                      =  -0.02691118758
+resource_stock_needed                    =    0.1043538027
+science_needed                           =  -0.04432002229
+
+SPECIAL KEYS (from 2p investigation):
+--------------------------------------------------------------------------------
+end_turn_bias                               -29.49427442 ->    -37.33585362  delta:    -7.841579199
+take_cost_share                            0.08825200072 ->   0.03739862425  delta:  -0.05085337646
+hand_potential                              -1.195639911 ->     1.792340978  delta:     2.987980889
+hand_military                              -0.6152493276 ->   -0.5624474954  delta:   0.05280183212
+row_last_copy                                2.993785449 ->    0.7628792555  delta:    -2.230906193
+food_rate                                   0.9647094559 ->    0.6460863498  delta:   -0.3186231061
+has_colony                                  0.6330743874 ->    0.6187185579  delta:   -0.0143558295
