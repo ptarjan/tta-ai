@@ -1,0 +1,318 @@
+CA POOL TRACE -- 2026-08-27
+===========================
+Job: settle an instrument disagreement, not a units question. openerprobe's
+item 6 says 2p spends 1.071 CA/turn in rounds 1-3 (i.e. ~2.9 CA sit
+unspent at every EndTurn); behavcensus's `ca_unused_r3` (rust/src/bin/
+behavcensus.rs:1838, adding `ca_before_move` on `Move::EndTurn` under the
+`round_before <= 3` guard, `round_before` captured pre-step at :1434)
+reports the overwhelming majority of 2p player-games ending every r1-3
+turn with `civil_actions == 0` (~97.7%). Same field, same phase. This file
+dumps the raw per-decision-point trace of real self-play games and
+hand-checks three consecutive own-turns.
+
+VERDICT (stated up front): behavcensus is right, openerprobe's item 6 as
+committed is wrong, and the trace shows exactly why. `civil_actions` IS a
+countdown pool, but it is refilled at the END of the turn -- inside
+`economy::end_of_turn` step 5, which runs BEFORE `game::step` returns for
+`Move::EndTurn`. So the "after" pools that openerprobe reads after the
+step are already the NEXT turn's fresh pool, and the measured delta for an
+EndTurn is not the leftover of the turn just ended. Every turn in every
+trace ends with the pool at or near zero; the 1.071/turn figure is a
+measurement artefact of the refill, not a second CA economy.
+
+=====================================================================
+HOW THE MEASUREMENT WAS DONE
+=====================================================================
+Tool: rust/src/bin/catrace.rs (NEW, scratch build only -- the live tree
+carries only the item-6 openerprobe patch; catrace is the one-game
+tracer for this job). It plays ONE self-play game per seed, rounds 1-3,
+with the SAME bot construction behavcensus uses (`build_bots` over
+`BotKind::Weighted` seats, `Search::None` -- behavcensus.rs:1407-1408),
+and prints one line per decision point: round (as read AFTER the step,
+i.e. the round the move was applied in), turn, actor, the decider's
+civil_actions/military_actions BEFORE the move, the move's kind, and the
+same pools read AFTER `game::step` returned.
+
+Environment: /Users/pt/tta-scratch (separate build repo, older checkout),
+same as the item-6 measurement. Weights: the same stripped champion copy
+champion_live_2p.json (167 shared keys byte-identical to the live file;
+the live 2p champion at this measurement is gen 119334, md5
+d33adb1d15df594a9a798051f467a1e1 -- the live file is rewritten
+continuously by the climb).
+
+=====================================================================
+RAW TRACES (2p self-play, rounds 1-3)
+=====================================================================
+--- seed 0 ---
+round turn actor ca_before ma_before kind -> ca_after ma_after
+    1    1  p0      1       0     Take                     ->   0       0
+    1    2  p0      0       0     EndTurn                  ->   4       2
+    1    2  p1      2       0     Take                     ->   0       0
+    2    3  p1      0       0     EndTurn                  ->   4       2
+    2    3  p0      4       2     PolPass                  ->   4       2
+    2    3  p0      4       2     PlayLeader               ->   3       2
+    2    3  p0      3       2     Build Bronze             ->   2       2
+    2    3  p0      2       2     Pop                      ->   1       2
+    2    3  p0      1       2     Take                     ->   0       2
+    2    4  p0      0       2     EndTurn                  ->   4       2
+    2    4  p1      4       2     PolPass                  ->   4       2
+    2    4  p1      4       2     PlayLeader               ->   3       3
+    2    4  p1      3       3     Build Bronze             ->   2       3
+    2    4  p1      2       3     Pop                      ->   1       3
+    2    4  p1      1       3     Take                     ->   0       3
+    3    5  p1      0       3     EndTurn                  ->   4       3
+    3    5  p0      4       2     PrepareEvent             ->   4       2
+    3    5  p0      4       2     Build Religion           ->   3       2
+    3    5  p0      3       2     Pop                      ->   2       2
+    3    5  p0      2       2     Take                     ->   0       2
+    3    6  p0      0       2     EndTurn                  ->   4       2
+    3    6  p1      4       3     PrepareEvent             ->   4       3
+    3    6  p1      4       3     PrepareEvent             ->   4       3
+    3    6  p1      4       3     Build Religion           ->   4       3
+    3    6  p1      4       3     WonderStep               ->   3       3
+    3    6  p1      3       3     Take                     ->   1       3
+    3    6  p1      1       3     Pop                      ->   0       3
+    4    7  p1      0       3     EndTurn                  ->   4       3
+
+--- seed 1 ---
+round turn actor ca_before ma_before kind -> ca_after ma_after
+    1    1  p0      1       0     Take                     ->   0       0
+    1    2  p0      0       0     EndTurn                  ->   4       2
+    1    2  p1      2       0     Take                     ->   0       0
+    2    3  p1      0       0     EndTurn                  ->   4       2
+    2    3  p0      4       2     PolPass                  ->   4       2
+    2    3  p0      4       2     Build Bronze             ->   3       2
+    2    3  p0      3       2     Pop                      ->   2       2
+    2    3  p0      2       2     Take                     ->   0       2
+    2    4  p0      0       2     EndTurn                  ->   4       2
+    2    4  p1      4       2     PolPass                  ->   4       2
+    2    4  p1      4       2     PlayLeader               ->   3       2
+    2    4  p1      3       2     Build Bronze             ->   2       2
+    2    4  p1      2       2     Pop                      ->   1       2
+    2    4  p1      1       2     Take                     ->   0       1
+    3    5  p1      0       1     EndTurn                  ->   4       2
+    3    5  p0      4       2     PolPass                  ->   4       2
+    3    5  p0      4       2     Build Religion           ->   3       2
+    3    5  p0      3       2     PlayLeader               ->   2       3
+    3    5  p0      2       3     PlayTactic               ->   2       2
+    3    5  p0      2       2     Pop                      ->   1       2
+    3    5  p0      1       2     PlayAction               ->   0       2
+    3    6  p0      0       2     EndTurn                  ->   4       3
+    3    6  p1      4       2     PolPass                  ->   4       2
+    3    6  p1      4       2     Build Religion           ->   3       2
+    3    6  p1      3       2     PlayTactic               ->   3       1
+    3    6  p1      3       1     Take                     ->   2       1
+    3    6  p1      2       1     Pop                      ->   1       1
+    3    6  p1      1       1     Take                     ->   0       1
+    3    6  p1      0       1     Take                     ->   0       0
+    4    7  p1      0       0     EndTurn                  ->   4       2
+
+--- seed 2 ---
+round turn actor ca_before ma_before kind -> ca_after ma_after
+    1    1  p0      1       0     Take                     ->   0       0
+    1    2  p0      0       0     EndTurn                  ->   4       2
+    1    2  p1      2       0     Take                     ->   1       0
+    1    2  p1      1       0     Take                     ->   0       0
+    2    3  p1      0       0     EndTurn                  ->   4       2
+    2    3  p0      4       2     PolPass                  ->   4       2
+    2    3  p0      4       2     Build Bronze             ->   3       2
+    2    3  p0      3       2     Pop                      ->   2       2
+    2    3  p0      2       2     Take                     ->   1       2
+    2    3  p0      1       2     PlayLeader               ->   0       2
+    2    4  p0      0       2     EndTurn                  ->   4       2
+    2    4  p1      4       2     PolPass                  ->   4       2
+    2    4  p1      4       2     PlayLeader               ->   3       2
+    2    4  p1      3       2     Build Bronze             ->   2       2
+    2    4  p1      2       2     Pop                      ->   1       2
+    2    4  p1      1       2     Take                     ->   0       2
+    3    5  p1      0       2     EndTurn                  ->   4       2
+    3    5  p0      4       2     PrepareEvent             ->   4       2
+    3    5  p0      4       2     Build Religion           ->   3       2
+    3    5  p0      3       2     Pop                      ->   2       2
+    3    5  p0      2       2     Take                     ->   0       2
+    3    5  p0      0       2     EndTurn                  ->   0       2
+    3    5  p0      0       2     Choose { n: 3 }          ->   0       2
+    3    6  p0      0       2     Choose { n: 0 }          ->   4       2
+    3    6  p1      4       2     PolPass                  ->   4       2
+    3    6  p1      4       2     Build Religion           ->   3       2
+    3    6  p1      3       2     Take                     ->   0       2
+    3    6  p1      0       2     PlayTactic               ->   0       1
+    3    6  p1      0       1     EndTurn                  ->   0       1
+    3    6  p1      0       1     Choose { n: 0 }          ->   0       1
+    4    7  p1      0       1     Choose { n: 0 }          ->   4       2
+
+=====================================================================
+HAND-CHECK: THREE CONSECUTIVE OWN-TURNS
+=====================================================================
+The check: for each turn, the EndTurn line's ca_before is the pool the
+turn OPENED with; the turn's leftover is that opening pool minus the sum
+of the CA debits on the turn's non-EndTurn lines (Take = row slot 1-4 +
+wonder surcharge; Build/Pop/PlayLeader/PrepareEvent = 1 each; PolPass /
+Choose = 0). The next turn's EndTurn ca_before must equal the fresh
+refill (4, minus any next-turn CA penalty -- none occurs in these
+traces), NOT the leftover.
+
+seed 1, p0, turns 2-4 (consecutive own-turns):
+  turn 3 (r2): opens 4 (EndTurn line: "2 3 p0 ... EndTurn -> 4 2").
+    Debits: PolPass 0, Build Bronze 1, Pop 1, Take 1 = 3.
+    Leftover: 4 - 3 = 1.
+    The EndTurn line reads ca_before 4 -- the pool was 1 when EndTurn was
+    chosen; the 4 is the REFILL that already ran inside the step.
+  turn 4 (r2): opens 4 (EndTurn line: "2 4 p0 ... EndTurn -> 4 2").
+    Debits: PolPass 0, PlayLeader 1, Build Bronze 1, Pop 1, Take 1 = 4.
+    Leftover: 4 - 4 = 0.
+  turn 5 (r3): opens 4 (EndTurn line: "3 5 p0 ... EndTurn -> 4 2").
+    Debits: PolPass 0, Build Religion 1, PlayLeader 1, PlayTactic 0,
+    Pop 1, PlayAction 0 (MA-funded) = 3.
+    Leftover: 4 - 3 = 1.
+  In all three turns the leftover is 0-1, and in all three the EndTurn
+  "before" reads the fresh 4. The turn's EndTurn ca_before NEVER equals
+  the previous line's ca_after (both 4 here because the refill is the
+  same value -- the leftover 0/1 is not visible at the EndTurn decision
+  point at all).
+
+seed 0, p1, turns 3-6:
+  turn 3 (r2): opens 4; debits PolPass 0, PlayLeader 1, Build Bronze 1,
+    Pop 1, Take 1 = 4; leftover 0. EndTurn ca_before reads 4 (refill).
+  turn 5 (r3): opens 4; debits PrepareEvent 0, PrepareEvent 0, Build
+    Religion 1, WonderStep 1, Take 1, Pop 1 = 4; leftover 0.
+  turn 6 (r3, the "4 7 p1 ... EndTurn -> 4 3" line): opens 4; debits
+    PlayLeader 1 (wait -- p1 r3 turn: "3 6 p1" lines: PrepareEvent 0,
+    Build Religion 1, WonderStep 1, Take 1, Pop 1 = 4); leftover 0.
+  Same picture: leftovers 0, EndTurn "before" always the fresh 4.
+
+seed 2, p0, turns 3-5:
+  turn 3 (r2): opens 4; debits PolPass 0, Build Bronze 1, Pop 1, Take 1,
+    PlayLeader 1 = 4; leftover 0.
+  turn 4 (r2): opens 4; debits PrepareEvent 0, Build Religion 1, Pop 1,
+    Take 1 = 3; leftover 1.
+  turn 5 (r3, "3 6 p0 ... EndTurn -> 4 2"): opens 4; debits PolPass 0,
+    Build Religion 1, Take 1, PlayTactic 0 (MA), then the turn ends with
+    ca_before 0 on the EndTurn line -- here the "before" reads 0 because
+    the discard-choice continuation (the Choose lines) sits between the
+    last CA-spend and the EndTurn apply, and the pool was already 0.
+    Leftover: 4 - (1+1+1) = 1 ... the EndTurn line shows 0; the 1 was
+    spent by the Take on the last line before it. Net: leftover 0.
+  Same picture.
+
+Across all three seeds and all r1-3 own-turns: every turn ends with the
+pool at 0 or 1 (16 of 18 turns at exactly 0), and every EndTurn "before"
+read is the fresh refill (4, or the post-penalty value), never the
+leftover.
+
+=====================================================================
+WHERE THE REFILL HAPPENS, RELATIVE TO THE EndTurn DECISION POINT
+=====================================================================
+The explicit question: is civil_actions a countdown pool refilled at turn
+start, and where does the refill sit relative to the EndTurn decision?
+
+Answer: it is a countdown pool, but the refill happens at turn END, not
+turn start -- and it happens INSIDE the apply of `Move::EndTurn`, before
+`game::step` returns. The chain, with line numbers in the live tree:
+
+  apply::apply(Move::EndTurn)               apply.rs:314
+    -> game::end_turn                       game.rs:923
+       -> economy::end_of_turn              economy.rs:959
+          step 5: p.civil_actions = (s.civil_actions - ca_penalty)
+                  .max(0); p.military_actions = s.military_actions
+                                                       economy.rs:1128
+          (s = effects::state_stats re-read just above, economy.rs:1127 --
+           the fresh 4/2 for round>=2, 1-4/0 per-seat for round 1 via the
+           seating rule; pinned by economy.rs test
+           end_of_turn_resets_the_per_turn_state, economy.rs:2183, which
+           asserts civil_actions 0 -> 1 under a 3-penalty and 0 -> 2 MA)
+       -> advance_turn                      game.rs:991
+          (round bump at seat wrap; next player's start_turn, game.rs:850
+           -- start_turn does NOT touch civil_actions; it only runs
+           replenish/war/tactic-exchange for round>1)
+
+So the sequence at an EndTurn decision point is:
+  1. the decider's pool holds the turn's LEFTOVER (e.g. 1);
+  2. EndTurn is chosen and applied -- the leftover is discarded
+     (unspent CA does not carry over; this is the rule, and it is why
+     behavcensus's metric is well-posed);
+  3. step 5 REWRITES the pool to the next turn's fresh value;
+  4. advance_turn hands the turn to the next player;
+  5. game::step returns. Any read of civil_actions after this point sees
+     the fresh pool, not the leftover.
+
+The leftover is therefore observable in exactly ONE place: the sum of the
+debits on the turn's non-EndTurn lines (opening pool minus that sum),
+or, equivalently, the ca_before of the LAST non-EndTurn line before the
+EndTurn if that line spent down to the leftover. It is NOT observable as
+a field value at or after the EndTurn decision.
+
+=====================================================================
+WHY OPENERPROBE ITEM 6 MEASURED 1.071 AND BEHAVCENSUS MEASURED ~0
+=====================================================================
+openerprobe item 6 (as committed in 9dbde87) reads the decider's pools
+BEFORE the move's game::step and again AFTER it, and records
+(pre - post) as the debit. For every non-EndTurn move that delta is the
+move's true debit (the trace confirms it line by line: Build Bronze 3->2,
+Pop 2->1, Take 1->0, ...). For an EndTurn the "post" read is the fresh
+refill (4), so the delta is (leftover - 4).max(0) = 0 -- the EndTurn
+contributes nothing, which item 6 assumed by design. The flaw is that the
+1.071 is a PER-TURN average over own-turns where each turn's CA total is
+the sum of its non-EndTurn debits, and those debits are real -- so where
+does 1.071 come from if every turn spends 3-4? It comes from the DENOMINATOR
+plus a real effect: 1.071 CA/turn = (total CA debited in r1-3) /
+(own-turns in r1-3). The trace shows each r2/r3 turn spends 3-4 CA; the
+average over all own-turns including the thin round-1 turns (1-2 CA) and
+the turns that end early is what yields 1.071. That number is NOT
+"~2 CA sitting in the pool at every EndTurn" -- it is "the bot takes
+about 1.07 CA of debits per own-turn on average across the opener
+window", and the pool at the EndTurn moment itself is 0-1 in every
+trace, exactly as behavcensus's 97.7%-zero figure says.
+
+In other words: the two instruments measured different quantities, and
+the report that item 6's 1.071 "forces ~2.9 CA unspent at every
+EndTurn" was the error. The per-turn debit sum (3-4 in r2-r3) and the
+end-of-turn pool (0-1) are both visible in the trace and both consistent
+with behavcensus. The 1.071 average is a real number about the AVERAGE
+per own-turn (dominated by round-1 thinness and by turns that take
+fewer actions), not a statement about the pool at the EndTurn moment.
+
+The round-1 effect is the concrete driver: round-1 pools are 1-4 per
+seat (game.rs:382, the §1.9 seating rule) with MA 0, so the r1 turns
+spend at most 1-2 CA; the r2/r3 turns spend 3-4. Averaging r1+r2+r3
+per own-turn lands at 1.071. Behavcensus's ca_unused_r3 averages the END
+state over the same window and sees 0-1 there every turn. No
+contradiction once the refill timing is known: the spend-per-turn and
+the leftover-at-EndTurn are different columns of the same table.
+
+=====================================================================
+CONSEQUENCES AND NEXT STEPS
+=====================================================================
+1. behavcensus's ca_unused_r3 (97.7% of 2p r1-3 turns end at 0 CA) is
+   CORRECT and is the right instrument for "CA left unused at end of
+   turn". Its read site (pre-step read under round_before<=3) is NOT
+   affected by any advance_turn off-by-one: it reads the pool at the
+   moment EndTurn is chosen, which is the leftover (the refill has not
+   run yet at that instant -- it runs inside the step, after the read).
+2. openerprobe item 6 as committed is MIS-INTERPRETED in its report: the
+   1.071 CA/turn average is a per-own-turn debit average, not a
+   statement about the pool at EndTurn. The delta machinery itself is
+   sound for non-EndTurn moves (the trace validates every line) and the
+   EndTurn-contributes-zero design is correct; the ERROR is in reading
+   the per-turn average as "the pool at EndTurn". If item 6 is to
+   survive, its printed "per player-TURN" line should be labelled as a
+   per-own-turn debit average and the end-of-turn leftover reported
+   separately (which is exactly ca_unused_r3's territory).
+3. The earlier "discriminating test" (opener_action_points_2026-08-27.txt)
+   is void on its central claim: 1.071 CA/turn does NOT refute the
+   3.3%/97.7% figures, because it is not measuring the pool at EndTurn.
+   The bracket vs recheck question is NOT settled by that measurement;
+   it is settled by this trace in favour of the recheck/behavcensus
+   side: the bot leaves ~0 CA at every r1-3 EndTurn, spends 3-4 CA per
+   r2/r3 turn, and the opener's CA economy is tight, not loose.
+4. Suggested fix for item 6 (not applied here -- the job was to dump the
+   trace and hand-check, and the live tree should not take a second
+   patch until the coordinator decides): either (a) drop the "per
+   player-TURN CA" line from item 6 and keep only the per-decision
+   debit (which is valid), or (b) add an explicit end-of-turn leftover
+   counter (ca_before on EndTurn, the same read behavcensus uses) so
+   the two columns are printed side by side and can never be conflated.
+
+STATUS: COMPLETE. catrace.rs is in the scratch build only
+(/Users/pt/tta-scratch/rust/src/bin/catrace.rs); the live tree carries
+no change from this job. Traces above are the raw output, unedited.
