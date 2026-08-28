@@ -1,0 +1,151 @@
+r1 margin minimal-carrier hunt — 2026-08-28
+=============================================
+
+Goal: find minimal subset of the 156 keys that differ PRE->POST which,
+when reverted to PRE values on top of POST, makes round-1 Take-vs-EndTurn
+margin distribution bimodal (TAILTIGHT low, like postclimb 0.017) rather
+than smooth (like preclimb 0.258 / all-156-reverted 0.253).
+
+TAILTIGHT = min(p25-p10, p90-p75) / (p90-p10), computed on round-1 margin
+percentiles from "Item 7" section of openerprobe output.
+
+Command: /Users/pt/tta-ai/rust/target/debug/openerprobe --games 360 --players 2 --seed 0 --threads 2 --weights /tmp/min_X.json
+
+(log in progress below)
+
+STEP A: VALIDATE 16-KEY CARRIER
+--------------------------------
+Variant: POST with these 16 keys reverted to PRE values:
+  row_bargain_forgone, row_last_copy, row_urgency,
+  science, science_gap, science_rate, science_rate_trailing, science_surplus,
+  card_board_credit, card_board_leader, card_rate_credit,
+  strength, strength_deficit, strength_lead, strength_rel, strength_rel_early
+Result: p10=-7.460 p25=-4.246 p75=2.777 p90=5.669
+  TAILTIGHT = min(3.214, 2.892) / 13.129 = 0.2203
+MATCHES expected 0.2203 exactly. Pipeline validated. Proceeding.
+
+Set C = 157 keys whose values differ between PRE and POST champ2p.json
+weights (task said 156; found 157 by exact float inequality -- using this
+full set for random draws throughout; off-by-one is immaterial).
+
+STEP B/C: FAMILY-ALONE AND COMBINED RUNS
+------------------------------------------
+Random controls drawn via python random.seed(N); random.sample(C, k) on the
+157-key diff set C (sorted).
+
+TAILTIGHT TABLE (candidate beside its same-size control)
+
+  subset                       size  TAILTIGHT   control (seed)              TAILTIGHT
+  ----------------------------------------------------------------------------------
+  16-key carrier (validation)   16    0.2203     n/a (validation run)         -
+  ROW alone                      3    0.0978     random-3 (seed21)           0.0172
+  SCIENCE alone                  5    0.0278     random-5 (seed22)           0.0172
+  STRENGTH alone                 5    0.0282     random-5 (seed23)           0.0123
+  ROW+SCIENCE                    8    0.0943     random-8 (seed24)           0.0212
+  ROW+STRENGTH                   8    0.1384     random-8 (seed24)           0.0212
+  CARDMULT alone (known, not re-run)  3          ~0.020 (already reported)   -
+
+  Reference points: postclimb baseline 0.017 (bimodal); preclimb 0.258
+  (smooth); all-156-reverted 0.253.
+
+Reading:
+  - ROW alone (3 keys) separates clearly from its control: 0.0978 vs 0.0172,
+    a ~5.7x ratio, and both ROW+SCIENCE and ROW+STRENGTH controls (seed24,
+    0.0212) sit in the same noise band as all three single-family controls
+    (0.0123-0.0212), consistent with the postclimb floor of 0.017. ROW alone
+    is unambiguously above that band.
+  - SCIENCE alone (0.0278) and STRENGTH alone (0.0282) barely clear their
+    own controls (0.0172, 0.0123) -- both plausible, neither clean on its
+    own the way ROW is.
+  - ROW+STRENGTH (0.1384) > ROW+SCIENCE (0.0943) > ROW alone (0.0978)?
+    ROW+SCIENCE is actually about equal to ROW alone (0.0943 vs 0.0978,
+    within run-to-run noise), so SCIENCE adds little on top of ROW.
+    ROW+STRENGTH is clearly higher than ROW alone, so STRENGTH adds real
+    signal on top of ROW even though STRENGTH alone barely beats its
+    control -- an interaction effect, not visible from either family run
+    in isolation.
+
+STEP D: MINIMAL CARRIER
+-------------------------
+Smallest subset tested that clearly beats its same-size control: ROW alone
+(3 keys: row_bargain_forgone, row_last_copy, row_urgency), 0.0978 vs 0.0172.
+This is a single family, not larger than one family, so per the task's own
+rule no leave-one-KEY-out pass is required within it.
+
+Caveat: ROW alone (0.0978) is still well short of the full 16-key carrier
+(0.2203) and of postclimb's own 0.017 floor from the OTHER direction (ROW
+alone is 5.7x the noise floor but only ~44% of the 16-key effect size).
+ROW is the dominant single family (matches the earlier leave-one-family-out
+ranking: ROW +0.154), and ROW+STRENGTH (8 keys, 0.1384) captures noticeably
+more of the effect than ROW alone or ROW+SCIENCE, suggesting STRENGTH
+carries real signal that only shows up in combination with ROW. Given the
+tool budget, this was not chased further with a ROW+STRENGTH leave-one-out
+pass; a clean claim is that ROW is necessary and dominant, not that ROW
+alone is sufficient to fully reproduce the postclimb bimodality.
+
+STEP E: WHAT THE THREE ROW KEYS COMPUTE
+------------------------------------------
+All three are linear multiplier terms: eval::evaluate() gates each behind
+`w.get(WeightKey::X) != 0.0`, then does `total += weight * <scalar>`, exactly
+like every other priced-through-w feature in that block (rust/src/bots/
+weighted/eval.rs:372-388). The "f.set" site -- where the raw, w-independent
+feature values are written into the shared feature vector `out[]` for
+credit-assignment/regression purposes, separate from evaluate()'s pricing --
+is features.rs's features() fn at eval.rs:685-688:
+    let (row_urgency, row_bargain) = row::row_pressure(state, idx, freeze, ctx);
+    out[WeightKey::RowUrgency as usize] = row_urgency;
+    out[WeightKey::RowBargainForgone as usize] = row_bargain;
+    out[WeightKey::RowLastCopy as usize] = row::row_last_copy(state, idx, freeze, ctx);
+
+RowUrgency (rust/src/bots/weighted/row.rs:312, row_pressure()):
+  Sum of card_potential() over visible card-row slots that are about to
+  slide off the row entirely this action (no swap slot available, i.e. the
+  card is gone for good if not taken now) -- the "value about to vanish"
+  half of row_pressure's (urgency, bargain) pair (row.rs:352-381).
+
+RowBargainForgone (row.rs:312, same row_pressure() call, second return
+  value "bargain"):
+  For row slots that WILL still be reachable after sliding (cost strictly
+  decreases as the slot advances, `saving > 0`), the value forgone by not
+  waiting for the discount, discounted by how much rival players are
+  competing for that same slot (rival_desire/rival demand modeling,
+  row.rs:383-420ish). Roughly: "what taking early costs you vs. waiting."
+
+RowLastCopy (row.rs:475, row_last_copy()):
+  A deterministic, w-INDEPENDENT count of wanted slots (card_potential > 0
+  used only as a boolean gate, never as a magnitude) that are about to
+  disappear for good with no further copy expected in the deck this age
+  (civil_outlook-based P(no further copy), row.rs:440-444). The doc comment
+  at row.rs:446-465 records this was a deliberate "UNITS FIX": it used to
+  multiply card_potential's own w-priced magnitude by rlc's coefficient a
+  SECOND time, which meant rlc's fitted value drifted whenever any other
+  weight in `w` moved. Now it prices a fixed quantity (count of doomed
+  wanted cards) so rlc means "price per about-to-vanish wanted card" at
+  every position.
+
+All three read board/row state through `w` (card_potential, competition
+modeling) but are themselves priced linearly via w.get() as a scalar
+multiplier on a row-pressure/timing signal -- not a *BoardCredit-style
+per-yield linear feature. Preclimb -> postclimb all three collapsed toward
+zero (row_bargain_forgone 2.18 -> 0.12, row_last_copy -0.24 -> 0.006,
+row_urgency -0.58 -> -0.16), i.e. the champion nearly stopped pricing
+row-timing pressure at all, which tracks with ROW being the dominant family
+in the leave-one-family-out ranking and the clearest single-family control
+beat here.
+
+VERDICT
+--------
+ROW (row_bargain_forgone, row_last_copy, row_urgency) is confirmed as the
+dominant, necessary family: reverting it alone produces a TAILTIGHT of
+0.0978 against a same-size random control of 0.0172, a clean ~5.7x
+separation, while SCIENCE and STRENGTH alone barely clear their own
+controls. ROW is not, however, sufficient by itself to fully reproduce
+postclimb's bimodal 0.017 or match the full 16-key carrier's 0.2203; ROW+
+STRENGTH (0.1384) captures visibly more of the effect than ROW alone,
+pointing at a real STRENGTH interaction that this budget did not chase to
+a minimal ROW+STRENGTH subset. A clean, non-stretched answer: ROW is the
+minimal SINGLE-FAMILY carrier; the true minimal multi-family carrier is
+still somewhere at or below the known 16-key set, likely ROW+STRENGTH-ish,
+and was not pinned down further here.
+
+
