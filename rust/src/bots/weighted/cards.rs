@@ -3817,6 +3817,42 @@ mod tests {
         assert_eq!(got, want);
     }
 
+    /// A leader's board-swap multiplier is `card_board_leader` ALONE. Before
+    /// the 2026-08-28 decouple it was `card_board_credit + card_board_leader`,
+    /// and the live 2p champion had climbed to an exactly equal-and-opposite
+    /// pair, so every leader's board price was multiplied by zero and the
+    /// ranking among leaders collapsed onto whatever the static fallback
+    /// table happened to hold. Moving `card_board_credit` must now change a
+    /// leader's price by nothing at all, while `card_board_leader` still
+    /// scales it -- the second half matters as much as the first, since a
+    /// coordinate that no longer responds to anything would also pass the
+    /// first assertion.
+    #[test]
+    fn a_leaders_board_price_scales_with_card_board_leader_alone() {
+        let state = crate::game::new_game(2, 46);
+        let id = CardId::by_name("Julius Caesar").unwrap();
+        let baseline = Baseline::at(&state, 0);
+        let late = horizon::lateness(&state);
+        let mut scratch = Vec::new();
+        let mut priced = |leader: f64, base: f64| {
+            let mut w = Weights::default();
+            w.set(WeightKey::CardBoardLeader, leader);
+            w.set(WeightKey::CardBoardCredit, base);
+            card_potential(id, &w, Some(&baseline), Some(late), &mut scratch)
+        };
+        let at_zero_base = priced(1.0, 0.0);
+        assert_eq!(
+            at_zero_base,
+            priced(1.0, 7.5),
+            "card_board_credit must not offset a leader's board multiplier any more"
+        );
+        assert_ne!(
+            at_zero_base,
+            priced(2.0, 0.0),
+            "card_board_leader must still be the multiplier that scales the swap diff"
+        );
+    }
+
     /// `hand_total` collapses two leaders in hand to "the better one, plus
     /// `hand_swap_extra` times the rest" rather than summing both
     /// replacements -- the bug `_hand_total`'s own doc comment describes.

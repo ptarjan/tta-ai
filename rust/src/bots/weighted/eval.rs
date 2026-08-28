@@ -2196,6 +2196,30 @@ mod tests {
         }
     }
 
+    /// `card_board_leader` carries its own sign now. The old composite rule
+    /// only ever asked whether `card_board_credit + card_board_leader` netted
+    /// non-negative, so a negative leader multiplier rode through untouched
+    /// whenever the base was large enough to cover it -- and the repair's
+    /// remedy, `card_board_leader := -card_board_credit`, projected the pair
+    /// onto the `sum == 0` line in exact f64, which is where the live 2p
+    /// champion ended up stuck. Both halves are pinned here: the per-key
+    /// `NonNegative` gate must fire on a shape the old composite rule
+    /// accepted, and `card_board_credit` must be left alone rather than
+    /// dragged into the repair.
+    #[test]
+    fn a_negative_leader_board_multiplier_is_pinned_even_when_the_base_would_cover_it() {
+        let mut w = Weights::default();
+        w.set(WeightKey::CardBoardCredit, 5.0);
+        w.set(WeightKey::CardBoardLeader, -1.0);
+        let (out, viol) = dominance_repair(&w);
+        assert_eq!(out.get(WeightKey::CardBoardLeader), 0.0, "a negative leader multiplier must be pinned to 0.0");
+        assert_eq!(out.get(WeightKey::CardBoardCredit), 5.0, "the base must not be moved by the leader key's repair");
+        assert!(
+            viol.iter().any(|v| v.weight == WeightKey::CardBoardLeader),
+            "the repair must report the leader multiplier as the violation"
+        );
+    }
+
     /// NEGATIVE CONTROL: the gate pins a SIGN, not a magnitude -- a penalty
     /// the league priced as costly is left exactly where it put it.
     #[test]
