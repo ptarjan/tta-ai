@@ -1,0 +1,152 @@
+WARRIMMUNE FLAT-CONSTANT ANALYSIS (2026-08-28)
+
+Question: WeightKey::WarImmune is +26.88308 on the 4p champion -- one flat
+constant paid regardless of which pact, which rival, or the board position.
+Is that constant defensible, or is it a flag standing in for something the
+eval cannot express?
+
+0. DATABILITY
+-------------
+Live files (read 2026-08-28):
+  experiments/rust_champion_2p.json  gen 120630
+  experiments/rust_champion_3p.json  gen 67308
+  experiments/rust_champion_4p.json  gen 21875
+(4p gen unchanged since the clamp-wall sweep this morning: 21875. 2p and 3p
+moved on from 120601 / 67299.)
+
+1. THE EMITTING PREDICATE (features.rs:949-954)
+-----------------------------------------------
+  // RULES_SPEC 5.6 cliff, not a slope -- see `WeightKey::WarImmune`'s own
+  // doc comment in `weights.rs`. `combat::war_forbidden` ORs `s.war_immune`
+  // (a pact side printing `cannotBeDeclaredWarOnByAnyone`) alongside
+  // `pact_forbids_attack` (already `blocks_attack` above); this reads the
+  // same `Stats` field `s` already carries for this player.
+  f.set(WeightKey::WarImmune, if s.war_immune { 1.0 } else { 0.0 });
+
+Exact predicate: `s.war_immune` -- the player's `Stats` field, set by a pact
+side printing `cannotBeDeclaredWarOnByAnyone` (a `PactBlock.war_immune` flag,
+e.g. "Loss of Sovereignty"'s B side, per the weights.rs:944-959 doc). It
+counts nothing: it is a pure 0/1 boolean. 1.0 iff the player holds (as a
+party) a pact side that makes War against them categorically illegal; 0.0
+otherwise. No which-pact, which-rival, or board information enters. The
+weights.rs doc (944-959) is explicit that this was a deliberate choice:
+`cards.rs::pact_value` and `rivals.rs::add_pact_block` both name `war_immune`
+as one of the `PactBlock` fields deliberately left OUT of the RATE-shaped
+decomposition -- "not a per-turn yield, a boolean gate on legality".
+
+So the flatness is not an accident of the fitter: the coordinate is
+structurally a 0/1 flag. The only thing the league can fit is the price of
+being on the protected side of that gate.
+
+2. VALUE ON ALL THREE LIVE CHAMPIONS
+------------------------------------
+arm   gen      war_immune        pact_blocks_attack     pacts
+2p    120630   +0.10211273074237650   -0.1218625203315605   +0.14755512824897682
+3p    67308    +0.17972212125342557   -2.7682820023796086   -1.3768422908957023
+4p    21875    +24.153794690585517     +8.286578219276729    -0.7681812882511769
+
+Note: the job brief carried +26.88308 for 4p. The live file says
++24.153795 -- same shape, same story, the number moved between the brief's
+snapshot and this read (4p is the least-converged arm). Nothing below
+depends on the exact 4p magnitude.
+
+Aliveness: all three arms are alive (nonzero). 4p is far from the other two
+by an order of magnitude. No arm is on a clamp wall (walls at 60 / 120,
+per the clamp-wall sweep of this morning: no WarImmune cell walled on any
+arm at gen 120601/67299/21875).
+
+3. p95 CANDIDATE SPREAD AND DERIVED CLAMP BOUND (weights.rs:2328)
+-----------------------------------------------------------------
+  WeightKey::WarImmune => [0.000000, 1.000000, 1.000000],
+  (order: 2p, 3p, 4p)
+
+The 2p cell is 0.000000 -- said loudly: on 2p the spread instrument sees no
+spread at all, so `clamp_bound` (weights.rs:2185-2191) returns
+CLAMP_BLIND = 60.0 (the `spread <= 0.0` fallback at 2187-2188) rather than
+a measured bound. On 2p the value 0.102 is therefore DRIFTING inside a blind
+rail, not fitted against a measurement. (Its smallness is also what the
+fitter would do with an unfittable coordinate: no gradient to climb, park
+near zero.)
+
+Derived bounds for the nonzero cells, from
+  bound = min(CLAMP_CEILING, P95_TOTAL_SPREAD[ix] / spread)
+  (weights.rs:2190-2191, CLAMP_T = 1.0 at 2470):
+  3p: 483.787396 / 1.0 = 483.787396 -> capped at CLAMP_CEILING = 120.0
+  4p: 545.274556 / 1.0 = 545.274556 -> capped at CLAMP_CEILING = 120.0
+(P95_TOTAL_SPREAD at weights.rs:2520: [823.689416, 483.787396, 545.274556].)
+
+So on 3p and 4p the bound is the ceiling itself: a measured spread of 1.0
+divides into a derived bound in the hundreds, and the ceiling is what
+actually holds the coordinate. 24.15 (4p) and 0.18 (3p) are both interior
+-- neither is parked on a wall.
+
+4. COMPARE AGAINST PACTBLOCKSATTACK
+-----------------------------------
+The two keys are adjacent in features.rs (948 vs 954) and price two
+different halves of the same RULES_SPEC 5.6 legality gate.
+
+PactBlocksAttack (features.rs:555-569, 948) is a COUNT: one per pact the
+player is a party to that prints `Special::NoAttacksBetweenParties`, plus
+the deferred-credit contribution from a pending offered pact
+(`dc.blocks_attack`). It prices "how many of my attack options are
+mutually locked with a named rival right now" -- a rival-specific,
+board-specific quantity, and it goes both ways: the same pact that protects
+me from my partner also bars my attacks against them. That is why its sign
+is arm-split (2p -0.122, 3p -2.768, 4p +8.287): the same fact is a net cost
+on the two converged arms and a net protection on the under-converged 4p
+arm, and weights.rs:1738-1739 records exactly this ("symmetric and costs
+the holder its own attack option") as the CITED counterexample keeping it
+Free.
+
+WarImmune prices the other gate: a boolean, rival-independent, count-free.
+It says "War against me is categorically illegal" -- the value of holding a
+pact side that removes the War option from EVERY rival at once, with no
+corresponding loss of the holder's own options (it only ever enters combat
+legality on the attacker's side, weights.rs:1780-1789). What it cannot
+express -- and cannot, because the emitting predicate is a single Stats
+boolean -- is which rival is barred (all of them), through which pact
+(whatever carries `cannotBeDeclaredWarOnByAnyone`), or how the protection
+interacts with the board (e.g. how threatening War is right now). A flat
+constant is the most the coordinate's information content allows.
+
+5. IS THE FLAT CONSTANT DEFENSIBLE?
+-----------------------------------
+Defensible, with the usual caveats, and the gates are right:
+
+- The flatness is structural, not a fitter artifact. The predicate is a
+  0/1 Stats boolean; there is no finer fact in the coordinate. If the eval
+  cannot express "protection against rival X via pact Y worth Z", that is
+  not this key's defect -- the key is honestly priced as the all-or-nothing
+  gate it is, exactly the RULES_SPEC 5.6 cliff shape ("declare a war ...
+  illegal if a pact forbids it").
+- The sign gate is NonNegative (weights.rs:1780-1790): "a protective flag
+  that removes no option from its holder", paired with AttackCostDoubled.
+  That gate is consistent with the rules: holding the immunity never costs
+  the holder anything (the pact's `cultureProduction: -2` is priced by the
+  culture coordinates, not here).
+- The magnitudes are honest about themselves: 2p is drifting under the
+  blind rail (spread 0.0 -> bound 60), 3p/4p are interior under a ceiling
+  that the measurement alone would have set far higher. None of the three
+  values is parked on a wall (clamp-wall sweep, same day: no WarImmune cell
+  walled on any arm).
+- The 4p-vs-rest gap (24.15 vs 0.10/0.18) is the same shape as the Tactic
+  story: 4p is the least-converged arm (gen 21875) and its protective
+  booleans are where it is still pricing large. Worth re-checking at the
+  next 4p read; the prediction is that 4p comes down toward the converged
+  arms' ~0.1 as it converges, not that the others go up.
+
+Verdict: the flat constant is the correct price for the fact the coordinate
+carries (a boolean legality gate), not a flag standing in for unexpressed
+structure. If finer structure ever becomes needed -- e.g. "protection
+matters more when a rival is strong" -- that is a new coordinate (a
+rival-indexed War-threat x immunity product, say), not a widening of this
+one.
+
+6. CHEAP ADD-ON: CLAMP_BLIND LINE NUMBER
+----------------------------------------
+  /Users/pt/tta-ai/rust/src/bots/weighted/weights.rs:2476
+      pub const CLAMP_BLIND: f64 = 60.0;
+
+The coordinator's notes said 2499; the previous read said 2476. 2476 is
+correct (verified with `grep -n` on 2026-08-28). CLAMP_CEILING is at
+weights.rs:2523 (unchanged from the clamp-wall sweep).
