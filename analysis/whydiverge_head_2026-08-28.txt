@@ -1,0 +1,81 @@
+whydiverge re-run at HEAD (post-f13707f), 2026-08-28
+=====================================================
+
+WHY THIS RUN EXISTS
+-------------------
+Companion to analysis/agreement_head_2026-08-28.txt. `whydiverge` scored candidates
+through `rank_moves`, which applied Move::EndTurn before scoring it until f13707f.
+Positions come from the human journal, so only the SCORES were wrong; this re-run
+replaces every pre-f13707f whydiverge attribution.
+
+SETUP
+-----
+binary      rust/target/release/whydiverge (built 2026-08-28 04:59, HEAD 1939ceb)
+weights     frozen experiments/rust_champion_{2,3,4}p.json, 2p champion gen 121046
+game ids    head -200 analysis/guard_ids_882.txt (123 x 2p, 29 x 3p, 48 x 4p)
+
+RUN TOTALS
+----------
+200 games run, 0 failed
+21553 take_card / increase_population decisions
+ 1681 agreed (skipped)
+19761 analysed
+  111 skipped (human move absent)
+
+whydiverge covers take_card and increase_population ONLY. It says nothing about builds,
+so it cannot speak to the Farm-vs-Mine ranking failure.
+
+TABLE COLUMNS
+-------------
+players / decision-kind / WeightKey / times-fired / signed-total / abs-total / decisive
+
+"decisive" = the number of divergences where that key's contribution was large enough to
+account for the bot preferring its move over the human's. It is the column to rank on;
+times-fired is exposure, not influence.
+
+TOP 15 OVERALL BY DECISIVE COUNT
+--------------------------------
+2p take_card            WorkersLate              fired=3450   decisive=1961
+2p take_card            CultureRate              fired=3129   decisive=1677
+4p take_card            CultureRate              fired=1461   decisive=1432
+2p take_card            HandPotential            fired=7146   decisive=1265
+4p take_card            HandCivil                fired=4587   decisive=1221
+4p take_card            Strength                 fired=1247   decisive=1011
+3p take_card            BlueFree                 fired=951    decisive=644
+2p take_card            WonderPromise            fired=2345   decisive=574
+3p increase_population  FoodStock                fired=600    decisive=526
+4p increase_population  CultureRate              fired=527    decisive=516
+4p take_card            HandPotential            fired=5071   decisive=474
+2p increase_population  CultureRate              fired=718    decisive=471
+3p take_card            HandPotential            fired=2295   decisive=453
+3p take_card            Strength                 fired=536    decisive=401
+2p take_card            FreeWorkers              fired=3904   decisive=391
+
+2p take_card, TOP 10
+--------------------
+WorkersLate              fired=3450   signed=201945.6    abs=210015.3    decisive=1961
+CultureRate              fired=3129   signed=259152.4    abs=259152.4    decisive=1677
+HandPotential            fired=7146   signed=24753.4     abs=45059.7     decisive=1265
+WonderPromise            fired=2345   signed=2339.1      abs=16907.9     decisive=574
+FreeWorkers              fired=3904   signed=-10575.2    abs=14415.3     decisive=391
+Strength                 fired=872    signed=13108.1     abs=21066.6     decisive=345
+ScienceGap               fired=784    signed=2819.3      abs=5559.6      decisive=273
+HandMilPotential         fired=1018   signed=3728.3      abs=3932.9      decisive=265
+TechLevelsLate           fired=327    signed=3034.6      abs=3034.6      decisive=162
+WonderPotential          fired=392    signed=1577.1      abs=3969.6      decisive=119
+
+READING IT
+----------
+CultureRate has signed == abs at 2p, 3p and 4p: it never once pushed the other way. It is
+a pure one-directional pull on every take decision where it fires.
+
+HandPotential fires most often of anything at 2p (7146) but its signed total is barely
+half its abs total, so it cuts both ways and its per-firing influence is small. Note the
+name collides: the HandPotential FEATURE delta is identically zero on a take, while
+eval.rs separately multiplies w.get(HandPotential) by cards::hand_potential(). Any claim
+about this row must say which of the two it means.
+
+FreeWorkers is the only top-10 key at 2p with a NEGATIVE signed total.
+
+DO NOT FIT ON THIS. A divergence from a human is evidence to investigate, not an error to
+minimise; fitting the leaf eval on human agreement is on the do-not-do list.
