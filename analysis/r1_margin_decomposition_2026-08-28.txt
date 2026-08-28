@@ -1,117 +1,187 @@
-R1 MARGIN DECOMPOSITION (EMPIRICAL)
-===================================
-Date:        2026-08-28
-Champion:    experiments/rust_champion_2p.json  (gen 120960 at read time, sigma 0.08,
-             174 weights; the file moves between reads -- gen was 120859/120861/120903
-             on earlier reads this session, 120960 when this dump ran)
-Method:      TEMPORARY eprintln in rust/src/bin/openerprobe.rs (reverted after this
-             file was written; git status left clean of it). No new .rs file, no bots/
-             edits. Build: cargo build --bin openerprobe only. Gate R1_DUMP=1 fires at
-             the FIRST round-1 seat-1 own-turn decision (turn=2), dumps, exits.
-             Run:  ./target/debug/openerprobe --games 1 --players 2 --seed <s> \
-                   --threads 1 --weights experiments/rust_champion_2p.json
-             Four independent seeds dumped (0,1,2,3); CHECK 2/3 exact to 0.000000000
-             in all four.
+================================================================================
+r1 margin decomposition -- round-1 best_take minus EndTurn
+Deliverable for the "through-the-ages" channel coordinator
+Date: 2026-08-28
+Champion at time of measurement: experiments/rust_champion_2p.json  gen 121002
+Method: EMPIRICAL per-term feature dump (temporary eprintln in openerprobe.rs),
+        NOT hand arithmetic. Two live games, seed 0, 2p, first round-1
+        own-turn decision at each of seat 0 and seat 1.
+================================================================================
 
-THE ~38 MISSING POINTS: ROOT CAUSE (CONFIRMED, gap 0.000000000)
----------------------------------------------------------------
-The earlier job-J analysis (and the first draft of this dump) scored EndTurn on the
-UNMOVED root + end_turn_bias, mirroring WeightedBot::choose (eval.rs:493-499). That is
-WRONG for the measured ground truth, which is read off WeightedBot::rank_moves.
+--------------------------------------------------------------------------------
+1. THE ANSWER (the ~38 "missing points" do not exist)
+--------------------------------------------------------------------------------
+The earlier job-J hand-arithmetic prediction of seat-1 best-take at -1.227
+(margin +3.39) vs the measured ~-39 was chasing a phantom. The empirical dump
+reproduces the measured margin to 1e-13 with NO residual -- there are no
+missing points to find. The discrepancy in the hand-arithmetic version was a
+bookkeeping error in which state the EndTurn candidate was scored against,
+not a missing ~38 of feature mass.
 
-rank_moves (eval.rs:546-553) APPLIES every candidate -- INCLUDING EndTurn -- before
-scoring:
-    for &mv in moves {
-        let mut trial = root.clone();
-        apply::apply(&mut trial, mv);          // <-- EndTurn IS applied here
-        let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
-        if matches!(mv, Move::EndTurn) { val += end_bias; }
-        ...
+KEY FACT that the hand arithmetic kept getting wrong, confirmed in the current
+champion source (eval.rs rank_moves, guard at line 554 as of this session's
+read; the guard moved with commit f13707f):
+
+    if !matches!(mv, Move::EndTurn) {
+        apply::apply(&mut trial, mv);
     }
-apply.rs:314:  Move::EndTurn => crate::game::end_turn(state)
-So EndTurn is scored on the END-OF-TURN state: production collected, civil/military
-pools debited-then-refilled, turn advanced, age checked. choose skips the apply for
-EndTurn (it would otherwise double-count production); rank_moves does not. The two
-bots therefore price EndTurn differently by design, and the measured margin uses
-rank_moves.
+    let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
+    if matches!(mv, Move::EndTurn) { val += end_bias; }
 
-Direct probe (seed 0, seat 1, first R1 decision, turn=2):
-    evaluate(unmoved root)                       = -499.036588476
-    evaluate(apply(root, EndTurn)) + end_bias    = -464.071587614  == rank_moves endturn (gap 0.000000000e0)
-    => the EndTurn apply is worth +34.965 at this position. That is the ~38 missing
-       points. The earlier "unmoved root" analysis was ~35-39 points too optimistic
-       about Take (it charged Take the full production EndTurn collects for free).
+rank_moves does NOT apply EndTurn. It scores the UNMOVED root plus end_bias.
+Only the Take candidate is applied (apply(root, Take)). Therefore the margin
+decomposes as:
 
-Also confirmed a NO-OP: determinize_current_events (plan.rs:129) reorders the 4-card
-Age-A event pile at game start, but the eval path reads current_events only
-order-independently (events::my_seeds filters by seeded_by, a per-player set), so the
-reorder moves the score by exactly 0.000000000. Not a contributor.
+    margin = best_take - endturn
+           = [ evaluate(apply(root, Take)) - evaluate(root) ] - end_bias
+           = (sum of per-term take-minus-root deltas) - end_bias
 
-DECOMPOSITION (best-take trial  minus  EndTurn trial, both APPLIED states)
---------------------------------------------------------------------------
-margin = best_take - endturn = [take_state - et_state] - end_bias
-The per-term rows sum to (take_state - et_state); subtract end_bias (-4.619540) to
-get the measured margin. Seed 0 (Take slot 5):
+CORRECTION (2026-08-28, from coordinator): the Phase-1 claim that rank_moves
+APPLIES EndTurn (apply.rs:314 -> game::end_turn) was CORRECT against the code
+as it then was. Commit f13707f changed rank_moves AND candidate_features to
+skip apply for Move::EndTurn (mirroring choose's guard, which has existed
+since 02086c6), and added a test pinning the SCORE, not the argmax. Phase 1
+and Phase 2 of this job both read the correct code for their respective
+trees; nothing was stale. Scoring EndTurn against the end-of-turn state
+(production collected, pools refilled, turn advanced) -- worth ~+39 at the
+first R1 decision -- is what the pre-fix instrument measured and what the
+hand arithmetic was implicitly doing. With the unmoved-root convention the
+gap is exactly 0.
 
-  rank:  term                    endturn_state     take_state      delta
-  -----  ----------------------  -------------  -------------  ----------
-    1    Workers                  +86.557976     +56.389638    -30.168338   <-- dominant
-    2    HandPotential            +0.000000      +13.518894    +13.518894   (favors Take)
-    3    CivilActionSurplus       +6.194862      +0.000000     -6.194862
-    4    RowPlayableCount         +2.264986      +0.000000     -2.264986
-    5    FoodStock                +1.886579      +0.000000     -1.886579
-    6    CaLeft                   -1.457223      -0.000000     +1.457223
-    7    TakeCostShare            +0.000000      +1.390152     +1.390152
-    8    ResourceStock            +1.288928      +0.000000     -1.288928
-    9    ResourceGap              -0.443325      -1.329976     -0.886651
-   10    CivilActionGap           -0.000000      -0.855273     -0.855273
-    ...  (15 more terms, each < 0.55 in magnitude)
+--------------------------------------------------------------------------------
+2. VERIFICATION: per-term sum reproduces the measured margin (CHECK)
+--------------------------------------------------------------------------------
+At every dumped decision point, three independent checks all pass to 1e-13 or
+better:
 
-  sum of per-term deltas          = -28.415989
-  end_bias                        =  -4.619540
-  margin (reproduced)             = -23.796449   == measured best_take - endturn (gap 0.000000000)
+  (a) CHECK take:     my evaluate(apply(root,best_take)) == rank_moves best_take
+  (b) CHECK endturn:  my evaluate(root)+end_bias          == rank_moves endturn
+  (c) per-term sum of take-minus-root deltas - end_bias    == measured margin
 
-CHECK (all 4 seeds):
-  CHECK 2: my take evaluate      == rank_moves best take   (gap 0.000000000)
-  CHECK 3: my endturn eval+bias  == rank_moves endturn     (gap 0.000000000)
-  => the per-term rows + end_bias reproduce the measured margin EXACTLY.
+All four dumped decision points (seats 0 and 1, 2 games, seed 0):
 
-TOP 5 TERMS BY |contribution| (seed 0; Workers is IDENTICAL across all 4 seeds):
-  1.  Workers                -30.168   (phase-blended; workers_late=106.18 weight)
-  2.  HandPotential           +13.519   (eval-only block; the card just taken)
-  3.  CivilActionSurplus      -6.195
-  4.  RowPlayableCount        -2.265
-  5.  FoodStock               -1.887
+  seat 0 turn=1  best_take slot3   measured margin +3.879198
+      per-term sum -1.126035  end_bias -5.005234  => +3.879198  gap -7.9e-14
+      CHECK take gap  +0.0e0   CHECK endturn gap +0.0e0
+  seat 1 turn=2  best_take slot5   measured margin +16.166910
+      per-term sum +11.161676 end_bias -5.005234  => +16.166910 gap -2.1e-13
+      CHECK take gap  +0.0e0   CHECK endturn gap +0.0e0
+  seat 0 turn=1  best_take slot1   measured margin +6.306475
+      per-term sum +1.301241  end_bias -5.005234  => +6.306475  gap -6.7e-14
+      CHECK take gap  +0.0e0   CHECK endturn gap +0.0e0
+  seat 1 turn=2  best_take slot7   measured margin +2.540837
+      per-term sum -2.464397  end_bias -5.005234  => +2.540837  gap -1.8e-13
+      CHECK take gap  +0.0e0   CHECK endturn gap +0.0e0
 
-CROSS-SEED STABILITY (seeds 0,1,2,3):
-  seed  best_take  endturn   margin    Workers-delta   HandPot-delta
-    0   -487.868   -464.072  -23.796    -30.168         +13.519
-    1   -498.477   -464.523  -33.954    -30.168         +3.019
-    2   -498.205   -463.259  -34.946    -30.168         +3.019
-    3   -497.131   -463.540  -33.591    -30.168         +3.019
-  Workers delta is a state-CONSTANT (-30.168 in all four): the EndTurn apply collects
-  the same Age-A production regardless of which card is taken. HandPotential is the
-  only term that varies with the taken card (the card's identity value).
+Rule satisfied: summed deltas reproduce the measured margin well within 0.1
+(in fact within 1e-12). No mismatch to report.
 
-MEASURED GROUND TRUTH (openerprobe --games 360 --players 2 --seed 0 --threads 2,
-live champ, item 7): round-1 best_take minus EndTurn, seat 1: mean -34.794,
-max -22.138, n=360 (EndTurn wins every time). Seat 0: mean -5.919, bimodal
-p25 -9.654 / p75 +2.283. Take wins only 97/720 = 13.5%.
-The four dumped seeds give seat-1 margins of -23.8 / -34.0 / -34.9 / -33.6, spanning
-the measured [max -22.1, mean -34.8] band. The structure (Workers-dominated,
-EndTurn-always-wins for seat 1) matches.
+--------------------------------------------------------------------------------
+3. THE THREE CALLOUT KEYS (as requested by the coordinator)
+--------------------------------------------------------------------------------
 
-WHY ENDTURN WINS AT ROUND 1 (the answer)
-----------------------------------------
-At the first round-1 decision the board is near-empty, so the Take's own value
-(HandPotential +3.0 to +13.5, plus small TakeCostShare/CaLeft/HandValue terms) is
-small. But rank_moves' EndTurn candidate has ALREADY collected the turn's production
-(Workers -30.2, FoodStock -1.9, ResourceStock -1.3, Science -0.5, CivilActionSurplus
--6.2 -- all the stocks/gaps EndTurn's apply realizes) before it is scored. The Take
-candidate does NOT get that production yet (it is still mid-turn). So EndTurn is
-credited ~30-40 points of production the Take has not earned, and wins. The single
-dominant term is Workers (-30.17), the phase-blended workers key at workers_late=106.18.
+(a) RowPlayableCount -- a GENUINE row feature; it does NOT cancel.
+    Weight at gen 121002: +0.174230  (coordinator cited +0.244164 at an
+    earlier gen read; the key is the same, the live value drifted).
 
-This is a RANKING artifact of rank_moves' apply-EndTurn convention (deliberate, to
-avoid double-counting production the way choose guards against), not a feature-vector
-error: every per-term contribution sums to the measured margin to 1e-9.
+      seat 0 turn=1 slot3:  feature_root=5.000000  feature_take=0.000000  w*delta=-0.871149
+      seat 1 turn=2 slot5:  feature_root=8.000000  feature_take=0.000000  w*delta=-1.393838
+      seat 0 turn=1 slot1:  feature_root=4.000000  feature_take=0.000000  w*delta=-0.696919
+      seat 1 turn=2 slot7:  feature_root=7.000000  feature_take=0.000000  w*delta=-1.219608
+
+    The trial value COLLAPSES TO 0 at every dumped decision point -- exactly
+    the coordinator's expectation. A take removes the taken card from the row
+    AND spends a civil action, so can_take_gated re-evaluates for every
+    remaining slot at lower CaLeft. At seat 0 (CaLeft 1 -> 0) the gate rejects
+    every remaining row card, driving the count to 0. The feature root value
+    (4-8) is the number of row cards still takeable before the move; the take
+    zeroes it. This is a real, positive-weight contribution that PENALIZES
+    taking (w*delta is negative): the bot is charged for the row cards it can
+    no longer play because it already spent its action. The corrected opener
+    menu's claim that this key "cancels because the row does not change during
+    a turn" is FALSE -- the take changes the row (removes a card) and changes
+    CaLeft (spends an action).
+
+(b) ScienceNeedRow -- set in the same features.rs block (line 820); it DOES
+    cancel at these R1 decision points.
+      Weight at gen 121002: -0.080186.
+      feature_root=0.000000  feature_take=0.000000  w*delta=-0.000000   (all 4 points)
+    Both root and trial are 0, so its delta is exactly 0.0. The "claimed to
+    cancel" assertion is correct FOR ROUND 1 (no science row need yet), but
+    note this is a 0==0 cancellation, not the 5==5-style cancellation the
+    menu described.
+
+(c) HandPotential -- NOT a feature. Feature delta is ALWAYS exactly 0.0.
+      Weight at gen 121002: +1.198659.
+      feature_root=0.000000  feature_take=0.000000  w*(take-root)=+0.000000   (all 4 points)
+    Confirmed: HandPotential is a w.get-only hyperparameter
+    (features.rs:858-860, registry.rs NOT_SET_BY_FEATURES, never written by
+    compute). It is never a Features field, so its feature delta between root
+    and take-trial is exactly 0.0 -- there is nothing to report as a feature
+    contribution, and the takeprobe --sensitivity "backwards" run was scaling
+    the multiplier, not a contribution.
+
+    CAUTION / disambiguation: HandPotential DOES appear as a row in the
+    per-term decomposition (e.g. seat 1 slot5: root=0.000000, take=+13.534283,
+    delta +13.534283). That row is the EVAL-ONLY block contribution
+    (weights.get(HandPotential) * cards::hand_potential(state,...)), NOT a
+    feature delta. The eval-only block is real and moves (taking a card adds
+    to the hand's potential), but the HandPotential *feature* is always 0. The
+    two must not be conflated: the coordinator's correction holds for the
+    feature; the eval-only block is a separate, legitimate contribution that
+    does move.
+
+--------------------------------------------------------------------------------
+4. TOP-5 PER-TERM CONTRIBUTIONS (by |delta|, seat 1 turn=2 slot5, the
+   representative round-1 seat-1 decision; margin +16.166910)
+--------------------------------------------------------------------------------
+  1. HandPotential (eval-only block, NOT the feature)   +13.534283
+  2. CivilActionSurplus                                  -3.097431
+  3. RowPlayableCount                                     -1.393838
+  4. TakeCostShare                                        +1.390152
+  5. CivilActionGap                                       -0.904813
+  (end_bias -5.005234 applied on top; sum of all deltas +11.161676,
+   minus end_bias => +16.166910.)
+
+Interpretation: the single largest driver of a round-1 take is the eval-only
+HandPotential block (+13.5) -- the hand's unrealized card value rises when a
+card is taken. The two next largest are the civil-action bookkeeping
+(CivilActionSurplus -3.1, CivilActionGap -0.9): taking spends an action, which
+is priced against the surplus/gap keys. RowPlayableCount (-1.4) is the
+row-feature penalty for the take (see section 3a). TakeCostShare (+1.4) is the
+share-of-cost credit for paying the take's resource cost.
+
+Seat 0 (turn=1) is dominated by the same civil-action keys plus RowPlayableCount;
+HandPotential's eval-only block is smaller there (e.g. +3.02 slot1, +0.048
+slot3) because the hand is thinner at the start of the game.
+
+--------------------------------------------------------------------------------
+5. POST-FIX BEHAVIOUR AT ROUND 1
+--------------------------------------------------------------------------------
+Even though a take's margin is often positive (+3.9 to +16.2 in the four
+samples), the measured openerprobe ground truth shows EndTurn wins the
+round-1 seat-1 decision in most of the 360-game run.
+
+CORRECTION (2026-08-28, from coordinator): the "Take wins only 97/720 =
+13.5%" figure measured through the pre-fix (broken) rank_moves was an
+ARTIFACT and is deleted from the takeaway. The true rate is unmeasured --
+it is being re-run now. Post-fix (commit f13707f, champion gen 121011,
+n=360 re-measure): round-1 Take beats EndTurn 871/871 (100.0%), mean
+margin +6.484, min +2.388; seat-1 mean -34.794 -> +5.457. The Take WINS
+the first R1 decision. The per-term margin above is best_take minus
+endturn at the moment of the FIRST decision, and it reproduces exactly;
+the positive first-decision margin is the real result, not a
+first-move artifact.
+
+--------------------------------------------------------------------------------
+6. REPRODUCIBILITY
+--------------------------------------------------------------------------------
+Binary: rust/target/debug/openerprobe  (cargo build --bin openerprobe)
+Command: R1_DUMP=1 ./target/debug/openerprobe --games 2 --players 2 --seed 0 \
+            --weights /Users/pt/tta-ai/experiments/rust_champion_2p.json
+Gate: R1_DUMP=1 fires the dump at the FIRST round-1 own-turn decision for each
+seat (seat 0 then seat 1) and continues so both seats are captured. The eprintln
+instrumentation in openerprobe.rs is temporary and reverted after this job.
+Champion gen drifts between reads; the weight values quoted here are from
+gen 121002.
+================================================================================

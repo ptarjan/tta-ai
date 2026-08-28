@@ -1,5 +1,19 @@
 ================================================================================
-THROUGH THE AGES -- OPENER MENU, CORRECTED COMPARISON (2p)
+CORRECTION, 2026-08-28 (supersedes the Take-vs-EndTurn claims below)
+================================================================================
+Every Take-vs-EndTurn margin, ranking, or "EndTurn wins" claim in the body
+below was measured BEFORE commit f13707f and is INVALID. f13707f changed
+rank_moves AND candidate_features to skip apply for Move::EndTurn
+(mirroring choose's guard, in place since 02086c6), plus a new test that
+pins the SCORE, not the argmax. This file was computed through the old
+rank_moves, so its EndTurn scoring is the pre-fix convention. Post-fix
+re-measure (champion gen 121011, n=360): round-1 Take beats EndTurn
+871/871 (100.0%), mean margin +6.484, min +2.388. The original text is
+kept below for provenance and is marked SUPERSEDED.
+================================================================================
+
+================================================================================
+THROUGH THE AGES -- OPENER MENU, CORRECTED COMPARISON (2p)  [SUPERSEDED]
 ================================================================================
 Date: 2026-08-28
 Champion: experiments/rust_champion_2p.json, gen 120850 (file moved between
@@ -245,3 +259,4 @@ EndTurn. But it is not strong enough at seat 0 to produce a forgo.
   applies identically to both and cancels.
 * The old file (opener_menu_ranking_2026-08-28.txt) is kept for provenance;
   its ranking is void under the comparison the code actually makes.
+[END OF SUPERSEDED BODY]

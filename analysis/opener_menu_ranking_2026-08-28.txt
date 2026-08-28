@@ -1,4 +1,17 @@
-Opener Menu Ranking — 2p Round 1, Champion gen 120839
+CORRECTION, 2026-08-28 (supersedes the Take-vs-EndTurn claims below)
+======================================================
+Every Take-vs-EndTurn margin, ranking, or "EndTurn wins" claim in the body
+below was measured BEFORE commit f13707f and is INVALID. f13707f changed
+rank_moves AND candidate_features to skip apply for Move::EndTurn
+(mirroring choose's guard, in place since 02086c6), plus a new test that
+pins the SCORE, not the argmax. This file was computed through the old
+rank_moves, so its EndTurn scoring is the pre-fix convention. Post-fix
+re-measure (champion gen 121011, n=360): round-1 Take beats EndTurn
+871/871 (100.0%), mean margin +6.484, min +2.388. The original text is
+kept below for provenance and is marked SUPERSEDED.
+======================================================
+
+Opener Menu Ranking — 2p Round 1, Champion gen 120839  [SUPERSEDED]
 ======================================================
 Date: 2026-08-28
 Champion: experiments/rust_champion_2p.json, gen 120839
@@ -362,4 +375,5 @@ NOTES
   because no rate-key feature changes between candidates
   (ScienceRate stays 1, FoodRate stays 2, etc. — the taken card
   is in hand, not in the tableau).
+[END OF SUPERSEDED BODY]
 • No sign_intent proposed. No code changes. Read-only analysis.
