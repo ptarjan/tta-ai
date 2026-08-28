@@ -1,0 +1,181 @@
+# Military strength by round, bot vs human
+
+## Scope and method
+
+Follow-up to the population curve report
+(`analysis/population_curve_bot_vs_human_2026-08-28.txt`), using the SAME
+method and round convention. That report showed the bot's population peels
+away from the human's at ~round 12; this one measures the same separation on
+the military side.
+
+Two sides, same quantities per round, 2p, whole game:
+
+- HUMAN side: the 632 completed 2p corpus games (the 2p subset of
+  `analysis/guard_ids_882.txt`), replayed to completion — all 632 complete,
+  0 stopped.
+- BOT side: `openerprobe` self-play, 2p, 256 games seeds 1..256, frozen
+  champion `experiments/rust_champion_2p_frozen_2026-08-28.json` (gen
+  121100).
+
+Per round, per side, per player, three quantities:
+
+- **total military strength** = `effects::state_stats(state, p).strength`.
+  This is the full military strength the engine reports: base unit strength
+  (unit base value x workers on it) PLUS tactics, `army_strength` cards,
+  military pacts, colonies and leaders. It is the same quantity the bot
+  prices in its `strength` weight and the quantity `rival_strength` reads
+  out — deliberately NOT just the sum of base unit values.
+- **units in play** = number of military unit cards on the tableau with at
+  least one worker on them (`interact::unit_pool` semantics).
+- **military workers** = workers on those units (the staffing).
+
+Round convention (identical on both sides): "end of round R" = the player
+state immediately after round R's last move. Human side: the journal's first
+line tagged round R+1 (the pre-move state at R+1, i.e. after round R's last
+action has been applied); a game's final round falls back to its last
+decision's pre-move state, i.e. it is read one move before the true end of
+the final round — one move of staleness only on the last round of the few
+games that reach it, documented here. Bot side: the snapshot taken the
+moment `state.round` advances past R.
+
+## Ended games: dropped or carried forward?
+
+**DROPPED.** A round-R row includes a player only if the player was still
+alive at the end of round R; the n per round is printed on BOTH sides and is
+NOT flat. Evidence, per side:
+
+- HUMAN n per round (player-rounds): 1264 for rounds 1-17 (632 games x 2),
+  then 1162 / 542 / 92 / 4 for rounds 18 / 19 / 20 / 21.
+- BOT n per round: 512 (256 x 2) for rounds 1-18, then 484 / 140 for rounds
+  19 / 20.
+
+The drop-off is the game-length distribution, not carry-forward: no 2p game
+on either side ends before round 18 (human) / 19 (bot), and the n then
+decays smoothly as games end. If ended games had been carried forward at
+their final values, n would be flat at 1264/512 through the last round. It
+is not, so the late rows are short real samples, not padded ones. The r1-17
+human / r1-18 bot rows are at full n on both sides and are unaffected by
+early endings.
+
+## The side-by-side table
+
+End-of-round values. `Δ` = human minus bot (positive = the human has MORE).
+n = player-rounds per side, printed on both sides.
+
+| round | n (hum/bot) | total strength hum/bot (Δ) | units hum/bot (Δ) | mil workers hum/bot (Δ) |
+|---|---|---|---|---|
+| 1 | 1264/512 | 1.00/1.00 (+0.00) | 1.00/1.00 (+0.00) | 1.00/1.00 (+0.00) |
+| 2 | 1264/512 | 1.13/1.06 (+0.07) | 1.00/1.00 (+0.00) | 1.01/1.06 (−0.05) |
+| 3 | 1264/512 | 1.34/1.23 (+0.10) | 1.00/1.00 (+0.00) | 1.11/1.16 (−0.04) |
+| 4 | 1264/512 | 1.71/1.73 (−0.01) | 1.03/1.00 (+0.03) | 1.32/1.27 (+0.05) |
+| 5 | 1264/512 | 2.36/2.13 (+0.23) | 1.12/1.00 (+0.12) | 1.70/1.25 (+0.45) |
+| 6 | 1264/512 | 3.34/2.75 (+0.59) | 1.29/1.00 (+0.29) | 2.24/1.29 (+0.95) |
+| 7 | 1264/512 | 4.36/3.30 (+1.05) | 1.47/1.02 (+0.45) | 2.82/1.47 (+1.34) |
+| 8 | 1264/512 | 5.50/3.89 (+1.61) | 1.65/1.04 (+0.61) | 3.34/1.65 (+1.69) |
+| 9 | 1264/512 | 6.69/4.42 (+2.27) | 1.81/1.07 (+0.74) | 3.89/1.87 (+2.02) |
+| 10 | 1264/512 | 8.00/4.89 (+3.11) | 1.96/1.13 (+0.82) | 4.46/2.02 (+2.45) |
+| 11 | 1264/512 | 9.60/5.30 (+4.29) | 2.15/1.25 (+0.90) | 5.17/2.15 (+3.02) |
+| 12 | 1264/512 | 11.49/5.65 (+5.84) | 2.40/1.30 (+1.10) | 5.97/2.32 (+3.65) |
+| 13 | 1264/512 | 13.67/4.88 (+8.79) | 2.61/1.35 (+1.26) | 6.80/2.40 (+4.40) |
+| 14 | 1264/512 | 16.19/5.31 (+10.88) | 2.82/1.43 (+1.40) | 7.75/2.40 (+5.35) |
+| 15 | 1264/512 | 19.00/5.90 (+13.10) | 3.05/1.52 (+1.53) | 8.90/2.68 (+6.22) |
+| 16 | 1264/512 | 22.44/6.29 (+16.14) | 3.30/1.58 (+1.71) | 10.42/2.88 (+7.54) |
+| 17 | 1264/512 | 25.39/7.02 (+18.37) | 3.54/1.68 (+1.86) | 11.72/3.18 (+8.54) |
+| 18 | 1162/512 | 27.14/7.28 (+19.86) | 3.64/1.76 (+1.89) | 12.54/3.46 (+9.08) |
+| 19 | 542/484 | 29.06/7.56 (+21.50) | 3.73/1.84 (+1.89) | 13.49/3.54 (+9.95) |
+| 20 | 92/140 | 31.04/8.14 (+22.90) | 3.70/1.92 (+1.77) | 15.02/3.75 (+11.27) |
+| 21 | 4/0 | 67.00/0.00 (+67.00) | 4.75/0.00 (+4.75) | 29.75/0.00 (+29.75) |
+
+Round 21 has 4 human player-rounds (2 games) and 0 bot; it is included for
+completeness and should be ignored.
+
+## Spot check (recomputed from the printed columns)
+
+Three rows recomputed from the table's own printed values (Δ = human − bot):
+
+- r8: 5.50 − 3.89 = +1.61 (table: +1.61) ✓; units 1.65 − 1.04 = +0.61 ✓;
+  workers 3.34 − 1.65 = +1.69 ✓.
+- r13: 13.67 − 4.88 = +8.79 (table: +8.79) ✓; units 2.61 − 1.35 = +1.26 ✓;
+  workers 6.80 − 2.40 = +4.40 ✓.
+- r19: 29.06 − 7.56 = +21.50 (table: +21.50) ✓; units 3.73 − 1.84 = +1.89 ✓;
+  workers 13.49 − 3.54 = +9.95 ✓.
+
+The r13 bot dip (total 5.65 at r12 to 4.88 at r13, at full n 1264/512) is
+the only visually anomalous row. It was checked for row misalignment BEFORE
+any explanation: both sides read at the same round index (same convention,
+verified per-game below), the n is full on both sides, and the dip is real
+in the per-game data — individual bot games (e.g. seed 5, seat 0: 7 → 6 → 4
+→ 7 across rounds 11-14) dip and recover within one or two rounds. The
+mechanism is mid-game strength churn: tactics cards expiring and war losses
+hitting a strength pool that is still small (total ~5-6), so a −1 card or a
+−2 war loss moves the average visibly. The unit and worker columns rise
+monotonically through r13 (1.30 → 1.35 units, 2.32 → 2.40 workers), which is
+inconsistent with an alignment error (a shifted row would show a jump in ALL
+three columns) and consistent with the modifiers layer on a small base.
+
+## Where the curves separate
+
+Essentially identical through rounds 1-4 (gap within ±0.01). The gap first
+crosses +1.0 at **round 7** (+1.05) and grows monotonically from round 5
+without a single dip: +3.11 at r10, +5.84 at r12, +8.79 at r13, +16.14 at
+r16, peaking at +22.90 at round 20 (human 31.0 vs bot 8.1 total strength)
+before the r20 sample shrinks to 92/140 player-rounds. Unlike the population
+gap, which crossed +1.0 at r10 and sustained from r12, the military gap is
+established earlier and steeper: by r10 it is already +3.1.
+
+## What the gap is made of
+
+The units and workers columns split the gap cleanly:
+
+- **Units:** the bot lags by ~+0.3 at r6, ~+0.8 at r10, ~+1.1 at r12,
+  holding ~+1.8-1.9 from r15 on. The bot simply buys fewer military units.
+  Human ~3.7 units by the late game vs bot ~1.9.
+- **Workers on units:** the bigger component. The gap is +0.95 at r6,
+  +2.45 at r10, +3.65 at r12, +7.54 at r16, +11.27 at r20 — human staffs
+  ~15 military workers by r20 vs bot ~3.75. Even the units the bot does buy
+  it keeps understaffed (r20: ~1.9 units with 3.75 workers ≈ 2.0 workers per
+  unit; human: ~3.7 units with 15 workers ≈ 4.1 per unit).
+
+So the military deficit is the same behavior as the population report, on a
+different axis: the bot does not put workers on its military cards, and it
+buys fewer of them. The total-strength gap (+22.9 at r20) splits as
+base-strength (units x workers only) human ~15 vs bot ~4 (gap +11.3) plus
+modifiers (tactics, army-strength cards, military pacts, colonies,
+leaders) human ~16 vs bot ~4.4 (gap +11.7): the modifier stack contributes
+about HALF of the late-game gap. The human builds the full modifier stack
+on top of a much larger staffed base; the bot skips most of it, and what
+it does buy it keeps understaffed.
+
+Note the interaction with the population report: the bot's low staffing is
+consistent with its low population (the bot only has ~8-10 workers on the
+board vs the human's ~14-16). The military curve is the same food/
+population-dispricing defect projected onto unit staffing.
+
+## Caveats
+
+- 2p only, on both sides (corpus 3p/4p excluded; bot is 2p self-play).
+- Human side: 632 completed 2p games, 0 stopped. Bot: 256 self-play games at
+  frozen champion gen 121100; sample sizes differ (1264 vs 512
+  player-rounds at full n).
+- "Total strength" is the engine's full `state_stats().strength` (units x
+  workers + tactics + pacts + colonies + leaders), the quantity the bot
+  itself prices. It is NOT the sum of base unit values; that is what makes
+  the late-game gap (+22.9 at r20) about twice the base-strength gap
+  (+11.3 at r20).
+- Round convention matches the population report exactly (end of round R =
+  after round R's last move; human = first decision tagged R+1, bot =
+  snapshot at round advance). One documented edge: a human game's FINAL
+  round is read at its last recorded decision's pre-move state, one move
+  before the true end of that round; only a few games reach that, and it
+  affects only their final row.
+- Ended games are DROPPED, not carried forward; the non-flat n on both
+  sides (1264→1162→542→92→4 human; 512→484→140 bot) is the proof and is
+  printed in the table.
+- The r21 row (n=4/0) is two human games and has no bot counterpart; ignore
+  it.
+- Diagnosis only: no weight change, no bots/ edits, no new .rs. Temporary
+  instrumentation (env-gated `MILCURVE_DEBUG` hooks in
+  `rust/src/replay_common.rs` and `rust/src/bin/openerprobe.rs`, and a
+  `--military-curve` mode in `rust/src/bin/replaystats.rs`) was reverted
+  after the runs; `cargo clippy --all-targets -- -D warnings` passes clean
+  on the reverted tree, and `git status --short` is empty.
