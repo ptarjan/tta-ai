@@ -1,0 +1,103 @@
+QUESTION: Which mechanistic weight families, among the 28 keys found to make round-1
+2p Take-vs-EndTurn margin distribution smooth (TAILTIGHT) when reverted from POST
+(postclimb champion) to PRE (preclimb champion) values, are actually load-bearing
+vs passengers riding a pure "revert more keys" dose effect?
+
+TAILTIGHT = min(p25-p10, p90-p75) / (p90-p10), computed from round-1 Take-vs-EndTurn
+margin percentiles in "Item 7" of openerprobe output.
+
+References:
+  postclimb champ as-is:        0.017 (bad/bimodal)
+  preclimb champ as-is:         0.258 (smooth)
+  all-156-diff-keys reverted:   0.253 (smooth)
+  28-key subset (prior worker): 0.212
+  random 28-key controls:       0.024 / 0.057 / 0.135
+
+POST = /Users/pt/tta-ai/analysis/frozen/postclimb_2026-08-26/champ2p.json
+PRE  = /Users/pt/tta-ai/analysis/frozen/preclimb_2026-08-25/champ2p.json
+BIN  = /Users/pt/tta-ai/rust/target/debug/openerprobe --games 360 --players 2 --seed 0 --threads 2 --weights <variant>
+
+28 KEYS BY FAMILY:
+  CA: ca_left, civil_action_gap, civil_action_surplus, civil_actions
+  CARDMULT: card_board_credit, card_board_leader, card_rate_credit
+  COLONY: colonies, colonize_bonus
+  RIVAL: rival_science_stock, rival_strength, rival_take_share, rival_wonders, rival_yellow_bank
+  ROW: row_bargain_forgone, row_last_copy, row_urgency
+  SCIENCE: science, science_gap, science_rate, science_rate_trailing, science_surplus
+  SPECIAL: special_techs
+  STRENGTH: strength, strength_deficit, strength_lead, strength_rel, strength_rel_early
+
+PROGRESS LOG:
+
+[1] PIPELINE VALIDATION
+Full 28-key variant (/tmp/fam_full28.json), 360 games seed 0:
+  p10=-7.854 p25=-4.259 p75=2.278 p90=5.000
+  TAILTIGHT = min(p25-p10, p90-p75)/(p90-p10) = min(3.595,2.722)/12.854 = 0.2118
+MATCHES expected 0.212 (+/- 0.005). Pipeline confirmed correct. Proceeding.
+
+Note: computed C (keys differing PRE vs POST, present in both dicts) has 157
+members, not 156 as stated in the brief (off by one, negligible). Also POST has
+4 extra keys not in PRE (resource_stock_needed, food_stock_needed,
+free_workers_needed, science_needed) and PRE has 1 extra key not in POST
+(card_board_bonus) -- these are excluded from C since make_variant requires
+presence in both files.
+
+[2] LEAVE-ONE-FAMILY-OUT RUNS (8 variants, 24-27 keys each)
+Full-28 baseline TAILTIGHT = 0.2118
+
+Leave-one-family-out results (28 minus family), TAILTIGHT and cost of removal
+(cost = base 0.2118 - variant TT; positive cost = family is load-bearing):
+  CA        (24 keys) TT=0.2104  cost=+0.0013  (noise-level)
+  CARDMULT  (25 keys) TT=0.1451  cost=+0.0667  LOAD-BEARING
+  COLONY    (26 keys) TT=0.2119  cost=-0.0001  passenger
+  RIVAL     (23 keys) TT=0.2197  cost=-0.0079  passenger (slightly negative)
+  ROW       (25 keys) TT=0.0579  cost=+0.1539  LOAD-BEARING (dominant)
+  SCIENCE   (23 keys) TT=0.1185  cost=+0.0933  LOAD-BEARING
+  SPECIAL   (27 keys) TT=0.2118  cost=+0.0000  passenger (byte-identical percentiles
+                                                 to full28 -- special_techs revert
+                                                 has literally zero effect on round-1
+                                                 take-vs-endturn decisions)
+  STRENGTH  (23 keys) TT=0.1779  cost=+0.0338  LOAD-BEARING (weaker, above noise)
+
+Ranking by load-bearing-ness: ROW >> SCIENCE > CARDMULT > STRENGTH >> CA ~ COLONY ~
+SPECIAL ~ RIVAL (noise/passenger, RIVAL even mildly negative).
+
+Threshold: treat CA/COLONY/SPECIAL/RIVAL (cost in [-0.008, +0.0013]) as passengers,
+ROW/SCIENCE/CARDMULT/STRENGTH (cost >= +0.03) as load-bearing.
+
+Note: CARDMULT alone (isolated revert) scores 0.020 per the brief -- nothing by
+itself -- yet removing it from the 28-set costs 0.067. This is a genuine
+interaction/dose effect: CARDMULT keys only matter in combination with the other
+load-bearing families, not alone.
+
+[3] SHRUNK UNION = ROW + SCIENCE + CARDMULT + STRENGTH = 3+5+3+5 = 16 keys
+  row_bargain_forgone, row_last_copy, row_urgency,
+  science, science_gap, science_rate, science_rate_trailing, science_surplus,
+  card_board_credit, card_board_leader, card_rate_credit,
+  strength, strength_deficit, strength_lead, strength_rel, strength_rel_early
+
+[4] SHRUNK-16 vs RANDOM N=16 CONTROLS (from C, len(C)=157, python3 random.seed)
+  SHRUNK16 (ROW+SCIENCE+CARDMULT+STRENGTH, 16 keys): TT=0.2203
+  RAND11  (seed 11, random.sample(sorted(C),16)):    TT=0.0195
+  RAND12  (seed 12, random.sample(sorted(C),16)):    TT=0.0230
+
+SHRUNK16 beats both same-size random controls by >9x (0.2203 vs 0.0195/0.0230),
+and actually slightly EXCEEDS the full-28-key result (0.2118). The random N=16
+controls sit close to the postclimb baseline (0.017), confirming this is NOT a
+pure dose effect at N=16 -- 16 random keys buy almost nothing, while these 16
+specific keys buy the whole effect.
+
+[5] VERDICT
+The bimodal-vs-smooth round-1 Take-vs-EndTurn margin distribution is carried by
+a 16-key subset of the original 28: the ROW, SCIENCE, CARDMULT, and STRENGTH
+families. CA, COLONY, SPECIAL, and RIVAL are passengers -- their removal cost
+was at or below noise (COLONY -0.0001, SPECIAL exactly 0.0000/byte-identical,
+CA +0.0013, RIVAL -0.0079) and can be dropped without loss. This is a real,
+non-dose finding: the shrunk 16-key set matches (slightly exceeds) the full
+28-key TAILTIGHT while random 16-key sets from the same 157-key differ-pool
+land near the bad postclimb baseline.
+
+Ranking of load-bearing families by individual leave-one-out cost:
+  ROW (0.154) >> SCIENCE (0.093) > CARDMULT (0.067) > STRENGTH (0.034)
+ROW is the dominant single family: removing it alone crashes TAILTIGHT from
+0.212 to 0.058, worse than removing any other single family.
