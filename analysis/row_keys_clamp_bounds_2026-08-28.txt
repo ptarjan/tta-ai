@@ -1,0 +1,138 @@
+row_keys_clamp_bounds_2026-08-28.txt
+
+Question: self-play drove three "take it NOW" weight keys toward zero --
+  row_bargain_forgone   2.180842 -> 0.123251
+  row_last_copy        -0.244516 ->  0.005789
+  row_urgency          -0.582632 -> -0.163023
+Were the climb's search bounds tight enough to have SQUEEZED these toward
+zero, or did the climb choose zero on its own inside a permissive range?
+
+Source of the before/after numbers: these are the 2p champion pair --
+confirmed by exact match against
+  analysis/frozen/preclimb_2026-08-25/champ2p.json   (old)
+  analysis/frozen/postclimb_2026-08-26/champ2p.json  (new)
+e.g. line 117/119 of those files: row_urgency -0.5826316852411483 ->
+-0.16302278360594896. Also cross-checked against
+analysis/champ2p_collapse_diff_2026-08-28.txt lines 41 (row_bargain_forgone
+2.1808 -> 0.1233) and 107 (row_last_copy -0.2445 -> 0.0058).
+
+================================================================================
+1. PER-ARM CLAMP BOUND, 2p / 3p / 4p (the min/max the climb may propose)
+================================================================================
+
+Formula (rust/src/bots/weighted/weights.rs:2208-2214, `WeightKey::clamp_bound`):
+
+    clamp_bound(k, n) = min( CLAMP_T * P95_TOTAL_SPREAD[n] / spread_k(n),
+                              CLAMP_CEILING )
+    (falls back to CLAMP_BLIND = 60.0 only if spread_k(n) <= 0.0 -- not the
+    case for any of these three keys, all of which measure nonzero.)
+
+Constants (weights.rs:2493, 2499, 2523, 2532):
+    CLAMP_T       = 1.0
+    CLAMP_BLIND   = 60.0   (flat rail, used only when a key is unmeasured)
+    CLAMP_CEILING = 120.0  (cap on a MEASURED bound; was 60.0/CLAMP_BLIND
+                            itself until 2026-08-27 -- see note below)
+    P95_TOTAL_SPREAD[2p,3p,4p] = [823.689416, 483.787396, 545.274556]
+
+spread_k(n) -- WeightKey::p95_candidate_spread, weights.rs:2287-2289,
+MEASURED by bin/featspread, not authored:
+    RowUrgency         [150.624847, 138.595198, 321.148062]
+    RowBargainForgone  [  8.000000,   4.440252,   5.000000]
+    RowLastCopy        [  9.214286,   5.000000,   7.000000]
+
+Computed bounds (P95_TOTAL_SPREAD[n] / spread_k(n), capped at 120.0; none
+of the three hits the cap at any count, so every number below is the
+MEASURED bound, not a flat-rail fallback):
+
+    key                    2p bound     3p bound     4p bound
+    row_urgency              5.468        3.491        1.698
+    row_bargain_forgone    102.961      108.955      109.055
+    row_last_copy           89.377       96.757       77.896
+
+NOTE on CLAMP_CEILING timing: the doc comment at weights.rs:2506-2519 says
+CLAMP_CEILING used to be CLAMP_BLIND (60.0) itself, "one number doing both
+jobs," until 2026-08-27, when it was raised to 120.0 as a stated experiment.
+The collapse this report investigates ran preclimb_2026-08-25 ->
+postclimb_2026-08-26, i.e. BEFORE that raise -- so during the actual climb
+that drove these three keys down, the effective ceiling on a measured bound
+was still 60.0, not 120.0. This only matters for row_bargain_forgone and
+row_last_copy, whose measured ratios (103-109 and 78-97) exceed 60 and so
+were flat-capped at 60.0 during the actual run; row_urgency's ratios
+(1.7-5.5) are below 60 either way and were never affected by the raise.
+Either way (60 then, or 102-109/78-97 now), the point below is unaffected:
+all three final values sit far inside whichever cap applied.
+
+================================================================================
+2. AUTHORED DEFAULT (weights.rs:864-866)
+================================================================================
+    RowUrgency        => "row_urgency",        0.0;
+    RowBargainForgone => "row_bargain_forgone", 0.0;
+    RowLastCopy       => "row_last_copy",       0.0;
+Confirmed: all three default to 0.0. (Read directly, lines 864-866.)
+
+================================================================================
+3. SIGN GATE / GROUPING (weights.rs:1421 and weights.rs:1480+/1854)
+================================================================================
+Two DIFFERENT mechanisms sit near "line 1421" and must not be conflated:
+
+(a) weights.rs:1421-1423, inside `WeightKey::group()` (a WeightGroup
+    classification used only for reporting/bucketing -- WeightGroup::name()
+    at line 2640 gives it the label "row", and WeightKey::of_group() at
+    2657 filters WeightKey::ALL by it). This grouping does NOT constrain
+    values, bounds, or signs. It is a label, nothing more:
+        RowUrgency | RowBargainForgone | RivalTakeShare | RowLastCopy
+        | RivalDesire => { WeightGroup::Row }
+
+(b) The actual sign gate lives in a SEPARATE function, `sign_intent`
+    (weights.rs:1480, `pub const fn sign_intent(self) -> SignIntent`).
+    At weights.rs:1854, in that function:
+        RowUrgency | RowBargainForgone | RowLastCopy | RivalDesire
+        | RivalTakeShare => Free,
+    "Free" means NO sign is imposed -- the surrounding comment
+    (weights.rs:1846-1853) states explicitly: "Row-reading and rival-row
+    preference coordinates -- how much to weigh a rival wanting a card is
+    a strategic read, not a rules fact ... Still Free -- fixing the units
+    did not establish a sign any rule cites." Contrast with e.g. WarImmune
+    | AttackCostDoubled => NonNegative(...), which DOES gate a sign.
+
+So: no sign_intent gate applies to any of the three keys, and the
+line-1421 grouping is unrelated to bounds -- it is a reporting label only.
+
+================================================================================
+4. VERDICT PER KEY
+================================================================================
+
+row_bargain_forgone: bound ~103-109 (measured; flat-capped at 60 during the
+  actual climb, since CLAMP_CEILING was raised only after this collapse).
+  Old value 2.180842, new value 0.123251 -- both are COMFORTABLY INTERIOR,
+  using at most ~3.6% of even the tighter 60.0 rail. The bound was never
+  close to binding in either direction. VERDICT: not bound-caused. The
+  climb chose to collapse this key toward zero on its own, well inside a
+  range that would have permitted it to stay at 2.18 or grow further.
+
+row_last_copy: bound ~78-97 (measured; flat-capped at 60 during the actual
+  climb, same timing note as above). Old value -0.244516, new value
+  0.005789 -- both trivially interior (well under 1% of the bound).
+  VERDICT: not bound-caused. Same conclusion: the climb had enormous room
+  and chose near-zero anyway.
+
+row_urgency: this is the one key where the bound is genuinely TIGHT --
+  5.468 / 3.491 / 1.698 at 2p/3p/4p, one to two orders of magnitude
+  smaller than the other two keys' bounds. But even here, the observed
+  values are far interior: old -0.582632 uses ~10.7% of the 2p bound
+  (5.468), and new -0.163023 uses ~3.0% of it. To reach its OWN bound at
+  4p (the tightest of the three, 1.698) row_urgency would need to be
+  roughly 10x its pre-climb magnitude, not shrink. VERDICT: not
+  bound-caused either, though this key's headroom is much smaller than
+  the other two's -- worth watching if a future climb pushes it further,
+  since it is the one arm where the rail is within an order of magnitude
+  of plausible values, unlike the other two which have effectively no
+  rail at these magnitudes.
+
+BOTTOM LINE: for all three keys, the collapse toward zero was NOT forced
+by the search bounds. Every final (and every prior) value sits comfortably
+inside its permitted [-bound, +bound] interval -- by a factor of roughly
+30x to 400x of headroom depending on the key. The climb was fully ALLOWED
+to keep row_bargain_forgone, row_last_copy, and row_urgency large, and
+chose not to. Whatever is driving these three toward zero is a property of
+the self-play objective/gradient, not a clamp artifact.
