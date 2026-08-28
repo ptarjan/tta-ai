@@ -1,0 +1,231 @@
+POP vs ALTERNATIVES score decomposition (diagnosis only — no weight change proposed)
+2026-08-28, worker qwen3.8-27b, repo /Users/pt/tta-ai, rust crate `tta`
+=============================================================================
+
+TASK
+----
+At every own-turn decision point where Move::Pop (IncreasePopulation) was
+LEGAL but another move outranked it, decompose winner_score - pop_score into
+per-WeightKey w*delta terms. 2p, rounds 6-14, 200 games seeds 1..200, both
+seats, frozen champion gen 121100. Same method as the farm_vs_military
+decomposition (analysis/farm_vs_military_decomposition_2026-08-28.txt),
+different target: here the loser is always Pop, and the winner is whatever
+the bot actually chose instead.
+
+WHY THIS IS THE DIRECT MEASUREMENT OF THE 76.9% DECLINE
+-------------------------------------------------------
+The military-curve report just refuted the "over-militarised" hypothesis:
+the bot has LESS military than humans at every round (+22.9 human lead at
+r20). The bot is not big, it is small. Population is the binding constraint
+on everything (food, workers, the military curve, the whole economy), and the
+prior pop report measured the bot declining a LEGAL Pop 76.9% of the time.
+This decomposition is that decline, scored point by point: it answers "at
+each moment the bot had Pop on the table and didn't take it, WHAT did it take
+instead, and WHICH weight terms made the alternative score higher."
+
+METHODOLOGY
+-----------
+Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json
+    "gen" field = 121100
+
+Self-play mirror match, 2p, seeds 1..200, both seats, whole game (the probe
+plays each game to completion so the round-6..14 windows are the real
+mid-game). At each decision point that is the player's OWN turn (Move::EndTurn
+among the legal moves) in rounds 6..14, where a legal Pop exists and some
+OTHER move scores strictly higher, I:
+  * score every legal candidate with the bot's own machinery —
+    eval::candidate_features + eval::dot (the exact trial-and-evaluate loop
+    rank_moves uses: same root, same RivalContext, same determinize, same
+    EndTurnBias handling),
+  * take the argmax (the bot's real choice) and Pop,
+  * for every WeightKey report the per-move term
+        delta(k) = w[k] * (f_win[k] - f_pop[k])
+    so that  sum_k delta(k)  ==  winner_score - pop_score  (the HARD
+    REQUIREMENT).
+
+(a) SAMPLE COUNT
+----------------
+  3609 decision points across the 200 games (seeds 1..200, 2p, both seats,
+  rounds 6-14) where Pop was legal and lost to another move. Per round:
+    r6=792  r7=731  r8=600  r9=387  r10=308  r11=209  r12=210  r13=175  r14=197
+  (the count falls with round simply because fewer mid-game decision points
+  remain as games end; every sampled point is a genuine "Pop was on the
+  table" moment.)
+
+(b) RECONCILIATION — max |gap| vs the real score difference
+-----------------------------------------------------------
+  gap = per-term sum_k delta(k)  -  measured(winner - pop), at full f64.
+  Points checked: 3609.
+  Max |gap| over all 3609 points = 8.242e-13   (requirement < 1e-9)  PASS
+  No point exceeds 1e-9; the per-term split reproduces the bot's own
+  score difference exactly, so the term attribution below is exact, not
+  approximate.
+
+(c) MARGIN DISTRIBUTION (winner_score - pop_score; positive = Pop loses)
+-------------------------------------------------------------------------
+  min     =  0.0012
+  mean    = 23.2974
+  median  =  5.6185
+  p95     = 101.195
+  max     = 533.211
+  The margin is POSITIVE at 100% of the 3609 points (by construction Pop is
+  not the argmax), but the spread is wide: 18.8% of declines are decided by
+  less than 1.0, 48.0% by less than 5.0, 59.0% by less than 10.0, 69.9% by
+  less than 20.0. Nearly half the bot's legal-Pop declines are CLOSE calls
+  (margin < 5), which is what makes the "flip the median" question below
+  tractable with a single small weight change.
+
+(d) TOP 15 KEYS BY MEAN CONTRIBUTION (champion weight quoted for each)
+-----------------------------------------------------------------------
+  key                       mean contrib   nz%    champion weight
+  ------------------------- -------------- ----- ------------------
+  culture_rate              +15.2280        17.6%  +60.084165
+  workers_late              +8.2125         14.7%  +119.737755
+  free_workers              -3.9472         92.2%  +3.692443
+  strength                  +2.9864         20.7%  +10.639705
+  food_stock                +2.5935        100.0%  +0.854803
+  strength_rel_early        -2.2559         20.7%  -15.765467
+  resource_stock            -0.7232         37.1%  +0.697464
+  food_gap                  +0.6561         89.0%  -0.274458
+  leader                    +0.5292          3.8%  +14.044015
+  take_cost_share           +0.4651         29.0%  +3.158842
+  yellow_bank               -0.4580         92.2%  -0.496720
+  rival_culture_deficit     +0.3496          8.3%  -3.084629
+  row_last_copy             +0.3490         81.9%  -0.176284
+  worker_gap                -0.3194         12.2%  -2.556029
+  hand_mil_potential        +0.3095         12.0%  -0.105347
+
+  (sum of top-15 |mean| = 39.38; overall mean margin = 23.30 — the terms
+  cancel heavily, as in the farm/military case, so no single key dominates
+  the margin the way `strength` did there.)
+
+  Reading the top two (together +23.4, i.e. the entire mean margin):
+  * culture_rate (w = +60.08, huge POSITIVE): the winner move (a Take or
+    Develop of a science-producing card) raises the player's culture RATE;
+    Pop does not. +15.2 of mean margin. This is the single largest driver:
+    the champion prices RATE (culture_rate, workers_late) at 60-120, dwarfing
+    every other weight, so any move that grows a rate beats a one-off Pop.
+  * workers_late (w = +119.74, the largest weight in the vector): the
+    late-game worker-count blend. The winner's post-move worker posture is
+    valued at +8.2 of mean margin. Pop spends food to add a worker, but the
+    champion's enormous workers_late weight rewards the ALTERNATIVE's worker
+    structure, and the food Pop just spent shows up as a cost elsewhere.
+  * free_workers (w = +3.69, NEGATIVE contribution -3.95): Pop consumes a
+    free worker / changes the free-worker posture that the bot is currently
+    valuing, so the alternative's preserved free workers score higher.
+  * strength (w = +10.64) and strength_rel_early (w = -15.77) largely cancel
+    (+3.0 / -2.3) — the same partially-offsetting pair as the farm/military
+    report; here they are secondary, not dominant.
+
+(e) WHICH MOVE WINS, AND HOW OFTEN
+----------------------------------
+  of 3609 declined-Pop points, the winning move is:
+    Take           1042   (28.9%)
+    WonderStep      752   (20.8%)
+    PlayAction      514   (14.2%)
+    Build           502   (13.9%)
+    PlayTactic      273    (7.6%)
+    CopyTactic      231    (6.4%)
+    PlayLeader      149    (4.1%)
+    Develop         117    (3.2%)
+    Revolution       17    (0.5%)
+    Upgrade          10    (0.3%)
+    Destroy          1    (<0.1%)
+    Barbarossa       1    (<0.1%)
+
+  Take alone is 28.9% — the bot most often declines a legal Pop to TAKE A
+  CARD. WonderStep (20.8%) is the second: the bot keeps funding its wonder
+  over growing population. Take + WonderStep + PlayAction = 63.9% of all
+  declines are "spend the action on something else entirely." Only 13.9% of
+  declines are Pop-losing to a Build. So the 76.9% decline is NOT primarily
+  "the bot would build instead" — it is "the bot would rather Take a card or
+  push the wonder," i.e. the same card-taking / wonder-first habit the
+  population-curve report attributed to food-dispricing and low on-board
+  population.
+
+(f) WHICH SINGLE KEY, CHANGED BY HOW MUCH, FLIPS THE MEDIAN DECISION
+---------------------------------------------------------------------
+  At the overall MEDIAN point (seed=43, seat=1, round=9, winner=CopyTactic,
+  margin=+5.6185), the most efficient single-key change that brings the
+  margin to zero (so Pop ties and, on the next epsilon, wins) is:
+
+    key: row_last_copy
+    champion w = -0.176284   ->   new w = +1.6766   (dw = +1.8529)
+
+  (two near-equally efficient alternatives at the same point: food_gap
+  w -0.274 -> +1.598 (dw +1.873), and food_stock w +0.855 -> -1.018
+  (dw -1.873).)
+
+  Per-round, the median margin is small everywhere (r8 median 5.98, r9 2.69,
+  r10 3.03, r11 2.82) and the best single-key flip at each round's median
+  needs |dw| between 0.1 and 0.9 — i.e. a SMALL single-weight change flips
+  the median decision in most rounds. But it is a different key each round
+  (wonder_promise / hand_mil_potential / food_gap / blue_free / row_last_
+  copy), which is the signature that there is NO single dominant lever: the
+  decline is the sum of many small positive terms (the rate keys above all),
+  not one oversized weight.
+
+  THE ONE-LINE ANSWER: no single key dominates, but if one must be named,
+  it is the RATE group — culture_rate (w=+60.08) and workers_late
+  (w=+119.74) — whose combined +23.4 of mean contribution is the whole mean
+  margin. Reducing their joint size (or, equivalently, raising the value
+  the bot places on the worker Pop itself) is the lever; a single-key tweak
+  of ~+1.85 on row_last_copy (or ~-1.87 on food_stock) flips the median
+  decision, but that is a point-specific fix, not a structural one.
+
+=============================================================================
+THE DIAGNOSIS (why the bot declines a legal Pop 76.9% of the time)
+=============================================================================
+1. The decline is REAL and UNIVERSAL at the score level: 3609 legal-Pop
+   points, margin positive at 100% of them, reconciling to 8.2e-13. The bot
+   is not declining Pop for a rules reason — its own evaluator scores the
+   alternative higher every time.
+
+2. The dominant driver is RATE, not the military terms. culture_rate
+   (+15.2) and workers_late (+8.2) — both with the two largest weights in
+   the vector (60 and 120) — supply the entire mean margin. The champion
+   learned to over-price growing a RATE (culture production, late-game
+   worker count) relative to taking a one-off population token, so a Take
+   or Develop that adds rate beats a Pop that adds a worker-and-food-spend.
+
+3. The WINNER mix confirms the behavioural picture: 28.9% Take, 20.8%
+   WonderStep, 14.2% PlayAction. The bot declines Pop to take cards and fund
+   its wonder — the card-taking/wonder-first habit, exactly the mechanism
+   the population-curve and food-gates reports diagnosed (bot runs
+   near-food-starved, keeps population gated, defers to card-taking). The
+   military terms (strength / strength_rel_early) are present but cancel to
+   ~+0.7 of the mean margin — the bot is NOT over-militarising its way out
+   of Pop; it is rate-chasing and wonder-chasing.
+
+4. Half the declines are CLOSE (margin < 5 at 48%): the median decision
+   flips on a small single-weight change (~+1.85 on row_last_copy or
+   -1.87 on food_stock at the median point; 0.1-0.9 per round), which means
+   the 76.9% is not a hard-coded refusal — it is a shallow, many-
+   term preference that a modest re-weight of the RATE group (or of the
+   worker Pop's own value) would move substantially. But because the flip
+   key differs by round, the structural fix is the RATE weights
+   (culture_rate / workers_late), not any one small term.
+
+SCOPE / LIMITS
+--------------
+* 2p self-play, seeds 1..200, both seats, rounds 6-14. 3609 points.
+* The per-term split replicates the bot's own candidate scoring EXACTLY
+  (max residual 8.2e-13), so the attribution is exact.
+* "Pop" = Move::Pop (the food-paying IncreasePopulation). PopFree (a card
+  grants a free pop) is a distinct move and is NOT the decline measured
+  here — a PopFree is never "declined" in the same sense.
+* This is a diagnosis. No weight was changed and none is proposed. The
+  levers the data points at are the RATE group (culture_rate +60.08,
+  workers_late +119.74) and the worker-Pop value — a tuning decision for
+  the coordinator, out of scope here.
+
+REPRODUCIBILITY
+---------------
+Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json (gen
+121100). The probe is a temporary `--pop-decomp` mode in
+rust/src/bin/openerprobe.rs (fn pop_decomp_one / run_pop_decomp), using
+eval::candidate_features + eval::dot — the bot's own scoring — and has been
+REVERTED; the working tree is clean and no .rs is modified. Re-running the
+same 200 seeds through that mode reproduces every number above, including
+the 8.2e-13 reconciliation at all 3609 points (the run is deterministic:
+two independent runs gave identical n, max_gap, margins, and per-key means).
