@@ -389,6 +389,31 @@ RESULTS
     and (ii) what fraction of the bucket has |m2| < 5. A high (i) means
     commutation, and closes the second-step feature line.
 
+(g) [50,INF) DISCRIMINATOR (re-run, census passes: n=3361, rev=1545):
+    In the [50,inf) m1 bucket only, of the 467 non-tie points (427 of
+    which reverse, m2 < 0):
+      (i)  of the 427 reversals, 400 have Pop's best depth-2 follow-up
+           EQUAL to the move that won at depth 1: 400/427 = 93.7%.
+      (ii) |m2| < 5  in 257 of 467 (55.0%); |m2| < 1 in 93 of 467
+           (19.9%).
+    READING: (i) is decisively HIGH. In the bucket where depth 1 is
+    most confident, Pop's best follow-up IS the depth-1 winner 93.7%
+    of the time the point reverses. That is the commutation mechanism,
+    not a valuation error: the two branches {Pop; winner} and
+    {winner; Pop} reach nearly the same state, so m2 collapses to an
+    ordering residual whatever m1 was, and it lands slightly negative
+    because Pop-first keeps a free worker where winner-then-Pop does
+    not (the Build-consumes-a-worker effect). (ii) confirms the
+    magnitude: 55% of the bucket is within 5 of a dead tie and 20%
+    within 1, so the "reversal" is a ~2-point ordering artifact, not a
+    large swing.
+    BRANCH: the myopia branch does NOT hold in [50,inf). The high-m1
+    reversals are commutation / ordering residuals, not the bot being
+    confidently wrong at depth 1. No static leaf feature can carry a
+    residual that exists because two different orderings of the same
+    two moves land on nearly the same state. The second-step feature
+    line is closed.
+
 DIAGNOSIS
 ---------
 BRANCH: MYOPIA, established by the corrected (f). The reversal rate
@@ -410,8 +435,10 @@ depth-1 margin and land a median of 2.45 past a tie -- a large rate
 attached to a ~2-point effect, which is what you get when Pop and the
 winning move both fit in one turn and only their ORDER is left to
 decide. Nothing here is a valuation error a leaf feature could carry.
-Branch is OPEN. Do not build a second-step feature off it until the
-follow-up-identity check in (f) comes back.
+Branch is OPEN pending the follow-up-identity check.
+
+^^^ RESOLVED by (g): the check came back 400/427 = 93.7%, decisively
+high. Commutation. See the VERDICT at the end of this file.
 
 The mechanism is the same as depth 1: workers_late (w=119.74) and
 culture_rate (w=60.08) carry 73.6% of the depth-1-to-depth-2 swing.
@@ -456,7 +483,42 @@ Build: cargo build --profile difftest --bin openerprobe
 Command:
   ./target/difftest/openerprobe \
     --weights /Users/pt/tta-ai/experiments/rust_champion_2p_frozen_2026-08-28.json \
-    --games 200 --seed 1 --threads 6 --pop2ply
-Output: 44 POP2 lines on stderr, ~18s on 6 cores.
+    --games 200 --players 2 --seed 1 --threads 6 --pop2ply
+Output: 7 POP2 lines on stdout, elapsed on stderr, ~28s on 4 cores.
 Instrumentation: src/bin/openerprobe.rs (reverted with git checkout --
 after this run).
+
+VERDICT (2026-08-28, after (g))
+-------------------------------
+CLOSED ON COMMUTATION. The decision rule this file committed to BEFORE
+(g) was run -- "a high (i) means commutation, and closes the
+second-step feature line" -- came back at 400 of 427, 93.7%. The rule
+stands as written and the line is CLOSED. Do not build WorkerPotential
+or any other second-step feature off this file.
+
+(g)'s counts are internally consistent and were checked before its
+prose was read: 400 <= 427 reversals, 257 <= 467 points, and the
+|m2| < 1 count of 93 is a subset of the |m2| < 5 count of 257. All
+three percentages reproduce from their own two numbers.
+
+THE DIAGNOSIS BLOCK ABOVE IS SUPERSEDED and is kept only for the
+record. Its [20,50)/[50,inf) myopia claim is refuted by (g) outright.
+Its LOW-m1 myopia claim was never measured at all: those buckets carry
+a median m2 of +30 to +40, so the 23-44% that reverse are a minority
+tail against a bulk saying the winner still wins, and by construction
+they overturn a depth-1 margin under 20. That is the signature of
+boundary noise -- the alternative hypothesis -- not evidence against
+it. Section (h) runs the identity check across all five buckets to
+settle it either way. Until it lands, NO bucket has an established
+myopia reading.
+
+WHAT SURVIVES. The 46.0% reversal rate is real as a COUNT and worth
+about 2 points as an EFFECT. The bot is not confidently wrong about
+Pop. It is picking an ORDER between two moves that both fit inside one
+turn, and Pop-first comes out fractionally ahead because Move::Build
+consumes a free worker (apply.rs:881), so Pop-then-Build is legal at
+states where Build-then-Pop is not. That is a move-ordering property
+of the search, not a valuation error, and no static leaf feature can
+express it. The open worker questions -- free_workers priced as
+inventory, and the bot running at zero worker slack against a human
+43-73% idle rate -- are untouched by this file in either direction.
