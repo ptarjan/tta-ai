@@ -1,0 +1,94 @@
+CLAMP-WALL SWEEP — ALL THREE LIVE CHAMPIONS (2026-08-28)
+
+Purpose: the definitive wall table, so no future claim about a weight's
+MAGNITUDE is made without first checking whether that weight is merely
+parked on a clamp wall. A value EXACTLY at 120.0000 / -120.0000 / 60.0000 /
+-60.0000 is on a wall (no gradient past it; the magnitude is the rail, not a
+fitted number).
+
+0. DATABILITY
+-------------
+Live files (read 2026-08-28):
+  experiments/rust_champion_2p.json  gen 120601
+  experiments/rust_champion_3p.json  gen 67299
+  experiments/rust_champion_4p.json  gen 21875
+
+Wall constants, read from source:
+  CLAMP_BLIND    = 60.0   (weights.rs:2476) — flat rail, fallback for
+                           coordinates the spread instrument cannot see.
+  CLAMP_CEILING  = 120.0  (weights.rs:2523) — cap on a MEASURED bound;
+                           "an EXPERIMENT, not a fitted value", introduced
+                           2026-08-27 (commit f942741 per the comment block
+                           at 2478-2522).
+
+So the two walls are exactly ±60.0000 (blind rail) and ±120.0000 (measured
+cap). Each arm carries 174 keys; the three weight sets are the same 174
+names (no missing keys in any arm).
+
+1. EXACTLY ON A WALL
+--------------------
+2p (gen 120601):  NONE. No key at ±60.0000 or ±120.0000.
+3p (gen 67299):   2 keys
+  attack_cost_doubled = +120.0000   (on CLAMP_CEILING)
+  colonies            = +120.0000   (on CLAMP_CEILING)
+4p (gen 21875):    1 key
+  best_theater        = +60.0000    (on CLAMP_BLIND)
+
+Interpretation by wall type:
+  - attack_cost_doubled / colonies at +120.0000 (3p): these are MEASURED
+    coordinates whose derived bound permitted (or exceeded) the 120 cap, and
+    the fitter pushed them all the way to the ceiling. Their magnitude is
+    NOT fitted; only "pressed at the cap" is. Any 3p claim about how large
+    these two weights are is a claim about the rail.
+  - best_theater at +60.0000 (4p): either a blind coordinate (instrument
+    cannot see it -> falls back to CLAMP_BLIND) or a measured one whose
+    bound is exactly the fallback. Either way: magnitude is the rail.
+  - 2p having zero walled keys is consistent with it being the most
+    converged arm (gen 120601): its fitter found interior optima.
+
+2. WITHIN 0.5 OF A WALL, NOT EXACTLY
+------------------------------------
+2p: NONE.
+3p: NONE.
+4p: NONE.
+
+There are no ambiguous near-wall values. The wall picture is clean: exactly
+three (key, arm) cells are walled, all positive, all on the upper walls.
+
+3. COMBINED TABLE (walled-on-any-arm first; all others are free)
+----------------------------------------------------------------
+key                   2p        3p          4p         flags
+attack_cost_doubled   +0.0598   +120.0000   +0.2206    3p@CEILING
+colonies              -15.750   +120.0000   -8.656     3p@CEILING
+best_theater          +0.728    +57.092     +60.0000   4p@BLIND
+---------------------------------------------------------------
+(all 171 remaining keys: no arm within 0.5 of ±60 or ±120; magnitudes are
+fitted interior values and may be cited freely)
+
+Cross-arm context for the three walled keys:
+  attack_cost_doubled: 2p +0.0598, 4p +0.2206 — both small and interior;
+  only 3p is walled.
+  colonies: 2p -15.7499, 4p -8.6558 — both NEGATIVE and interior; only 3p
+  is walled (positive). So the 3p +120 magnitude is a wall, but the SIGN
+  disagreement between 3p and the other arms is real data, not a wall
+  artifact: at 2p/4p the fitter priced colonies negatively, at 3p it ran
+  into the +120 cap.
+  best_theater: 3p +57.0923 — 2.9 below the blind rail, i.e. the fitter
+  stopped just short of the wall. Worth watching: if the next 3p read shows
+  +60.0000, 3p gains a fourth walled cell.
+
+Context (outside the 0.5 spec, flagged because it is inside 2.0 of a wall):
+  unit_workers, 4p = -61.3834. This is PAST the 60 blind rail (|v| > 60)
+  but inside the 120 ceiling — i.e. a MEASURED coordinate whose derived
+  bound is between 60 and 120, and the value is interior (not walled). It
+  is NOT on a wall; its magnitude is fitted. Listed here only so the 4p
+  -61.38 is never later misread as "on the 60 rail".
+
+4. NOTES
+--------
+  - Exact match used: float equality against 120.0 / -120.0 / 60.0 / -60.0
+    (JSON stores these as exact 120 / 60). "Within 0.5" = |v| within 0.5 of
+    60 or 120, excluding the exact values.
+  - No negative-wall cells in any arm.
+  - The three walled cells are all 3p-or-4p; the most-converged arm (2p)
+    is entirely off the rails.
