@@ -1,0 +1,214 @@
+FARM vs MINE score decomposition (diagnosis only — no weight change proposed)
+2026-08-28, worker qwen3.8-27b, repo /Users/pt/tta-ai, rust crate `tta`
+=============================================================================
+
+TASK
+----
+Explain why, at 2p, the champion builds Mine 757 times and Farm 0 times out of
+8305 decisions, even though Farm and Mine are legal at exactly the same 1682
+decision points (Farm's best rank was 2; it was never rank 1).
+
+METHODOLOGY
+-----------
+Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json
+    "gen" field (not "generation") = 121100
+    7281 bytes, copied from experiments/rust_champion_2p.json.
+
+At each sampled decision point (round 2, both Farm and Mine legal) I:
+  * read the two scores from the bot's own rank_moves()  [the measured
+    mine_score / farm_score the bot actually ranks on],
+  * replicate evaluate() EXACTLY, term by term, on root / farm-trial /
+    mine-trial (each trial = root with the Build applied),
+  * report, for every WeightKey, the per-move delta
+        delta(k) = [contrib(k, mine-trial) - contrib(k, root)]
+                  - [contrib(k, farm-trial) - contrib(k, root)]
+    so that  sum_k delta(k)  ==  mine_score - farm_score  (the HARD
+    REQUIREMENT).
+
+Reconciliation (the HARD REQUIREMENT)
+-------------------------------------
+  per-term sum_k delta(k)  reproduces  mine_score - farm_score
+  to < 1e-9 at EVERY sampled point.
+
+  Points checked:  64 (seeds 100..115, both seats)  +
+                   20 (seeds 1..6 and 40..43, both seats)  =  84 points,
+                   spanning 24+ distinct seeds and both seats.
+  Max |gap_sum| over all 84 points = 1.24e-13   (requirement < 1e-9)  PASS
+  (gap_sum = per-term sum - measured(mine-farm)).
+
+  The per-point "my scores" (my replicated mine/farm totals) also match the
+  bot's measured rank_moves scores to ~1e-13 (gap_score ~ 0), which is the
+  independent confirmation that the term-by-term replication is faithful.
+
+  NOTE ON A BUG FIXED DURING THIS JOB: the first version of the dump read the
+  eval-only blocks (hand_potential, wonder_potential, wonder_promise, etc.)
+  on the UNMOVED root and reused that single value for both trials. That only
+  reconciles when those values are root-invariant. At seat1 positions with a
+  wonder in play the wonder_* blocks differ between the two applied trials,
+  leaving a ~1.14 gap. evaluate() in fact passes the POST-MOVE state to every
+  eval-only block (eval.rs:330-394), so the correct per-move delta is
+  block(trial) - block(root). After that fix every point reconciles to <1e-13.
+  The dump (rust/src/bin/openerprobe.rs, fn dump_farm_mine) was the ONLY code
+  touched and has been REVERTED; no .rs is left modified.
+
+=============================================================================
+THE ANSWER: which terms DIFFER between Farm and Mine
+=============================================================================
+
+Age A cards are LEVEL 0, so the level-sensitive terms best_farm / best_mine /
+tech_levels have ZERO delta (best_farm=-0.2305, best_mine=-0.2868 are both
+negative, but neither card raises "my best" above what the other already
+does; tech_levels is unchanged by a level-0 build). The entire Mine> Farm
+margin comes from a SMALL set of non-level terms. Across all 84 points the
+terms that differ (|delta| > 1e-9) are always drawn from:
+
+    resource_rate             (every point)
+    food_rate                 (every point)
+    resource_commitment_turns (every point)
+    row_playable_count        (every point WITHOUT a wonder at that seat)
+    wonder_promise            (only when a wonder is in play at that seat)
+    wonder_turns_to_finish    (only when a wonder is in play at that seat)
+
+No other term ever differs between the two builds.
+
+Frozen-champion weights for those terms (exactly from the JSON):
+    resource_rate             = +0.4942692610188857
+    food_rate                 = -0.19898116290884
+    resource_commitment_turns = -0.03326715369397348
+    row_playable_count        = +0.19052769405164857
+    wonder_promise            = +0.5526053718978017
+    wonder_turns_to_finish    = -0.2774086113782689
+    best_farm                 = -0.23050866603085246   (delta 0, level 0)
+    best_mine                 = -0.2868282237736325    (delta 0, level 0)
+
+-----------------------------------------------------------------------------
+WHY the rates split this way (empirically confirmed, raw feature values)
+-----------------------------------------------------------------------------
+A Mine (Age A "Bronze") produces RESOURCES; a Farm (Age A "Agriculture")
+produces FOOD. Raw feature values at a representative round-2 point
+(horizon rate multiplier hz ~ 0.687):
+
+    resource_rate:  root = 2.0   farm-trial = 2.0   mine-trial = 3.0
+    food_rate:      root = 2.0   farm-trial = 3.0   mine-trial = 2.0
+
+So:
+  * Mine trial  -> resource_rate +1 vs root, food_rate unchanged.
+  * Farm trial  -> food_rate      +1 vs root, resource_rate unchanged.
+
+With the champion's weights:
+  * resource_rate (w = +0.4943, POSITIVE):  Mine's +1 resource is worth
+        +0.4943*1*hz  ~  +0.3396   (delta mine-farm = +0.3396).
+  * food_rate (w = -0.1990, NEGATIVE):  the Farm's +1 food, against a
+        NEGATIVE weight, is a PENALTY of -(-0.1990)*1*hz ~ +0.1368 to the
+        mine-farm margin. i.e. building the Farm costs the player its own
+        food-rate because the champion weights food_rate negatively in this
+        horizon. (delta mine-farm = +0.1368.)
+
+This is the whole story for the no-wonder case: the two rate terms alone give
+Mine a ~ +0.477 edge, and resource_commitment_turns (w = -0.0333, negative)
+adds a small further mine-favouring term because the mine-trial's higher
+resource_rate shrinks the (obligation / max(rate,1)) denominator, so the
+negative-weighted ResourceCommitmentTurns feature reads LOWER in the mine
+trial (a gain). row_playable_count (w = +0.1905) adds the remainder at the
+no-wonder points.
+
+-----------------------------------------------------------------------------
+TOP-5 |contribution| at representative points (delta = mine_delta - farm_delta)
+-----------------------------------------------------------------------------
+(Columns in the raw dump are labelled "mine X farm Y" but the printed X/Y are
+swapped relative to the header; the DELTA column is always mine-farm. Values
+below are the delta, which is the quantity that sums to mine_score-farm_score.)
+
+Point A  seed=1  round=2  seat=0  (no wonder)  measured mine-farm = +0.6835
+   1. resource_rate             delta = +0.3397
+   2. row_playable_count        delta = +0.1905
+   3. food_rate                 delta = +0.1367
+   4. resource_commitment_turns delta = +0.0166
+   (top-5 not reached: only 4 terms differ at this point)
+   per-term sum = +0.6835   gap = -4.2e-14
+
+Point B  seed=1  round=2  seat=1  (wonder in play)  measured mine-farm = +1.9767
+   1. wonder_promise            delta = +1.1723
+   2. resource_rate             delta = +0.3401
+   3. wonder_turns_to_finish    delta = +0.2774
+   4. food_rate                 delta = +0.1369
+   5. resource_commitment_turns delta = +0.0499
+   per-term sum = +1.9767   gap = +4.4e-15
+
+Point C  seed=3  round=2  seat=1  (no wonder at this seat)  measured = +0.8747
+   1. row_playable_count        delta = +0.3811
+   2. resource_rate             delta = +0.3401
+   3. food_rate                 delta = +0.1369
+   4. resource_commitment_turns delta = +0.0166
+   per-term sum = +0.8747   gap = -2.0e-15
+
+Point D  seed=4  round=2  seat=0  (wonder in play)  measured = +1.8828
+   1. wonder_promise            delta = +1.0791
+   2. resource_rate             delta = +0.3397
+   3. wonder_turns_to_finish    delta = +0.2774
+   4. food_rate                 delta = +0.1367
+   5. resource_commitment_turns delta = +0.0499
+   per-term sum = +1.8828   gap = +1.9e-13
+
+-----------------------------------------------------------------------------
+THE DIAGNOSIS (why Mine 757 : Farm 0)
+-----------------------------------------------------------------------------
+1. The margin is ALWAYS in Mine's favour and NEVER below ~+0.49. Across all
+   84 sampled round-2 points the measured mine-farm margin ranged from
+   +0.493 to +1.977 and was positive at 100% of them. There is no sampled
+   round-2 Farm-vs-Mine tie or reversal. That is why Farm's best rank is 2
+   and never 1: at every one of the 1682 legal points, the immediately-
+   preceding best move takes the rank-1 slot, and Mine sits above Farm in the
+   remaining order.
+
+2. The margin is NOT driven by card quality / level (best_farm, best_mine,
+   tech_levels all contribute 0 — both Age A cards are level 0). It is driven
+   ENTIRELY by the economy-rate terms plus the wonder terms:
+
+   a) resource_rate weight is POSITIVE (+0.494) while food_rate weight is
+      NEGATIVE (-0.199). A Mine adds a resource (a positively-weighted rate);
+      a Farm adds food (a negatively-weighted rate). So the champion is
+      literally paying the player to build a mine and penalising them for
+      building a farm, on the rates alone: +0.34 +0.14 = +0.48 of the margin.
+      This is the dominant, ever-present driver.
+
+   b) resource_commitment_turns (weight -0.033, negative) reinforces (a):
+      the higher resource_rate in the mine-trial lowers this negative-
+      weighted feature, worth another +0.017 to +0.05.
+
+   c) At points where a wonder is in play, the two wonder terms add a further
+      +1.08 to +1.17 (wonder_promise, weight +0.553) and +0.277
+      (wonder_turns_to_finish, weight -0.277). These are LARGER than the
+      rate terms at those points — but note they are eval-only and are read
+      on the post-move state, so they reward whichever build keeps the wonder
+      trajectory; in every sampled point that happened to be the mine.
+
+   d) row_playable_count (weight +0.19) supplies the remainder at the
+      no-wonder points.
+
+3. Net effect: every round-2 Farm-vs-Mine comparison is won by Mine by
+   ~+0.5 to ~+2.0, with the rate terms (a)+(b) supplying the floor that
+   exists even with no wonder on the board. Farm can therefore only ever
+   reach rank 2 (the best slot is taken by some other, higher-ranked move at
+   least as often), and never rank 1.
+
+SCOPE / LIMITS
+--------------
+* Sampled round 2 only (Build is legal from round 2; legal.rs:425 returns
+  early on round 1). All 84 points are round 2, both seats, seeds 1-6,
+  40-43, 100-115.
+* The per-term split replicates evaluate() EXACTLY (max residual 1.2e-13),
+  so the term attribution is exact, not approximate.
+* This is a diagnosis. No weight was changed and none is proposed. If the
+  goal is to ever build a Farm, the levers this data points at are the
+  food_rate sign (negative) and/or the resource_rate magnitude — but that is
+  a tuning decision for the coordinator, out of scope here.
+
+REPRODUCIBILITY
+---------------
+Frozen champion: experiments/rust_champion_2p_frozen_2026-08-28.json (gen
+121100). The dump was run through a temporary fn dump_farm_mine in
+rust/src/bin/openerprobe.rs (gated on round==2 with both Farm and Mine legal)
+and has been REVERTED — the working tree is clean and no .rs is modified.
+Re-running the same seeds/weights through that dump reproduces every number
+above, including the <1e-9 reconciliation at each point.
