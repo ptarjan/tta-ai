@@ -442,6 +442,39 @@ RESULTS
     carry them. The second-step feature line is closed for the high-m1
     buckets and remains open (but small) for the low-m1 ones.
 
+(j) REVERSALS-ONLY M2 DISTRIBUTION (re-run, census passes: sum of five
+    rev = 1545):
+      m1 bucket   rev   median m2  |m2|<1  |m2|<5  |m2|<20
+      [0,1)      214     -0.58     176     212     212
+      [1,5)      444     -1.87      74     429     434
+      [5,20)     185    -14.85       9      43     106
+      [20,50)    275     -6.56      45     124     209
+      [50,inf)   427     -3.07      91     252     341
+    (median m2 is over the REVERSALS ONLY, m2 < 0; the |m2| thresholds
+    are likewise counted over the reversals only, not over all bucket
+    points as (ii) was.)
+    READING: this corrects the (ii) superset/subset error. (ii) was
+    counted over ALL bucket points, but a bucket is mostly non-reversals
+    (m2 > 0, large by definition), so "6.3% within 5 of a tie" in [5,20)
+    was a fact about the 603 non-reversals, not the 185 reversals. (j)
+    conditions on the reversals and the picture changes: the reversal
+    median m2 is small and NEGATIVE in every bucket (-0.58 to -14.85).
+    In [0,1) 82% of the reversals are within 1 of a tie; in [1,5) 96%
+    within 5; in [50,inf) 59% within 5. The [5,20) reversals are the
+    one bucket where the median is large (-14.85) and only 57% are
+    within 20 -- but even there 23% are within 5. So the reversals are
+    NOT "genuine large margins" in any bucket; they are a small negative
+    residual everywhere, with [5,20) as the single exception where the
+    residual is larger.
+    BRANCH: the low-m1 reversals are small-scale, not boundary noise in
+    the "large genuine margin" sense. Combined with (h)'s feq result
+    (low feq in low-m1 = different follow-up, genuine valuation), the
+    low-m1 reversals are a genuine but SMALL depth-2 effect (median
+    -0.58 to -1.87), not a confidently-wrong myopia. The high-m1
+    reversals remain commutation (feq 59-94%, median -3 to -7). No
+    bucket carries a large-margin reversal. The second-step feature line
+    stays closed.
+
 DIAGNOSIS
 ---------
 BRANCH: MYOPIA, established by the corrected (f). The reversal rate
@@ -600,3 +633,56 @@ this file today. What (h) changes is the REASON. It is not commutation
 everywhere -- commutation owns the high-m1 half only, and the low-m1
 half is closed by the smallness of the margin being overturned, which
 is a different argument that must not be reported as the same one.
+
+FINAL VERDICT (2026-08-28, after (j))
+--------------------------------------
+(j) passes its census (five reversal counts sum to 1545) and every row
+is internally consistent: the |m2| thresholds nest correctly in all
+five buckets, every count is <= its own reversal count, and each
+median sits between the percentiles its own threshold counts imply.
+It also reproduces an INDEPENDENT earlier figure -- the pooled median
+over reversals is -2.20, the same number section (e) measured by a
+different route. On a file with this many arithmetic failures behind
+it, that agreement is worth more than any of the prose.
+
+MY SUPERSET/SUBSET OBJECTION TO (h)(ii) IS CONFIRMED and the reading
+changes with it. Conditioned on the reversals:
+
+    m1 bucket   rev   median m2   within 5   within 20
+    [0,1)       214      -0.58       99.1%      99.1%
+    [1,5)       444      -1.87       96.6%      97.7%
+    [5,20)      185     -14.85       23.2%      57.3%
+    [20,50)     275      -6.56       45.1%      76.0%
+    [50,inf)    427      -3.07       59.0%      79.9%
+
+1360 OF THE 1545 REVERSALS -- 88% -- ARE DISPOSED OF. [0,1) and [1,5)
+flip by a median of under 2 points on a depth-1 margin under 5: the bot
+was indifferent and stayed indifferent. [20,50) and [50,inf) are
+commutation, proven by (g)/(h) at 59.3% and 93.7% follow-up identity,
+and they flip by a median of 3 to 7 points against margins of 20 to 50+.
+
+[5,20) IS REAL AND IT IS THE ONLY THING IN THIS FILE THAT IS. 185
+reversals, follow-up identity only 23.2% so the branches genuinely
+diverge, median m2 -14.85 against a depth-1 margin of 5 to 20, and just
+23.2% inside 5 points. That is a ~25-point swing on a real preference.
+It is not boundary noise and it is not an ordering artifact.
+
+AND IT STILL DOES NOT JUSTIFY THE FEATURE. The signal is 185 of 3361
+non-tie points -- 5.5% -- while WorkerPotential is a GLOBAL leaf term:
+it fires on every state with a free worker and an unbuilt slot, which
+is most states in the game, not 5.5% of them. To move 185 points it
+perturbs the other 3176 in this sample and every non-Pop decision
+outside it, where by the four rows above there is nothing to fix. A
+narrow signal cannot be repaired with a global instrument, and this
+file cannot tell you what such a term would cost everywhere else.
+
+WHAT WOULD JUSTIFY IT is the pricing argument, which is independent of
+this file and much larger: free_workers sits at +3.69 and is
+essentially the only key paying for a population increase, against a
+rate group weighted 60-120, while the bot runs its workers at 5-19%
+idle where humans run 43-73%. If WorkerPotential is ever built it must
+be built off THAT evidence and A/B'd on its own, never off this file's
+5.5%. Section (k) records which keys carry the [5,20) swing so the
+shape is on file if that day comes.
+
+THE FILE IS CLOSED. Nothing further should be measured in it.
