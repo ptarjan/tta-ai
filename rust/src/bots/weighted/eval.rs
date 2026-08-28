@@ -791,50 +791,6 @@ pub fn dot(w: &Weights, f: &[f64]) -> f64 {
 /// direct port here.
 pub const NET_NONNEG_PHASE: &[WeightKey] = &[];
 
-/// The per-type "board credit" keys `cards::card_potential`'s generic
-/// swap-pricing path can ADD to [`WeightKey::CardBoardCredit`] before scaling
-/// a computed board-swap diff (`cards.rs`'s `credit_board = base +
-/// board_credit_key(id).map_or(0.0, |k| w.get(k))`) -- today just
-/// `CardBoardLeader`, the sole remaining [`cards::board_credit_key`] match
-/// arm that returns `Some`. `CardBoardGovernment`/`CardBoardAction`/
-/// `CardBoardWonder` used to be three more such arms, RETIRED 2026-08-13
-/// (SIGNAUDIT.txt) for being permanently shadowed by a dedicated
-/// board-aware pricing function that intercepts first; `CardBoardBonus`
-/// was a fifth, RETIRED 2026-08-24 for a stronger reason -- not shadowed,
-/// structurally unreachable for every weight vector (see `weights::
-/// RETIRED_KEYS`'s own entry for the full account of each). Because this
-/// list is DERIVED from `board_credit_key` rather than hand-copied (next
-/// paragraph), none of the four retirements needed an edit here at all: the
-/// function simply stopped returning `Some` for those `CardType`s and this
-/// list shrank from five entries to one automatically.
-///
-/// Deliberately NOT hand-copied: this calls [`cards::board_credit_key`] over
-/// every real card in [`crate::card_table::CARDS`] and collects the distinct
-/// `Some` results, so a card type that function starts answering later is
-/// picked up automatically by [`dominance_repair`]'s gate below instead of
-/// landing outside it the way a hand-retyped list could silently drift --
-/// exactly the failure shape `board_credit_key`'s own doc comment names for
-/// itself (a card category present in the data but silently absent from a
-/// hand-rolled registry), one level up.
-///
-/// Cached behind a `OnceLock`: [`dominance_repair`] runs on every hillclimb
-/// mutation (`bin/climb.rs`'s `mutate` wrapper), not only at load, so this
-/// must not re-walk a few hundred cards on every single call.
-pub fn card_board_credit_keys() -> &'static [WeightKey] {
-    static KEYS: std::sync::OnceLock<Vec<WeightKey>> = std::sync::OnceLock::new();
-    KEYS.get_or_init(|| {
-        let mut keys: Vec<WeightKey> = crate::card_table::CARDS
-            .iter()
-            .filter_map(|c| {
-                cards::board_credit_key(crate::cards::CardId::by_name(c.name).expect("every card_table entry resolves by its own name"))
-            })
-            .collect();
-        keys.sort_by_key(|k| k.name());
-        keys.dedup();
-        keys
-    })
-}
-
 /// `(dominant, dominated)` -- `w[dominant] >= w[dominated]`, repaired by
 /// raising the dominant side. A resource in stock dominates the blue token it
 /// sits on: spending the resource hands the token back to the bank AND buys
@@ -937,38 +893,6 @@ pub fn dominance_repair(w: &Weights) -> (Weights, Vec<Violation>) {
                 });
                 out.set(mk, -base);
             }
-        }
-    }
-
-    // `CardBoardCredit`'s per-type offsets ([`card_board_credit_keys`]):
-    // the EFFECTIVE multiplier `card_potential` scales a board-swap diff by
-    // is `CardBoardCredit + <per-type key>`, not either term alone --
-    // [`BENEFIT_GATES`] above only gates `CardBoardCredit` itself, which is
-    // useless when the per-type key carries the negative sign instead (the
-    // live 2p champion: `card_board_credit = 0.0`, `card_board_leader =
-    // -15.003`). A negative EFFECTIVE scale on a diff that is genuinely
-    // positive for a helpful leader/government/wonder/action/bonus swap and
-    // genuinely negative for a harmful one does not mis-price one card, it
-    // inverts the entire ranking of that card TYPE against every other type
-    // priced with a sane sign -- exactly what `leadersign` (the investigation
-    // this gate was added for) measured: `Hammurabi` priced at -13.28 despite
-    // a +0.885 raw board benefit, `Julius Caesar` at +43.63 despite a -2.908
-    // raw diff. Same shape as [`NET_NONNEG_PHASE`] above (a base plus a
-    // modifier must not net negative), restated for a single fixed base
-    // (`CardBoardCredit`) against several per-type modifiers instead of a
-    // phase pair. Repaired by raising the per-type key to `-base`, never by
-    // lowering `base`: same direction as every other rule in this function.
-    let card_board_base = out.get(WeightKey::CardBoardCredit);
-    for &k in card_board_credit_keys() {
-        let m = out.get(k);
-        if card_board_base + m < -1e-12 {
-            viol.push(Violation {
-                weight: k,
-                value: m,
-                default: k.default_weight(),
-                rule: format!("{} + {} >= 0", WeightKey::CardBoardCredit.name(), k.name()),
-            });
-            out.set(k, -card_board_base);
         }
     }
 

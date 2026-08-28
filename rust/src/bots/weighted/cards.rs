@@ -2030,7 +2030,18 @@ fn card_potential_core(
     let base = w.get(WeightKey::CardBoardCredit);
     // `credit_board`, not `board`: `board` is the Baseline parameter now, and
     // this is the WEIGHT that gates board-aware pricing, a different thing.
-    let credit_board = base + board_credit_key(id).map_or(0.0, |k| w.get(k));
+    //
+    // `credit_board` is the ABSOLUTE board-swap multiplier for `id`: when
+    // `id` has a per-type board-credit key (`board_credit_key` answers
+    // `Some`, today exactly `Leader => CardBoardLeader`) that key alone
+    // scales the swap diff -- it is NOT an offset added on top of `base`.
+    // `base` (`CardBoardCredit`) only governs the types with no per-type
+    // key, through the `map_or(base, ...)` arm below. The old `base +
+    // offset` composition is gone: it let `CardBoardLeader` cancel
+    // `CardBoardCredit` (the 2p champion's equal-and-opposite pair) and
+    // deleted a leader's entire board price, which is what this decouple
+    // removes.
+    let credit_board = board_credit_key(id).map_or(base, |k| w.get(k));
     if base == 0.0 && credit_board == 0.0 {
         // the exact pre-valuation-layer answer, and this early return is why:
         // every branch below has to be behind the gate for an A/B to stay
@@ -2081,9 +2092,9 @@ fn card_potential_core(
 /// condition here rather than one shared formula:
 ///
 /// * Leader has no dedicated top-level branch -- the generic swap-diff path
-///   (`card_board_credit + board_credit_key(id)`, [`card_board_credit_keys`]
-///   in `eval.rs` is what gates its SIGN) is the only board-aware channel it
-///   has.
+///   (scaled by `board_credit_key(id)` alone, today
+///   [`WeightKey::CardBoardLeader`], as an ABSOLUTE multiplier rather than an
+///   offset on `card_board_credit`) is the only board-aware channel it has.
 /// * Government has ONE ([`gov_value`], gated on [`WeightKey::
 ///   GovBoardCredit`]) that intercepts first whenever `gov_board_credit !=
 ///   0.0` -- true on every trained champion sampled, since that credit
@@ -2097,7 +2108,11 @@ pub fn swap_slot(id: CardId, w: &Weights) -> Option<CardType> {
     let priced_board_aware = match typ {
         CardType::Leader => {
             let key = board_credit_key(id).expect("Leader always has a board credit key");
-            w.get(WeightKey::CardBoardCredit) + w.get(key) != 0.0
+            // ABSOLUTE: `board_credit_key(id)` (today CardBoardLeader) alone
+            // gates a leader's board-aware pricing; `CardBoardCredit` no
+            // longer offsets it (see `credit_board` in
+            // `card_potential_core`).
+            w.get(key) != 0.0
         }
         CardType::Government => {
             w.get(WeightKey::GovBoardCredit) != 0.0 || w.get(WeightKey::CardBoardCredit) != 0.0
@@ -3805,14 +3820,16 @@ mod tests {
     /// `hand_total` collapses two leaders in hand to "the better one, plus
     /// `hand_swap_extra` times the rest" rather than summing both
     /// replacements -- the bug `_hand_total`'s own doc comment describes.
-    /// Built with `card_board_credit` on (so `swap_slot` actually collapses)
-    /// and two DIFFERENT leaders so their `card_potential` values are not
-    /// forced equal by symmetry.
+    /// Built with the leader's ABSOLUTE board-credit key (`card_board_leader`)
+    /// on -- `card_board_credit` no longer offsets it after the 2026-08-28
+    /// decouple -- so `swap_slot` actually collapses, with two DIFFERENT
+    /// leaders so their `card_potential` values are not forced equal by
+    /// symmetry.
     #[test]
     fn hand_total_collapses_two_leaders_to_the_better_one_plus_extra_times_the_rest() {
         let state = crate::game::new_game(2, 46);
         let mut w = Weights::default();
-        w.set(WeightKey::CardBoardCredit, 1.0);
+        w.set(WeightKey::CardBoardLeader, 1.0);
         w.set(WeightKey::HandSwapExtra, 0.0);
         let a = CardId::by_name("Julius Caesar").unwrap();
         let b = CardId::by_name("Napoleon Bonaparte").unwrap();

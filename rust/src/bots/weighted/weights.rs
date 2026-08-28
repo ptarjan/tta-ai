@@ -1489,6 +1489,20 @@ impl WeightKey {
             BuildDiscount | CardBoardCredit | DefenseBonus | HandLimit
             | ResourceDiscount | UnitStrengthCredit
             | WonderStagesPerAction => NonNegative("scales a printed benefit"),
+            // `CardBoardLeader` is now the ABSOLUTE multiplier on a leader's
+            // board-swap diff (`credit_board` in `card_potential_core` reads
+            // it through `board_credit_key` with NO offset on
+            // `CardBoardCredit` anymore). The composite gate that used to
+            // carry this key's sign (`eval::dominance_repair`'s
+            // `card_board_credit_keys()` loop, gating `CardBoardCredit +
+            // this >= 0`) is deleted, so this key carries the constraint
+            // DIRECTLY: a negative scale would invert the entire Leader type's
+            // ranking (a genuinely-beneficial swap priced below a genuinely
+            // harmful one) -- exactly what the old gate at the former
+            // `eval.rs` documented. NonNegative, not Free.
+            CardBoardLeader => NonNegative(
+                "absolute leader board-swap multiplier; negative would invert the whole type's ranking",
+            ),
             // A redundant card getting MORE valuable the more of its lane is
             // already covered would invert the discount's own premise, not
             // just leave a direction unmeasured. Former `REDUNDANCY_NONNEG_GATES`.
@@ -1673,43 +1687,6 @@ impl WeightKey {
             TacticShort => NonPositive("prices a marginal-need shortfall"),
 
             // -------------------------------------------------------- Free
-            // Composite constraints living in a DIFFERENT mechanism, not a
-            // simple per-key sign -- classifying either `NonNegative` here
-            // would be WRONG (over-constraining a coordinate whose base term
-            // is legally allowed to be negative as long as the SUM is not):
-            //
-            // * `CardBoardLeader`: the effective multiplier
-            //   `cards::card_potential` scales a leader swap diff by is
-            //   `CardBoardCredit + <this key>`, not either term alone --
-            //   `eval::dominance_repair`'s `card_board_credit_keys()` loop
-            //   (itself derived from `cards::board_credit_key`, not hand
-            //   copied) gates the SUM. `CardBoardGovernment`/`CardBoardAction`/
-            //   `CardBoardWonder` used to sit alongside this key here; all
-            //   three are RETIRED (`RETIRED_KEYS`) -- `cards::
-            //   card_potential_core`'s dedicated `gov_value`/`action_value`/
-            //   wonder swap-diff branches unconditionally intercept and
-            //   `return` before the generic per-type path is ever reached
-            //   whenever their own `GovBoardCredit`/`ActionBoardCredit`/
-            //   `WonderBoardCredit` is nonzero -- which is every trained
-            //   champion sampled, since the first two default nonzero and are
-            //   "measured effective" -- so the three retired keys were
-            //   live-looking knobs wired to nothing, the same shape
-            //   `card_yields`'s own deleted static action formula was retired
-            //   for (see `cards.rs::tests::card_yields_never_reprices_the_
-            //   action_boards_ring_fenced_coordinates`'s doc comment for that
-            //   precedent). `CardBoardBonus` used to sit alongside
-            //   `CardBoardLeader` in this SAME composite-constraint bucket;
-            //   it is RETIRED too as of 2026-08-24 (`RETIRED_KEYS`) for a
-            //   different, stronger reason than the government/action/wonder
-            //   trio -- not merely shadowed by a dedicated function, but
-            //   structurally unreachable: `cards::board_credit_key(Bonus)`
-            //   now answers `None`, the same bucket Government/Action/Wonder
-            //   already sit in, because `credit_board`'s only two consumers
-            //   (`board_yields::board_yields`'s swap diff, and
-            //   `board_yields::board_extra`) never produce a nonzero result
-            //   for a `CardType::Bonus` card -- see that retirement's own
-            //   `RETIRED_KEYS` entry for the full proof.
-            CardBoardLeader => Free,
             // `HandValue`/`HandValueLate`: the feature `hand_value` (`Σ
             // level()+1` over the civil hand) is always >= 0, so the
             // coefficient `evaluate` actually applies at ANY lateness must
@@ -2832,8 +2809,10 @@ pub const RETIRED_KEYS: &[&str] = &[
     // value the way `gov_action_cost`'s reachability turned out to be --
     // `cards::board_credit_key` answers `None` for `Bonus` now, joining
     // Government/Action/Wonder in that bucket, and `eval::
-    // card_board_credit_keys()` (derived from it, not hand-copied) shrinks
-    // accordingly with no edit needed there.
+    // card_board_credit_keys()` (derived from it, not hand-copied) shrank
+    // accordingly with no edit needed there -- that derived list is itself
+    // deleted as of the 2026-08-28 leader-pricing decouple (see the
+    // `CardBoardLeader` NonNegative entry in `sign_intent`).
     "card_board_bonus",
 ];
 

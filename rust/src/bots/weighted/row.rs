@@ -760,9 +760,10 @@ mod tests {
     /// the free parameter is the same question either way -- the incremental
     /// worth of a spare single-slot card beyond the one you would actually
     /// play, whether the spare arrives via the row or the hand. Built with
-    /// `card_board_credit` on (so `swap_slot` actually collapses) and two
-    /// DIFFERENT leaders so their `card_potential` values are not forced
-    /// equal by symmetry.
+    /// the leader's ABSOLUTE board-credit key (`card_board_leader`) on --
+    /// `card_board_credit` no longer offsets it after the 2026-08-28 decouple
+    /// -- so `swap_slot` actually collapses, with two DIFFERENT leaders so
+    /// their `card_potential` values are not forced equal by symmetry.
     #[test]
     fn urgency_collapses_two_doomed_leaders_to_the_better_one_plus_extra_times_the_rest() {
         let mut state = G::new_game(2, 46);
@@ -773,7 +774,7 @@ mod tests {
         state.card_row[0] = a;
         state.card_row[1] = b;
         let mut w = Weights::default();
-        w.set(WeightKey::CardBoardCredit, 1.0);
+        w.set(WeightKey::CardBoardLeader, 1.0);
         w.set(WeightKey::HandSwapExtra, 0.0);
         let late = horizon::lateness(&state);
         let mut scratch = Vec::new();

@@ -1843,46 +1843,12 @@ mod tests {
         }
     }
 
-    /// LEADERSIGN: the board-credit rule (`eval::dominance_repair`'s
-    /// `card_board_base + card_board_credit_keys() >= 0` loop) has to
-    /// survive mutation too, exactly like the three directions above it --
-    /// this is what actually proves "adding the rule inside
-    /// `dominance_repair` arms both load-time and mutation-time repair at
-    /// once" rather than merely asserting it by reading `mutate`'s source.
-    /// Driven from the live 2p champion's own illegal shape (`card_board_
-    /// credit` legal at `0.0`, every per-type key pinned deeply negative)
-    /// and table-driven over [`eval::card_board_credit_keys`], so a future
-    /// card type this function starts covering arms this coverage with no
-    /// new test, matching every other guard test in this file.
-    #[test]
-    fn no_mutant_ever_leaves_a_board_credit_pair_net_negative() {
-        let mut w = Weights::defaults();
-        w.set(WeightKey::CardBoardCredit, 0.0);
-        for &k in eval::card_board_credit_keys() {
-            w.set(k, -9.0);
-        }
-        let mut s = Search::new(2030);
-        for gen in 0..300 {
-            w = mutate(&w, &mut s, 0.8, None, 3).weights;
-            let base = w.get(WeightKey::CardBoardCredit);
-            for &k in eval::card_board_credit_keys() {
-                assert!(
-                    base + w.get(k) >= -1e-12,
-                    "generation {gen}: card_board_credit ({base}) + {} ({}) went negative",
-                    k.name(),
-                    w.get(k)
-                );
-            }
-        }
-    }
-
     /// SIGNAUDIT instance 3 (`hand_value_early`/`hand_value_late`): the
     /// `NET_NONNEG_PHASE` rule (`eval::dominance_repair`'s `base + k.early()
     /// >= 0` / `base + k.late() >= 0` loop) was EMPTY until this audit added
     /// `WeightKey::HandValue` to it, so nothing ever proved that rule is
     /// actually armed at mutation time rather than only at load -- this is
-    /// that proof, the same shape as `no_mutant_ever_leaves_a_board_credit_
-    /// > pair_net_negative` one test up. Driven from a shape close to the
+    /// that proof. Driven from a shape close to the
     /// live corpus (`hand_value` legal near its authored default,
     /// `hand_value_early`/`hand_value_late` both pinned deeply negative) and
     /// table-driven over `eval::NET_NONNEG_PHASE`, so the next key added to
