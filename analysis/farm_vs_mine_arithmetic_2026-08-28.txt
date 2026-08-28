@@ -1,0 +1,177 @@
+FARM vs MINE LEAF-EVAL ARITHMETIC, BY HAND (2026-08-28)
+
+Question: at all three player counts the bot builds a farm ZERO times in the
+opener (2p 0/741, 3p 0/1851, 4p 0/2432 legal chances) while the mine ranks 1
+at the median. Valuation defect, not legality. What does the leaf eval
+actually score for "build the Age-A Farm" vs "build the Age-A Mine", from
+the LIVE 2p champion, no code run?
+
+0. SETUP
+--------
+2p champion: experiments/rust_champion_2p.json, gen 120648 (read
+2026-08-28; live file, moved from 120601/120630 during this session).
+
+The Age-A farm is "Agriculture" (card_table.rs:184-201): resource_cost 2,
+production food +1 per worker. The Age-A mine is "Bronze"
+(card_table.rs:260-277): resource_cost 2, production resources +1 per
+worker. They are EXACTLY symmetric except for which resource: same cost,
+same CA, same +1 worker, +1 tech_level, +1 best-type level, no effects,
+no special. So every key that changes for one changes by the same amount
+for the other; the whole comparison is the resource pair.
+
+A build is legal only with a free worker (apply.rs:809+ do_build:
+`pay_ca(...,1)` for the civil action, resource cost paid from stock,
+`workers_free -= 1`, `slot.workers = 1`), so the delta below is the
+before->after diff for a build taken while a free worker IS available.
+
+1. EVERY KEY THAT CHANGES (derived, not assumed)
+------------------------------------------------
+For BOTH builds, identically (features.rs line of each emission):
+
+  free_workers     -1    features.rs:840  (p.workers_free -> 0)
+  workers          +1    features.rs:862  (sweep_tableau total, :248)
+  prod_workers     +1    features.rs:863  (Farm|Mine arm, :227-230)
+  tech_levels      +1    features.rs:856* (same arm)
+  best_farm +1 / best_mine +1
+                    features.rs:971/972  (sweep best, :212-219)
+  food_stock / resource_stock   -2
+                    features.rs:718/719* (stock = p.<res> + g() - <rate>;
+                    stock falls by the cost, the rate falls by the new
+                    production: -2 total)
+  food_gap / resource_gap       -2  (hinge case, below)
+                    features.rs:1173-1181
+  worker_gap       -1 (1->0 hinge; 0->+1 in the surplus case)
+                    features.rs:1213-1215
+  civil_action_gap -1 (1->0 hinge)
+                    features.rs:1219-1221
+
+*line numbers for tech_levels and the stocks verified by the same sweep
+block (features.rs:856-865) and rate block (features.rs:711-719) read
+during this job; the emission lines cited in section 2 are the ones that
+matter.
+
+Farm-only (the +1 food side): food_rate +1, best_farm +1, and the food
+hinge keys below.
+Mine-only (the +1 resource side): resource_rate +1, best_mine +1, and the
+resource hinge keys below.
+
+NOT on the list (checked, not assumed):
+  - FamineDeficit (features.rs:752) changes only for FARM, and only when
+    food_stock+food_rate <= 0: (-(F+R)).max(0) goes 0 -> 2. In a live
+    opening with food it is 0 -> 0 (no change); I list it as a farm-only
+    conditional in section 2.
+  - ResourceCommitmentTurns (features.rs:724-734): the build CLEARS one
+    unbuilt slot (numerator -2) but the rate denominator moves from 2 to 3;
+    (0+2)/2 = 1 -> (0)/3 = 0, delta -1 when the built card was the only
+    unbuilt slot, 0 otherwise. Conditional; listed in section 2.
+  - CorruptionHeadroom / ConsumptionHeadroom: the build moves neither the
+    blue nor the yellow bank. No change.
+  - TakeCostPaid / RowUrgency / RowBargainForgone / RowLastCopy: a build
+    takes no cards from the row. No change.
+  - HandCivil / HandMilitary: the built card is already in the tableau
+    (developed earlier); the build adds a worker, it does not draw. No
+    change.
+  - WorkerSurplus: 0 before the build (a free worker exists, so
+    worker_have = needs.worker exactly, or the gap is 1 and surplus 0);
+    after, worker_have = 0. If needs.worker >= 1 it stays 0; only in the
+    odd needs.worker = 0 case would it go 1 -> 0. No change in practice.
+  - CivilActionSurplus: mirror of the gap hinge; no change when the gap
+    fires, +1 change in the gap-free case (see section 2).
+  - Everything military, tactic, pact, event, wonder, rival: untouched by
+    a production build.
+
+2. SIZE OF EACH CHANGE, WEIGHTED (gen 120648)
+---------------------------------------------
+Hinge case (worker_gap 1 -> 0, civil_action_gap 1 -> 0): the normal
+opening, where the player has a developed-but-unstaffed slot (so
+needs.worker = 1) and civil actions are tight.
+
+FARM (d, weight, contribution):
+  food_rate           +1   -0.183861   -0.183861
+  best_farm           +1   -0.310544   -0.310544
+  free_workers        -1   +3.411856   -3.411856
+  workers             +1   +0.049714   +0.049714
+  prod_workers        +1   +0.557293   +0.557293
+  tech_levels         +1   -1.927007   -1.927007
+  food_stock          -2   +0.943289   -1.886579
+  food_gap            -2   -0.258007   +0.516013
+  famine_deficit      -2   -0.198414   +0.396829   (only if food <= 0 before)
+  worker_gap          -1   -2.361798   +2.361798
+  civil_action_gap    -1   -1.285290   +1.285290
+  TOTAL (with famine)      -2.552910
+  TOTAL (without famine)   -2.156081
+
+MINE:
+  resource_rate       +1   +0.402473   +0.402473
+  best_mine           +1   -0.194713   -0.194713
+  free_workers        -1   +3.411856   -3.411856
+  workers             +1   +0.049714   +0.049714
+  prod_workers        +1   +0.557293   +0.557293
+  tech_levels         +1   -1.927007   -1.927007
+  resource_stock      -2   +0.644464   -1.288928
+  resource_gap        -2   -0.443325   +0.886651
+  worker_gap          -1   -2.361798   +2.361798
+  civil_action_gap    -1   -1.285290   +1.285290
+  TOTAL                      -1.279286
+
+FARM - MINE = -1.273624 (with famine) / -0.876794 (without).
+
+The hinge is board-specific: in the surplus case (worker_gap 0 -> +1,
+civil_action_gap 0, so worker_surplus 0 -> +1 and civil_action_surplus
+0 -> +1 instead), the worker_gap/civil_action_gap rows are replaced by
+worker_surplus +1 * 0.190932 and civil_action_surplus +1 * +2.098429, i.e.
++2.289361 total instead of +3.647088: the build is ~1.36 less positive for
+both, and the farm-vs-mine difference is UNCHANGED (the resource pair is
+the only asymmetry).
+
+3. WHERE THE FARM IS KILLED (and the mine survives)
+---------------------------------------------------
+Both builds are NEGATIVE in this champion (the free_workers -3.41 and
+tech_levels -1.93 terms dominate; that is the "never build in the opener"
+part, and it is shared). But the mine is ~0.88 to ~1.27 LESS negative,
+entirely from four terms:
+
+  resource_rate  +0.4025   vs   food_rate   -0.1839   (+0.5863)
+  resource_stock -1.2889   vs   food_stock  -1.8866   (+0.5977)
+  resource_gap   +0.8867   vs   food_gap    +0.5160   (+0.3707)
+  best_mine     -0.1947   vs   best_farm   -0.3105   (+0.1159)
+                                                        SUM +1.2705 (the
+                                                        rest is rounding on
+                                                        the famine row)
+
+So the leaf eval prices the mine's +1 resource as a GAIN (rate +0.40,
+gap-closure +0.89) and the farm's +1 food as a LOSS (rate -0.18,
+stock-heavy -1.89). The food side is penalized ~1.27 more than the
+resource side, and that is exactly the farm-vs-mine gap: the eval
+ranks "build Bronze" above "build Agriculture" by ~1.27 on every legal
+chance, so the farm goes 0/N.
+
+Is that the defect? The resource side of the arithmetic is defensible:
+resources pay for everything (builds, development), so a positive
+resource_rate and a positive resource_gap-closure are the right shape.
+The food side is where the champion disagrees with the rules: a +1 food
+rate in an opening where food is needed for population is being priced
+NEGATIVE (food_rate -0.1839), and the food stock is being priced so
+heavily (food_stock +0.9433, doubled by the cost) that spending 2 food to
+build a farm costs 1.89 while the +1 food rate only refunds 0.18. The
+fitter has found "food is a liability, resources are an asset" at 2p --
+a reading in which the mine is the only rational production build and the
+farm is never worth taking. That is a valuation defect in the food
+coordinates, not in the farm/mine pair: both buildings are scored by the
+same machinery, and the farm inherits the negative food price.
+
+One caveat: food_rate and friends are NET of consumption/corruption
+(features.rs:711-716) and hinge on the projected banks, so part of the
+negative food_rate may be a real opening fact (low population, low
+consumption, food stock sitting idle). But a NEGATIVE rate price means the
+eval prefers NOT to produce food, which no opening position justifies:
+population is the engine of every later action. At minimum the food_rate
+sign is the coordinate to look at first.
+
+4. REPRODUCIBILITY
+------------------
+All weights from experiments/rust_champion_2p.json at gen 120648
+(recorded above, section 0). Deltas from features.rs emission lines and
+sweep_tableau (features.rs:184-248) and effects::compute (effects.rs:
+1415-1427, the Farm|Mine production arm). No code was run; the sums are
+hand arithmetic over the two tables in section 2.
