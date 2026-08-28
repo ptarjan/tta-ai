@@ -1,0 +1,39 @@
+agreement re-run at HEAD (post-f13707f), 2026-08-28
+====================================================
+
+WHY THIS RUN EXISTS
+-------------------
+`agreement` is one of the four journal-driven binaries that scored candidate moves
+through `rank_moves`, which applied `Move::EndTurn` before scoring it until `f13707f`.
+Unlike `openerprobe`, these binaries take their positions from the human journal, so
+they saw the RIGHT positions and put WRONG numbers on them. The error is bounded and a
+re-run erases it. Every agreement figure taken before `f13707f` is superseded by this one.
+
+SETUP
+-----
+binary      rust/target/release/agreement (built 2026-08-28 04:59, at HEAD 1939ceb)
+index       sources/bgo/index.tsv
+journals    sources/bgo/journals
+weights     frozen copy of experiments/rust_champion_{2,3,4}p.json
+            2p champion gen 121046
+game ids    head -200 analysis/guard_ids_882.txt
+            (123 x 2p, 29 x 3p, 48 x 4p; all 200 reached COMPLETE)
+
+RESULT
+------
+top-1 agreement      16897 / 70073 = 24.11%
+top-3 agreement      48.69%
+top-5 agreement      61.49%
+mean rank of the human's move   5.97
+mean legal moves at a decision  17.46
+random top-1 baseline           5.73%
+
+READING IT
+----------
+The bot puts the human's actual move first about one time in four, inside the top three
+about half the time, against a 5.7% random baseline. That is a similarity statistic, not
+a quality statistic. It is recorded as a reference point only.
+
+DO NOT FIT ON THIS NUMBER. Fitting the leaf eval or a gate on human agreement has lost
+three separate ways and is on the do-not-do list; a divergence from a human is evidence
+to investigate, never an error to minimise.
