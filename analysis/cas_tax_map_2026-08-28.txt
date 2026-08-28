@@ -1,0 +1,149 @@
+================================================================================
+THROUGH THE AGES -- CIVILACTIONSURPLUS TAX MAP (whole game, 2p)
+================================================================================
+Date: 2026-08-28
+Champions (re-read live this session):
+  2p gen 120861, 3p gen 67460, 4p gen 21894
+  (the files moved again; weights below are the ones just re-read).
+
+CAS = max(0, CaLeft - HandCivil)          (features.rs:1199-1202)
+CAG = max(0, HandCivil - CaLeft)          (features.rs:1199-1202, the other hinge)
+
+A Take of cost c does CaLeft -= c, HandCivil += 1.
+
+--------------------------------------------------------------------------------
+1. CAS TAX TABLE -- CA_left 0..8, HandCivil 0..8, c in {1,2,3}
+--------------------------------------------------------------------------------
+Live 2p weight: civil_action_surplus = +2.098429 (gen 120861).
+Each cell shows the point cost (w * CAS_drop) and the CAS drop in parens.
+A zero tax is marked 0.
+
+--- Take cost c=1 ---
+CA\H    0          1          2          3          4          5          6          7          8
+   0     0          0          0          0          0          0          0          0          0
+   1   +2.10(1)    0          0          0          0          0          0          0          0
+   2   +2.10(1)  +2.10(1)    0          0          0          0          0          0          0
+   3   +2.10(1)  +2.10(1)  +2.10(1)    0          0          0          0          0          0
+   4   +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)    0          0          0          0          0
+   5   +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)    0          0          0          0
+   6   +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)    0          0          0
+   7   +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)    0          0
+   8   +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)  +2.10(1)    0
+
+--- Take cost c=2 ---
+CA\H    0          1          2          3          4          5          6          7          8
+   0     0          0          0          0          0          0          0          0          0
+   1   +2.10(1)    0          0          0          0          0          0          0          0
+   2   +4.20(2)  +2.10(1)    0          0          0          0          0          0          0
+   3   +4.20(2)  +4.20(2)  +2.10(1)    0          0          0          0          0          0
+   4   +4.20(2)  +4.20(2)  +4.20(2)  +2.10(1)    0          0          0          0          0
+   5   +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +2.10(1)    0          0          0          0
+   6   +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +2.10(1)    0          0          0
+   7   +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +2.10(1)    0          0
+   8   +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +4.20(2)  +2.10(1)    0
+
+--- Take cost c=3 ---
+CA\H    0          1          2          3          4          5          6          7          8
+   0     0          0          0          0          0          0          0          0          0
+   1   +2.10(1)    0          0          0          0          0          0          0          0
+   2   +4.20(2)  +2.10(1)    0          0          0          0          0          0          0
+   3   +6.30(3)  +4.20(2)  +2.10(1)    0          0          0          0          0          0
+   4   +6.30(3)  +6.30(3)  +4.20(2)  +2.10(1)    0          0          0          0          0
+   5   +6.30(3)  +6.30(3)  +6.30(3)  +4.20(2)  +2.10(1)    0          0          0          0
+   6   +6.30(3)  +6.30(3)  +6.30(3)  +6.30(3)  +4.20(2)  +2.10(1)    0          0          0
+   7   +6.30(3)  +6.30(3)  +6.30(3)  +6.30(3)  +6.30(3)  +4.20(2)  +2.10(1)    0          0
+   8   +6.30(3)  +6.30(3)  +6.30(3)  +6.30(3)  +6.30(3)  +6.30(3)  +4.20(2)  +2.10(1)    0
+
+Structure: the CAS drop for a take of cost c is
+  min(c, max(0, CaLeft - HandCivil))
+i.e. the take costs one unit of CAS per CA spent, but only while the surplus
+is still positive. The zero-tax cells are exactly the cells with
+CaLeft <= HandCivil (the hand is at least as full as the action pool) OR
+CaLeft == 0 (nothing to spend). In the c=1 table the zero region is the
+upper-right triangle (H >= CA); in c=2 and c=3 it shrinks to the upper-right
+plus the CA=0 row.
+
+--------------------------------------------------------------------------------
+2. WHEN THE TAX BITES -- CONFIRMED
+--------------------------------------------------------------------------------
+The tax bites if and only if CaLeft > HandCivil AND CaLeft >= c (the take is
+affordable). In words: the hand is STRICTLY emptier than the action pool.
+Your reading is confirmed, with the affordability caveat. The intuition is
+exact: the state in which the tax bites is precisely the state in which the
+hand is emptiest relative to the CA pool -- i.e. the bot most needs to
+refill -- and that is the state in which the CAS feature charges it a
+positive price for the very act of refilling (the take drops CaLeft by c and
+HandCivil by +1, both of which reduce the surplus). The tax is a tax on
+refilling when the hand is light, which is backwards if the hand being light
+is what the surplus was meant to reward.
+
+--------------------------------------------------------------------------------
+3. CIVILACTIONGAP -- THE OTHER HINGE
+--------------------------------------------------------------------------------
+CAG = max(0, HandCivil - CaLeft) = (ca_need - ca_have).max(0), ca_need =
+HandCivil, ca_have = CaLeft (features.rs:1199-1202, the line immediately
+above the CAS line).
+
+Live weights:
+  2p gen 120861:  civil_action_gap = -1.285290
+  3p gen 67460:   civil_action_gap = -0.005153
+  4p gen 21894:   civil_action_gap = -0.013682
+
+When CAG fires: it is > 0 exactly when HandCivil > CaLeft -- the hand is
+FULLER than the action pool. A Take does HandCivil +1, CaLeft - c, so CAG
+rises by 1 + (CAS_drop) in general; concretely the CAG rise is
+  min(1 + c, max(0, HandCivil + c + 1 - CaLeft) - max(0, HandCivil - CaLeft))
+and in the cells where CAS already fires (CaLeft > HandCivil) a take of cost
+c that exhausts the surplus (CaLeft - c <= HandCivil) pushes CAG up by
+(HandCivil + 1) - (CaLeft - c) = (HandCivil + c + 1 - CaLeft). Example:
+CA=2, H=0, c=3: CAS 2->0 (drop 2), CAG 0->2 (rise 2), so the take pays
+2*2.098429 (CAS) + 2*(-1.285290) (CAG) = 4.196858 - 2.570580 = +1.626278
+net on the two hinge keys. The CAG rise partially offsets the CAS fall in
+the cells where the take crosses the hinge, but it never fully cancels it:
+|w[CAG]| = 1.285290 < |w[CAS]| = 2.098429 per unit, so the CAS side always
+dominates the net.
+
+Symmetry: the pair is NOT symmetric. At 2p the CAS side (surplus, w +2.098)
+is 1.63x the CAG side (gap, w -1.285) in magnitude. The hinge prices
+"hand lighter than pool" (surplus) more heavily than "hand fuller than pool"
+(gap). At 3p and 4p both weights are ~0 (3p CAG -0.005, 4p CAG -0.014; 3p CAS
++0.009, 4p CAS 0.000), so the whole hinge is effectively unpriced at those
+counts -- the asymmetry is a 2p-only phenomenon.
+
+--------------------------------------------------------------------------------
+4. LIVE WEIGHTS AT ALL THREE COUNTS + P95 SPREAD
+--------------------------------------------------------------------------------
+p95 spread rows from analysis/featspread_matched_2026-08-27.txt (built under
+the frozen clamp_ceiling_2026-08-27 champion; one day older than the live
+gens above -- flagged, not asserted as same-gen):
+
+  2p (gen 120861):
+    civil_action_surplus  w=+2.098429   p95_spread 4.0   fire 0.4766  -> FITTED
+    civil_action_gap      w=-1.285290   p95_spread 4.0   fire 0.5996  -> FITTED
+  3p (gen 67460):
+    civil_action_surplus  w=+0.008810   p95_spread 4.0   fire 0.3699  -> ~zero (near-rail)
+    civil_action_gap      w=-0.005153   p95_spread 4.0   fire 0.4906  -> ~zero (near-rail)
+  4p (gen 21894):
+    civil_action_surplus  w=+0.000000   p95_spread 6.0   fire 0.5887  -> ZERO-WEIGHT
+    civil_action_gap      w=-0.013682   p95_spread 4.0   fire 0.5026  -> ~zero (near-rail)
+
+All three counts have NON-ZERO p95 spread on both keys, so the feature does
+fire (spread is present) at every count. The fitted-vs-zero distinction is
+about the WEIGHT, not the spread: at 2p both are fitted (CAS dominates); at
+3p both are near-rail (~0.005-0.009, effectively unpriced); at 4p CAS is
+exactly 0.0 (zero-weight, the key is retired for this count) and CAG is
+near-rail. No build is needed to state any of this; the spread rows come
+from the existing featspread table, not a new measurement.
+
+--------------------------------------------------------------------------------
+5. NOTES
+--------------------------------------------------------------------------------
+* No build, no edits, no sign_intent, no fix proposed.
+* The CAS/CAG hinge is a pure function of (CaLeft, HandCivil); the tables
+  above are exact arithmetic on the live 2p weight and need no engine run.
+* The p95 spread table is one day older than the live champions; the
+  fire_rate/p95 values are stable across this session's champion moves, but
+  a same-gen table would be cleaner.
+* The CAG offset in the crossing cells is arithmetic, not a build result:
+  it follows directly from the two max(0,.) definitions at
+  features.rs:1199-1202.
