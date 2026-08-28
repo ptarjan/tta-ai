@@ -1,0 +1,329 @@
+Carrier keys: decision 1 vs decision 2 at 2p round 1
+Date: 2026-08-28
+Repo: /Users/pt/tta-ai (read-only code read, no build/run)
+
+Scenario: 2-player game, round 1.
+  Decision 1 (D1): the FIRST civil decision of the turn -- hand_civil EMPTY,
+    ca = 1 (seat 1) or 2 (seat 2). All legal candidates are Takes (slots
+    0..12) plus EndTurn.
+  Decision 2 (D2): the SECOND own-turn decision of the same turn, reached
+    only when ca >= 2 (seat 2): one take already played, so hand has 1
+    card, ca = 0. Candidates: EndTurn (plus Take if the one taken card
+    left a legal second take -- e.g. a different 1-cost slot still spare,
+    which the take gate then empties once ca hits 0, so in practice D2's
+    candidate set is EndTurn alone, or EndTurn plus takes when a 0-cost
+    path such as a free leader exists -- the take gate costs CA, and at
+    ca=0 only zero-cost candidates survive, of which a take never is).
+    Either way D2 is the "refusal" decision: the bot chooses between
+    EndTurn and (at most) a second take.
+
+Setup facts (established in analysis/row_keys_r1_reachability_2026-08-28.txt
+and analysis/science_keys_r1_reachability_2026-08-28.txt):
+  - round = 1, phase Actions; the 13-slot row is dealt IN FULL from the
+    20-card Age A deck before D1 (game.rs:426-434).
+  - Both players start with Philosophy staffed: state_stats science = 1
+    each; strength 0 each (no units); no governments, no pacts, no events,
+    no tactics, no wonders.
+  - A Take never advances the round, never changes production/strength,
+    never changes the rival's board. It changes ONLY: the row (card
+    removed, deck card slid in at the same or a later slot), hand_civil
+    (+1 at D2), civil_actions (-1), ca_spent_taking (+cost), and the deck
+    counts.
+
+Champion weights for the 16 keys (preclimb_2026-08-25 / postclimb_2026-08-26):
+  row_urgency            -0.5826 / -0.1630
+  row_bargain_forgone     2.1808 /  0.1233
+  row_last_copy          -0.2445 /  0.0058
+  science_rate_trailing  20.6190 / 60.0 (CLAMP_BLIND rail)
+  science_gap            -1.1994 / -5.8148
+  science_surplus        -0.0291 / -0.0212
+  science_rate           -0.1110 /  0.2199
+  strength_deficit       -1.7832 / -0.4527
+  rival_strength         -0.0073 / -0.1431
+  card_board_credit       0.1698 /  0.1634
+  card_board_leader      -0.1502 / -0.1634
+  card_rate_credit        0.1559 /  0.3696
+  ca_left                -0.2044 / -1.0490
+  civil_action_gap       -0.2027 / -0.8790
+  civil_action_surplus    0.0731 /  0.5496
+  civil_actions           0.4012 /  0.4556
+
+=====================================================================
+1. row_urgency  (row::row_pressure, row.rs:312; consumed eval.rs:372-377)
+=====================================================================
+  D1: NON-ZERO (structurally reachable; typical magnitude 0..few).
+    Six of the 13 freshly dealt cards (2p: slide = 2*sweep_count(2) = 6,
+    row.rs:328, positional not round-gated) sit in the slide zone from the
+    very first decision. Every visible, takeable card at index i < slide
+    with card_potential > 0 contributes its card_potential (row.rs:360-361).
+    The Age A row is full of developable cards with positive potential, so
+    urgency is generically positive at D1.
+    ACROSS D1 CANDIDATES: NOT constant. Each Take candidate removes a
+    different row card (and slides a new deck card in), so the row the
+    trial state sees differs per candidate; card_potential itself is
+    w-dependent but evaluated on a DIFFERENT row per candidate. The term
+    therefore does carry margin.
+  D2: NON-ZERO, same structure on the post-take row (one slot slid).
+  VERDICT: margin-active at BOTH D1 and D2; not zero at either.
+
+=====================================================================
+2. row_bargain_forgone  (row::row_pressure, row.rs:312; consumed
+    eval.rs:373,380)
+=====================================================================
+  D1: REACHABLE, generically non-zero: cards at index i >= slide with
+    positive cost-saving (costs::row_cost(i) - costs::row_cost(nxt) > 0,
+    row.rs:383-384) and survive > 0 contribute saving*survive
+    (row.rs:420). Whether any such card sits in slots 6..12 of a given
+    opening row is a numeric fact about the deal; the code path is
+    unconditionally reachable.
+    ACROSS D1 CANDIDATES: not constant (row differs per candidate).
+  D2: reachable, same.
+  VERDICT: margin-active at both decisions in principle; zero only on
+    deals where no slide-zone-far card has a positive saving.
+
+=====================================================================
+3. row_last_copy  (row::row_last_copy, row.rs:475; consumed
+    eval.rs:385-387)
+=====================================================================
+  D1: REACHABLE, generically non-zero: no positional gate; for every
+    visible, takeable, wanted card, gone = 1 - civil_outlook(name) > 0
+    contributes (row.rs:507-509). On a fresh 20-card Age A deck many
+    common cards have outlook 0 or 1, so gone > 0 is the norm.
+    ACROSS D1 CANDIDATES: not constant -- a Take removes a copy from the
+    row AND the deck, so the outlook (and hence gone) for the taken name
+    changes in its own trial state relative to other candidates.
+  D2: reachable, same, on the post-take row/deck.
+  VERDICT: margin-active at both decisions; not zero at either (except
+    the degenerate all-outlook>=1 deal).
+
+=====================================================================
+4. science_rate_trailing  (NO f.set; consumed rivals.rs:977 inside
+    feature_marginal, gated STANDING_KEYS, rivals.rs:976)
+=====================================================================
+  D1: STRUCTURALLY ZERO. trailing_fraction (rivals.rs:873) reads
+    state_stats science: mine = 1, best = 1 (both seats, Philosophy x1);
+    `mine >= best` -> 0.0. A Take does not change either player's
+    production, so this holds for EVERY D1 candidate.
+  D2: STILL STRUCTURALLY ZERO: same numbers, nothing legal in round 1
+    changed production.
+  VERDICT: ZERO at both D1 and D2 in a 2p round-1 game. Its 60.0 value is
+    the CLAMP_BLIND rail (p95 spread unmeasured, weights.rs:2432/2499),
+    not a fitted value; it cannot contribute to the round-1 margin at all,
+    at either decision.
+
+=====================================================================
+5. science_gap  (features.rs:1180)
+=====================================================================
+  D1: ZERO. needs.science = min printed science_cost over LEVELLED cards
+    in hand (marginal_needs, features.rs:320-325); hand is EMPTY at D1 ->
+    0. science_have = stock 0 (+pending gain, 0) -> gap 0. Constant
+    across D1 candidates (no D1 candidate changes hand or science stock).
+  D2: NON-ZERO IFF the taken card is levelled (Age A urban/production/unit/
+    special tech are all takeable): needs = that card's cost (1-5), have =
+    0 -> gap = cost > 0. If the taken card is not levelled (farm/mine/
+    leader/action/government/wonder) the gap stays 0.
+    ACROSS D2 CANDIDATES: constant (the hand is fixed by the first take;
+    the remaining candidates do not change it).
+  VERDICT: ZERO at D1 (constant); CONDITIONALLY NON-ZERO at D2 (then
+    constant across D2 candidates). With the champion's negative weight
+    (-1.199 preclimb, -5.815 postclimb), a developable card in hand makes
+    the state score MORE negative relative to the no-card baseline -- a
+    direct linear path into the refusal at D2.
+
+=====================================================================
+6. science_surplus  (features.rs:1181)
+=====================================================================
+  D1: ZERO (have 0, need 0).
+  D2: ZERO. have (stock 0 + pending 0) can never exceed a need that is
+    either 0 or a positive printed cost.
+  VERDICT: STRUCTURALLY ZERO at both D1 and D2 of a 2p round-1 game.
+
+=====================================================================
+7. science_rate  (features.rs:688)
+=====================================================================
+  D1: NON-ZERO but CONSTANT: s.science = 1 for the decider at every D1
+    candidate (a take never changes production; a take never advances the
+    round). Value 1.0 (times hz = rate_multiplier(RateHorizon), which is
+    itself constant across D1 candidates).
+  D2: NON-ZERO but CONSTANT: still 1.0; the one take changed nothing the
+    stats read.
+  VERDICT: NON-ZERO at both, but margin-INERT at both: identical across
+    all candidates of each decision, so it cancels out of the
+    Take-vs-EndTurn margin.
+
+=====================================================================
+8. strength_deficit  (features.rs:933; rel = strength - rival_str,
+    features.rs:678-680, rel set at ~681)
+=====================================================================
+  D1: rel = 0 - 0 = 0 -> deficit = max(-0,0) = 0. CONSTANT across all D1
+    candidates (no candidate changes strength: takes don't build, and the
+    rival is untouched).
+  D2: SAME: 0.
+  VERDICT: STRUCTURALLY ZERO at both D1 and D2 in a 2p round-1 game.
+    (Note the champion weight is NEGATIVE, -1.783/-0.453: a deficit term
+    with negative weight means "deficits are good" in the score -- the
+    coordinate is simply dead at round 1, so the sign is moot here.)
+
+=====================================================================
+9. rival_strength  (features.rs:1111; rival_str = max state_stats strength
+    over live rivals, features.rs:656-676, with partner-gain recompute)
+=====================================================================
+  D1: 0. No rival holds units at game start; partner gains are all zero
+    (no pacts). Constant across D1 candidates (a take does not change the
+    rival).
+  D2: 0, same.
+  VERDICT: STRUCTURALLY ZERO at both D1 and D2. The small negative
+    champion weight (-0.007/-0.143) multiplies nothing at round 1.
+
+=====================================================================
+10. card_board_credit  (NO f.set; weight-only, consumed inside
+    cards::card_potential_core, cards.rs:2029-2036, as `base`)
+=====================================================================
+  This is not a linear feature: it gates board-aware card pricing inside
+  card_potential, which is what row_urgency/row_bargain/row_last_copy
+  themselves call to value each takeable row card, and what the take
+  candidate's trial evaluate reaches through HandPotential/row terms. Its
+  VALUE as a weight is non-zero in both champions (0.170/0.163), and the
+  pricing it gates IS active on the round-1 row (the row is full of
+  developable cards whose potentials are priced through this gate).
+  D1: ACTIVE (not zero, not constant across candidates -- it scales the
+    per-candidate row pricing).
+  D2: ACTIVE on the post-take row, same.
+  VERDICT: not zero at either decision; it is a multiplier on card
+    valuation, so its effect on the margin is per-candidate and
+    deal-dependent, not a single emitted feature value.
+
+=====================================================================
+11. card_board_leader  (NO f.set; weight-only; cards.rs:600 maps Leader ->
+    CardBoardLeader for board_credit_key)
+=====================================================================
+  D1: ACTIVE IFF a leader is in the 13-slot opening row: for that leader
+    specifically, credit_board = card_board_credit + card_board_leader
+    (cards.rs:2034-2036) scales its board-aware price. On deals with no
+    leader in the row, this key multiplies nothing.
+  D2: same, on the post-take row.
+  VERDICT: deal-dependent at both decisions; structurally reachable, not
+  guaranteed non-zero. The champion keeps card_board_credit and
+  card_board_leader at equal magnitude and opposite sign (preclimb
+  0.1698/-0.1502; postclimb exactly 0.1634/-0.1634), so a leader's
+  credit_board collapses to ~0 -- the two largely cancel for leaders.
+
+=====================================================================
+12. card_rate_credit  (NO f.set; weight-only; cards.rs:2029, 2312 --
+    `credit` in sum_yields and in the card-choice branch)
+=====================================================================
+  D1: ACTIVE: it scales the yield sum of every priced card (the
+    non-board-aware fallback, cards.rs:2038-2040: sum_yields(scratch, w,
+    credit)), which is part of card_potential for every takeable row card,
+    hence part of the row terms and of the trial-state hand pricing.
+  D2: ACTIVE, same.
+  VERDICT: not zero at either decision; multiplier on per-card yields,
+    active across the whole row from the first decision.
+
+=====================================================================
+13. ca_left  (features.rs:900: p.civil_actions, the pool REMAINING)
+=====================================================================
+  D1: NON-ZERO and CONSTANT across D1 candidates: ca = 1 or 2 for every
+    candidate (the trial state is post-apply, so a Take candidate's trial
+    has ca-1 and EndTurn's trial has ca -- see note below).
+    NOTE: rank_moves evaluates each candidate in its POST-APPLY trial
+    state (eval.rs:548-554), so across D1 candidates the feature takes
+    the values ca-1 (every Take) and ca (EndTurn). That is exactly the
+    signal the weight is supposed to read: postclimb's -1.049 makes the
+    ca=0 trial (EndTurn from ca=1, and every Take from ca=2) score LOWER
+    than the ca>0 trial. For seat 1 (ca=1): every Take lands at ca=0 and
+    EndTurn at ca=1 -> the term alone pushes Take below EndTurn by
+    1.049*1.0 = 1.049 in postclimb. For seat 2 (ca=2): Takes land at
+    ca=1, EndTurn at ca=2 -> push 1.049 as well.
+  D2: ca = 0 for EVERY D2 candidate (the take already spent it; EndTurn
+    leaves 0, a hypothetical second 0-cost candidate also 0) -> value 0.0,
+    CONSTANT across D2 candidates: no margin contribution at D2.
+  VERDICT: D1 NON-ZERO and margin-ACTIVE (constant 1 apart between the
+    Take group and EndTurn); D2 ZERO and constant.
+
+=====================================================================
+14. civil_action_gap  (features.rs:1201: max(hand_civil_count - ca_left, 0))
+=====================================================================
+  D1: hand_civil = 0, so gap = max(0 - ca, 0) = 0 for EVERY D1 candidate,
+    whether measured pre-apply or post-apply (post-apply: a Take trial has
+    hand 1, ca-1 -> max(1-(ca-1),0): for ca=1 that is max(1-0,0)=1, for
+    ca=2 that is max(1-1,0)=0; EndTurn trial: hand 0, ca -> 0). So on the
+    POST-APPLY trials (the ones actually scored):
+      seat 1 (ca=1): Take trials read gap = 1, EndTurn reads 0 -> NON-ZERO,
+        margin-active: the negative weight (-0.203/-0.879) punishes the
+        Take trials, reinforcing the refusal.
+      seat 2 (ca=2): Take trials read gap = 0, EndTurn 0 -> zero, constant.
+  D2: hand 1, ca 0 -> gap = 1 for EVERY D2 candidate (post-apply of
+    EndTurn leaves hand 1, ca 0) -> NON-ZERO but CONSTANT across D2
+    candidates: no margin at D2 (it is a flat offset that cancels
+    Take-vs-EndTurn within D2).
+  VERDICT: seat-1 D1: margin-active (Take 1 vs EndTurn 0); seat-2 D1:
+    zero; D2: non-zero (1.0) but constant across candidates.
+
+=====================================================================
+15. civil_action_surplus  (features.rs:1202: max(ca_left - hand_civil, 0))
+=====================================================================
+  Post-apply trials:
+  D1:
+      seat 1 (ca=1): Take trials: ca 0, hand 1 -> max(0-1,0)=0. EndTurn:
+        ca 1, hand 0 -> 1. NON-ZERO, margin-active (positive weight
+        +0.073/+0.550 REWARDS EndTurn relative to Take at seat 1).
+      seat 2 (ca=2): Take trials: ca 1, hand 1 -> 0. EndTurn: ca 2, hand 0
+        -> 2. NON-ZERO, margin-active (rewards EndTurn by 2 units of
+        surplus at seat 2, even stronger).
+  D2: every candidate: ca 0, hand 1 -> 0. CONSTANT (zero) at D2.
+  VERDICT: D1 NON-ZERO and margin-active at BOTH seats (favors EndTurn);
+    D2 zero.
+
+=====================================================================
+16. civil_actions  (features.rs:898: s.civil_actions, the ALLOWANCE, not
+    the pool)
+=====================================================================
+  D1: s.civil_actions = 4 (no government: the default at effects.rs:1394)
+    + pending gain 0 -> 4.0 for every candidate. CONSTANT.
+  D2: 4.0 for every candidate. CONSTANT.
+  VERDICT: NON-ZERO (4.0) at both decisions but margin-INERT at both:
+    identical across all candidates, cancels out of the margin.
+
+=====================================================================
+Summary table (D1 = first decision, D2 = refusal decision)
+=====================================================================
+  key                   D1                    D2                    margin source
+  row_urgency           non-zero, varies      non-zero, varies      both (row terms)
+  row_bargain_forgone   non-zero*, varies     non-zero*, varies     both (*deal-dependent)
+  row_last_copy         non-zero, varies      non-zero, varies      both
+  science_rate_trailing 0 (structural)        0 (structural)        none (rail value, r2+)
+  science_gap           0 (constant)          0 or cost (const)     D2 when levelled taken
+  science_surplus       0 (structural)        0 (structural)        none
+  science_rate          1.0 (constant)        1.0 (constant)        none
+  strength_deficit      0 (structural)        0 (structural)        none
+  rival_strength        0 (structural)        0 (structural)        none
+  card_board_credit     active multiplier     active multiplier     both (per-card)
+  card_board_leader     deal-dependent        deal-dependent        both (leaders only)
+  card_rate_credit      active multiplier     active multiplier     both (per-card)
+  ca_left               ca or ca-1 (1 apart)  0 (constant)          D1 (pushes Take down)
+  civil_action_gap      seat1: 1 vs 0; s2: 0  1 (constant)          D1 seat 1
+  civil_action_surplus  0 vs 1 (s1) / 0 vs 2  0 (constant)          D1 both seats (pushes ET up)
+  civil_actions         4.0 (constant)        4.0 (constant)        none
+
+  Keys that are structurally zero at D1 AND D2 in this scenario:
+  science_rate_trailing, science_surplus, strength_deficit,
+  rival_strength.
+  Keys that are non-zero but constant (margin-inert) at both:
+  science_rate, civil_actions.
+  Keys that become margin-active only at D1 (via post-apply trial
+  differences): ca_left, civil_action_gap (seat 1), civil_action_surplus.
+  Keys margin-active at both D1 and D2: row_urgency, row_bargain_forgone,
+  row_last_copy, card_board_credit, card_rate_credit, (card_board_leader
+  if a leader is in the row).
+  Key margin-active only at D2: science_gap (when the taken card is
+  levelled).
+
+  Reading for the round-1 refusal: at D1 the CA-family (ca_left,
+  civil_action_gap at seat 1, civil_action_surplus at both seats) plus the
+  row terms and the card-credit multipliers are the live carriers; the
+  science family contributes nothing at D1 except science_rate's cancelling
+  constant. At D2 the only science-family carrier is science_gap, and the
+  CA-family goes flat (constant 1.0 gap / 0.0 surplus / 0.0 ca_left), so
+  D2's margin is carried by the row terms, the card credits, and
+  science_gap.
