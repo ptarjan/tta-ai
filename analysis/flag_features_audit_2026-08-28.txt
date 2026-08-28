@@ -1,0 +1,248 @@
+FLAG-FEATURE AUDIT (2026-08-28)
+
+Scope: every feature written in rust/src/bots/weighted/features.rs whose value
+is a FLAG (0/1, bool cast, is_none/is_some test) or a SMALL FIXED STEP
+(count_ones, saturating small integer) -- not a continuous quantity. Weights
+from analysis/champion_freeze_2026-08-26/rust_champion_{2,3,4}p.json
+(169 keys each). Question per top-|w| flag: is there a SEPARATE channel that
+discriminates within the thing being flagged, and is that channel ALIVE
+(non-zero) on the live champion? A flag with a dead discriminator is the same
+defect class as Leader (verified: seat-0 round-1 split, +18.85663).
+
+=============================================================================
+PART 1 -- TRUE FLAGS (0/1 only)
+=============================================================================
+
+1. Leader -- features.rs:1023
+   Flags: p.leader.is_some() -- holding ANY leader.
+   w: 2p +18.85663 (rank 6/169) | 3p +0.46660 | 4p -22.59633 (rank 13)
+   THE known case: Homer (happy+1) and Genghis Khan (strength+3, +1 army) pay
+   identically. Per-leader channel: card-side `CardBoardLeader` (weights.rs:1030)
+   is the only leader-specific price, and it is near dead in all three
+   champions (2p -0.194, 3p -0.027, 4p -0.098); board-side there is NO
+   leader-specific coordinate at all (strength picks up only Caesar's printed
+   strength=1; nothing prices happiness or army-type bonuses).
+   VERDICT: same bug, confirmed and already fixed for the card side.
+
+2. LeaderReplacement -- features.rs:1030-1033
+   Flags: leader held AND taken_leader_ages.count_ones() >= 2 (a leader was
+   replaced).
+   w: 2p +0.028 | 3p -0.183 | 4p +0.308
+   Verdict: too small to matter; not a live defect.
+
+3. HasUnit -- features.rs:940
+   Flags: unit_workers > 0 -- at least one military unit staffed with a worker.
+   w: 2p +0.091 | 3p +0.315 | 4p -0.027
+   Verdict: small in all three. (Note: the 3p `colonies` +53.0750 and
+   4p `colonies` -6.617 ARE alive, so the colony COUNT channel is alive; only
+   the 0/1 cliff here is nearly unpriced.)
+
+4. HasColony -- features.rs:946
+   Flags: p.colonies non-empty.
+   w: 2p +8.68212 (rank 11) | 3p +0.134 | 4p +0.486
+   Discriminator: `Colonies` (features.rs:941, raw count) IS alive where it
+   matters -- 3p +53.0750, 4p -6.6169 (2p small, -9.319 on the rival side
+   instead). So within-colony discrimination exists and is live on the 2p
+   champion's neighbors; the 2p +8.68 cliff is a genuine cliff-on-top-of-count
+   overlay, not a dead channel.
+   Verdict: borderline -- a real 2p cliff, but the discriminator channel is
+   alive (3p/4p). Not the Leader bug shape.
+
+5. WarImmune -- features.rs:954
+   Flags: s.war_immune -- a pact side printing cannotBeDeclaredWarOnByAnyone
+   (RULES_SPEC 5.6).
+   w: 2p +0.098 | 3p +0.168 | 4p +26.88308 (rank 11/169)
+   Gated NonNegative (weights.rs:1790). 4p value is large and POSITIVE -- the
+   flag is paying +26.88 for being UNABLE to be attacked, with NO channel that
+   prices the other side of the same fact: the rival's doubled/forbidden
+   attack cost against this holder. The only related coordinates are
+   `AttackCostDoubled` (leader-specific, 4p +0.019 -- dead) and
+   `PactBlocksAttack` (2p +0.728, 3p -0.926, 4p +2.165 -- alive but small, and
+   it is a different fact: "an offer would be blocked", not "this holder is
+   protected"). No per-pact-quality channel prices how GOOD the protection is
+   (a War pact with a strong partner vs a weak one).
+   Verdict: FLAG WITH WEAK DISCRIMINATOR on 4p -- same class as Leader,
+   milder: the fact is real and the sign is gated correct, but the magnitude
+   is a single fitted constant over all pacts and all positions.
+
+6. AttackCostDoubled -- features.rs:964
+   Flags: leader carries OpponentsPayDoubleMilitaryActionsToAttackYou (Gandhi).
+   w: 2p +0.062 | 3p +60.0000 (RANK 1 of 169, AT the CLAMP_BLIND rail)
+       | 4p +0.019
+   Gated NonNegative (weights.rs:1790). At 3p this flag is pinned at the
+   blind rail -- the single largest coordinate in the 3p champion -- for a fact
+   that only one leader can produce and that only matters when someone
+   actually wants to attack. The channel that discriminates WITHIN the fact
+   (how expensive the doubled attack actually is: rival's strength margin,
+   available MAs) is `AttackTargetWeakness` (3p +30.237, alive) -- but that
+   prices the ATTACKER's view, not the holder's protection value. There is no
+   "my attacks cost double against them" mirror coordinate for the holder side.
+   Verdict: FLAG PINNED AT RAIL on 3p, dead holder-side discriminator.
+   Strongest Leader-bug-shaped finding in this audit.
+
+7. WonderOneStageShort -- features.rs:1011
+   Flags: wonder stages_left == 1.
+   w: 2p +0.0007 | 3p 0.0 | 4p 0.0
+   Verdict: unpriced in all three; not live.
+
+8. WonderInProgress -- features.rs:1040
+   Flags: p.wonder.is_some() -- any wonder in progress.
+   w: 2p +0.306 | 3p +0.138 | 4p -0.088
+   Discriminator: `WonderStagesLeft` (2p -4.2511, alive), `WonderProgress`
+   (3p +8.3715, alive), `WonderTurnsToFinish`/`WonderOverrun`/`WonderAgeOverrun`
+   (all near 0). So the within-wonder channel is ALIVE on 2p/3p.
+   Verdict: not the Leader bug -- the discriminator exists and is live.
+
+9. NoAggression -- features.rs:1057
+   Flags: s.no_aggression -- CannotPlayAggressionOrWar leader (Gandhi's
+   self-restriction).
+   w: 2p -0.51312 | 3p -0.0325 | 4p -2.69322
+   Gated NonPositive (weights.rs:1900). Grep confirms NO other bot code reads
+   `no_aggression` for pricing -- the flat flag is the ONLY place this fact
+   enters evaluation. There is no "how much aggression I would have wanted"
+   channel (rival strength margin, my tactic value) that could distinguish
+   "Gandhi while I had nothing to attack" from "Gandhi while I was about to
+   win a war".
+   Verdict: FLAG WITH NO DISCRIMINATOR, all three player counts. Smaller than
+   Leader but exactly the same shape: one flat number for a fact whose
+   consequence varies enormously.
+
+=============================================================================
+PART 2 -- SMALL FIXED STEPS / CAPPED STEPS (not pure 0/1, but step-like)
+=============================================================================
+
+10. TacticLevel -- features.rs:935
+    Step: 0 (none) or p.tactic.level() (1-3).
+    w: 2p -0.0667 | 3p +60.0000 (RANK 1 of 169, AT RAIL) | 4p -36.14501 (rank 10)
+    The step is signed in OPPOSITE directions between 3p (+60) and 4p (-36):
+    the league cannot agree whether having a tactic in play is good, because
+    the flat step carries the whole fact and the real signal -- how much
+    strength the tactic actually adds -- lives in `TacticGain` (2p +0.516,
+    3p +0.970, 4p +0.571, ALIVE but ~50-100x smaller than the step) and
+    `TacticBoardCredit` (2p 0.137, 4p 0.094 -- card-side only).
+    Verdict: FLAG-LIKE STEP PINNED AT RAIL on 3p, alive-but-dwarfed
+    discriminator on 4p. Same class as Leader, and the 3p sign is likely
+    noise pinned to the rail.
+
+11. SpecialTechs -- features.rs:980
+    Step: count of special techs on board (0-4 typical).
+    w: 2p +0.084 | 3p -0.256 | 4p +49.32791 (RANK 7 of 169)
+    The count treats a 2-science special (e.g. a food discount) the same as a
+    5-science one (e.g. a strong per-turn effect). There is NO per-special-tech
+    channel: cards.rs special-tech pricing dispatches through the generic
+    special-matcher which returns None for most specials (cards.rs:462, 510,
+    1735 -- long arms-lists ending `=> None`/`continue`), so the board-side
+    count is the only place these facts enter evaluation.
+    Verdict: STEP WITH DEAD DISCRIMINATOR on 4p. The +49.33 is a single
+    constant over ~20 different special-tech effects, exactly the Leader
+    shape (flat price over a heterogeneous class).
+
+12. MySeededPending -- features.rs:1149
+    Step: sum of age levels of my pending seeded events (0, 1, 2, 3, ...).
+    w: 2p -0.081 | 3p +0.757 | 4p -0.076
+    Discriminator: `EventScoringMargin` (2p +7.175, 3p +34.556, 4p +20.225 --
+    ALIVE, large) prices the same facts per-event with real card data.
+    Verdict: not a bug -- the flat step is dwarfed by the live discriminator.
+
+13. AuctionCommitted / AuctionBid -- features.rs:965-966
+    AuctionBid is a magnitude (current bid), not a flag; AuctionCommitted is
+    a bool-ish 0/1.
+    w AuctionCommitted: 2p +0.305 | 3p -1.286 | 4p -0.007
+    w AuctionBid: 2p -4.10756 | 3p -0.040 | 4p +2.023
+    Verdict: small; the bid is a genuine continuous quantity, not a flag
+    defect. Excluded from the top-8 bug list.
+
+14. Pacts / PactBlocksAttack -- features.rs:947-948
+    Pacts is a small count (0-3); PactBlocksAttack a 0/1-ish offer flag.
+    w Pacts: 2p -0.089 | 3p -3.857 | 4p -0.111
+    w PactBlocksAttack: 2p +0.728 | 3p -0.926 | 4p +2.165
+    Discriminator: `PactBoardCredit` (2p 0.159, 3p ?, 4p ?) and
+    `PactPartnerLead` (2p -0.157) -- both small. The within-pact channel is
+    weak but not dead.
+    Verdict: mild; not in top 8.
+
+=============================================================================
+PART 3 -- RANKED BY |WEIGHT| (max over 2p/3p/4p), TOP 8 + DISCRIMINATOR
+=============================================================================
+
+Rank  Key                  Max|w|  Where      Discriminator channel          Alive?
+1     TacticLevel          60.000   3p       TacticGain/TacticShort/Tactic    3p: TacticGain +0.97 alive
+                                         BoardCredit (cards.rs)               but 60x smaller than the step;
+                                                                 4p: TacticGain +0.57, step -36
+2     AttackCostDoubled    60.000   3p       (holder-side: none;              No holder-side channel at all;
+                                         attacker-side: AttackTargetWeakness) attacker-side is a different fact.
+                                                                 FLAG + DEAD DISCRIMINATOR.
+3     SpecialTechs         49.3279   4p      (none -- per-special-tech         No channel prices which special tech.
+                                         pricing is dead, cards.rs)           FLAG + DEAD DISCRIMINATOR.
+4     Leader               22.5963   4p      CardBoardLeader (card-side only)  Card-side near dead (-0.19/-0.03/-0.10);
+                                                                 board-side: none.
+                                                                 CONFIRMED BUG (seat-0 survey).
+5     WarImmune            26.8831   4p      PactBlocksAttack (small,          Partial: alive but small and a
+                                         different fact)                      different fact; no per-pact
+                                                                 quality channel. MILD BUG.
+6     NoAggression         2.69322   4p      (none -- grep: no other bot       FLAG + NO DISCRIMINATOR, all three.
+                                         code reads no_aggression)            Same shape as Leader, smaller.
+7     HasColony            8.68212   2p      Colonies (raw count)             ALIVE 3p +53.07, 4p -6.62;
+                                                                 2p small. NOT the Leader shape.
+8     AuctionBid           4.10756   2p      (continuous magnitude, not a     Not a flag; excluded from bug list.
+                                         flag)
+
+---------------------------------------------------------------------------
+Also listed but below the cut:
+  WonderInProgress  0.306 (2p)  -- discriminator WonderStagesLeft -4.25 (2p)
+                                   alive; not a bug.
+  MySeededPending   0.757 (3p)  -- EventScoringMargin +34.56 alive; not a bug.
+  LeaderReplacement 0.308 (4p)  -- no separate channel, but too small.
+  HasUnit           0.315 (3p)  -- Colonies/UnitWorkers channels alive; small.
+  WonderOneStageShort ~0        -- unpriced everywhere.
+  Pacts/PactBlocksAttack -3.86 (3p) -- partial channel, mild.
+
+=============================================================================
+BOTTOM LINE
+=============================================================================
+
+True Leader-class defects (flag/step with a dead or dwarfed within-class
+discriminator, priced large on the live champion):
+
+  A. TacticLevel at 3p (+60.0000, at the CLAMP_BLIND rail): the step is the
+     only big price for "a tactic is in play"; the real discriminator
+     (TacticGain, how much strength it adds) is alive but 60x smaller. The
+     sign is +60 at 3p and -36 at 4p -- the league is paying a rail-pinned
+     constant to express something the smaller channel already says.
+
+  B. AttackCostDoubled at 3p (+60.0000, at the CLAMP_BLIND rail): one leader
+     can produce this; the holder-side protection value has no channel at all,
+     so the whole fact is priced by a single 0/1 constant pinned to the rail.
+
+  C. SpecialTechs at 4p (+49.3279): ~20 different special-tech effects all pay
+     the same +12.33 per tech; no per-special-tech channel exists (cards.rs
+     special-matcher returns None for most).
+
+  D. Leader (all three: 2p +18.86, 4p -22.60): confirmed, already addressed on
+     the card side by CardBoardLeader (itself near dead: -0.19/-0.03/-0.10).
+     The board-side per-leader channel is missing entirely.
+
+  E. WarImmune at 4p (+26.8831): real fact, correct sign gate, but one constant
+     over all pacts and positions; the only related channel (PactBlocksAttack)
+     is alive but small and prices a different fact.
+
+  F. NoAggression (all three, max 4p -2.69): no discriminator channel exists
+     anywhere in the bot -- the flat flag is the sole entry point. Same shape
+     as Leader; smaller magnitude.
+
+The pattern: the league pushes the largest possible coefficient onto a
+0/1 or small-step coordinate when the within-class channel is missing or too
+small to carry the fact, and at 3p two of those coordinates are pinned at the
+CLAMP_BLIND rail (60.0) -- the same "pinned coordinate" failure mode the
+Uprising fix (features.rs:885-892) already documented for a different key.
+
+Rail note (weights.rs:2185-2192, 2210-2240): `clamp_bound(players)` is
+CLAMP_T * P95_TOTAL_SPREAD / p95_candidate_spread, capped at CLAMP_CEILING
+(120.0, the 2026-08-27 experiment). `TacticLevel` (line 2320) and
+`AttackCostDoubled` (line 2329) both carry a p95 spread of 1.0 at 3p -- the
+measured value for any 0/1 step -- which is exactly what lets a 0/1 coordinate
+legitimately sit at 60.0 under the blind rail. The instrument sees "this step
+flips by 1.0 between candidates" and cannot see "the 1.0 it scales is a flag
+with no within-class channel." That is the measurement-side half of this
+defect class: spread-based rails cannot distinguish a 1.0 swing on a
+continuous residual from a 1.0 swing on a Leader-shaped flag.
