@@ -1,0 +1,247 @@
+================================================================================
+THROUGH THE AGES -- OPENER MENU, CORRECTED COMPARISON (2p)
+================================================================================
+Date: 2026-08-28
+Champion: experiments/rust_champion_2p.json, gen 120850 (file moved between
+reads this session: 120804 -> 120839 -> 120848 -> 120850; all figures below
+are at 120850, re-verified after each move).
+Supersedes: analysis/opener_menu_ranking_2026-08-28.txt (gen 120839). That
+file's comparison was WRONG: it scored EndTurn on the state AFTER
+end_of_turn had run, i.e. it credited the turn-end production windfall to
+EndTurn itself. This file uses the comparison the code actually makes.
+
+--------------------------------------------------------------------------------
+1. THE CODE, VERBATIM
+--------------------------------------------------------------------------------
+rust/src/bots/weighted/eval.rs, `Weighted::choose`, lines 493-499:
+
+    if !matches!(mv, Move::EndTurn) {
+        apply::apply(&mut trial, mv);
+    }
+    let mut val = evaluate(&trial, idx, w, Some(&ctx), None);
+    if matches!(mv, Move::EndTurn) {
+        val += end_bias;
+    }
+
+Every candidate is scored at the SAME point in time, mid-turn, before this
+turn's production. `Move::EndTurn` is the only move whose apply arm reaches
+`economy::end_of_turn` (apply.rs -> game::end_turn -> resume_end_turn), so
+applying it here would score it against a board that already holds this
+turn's food and resources while every rival candidate is still charged the
+full negative food_gap/resource_gap (block comment, eval.rs:482-492).
+EndTurn is scored on the UNMOVED root, and end_turn_bias is what prices
+ending a turn.
+
+Consequences for the delta table (delta = candidate score minus evaluate(root)):
+  * EndTurn:   delta = end_turn_bias            = -4.619540
+  * Take(c):   delta = sum over keys of w * (feature_after_take - feature_root)
+The old file's +1.98 EndTurn delta (production +2/+2, MA reset, science
+scoring) is spurious: none of it is in EndTurn's score.
+
+--------------------------------------------------------------------------------
+2. BASELINE (round 1, fresh game)
+--------------------------------------------------------------------------------
+game.rs:382 `p.civil_actions = i as i8 + 1` -- seat 0 has CA=1, seat 1 CA=2
+at 2p round 1 (Despotism, no modifiers; s.civil_actions = p.civil_actions
+here, so the CivilActions feature equals 1/2 per seat).
+  hand_civil = 0, hand_value = 0, science = 0, food = 0, resources = 0,
+  workers_free = 1, military_actions = 0 (round 1), no tableau, Age A.
+  ScienceGap baseline = 0: marginal_needs.science is the min science cost of
+  levelled-type cards IN HAND (features.rs:308-333); hand empty -> 0.
+  RowPlayableCount baseline R (row-dependent, see section 5): in round 1
+  science_have_rate = max(ScienceRate,0) + Science = 1 + 0 = 1, so an Age A
+  tech in the row is "playable" iff its printed science cost <= 1; row takes
+  with a legal gate count as playable. R is identical in the root and in
+  every Take trial (the row does not change during a turn), so it cancels
+  from every delta.
+  HandOverCapacity baseline = 0: hand_card_affordable is true for
+  Action/Leader cards unconditionally, and for a levelled card with 0
+  science it is true exactly when the card's science cost is 0.
+  FamineDeficit baseline = 0: FoodStock + FoodRate = 0 + 2 = 2 > 0.
+
+Lateness L = 0.085526 (cards_unseen 139 / total 152, 2p), early = 0.914474.
+Phase blends (eval.rs:664-673; PHASE_KEYS = Workers, StrengthRel,
+TechLevels, HandValue, weights.rs:2661-2666): Workers and TechLevels are 0
+in round 1 (their _late twins contribute 0 anyway); HandValue is 0 at root
+and 1 (level-0 card + 1) after a Take.
+
+Champion weights at gen 120850 (move-relevant):
+  ca_left -0.482596, take_cost_paid -0.018257, take_cost_share +3.816965,
+  hand_civil -0.132048, civil_action_surplus +2.098429,
+  science_gap -2.432329, science 0.407065, end_turn_bias -4.619540,
+  hand_value +0.310631 (early slot), hand_value_late +0.027702,
+  hand_potential +1.197296, row_playable_count +0.244164,
+  science_need_row -0.076184, food_rate -0.183861 (rate-scaled, cancels),
+  resource_rate +0.402473 (rate-scaled, cancels).
+
+p95 spread rows (2p column, analysis/featspread_matched_2026-08-27.txt):
+  civil_action_surplus p95 4.0, science_gap p95 10.0, ca_left p95 5.0,
+  take_cost_paid p95 4.0, take_cost_share p95 0.8333, hand_civil p95 2.0,
+  hand_value p95 2.7895, hand_value_late p95 7.5789,
+  row_playable_count p95 13.0, science_need_row p95 (nonzero; row-dependent).
+Every magnitude cited below has a NON-ZERO 2p p95 row: the fitted values are
+in play, not blind-rail drift. (The featspread table is one day older than
+this file and was built under the frozen clamp_ceiling_2026-08-27 champion;
+the 2p p95 values are stable across this session's champion moves, but they
+are not this gen's own measurement -- flagged, not asserted.)
+DOMINATES (eval.rs:811-814): (ResourceStock, BlueFree), (WonderPotential,
+WonderPromise). No Take moves ResourceStock/BlueFree/WonderPotential/
+WonderPromise in round 1, so dominance repair cannot touch any figure here.
+
+--------------------------------------------------------------------------------
+3. TAKE DELTAS, ITEMISED BY KEY
+--------------------------------------------------------------------------------
+For a Take of a row card at slot cost c (c in {1,2,3}, c <= CA) with printed
+science cost s (s = 0 for Action/Leader/Wonder):
+  ca_left              -c                * w[ca_left]              = -0.482596 c
+  take_cost_paid       +c                * w[take_cost_paid]       = -0.018257 c
+  take_cost_share      c/CA              * w[take_cost_share]      = +3.816965 c/CA
+  hand_civil           +1                * w[hand_civil]           = -0.132048
+  hand_value           0 -> 1            * early * w[hand_value]   = +0.284068
+                                   + late * w[hand_value_late]    = +0.002369
+  civil_action_surplus max(0,CA) -> max(0,CA-c-1)  * w[cas]       = -2.098429 per unit lost
+  science_gap          0 -> s (0-science card)  * w[science_gap]   = -2.432329 s
+  hand_potential       +h                * 1.197296 (row/card-dependent, h >= 0)
+  row_playable_count   unchanged (R cancels)
+  science_need_row     unchanged (row, science, rate all unchanged; cancels)
+  food_rate/resource_rate: unchanged (card goes to HAND, not tableau;
+  rate-scaled by the same hz in root and trial; cancels exactly)
+  everything else (stocks, rates, workers, headrooms, strength, gaps): unchanged
+  hand_over_capacity: unchanged for s = 0 (affordable at 0 science); for a
+  levelled card with s >= 1 it would rise by 1 at w 0.0 (unpriced) -- no effect
+  famine_deficit: stays 0 (FoodStock+FoodRate = 2, unchanged)
+
+Fixed part (everything except science_gap, hand_potential):
+  F(c, CA) = -0.482596 c - 0.018257 c + 3.816965 c/CA - 0.132048 + 0.286437
+            + 2.098429 * (CAS_after - CAS_root)
+
+CAS at start of round 1 and after one Take, and its point contribution
+(w[cas] = +2.098429 per unit):
+  SEAT 0 (CA=1):  CAS 1 -> 0.   Contribution -2.098429.
+  SEAT 1 (CA=2):  CAS 2 -> 0.   Contribution -4.196858. (A cost-1 take spends
+  the last CA, so the whole surplus is lost at once; a cost-2 take does the
+  same.)
+
+Seat 0 (CA=1), only c = 1 legal:
+  F = -0.482596 - 0.018257 + 3.816965 - 0.132048 + 0.286437 - 2.098429
+    = +1.372073
+  Take, s=0 (Action/Leader/Wonder):  +1.372073 + 1.197296 h
+  Take, s=1:                         -1.060256 + 1.197296 h
+  Take, s=2:                         -3.492585 + 1.197296 h
+  Take, s=3:                         -5.924914 + 1.197296 h
+  EndTurn:                            -4.619540
+
+Seat 1 (CA=2), c in {1,2}:
+  F(1) = -0.482596 - 0.018257 + 1.908482 - 0.132048 + 0.286437 - 4.196858
+        = -2.634841
+  F(2) = -0.965192 - 0.036514 + 3.816965 - 0.132048 + 0.286437 - 4.196858
+        = -1.227211
+  Take, c=1, s=0:  -2.634841 + 1.197296 h
+  Take, c=1, s=1:  -5.067170 + 1.197296 h
+  Take, c=2, s=0:  -1.227211 + 1.197296 h
+  Take, c=2, s=1:  -3.659540 + 1.197296 h
+  (s=2, s=3 techs add -4.864658 / -7.296987 on top; never competitive.)
+  EndTurn:         -4.619540
+
+h (the hand_potential increment of the taken card) is card-dependent and
+>= 0; its 2p p95 row is non-zero (w +1.197296, fitted, in play). It shifts
+a given take's delta UP by at most a few points. The bounds below use the
+extremes.
+
+--------------------------------------------------------------------------------
+4. THE QUESTION: DOES THE BOT FORGO A TAKE IN ROUND 1?
+--------------------------------------------------------------------------------
+Headline: seat 0, CA=1.
+
+  Take s=0, h=0:  +1.372073 vs EndTurn -4.619540  -> Take wins by 5.99
+  Take s=0, h=1:  +2.569369                        -> Take wins by 7.19
+  Take s=1, h=0:  -1.060256 vs -4.619540           -> Take wins by 3.56
+  Take s=2, h=0:  -3.492585                        -> Take wins by 1.13
+  Take s=3, h=0:  -5.924914                        -> EndTurn wins by 1.31
+  Take s=3, h=1:  -4.727618                        -> EndTurn wins by 0.11
+  Take s=3, h=2:  -3.530322                        -> Take wins by 1.09
+
+The bot forgoes a take in round 1 ONLY when the best affordable row card is a
+3-science tech whose hand_potential increment is low. Every 1- or 2-science
+tech, and every Action/Leader/Wonder (s=0), is preferred over EndTurn by a
+wide margin. So at seat 0 the round-1 menu says TAKE (except in the thin
+s=3/h~0 corner), and the known civil-action waste is NOT explained by seat 0
+round 1 at all.
+
+Seat 1 (CA=2) -- the highest-CA seat, the explicit second case:
+
+  Take c=2, s=0, h=0:  -1.227211 vs -4.619540  -> Take wins by 3.39
+  Take c=1, s=0, h=0:  -2.634841               -> Take wins by 1.98
+  Take c=1, s=1, h=0:  -5.067170               -> EndTurn wins by 0.45
+  Take c=2, s=1, h=0:  -3.659540               -> Take wins by 0.96
+
+The conclusion CHANGES for seat 1: with two CA the CAS hit doubles
+(-4.196858 vs -2.098429), EndTurn becomes the top-ranked move in several
+slices (any take with s=1 and c=1 and h=0; all s>=2 techs), and even the
+best take only wins by ~3.4. Seat 1 is where a round-1 forgo is plausible
+from this menu alone; seat 0 essentially always takes.
+
+But note the seat-1 caveat: the take here is a 1- or 2-CA spend of a pool
+that resets at end of turn anyway. The CAS feature prices that spend as if
+the surplus were permanent, which is why the seat-1 menu leans so hard
+toward EndTurn. That is a feature-design observation, not a defect claim
+(no sign_intent proposed, per standing rules).
+
+--------------------------------------------------------------------------------
+5. ROW-DEPENDENT TERMS AND BOUNDS
+--------------------------------------------------------------------------------
+R = RowPlayableCount baseline (count of row slots that are take-legal AND
+playable at have+rate = 1). R is identical in root and in every Take trial
+(the row does not change during a turn; take_gate's have is recomputed from
+p.civil_actions but R counts legal slots, and a slot that is playable in the
+root is still playable in the trial -- the taken slot's card is in the hand,
+not the row). So R * 0.244164 cancels from every delta. Likewise
+science_need_row (row + science + rate all unchanged) cancels.
+The only row/card-dependent term left is hand_potential (+1.197296 per unit
+of increment h), which is card-specific and >= 0. The per-seat tables above
+are therefore exact modulo h; the bounds use h = 0 (worst case for the
+Take) and the natural card-specific values.
+
+--------------------------------------------------------------------------------
+6. NEGATIVE RESULT, STATED PLAINLY
+--------------------------------------------------------------------------------
+Under the CORRECT comparison (EndTurn scored on the unmoved root plus
+end_turn_bias, per eval.rs:493-499), the corrected 2p round-1 ranking says
+the bot SHOULD take in round 1:
+
+  * Seat 0 (CA=1): every take with s <= 2 beats EndTurn by at least 1.13;
+    s = 0 beats it by 5.99+. The forgo happens only for a 3-science tech
+    with a low hand_potential increment -- a thin corner.
+  * Seat 1 (CA=2): the menu is genuinely mixed; EndTurn can be top-ranked
+    (s=1/c=1/h=0 slice, all s>=2 techs), but the best take still wins by
+    3.39.
+
+Therefore the known civil-action waste (rounds where the champion leaves CA
+on the table) must be happening in LATER ROUNDS, or in seat-1 round 1 in the
+specific slices above, not in the seat-0 round 1 the old file analysed. The
+old file's +1.98 EndTurn "windfall" was an artefact of applying end_of_turn
+to EndTurn's own trial; the real EndTurn delta is exactly end_turn_bias
+(-4.619540), and it LOSES to most takes in round 1.
+
+Mechanism 2 from the previous file survives: CivilActionSurplus really does
+drop by 2 under a take (CaLeft -1, HandCivil +1, features.rs:1199-1202
+`CivilActionSurplus = max(0, CaLeft - HandCivil)`), at -2.098429 per unit
+= -4.196858 at seat 1 -- and it is the reason seat 1's menu leans toward
+EndTurn. But it is not strong enough at seat 0 to produce a forgo.
+
+--------------------------------------------------------------------------------
+7. NOTES
+--------------------------------------------------------------------------------
+* Gen 120850; all weights re-read live, not trusted from prior notes.
+  end_turn_bias = -4.619540.
+* No build, no edits, no sign_intent. Read-only over rust/src + the
+  champion JSON + analysis/featspread_matched_2026-08-27.txt.
+* The p95 spread table used is one day old (frozen
+  clamp_ceiling_2026-08-27 champion); the 2p p95 values for the keys cited
+  are non-zero and stable, but a same-gen table would be cleaner.
+* Rate-scaled keys (food_rate, resource_rate, culture_rate, science_rate):
+  a taken card lands in the HAND, not the tableau, so the net rates are
+  unchanged between root and trial; the hz scale (0.6829 at round 1, 2p)
+  applies identically to both and cancels.
+* The old file (opener_menu_ranking_2026-08-28.txt) is kept for provenance;
+  its ranking is void under the comparison the code actually makes.
