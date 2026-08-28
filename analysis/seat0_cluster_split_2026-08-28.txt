@@ -1,0 +1,173 @@
+Seat 0, round 1: what splits the Take-vs-EndTurn margin into two clusters
+============================================================================
+
+Question
+--------
+At 2 players, round 1, seat 0 alone (single decision index, n=360 in the
+postclimb 2p champion, see analysis/r1_margin_by_decision_index_2026-08-28.txt),
+the Take-vs-EndTurn score margin (best_take - end_turn, read off
+WeightedBot::rank_moves) is strongly bimodal: a low cluster around p25 = 4.16
+and a high cluster around p75 = 40.71, with nothing between. It is NOT the
+decision index (postclimb has n=0 at index 2) and NOT the seat (already
+isolated to seat 0). Find the coordinate that separates the two clusters.
+
+Answer (one line)
+-----------------
+The coordinate is the `Leader` feature, written at
+rust/src/bots/weighted/features.rs:1023:
+
+    f.set(WeightKey::Leader, if p.leader.is_none() { 0.0 } else { 1.0 });
+
+It is 0 in the EndTurn trial (and in any non-leader Take trial) and 1 in the
+Take trial whose taken card is a leader. The live 2p champion prices it at
+`leader = +18.85663` (analysis/champion_freeze_2026-08-26/rust_champion_2p.json),
+the 6th-largest |weight| in the whole vector. That single ~18.9 swing, stacked
+on the leader's own card-potential and (for Julius Caesar only) a +1 strength
+bump, is what lifts a leader-on-row game into the high cluster and leaves
+every no-leader game in the low one.
+
+Why the margin is post-apply and why that matters
+--------------------------------------------------
+rank_moves (eval.rs:533-557) scores every candidate in its POST-APPLY trial
+state: for each mv it does `apply(&mut trial, mv)` then
+`evaluate(&trial, idx, w, Some(&ctx), None)` (eval.rs:546-553). EndTurn is the
+one candidate that does not move the board, so it is scored on the unmoved
+root plus `end_turn_bias` (champion value -2.1895). Every other candidate is
+scored on the state AFTER that candidate's move. So the margin
+best_take - end_turn is really "evaluate(post-take state) -
+evaluate(pre-take state) - end_turn_bias", and the only features that can
+differ between the two sides are the ones a single round-1 seat-0 take
+actually changes.
+
+The seat-0 round-1 position (the "opening position")
+----------------------------------------------------
+From game::new_game / blank_player (game.rs:360, 244) at 2p:
+  - p.civil_actions = 1  (the section-1.9 first-round grant: seat 0 gets 1)
+  - p.military_actions = 0
+  - p.hand_civil empty, p.hand_military empty
+  - p.ca_spent_taking = 0
+  - p.leader = NONE, p.tactic = NONE, p.wonder = NONE, p.colonies empty
+  - p.workers_free = 1
+  - tableau = the five start techs, all pre-staffed: Warriors(1),
+    Agriculture(2), Bronze(2), Philosophy(1), Religion(0) (game.rs:118).
+    All four production/urban techs have workers > 0 and Religion is a
+    SpecialTech (takes_workers() == false), so sweep_tableau's unbuilt_slots
+    (features.rs:205, `slot.workers == 0 && kind.takes_workers()`) is 0.
+    Hence WorkerGap = 0, WorkerSurplus = 1, ResourceGap = 0 -- all CONSTANT
+    across the two clusters (a take does not touch the tableau).
+  - s.strength = 1 (Warriors only) before any take; p.leader is NONE.
+  - s.civil_actions = 1, s.civil_hand_limit = 0, so costs::civil_hand_limit =
+    1 + 0 = 1 (costs.rs:100-103) -- the hand is effectively full the moment
+    one card is taken.
+
+What a seat-0 take can change (and the champion weight of each)
+--------------------------------------------------------------
+A seat-0 take with 1 CA can only come from row slots 0-4 (row_cost is 1 for
+slots 0-4, 2 for 5-8, 3 for 9-12; costs.rs:71-79). The features that differ
+between the pre-take (EndTurn) trial and the post-take trial, with the live
+2p champion weight of each:
+
+  feature (features.rs line)          pre-take -> post-take      weight
+  ----------------------------------  -------------------------  --------
+  Leader (1023)                         0.0      -> 1.0  (leader only)   +18.85663
+  Strength (678 / 931)                  1.0      -> 2.0  (Caesar only)   +14.39839
+  CaLeft (900)                          1.0      -> 0.0                  -1.01477
+  CivilActionGap (1201)                 0.0      -> 1.0                  -1.05835
+  TakeCostShare (925)                   0.0      -> 1/ca_total            +0.94564
+  TakeCostPaid (915)                    0.0      -> 1.0                   -0.55666
+  HandCivil (1060)                      0.0      -> 1.0                   +0.10203
+  HandValue (1061)                      0.0      -> level+1               +0.01549
+  MilitaryActions (899)                 0.0      -> 0.0 (unchanged)       +0.09489
+
+Every one of these except `Leader` (and, for Caesar, `strength`) carries a
+weight of |w| <= 1.06. No combination of the small ones can move the margin by
+more than a couple of points. `Leader` alone is +18.86; `strength` adds a
+further +14.40 but ONLY when the taken leader is Julius Caesar (the one Age A
+leader whose printed `effects.strength` is 1; the other two, Hammurabi and
+Homer, print strength 0). Those two are the only large-weight coordinates a
+seat-0 round-1 take can flip, and both flip together exactly when the taken
+card is a leader.
+
+Why the binary is "is a leader on a cheap row slot"
+---------------------------------------------------
+The Age A civil deck that fills the 13-slot row contains three leaders --
+Julius Caesar, Hammurabi, Homer (card_table.rs:1553, 1572, 1591), each
+`count: [1,1,1]` so exactly one copy each at 2p. `build_deck` (game.rs:340)
+includes every `is_civil_row()` card of Age A, and `is_civil_row` (cards.rs:
+147-157) includes `CardType::Leader`, so all three are in the 20-card deck
+that `deal` (game.rs:543) spreads into the 13 slots.
+
+Seat 0 has exactly 1 CA, so it can take only from slots 0-4 (cost 1). A leader
+dealt into slots 5-12 (cost 2-3) is NOT takeable by seat 0 and never becomes
+best_take. So the coordinate that is 0 in one opening position and 1 in the
+other is: **is there a leader in one of the five 1-CA slots (0-4)?**
+
+  - No leader in a cheap slot: best_take is a farm/mine/lab/etc. Its
+    post-take state has p.leader == NONE, so the `Leader` feature is 0.0 in
+    the Take trial just as it is in the EndTurn trial. The margin is the
+    small sum of the sub-1.06 coordinates above (hand value, the CA cost
+    swing, the gap) -- the low cluster, ~4.
+  - A leader in a cheap slot: best_take is the leader. Its post-take state
+    has p.leader set, so the `Leader` feature is 1.0 in the Take trial while
+    the EndTurn trial still reads 0.0 -- a one-unit step on a +18.86 weight,
+    plus the leader's own card-potential, plus (Caesar only) the +14.4
+    strength step. That is the high cluster, ~40.
+
+There is no in-between: a leader either is or is not in a takeable slot, and
+the `Leader` feature is exactly 0.0 or 1.0. Hence the gap between p25 (4.16)
+and p75 (40.71) has nothing in it.
+
+The specific coordinate the question asked for
+----------------------------------------------
+WeightKey: `Leader`
+features.rs line: 1023
+    f.set(WeightKey::Leader, if p.leader.is_none() { 0.0 } else { 1.0 });
+Champion weight (2p postclimb): +18.85663
+Shape: a flag -- 0.0 in the pre-take/EndTurn trial and in every non-leader
+Take trial, 1.0 in the Take trial that takes a leader. It is the only
+flag/step feature in features.rs that is (a) large-weight in the live 2p
+champion, (b) 0 in the seat-0 round-1 EndTurn trial, and (c) nonzero in the
+Take trial for some but not all seat-0 round-1 positions.
+
+Secondary coordinate (same flip, Caesar only):
+WeightKey: `strength` (features.rs:678 `let strength = f64::from(s.strength)
++ g(GainFeature::Strength);`, written at features.rs:931)
+Champion weight: +14.39839
+`effects::compute` adds the leader's printed `effects.strength` in phase 2
+(effects.rs:1470-1478, `add_flat(&mut stats, &card.effects)`), so taking
+Julius Caesar (effects.strength = 1) steps `strength` 1 -> 2, while taking
+Hammurabi or Homer (effects.strength = 0) leaves it at 1. This is why the high
+cluster's exact height varies a little by WHICH leader is on the row, but the
+0-vs-1 `Leader` flag is the binary that splits the two clusters.
+
+What it is NOT
+--------------
+- Not the decision index: postclimb seat 0 never reaches index 2 (n=0 at
+  index 2; see r1_margin_by_decision_index_2026-08-28.txt).
+- Not the seat: already isolated to seat 0 (the seat split is what left this
+  residual).
+- Not the CA/gap family (CaLeft, CivilActionGap, TakeCostPaid, TakeCostShare,
+  HandCivil, HandValue): all flip on every take (leader or not) and all have
+  |weight| <= 1.06, so they contribute a small constant offset to BOTH
+  clusters, not the gap between them.
+- Not the production/strength-at-stake features (culture_rate +57.5,
+  science_rate_trailing +49.5, workers_late +45.0, rival_yellow_bank -39.7):
+  none of these change on a seat-0 round-1 take. culture_rate/science_rate/
+  workers read the tableau and rival board, which a hand-take does not touch;
+  workers is a PHASE_KEY priced in the phase-blend (eval.rs:295-324) off the
+  same unchanging tableau; science_rate_trailing is not a features.rs dot-
+  product feature at all (it is priced through the rivals.rs standing-hinge
+  marginal, registry.rs:311).
+
+Cross-check against the numbers
+-------------------------------
+Low cluster ~4: the sub-1.06 take-flip coordinates summed (CaLeft -1.01 * (1-
+0) = +1.01, CivilActionGap -1.06 * (0-1) = +1.06, TakeCostShare +0.95 * ~0.25
+= +0.24, TakeCostPaid -0.56 * 1 = -0.56, hand value ~+0.1) net to a few
+points, plus the taken card's own card-potential. Consistent with 4.16.
+High cluster ~40: the low-cluster base PLUS the Leader flag +18.86 PLUS the
+leader's card-potential PLUS (Caesar) +14.4. 4 + 18.86 + card-potential (+
+14.4 for Caesar) lands in the 25-45 band, consistent with 40.71. The exact
+height varies by which of the three leaders is on the row (Caesar highest via
+the strength step), which is why p75-p90 (40.71 -> 40.89) is a tight tail
+rather than a spread.
