@@ -1,0 +1,297 @@
+================================================================================
+card_board_credit == -card_board_leader in the postclimb 2p champion
+mechanism hunt + runtime effect, 2026-08-28
+================================================================================
+
+FINDING (question 1): I could NOT find any code in this repo that sets one of
+these two keys from the other. The only coupling that exists is a SIGN gate
+that fires exactly when the pair is equal-and-opposite, and its repair is a
+no-op there (see section 3). The equality is not manufactured: it is the
+HILL-CLIMB ITSELF landing on the gate's boundary. Evidence and mechanism in
+sections 2-6.
+
+FINDING (question 2): CONFIRMED, with one correction to the question's
+framing. It is not the leader's board credit that is zero -- it is the
+leader's BOARD-SWAP DIFF term. A leader's static (card_yields) price, its
+card_choice price, and any board_extra term are all scaled by
+card_board_credit ALONE, so they survive at roughly full weight. Only the
+board-aware "what does replacing the leader on the board with this one
+change" term is scaled by card_board_credit + card_board_leader, which is
+exactly 0.0. See section 7 for the arithmetic and what a leader is left
+priced on.
+
+------------------------------------------------------------------------------
+1. THE OBSERVED FACTS (full float precision, python repr)
+------------------------------------------------------------------------------
+file: analysis/frozen/postclimb_2026-08-26/champ2p.json (gen 113181)
+    card_board_credit  =  0.16341414301175877
+    card_board_leader  = -0.16341414301175877
+    sum                =  0.0   (a == -b is True; the two are the SAME f64
+                                 bit pattern with the sign bit flipped)
+
+file: analysis/frozen/preclimb_2026-08-25/champ2p.json (gen 108828)
+    card_board_credit  =  0.1697739687579601
+    card_board_leader  = -0.15018005988450783
+    sum                =  +0.01959...   (close, not equal)
+
+The equality is not a postclimb-only artifact that later died; it RECURS:
+  experiments/rust_champion_2p.json (live champion, gen 120300)
+    card_board_credit  =  0.1965856875...
+    card_board_leader  = -0.1965856875...   (again bit-exact equal-and-opp)
+while the two later frozen champions are NOT equal:
+  clamp_ceiling_2026-08-27 (gen 116808): 0.3262186147 / -0.2398275788 (sum +0.0864)
+  opener_2026-08-28       (gen 119419): 0.1895736345 / -0.1614092403 (sum +0.0282)
+  app/champion_2p.json (gen 108474):      0.1702389930 / -0.1501800599 (sum +0.0201)
+So the pattern is: the pair keeps drifting to the boundary and then sits
+EXACTLY on it for stretches of the walk (two champions ~7000 gens apart are
+both exactly on it, the next two are off). That is boundary-sticking
+behaviour, not a one-off event, and it argues against "a one-shot post-
+processing pass ran once and stamped it" -- no such pass exists anyway (the
+climb re-reads and re-saves the file on every promotion, and any stamping
+pass would have left every champion on it, not just some).
+
+------------------------------------------------------------------------------
+2. THE ONLY COUPLING IN THE CODEBASE
+------------------------------------------------------------------------------
+The composite gate in eval::dominance_repair:
+  rust/src/bots/weighted/eval.rs:961-973
+      let card_board_base = out.get(WeightKey::CardBoardCredit);
+      for &k in card_board_credit_keys() {
+          let m = out.get(k);
+          if card_board_base + m < -1e-12 {
+              ...
+              out.set(k, -card_board_base);      // raise the per-type key
+          }
+      }
+  - card_board_credit_keys() (eval.rs:823-835) is derived at runtime from
+    cards::board_credit_key (cards.rs:597-600); CardBoardLeader is its ONLY
+    member (the government/action/wonder/bonus per-type keys are RETIRED --
+    weights.rs:2788-2790, 2837 -- and Leader is explicitly NOT retired,
+    weights.rs:2780).
+  - The rule: card_board_credit + card_board_leader >= 0. When violated the
+    repair RAISES card_board_leader to exactly -card_board_credit.
+  - CardBoardCredit is NonNegative-gated (weights.rs:1489:
+    "BuildDiscount | CardBoardCredit | ... => NonNegative"), so the
+    repaired pair always lands with leader = -base <= 0.
+  - CardBoardLeader is SignIntent::Free (weights.rs:1712) -- it has no sign
+    gate of its own; this composite rule is its only constraint.
+
+This repair is the ONLY place in the repo that writes either key as a
+function of the other. And critically: it only fires when base + leader < 0.
+At the postclimb value, base + leader == +0.0, so the condition is FALSE --
+the repair does nothing there. It cannot produce the equality; it can only
+PIN it (any mutation that pushes the pair below the boundary is pulled
+straight back onto it).
+
+------------------------------------------------------------------------------
+3. THE MECHANISM: THE CLIMB WALKS THE BOUNDARY, AND THE BOUNDARY IS FLAT
+------------------------------------------------------------------------------
+a) The two keys are independently and continuously mutable.
+   - The climb's four operators (rust/src/bin/climb.rs:406-476):
+     Scatter (25% of keys get a gaussian add), Group (whole WeightGroup),
+     Rescale (multiply a group by exp(gauss)), Kick (60% of keys, 3x step).
+   - CardBoardCredit and CardBoardLeader sit in the SAME group,
+     WeightGroup::Board (weights.rs:1331). Group and Rescale moves hit both
+     at once; Scatter/Kick can hit either alone. There is no operator that
+     copies one coordinate onto another.
+   - Only FROZEN (culture) is exempt from mutation (climb.rs:94, 195-197);
+     both keys are movable.
+   - Every mutant goes through dominance_repair (climb.rs:401-402), and
+     every save re-runs it (eval.rs:1219).
+
+b) Why the boundary is a flat valley (why the walk keeps landing exactly on
+   it):
+   - Both keys have NO linear feature coordinate: features.rs never f.sets
+     either (registry.rs:323-324 lists both in NOT_SET_BY_FEATURES as "cards
+     .rs board-credit multiplier"). They enter the score only as MULTIPLIERS
+     inside the card pricers, resolved from the frozen vector (this is the
+     same structural fact the creditspread spec records: featspread's
+     instrument reads exactly 0.0 for all 20 credit keys by construction --
+     rust/src/bin/creditspread.rs header, lines 1-60; and their
+     p95_candidate_spread rows are all zero: weights.rs:2387
+     [440.293944, 257.969239, 555.766676] is for CardBoardCredit, and the
+     creditspread finding of 2026-08-26 is where the real lever rows came
+     from).
+   - For a LEADER, the pricer uses them ONLY as the sum
+     credit_board = card_board_credit + card_board_leader
+     (cards.rs:2030, 2034; gate at cards.rs:2035). So to the LEADER-pricing
+     part of the objective, only the SUM s = base + leader matters.
+     Any pair (base, leader) with base > 0, leader = -base has IDENTICAL
+     leader pricing -- a 1-dimensional flat valley along the line leader =
+     -base.
+   - The fitness signal does not fully ignore the split either (a leader's
+     static card_yields price is base-scaled only, section 7), so the split
+     itself has a weak gradient; but the valley floor is broad and the
+     fitness is a noisy 100-game win/margin share, so the walk repeatedly
+     settles with leader parked exactly at -base.
+   - When a mutation pushes base + leader < 0, dominance_repair snaps leader
+     back to -base (eval.rs:971). That snap is an EXACT assignment: it
+     writes leader := -(base) in f64, and -(-x) == x is exact in IEEE 754.
+     A mutant whose scatter step happens to overshoot the boundary by a
+     tiny amount is written back onto it at FULL float precision -- and if
+     that mutant wins the generation, the saved champion is exactly
+     equal-and-opposite to 17 digits. That is the provenance of the
+     postclimb pair: a snap, not a fit.
+   - The preclimb pair (sum +0.0196) is the same valley with the leader
+     slightly INSIDE the boundary (leader > -base): either the last repair
+     snap predates a later base mutation, or the walk has not re-crossed the
+     boundary since. Either way it is consistent with, not contrary to,
+     boundary-sticking.
+
+c) The gate's own doc comment documents exactly this shape of the live 2p
+   champion: eval.rs:943-956 describes "the live 2p champion:
+   card_board_credit = 0.0, card_board_leader = -15.003" and explains that a
+   negative EFFECTIVE scale inverts the whole leader ranking. The gate exists
+   precisely because the climb keeps walking this pair across the boundary --
+   it just has not documented the boundary-landing case, where the effective
+   scale is 0.0 and the pair is legal.
+
+d) Nothing else can have done it. Checked and excluded:
+   - No repair/normalisation pass in weights.rs ties the keys: the clamp
+     machinery (weights.rs:2208-2215 clamp_bound, CLAMP_BLIND=60.0 at 2499,
+     CLAMP_CEILING=120.0 at 2523) clamps each key INDEPENDENTLY to its own
+     bound (both bounds are far above 0.16; the 2p credit-spread rows give
+     bounds of ~1.9 for credit and ~6.4 for leader), never to another key's
+     value.
+   - The DOMINATES table (eval.rs:855-858) has only (ResourceStock,
+     BlueFree) and (WonderPotential, WonderPromise) -- no card-board pair.
+   - The python league scripts (experiments/*.py) do not touch
+     card_board_leader at all.
+   - No bin writes either key from the other; the only non-test w.set sites
+     for the keys in production code are the dominance_repair snap (eval
+     .rs:971) and test fixtures.
+   - No post-promotion post-processor: the champion file is written by
+     save_weights (eval.rs:1252+) which serialises the in-memory (already
+     repaired) vector as-is, and the climb re-reads it through load_weights
+     (eval.rs:1186) which re-runs dominance_repair -- a legal pair passes
+     through unchanged.
+
+------------------------------------------------------------------------------
+4. WHERE I LOOKED (complete list, as requested)
+------------------------------------------------------------------------------
+- rust/src/bots/weighted/weights.rs: sign_intent (1459+, 1489 NonNegative
+  for CardBoardCredit, 1712 Free for CardBoardLeader), group (1331),
+  p95_candidate_spread (2387, 2389), clamp_bound (2208-2215),
+  CLAMP_* constants (2493-2523), RETIRED_KEYS (2788-2837), name/default
+  table (1028, 1030).
+- rust/src/bots/weighted/eval.rs: card_board_credit_keys (823-835), DOMINATES
+  (855-858), dominance_repair (920-1010, the composite gate at 961-973),
+  parse_weights/load_weights (1099, 1186-1190), save_weights (1219, 1252+),
+  LEADERSIGN tests (2076-2141).
+- rust/src/bin/climb.rs: FROZEN (94), movable (195-197), clamp (226-232),
+  repair_to_bounds (258-271), mutate/mutate_raw (385-476), champion load
+  repair (1209-1223).
+- rust/src/bots/weighted/cards.rs: board_credit_key (597-600),
+  card_potential/card_potential_core (1908-1960), credit/credit_board
+  computation (2029-2040), swap_slot leader gate (2100-2101),
+  wonder_outlook board term (2313-2321), redundancy_discount (1864-1895),
+  test fixtures.
+- rust/src/bots/weighted/registry.rs: NOT_SET_BY_FEATURES (323-324).
+- rust/src/bots/weighted/features.rs: no f.set for either key (only a doc
+  mention at line 26).
+- rust/src/bots/weighted/{row,events,horizon,tactics,rivals,mod}.rs: no
+  production reads or writes of either key (rivals.rs mentions are comments
+  only; row.rs:776 is a test fixture).
+- rust/src/bin/{creditspread,leadersign}.rs: instrument-only, report values,
+  set nothing (creditspread.rs:239,254; leadersign.rs:10,47).
+- experiments/*.py, experiments/deploy, tools, app: no coupling code (only
+  the champion JSON files themselves carry the values).
+- Champion JSONs on disk (preclimb, postclimb, clamp_ceiling, opener,
+  experiments live, app): the values in section 1.
+- analysis/*.txt prior work: credit_spread_measurement_spec_2026-08-26.txt,
+  credit_spread_finding_2026-08-26.txt (the 20-credit-key lever rows;
+  card_board_credit and card_board_leader both carry usable 2p slopes, so
+  both have real measured bounds -- neither is pinned at CLAMP_BLIND).
+
+------------------------------------------------------------------------------
+5. BOTTOM LINE ON THE MECHANISM
+------------------------------------------------------------------------------
+The equality is set by the climb's own mutation-and-repair loop, not by any
+normalisation or post-processing pass:
+  (1) the two keys share a 1-D flat valley in fitness (leader pricing
+      depends only on base + leader);
+  (2) dominance_repair's composite gate (eval.rs:961-973) makes the region
+      base + leader < 0 a hard wall and snaps the pair onto leader = -base
+      with exact f64 arithmetic whenever a mutant crosses it;
+  (3) mutants that win a generation while sitting on that wall are saved
+      with the pair at full-precision equality (save_weights serialises the
+      repaired vector verbatim, eval.rs:1219).
+The gate both explains the -sign of card_board_leader and guarantees that
+once the pair is on the wall it stays there until a mutation pushes base
+itself; that is why two champions ~7000 generations apart are both exactly
+equal-and-opposite while the intermediate ones are not.
+
+------------------------------------------------------------------------------
+6. WHAT THE EQUALITY DOES AT RUNTIME (question 2)
+------------------------------------------------------------------------------
+The arithmetic (cards.rs, card_potential_core):
+  let credit = w.get(CardRateCredit);                       // :2029
+  let base   = w.get(CardBoardCredit);                      // :2030
+  let credit_board = base
+      + board_credit_key(id).map_or(0.0, |k| w.get(k));     // :2034
+For a Leader, board_credit_key(id) == Some(CardBoardLeader) (cards.rs:600),
+so credit_board == base + card_board_leader == EXACTLY 0.0 in the
+postclimb and live champions.
+
+Consequences for a LEADER (a leader is a single-slot board card, so this
+branch is always taken whenever it is priced with a board -- board =
+Some, cards.rs:2040-2049):
+  1. THE BOARD-SWAP DIFF TERM IS DELETED.
+     return credit_board * sum_board_triples(&swap, w) + type_bonus;   // :2050
+     With credit_board == 0.0 this returns 0.0 + type_bonus. A leader is
+     not a wonder, so type_bonus == 0.0: the leader prices at 0.0 from this
+     path. "What replacing the leader on the board with this one changes"
+     is priced as worth exactly nothing -- good swaps and bad swaps are
+     both worth 0.0 on this axis. (The same zero also closes the board-
+     extra fall-through at cards.rs:2065-2068, which is moot for leaders:
+     board_extra only ever emits triples for two Action-card specials.)
+  2. THE STATIC TABLE PRICE IS ALSO GONE for leaders. In the pre-valuation
+     era the same branch (credit_board == 0.0) fell back to
+     sum_yields(card_yields(id), w, credit) -- the leader's printed yields
+     (culture/science/food/resource, each scaled by card_rate_credit).
+     The current code does NOT fall back: the zero gate at cards.rs:2035-2043
+     is bypassed only when base == 0.0 AND credit_board == 0.0, which is not
+     the case (base == 0.1634 != 0.0), so the swap-diff early return stands.
+  3. WHAT A LEADER IS LEFT WITH:
+     - the redundancy_discount tail of card_potential (cards.rs:1916,
+       1864-1895): with base 0.0 the discount is 0.0 -- nothing.
+     - the +0.0 it got from (1).
+     So a leader's total card_potential in the postclimb champion is
+     0.0 on every board-aware call site (row pricing, hand pricing,
+     pricer feeds). The leader is priced as if it were a blank card; only
+     the leader's OTHER effects -- its special abilities priced by their
+     own dedicated channels (e.g. a leader's gain-on-take through its
+     printed yield is NOT part of card_potential's board path) and the
+     non-card terms of the evaluation -- can make a leader move worth
+     anything.
+  4. THE SWAP_SLOT COLLAPSE IS DISABLED for leaders.
+     swap_slot (cards.rs:2095-2101) reports a leader as board-aware-priced
+     only when card_board_credit + card_board_leader != 0.0. At the
+     degenerate pair the condition is FALSE, so _hand_total's single-slot
+     collapse (cards.rs:2105+) does not treat the leader as a slot
+     replacement: the leader is summed at its 0.0 price rather than
+     collapsed to the best leader in the slot. Both effects (zero price,
+     no collapse) point the same way: the champion treats every leader as
+     worth nothing on the board axis.
+
+So: CONFIRMED in the strong form -- a leader's effective board credit
+(card_board_credit + card_board_leader) is exactly ZERO, and in this
+codebase's dispatch that means the leader's entire board-aware price is
+0.0, not merely "zero on that one axis" (the axis IS the whole board-aware
+price for a leader; the static-yield fallback that a zero credit used to
+imply was removed when the swap-diff branch became unconditional for
+leaders). The question's phrasing "board credit is exactly ZERO -- the bot
+prices leaders as worth nothing on that axis" is right, and the
+correction is only that for a leader there is no separate axis left: the
+swap-diff term is the leader's board price, and it is deleted outright.
+
+Side note for the record: the same arithmetic means the gate at
+cards.rs:2100 (swap_slot) and the gate at cards.rs:2035 see the leader as
+UNPRICED (credit_board == 0.0), which is precisely the shape dominance_
+repair's own doc comment (eval.rs:943-956) feared in its extreme form --
+there the effective scale is negative (inversion); here it is exactly zero
+(deletion). The gate permits 0.0 (base + leader >= 0), so the repair can
+never object. If the coordinator wants leaders to cost anything on the
+board axis, the pair must be pushed off the wall (leader > -base) -- the
+repair will allow it, and the flat valley will let the climb do it again
+unless the objective gains a term that rewards the split itself.
