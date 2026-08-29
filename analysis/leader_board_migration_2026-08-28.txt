@@ -1,0 +1,47 @@
+LEADER BOARD-PRICING MIGRATION -- 2026-08-28 18:4x, coordinator
+
+WHY. `83d1c2e` made `CardBoardLeader` the ABSOLUTE multiplier on a leader's
+board-swap diff. Before it, `cards.rs::card_potential_core` composed the scale
+as `CardBoardCredit + CardBoardLeader`; after it, `credit_board =
+board_credit_key(id).map_or(base, |k| w.get(k))` (`cards.rs:2044`) reads
+`CardBoardLeader` ALONE for Leader cards, and `CardBoardCredit` no longer
+reaches them at all.
+
+The code went live with the 04:59 rebuild. The champions were never migrated,
+so every one of them silently lost its `CardBoardCredit` contribution to
+leaders at that moment:
+
+  players  gen     card_board_credit  card_board_leader  effective leader scale
+                                                          BEFORE      AFTER
+  2p       122950  0.357041           0.000000            0.357041 -> 0.000000
+  3p        69000  0.208738           0.119401            0.328140 -> 0.119401
+  4p        22147  0.357240           0.030284            0.387523 -> 0.030284
+
+At 2p the effective scale went to EXACTLY ZERO, which re-created the very
+defect the decouple was written to remove -- a leader's board price deleted --
+by a different route. `card_board_leader`'s default is 0.0 (`weights.rs:1030`)
+and its `sign_intent` is now `NonNegative` (`:1503`), so nothing about the
+snapshot value 0.0 was a learned preference; it was the untouched default.
+
+WHAT WAS DONE. Arms stopped via the sentinel bracket, the three live champions
+rewritten as
+
+    card_board_leader := max(0, card_board_credit + card_board_leader)
+
+recomputed from the LIVE files at the moment the arms were down (the champion
+file is rewritten on every promotion, so the pre-stop values would have been
+stale), then the arms restarted. `card_board_credit` was NOT changed -- it
+still governs every card type with no per-type key, through the `map_or(base,
+..)` arm.
+
+Pre-migration copies: `analysis/frozen/premigration_leaderboard_2026-08-28/`.
+
+WHAT THIS DOES NOT SHOW. The 2p `leader` weight fell from +14.0440 (frozen gen
+121100) to +5.4946 (gen 122926), and it is tempting to read that as the
+predicted hand-off -- the flat 0/1 leader flag shrinking because the board
+channel took over the pricing. It is not that. The board channel was at zero
+for the whole post-rebuild window at 2p, so the fall happened with nothing
+taking over. A single frozen-vs-now snapshot 1826 gens apart cannot separate
+"the climb reduced it for an unrelated reason" from any coupling story, and no
+coupling story is available while the other side of it reads 0.0. The
+prediction is UNTESTED, not confirmed.
