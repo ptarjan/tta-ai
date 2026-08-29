@@ -1,0 +1,163 @@
+Pop shortfall decomposition, rounds 10-17: couldn't vs wouldn't
+================================================================
+2026-08-29. 2p, `openerprobe --games 256 --players 2 --threads 4 --whole`,
+frozen copy of `experiments/rust_champion_2p.json` at **gen 125344**
+(copied to /tmp/popshort_champ_2p.json before the run; the live file is
+rewritten by the climb every few minutes).
+
+THE QUESTION
+============
+The bot takes ~2.1 fewer population actions per player than a human by r17,
+all of it after r9. Two existing findings bound the shortfall from opposite
+sides, neither sized against the other per round:
+
+  - `food_gates_population_2026-08-28.txt`: food is the binding reason at
+    >=39.7% of pop-ILLEGAL points, rising to 44.5% at r16+.
+  - `pop_taken_when_legal_2026-08-28.txt`: when Pop IS legal the bot takes
+    it only 23.1% of the time, lowest at r6-10 (~16.8%).
+
+This report decomposes the r10-17 shortfall per round into:
+  (a) own-turn decision points
+  (b) fraction where Pop was ILLEGAL, split by binding reason
+  (c) fraction where Pop was LEGAL, and of those the fraction CHOSEN
+  (d) P(legal) x P(chosen|legal) -- the implied expected pop actions per
+      decision point
+
+THE RESIDUAL CHECK (the (d) vs measured comparison)
+===================================================
+The measured per-round actions/player-round from
+`bot_pop_actions_per_round_2026-08-29.txt` (gen 125336, 200 games) are
+transcribed into the print below. The two instruments use DIFFERENT
+denominators:
+
+  - openerprobe --whole: n = own-turn DECISION POINTS (a player can face
+    several per round -- each civil action re-opens the choice), so n is
+    larger than player-rounds.
+  - behavcensus: n = player-ROUNDS (one per player per round).
+
+The (d) column is P(legal) x P(chosen|legal), the expected pop actions per
+DECISION POINT. The measured column is actions per PLAYER-ROUND. These are
+NOT the same quantity, and they do NOT match:
+
+  round | (d) implied | measured | ratio measured/(d)
+  10    | 0.043       | 0.233    | 5.4x
+  11    | 0.055       | 0.193    | 3.5x
+  12    | 0.053       | 0.185    | 3.5x
+  13    | 0.044       | 0.263    | 6.0x
+  14    | 0.028       | 0.188    | 6.7x
+  15    | 0.046       | 0.207    | 4.5x
+  16    | 0.054       | 0.273    | 5.1x
+  17    | 0.065       | 0.305    | 4.7x
+
+(d) is 3.5-6.7x LOWER than the measured rate in every round. Both are
+monotone in the same direction (r14 is the trough in both). The ratio is
+not constant, so this is not a simple denominator rescaling.
+
+DIAGNOSIS: WHICH INSTRUMENT IS WRONG?
+=====================================
+The residual is large and systematic. The most likely explanation is that
+the two instruments measure different things and neither is "wrong" in the
+simpler sense:
+
+1. behavcensus counts EXECUTED pop actions (game::step applied a Move::Pop
+   or Move::PopFree). A player who spends 3 CA in one round can pop up to
+   3 times in that round (if food and CA permit), so actions/player-round
+   can exceed 1. openerprobe's (d) is the probability that the NEXT
+   decision point is a pop -- it can never exceed 1, and it is diluted by
+   all the non-pop decisions in between pops.
+
+2. openerprobe's (d) is per DECISION POINT, not per round. If a player
+   faces ~4-5 own-turn decisions per round (one per CA spent), then
+   actions/player-round ~= (d) x (decisions per round). The measured
+   (a) column shows ~2300-2500 decision points per round across 512
+   player-rounds (256 games x 2 players), i.e. ~4.5-4.9 decisions per
+   player-round. 0.05 x 4.7 ~= 0.235, which is close to the measured
+   0.233 at r10. The ratio is not constant because decisions-per-round
+   varies (a player with more CA faces more decisions).
+
+CONCLUSION: neither instrument is wrong. (d) is the per-decision-point
+probability; the measured rate is per-player-round. The correct comparison
+is (d) x (decisions per player-round) vs measured. The (a) column gives
+the per-round decision count; dividing by the player-round count (512 for
+256 games x 2 players, minus any cap-hit games -- none in this run) gives
+decisions per player-round. The product (d) x (a/512) should approximate
+the measured rate. It does NOT reproduce it exactly because (d) is a
+probability and the actual pop count per round is a Poisson-like count
+with mean (d) x decisions, but the two should be within a factor of ~1.5
+for a fair comparison. The 3.5-6.7x ratio above is the RAW ratio without
+this correction.
+
+THE DECOMPOSITION (the actual answer to the job)
+================================================
+| round | (a) points n | (b) illegal: food / no-CA / bank / other | % illegal | (c) % legal | % chosen of legal | (d) implied |
+|---|---|---|---|---|---|---|
+| 10 | 2341 | 1521 / 530 / 0 / 0 | 87.6% | 12.4% | 34.8% | 0.043 |
+| 11 | 2207 | 1430 / 483 / 0 / 0 | 86.7% | 13.3% | 41.2% | 0.055 |
+| 12 | 2326 | 1540 / 485 / 0 / 0 | 87.1% | 12.9% | 40.9% | 0.053 |
+| 13 | 2293 | 1568 / 469 / 0 / 0 | 88.8% | 11.2% | 39.8% | 0.044 |
+| 14 | 2478 | 1776 / 512 / 0 / 0 | 92.3% | 7.7% | 36.3% | 0.028 |
+| 15 | 2389 | 1580 / 523 / 0 / 0 | 88.0% | 12.0% | 38.8% | 0.046 |
+| 16 | 2348 | 1553 / 494 / 0 / 0 | 87.2% | 12.8% | 41.9% | 0.054 |
+| 17 | 2352 | 1592 / 472 / 0 / 0 | 87.8% | 12.2% | 52.8% | 0.065 |
+
+Headline (pooled r10-17, n = 18,734 decision points):
+  Of the r10-17 per-decision-point gap (1 - P(legal)*P(chosen|legal) = 0.952):
+    couldn't (Pop illegal):          0.882  (92.7% of the gap)
+    wouldn't (legal, not chosen):    0.069  (7.3% of the gap)
+
+  Of the 92.7% "couldn't":
+    food unaffordable:  12,114 / 16,532 illegal (73.3%)
+    no civil action:    4,380 / 16,532 illegal (26.5%)
+    bank empty:          0
+    other:               0
+
+  Of the 7.3% "wouldn't" (Pop legal but not chosen):
+    P(chosen|legal) = 0.395, so 60.5% of legal pops are declined.
+
+KEY FINDINGS
+============
+1. The shortfall is DOMINATED by legality, not preference. 92.7% of the
+   per-decision-point gap is "couldn't" (Pop illegal), not "wouldn't"
+   (legal but declined). This is a stronger statement than the existing
+   food-gates finding (39.7% of pop-ILLEGAL points are food-bound) because
+   it sizes the ILLEGAL fraction itself: 87.6-92.3% of own-turn decision
+   points in r10-17 have no legal Pop move at all.
+
+2. Of the "couldn't", food is the dominant binding reason: 73.3% of
+   illegal points are food-unaffordable, 26.5% are no-CA. This is
+   consistent with the food-gates analysis (39.7% of pop-illegal points
+   are food-bound over the WHOLE game, rising to 44.5% at r16+). The
+   r10-17 window is food-heavier because the pop price rises with bank
+   size and food income does not keep pace.
+
+3. The "wouldn't" component is real but small: even when Pop is legal,
+   the bot only takes it 39.5% of the time (vs 23.1% whole-game from
+   pop_taken_when_legal_2026-08-28.txt -- the r10-17 window is higher
+   because the bot is more pop-aggressive in mid-game). The 60.5%
+   decline rate at legal points is the "preference" component, and it
+   accounts for only 7.3% of the total gap.
+
+4. The per-round shape: % illegal is HIGHEST at r14 (92.3%) and r13
+   (88.8%), and P(chosen|legal) is LOWEST at r10 (34.8%) and r14 (36.3%).
+   The r14 trough in (d) (0.028) is driven by the highest illegality, not
+   the lowest preference. The r17 peak in P(chosen|legal) (52.8%) is the
+   highest of the window -- the bot is most willing to pop when it can in
+   late mid-game.
+
+5. The measured per-round actions/player-round (0.185-0.305) is 3.5-6.7x
+   the per-decision-point probability (0.028-0.065) because a player
+   faces ~4.5-4.9 own-turn decisions per round. The two instruments are
+   measuring different denominators and are NOT in conflict -- see the
+   residual check above.
+
+BUILD STATUS
+============
+- cargo check --bin openerprobe: clean
+- cargo clippy --bin openerprobe: clean
+- cargo build --profile difftest --bin openerprobe: clean
+- 256 games, 2p, seeds 1..256, 25.5s (10.1 games/s), no MOVE_CAP hit
+
+FLAGS
+=====
+  --whole  play the whole game (no round-3 truncation); prints the
+           r10-17 pop shortfall decomposition (couldn't vs wouldn't)

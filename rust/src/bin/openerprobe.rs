@@ -977,6 +977,72 @@ impl PopReasonCounts {
     }
 }
 
+#[derive(Default)]
+struct PopMidRound {
+    /// Own-turn decision points in this round (a player can face several per
+    /// round -- each civil action re-opens the choice), summed over players.
+    points: u64,
+    /// Of those, points where no `Move::Pop`/`Move::PopFree` was legal, by
+    /// the SAME four binding reasons item 4 uses (`classify_pop_illegal`).
+    /// The residual `points - illegal` is `legal`.
+    illegal_food: u64,
+    illegal_no_ca: u64,
+    illegal_bank: u64,
+    illegal_other: u64,
+    /// Of the legal points, the ones where the bot's actual pick WAS a
+    /// `Move::Pop`/`Move::PopFree` (`choose`/`ranked[0]`, read off the move
+    /// -- the same pick the game then `game::step`s, so the (d) residual is
+    /// against the executed actions, not against a re-scored argmax).
+    legal_chosen: u64,
+}
+
+/// Rounds 10..=17 pop-shortfall decomposition for `--whole` runs: at every
+/// own-turn decision point in these rounds, was a population increase
+/// ILLEGAL (and which gate bound it) or LEGAL (and did the bot take it)?
+/// That is the "couldn't vs wouldn't" split, per round.
+#[derive(Default)]
+struct PopMidgameByRound {
+    by_round: std::collections::HashMap<u16, PopMidRound>,
+    /// True if any game aborted at `MOVE_CAP` before `state.game_over` --
+    /// such a game's later rounds are missing from this table, so the
+    /// report says so instead of silently presenting survivorship-thinned n.
+    cap_hit: bool,
+}
+
+impl PopMidgameByRound {
+    fn record(&mut self, round: u16, pop_legal: bool, reason: Option<PopIllegalReason>, chosen_pop: bool) {
+        let b = self.by_round.entry(round).or_default();
+        b.points += 1;
+        if pop_legal {
+            if chosen_pop {
+                b.legal_chosen += 1;
+            }
+        } else {
+            match reason {
+                Some(PopIllegalReason::FoodUnaffordable) => b.illegal_food += 1,
+                Some(PopIllegalReason::CivilActionUnavailable) => b.illegal_no_ca += 1,
+                Some(PopIllegalReason::YellowBankEmpty) => b.illegal_bank += 1,
+                // Round1TakeOnly is unreachable here (round >= 10), kept
+                // explicit so a new variant fails this match, not a wildcard.
+                None | Some(PopIllegalReason::Round1TakeOnly) => b.illegal_other += 1,
+            }
+        }
+    }
+
+    fn merge(&mut self, o: PopMidgameByRound) {
+        for (round, ob) in o.by_round {
+            let b = self.by_round.entry(round).or_default();
+            b.points += ob.points;
+            b.illegal_food += ob.illegal_food;
+            b.illegal_no_ca += ob.illegal_no_ca;
+            b.illegal_bank += ob.illegal_bank;
+            b.illegal_other += ob.illegal_other;
+            b.legal_chosen += ob.legal_chosen;
+        }
+        self.cap_hit |= o.cap_hit;
+    }
+}
+
 #[derive(Default, Clone)]
 struct R1MarginStats {
     /// Round-1 own-turn decision points at which BOTH a Take and an EndTurn
@@ -1137,6 +1203,10 @@ struct Report {
     /// Item 7: round-1 Take-vs-EndTurn score margin -- see this file's top
     /// doc comment, item 7.
     r1_margin: R1MarginStats,
+
+    /// `--whole` only: the r10-17 pop shortfall decomposition (couldn't vs
+    /// wouldn't) -- see [`PopMidgameByRound`]. Empty unless `--whole`.
+    pop_mg_by_round: PopMidgameByRound,
 }
 
 impl Report {
@@ -1166,6 +1236,7 @@ impl Report {
         self.develop_legal_not_chosen_top_kind.merge(o.develop_legal_not_chosen_top_kind);
 
         self.r1_margin.merge(o.r1_margin);
+        self.pop_mg_by_round.merge(o.pop_mg_by_round);
     }
 }
 
@@ -1275,6 +1346,7 @@ fn record_decision(
     // Item 4: Pop legality (and why not), rank when legal, and what wins
     // when legal but not chosen.
     let pop_legal = legal.iter().any(|m| decision_kind(*m) == DecisionKind::Pop);
+    let chosen_pop = decision_kind(ranked[0].0) == DecisionKind::Pop;
     if pop_legal {
         report.pop_legal += 1;
         let pos = ranked
@@ -1289,6 +1361,20 @@ fn record_decision(
     } else {
         report.pop_illegal += 1;
         report.pop_illegal_reason.record(classify_pop_illegal(state, p));
+    }
+
+    // --whole: the r10-17 shortfall decomposition samples every own-turn
+    // decision point in those rounds. `chosen_pop` is read off the executed
+    // pick (`ranked[0].0` -- `choose`'s own argmax, the same move the game
+    // then `game::step`s), so (d) is against the actions actually taken.
+    if (10..=17).contains(&state.round) {
+        let reason = if pop_legal {
+            None
+        } else {
+            Some(classify_pop_illegal(state, p))
+        };
+        report.pop_mg_by_round
+            .record(state.round, pop_legal, reason, chosen_pop);
     }
 
     // Item 5: same three questions for Develop.
@@ -1334,7 +1420,7 @@ fn record_decision(
 
 /// Plays one self-play mirror-match game, truncated the moment
 /// `state.round` exceeds 3 -- see this file's top doc comment.
-fn play_one(players: u8, weights: Weights, seed: u64) -> Report {
+fn play_one(players: u8, weights: Weights, seed: u64, whole: bool) -> Report {
     let bots: Vec<WeightedBot> = (0..players).map(|_| WeightedBot::new(weights)).collect();
     let mut state = game::new_game(players, seed);
     let mut report = Report { games: 1, ..Report::default() };
@@ -1348,8 +1434,9 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> Report {
     // player, not global, because the two seats' turns interleave.
     let mut r1_decision_index = vec![0u32; players as usize];
     let mut moves_played = 0usize;
-    while !state.game_over && state.round <= 3 {
+    while !state.game_over && (whole || state.round <= 3) {
         if moves_played >= MOVE_CAP {
+            report.pop_mg_by_round.cap_hit = true;
             break;
         }
         let idx = state.decider();
@@ -1407,6 +1494,96 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> Report {
 }
 
 // ---------------------------------------------------------------------
+// --whole: the r10-17 pop shortfall decomposition
+// ---------------------------------------------------------------------
+
+/// Prints the "couldn't vs wouldn't" decomposition for rounds 10-17.
+///
+/// `measured` is the (round, actions-per-player-round) pair for each round,
+/// read off `analysis/bot_pop_actions_per_round_2026-08-29.txt`, passed in
+/// so this print stays a pure function of its arguments (no file IO here).
+fn print_pop_midgame(r: &Report, measured: &[(u16, f64)]) {
+    let mg = &r.pop_mg_by_round;
+    if mg.by_round.is_empty() {
+        return;
+    }
+    println!("\n### Pop shortfall decomposition, rounds 10-17 (--whole)\n");
+    if mg.cap_hit {
+        println!(
+            "WARNING: at least one game hit MOVE_CAP before finishing -- its later \
+             rounds are ABSENT from this table, so per-round n below is \
+             survivorship-thinned and the cap-aborted games' missing pops are \
+             not counted anywhere in this table.\n"
+        );
+    }
+    println!("n (a) = own-turn decision points that round; (d) = P(legal) x P(chosen|legal), the implied");
+    println!("pop actions per DECISION POINT. The measured column is behavcensus's actions per");
+    println!("PLAYER-ROUND for the same round -- a different denominator (player-rounds, not");
+    println!("decision points), so the two are compared, not equated.\n");
+    println!("| round | (a) points n | (b) illegal: food / no-CA / bank / other | % illegal | (c) % legal | % chosen of legal | (d) implied | measured (behavcensus) |");
+    println!("|---|---|---|---|---|---|---|---|");
+    let mut rounds: Vec<u16> = mg.by_round.keys().copied().collect();
+    rounds.sort_unstable();
+    for round in rounds {
+        if !(10..=17).contains(&round) {
+            continue;
+        }
+        let b = &mg.by_round[&round];
+        let legal = b.points - b.illegal_food - b.illegal_no_ca - b.illegal_bank - b.illegal_other;
+        let illegal_total = b.illegal_food + b.illegal_no_ca + b.illegal_bank + b.illegal_other;
+        let p_legal = legal as f64 / b.points.max(1) as f64;
+        let p_chosen = b.legal_chosen as f64 / legal.max(1) as f64;
+        let implied = p_legal * p_chosen;
+        let measured = measured
+            .iter()
+            .find(|(rr, _)| *rr == round)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+        println!(
+            "| {round} | {} | {} / {} / {} / {} | {:.1}% | {:.1}% | {:.1}% | {:.3} | {:.3} |",
+            b.points,
+            b.illegal_food,
+            b.illegal_no_ca,
+            b.illegal_bank,
+            b.illegal_other,
+            100.0 * illegal_total as f64 / b.points.max(1) as f64,
+            100.0 * p_legal,
+            100.0 * p_chosen,
+            implied,
+            measured
+        );
+    }
+    // The headline: of the r10-17 shortfall (measured human-minus-bot actions),
+    // how much is P(illegal) vs (1 - P(chosen|legal))? The shortfall in
+    // actions-per-decision-point is (1 - implied) if a hypothetical
+    // "always-take-when-legal" bot were the reference; the two components
+    // are P(illegal) and P(legal) * (1 - P(chosen|legal)).
+    let mut tot_points = 0u64;
+    let mut tot_illegal = 0u64;
+    let mut tot_legal = 0u64;
+    let mut tot_chosen = 0u64;
+    for (&round, b) in &mg.by_round {
+        if !(10..=17).contains(&round) {
+            continue;
+        }
+        let illegal_total = b.illegal_food + b.illegal_no_ca + b.illegal_bank + b.illegal_other;
+        tot_points += b.points;
+        tot_illegal += illegal_total;
+        tot_legal += b.points - illegal_total;
+        tot_chosen += b.legal_chosen;
+    }
+    let p_illegal = tot_illegal as f64 / tot_points.max(1) as f64;
+    let p_legal = tot_legal as f64 / tot_points.max(1) as f64;
+    let p_chosen = tot_chosen as f64 / tot_legal.max(1) as f64;
+    let could_not = p_illegal;
+    let would_not = p_legal * (1.0 - p_chosen);
+    let total_gap = could_not + would_not;
+    println!("\nOf the r10-17 per-decision-point gap (1 - P(legal)*P(chosen|legal) = {:.3}):", total_gap);
+    println!("  couldn't (Pop illegal):          {:.3}  ({:.1}% of the gap)", could_not, 100.0 * could_not / total_gap.max(1e-9));
+    println!("  wouldn't (legal, not chosen):    {:.3}  ({:.1}% of the gap)", would_not, 100.0 * would_not / total_gap.max(1e-9));
+}
+
+// ---------------------------------------------------------------------
 // CLI (same shape as `bin/behavcensus.rs`)
 // ---------------------------------------------------------------------
 
@@ -1416,11 +1593,17 @@ struct Args {
     weights_path: String,
     seed: u64,
     threads: usize,
+    /// Play the WHOLE game instead of truncating at `state.round > 3`.
+    /// Only the r10-17 pop-decomposition print (`pop_mg_by_round`) is
+    /// populated in this mode; the rounds-1-3 items are also collected for
+    /// the rounds the game reaches (see `play_one`'s doc note) but are NOT
+    /// the probe's raison d'etre and should not be quoted from a --whole run.
+    whole: bool,
 }
 
 impl Default for Args {
     fn default() -> Args {
-        Args { games: 20, players: 3, weights_path: String::new(), seed: 1, threads: 1 }
+        Args { games: 20, players: 3, weights_path: String::new(), seed: 1, threads: 1, whole: false }
     }
 }
 
@@ -1432,6 +1615,8 @@ usage: openerprobe --weights PATH [options]
   --weights PATH  champion JSON every seat plays (required)
   --seed N        base seed; game g uses seed+g (default 1)
   --threads N     games in parallel (default 1)
+  --whole         play the whole game (no round-3 truncation); prints the
+                  r10-17 pop shortfall decomposition (couldn't vs wouldn't)
   --help
 ";
 
@@ -1448,6 +1633,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--weights" => a.weights_path = value(flag)?,
             "--seed" => a.seed = value(flag)?.parse().map_err(|_| "bad --seed".to_string())?,
             "--threads" => a.threads = value(flag)?.parse().map_err(|_| "bad --threads".to_string())?,
+            "--whole" => a.whole = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -1780,7 +1966,7 @@ fn main() -> ExitCode {
                         break;
                     }
                     let seed = args.seed.wrapping_add(i as u64);
-                    let r = play_one(args.players, *weights, seed);
+                    let r = play_one(args.players, *weights, seed, args.whole);
                     mine.push((i, r));
                 }
                 mine
@@ -1804,6 +1990,19 @@ fn main() -> ExitCode {
     println!("weights      {}", args.weights_path);
     println!("seeds        {}..{}", args.seed, args.seed + args.games as u64 - 1);
     println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
+
+    if args.whole {
+        // The measured per-round actions/player-round from
+        // analysis/bot_pop_actions_per_round_2026-08-29.txt, transcribed
+        // here so this print stays pure. Rounds 10-17 only (the job's
+        // window); the earlier rounds are not part of the shortfall
+        // question.
+        let measured: &[(u16, f64)] = &[
+            (10, 0.233), (11, 0.193), (12, 0.185), (13, 0.263),
+            (14, 0.188), (15, 0.207), (16, 0.273), (17, 0.305),
+        ];
+        print_pop_midgame(&overall, measured);
+    }
 
     print_report(args.players, &overall);
 
@@ -1910,7 +2109,7 @@ mod tests {
     #[test]
     fn a_truncated_2p_self_play_game_stops_at_round_4_and_records_at_least_one_decision() {
         let weights = Weights::default();
-        let report = play_one(2, weights, 42);
+        let report = play_one(2, weights, 42, false);
         assert_eq!(report.games, 1);
         assert!(report.decisions > 0, "expected at least one own-turn decision point in rounds 1-3");
         assert!(report.top_kind.total() > 0);
@@ -2013,7 +2212,7 @@ mod tests {
         // every one of which offers Takes plus EndTurn (legal.rs pushes
         // EndTurn on any own turn), so at least one point is sampled and
         // EndTurn is always present.
-        let report = play_one(2, Weights::default(), 7);
+        let report = play_one(2, Weights::default(), 7, false);
         let m = &report.r1_margin;
         assert!(m.n >= 1, "a round-1 game must sample at least one Take-vs-EndTurn decision point");
         assert_eq!(m.samples.len(), m.n as usize);
@@ -2034,7 +2233,7 @@ mod tests {
         // turns_round1 undercounts whenever any seat's grant exceeds 1 CA.
         for seed in 0..6 {
             let weights = Weights::default();
-            let report = play_one(2, weights, seed);
+            let report = play_one(2, weights, seed, false);
             let m = &report.r1_margin;
             assert!(m.samples.iter().all(|x| x.is_finite()), "seed {seed}");
 
@@ -2077,7 +2276,7 @@ mod tests {
         // `r1_decision_index` (1-based) -- never a re-derivation that could
         // silently drop or duplicate a row.
         for seed in 0..6 {
-            let report = play_one(2, Weights::default(), seed);
+            let report = play_one(2, Weights::default(), seed, false);
             let m = &report.r1_margin;
             let total: usize = m.samples_by_index.values().map(|v| v.len()).sum();
             assert_eq!(
@@ -2096,7 +2295,7 @@ mod tests {
         // 2p seat 0 is always in `0..2`, and every sampled row belongs to
         // exactly one seat and exactly one (seat, index) pair.
         for seed in 0..6 {
-            let report = play_one(2, Weights::default(), seed);
+            let report = play_one(2, Weights::default(), seed, false);
             let m = &report.r1_margin;
 
             let by_seat: usize = m.samples_by_seat.values().map(|v| v.len()).sum();
@@ -2160,7 +2359,7 @@ mod tests {
         let mut m = R1MarginStats::default();
         let weights = Weights::default();
         for seed in 0..6 {
-            let report = play_one(2, weights, seed);
+            let report = play_one(2, weights, seed, false);
             m.merge(report.r1_margin.clone());
             let bots: Vec<WeightedBot> = (0..2).map(|_| WeightedBot::new(weights)).collect();
             let mut state = game::new_game(2, seed);
@@ -2217,7 +2416,7 @@ mod tests {
         let mut any_debit = false;
         for weights in [Weights::default(), spendthrift] {
             for seed in 0..8 {
-                let ap = play_one(2, weights, seed).action_points;
+                let ap = play_one(2, weights, seed, false).action_points;
                 any_left |= ap.ca_left_round2 > 0;
                 any_debit |= ap.ca_round2 > 0;
                 ca[0] += ap.ca_round1;
