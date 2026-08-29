@@ -287,3 +287,48 @@ food gap opens at r10) rests on r10-r17 and is untouched.
 
 The body sentence "holding around +5.1 through the endgame" has been
 removed; that claim was drawn from the retired rows.
+
+================================================================================
+REVIEWER: THE HUMAN POPULATION COLUMN IS WITHDRAWN - 2026-08-29
+================================================================================
+
+DO NOT QUOTE THE +5.67 GAP OR ANY HUMAN POPULATION VALUE PAST ROUND 9.
+The bank columns, the food columns and the whole bot side stand.
+
+1. THE TABLE CANNOT BE AUDITED. The instrumentation this report describes (a
+   PopCurve struct in openerprobe.rs, a POPCURVE_DEBUG hook in
+   replay_common.rs) was reverted before committing and exists in NO git
+   revision - `git log --all -S 'popcurve'` returns nothing, and 9fb3e6c adds
+   this .txt and nothing else. There is no expression to read and no
+   denominator that can ever be quoted. Instrumentation reverted before commit
+   makes its own number permanently unauditable.
+
+2. THE ARITHMETIC, WITHOUT THE CODE. The rules force an order on three
+   quantities: bank fall >= population rise >= 0, because a token leaves the
+   bank for every worker gained, and 12.2.4 removes 2 more per player per age
+   change after the first (game.rs:571). Over rounds 9-17 this table has them
+   in the OPPOSITE order:
+
+       human population rise      +7.21
+       human bank fall            -5.50
+       increase-population actions 3.66   (analysis/human_midgame_actions_2026-08-28.txt, r9-r16)
+
+3. THE BANK COLUMN SURVIVES AND CONFIRMS THE CENSUS. 3.66 increases plus one
+   age-change removal predicts a bank fall of 5.66; the measured fall is 5.50.
+   Two independent instruments agreeing to 0.16 of a token.
+
+4. ONLY THE SLOPE IS WRONG, NOT THE LEVEL. At r9, pop 6.71 + bank 11.83 =
+   18.54, sitting right on 18 + yellow_granted, so the r9 human level is sound.
+   It is the r9->r17 rise that is roughly double what the counted actions can
+   pay for.
+
+5. THE BOT COLUMN IS NOT IMPLICATED. It satisfies pop = 18 + yellow_granted -
+   yellow_bank row by row (r9 sum 18.48 -> r17 sum 19.62).
+
+6. THE CORRECTED DAMAGE FIGURE, PENDING RE-DERIVATION. Human population at r17
+   should be near 10.5-11 against the bot's 8.25 - a mid-game gap near +2.5,
+   not +5.67. The r12 peel is probably real; its magnitude is not established.
+   Re-derivation is out of the journals directly (tools/human_pop_from_journals.py).
+
+METHOD NOTE. A census of the ACTIONS behind a curve is a conservation check on
+the curve, and it is cheap. Run one before trusting any accumulated quantity.
