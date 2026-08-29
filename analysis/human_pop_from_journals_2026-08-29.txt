@@ -1,0 +1,106 @@
+# Human population growth, re-derived from the journals alone (2p)
+
+## Why this exists
+
+`analysis/population_curve_bot_vs_human_2026-08-28.txt` reported a human
+population curve whose producer was reverted before committing and exists in no
+git revision, so its expression and its denominator can never be read. Its human
+population column also violates a conservation law (see that file's REVIEWER
+block). This report rebuilds the human side from the one source that can be
+re-run and re-checked: the BGO journals.
+
+## Method
+
+Same pipeline as `analysis/human_midgame_actions_2026-08-28.txt`. The 632
+2-player games in `analysis/guard_ids_882.txt` (selected as exactly 2 distinct
+`player_colour` values). Journals are TSV, `date / player_colour / age / round /
+text`; round is column 4 as a base-10 int; the action verb is the leading word of
+`text` after the colour word, regex `^\w+\s+(\w+)\b`.
+
+DENOMINATOR, stated explicitly: **player-rounds**, the count of distinct
+(player_colour, round) pairs, = **1264 for every round 1..17** (632 games x 2
+seats). No 2p game ends before round 18, so nothing is dropped and n is flat by
+construction. This is the quantity the withdrawn curve could not be shown to use.
+
+CROSS-CHECK, PASS: the per-round `increases` means for r9-r16 reproduce the
+published census exactly (0.272 / 0.332 / 0.381 / 0.460 / 0.479 / 0.521 / 0.542 /
+0.672).
+
+## (a) Population-increase actions per human player
+
+Each increase-population action moves exactly one token from the bank to the
+board, so these ARE the worker gains.
+
+    round   per-round   cumulative
+      1       0.000        0.000
+      2       0.566        0.566
+      3       0.574        1.140
+      4       0.645        1.785
+      5       0.729        2.514
+      6       0.462        2.976
+      7       0.459        3.435
+      8       0.332        3.767
+      9       0.272        4.040
+     10       0.332        4.372
+     11       0.381        4.753
+     12       0.460        5.214
+     13       0.479        5.692
+     14       0.521        6.214
+     15       0.542        6.756
+     16       0.672        7.428
+     17       0.661        8.089
+
+The opener is where humans grow fastest: 2.98 of the 8.09 lifetime increases are
+taken by the end of round 6, and the per-round rate does not return to its round-5
+peak (0.729) at any later round in this window.
+
+## (b) Worker removals: negligible
+
+All 260 distinct verb tokens were listed and each candidate read with its full
+line. Only two verbs remove a worker from the acting player's own board:
+
+    disbands   398 total   "Orange disbands Warrior"
+    annexes      1 total   "Purple annexes Inhabited Territory"
+
+Per-round mean for `disbands`: r1-2 .000, r3 .001, r4 .000, r5-6 .001, r7 .007,
+r8 .015, r9 .013, r10 .013, r11 .016, r12 .025, r13 .041, r14 .043, r15 .040,
+r16 .036, r17 .062. Cumulative through r17: **0.315**, plus 0.001 for `annexes`.
+
+Excluded, each with its full line as evidence: `destroys` ("Orange destroys
+Philosophy", cards), `destroy` ("Terrorists destroy a Purple Movies", event),
+`casualties` ("Raid casualties 1 Bread & Circuses; 1 Opera", buildings on the
+victim's line), `loses` ("Purple loses Developed Territory (I)", a result line
+for the opponent's workers), `revolutions`, `defeat` ("concedes defeat"), `dies`
+("Alexander dies... Orange gets 1 yellow token" - returns a token TO the bank,
+the opposite direction), `enlists` ("Barbarossa enlists a Warrior" - ADDS one).
+
+## (c) The result, and what it does to the damage figure
+
+Net board-worker gain per human player, gross adds minus removals:
+
+    through r9    4.040 - 0.038 = 4.002
+    through r17   8.089 - 0.316 = 7.773
+    r9 -> r17 net gain           = 3.771
+
+The withdrawn curve has the human population rising **+7.21** over exactly that
+span. The journals pay for **+3.77**. The ratio is **1.91**.
+
+The curve's absolute level fails the same way. It puts the human at 13.92 workers
+at r17; the journals supply only 7.77 net gains over the whole game to that
+point, so reaching 13.92 needs about six workers on the board at setup. The
+engine starts each player with `yellow_bank: 18` and `workers_free: 1`
+(`rust/src/game.rs:268-270`). Six is not supported.
+
+CORRECTED FIGURE. A human player holds roughly 9-11 workers at r17 against the
+bot's 8.25. **The mid-game population gap is on the order of +1 to +3, not
++5.67.** The peel is probably real; it was roughly half to a fifth of what was
+published. Anything sized off +5.67 needs re-sizing.
+
+The bank column of the withdrawn curve is untouched by this and remains
+consistent with these counts.
+
+## Reproducing
+
+Read-only over `sources/bgo/journals/*.tsv` filtered by
+`analysis/guard_ids_882.txt`; no build, no engine, no self-play. Count the
+`increases` verb per (colour, round), divide by 1264, and cumulate.
