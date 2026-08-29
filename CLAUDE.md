@@ -1,7 +1,15 @@
 # Working in this repo
 
 A Through the Ages AI — the 2015 base game "A New Story of Civilization", NOT the
-expansion. (It is not Terraforming Mars.) The repo is private and stays private.
+expansion. (It is not Terraforming Mars.)
+
+**This repo is PUBLIC.** The BGO corpus and the third-party reference material are
+not in it: `sources/` is CGE and BGA copyrighted material plus 1011 scraped games
+under real players' account names, and it lives in the private
+`ptarjan/tta-ai-sources`, symlinked in here and gitignored. Never commit anything
+derived from it that names a player — quote journal lines for the mechanics only and
+write P1/P2 — and never register a self-hosted Actions runner against this repo, as
+any fork's pull request would then run as that runner's login.
 
 ## Layout
 
