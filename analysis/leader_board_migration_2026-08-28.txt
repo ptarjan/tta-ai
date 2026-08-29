@@ -1,47 +1,66 @@
-LEADER BOARD-PRICING MIGRATION -- 2026-08-28 18:4x, coordinator
+2p LEADER BOARD-PRICING SEED -- 2026-08-28, coordinator
+(supersedes this file's first version, which claimed a three-arm
+value-preserving migration; that framing was wrong and is corrected below)
 
 WHY. `83d1c2e` made `CardBoardLeader` the ABSOLUTE multiplier on a leader's
 board-swap diff. Before it, `cards.rs::card_potential_core` composed the scale
 as `CardBoardCredit + CardBoardLeader`; after it, `credit_board =
 board_credit_key(id).map_or(base, |k| w.get(k))` (`cards.rs:2044`) reads
-`CardBoardLeader` ALONE for Leader cards, and `CardBoardCredit` no longer
-reaches them at all.
+`CardBoardLeader` ALONE for a Leader, and `CardBoardCredit` no longer reaches
+leaders at all. The same commit gave the key `SignIntent::NonNegative`
+(`weights.rs:1503`); default is 0.0 (`:1030`).
 
-The code went live with the 04:59 rebuild. The champions were never migrated,
-so every one of them silently lost its `CardBoardCredit` contribution to
-leaders at that moment:
+WHAT THE 2p HISTORY ACTUALLY SHOWS. The climb jsonl does not record per-key
+mutations, but it does carry a `runaway` array, and `card_board_leader` appears
+in it 42 times across gens 41342-42132 at values of -60.000 / -59.944 /
+-59.043 -- i.e. pinned at its LOWER clamp bound. Under the old composite
+semantics a large negative was how the climb cancelled `CardBoardCredit`, and
+`dominance_repair` then snapped it to exactly `-card_board_credit` on the wall
+(the gen-120300 champion was bit-exact equal-and-opposite at +/-0.1965856875).
+The live gen-122950 file reads exactly 0.0 -- which is what the NEW NonNegative
+gate does to a negative on the first load after the 04:59 rebuild.
 
-  players  gen     card_board_credit  card_board_leader  effective leader scale
-                                                          BEFORE      AFTER
-  2p       122950  0.357041           0.000000            0.357041 -> 0.000000
-  3p        69000  0.208738           0.119401            0.328140 -> 0.119401
-  4p        22147  0.357240           0.030284            0.387523 -> 0.030284
+So at 2p the key has been NEGATIVE for its whole recorded history and is now
+exactly 0.0 by a sign snap. It has never held a learned positive value, and
+`credit_board == 0.0` does not merely scale the channel down, it switches the
+swap branch off (`cards.rs:2041`) and falls through to the static
+`card_yields` path -- five of six leaders priced at exactly 0, ranking
+destroyed. The decouple made this a free upward direction instead of a wall,
+but 1826 gens produced no movement off zero.
 
-At 2p the effective scale went to EXACTLY ZERO, which re-created the very
-defect the decouple was written to remove -- a leader's board price deleted --
-by a different route. `card_board_leader`'s default is 0.0 (`weights.rs:1030`)
-and its `sign_intent` is now `NonNegative` (`:1503`), so nothing about the
-snapshot value 0.0 was a learned preference; it was the untouched default.
+WHAT WAS DONE. Arms stopped via the sentinel bracket; the 2p champion's
+`card_board_leader` set to 0.357041 (its `card_board_credit`, the only
+board-credit scale this champion has actually fitted) purely to break the zero
+and give the climb a live coordinate to work from; arms restarted.
+`card_board_credit` was NOT changed -- it still governs every card type with no
+per-type key, through the `map_or(base, ..)` arm.
 
-WHAT WAS DONE. Arms stopped via the sentinel bracket, the three live champions
-rewritten as
+THIS IS A SEED, NOT A VALUE-PRESERVING MIGRATION. The migration designed for
+this decouple, `cbl := max(0, cbc + cbl)`, is only value-preserving if applied
+at the moment the code goes live. It was applied 13.5 hours late, after both
+keys had drifted under the new semantics, so `card_board_credit`'s current
+value no longer says anything about leaders. 0.357041 is a starting point, not
+a reconstruction.
 
-    card_board_leader := max(0, card_board_credit + card_board_leader)
+3p AND 4p WERE LEFT ALONE. Both already hold positive values (0.119401 and
+0.030284), so their channel is ON and there is no zero-channel defect to fix.
+They were migrated in the first pass and REVERTED in the second: folding a
+drifted `card_board_credit` into an already-positive value would have nearly
+tripled 3p on no evidence. Whether their positives are pre-rebuild offsets that
+lost their `card_board_credit` partner, or post-rebuild learned values, cannot
+be told from a snapshot and the logs cannot answer it either.
 
-recomputed from the LIVE files at the moment the arms were down (the champion
-file is rewritten on every promotion, so the pre-stop values would have been
-stale), then the arms restarted. `card_board_credit` was NOT changed -- it
-still governs every card type with no per-type key, through the `map_or(base,
-..)` arm.
+Pre-change copies of all three: `analysis/frozen/premigration_leaderboard_2026-08-28/`.
 
-Pre-migration copies: `analysis/frozen/premigration_leaderboard_2026-08-28/`.
+WHAT THE LEADER-DRIFT TEST DOES NOT SHOW. 2p `leader` fell from +14.0440
+(frozen gen 121100) to +5.4946 (gen 122926). That is NOT the predicted hand-off
+from the flat 0/1 leader flag to the board channel: the board channel read 0.0
+for the whole window, so nothing took over. A frozen-vs-now snapshot 1826 gens
+apart cannot separate a coupling from an unrelated drift, and no coupling story
+survives when the other side of it is zero. The prediction is UNTESTED.
 
-WHAT THIS DOES NOT SHOW. The 2p `leader` weight fell from +14.0440 (frozen gen
-121100) to +5.4946 (gen 122926), and it is tempting to read that as the
-predicted hand-off -- the flat 0/1 leader flag shrinking because the board
-channel took over the pricing. It is not that. The board channel was at zero
-for the whole post-rebuild window at 2p, so the fall happened with nothing
-taking over. A single frozen-vs-now snapshot 1826 gens apart cannot separate
-"the climb reduced it for an unrelated reason" from any coupling story, and no
-coupling story is available while the other side of it reads 0.0. The
-prediction is UNTESTED, not confirmed.
+HOW TO JUDGE THE SEED. Compare the 2p champion against
+`analysis/frozen/premigration_leaderboard_2026-08-28/rust_champion_2p.json`
+after it has climbed. If `card_board_leader` is driven back toward 0 the seed
+was wrong and the channel is genuinely unwanted at 2p; if it holds or grows,
+the zero was a sign-snap artifact and not a preference.
