@@ -13,26 +13,29 @@ name: CI
 # Deliberately minimal: no secrets, no deploy step, no network fetch beyond
 # the toolchain update below.
 #
-# This runs on a SELF-HOSTED runner (the mac mini, `actions-runner-tta/`),
-# not a GitHub-hosted one: this repo is private, so hosted minutes are
-# metered, and every run for a week was killed before its first step. Self-
-# hosted minutes are free. The repo must stay private for that to be safe --
-# a self-hosted runner executes whatever a workflow says, and this one runs
-# as the `pt` login with that account's full access.
+# This runs on GitHub-hosted runners, which are free and unmetered for public
+# repositories. Never point it at a self-hosted runner: a self-hosted runner
+# executes whatever a workflow file says, as the login that registered it, and
+# on a public repo any fork's pull request can supply that workflow.
+#
+# The BGO corpus under `sources/` is NOT part of this repository (it is
+# third-party material and real players' account names, kept privately in
+# ptarjan/tta-ai-sources). Anything here that needs it must skip when it is
+# absent, because CI never has it.
 
 on:
   push:
   pull_request:
 
-# One machine, shared with the training league. Superseding a run instead of
-# queueing it keeps a push burst from stacking builds against the climb.
+# Superseding a run instead of queueing it keeps a push burst from stacking
+# builds that are already obsolete.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    runs-on: [self-hosted, macOS]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
       run:
@@ -44,25 +47,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The whole point of the gate is that it runs the LATEST stable clippy,
-      # which has caught lints the box's older toolchain could not see. But
-      # this box also builds the league binaries, so the toolchain step must
-      # update the `stable` CHANNEL and select it explicitly with `+stable` --
-      # never `rustup default`, which would repoint every other build here.
-      # `$HOME/.cargo/bin` is not on a launchd service's PATH.
+      # The gate runs the LATEST stable clippy, which catches lints an older
+      # pinned toolchain cannot see. Select it explicitly with `+stable` rather
+      # than `rustup default`, so the same workflow behaves identically wherever
+      # it runs.
       - name: Update the stable toolchain
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
           rustup update stable --no-self-update
           rustup component add clippy --toolchain stable
           cargo +stable --version
 
       - name: cargo clippy (all targets, warnings deny)
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
           cargo +stable clippy --all-targets -- -D warnings
 
       - name: cargo test
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
           cargo +stable test

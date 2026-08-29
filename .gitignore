@@ -66,3 +66,9 @@ app/serve.log
 
 # BGO corpus journals extracted from tar.gz for analysis (regenerated, not committed)
 sources/bgo/journals/
+
+# The BGO corpus and the third-party reference material live in the PRIVATE
+# repo ptarjan/tta-ai-sources: CGE and BGA copyright, plus 1011 scraped games
+# under real players' account names. Symlink it in as `sources/` to run the
+# replayer or any corpus tool. It must never be committed here.
+sources/
