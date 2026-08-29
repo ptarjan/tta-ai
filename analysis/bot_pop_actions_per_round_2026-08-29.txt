@@ -1,0 +1,146 @@
+Bot population-increase ACTIONS per round, and the first like-for-like
+comparison against the human journals
+=======================================================================
+2026-08-29. 2p, `behavcensus --games 200 --players 2 --threads 2`, frozen copy
+of `experiments/rust_champion_2p.json` at **gen 125336** (copied to
+/tmp/popact_champ_2p.json before the run; the live file is rewritten by the
+climb every few minutes).
+
+WHY THIS MEASUREMENT EXISTS
+===========================
+`population_curve_bot_vs_human_2026-08-28.txt` compared a human population
+LEVEL against a bot population LEVEL and its human column turned out to be
+~1.9x too steep; it is withdrawn, and the +5.67 r17 gap with it. The journals
+were then re-derived as an ACTION count
+(`human_pop_from_journals_2026-08-29.txt`: 8.089 population-increase actions
+per player by r17, 2.98 by r6), but until now no bot binary emitted the
+matching quantity:
+
+  - `botcensus` classifies `Move::Pop` but counts per GAME with no round
+    keying, and returns `None` for `Move::PopFree` -- it would undercount.
+  - `openerprobe` counts `Move::Pop|PopFree` but truncates at round 3, and
+    counts decision POINTS, not actions.
+  - `behavcensus` was closest but recorded CA SPENT on pops
+    (`CivilSpendCounts::record(kind, ca_spent)`), so a free pop contributed 0,
+    and only over a fixed `(3..=9)` round window.
+
+So `behavcensus` gained a counter that is the same measure as the journals:
+**one increment per `Move::Pop`/`Move::PopFree`** (an action, never a CA
+debit -- a free pop counts as 1), keyed by `round_before` (`state.round`
+pre-move), over the WHOLE game.
+
+THE DENOMINATOR
+===============
+Two populations, printed separately and never reconciled:
+
+(1) PER-ROUND: n = player-rounds that reached that round, read off
+    `production_by_round[round].2`, the turn-start sample this file already
+    takes once per player-round. n FALLS as rounds go up because games end at
+    different rounds. A cumulative over this falling-n population would be
+    survivorship-biased and is NOT printed.
+(2) COMPLETED-GAMES CUMULATIVE: the journals' figure is per PLAYER over games
+    that COMPLETE, so BOTH sides of the bot cumulative come from the completed
+    population -- numerator `pop_actions_by_round_completed` (folded only when
+    `!cap_hit`), denominator `completed_player_games`. Summing the all-games
+    numerator over a completed-only denominator would divide one population's
+    actions by another population's count and inflate the cumulative by every
+    capped game; that is the class of error that produced the withdrawn +5.67
+    and it is structurally excluded here, not merely avoided in this run.
+
+In THIS run the two are numerically equal at 400 (200 games x 2 seats, every
+game completed, no MOVE_CAP hit), so the completed-only fix is a no-op on these
+numbers. It is not a no-op in general.
+
+RESULT
+======
+| round | pop actions (that round) | n (player-rounds) | mean/player-round | cumulative (completed) |
+|---|---|---|---|---|
+| 2 | 246 | 400 | 0.615 | 0.615 |
+| 3 | 306 | 400 | 0.765 | 1.380 |
+| 4 | 247 | 400 | 0.618 | 1.998 |
+| 5 | 227 | 400 | 0.568 | 2.565 |
+| 6 | 218 | 400 | 0.545 | 3.110 |
+| 7 | 176 | 400 | 0.440 | 3.550 |
+| 8 | 116 | 400 | 0.290 | 3.840 |
+| 9 | 104 | 400 | 0.260 | 4.100 |
+| 10 | 93 | 400 | 0.233 | 4.332 |
+| 11 | 77 | 400 | 0.193 | 4.525 |
+| 12 | 74 | 400 | 0.185 | 4.710 |
+| 13 | 105 | 400 | 0.263 | 4.973 |
+| 14 | 75 | 400 | 0.188 | 5.160 |
+| 15 | 83 | 400 | 0.207 | 5.367 |
+| 16 | 109 | 400 | 0.273 | 5.640 |
+| 17 | 122 | 400 | 0.305 | 5.945 |
+| 18 | 119 | 400 | 0.297 | 6.242 |
+| 19 | 124 | 398 | 0.312 | 6.553 |
+| 20 | 107 | 294 | 0.364 | 6.820 |
+| 21 | 6 | 20 | 0.300 | 6.835 |
+
+Round 1 has no row: r1 is take-only, so a pop is not legal.
+r19+ rows are where n starts to fall; treat them as survivorship-thinned the
+same way the population curve's r18+ rows are.
+
+THE COMPARISON
+==============
+Cumulative per player, same definition on both sides:
+
+  by r6:  bot 3.110  vs human 2.98   -> bot +0.13 (parity, bot marginally ahead)
+  by r17: bot 5.945  vs human 8.089  -> human +2.14
+
+The r17 lead of ~+2.1 ACTIONS is consistent with the corrected +1..+3 mid-game
+band and has nothing in common with the withdrawn +5.67 LEVEL gap.
+
+Per player-round, against the `increases` row of
+`human_midgame_actions_2026-08-28.txt` (632 2p games, n=1264 player-rounds per
+round, flat):
+
+  round     bot     human    ratio
+  r 8      0.290    0.332    1.14x
+  r 9      0.260    0.272    1.05x
+  r10      0.233    0.332    1.42x
+  r11      0.193    0.381    1.97x
+  r12      0.185    0.460    2.49x
+  r13      0.263    0.479    1.82x
+  r14      0.188    0.521    2.77x
+  r15      0.207    0.542    2.62x
+  r16      0.273    0.672    2.46x
+
+WHAT IT SAYS
+============
+1. **The bot matches humans on population through round 9 and then flatlines.**
+   Parity at r8-r9; the gap opens at r10-r11 and holds at ~2.5x from r12 on.
+   The r12 peel is real and now rests on a trusted like-for-like instrument
+   rather than the withdrawn curve.
+
+2. **It is a SHAPE inversion, not a level shortfall.** Both sides front-load,
+   but the bot front-loads HARDER -- 3.11 of its 5.95 lifetime actions land by
+   r6 (52%), against the human's 2.98 of 8.09 (37%) -- and then never
+   accelerates, sitting at ~0.2/round while the human climbs to 0.672. This is
+   the same signature as the food curve running backwards: the bot's rate peaks
+   at r3 and decays, the human's rises all game.
+
+3. **On POPULATION COUNT specifically, the opener is clean.** That clears one
+   claim only. The bot buys as many workers as a human by r6 and still cannot
+   build a Farm 88.3% of the time for want of a free worker
+   (`analysis/` no-free-workers finding), and its workers are placed within one
+   round against a human idle rate of 43-73%. So the opener defect is worker
+   SLACK, not worker COUNT -- a different problem from the one this measurement
+   was built to test, and untouched by it.
+
+4. **The obvious next decomposition is "couldn't" vs "wouldn't".** Over r10-r17
+   the shortfall is ~2.1 actions. Two known instruments bound it from opposite
+   sides: food is the binding reason at >=39.7% of pop-ILLEGAL points and rising
+   (`food_gates_population_2026-08-28.txt`), and when Pop IS legal the bot takes
+   it only 23.1% of the time, at its LOWEST in exactly this window (r6-10 ~16.8%,
+   `pop_taken_when_legal_2026-08-28.txt`). Both effects point the same way in the
+   same rounds; neither has been sized against the other per round.
+
+REPRODUCTION
+============
+  cp experiments/rust_champion_2p.json /tmp/popact_champ_2p.json   # record its gen
+  cd rust && cargo build --profile difftest --bin behavcensus
+  ./target/difftest/behavcensus --games 200 --players 2 --threads 2 \
+      --weights /tmp/popact_champ_2p.json
+Section "### Pop-increase actions per round (bot)", printed after
+"### Production curve". Deterministic: two runs at the same gen reproduce the
+table byte for byte (verified).

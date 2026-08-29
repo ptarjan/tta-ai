@@ -1003,6 +1003,40 @@ struct Report {
     /// already has its story told by `playable_turns_never_played_*`.
     blocked_never_played_zero_early: Vec<(u32, u32, u32)>,
     blocked_never_played_zero_late: Vec<(u32, u32, u32)>,
+
+    // ---- pop-increase ACTIONS per player-round (the bot-side twin of the
+    // journals' "population-increase actions per player-round" measure) ----
+    //
+    // Counts the ACTION (one per `Move::Pop`/`Move::PopFree`), NOT CA spent:
+    // the human-side number (8.089 by r17, 2.98 by r6) is a count of
+    // increase-population actions, so a free/discounted pop must still
+    // count as 1 here. This is deliberately NOT the CA-debit the
+    // `civil_spend_by_round` counter above uses -- that one is "CA spent on
+    // pops", a different quantity, and reusing it is exactly the definitional
+    // mismatch that produced the withdrawn +5.67 figure.
+    //
+    // Per-ROUND (not cumulative) and keyed by the round the move was played
+    // in (`round_before` = `state.round` pre-move), the same shape as
+    // `production_by_round`/`alloc_by_round` above -- a `HashMap<u16, u64>`
+    // rather than a fixed array, so the round window is the whole game, not
+    // the `(3..=9)` slice the civil-spend counter is capped to.
+    pop_actions_by_round: HashMap<u16, u64>,
+    /// The same per-round action counts, restricted to COMPLETED player-games
+    /// -- the numerator of the cumulative, whose denominator is
+    /// `completed_player_games`. It must be its own map rather than a running
+    /// sum over `pop_actions_by_round`: that map counts every player-game
+    /// including `cap_hit` ones, so summing it over a completed-only
+    /// denominator divides one population's actions by another population's
+    /// count and silently inflates the cumulative whenever a game hits the
+    /// move cap. The two populations are reported separately and never
+    /// reconciled (see the "Pop-increase actions per round" print section).
+    pop_actions_by_round_completed: HashMap<u16, u64>,
+    /// Player-games that reached `state.game_over` with no `MOVE_CAP` hit --
+    /// the completed population for the cumulative below. `cap_hit` games
+    /// have no `game_over` (the loop broke on the move cap), so they are
+    /// excluded here on the same "no fabricated sample" rule the rest of this
+    /// file applies to `is_winner`.
+    completed_player_games: u64,
 }
 
 impl Report {
@@ -1081,6 +1115,14 @@ impl Report {
         self.blocked_played_late.extend(other.blocked_played_late);
         self.blocked_never_played_zero_early.extend(other.blocked_never_played_zero_early);
         self.blocked_never_played_zero_late.extend(other.blocked_never_played_zero_late);
+
+        for (k, v) in other.pop_actions_by_round {
+            *self.pop_actions_by_round.entry(k).or_insert(0) += v;
+        }
+        for (k, v) in other.pop_actions_by_round_completed {
+            *self.pop_actions_by_round_completed.entry(k).or_insert(0) += v;
+        }
+        self.completed_player_games += other.completed_player_games;
     }
 }
 
@@ -1202,6 +1244,14 @@ struct PlayerTrack {
     /// [`WonderTempoGroup`], which is not known until the game ends; folded
     /// into `Report::civil_spend_early`/`civil_spend_late` at that point.
     civil_spend_by_round: [CivilSpendCounts; 7],
+    /// This player's pop-increase ACTIONS by round (one per
+    /// `Move::Pop`/`Move::PopFree`, the whole game, not the 3-9 slice),
+    /// accumulated regardless of group and folded into
+    /// `Report::pop_actions_by_round` (and, if the game completed, also
+    /// `Report::pop_actions_by_round_completed`) at game end. See
+    /// `Report::pop_actions_by_round`'s doc for why this is an action count,
+    /// not a CA debit.
+    pop_actions_by_round: HashMap<u16, u64>,
     /// This player's board, sampled PRE-move at the move that ends round 6
     /// (same "state before the transition" convention as the age-boundary
     /// snapshots above) -- `None` if the game ended before round 6 was
@@ -1290,6 +1340,7 @@ impl PlayerTrack {
             increased_pop_r3: false,
             ca_unused_r3: 0,
             civil_spend_by_round: [CivilSpendCounts::default(); 7],
+            pop_actions_by_round: HashMap::new(),
             round6_sample: None,
             taken_rounds: HashMap::new(),
             n_taken: 0,
@@ -1769,6 +1820,15 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             }
         }
 
+        // ---- pop-increase ACTION count, every round (see
+        // `Report::pop_actions_by_round`'s doc for why this is an action
+        // count, not the CA debit recorded above, and why it is NOT capped
+        // to the 3-9 slice). One increment per `Move::Pop`/`Move::PopFree`
+        // at the round the move was played in.
+        if matches!(mv, Move::Pop { .. } | Move::PopFree) {
+            *tracks[actor as usize].pop_actions_by_round.entry(round_before).or_insert(0) += 1;
+        }
+
         // ---- openings ----
         if let Some(card) = taken_card {
             if !card.is_none() && pre_age == Age::A && tracks[actor as usize].first_take.is_none() {
@@ -1905,6 +1965,22 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
     for i in 0..players {
         let p = &state.players[i as usize];
         report.n_player_games += 1;
+
+        // ---- pop-increase actions: fold this player-game's per-round action
+        // counts into the per-round table (denominator = every player-round
+        // that reached that round, so its n falls as rounds go up), and, only
+        // if the game COMPLETED, into the separate completed-only map whose
+        // denominator is `completed_player_games`. Folding into one map and
+        // dividing by the other would mix the two populations.
+        for (&round, &count) in &tracks[i as usize].pop_actions_by_round {
+            *report.pop_actions_by_round.entry(round).or_insert(0) += count;
+            if !cap_hit {
+                *report.pop_actions_by_round_completed.entry(round).or_insert(0) += count;
+            }
+        }
+        if !cap_hit {
+            report.completed_player_games += 1;
+        }
 
         // ---- opening, human-comparable schema: record into (wins, total)
         // maps, or the unknown-outcome counter, per player-game.
@@ -2748,6 +2824,49 @@ fn print_report(players: u8, r: &Report) {
             resources_sum as f64 / n.max(1) as f64
         );
     }
+
+    // ---- pop-increase ACTIONS per round (the bot-side twin of the
+    // journals' "population-increase actions per player-round" measure; see
+    // `Report::pop_actions_by_round`'s doc for why this is an action count,
+    // not a CA debit). Two populations, printed separately on purpose:
+    //
+    //  (1) PER-ROUND: one row per round, n = the player-rounds that reached
+    //      it (falls as rounds go up, because games end at different rounds).
+    //      Mean = total pop actions in that round / n. A cumulative mean over
+    //      this falling-n population would be survivorship-biased, so it is
+    //      NOT printed here.
+    //  (2) COMPLETED-GAMES CUMULATIVE: the journals' 8.089-by-r17 / 2.98-by-r6
+    //      is per PLAYER over games that COMPLETE, so BOTH sides of it come
+    //      from the completed population -- numerator
+    //      `pop_actions_by_round_completed`, denominator
+    //      `completed_player_games`. Summing the all-games numerator over the
+    //      completed-only denominator would inflate it by every `cap_hit`
+    //      game's actions. If that completed count differs from the per-round
+    //      n, the two populations differ and the divergence is stated rather
+    //      than reconciled silently.
+    println!("\n### Pop-increase actions per round (bot)\n");
+    println!(
+        "n (per round) = player-rounds that reached that round -- falls as rounds go up (games end at different rounds).\n\
+         cumulative (completed) = sum of pop actions through that round, over completed player-games only (n={}).\n",
+        r.completed_player_games
+    );
+    println!("| round | pop actions (that round) | n (player-rounds) | mean actions/player-round | cumulative (completed games) |");
+    println!("|---|---|---|---|---|");
+    let mut pop_rounds: Vec<u16> = r.pop_actions_by_round.keys().copied().collect();
+    pop_rounds.sort_unstable();
+    let n_completed = r.completed_player_games;
+    let mut cumulative = 0u128;
+    for round in pop_rounds {
+        cumulative += u128::from(r.pop_actions_by_round_completed.get(&round).copied().unwrap_or(0));
+        let n = r.production_by_round.get(&round).map(|t| t.2).unwrap_or(0);
+        let mean = r.pop_actions_by_round[&round] as f64 / n.max(1) as f64;
+        let cum_mean = cumulative as f64 / n_completed.max(1) as f64;
+        println!("| {round} | {} | {} | {:.3} | {:.3} |", r.pop_actions_by_round[&round], n, mean, cum_mean);
+    }
+    println!(
+        "\nPer-round n counts player-ROUNDS (falls as rounds go up; includes every game that reached that round, complete or not) -- a cumulative mean over that falling-n population would be survivorship-biased, so it is not printed. The completed-games cumulative uses n={completed} player-GAMES (no MOVE_CAP hit) -- a DIFFERENT population from the per-round n. The two are printed separately and NOT reconciled silently; if {completed} differs from a per-round n above, that is the two populations differing, stated here rather than hidden.",
+        completed = n_completed
+    );
 
     // ---- worker allocation curve: mean workers by CardType bucket, mean
     // free/staffed workers, and mean of each player's OWN best farm/mine

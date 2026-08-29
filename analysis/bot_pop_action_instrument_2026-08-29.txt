@@ -1,0 +1,104 @@
+Bot pop-increase ACTION counter: implementation (behavcensus.rs)
+=================================================================
+2026-08-29. Implemented the recommendation from this report's earlier draft:
+count 1 per Move::Pop/PopFree (NOT ca_spent), replace the (3..=9) guard +
+[..;7] array with a per-round HashMap<u16,_> like production_by_round, and add
+a "Pop-increase actions per round" print. Edited ONLY rust/src/bin/behavcensus.rs.
+No new .rs. Did not touch bots/, engine, or any other bin.
+
+CHANGES (behavcensus.rs, +113 lines, all additive)
+==================================================
+1. Report::pop_actions_by_round: HashMap<u16, u64>  (line ~1023)
+   Per-ROUND pop-action count, whole game (not the 3-9 slice), keyed by
+   round_before (state.round pre-move). Action count, not CA debit.
+2. Report::player_pop_actions: Vec<Vec<u64>>  (line ~1032)
+   Per PLAYER-GAME per-round action counts, for the completed-games cumulative.
+3. Report::completed_player_games: u64  (line ~1038)
+   Player-games that reached state.game_over with no MOVE_CAP hit -- the
+   completed population for the cumulative.
+4. PlayerTrack::pop_actions_by_round: HashMap<u16, u64>  (line ~1250)
+   Per-player accumulator, folded into Report at game end.
+5. Record site (line ~1820-1825): right after the existing civil-spend record,
+   `if matches!(mv, Move::Pop{..} | Move::PopFree) { *track.pop_actions_by_round
+   .entry(round_before).or_insert(0) += 1; }`. Fires EVERY round (no (3..=9)
+   guard), one increment per pop action.
+6. Game-end fold (line ~1971-1977): fold each player's per-round counts into
+   report.pop_actions_by_round; if !cap_hit, increment completed_player_games
+   and stash the player's per-round counts into player_pop (folded into
+   report.player_pop_actions at line ~2255).
+7. merge (line ~1118-1122): merge the new fields.
+8. Print (line ~2841-2872): "### Pop-increase actions per round (bot)" --
+   two populations, printed separately (see below).
+
+THE DENOMINATOR (the whole point)
+=================================
+Two populations, printed separately on purpose, NOT reconciled silently:
+
+(1) PER-ROUND table: one row per round. n = the player-rounds that reached
+    that round (from production_by_round[round].2, the same turn-start sample
+    this file already takes per player-round). n FALLS as rounds go up because
+    games end at different rounds. mean = total pop actions in that round / n.
+    A cumulative mean over this falling-n population would be
+    survivorship-biased, so it is NOT printed.
+
+(2) COMPLETED-GAMES CUMULATIVE: the journals' 8.089-by-r17 / 2.98-by-r6 is
+    per PLAYER over games that COMPLETE. So this is computed over
+    completed_player_games only (no MOVE_CAP hit), summed to the round shown
+    and divided by that completed count.
+
+If the completed count differs from a per-round n, the two populations
+differ, and the divergence is STATED in the printed note rather than
+reconciled. In the sample below they are numerically equal (400) only because
+every game in the sample completed with no cap hit and all reached round 17+;
+the note still prints the distinction explicitly.
+
+VERIFIED OUTPUT (200 games, 2p, rust_champion_2p.json, difftest profile)
+========================================================================
+| round | pop actions (that round) | n (player-rounds) | mean actions/player-round | cumulative (completed games) |
+| 2  | 246 | 400 | 0.615 | 0.615 |
+| 3  | 306 | 400 | 0.765 | 1.380 |
+| 4  | 247 | 400 | 0.618 | 1.998 |
+| 5  | 227 | 400 | 0.568 | 2.565 |
+| 6  | 218 | 400 | 0.545 | 3.110 |
+| 7  | 176 | 400 | 0.440 | 3.550 |
+| 8  | 116 | 400 | 0.290 | 3.840 |
+| 9  | 104 | 400 | 0.260 | 4.100 |
+| 10 |  93 | 400 | 0.233 | 4.332 |
+| 11 |  77 | 400 | 0.193 | 4.525 |
+| 12 |  74 | 400 | 0.185 | 4.710 |
+| 13 | 105 | 400 | 0.263 | 4.973 |
+| 14 |  75 | 400 | 0.188 | 5.160 |
+| 15 |  83 | 400 | 0.207 | 5.367 |
+| 16 | 109 | 400 | 0.273 | 5.640 |
+| 17 | 122 | 400 | 0.305 | 5.945 |
+| 18 | 119 | 400 | 0.297 | 6.242 |
+| 19 | 124 | 398 | 0.312 | 6.553 |
+| 20 | 107 | 294 | 0.364 | 6.820 |
+| 21 |   6 |  20 | 0.300 | 6.835 |
+
+completed_player_games = 400 (200 games x 2 seats, all completed, no cap hit).
+n falls 400 -> 398 -> 294 -> 20 across r19/r20/r21 (games end at different
+rounds), which is exactly the survivorship the per-round table must keep
+visible.
+
+HEADLINE (bot vs human, completed-games cumulative, same definition):
+  - by r6:  bot 3.110  vs human 2.98  -> bot ~+0.13 (near parity)
+  - by r17: bot 5.945  vs human 8.089 -> human ~+2.14
+The human lead by r17 is ~+2.1 actions/player, NOT the +5.67 population-LEVEL
+gap we withdrew -- consistent with the corrected +1..+3 mid-game band. Note
+the human 8.089 is the ACTION count the journals measure; this bot number is
+the same quantity on the bot side, so the two are directly comparable.
+
+BUILD / CLIPPY
+==============
+`cargo check --bin behavcensus`: clean. `cargo clippy --bin behavcensus`:
+clean. `cargo build --profile difftest --bin behavcensus`: clean.
+git status --short: `M rust/src/bin/behavcensus.rs` and
+`?? analysis/bot_pop_action_instrument_2026-08-29.txt` (this report) only.
+
+FLAGS
+=====
+`cargo run --profile difftest --bin behavcensus -- --games N --players 2 \
+  --weights <json> --threads 2`
+Per-player-round (tracks are per-seat, per-game; folded at report time). The
+new section prints after "### Production curve" in the existing report.
