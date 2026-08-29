@@ -12287,9 +12287,12 @@ mod tests {
     #[test]
     fn replay_game_completes_a_journal_whose_duplicated_end_turn_pair_is_logged_before_its_own_end_of_game_marker() {
         let index_path = format!("{}/../sources/bgo/index.tsv", env!("CARGO_MANIFEST_DIR"));
-        let games = match crate::corpus::parse_index(&index_path) {
-            Ok(g) => g,
-            Err(e) => panic!("{index_path}: {e}"),
+        // The corpus lives in the private ptarjan/tta-ai-sources and is symlinked
+        // in as `sources/`, so it is absent on any machine that only has this
+        // repo -- CI included. Absent corpus means nothing to pin, same skip
+        // discipline as the journal fixture below.
+        let Ok(games) = crate::corpus::parse_index(&index_path) else {
+            return;
         };
         let Some(meta) = games.iter().find(|g| g.id == "7522663") else {
             return; // index.tsv changed on this machine -- nothing to pin, same skip discipline as the fixture below
@@ -12400,9 +12403,12 @@ mod tests {
     #[test]
     fn replay_game_skips_the_redundant_trailing_discard_line_after_an_end_turn() {
         let index_path = format!("{}/../sources/bgo/index.tsv", env!("CARGO_MANIFEST_DIR"));
-        let games = match crate::corpus::parse_index(&index_path) {
-            Ok(g) => g,
-            Err(e) => panic!("{index_path}: {e}"),
+        // The corpus lives in the private ptarjan/tta-ai-sources and is symlinked
+        // in as `sources/`, so it is absent on any machine that only has this
+        // repo -- CI included. Absent corpus means nothing to pin, same skip
+        // discipline as the journal fixture below.
+        let Ok(games) = crate::corpus::parse_index(&index_path) else {
+            return;
         };
         let Some(meta) = games.iter().find(|g| g.id == "7523354") else {
             return; // index.tsv changed on this machine -- nothing to pin
