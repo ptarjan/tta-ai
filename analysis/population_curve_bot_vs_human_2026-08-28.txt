@@ -268,6 +268,18 @@ human side retains 92 of 1264 player-rounds (7.3%) and the bot 140 of 512
 subsets, and a gap between two different selections is not a gap. That,
 not contamination by ended games, is why they are retired.
 
+RESOLVED 2026-08-28, and the mechanism is now exact. The accumulator rule is
+n(R) = 2 x (games whose final round is STRICTLY GREATER than R) — a game
+contributes no snapshot for its OWN final round, because the human side reads
+round R from the round-R+1 journal line and the bot side from `state.round`
+advancing past R, and neither exists in the last round. Checked against the
+`ee20303` final-round histograms: seven numbers, both sides, all exact.
+**Every game's last round is missing from this table.** So the late rows are
+conditioned on running PAST that round and exclude exactly the games that
+just ended. The one-round disagreement between the two runs was the OTHER
+file's error, not this one's — see the coordinator correction appended to
+`analysis/game_length_and_pop_timing_2026-08-28.txt`.
+
 STATUS: r1-r17 QUOTABLE on both sides, r15/r16/r17 included. r18, r19, r20
 FORMALLY RETIRED for survivorship — the existing do-not-quote rule on r18+
 stands and is now reasoned correctly. The headline (curves separate at r12,

@@ -291,3 +291,54 @@ Caveats
 - "Final round" for game length is read as the engine's `state.round` at the
   moment the game ended (the last round whose turn sequence the game reached).
   It is a round number, not an age.
+
+## COORDINATOR CORRECTION (2026-08-28) — THE CARRIED-VS-DROPPED TABLE ABOVE
+## IS OFF BY ONE, AND ITS PREMISE IS FALSE. THE CURVE REPORT WAS ALREADY RIGHT.
+
+The FINAL ROUND DISTRIBUTION above is correct and is the key to everything
+below. What is wrong is definition (b) and the table built on it.
+
+THE ACTUAL ACCUMULATOR RULE, verified on seven independent numbers:
+
+    n(R) = 2 x (games whose final round is STRICTLY GREATER than R)
+
+not `R <= final round` as (b) states. A game does NOT contribute an
+end-of-round-R snapshot for its OWN final round. That is not a quirk, it
+falls straight out of the method both reports declare: on the human side the
+round-R state is read from "the journal's first line tagged round R+1", and a
+game ending at R has no round R+1 line; on the bot side it is "the snapshot
+taken the moment `state.round` advances past R", and in the final round the
+round never advances. **Every game's last round is missing from the curve
+table, on both sides.**
+
+Human, against the histogram (r18:52, r19:311, r20:223, r21:44, r22:2):
+    n(17) = 2 x 632 = 1264   table 1264  OK
+    n(18) = 2 x 580 = 1160   table 1160  OK
+    n(19) = 2 x 269 =  538   table  538  OK
+    n(20) = 2 x  46 =   92   table   92  OK
+Bot, against its histogram (r19:14, r20:172, r21:70):
+    n(18) = 2 x 256 =  512   table  512  OK
+    n(19) = 2 x 242 =  484   table  484  OK
+    n(20) = 2 x  70 =  140   table  140  OK
+
+Seven for seven, both sides. Under (b) as written, n(18) would be 1264 and
+every one of those would fail.
+
+CONSEQUENCE 1 — the table at lines 71-79 is labelled ONE ROUND LATE. Its
+"corrected dropped" rows (r19: 1160 / 14.68 / 5.68 / 4.34; r20: 538 / 15.22 /
+5.26 / 4.27; r21: 92 / 15.86 / 4.73 / 4.29) are the curve report's r18, r19
+and r20 rows, verbatim. The curve table's round labels are the correct ones.
+
+CONSEQUENCE 2 — the premise is false. Line 61 calls (a) "what the prior
+report actually printed". It is not. `git show ee20303:analysis/population_
+curve_bot_vs_human_2026-08-28.txt` prints n=1160 and pop 14.68 at round 18 —
+the DROPPED value, at the correct label, before this file was written. There
+was never a carried-forward table to correct. This file audited a report that
+had already done the right thing and mislabelled its own restatement of it.
+
+The r18+ rows still may not be quoted, and the reason is now exact rather
+than approximate: each late row is conditioned on the game running PAST that
+round, so it excludes precisely the games that just ended, and the two sides
+thin at very different rates (at r20 the human retains 46 of 632 games, the
+bot 70 of 256). r1-r17 are complete on both sides — no game's final round
+falls there — so the headline is untouched.
