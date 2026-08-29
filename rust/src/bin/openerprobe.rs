@@ -1263,11 +1263,15 @@ fn food_production_rate(state: &GameState, idx: u8) -> u16 {
 /// `true` if `m` is a legal food build/upgrade candidate (see
 /// [`FoodBuildsR39`]'s doc comment for the closed candidate set).
 fn is_food_build_move(m: Move) -> bool {
-    match m {
-        Move::Develop { card, .. } | Move::Build { card } => card.kind() == CardType::Farm,
-        Move::Upgrade { to, .. } => to.kind() == CardType::Farm,
-        _ => false,
+    // `if let`, not a wildcard `match` arm: the repo's Cargo.toml denies
+    // `wildcard_enum_match_arm`, and `Move` has 30+ variants.
+    if let Move::Develop { card, .. } | Move::Build { card } = m {
+        return card.kind() == CardType::Farm;
     }
+    if let Move::Upgrade { to, .. } = m {
+        return to.kind() == CardType::Farm;
+    }
+    false
 }
 
 /// One replay of `recorded` on a fresh game. `force_food` controls the (d)
@@ -1939,8 +1943,7 @@ fn print_food_supply(r: &Report, human_r12: f64) {
     );
     let tech_names = ["Agriculture", "Irrigation", "SelectiveBreeding"];
     println!(
-        "\n  round  n       prod   consume  net     {}  {}  {}",
-        "Agr(in/stf/mean)", "Irr(in/stf/mean)", "SB(in/stf/mean)"
+        "\n  round  n       prod   consume  net     Agr(in/stf/mean)  Irr(in/stf/mean)  SB(in/stf/mean)"
     );
     for round in 3..=17u16 {
         match fs.by_round.get(&round) {
