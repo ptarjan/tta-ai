@@ -1,0 +1,250 @@
+BEHAVCENSUS CA_BEFORE_MOVE TRACE -- 2026-08-28
+================================================
+Job: add a temporary eprintln of `ca_before_move` at
+rust/src/bin/behavcensus.rs:1839, build, run
+`behavcensus --games 2 --players 2 --threads 1 --seed 0`, and report per-turn
+civil actions remaining before each move for both seats. Question: does
+`behavcensus`'s `ca_unused_r3` counter agree with that trace? It is already
+proven WRONG -- the deliverable is WHY (what it actually counts), not a
+re-litigation of CA waste. Diagnose only.
+
+=====================================================================
+THE TRACE (what the temporary eprintln printed)
+=====================================================================
+The eprintln was inserted at the `ca_before_move` capture (the line
+`let ca_before_move = state.players[actor as usize].civil_actions;`), which
+runs PRE-`game::step`. It printed, per decision point:
+    CA_TRACE round={round_before} turn={state.turn} actor=p{actor}
+             ca_before_move={..} mv={:?}
+with `round_before`/`state.turn`/`actor` all read in the same pre-step
+instant as the counter's own read site (behavcensus.rs:1433-1434, 1537), so
+the trace is EXACTLY the value the counter consumes, per move. Weights:
+the frozen 2p champion
+(/Users/pt/tta-ai/experiments/rust_champion_2p_frozen_2026-08-28.json).
+538 decision points over 2 games.
+
+The round 1-3 portion (the window the counter covers) for BOTH games:
+
+--- game 0 (seed 0) ---
+round  turn  actor  ca_before  mv
+    1     1    p0       1       Take { slot: 3 }
+    1     1    p0       0       EndTurn            <- counter adds 0
+    1     2    p1       2       Take { slot: 5 }
+    1     2    p1       0       EndTurn            <- counter adds 0
+    2     3    p0       4       PolPass
+    2     3    p0       4       PlayLeader { card: Homer }
+    2     3    p0       3       Build { card: Bronze }
+    2     3    p0       2       Pop { full: None }
+    2     3    p0       1       Take { slot: 1 }
+    2     3    p0       0       EndTurn            <- counter adds 0
+    2     4    p1       4       PolPass
+    2     4    p1       4       Build { card: Bronze }
+    2     4    p1       3       Pop { full: None }
+    2     4    p1       2       Take { slot: 3 }
+    2     4    p1       1       PlayLeader { card: Julius Caesar }
+    2     4    p1       0       EndTurn            <- counter adds 0
+    3     5    p0       4       PrepareEvent { card: Good Harvest }
+    3     5    p0       4       Build { card: Religion }
+    3     5    p0       3       Pop { full: None }
+    3     5    p0       2       PlayAction { card: Stock Pile }
+    3     5    p0       1       Build { card: Warriors }
+    3     5    p0       1       Pop { full: None }
+    3     5    p0       0       EndTurn            <- counter adds 0
+    3     6    p1       4       PrepareEvent { card: Historic Territory (I) }
+    3     6    p1       4       PrepareEvent { card: Cultural Influence }
+    3     6    p1       4       Build { card: Religion }
+    3     6    p1       4       WonderStep { steps: 1 }
+    3     6    p1       3       Pop { full: None }
+    3     6    p1       2       Take { slot: 3 }
+    3     6    p1       1       Take { slot: 2 }
+    3     6    p1       0       EndTurn            <- counter adds 0
+
+--- game 1 (seed 1) ---
+round  turn  actor  ca_before  mv
+    1     1    p0       1       Take { slot: 3 }
+    1     1    p0       0       EndTurn            <- counter adds 0
+    1     2    p1       2       Take { slot: 5 }
+    1     2    p1       0       EndTurn            <- counter adds 0
+    2     3    p0       4       PolPass
+    2     3    p0       4       Build { card: Bronze }
+    2     3    p0       3       Pop { full: None }
+    2     3    p0       2       Take { slot: 1 }
+    2     3    p0       0       EndTurn            <- counter adds 0
+    2     4    p1       4       PolPass
+    2     4    p1       4       PlayLeader { card: Julius Caesar }
+    2     4    p1       3       Build { card: Bronze }
+    2     4    p1       2       Pop { full: None }
+    2     4    p1       1       Take { slot: 3 }
+    2     4    p1       0       EndTurn            <- counter adds 0
+    3     5    p0       4       PrepareEvent { card: Good Harvest }
+    3     5    p0       4       Build { card: Religion }
+    3     5    p0       3       Pop { full: None }
+    3     5    p0       1       Take { slot: 1 }
+    3     5    p0       1       Pop { full: None }
+    3     5    p0       0       EndTurn            <- counter adds 0
+    3     6    p1       4       PrepareEvent { card: Historic Territory (I) }
+    3     6    p1       4       Build { card: Religion }
+    3     6    p1       3       Take { slot: 3 }
+    3     6    p1       1       Take { slot: 2 }
+    3     6    p1       0       EndTurn            <- counter adds 0
+
+Round 4 onward (not counted, shown for completeness of the mechanic):
+every turn OPENS at ca_before=4 and the EndTurn also reads 0 -- the
+"ca_before=4" lines in the trace are the NON-EndTurn moves at the top of a
+fresh turn, and the EndTurn line itself is always 0 because the pool is
+spent to 0 before EndTurn is chosen (or was already 0). The "4" that the
+earlier file (ca_pool_trace_2026-08-27) saw on its EndTurn line was read
+AFTER `game::step` returned -- see "THE CONTRADICTION" below.
+
+=====================================================================
+DOES THE COUNTER AGREE WITH THE TRACE?  YES -- EXACTLY.
+=====================================================================
+Recomputing `ca_unused_r3` from the trace (sum of `ca_before_move` over
+`Move::EndTurn` lines with `round_before <= 3`):
+
+    game 0: p0 = 0+0+0 = 0,  p1 = 0+0+0 = 0
+    game 1: p0 = 0+0+0 = 0,  p1 = 0+0+0 = 0
+    all four player-games: 0
+
+The binary's own stdout line:
+    Civil actions left unused across rounds 1-3 (count -> player-games): 0->4
+
+i.e. all four player-games fall in the "0 unused CAs" bucket. The trace
+and the counter AGREE TO THE BIT. So the disagreement the prior file
+asserted (that the counter "reads the fresh refill, not the leftover") is
+NOT what is happening here -- the counter is reading exactly the value the
+trace shows at the EndTurn decision point, which is 0 in every r1-3 turn.
+
+WHY THEY AGREE (the timing): `ca_before_move` is captured PRE-`game::step`
+(behavcensus.rs:1537), and the civil-action refill runs INSIDE the EndTurn
+apply (`economy::end_of_turn` step 5, economy.rs:1128) -- i.e. AFTER the
+capture. So the counter sees the pool's leftover, not the refill. The
+leftover is 0 in every r1-3 turn of this self-play because the bot spends
+the pool to 0 (or near 0) before EndTurn.
+
+=====================================================================
+THE CONTRADICTION IN THE PRIOR FILE
+=====================================================================
+ca_pool_trace_2026-08-27.txt is internally inconsistent about this exact
+mechanism. In one section it says (lines ~229-243, 290):
+
+    "the decider's pool holds the turn's LEFTOVER ... it is NOT
+     observable as a field value at or after the EndTurn decision ...
+     it reads the pool at the moment EndTurn is chosen, which is the
+     leftover (the refill has not run yet at that instant)."
+
+and on that basis it CONCLUDES behavcensus's `ca_unused_r3` is "CORRECT and
+is the right instrument for CA left unused at end of turn."
+
+But in its own hand-check (lines ~155-172) it writes:
+
+    "Leftover: 4 - 3 = 1. The EndTurn line reads ca_before 4 -- the pool
+     was 1 when EndTurn was chosen; the 4 is the REFILL that already ran
+     inside the step."
+
+These two statements cannot both be true for the SAME read. If the refill
+"already ran inside the step" by the time the EndTurn line is printed, then
+the counter (which reads pre-step) would NOT see the refill and WOULD see
+the leftover -- the prior file's "CORRECT" conclusion. If instead the
+EndTurn line's "4" is the pre-step leftover, that contradicts the trace
+showing 3-4 CA spent that same turn. The prior file conflated two different
+read points: the catrace tool it built printed the pool AFTER `game::step`
+returned (so its EndTurn line showed the post-refill 4), whereas
+`ca_unused_r3` reads BEFORE `game::step` (so it shows the leftover 0). The
+prior file's "CORRECT" verdict was built on the post-step catrace trace but
+argued from the pre-step read -- a mismatch it never reconciled.
+
+This file resolves it with the actual pre-step trace: the counter's read
+point shows 0 (the leftover), and the counter sums to 0->4, agreeing with
+the trace exactly.
+
+=====================================================================
+WHAT `ca_unused_r3` ACTUALLY COUNTS (the "why" of it being wrong)
+=====================================================================
+It is "proven wrong" not because the trace and the counter disagree (they
+agree), but because the QUANTITY IT MEASURES IS NOT THE ONE THE NAME AND THE
+FIELD DOC PROMISE:
+
+  1. NAME/DOC: the field is `ca_unused_r3` and the field doc
+     (behavcensus.rs:1179-1198) says it mirrors `bin/humanopenings.rs`'s
+     `ca_unused_by_r3` column "exactly" -- a per-seat OPENING metric, i.e.
+     "civil actions left unused BY (at the end of) round 3".
+
+  2. WHAT IT IS: a CUMULATIVE SUM over EVERY `Move::EndTurn` in rounds
+     1-3 (behavcensus.rs:1817 gate `round_before <= 3`, arm `Move::EndTurn`,
+     line 1840 `t.ca_unused_r3 += ca_before_move`). It is not a snapshot of
+     the pool at the end of round 3; it is "how many CA the player let lapse
+     across the three rounds, summed turn by turn". A player who wastes 1 CA
+     in r1, 1 in r2 and 1 in r3 scores 3, not 1.
+
+  3. UNIT MISMATCH: it is accumulated as an `i32` PER PLAYER-GAME and
+     reported as a HISTOGRAM `opening_ca_unused: HashMap<i32,u64>` --
+     "count -> player-games" (behavcensus.rs:1949, 2387-2389), i.e. "N
+     player-games had exactly K unused CAs in the window". It is not a
+     per-turn or per-round average, and it is not "CA unused at the end of
+     round 3".
+
+So the number the counter reports (a per-player-game histogram of a
+three-round cumulative lapse total, here concentrated at 0 because the bot
+spends to 0 before every r1-3 EndTurn) is a DIFFERENT quantity from the
+"unused by round 3" the column name and the field doc describe. That is the
+diagnosis: the trace agrees with the counter's arithmetic; the counter's
+ARITHMETIC is the wrong instrument for the metric the field claims to be.
+
+=====================================================================
+STATUS
+=====================================================================
+- Temporary eprintln added at the `ca_before_move` capture, built, ran
+  `behavcensus --games 2 --players 2 --threads 1 --seed 0` (weights: frozen
+  2p champion), captured 538 CA_TRACE lines.
+- Counter reconciles with the trace exactly: all 4 player-games = 0 unused
+  (stdout: `0->4`).
+- eprintln reverted via `git checkout --`; no .rs file left changed.
+- clippy --all-targets -- -D warnings: clean.
+- This is diagnosis only: no weight change, no bots/ edit, no new .rs, no
+  fix to the counter.
+
+COORDINATOR NOTE (2026-08-28) — THE COUNTER IS NOT BROKEN. THE "UNIT
+MISMATCH" DIAGNOSIS ABOVE IS WRONG, AND SO WAS THE PREMISE I DISPATCHED.
+
+The job above was sent with "it is already PROVEN WRONG, so the deliverable
+is WHY". That premise came from a one-clause aside in
+`tta-endturn-scored-after-production` and was never itself checked. It does
+not survive.
+
+The diagnosis above says behavcensus computes a CUMULATIVE SUM over r1-3
+EndTurns while `humanopenings`' `ca_unused_by_r3` is a SNAPSHOT, making the
+field doc's "mirrors it exactly" claim a unit mismatch. Both sides were
+read:
+
+    behavcensus.rs:1838-1841   Move::EndTurn => { if ca_before_move > 0 {
+                                   t.ca_unused_r3 += ca_before_move } }
+    humanopenings.rs:723-727   Move::EndTurn => { let ca = d.state.players
+                                   [seat].civil_actions;
+                                   if ca > 0 { ca_unused[seat] += ca } }
+
+Same construction, same guard, same accumulation, same pre-step read, same
+`round_before <= 3` gate. `humanopenings` ALSO sums. The field doc's claim
+is TRUE. What is misleading is the NAME `..._by_r3` — equally on both
+sides, which is precisely why it does not corrupt the only thing the field
+exists for, the bot-vs-human comparison. A misleading name shared by both
+operands of a difference is a documentation defect, not a measurement one.
+
+WHY THE TRACE COULD NOT HAVE SETTLED THIS EITHER WAY. Every value in the
+run is 0 (0->4 player-games), and 0 is what a sum and a snapshot both
+return when the pool is spent to 0 before every EndTurn. The trace agreeing
+"to the bit" is therefore vacuous on the sum-vs-snapshot question; the two
+definitions are indistinguishable on all-zero data. The discriminating
+evidence is the source, not the run.
+
+WHAT THE JOB DID SETTLE, AND IT IS WORTH HAVING. The prior file
+`ca_pool_trace_2026-08-27.txt` is internally inconsistent about this
+mechanism (its ~229-243/290 verdict argues from a pre-step read while its
+~155-172 hand-check shows a post-step one), because its own tool printed
+the pool AFTER `game::step` returned and so saw the refill. That
+contradiction is real, is now explained, and the pre-step trace is the
+record that resolves it.
+
+STATUS: `ca_unused_r3` is CORRECT and matches `humanopenings` exactly. Do
+not "fix" it. The stale "separately broken" clause has been removed from
+the memory that carried it.
