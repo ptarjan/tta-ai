@@ -176,3 +176,47 @@ Repro:
   ./target/difftest/openerprobe --players 2 --games 256 --seed 1 --foodprobe \
       --weights experiments/rust_champion_2p_frozen_2026-08-28.json
 ================================================================================
+
+================================================================================
+REVIEWER NOTES 2026-08-29: THE CONCLUSION HOLDS, TWO CAVEATS ON HOW IT IS QUOTED
+================================================================================
+
+The result is accepted. Forcing the r3-r9 food builds moves end-of-r12 food
+stock 1.73 -> 8.00, a 4.6x change from one lever, with 256/256 forced replays
+reaching r12 and 0 aborts. The reworking of (d) from a recorded-move replay to
+a live one is the right call and the reason it is well-defined: a forced build
+changes CA spend and turn order, so later recorded picks stop being legal.
+Supply-side, not consumption-side. The Farm story is right.
+
+CAVEAT 1: THE HUMAN 4.15 COMES FROM AN UNAUDITABLE INSTRUMENT.
+It is the r12 human food cell of `population_curve_bot_vs_human_2026-08-28.txt`
+-- the same report whose human POPULATION column was withdrawn as ~1.9x too
+steep, and whose producer (a `PopCurve` struct in `openerprobe.rs` and a
+`POPCURVE_DEBUG` hook in `replay_common.rs`) was reverted before committing and
+exists in NO git revision. Its human food column was never separately audited;
+it is not known to be wrong, but it cannot be checked, and it fails the same
+test that killed the population column.
+
+This does not damage the finding, because the finding does not need it. The
+decisive comparison is WITHIN the bot -- 1.73 as played against 8.00 forced, on
+one instrument, in one run. "The build lever moves food by 4.6x" stands on its
+own. "It closes the gap to the human" does not, and should not be quoted until
+human food is re-derived from the journals the way population was
+(`human_pop_from_journals_2026-08-29.txt`). Treat the overshoot figure of 3.85
+as unquotable for the same reason.
+
+CAVEAT 2: THE COUNTERFACTUAL IS NOT FREE, AND THIS DOES NOT SHOW IT IS AN
+IMPROVEMENT.
+Every forced food build spends a civil action the bot had allocated elsewhere --
+the (c) substitution table says Urban 48.1%, Military 19.5%, Mine 18.4%. So the
+8.00 food is bought with 2338 civil actions taken off the rest of the board. The
+experiment answers "is the food shortfall caused by declined builds?" (yes) and
+NOT "would taking those builds make the bot better", which is a different
+question with the opposite prior: `farm_loses_on_strength_not_food` found
+food_rate is only 2.5% of a +7.97 margin, i.e. the eval declines the Farm on
+STRENGTH terms and is at least arguably right to.
+
+Nothing here shows the eval is wrong to decline them. It shows only that the
+declining is what causes the food curve, which is the causal link the population
+chain needed. Whether the chain is worth fixing is an ARENA question and is out
+next.
