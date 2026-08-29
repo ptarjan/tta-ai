@@ -165,3 +165,42 @@ climbs do not zero the same key at once by chance.
 METHOD NOTE, reusable: "exactly 0.0" is NOT a fingerprint of a sign gate.  Run
 the no-landing control window before attributing a batch of fresh zeros to a
 code change.
+
+================================================================================
+ADDENDUM 3: THE 2p `leader` COLLAPSE IS A WALL RELEASE, NOT A REBUILD EFFECT
+================================================================================
+
+Addendum 1 left "2p's flat leader weight collapsed 79% after the rebuild" open.
+It is now closed, and the earlier framing was wrong.
+
+#local-model scanned all 104,135 records of experiments/logs/rust_climb_2p.jsonl
+for `leader` in the runaway array.  Three records, all at +60.000 -- the UPPER
+bound -- at gens 109616 / 109621 / 109665.  In the window 119000-123000, where
+the fall happened, `leader` NEVER appears; it moved freely in the interior.
+(Only four keys appear in that window's runaway arrays at all: uprising 74,
+rival_free_ca 31, workers_late 19, rival_mean_culture 5.)
+
+Extending the series back to the wall:
+
+  g109616  60.0000   pinned at the upper bound
+  g116808  25.9028
+  g119419  25.7481
+  g121100  14.0440
+  g122950   5.4946
+
+So it is one monotone descent over ~13,300 generations, beginning ~7,000
+generations BEFORE the 04:59 rebuild.  The "flat then collapse" shape in
+Addendum 1 was an artifact of sampling only the last four points; the flat
+segment g116808->g119419 is just one plateau inside a long fall.  The rebuild is
+not implicated, and the board channel read 0.0 throughout in any case.
+
+This is the standard alive-key signature: a key riding a wall, released, still
+descending toward its fitted value.  Nothing to fix.
+
+ONE THING TO CHECK AT THE 2026-08-30 CLAMP A/B: WeightKey::Leader's
+p95_candidate_spread row is [1.0, 1.0, 1.0] (weights.rs:2354), a round
+placeholder for a key that has held 60.0 and 25.9.
+
+METHOD NOTE, reusable: before calling a weight trajectory a collapse, get a
+point from BEFORE the window you are looking at.  Four points spanning one day
+described a cliff; the fifth point, 13,000 generations earlier, made it a slope.
