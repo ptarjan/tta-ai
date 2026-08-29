@@ -1043,6 +1043,322 @@ impl PopMidgameByRound {
     }
 }
 
+// ---------------------------------------------------------------------
+// --foodprobe: the r3-r17 food-supply upstream decomposition
+// ---------------------------------------------------------------------
+
+/// Rounds 3..=17 food-supply census for `--foodprobe` runs: at every own-turn
+/// decision point in these rounds, the decider's food PRODUCTION rate (the
+/// worker-capped farm credit plus the flat leader/wonder/government bonus,
+/// exactly the two credits `end_of_turn` step 3c pays -- `economy`'s
+/// `production_this_turn` alone would miss the bonus), the food CONSUMPTION
+/// rate (`economy::consumption` of the yellow bank, step 3d's number), and
+/// how many of the three food techs are in play / staffed.
+///
+/// Every field is a SUM of per-decision-point samples; the print divides by
+/// `samples` (n on every row, as the job asks), so a round a game never
+/// reached simply contributes fewer samples and the n makes the thinning
+/// visible.
+#[derive(Default)]
+struct FoodSupplyRound {
+    /// Own-turn decision points in this round, summed over players.
+    samples: u64,
+    /// Sum of the decider's food production rate (flat bonus + worker-capped
+    /// farm credit, both at the decision moment's blue-token availability).
+    prod_sum: u64,
+    /// Sum of the decider's food consumption rate (the consumption table at
+    /// the decision moment's yellow bank).
+    consume_sum: u64,
+    /// Decision points holding the tech in play / with a worker on it.
+    tech_count: [u64; 3],
+    tech_staffed: [u64; 3],
+}
+
+#[derive(Default)]
+struct FoodSupplyByRound {
+    by_round: std::collections::HashMap<u16, FoodSupplyRound>,
+}
+
+impl FoodSupplyByRound {
+    fn record(
+        &mut self,
+        round: u16,
+        prod: u16,
+        consume: u8,
+        in_play: [bool; 3],
+        staffed: [bool; 3],
+    ) {
+        let b = self.by_round.entry(round).or_default();
+        b.samples += 1;
+        b.prod_sum += u64::from(prod);
+        b.consume_sum += u64::from(consume);
+        for i in 0..3 {
+            if in_play[i] {
+                b.tech_count[i] += 1;
+            }
+            if staffed[i] {
+                b.tech_staffed[i] += 1;
+            }
+        }
+    }
+
+    fn merge(&mut self, o: FoodSupplyByRound) {
+        for (round, ob) in o.by_round {
+            let b = self.by_round.entry(round).or_default();
+            b.samples += ob.samples;
+            b.prod_sum += ob.prod_sum;
+            b.consume_sum += ob.consume_sum;
+            for i in 0..3 {
+                b.tech_count[i] += ob.tech_count[i];
+                b.tech_staffed[i] += ob.tech_staffed[i];
+            }
+        }
+    }
+}
+
+/// The r3-r9 "wouldn't" side: at every own-turn decision point in rounds
+/// 3..=9 where a food build/upgrade was LEGAL, was it the bot's actual
+/// pick, and if not, what kind won instead (the `pop_taken_when_legal`
+/// substitution shape). The legal candidates are exactly:
+///
+/// - `Move::Develop { card }` with a farm-family card (developing it is the
+///   prerequisite for building it, so it counts as a food build);
+/// - `Move::Build { card }` / `Move::Upgrade { .., to }` on a farm-family
+///   card (the build/upgrade itself).
+///
+/// Everything else legal at that point is "the rest".
+#[derive(Default)]
+struct FoodBuildsR39 {
+    legal: u64,
+    chosen: u64,
+    /// When the legal food move was NOT the top-ranked pick, the kind that
+    /// WAS.
+    not_chosen_top_kind: DecisionKindCounts,
+    /// How often the legal set held ONLY a develop (no build/upgrade
+    /// candidate) -- tracked so the substitution table can say whether
+    /// "declined" meant "refused the prerequisite" or "refused the build
+    /// itself while holding the tech".
+    develop_only: u64,
+}
+
+impl FoodBuildsR39 {
+    fn record(&mut self, legal: bool, legal_develop_only: bool, chosen: bool, top_kind: DecisionKind) {
+        if !legal {
+            return;
+        }
+        self.legal += 1;
+        if legal_develop_only {
+            self.develop_only += 1;
+        }
+        if chosen {
+            self.chosen += 1;
+        } else {
+            self.not_chosen_top_kind.record(top_kind);
+        }
+    }
+
+    fn merge(&mut self, o: FoodBuildsR39) {
+        self.legal += o.legal;
+        self.chosen += o.chosen;
+        self.not_chosen_top_kind.merge(o.not_chosen_top_kind);
+        self.develop_only += o.develop_only;
+    }
+}
+
+/// The (d) counterfactual, run per GAME. TWO replays of the recorded move
+/// sequence: the ORIGINAL (bot's picks everywhere -- its end-of-r12 food
+/// stock, the as-played baseline, measured under the same snapshot
+/// convention as the human figure) and the FORCED one, which at every r3-r9
+/// own-turn decision point where a food build/upgrade was legal plays the
+/// best-scored such move instead of the bot's pick, and the bot's pick
+/// everywhere else. A forced replay ABORTS when its board diverges so far
+/// that the bot's next recorded pick is no longer legal -- a forced move is
+/// only well-defined as "one lever, everything else as played" while the
+/// original path stays replayable; aborted games contribute nothing and the
+/// print says how many aborted. The headline number is the end-of-round-12
+/// food STOCK (the player's `p.food`, after the last end-of-turn credit and
+/// consumption of round 12), the same quantity the human "4.15" is (mean
+/// end-of-r12 food stock, 2p corpus,
+/// analysis/population_curve_bot_vs_human_2026-08-28.txt). A production-RATE
+/// comparison would be a category error against that figure.
+#[derive(Default)]
+struct FoodCounterfactual {
+    /// Forced replays that reached end of round 12 and reported a stock.
+    reached: u64,
+    /// Forced replays that aborted on divergence before end of r12.
+    aborted: u64,
+    /// Original (as-played) replays that reached end of round 12.
+    original_reached: u64,
+    /// Sums of the end-of-r12 food stock.
+    r12_sum: u64,
+    original_r12_sum: u64,
+}
+
+impl FoodCounterfactual {
+    fn record(
+        &mut self,
+        reached: bool,
+        _aborted: bool,
+        r12: u64,
+        original_reached: bool,
+        original_r12: u64,
+    ) {
+        if reached {
+            self.reached += 1;
+            self.r12_sum += r12;
+        } else {
+            self.aborted += 1;
+        }
+        if original_reached {
+            self.original_reached += 1;
+            self.original_r12_sum += original_r12;
+        }
+    }
+
+    fn merge(&mut self, o: FoodCounterfactual) {
+        self.reached += o.reached;
+        self.aborted += o.aborted;
+        self.original_reached += o.original_reached;
+        self.r12_sum += o.r12_sum;
+        self.original_r12_sum += o.original_r12_sum;
+    }
+}
+
+/// The three food-producing technologies, in the order the job names them.
+/// Parsed once per process (the I/O boundary is where names may appear).
+fn food_techs() -> [CardId; 3] {
+    [
+        CardId::by_name("Agriculture").expect("Agriculture missing from the card table"),
+        CardId::by_name("Irrigation").expect("Irrigation missing from the card table"),
+        CardId::by_name("Selective Breeding").expect("Selective Breeding missing from the card table"),
+    ]
+}
+
+/// `Some(i)` if `id` is food-tech `i` of [`food_techs`]; `None` otherwise.
+/// Exhaustive by construction (three named cards), not a wildcard.
+fn food_tech_index(id: CardId, techs: &[CardId; 3]) -> Option<usize> {
+    for (i, t) in techs.iter().enumerate() {
+        if *t == id {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// The food rate `end_of_turn` step 3c credits this player, read off the
+/// decision moment's state: the flat bonus (everything `Stats::food` carries
+/// beyond the farm cards' own printed production) plus the worker-capped
+/// farm credit, both against the same `blue_available` snapshot
+/// `production_this_turn` uses. Mutates nothing.
+fn food_production_rate(state: &GameState, idx: u8) -> u16 {
+    let p = &state.players[idx as usize];
+    let free = economy::blue_available(p);
+    let farm_full = economy::worker_capped_production(&p.techs, CardType::Farm, u16::MAX);
+    let s = effects::state_stats(state, p);
+    let bonus = (s.food as u16).saturating_sub(farm_full);
+    let farm = economy::worker_capped_production(&p.techs, CardType::Farm, free);
+    bonus.saturating_add(farm)
+}
+
+/// `true` if `m` is a legal food build/upgrade candidate (see
+/// [`FoodBuildsR39`]'s doc comment for the closed candidate set).
+fn is_food_build_move(m: Move) -> bool {
+    match m {
+        Move::Develop { card, .. } | Move::Build { card } => card.kind() == CardType::Farm,
+        Move::Upgrade { to, .. } => to.kind() == CardType::Farm,
+        _ => false,
+    }
+}
+
+/// One replay of `recorded` on a fresh game. `force_food` controls the (d)
+/// lever: when true, at every r3-r9 own-turn decision point where a food
+/// build/upgrade was legal in the ORIGINAL game, the best-scored legal food
+/// move is played instead of the recorded pick (recorded pick everywhere
+/// else); when false the replay is the bot's own path. Returns
+/// `(reached_end_r12, aborted, food_stock_at_end_r12)`.
+///
+/// The snapshot is the END of round 12 -- the first state with
+/// `state.round >= 13`, i.e. after the last end-of-turn credit/consumption
+/// of round 12 has landed -- the same convention the human 4.15 stock figure
+/// uses (analysis/population_curve_bot_vs_human_2026-08-28.txt, r12 row,
+/// food column, human side). `aborted` is true only in forced mode when the
+/// board diverged so far that a recorded pick is no longer legal; the
+/// original replay aborts only if the recording itself is inconsistent with
+/// the engine (should not happen for a self-consistent original).
+/// Live counterfactual replay: plays the whole game with the bot's own
+/// policy, but at every own-turn action-phase decision in rounds 3-9, if a
+/// food build/upgrade is legal, takes the best-scored one instead of the
+/// bot's top pick. Everything else is the bot's normal `rank_moves[0]` /
+/// `choose`. No recorded moves, so no divergence -- the counterfactual is
+/// always on the bot's own policy line. Returns
+/// `(reached, forced_r12)`.
+fn live_counterfactual(
+    players: u8,
+    weights: Weights,
+    seed: u64,
+    force_food: bool,
+) -> (bool, u64) {
+    let bots: Vec<WeightedBot> = (0..players).map(|_| WeightedBot::new(weights)).collect();
+    let mut state = game::new_game(players, seed);
+    let mut stock_at_end_r12: Option<u64> = None;
+    let mut moves_played = 0usize;
+    while !state.game_over && moves_played < MOVE_CAP {
+        let idx = state.decider();
+        let pending = !state.pending.is_empty();
+        let legal = legal::legal_moves(&state);
+        let own_turn = legal.as_slice().iter().any(|m| matches!(m, Move::EndTurn));
+        let round = state.round;
+        let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
+        let mv = if force_food
+            && own_turn
+            && !pending
+            && (3..=9).contains(&round)
+        {
+            ranked
+                .iter()
+                .position(|&(m, _)| is_food_build_move(m))
+                .map(|pos| ranked[pos].0)
+                .unwrap_or(ranked[0].0)
+        } else if pending {
+            bots[idx as usize].choose(&state, legal.as_slice())
+        } else {
+            ranked[0].0
+        };
+        if pending {
+            tta::interact::apply_pending(&mut state, mv);
+        } else {
+            game::step(&mut state, mv);
+        }
+        if stock_at_end_r12.is_none()
+            && own_turn
+            && !pending
+            && round == 12
+            && mv == Move::EndTurn
+        {
+            stock_at_end_r12 =
+                state.last_end_of_turn_food[idx as usize].map(u64::from);
+        }
+        moves_played += 1;
+    }
+    (stock_at_end_r12.is_some(), stock_at_end_r12.unwrap_or(0))
+}
+
+/// The per-game (d) counterfactual: the forced replay (every legal r3-r9
+/// food build/upgrade taken, bot's picks elsewhere) plus the original
+/// replay (bot's picks everywhere) as the as-played baseline, both
+/// snapshotting end-of-round-12 food stock. Both use the live-counterfactual
+/// engine (no recorded moves, so no divergence). Returns
+/// `(reached, aborted, forced_r12, original_reached, original_r12)`.
+fn run_food_counterfactual(
+    players: u8,
+    weights: Weights,
+    seed: u64,
+) -> (bool, bool, u64, bool, u64) {
+    let (original_reached, original_r12) = live_counterfactual(players, weights, seed, false);
+    let (reached, forced_r12) = live_counterfactual(players, weights, seed, true);
+    (reached, false, forced_r12, original_reached, original_r12)
+}
+
 #[derive(Default, Clone)]
 struct R1MarginStats {
     /// Round-1 own-turn decision points at which BOTH a Take and an EndTurn
@@ -1207,6 +1523,16 @@ struct Report {
     /// `--whole` only: the r10-17 pop shortfall decomposition (couldn't vs
     /// wouldn't) -- see [`PopMidgameByRound`]. Empty unless `--whole`.
     pop_mg_by_round: PopMidgameByRound,
+
+    /// `--foodprobe` only: the r3-r17 food-supply census -- see
+    /// [`FoodSupplyByRound`]. Empty unless `--foodprobe`.
+    food_supply_by_round: FoodSupplyByRound,
+    /// `--foodprobe` only: the r3-r9 food-build legality/choice census --
+    /// see [`FoodBuildsR39`].
+    food_builds_r3_9: FoodBuildsR39,
+    /// `--foodprobe` only: the per-game (d) counterfactual results -- see
+    /// [`FoodCounterfactual`].
+    food_counterfactual: FoodCounterfactual,
 }
 
 impl Report {
@@ -1237,6 +1563,9 @@ impl Report {
 
         self.r1_margin.merge(o.r1_margin);
         self.pop_mg_by_round.merge(o.pop_mg_by_round);
+        self.food_supply_by_round.merge(o.food_supply_by_round);
+        self.food_builds_r3_9.merge(o.food_builds_r3_9);
+        self.food_counterfactual.merge(o.food_counterfactual);
     }
 }
 
@@ -1420,10 +1749,15 @@ fn record_decision(
 
 /// Plays one self-play mirror-match game, truncated the moment
 /// `state.round` exceeds 3 -- see this file's top doc comment.
-fn play_one(players: u8, weights: Weights, seed: u64, whole: bool) -> Report {
+fn play_one(players: u8, weights: Weights, seed: u64, whole: bool, food_probe: bool) -> Report {
     let bots: Vec<WeightedBot> = (0..players).map(|_| WeightedBot::new(weights)).collect();
     let mut state = game::new_game(players, seed);
     let mut report = Report { games: 1, ..Report::default() };
+    // --foodprobe only: every decision point of the ORIGINAL game, recorded
+    // for the per-game counterfactual re-play (see `run_food_counterfactual`).
+    // `(decider, round, own turn?, a food build/upgrade was legal?, the move
+    // played)`.
+    let mut recorded: Vec<(u8, u16, bool, bool, Option<Move>)> = Vec::new();
 
     // Item 7's DECISION INDEX: which civil decision this is within the
     // player's CURRENT round-1 turn (1-based, reset to 0 -- "no decision
@@ -1453,6 +1787,11 @@ fn play_one(players: u8, weights: Weights, seed: u64, whole: bool) -> Report {
         let pre = &state.players[idx as usize];
         let (pre_ca, pre_ma) = (pre.civil_actions, pre.military_actions);
         let round_at_decide = state.round;
+        // --foodprobe only: whether this decision answers a pending
+        // sub-choice (routed through `apply_pending`) rather than owning a
+        // turn (`game::step`). Read BEFORE the move, since the move may
+        // clear the pending stack.
+        let pending_now = !state.pending.is_empty();
         // Items 1-5 read the state AS THE DECIDER SAW IT, so they must run
         // before the step -- `legal` and `ranked` describe the pre-move
         // position and classifying them against the post-move board
@@ -1463,17 +1802,43 @@ fn play_one(players: u8, weights: Weights, seed: u64, whole: bool) -> Report {
             }
             let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
             record_decision(&mut report, &state, idx, legal.as_slice(), &ranked, r1_decision_index[idx as usize]);
+            if food_probe {
+                record_food_decision(
+                    &mut report,
+                    &state,
+                    idx,
+                    round_at_decide,
+                    legal.as_slice(),
+                    &ranked,
+                );
+            }
             ranked[0].0
         } else {
             bots[idx as usize].choose(&state, legal.as_slice())
         };
+        if food_probe {
+            // The ACTUAL pick of every decision (own and sub) is what the
+            // counterfactual replays -- `choose` re-rolls the event deck's
+            // determinization per call, so re-deriving a pick on a replayed
+            // board does not reproduce the original game.
+            recorded.push((idx, round_at_decide, pending_now, is_own_turn, None));
+        }
         // The chosen move ends this player's turn: the NEXT decision point
         // this player faces (if any -- round 1 grants at most a handful of
         // CA) is a new turn's first, so its index resets.
         if mv == Move::EndTurn {
             r1_decision_index[idx as usize] = 0;
         }
-        game::step(&mut state, mv);
+        if food_probe {
+            recorded.last_mut().expect("pushed above").4 = Some(mv);
+        }
+        // Sub-decisions route through `apply_pending` (a pending choice owns
+        // the move); own-turn moves through `game::step`.
+        if pending_now {
+            tta::interact::apply_pending(&mut state, mv);
+        } else {
+            game::step(&mut state, mv);
+        }
         // Item 6 is the only thing that needs the post-move pools.
         if is_own_turn {
             let post = &state.players[idx as usize];
@@ -1490,12 +1855,179 @@ fn play_one(players: u8, weights: Weights, seed: u64, whole: bool) -> Report {
         }
         moves_played += 1;
     }
+    if food_probe {
+        let (reached, aborted, forced_r12, original_reached, original_r12) =
+            run_food_counterfactual(players, weights, seed);
+        report
+            .food_counterfactual
+            .record(reached, aborted, forced_r12, original_reached, original_r12);
+    }
     report
+}
+
+/// --foodprobe only: the per-decision-point food census (items a+b) and the
+/// r3-r9 food-build choice census (item c), plus the recording of every
+/// decision point for the counterfactual re-play.
+fn record_food_decision(
+    report: &mut Report,
+    state: &GameState,
+    idx: u8,
+    round: u16,
+    legal: &[Move],
+    ranked: &[(Move, f64)],
+) {
+    let p = &state.players[idx as usize];
+    let top = ranked[0].0;
+    let food_legal = legal.iter().any(|m| is_food_build_move(*m));
+
+    if (3..=17).contains(&round) {
+        let techs = food_techs();
+        let mut in_play = [false; 3];
+        let mut staffed = [false; 3];
+        for (id, slot) in p.techs.iter() {
+            if let Some(i) = food_tech_index(id, &techs) {
+                in_play[i] = true;
+                if slot.workers > 0 {
+                    staffed[i] = true;
+                }
+            }
+        }
+        report.food_supply_by_round.record(
+            round,
+            food_production_rate(state, idx),
+            economy::consumption(p.yellow_bank),
+            in_play,
+            staffed,
+        );
+    }
+
+    if (3..=9).contains(&round) {
+        let chosen = food_legal && is_food_build_move(top);
+        let develop_only = food_legal
+            && ranked
+                .iter()
+                .filter(|(m, _)| is_food_build_move(*m))
+                .all(|&(m, _)| matches!(m, Move::Develop { .. }));
+        report
+            .food_builds_r3_9
+            .record(food_legal, develop_only, chosen, decision_kind(top));
+    }
 }
 
 // ---------------------------------------------------------------------
 // --whole: the r10-17 pop shortfall decomposition
 // ---------------------------------------------------------------------
+
+// ---------------------------------------------------------------------
+// --foodprobe: the r3-r17 food-supply upstream decomposition
+// ---------------------------------------------------------------------
+
+/// Prints the r3-r17 food-supply census (a+b), the r3-r9 food-build choice
+/// census (c), and the r12 counterfactual (d). Pure function of its
+/// arguments, no file IO. `human_r12` is the human r12 food rate the (d)
+/// result is compared against, passed in so the print stays pure.
+fn print_food_supply(r: &Report, human_r12: f64) {
+    let fs = &r.food_supply_by_round;
+    let fb = &r.food_builds_r3_9;
+    let cf = &r.food_counterfactual;
+
+    println!("\n### (a)+(b) r3-r17 food production / consumption / techs, per own-turn decision point  [MARKER_FOODPROBE_LATEST]");
+    println!(
+        "  (prod/consume are the decision-moment rates: prod = flat bonus + worker-capped farm credit,\n  \
+         exactly end_of_turn 3c; consume = the consumption table at the decision moment's yellow bank, 3d.\n  \
+         tech columns: in play (samples holding it) / staffed (with a worker on it) / mean count in play)"
+    );
+    let tech_names = ["Agriculture", "Irrigation", "SelectiveBreeding"];
+    println!(
+        "\n  round  n       prod   consume  net     {}  {}  {}",
+        "Agr(in/stf/mean)", "Irr(in/stf/mean)", "SB(in/stf/mean)"
+    );
+    for round in 3..=17u16 {
+        match fs.by_round.get(&round) {
+            None => println!("  {round:>3}  (no samples)"),
+            Some(b) => {
+                let n = b.samples.max(1) as f64;
+                let prod = b.prod_sum as f64 / n;
+                let con = b.consume_sum as f64 / n;
+                let techs = (0..3)
+                    .map(|i| {
+                        format!(
+                            "{}: {}/{} ({:.2})",
+                            tech_names[i],
+                            b.tech_count[i],
+                            b.tech_staffed[i],
+                            b.tech_count[i] as f64 / n
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                println!(
+                    "  {:>3}  n={:>6}  {:>5.2}  {:>7.2}  {:>6.2}  {}",
+                    round, b.samples, prod, con, prod - con, techs
+                );
+            }
+        }
+    }
+
+    println!("\n### (c) r3-r9: at points where a food build/upgrade was LEGAL, what was chosen?");
+    println!(
+        "  legal food points: {}  chosen: {} ({:.1}%)  develop-only (no build/upgrade candidate): {}",
+        fb.legal,
+        fb.chosen,
+        100.0 * fb.chosen as f64 / fb.legal.max(1) as f64,
+        fb.develop_only
+    );
+    let not_chosen = fb.legal - fb.chosen;
+    println!(
+        "  not chosen: {} -- kind chosen instead (same shape as pop_taken_when_legal):",
+        not_chosen
+    );
+    print_kind_counts(&fb.not_chosen_top_kind);
+
+    println!("\n### (d) counterfactual: every legal r3-r9 food build/upgrade taken, everything else as played");
+    println!(
+        "  forced replays reaching end of r12: {}  aborted (diverged, bot's later picks no longer legal): {}\n  \
+         original replays reaching end of r12: {}",
+        cf.reached, cf.aborted, cf.original_reached
+    );
+    if cf.reached > 0 {
+        let forced = cf.r12_sum as f64 / cf.reached as f64;
+        let now = if cf.original_reached > 0 {
+            cf.original_r12_sum as f64 / cf.original_reached as f64
+        } else {
+            0.0
+        };
+        println!(
+            "\n  END-OF-ROUND-12 FOOD STOCK (after the last r12 end-of-turn credit/consumption; the same\n  \
+             quantity the human {} figure is, analysis/population_curve_bot_vs_human_2026-08-28.txt r12 row):\n",
+            human_r12
+        );
+        println!(
+            "    bot as played: {:.2}   counterfactual: {:.2}   human: {:.2}",
+            now, forced, human_r12
+        );
+        let gap_cf = human_r12 - forced;
+        if gap_cf <= 0.0 {
+            println!(
+                "    the counterfactual CLOSES the r12 food gap: {:.2} -> {:.2} (human {:.2}; overshoots by {:.2}).",
+                now, forced, human_r12, -gap_cf
+            );
+        } else {
+            println!(
+                "    the counterfactual does NOT close the r12 gap: {:.2} -> {:.2} (human {:.2}); residual {:.2}\n    \
+                 = {:.1}% of the as-played gap ({:.2}).",
+                now,
+                forced,
+                human_r12,
+                gap_cf,
+                100.0 * gap_cf / (human_r12 - now).max(1e-9),
+                human_r12 - now
+            );
+        }
+    } else {
+        println!("  no counterfactual reached end of r12 -- (d) is unmeasured, not zero.");
+    }
+}
 
 /// Prints the "couldn't vs wouldn't" decomposition for rounds 10-17.
 ///
@@ -1599,11 +2131,23 @@ struct Args {
     /// the rounds the game reaches (see `play_one`'s doc note) but are NOT
     /// the probe's raison d'etre and should not be quoted from a --whole run.
     whole: bool,
+    /// Play the whole game and collect the r3-r17 food-supply upstream
+    /// probe (`food_supply_by_round` / `food_builds_r3_9`) instead of the
+    /// r10-17 pop decomposition. See `FoodSupplyByRound`'s doc.
+    food_probe: bool,
 }
 
 impl Default for Args {
     fn default() -> Args {
-        Args { games: 20, players: 3, weights_path: String::new(), seed: 1, threads: 1, whole: false }
+        Args {
+            games: 20,
+            players: 3,
+            weights_path: String::new(),
+            seed: 1,
+            threads: 1,
+            whole: false,
+            food_probe: false,
+        }
     }
 }
 
@@ -1617,6 +2161,9 @@ usage: openerprobe --weights PATH [options]
   --threads N     games in parallel (default 1)
   --whole         play the whole game (no round-3 truncation); prints the
                   r10-17 pop shortfall decomposition (couldn't vs wouldn't)
+  --foodprobe     play the whole game; prints the r3-r17 food-supply
+                  upstream decomposition (production/consumption, techs in
+                  play, food-build declines at r3-r9, r12 counterfactual)
   --help
 ";
 
@@ -1634,6 +2181,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--seed" => a.seed = value(flag)?.parse().map_err(|_| "bad --seed".to_string())?,
             "--threads" => a.threads = value(flag)?.parse().map_err(|_| "bad --threads".to_string())?,
             "--whole" => a.whole = true,
+            "--foodprobe" => a.food_probe = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -1643,6 +2191,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if !(2..=4).contains(&a.players) {
         return Err(format!("--players must be 2, 3 or 4, got {}", a.players));
+    }
+    if a.food_probe {
+        a.whole = true;
     }
     if a.weights_path.is_empty() {
         return Err("--weights is required".to_string());
@@ -1966,7 +2517,7 @@ fn main() -> ExitCode {
                         break;
                     }
                     let seed = args.seed.wrapping_add(i as u64);
-                    let r = play_one(args.players, *weights, seed, args.whole);
+                    let r = play_one(args.players, *weights, seed, args.whole, args.food_probe);
                     mine.push((i, r));
                 }
                 mine
@@ -1991,7 +2542,7 @@ fn main() -> ExitCode {
     println!("seeds        {}..{}", args.seed, args.seed + args.games as u64 - 1);
     println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
 
-    if args.whole {
+    if args.whole && !args.food_probe {
         // The measured per-round actions/player-round from
         // analysis/bot_pop_actions_per_round_2026-08-29.txt, transcribed
         // here so this print stays pure. Rounds 10-17 only (the job's
@@ -2002,6 +2553,17 @@ fn main() -> ExitCode {
             (14, 0.188), (15, 0.207), (16, 0.273), (17, 0.305),
         ];
         print_pop_midgame(&overall, measured);
+    }
+
+    if args.food_probe {
+        // The human r12 END-OF-ROUND food STOCK from
+        // analysis/population_curve_bot_vs_human_2026-08-28.txt (r12 row,
+        // food column "4.15/1.72": human 4.15, bot 1.72 -- stocks at the end
+        // of round 12, 2p corpus), transcribed so the print stays pure. The
+        // as-played column of (d) should land near 1.72 if the snapshot
+        // convention matches.
+        let human_r12: f64 = 4.15;
+        print_food_supply(&overall, human_r12);
     }
 
     print_report(args.players, &overall);
@@ -2109,7 +2671,7 @@ mod tests {
     #[test]
     fn a_truncated_2p_self_play_game_stops_at_round_4_and_records_at_least_one_decision() {
         let weights = Weights::default();
-        let report = play_one(2, weights, 42, false);
+        let report = play_one(2, weights, 42, false, false);
         assert_eq!(report.games, 1);
         assert!(report.decisions > 0, "expected at least one own-turn decision point in rounds 1-3");
         assert!(report.top_kind.total() > 0);
@@ -2212,7 +2774,7 @@ mod tests {
         // every one of which offers Takes plus EndTurn (legal.rs pushes
         // EndTurn on any own turn), so at least one point is sampled and
         // EndTurn is always present.
-        let report = play_one(2, Weights::default(), 7, false);
+        let report = play_one(2, Weights::default(), 7, false, false);
         let m = &report.r1_margin;
         assert!(m.n >= 1, "a round-1 game must sample at least one Take-vs-EndTurn decision point");
         assert_eq!(m.samples.len(), m.n as usize);
@@ -2233,7 +2795,7 @@ mod tests {
         // turns_round1 undercounts whenever any seat's grant exceeds 1 CA.
         for seed in 0..6 {
             let weights = Weights::default();
-            let report = play_one(2, weights, seed, false);
+            let report = play_one(2, weights, seed, false, false);
             let m = &report.r1_margin;
             assert!(m.samples.iter().all(|x| x.is_finite()), "seed {seed}");
 
@@ -2276,7 +2838,7 @@ mod tests {
         // `r1_decision_index` (1-based) -- never a re-derivation that could
         // silently drop or duplicate a row.
         for seed in 0..6 {
-            let report = play_one(2, Weights::default(), seed, false);
+            let report = play_one(2, Weights::default(), seed, false, false);
             let m = &report.r1_margin;
             let total: usize = m.samples_by_index.values().map(|v| v.len()).sum();
             assert_eq!(
@@ -2295,7 +2857,7 @@ mod tests {
         // 2p seat 0 is always in `0..2`, and every sampled row belongs to
         // exactly one seat and exactly one (seat, index) pair.
         for seed in 0..6 {
-            let report = play_one(2, Weights::default(), seed, false);
+            let report = play_one(2, Weights::default(), seed, false, false);
             let m = &report.r1_margin;
 
             let by_seat: usize = m.samples_by_seat.values().map(|v| v.len()).sum();
@@ -2359,7 +2921,7 @@ mod tests {
         let mut m = R1MarginStats::default();
         let weights = Weights::default();
         for seed in 0..6 {
-            let report = play_one(2, weights, seed, false);
+            let report = play_one(2, weights, seed, false, false);
             m.merge(report.r1_margin.clone());
             let bots: Vec<WeightedBot> = (0..2).map(|_| WeightedBot::new(weights)).collect();
             let mut state = game::new_game(2, seed);
@@ -2416,7 +2978,7 @@ mod tests {
         let mut any_debit = false;
         for weights in [Weights::default(), spendthrift] {
             for seed in 0..8 {
-                let ap = play_one(2, weights, seed, false).action_points;
+                let ap = play_one(2, weights, seed, false, false).action_points;
                 any_left |= ap.ca_left_round2 > 0;
                 any_debit |= ap.ca_round2 > 0;
                 ca[0] += ap.ca_round1;

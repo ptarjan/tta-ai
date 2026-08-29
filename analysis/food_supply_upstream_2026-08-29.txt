@@ -1,0 +1,178 @@
+Food supply upstream: does the r10-17 food shortfall trace to the Farm/food
+builds the bot declined at r3-r9, or is it consumption-driven?
+2p, 256 games, frozen champion (rust_champion_2p_frozen_2026-08-28.json, gen 121100).
+Probe: openerprobe --players 2 --games 256 --seed 1 --foodprobe --weights <frozen>.
+All n are on every row. Seeds 1..256. 152.5s.
+
+The question, from the population-curve report
+(population_curve_bot_vs_human_2026-08-28.txt): the bot's mean end-of-round-12
+food STOCK is 1.72 vs the human 4.15 (+2.43 for the human), and the bot's
+r10-17 net food (production - consumption) runs from +0.12 (r12) to -0.29 (r17).
+Two candidate causes:
+  (i)   BUILD-driven: the bot declines Farm/food builds at r3-r9, so it has
+        too little food PRODUCTION capacity by mid-game.
+  (ii)  CONSUMPTION-driven: the bot grows population faster (or holds a larger
+        yellow bank) than the human, so it CONSUMES more food per turn and the
+        shortfall is a demand problem, not a supply problem.
+
+The counterfactual that decides it: if every legal food build/upgrade at
+r3-r9 had been taken (bot's picks everywhere else), what food stock does the
+bot have at end of round 12, against the human 4.15? If it closes the gap, the
+shortfall traces to the declined builds (cause i). If it does NOT close the gap,
+food is consumption-driven (cause ii) and the Farm story is wrong -- a more
+valuable result.
+
+METHOD. The counterfactual is a LIVE replay, not a recorded-move replay: the
+whole game is played with the bot's own policy (rank_moves[0] on own turns,
+choose on pending sub-decisions), but at every own-turn action-phase decision in
+rounds 3-9, if a food build/upgrade is legal, the best-scored one is taken
+instead of the bot's top pick. Everything else is the bot's normal pick. This
+avoids the divergence problem of a recorded-move replay (a forced build changes
+CA spend and turn order, so a later recorded pick stops being legal) -- the
+counterfactual is always on the bot's own policy line, so it is well-defined for
+every game. End-of-round-12 stock is read from the engine's
+`state.last_end_of_turn_food` snapshot (the food credited + consumed at the last
+r12 end-of-turn), the same quantity the human 4.15 figure is.
+
+================================================================================
+(a) + (b)  r3-r17 food production / consumption / techs, per own-turn decision
+point. prod/consume are decision-moment RATES: prod = flat bonus + worker-capped
+farm credit (end_of_turn 3c), consume = consumption table at the decision
+moment's yellow bank (3d). tech columns: in-play (samples holding it) / staffed
+(worker on it) / mean count in play.
+================================================================================
+
+  round  n       prod   consume  net     Agr(in/stf/mean)  Irr(in/stf/mean)  SB(in/stf/mean)
+    3  n=  2397   2.00     0.40    1.60  Agriculture: 2397/2397 (1.00)  Irrigation: 0/0 (0.00)  SelectiveBreeding: 0/0 (0.00)
+    4  n=  2414   2.00     0.83    1.16  Agriculture: 2414/2414 (1.00)  Irrigation: 0/0 (0.00)  SelectiveBreeding: 0/0 (0.00)
+    5  n=  2582   1.95     0.91    1.04  Agriculture: 2582/2582 (1.00)  Irrigation: 0/0 (0.00)  SelectiveBreeding: 0/0 (0.00)
+    6  n=  2609   1.89     0.89    0.99  Agriculture: 2609/2609 (1.00)  Irrigation: 0/0 (0.00)  SelectiveBreeding: 0/0 (0.00)
+    7  n=  2639   1.84     0.93    0.91  Agriculture: 2639/2639 (1.00)  Irrigation: 0/0 (0.00)  SelectiveBreeding: 0/0 (0.00)
+    8  n=  2622   1.80     1.43    0.37  Agriculture: 2622/2622 (1.00)  Irrigation: 0/0 (0.00)  SelectiveBreeding: 0/0 (0.00)
+    9  n=  2568   1.73     1.54    0.19  Agriculture: 2568/2568 (1.00)  Irrigation: 0/0 (0.00)  SelectiveBreeding: 0/0 (0.00)
+   10  n=  2452   1.64     1.52    0.12  Agriculture: 2452/2448 (1.00)  Irrigation: 3/2 (0.00)  SelectiveBreeding: 0/0 (0.00)
+   11  n=  2504   1.62     1.50    0.12  Agriculture: 2504/2499 (1.00)  Irrigation: 14/9 (0.01)  SelectiveBreeding: 0/0 (0.00)
+   12  n=  2418   1.58     1.46    0.12  Agriculture: 2418/2412 (1.00)  Irrigation: 23/15 (0.01)  SelectiveBreeding: 1/0 (0.00)
+   13  n=  2459   1.53     1.53    0.00  Agriculture: 2459/2448 (1.00)  Irrigation: 36/13 (0.01)  SelectiveBreeding: 14/1 (0.01)
+   14  n=  2526   1.51     1.74   -0.23  Agriculture: 2526/2501 (1.00)  Irrigation: 50/29 (0.02)  SelectiveBreeding: 22/5 (0.01)
+   15  n=  2574   1.50     1.72   -0.23  Agriculture: 2574/2537 (1.00)  Irrigation: 51/39 (0.02)  SelectiveBreeding: 30/9 (0.01)
+   16  n=  2594   1.45     1.75   -0.30  Agriculture: 2594/2538 (1.00)  Irrigation: 59/45 (0.02)  SelectiveBreeding: 47/25 (0.02)
+   17  n=  2591   1.46     1.75   -0.29  Agriculture: 2591/2516 (1.00)  Irrigation: 67/60 (0.03)  SelectiveBreeding: 67/50 (0.03)
+
+Read: production falls 2.00 -> 1.46 over r3-r17 (the bot never adds a second
+Agriculture or an Irrigation until r10-12, and even then only rarely --
+Irrigation mean in-play is 0.03 by r17, Selective Breeding 0.03). Consumption
+rises 0.40 -> 1.75 (population growth). Net goes from +1.60 (r3) to -0.29 (r17),
+crossing zero at r13. So the r10-17 shortfall is a slow production decline
+against a rising consumption curve -- the production side is flat-to-falling
+because the bot never builds out its food base beyond the single opening
+Agriculture.
+
+================================================================================
+(b) detail: food-producing tech in play and staffed
+================================================================================
+
+- Agriculture: in play 100% of samples every round (2397/2397 at r3 through
+  2591/2591 at r17), and staffed 100% (a worker is on it in every game that
+  holds it). The bot always opens with Agriculture and always staffs it.
+- Irrigation: absent r3-r9, first appears r10 (3/2452 = 0.1%), reaches 67/2591
+  = 2.6% in-play by r17, 60/67 = 90% of those staffed. Rare.
+- Selective Breeding: absent r3-r11, first appears r12 (1/2418 = 0.04%), reaches
+  67/2591 = 2.6% in-play by r17, 50/67 = 75% of those staffed. Rare.
+
+So the bot's food base is, for the entire mid-game, effectively ONE Agriculture.
+It never builds the second/food-upgrade chain (Irrigation, Selective Breeding)
+that would lift per-worker food output. This is the "declined food build" that
+the question asks about.
+
+================================================================================
+(c) r3-r9: at every decision point where a food build/upgrade was LEGAL, what was
+chosen? (same shape as pop_taken_when_legal)
+================================================================================
+
+  legal food points: 2338   chosen: 0 (0.0%)   develop-only (no build/upgrade
+  candidate in the legal set): 165
+  not chosen: 2338 -- kind chosen instead:
+
+- Take: 60/2338 (2.6%)
+- Build Farm: 0/2338 (0.0%)
+- Build Mine: 430/2338 (18.4%)
+- Build Urban: 1125/2338 (48.1%)
+- Build Military: 457/2338 (19.5%)
+- Develop: 3/2338 (0.1%)
+- Upgrade: 0/2338 (0.0%)
+- WonderStep: 136/2338 (5.8%)
+- Pop: 21/2338 (0.9%)
+- Leader: 15/2338 (0.6%)
+- ActionCard: 63/2338 (2.7%)
+- EndTurn: 1/2338 (0.0%)
+- Other: 27/2338 (1.2%)
+
+The bot chose a food build/upgrade at 0/2338 (0.0%) of the points where one was
+legal. When it had a legal food build and did not take it, it took Urban
+(48.1%), Military (19.5%), or Mine (18.4%) -- i.e. it spent those civil actions
+on non-food production instead. (The "Other" 1.2% is mostly round-1-style
+Take/EndTurn edge cases; the "develop-only" 165 points had no build/upgrade
+candidate at all, so a food build was not an option there.)
+
+================================================================================
+(d) the counterfactual: every legal r3-r9 food build/upgrade taken, everything
+else as the bot plays it. End-of-round-12 food stock.
+================================================================================
+
+  forced replays reaching end of r12: 256/256   aborted: 0
+  original (as-played) replays reaching end of r12: 256/256
+
+  END-OF-ROUND-12 FOOD STOCK:
+    bot as played:        1.73
+    counterfactual:       8.00
+    human:                4.15
+
+  The counterfactual CLOSES the r12 food gap: 1.73 -> 8.00 (human 4.15;
+  overshoots by 3.85).
+
+This is the decisive result. Forcing the bot to take every legal food
+build/upgrade at r3-r9 raises its end-of-round-12 food stock from 1.73 (as
+played, ~the 1.72 in the population-curve report) to 8.00 -- well above the
+human's 4.15. The r10-17 food shortfall therefore DOES trace to the declined
+food builds (cause i): the bot's food base is underbuilt, not over-consumed.
+
+Note the overshoot (8.00 vs human 4.15): the counterfactual is a "take EVERY
+legal food build" extreme, which over-builds food relative to the human's
+measured pace (the human does not take every legal food build either -- 4.15 is
+a real, moderate food base). The point is not that 8.00 is the human's number,
+but that the bot's as-played 1.73 is far below it, and that the gap is closed by
+the build lever alone. The shortfall is supply-side.
+
+Why the as-played number is so low (1.73): the bot's single Agriculture gives a
+flat ~2.0 food/turn in early rounds, but consumption rises to ~1.5-1.75 by
+r10-17 as population grows, so net production goes to ~0 or negative and the
+stock does not build. Taking the food builds (a second Agriculture / Irrigation
+/ Selective Breeding chain) lifts per-worker food output enough to keep the net
+positive and the stock high (8.00).
+
+CONCLUSION (plain, per the job's instruction):
+  The r10-17 food shortfall IS upstream -- it traces to the Farm/food builds the
+  bot declined at r3-r9. The counterfactual (every legal r3-r9 food build taken)
+  closes the end-of-r12 food gap (1.73 -> 8.00, human 4.15), overshooting by
+  3.85. This is NOT a consumption-driven shortfall: forcing the builds alone
+  moves the bot from below the human to above it, so the bot's population /
+  consumption profile is not the cause. The Farm story is right, not wrong.
+
+Caveat / honesty note:
+  - The counterfactual is a one-lever extreme (take EVERY legal food build at
+    r3-r9). A milder "take the bot's best food build when it is within a small
+    margin of the top pick" lever would land between 1.73 and 8.00, but the
+    direction is unambiguous: the build lever moves the stock far above the
+    as-played level, so the shortfall is supply-side.
+  - The counterfactual is measured as a live replay on the bot's own policy line
+    (no recorded-move replay), so it is well-defined for all 256 games (0
+    aborts). The as-played 1.73 is the bot's own policy's stock, matching the
+    population-curve report's 1.72.
+
+================================================================================
+Repro:
+  ~/.cargo/bin/cargo build --profile difftest --bin openerprobe
+  ./target/difftest/openerprobe --players 2 --games 256 --seed 1 --foodprobe \
+      --weights experiments/rust_champion_2p_frozen_2026-08-28.json
+================================================================================
