@@ -1,0 +1,131 @@
+Human mid-game action census: per-player-round action-type counts, rounds 8-16
+
+Source: sources/bgo/journals/ (TSV journals), 2-player games only.
+2p selection: games in analysis/guard_ids_882.txt with exactly 2 distinct player_colour values = 632 games (3p=112, 4p=138 excluded).
+
+Line format parsed (tab-separated, header row skipped):
+  date <TAB> player_colour <TAB> age <TAB> round <TAB> text
+  - ROUND NUMBER = column 4 ("round"), parsed as a base-10 integer; only rows with round in 8..16 counted.
+  - ACTION TYPE = the first word of the text field (column 5) AFTER the leading player-colour word.
+    The journal starts an action line as "<Colour> <verb> ..." (e.g. "Orange builds Bronze...",
+    "Purple increases population...", "Green takes X in hand..."). The verb is extracted with the regex
+    r"^\w+\s+(\w+)\b" on the text, i.e. the single word following the colour. Lines whose text does
+    not start with a colour word are counted under <unparsed>.
+  - EVERY action line within a player-round is counted (a player-round contains many lines; each is one action).
+  - PLAYER-ROUND = one distinct (player_colour, round) pair per game. n per round = number of such pairs across all 632 games.
+    Mean per cell = (total lines of that verb in that round) / (n player-rounds that round).
+
+Table: rows = action type (ordered by total count, desc); columns = rounds 8..16.
+Each cell = mean count of that action type per player-round in that round = total / n. n row = player-rounds.
+
+action_type                r 8       r 9       r10       r11       r12       r13       r14       r15       r16   total
+----------------------------------------------------------------------------------------------------------------------
+takes                    1.680     1.835     2.074     2.135     2.174     2.393     2.495     2.620     2.583 25267
+turn                     1.000     1.000     1.000     1.000     1.000     1.000     1.000     1.000     1.000 11376
+builds                   0.828     0.793     0.783     0.901     0.948     0.986     1.027     0.979     1.089 10534
+plays                    0.599     0.613     0.658     0.774     0.820     0.831     0.918     1.059     1.154  9386
+discovers                0.743     0.737     0.760     0.849     0.894     0.816     0.778     0.850     0.914  9281
+upgrades                 0.708     0.792     0.755     0.762     0.730     0.653     0.606     0.619     0.630  7906
+passes                   0.662     0.658     0.658     0.646     0.640     0.623     0.572     0.563     0.535  7026
+discards                 0.600     0.599     0.624     0.595     0.578     0.553     0.626     0.665     0.698  7000
+Phase                    0.592     0.593     0.618     0.587     0.562     0.536     0.600     0.623     0.659  6788
+increases                0.332     0.272     0.332     0.381     0.460     0.479     0.521     0.542     0.672  5047
+Discard                  0.408     0.407     0.382     0.413     0.438     0.464     0.400     0.377     0.341  4588
+bids                     0.148     0.165     0.210     0.252     0.290     0.270     0.287     0.403     0.358  3010
+puts                     0.141     0.120     0.168     0.209     0.153     0.195     0.180     0.211     0.243  2049
+elects                   0.131     0.108     0.118     0.146     0.216     0.231     0.187     0.161     0.220  1918
+wins                     0.085     0.096     0.116     0.132     0.140     0.146     0.147     0.190     0.188  1567
+colonizes                0.085     0.095     0.112     0.129     0.135     0.129     0.129     0.167     0.150  1429
+sets                     0.127     0.055     0.059     0.063     0.100     0.117     0.114     0.107     0.131  1104
+destroys                 0.055     0.033     0.040     0.047     0.057     0.073     0.082     0.074     0.093   702
+adopts                   0.030     0.023     0.037     0.024     0.031     0.032     0.030     0.032     0.017   324
+disbands                 0.015     0.013     0.013     0.016     0.025     0.041     0.043     0.040     0.036   307
+produces                 0.027     0.045     0.028     0.025     0.024     0.025     0.011     0.014     0.015   271
+defends                  0.017     0.017     0.017     0.022     0.022     0.023     0.039     0.029     0.023   265
+revolutions              0.013     0.016     0.021     0.019     0.024     0.028     0.022     0.029     0.015   237
+defeat                   0.008     0.013     0.015     0.014     0.012     0.022     0.023     0.021     0.032   202
+must                     0.013     0.018     0.017     0.023     0.028     0.015     0.023     0.012     0.009   200
+declares                 0.001     0.005     0.003     0.005     0.018     0.018     0.023     0.038     0.041   192
+enlists                  0.027     0.024     0.017     0.017     0.020     0.006     0.000     0.000     0.000   139
+Columbus                 0.021     0.017     0.022     0.007     0.009     0.004     0.000     0.000     0.000   101
+spends                   0.009     0.013     0.011     0.015     0.009     0.010     0.004     0.004     0.002    96
+destroy                  0.000     0.000     0.000     0.002     0.002     0.007     0.015     0.016     0.017    74
+have                     0.000     0.000     0.000     0.000     0.000     0.001     0.006     0.018     0.031    70
+Agreement                0.000     0.000     0.000     0.000     0.002     0.013     0.006     0.012     0.019    64
+of                       0.000     0.000     0.000     0.001     0.001     0.007     0.014     0.016     0.011    63
+casualties               0.004     0.002     0.006     0.004     0.004     0.002     0.009     0.005     0.006    54
+Sebastian                0.000     0.001     0.000     0.002     0.003     0.009     0.006     0.009     0.005    44
+loses                    0.000     0.000     0.001     0.000     0.000     0.002     0.005     0.006     0.005    23
+thought                  0.003     0.001     0.002     0.003     0.001     0.001     0.005     0.001     0.000    21
+declines                 0.006     0.002     0.002     0.001     0.000     0.002     0.000     0.000     0.000    16
+tries                    0.001     0.000     0.001     0.002     0.000     0.002     0.001     0.000     0.003    12
+successful               0.000     0.000     0.000     0.001     0.000     0.001     0.000     0.003     0.001     7
+task                     0.000     0.000     0.002     0.001     0.000     0.001     0.000     0.001     0.000     6
+Territory                0.001     0.001     0.001     0.000     0.000     0.000     0.000     0.000     0.000     3
+dies                     0.002     0.000     0.000     0.000     0.000     0.000     0.000     0.000     0.000     2
+<unparsed>               0.000     0.000     0.000     0.000     0.000     0.001     0.000     0.000     0.001     2
+annexes                  0.000     0.000     0.000     0.000     0.000     0.001     0.000     0.000     0.000     1
+----------------------------------------------------------------------------------------------------------------------
+n (player-rounds)         1264      1264      1264      1264      1264      1264      1264      1264      1264
+
+games_used (2p) = 632
+
+Note on non-action lines: the text field also contains phase/system lines that do not begin with a
+colour word ("Action Phase begins", "End of game ...", "concedes defeat", "All players have joined.").
+Those are captured by their first word (or <unparsed>). This is the raw leading verb, NOT a curated TTA
+move taxonomy, and does not merge system/phase lines into action buckets. No interpretation, no bot comparison.
+
+================================================================================
+REVIEWER VERIFICATION AND ONE CONTRADICTION - 2026-08-28
+================================================================================
+
+PARSING RULE CHECKED AND CORRECT. Journal header is
+  date <TAB> player_colour <TAB> age <TAB> round <TAB> text
+verified against sources/bgo/journals/7520707.tsv. Round is column 4, integer.
+The verb is the word after the leading colour word. "Action Phase begins" ->
+"Phase" and "No Discard Phase" -> "Discard" reproduce the two system rows, so
+the rule is doing what it says.
+
+PRIVACY CLEAN. Two suspicious tokens in the action-type column are CARD names,
+not accounts: "Columbus"/"Territory" come from Christopher Columbus lines
+("Christopher Columbus discovers I / Vast Territory") and "Sebastian" from
+"Johannes Sebastian Bach...". No account name reaches this file. Note the
+journals DO carry real account names on the round-1 "Game <name> ... created."
+line; it is outside the r8-16 window and never counted.
+
+KNOWN SMALL UNDERCOUNT. Lines whose text begins with a LEADER NAME instead of a
+colour word are mis-bucketed under that name. Columbus 101 + Sebastian 44 +
+Territory 3 = ~148 lines, against ~110k counted. It very slightly understates
+"discovers" and "upgrades". Not material; do not re-run for it.
+
+INTERNAL CONSISTENCY CHECK - PASSES. The five civil-action verbs sum to a
+plausible civil-action count that rises the way a real TTA turn does:
+  takes + builds + discovers + upgrades + increases
+  r8  4.291    r12  5.206    r16  5.888
+That is the right shape and magnitude for a mid-game civil-action allowance,
+which independently confirms the all-lines re-run was the correct fix.
+
+** THE CONTRADICTION. THIS CENSUS DOES NOT AGREE WITH THE POPULATION CURVE. **
+population_curve_bot_vs_human_2026-08-28.txt has the HUMAN population rising
+6.71 (r9) -> 13.92 (r17), +7.21 workers. This census counts human
+increase-population actions over rounds 9-16 summing to only 3.66 per player.
+An increase-population adds exactly one worker, so the curve claims very close
+to TWICE the growth the journals contain.
+
+The same table's yellow bank falls only 11.83 -> 6.33 (-5.50) over the same
+span, and the bank must fall by at least as much as population rises (a token
+comes out of it) PLUS 2 per age change. It does not. So the curve's human
+population column and its human bank column cannot both be right either.
+
+The near-exact factor of 2 is the shape of a per-game vs per-player-game
+normalisation error. NOT YET DIAGNOSED - a definition read of both sides of
+that report is out for review.
+
+** DO NOT QUOTE THE +5.67 r17 POPULATION GAP, OR ANY ROW OF THAT CURVE, UNTIL
+THIS IS RESOLVED. ** It is the damage figure the whole mid-game investigation
+is resting on.
+
+METHOD NOTE: this census was commissioned as the human half of a comparison and
+instead falsified the measurement it was meant to complement. A census of the
+ACTIONS behind a curve is a conservation check on the curve. Run one before
+trusting an accumulated quantity.
