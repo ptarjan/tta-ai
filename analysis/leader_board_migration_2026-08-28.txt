@@ -115,3 +115,53 @@ So the collapse is real and post-rebuild but it is NOT the predicted hand-off --
 nothing took over.  3p (0.319 -> 0.434) and 4p (-12.34 -> -10.45) show nothing
 like it.  Do not cite this as confirmation of anything; it is a 2p-only open
 question.
+
+================================================================================
+ADDENDUM 2: THE SIGN-SNAP SWEEP FOUND NO SECOND VICTIM
+================================================================================
+
+Question: did the 04:59 rebuild silently snap any key OTHER than
+card_board_leader?  #local-model diffed the pre-rebuild frozen set
+(analysis/frozen/opener_2026-08-28/, Aug 27 19:10) against the live champions
+and found keys that are exactly 0.0 now and were non-zero then:
+
+  2p (5): food_gap -0.205414, free_worker_wall -0.011087, hand_value_late
+          +0.070581, tactic_short -1.409234, wonder_turns_to_finish -0.050683
+  3p (5): build_discount +0.028242, hand_value +0.051946,
+          happy_margin_after_next_pop -0.004699, unit_strength_credit +0.001544,
+          war_board_credit +0.029160
+  4p (7): aggression_board_credit +0.295988, civil_action_surplus +1.248157,
+          free_worker_wall -0.033871, tactic_shortfall_cost +0.082721,
+          wonder_board_credit +0.002817, wonder_overrun -0.047997,
+          wonder_stages_left -0.684940
+
+No key is present in one file and absent from the other on any arm (174 keys
+both sides, all three arms).
+
+TWO THINGS KILL THE "THE REBUILD DID THIS" READING.
+
+1. NINE of those seventeen had POSITIVE pre values.  A NonNegative gate cannot
+   snap a positive to zero.
+
+2. The control.  A third frozen set, analysis/frozen/clamp_ceiling_2026-08-27/
+   (Aug 27 07:13), gives a same-length window with NO rebuild in it.  Counting
+   keys crossing into and out of exactly 0.0:
+
+     arm  A->B (Aug27 07:13 -> Aug27 19:10, no rebuild)  B->C (rebuild inside)
+     2p   4 in / 6 out                                    5 in / 5 out
+     3p   4 in / 2 out                                    5 in / 5 out
+     4p   3 in / 6 out                                    7 in / 7 out
+
+   Indistinguishable.  Exact 0.0 is a revolving door the climb enters and leaves
+   at roughly five keys per arm per half-day, and the churning keys differ on
+   every arm.
+
+CONCLUSION: the sweep is a clean NEGATIVE.  card_board_leader remains the only
+key the rebuild changed, and what marked it out was never the exactness of its
+zero -- it was CROSS-ARM SIMULTANEITY, the same key crossing from negative on
+all three arms in the window its NonNegative intent landed.  Three independent
+climbs do not zero the same key at once by chance.
+
+METHOD NOTE, reusable: "exactly 0.0" is NOT a fingerprint of a sign gate.  Run
+the no-landing control window before attributing a batch of fresh zeros to a
+code change.
