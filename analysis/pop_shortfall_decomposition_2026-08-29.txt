@@ -161,3 +161,67 @@ FLAGS
 =====
   --whole  play the whole game (no round-3 truncation); prints the
            r10-17 pop shortfall decomposition (couldn't vs wouldn't)
+
+================================================================================
+REVIEWER CORRECTION 2026-08-29: THE 92.7/7.3 SPLIT DOES NOT RANK THE LEVERS
+================================================================================
+
+The decomposition above is correct as arithmetic and the residual diagnosis is
+right. The HEADLINE is the problem: "92.7% couldn't, 7.3% wouldn't" is a count
+of how often each reason OCCURS, and it reads as "preference is only 7.3% of
+the problem, so fixing the eval's taste for Pop is not worth it". That does not
+follow, and it is false.
+
+A reason count is not headroom. What decides which lever is worth pulling is
+how far each one can move the outcome, so put both counterfactuals against the
+human rate. Using (a)/512 as decisions per player-round and holding everything
+else fixed:
+
+  round  bot now   preference->100%   food-blocks->legal   human
+   10     0.197        0.566                1.231          0.332
+   11     0.237        0.574                1.387          0.381
+   12     0.240        0.588                1.471          0.460
+   13     0.199        0.500                1.418          0.479
+   14     0.135        0.371                1.394          0.521
+   15     0.217        0.559                1.414          0.542
+   16     0.246        0.588                1.517          0.672
+
+BOTH levers overshoot the human rate. The lever that is "only 7.3% of the
+reasons" is on its own enough to reach the human rate in five of seven rounds.
+So the split ranks nothing, and the useful question is not which reason is
+commoner but what P(chosen | legal) would have to be:
+
+  round   current   needed to match human   reachable?
+   10      34.8%           58.6%             yes
+   11      41.2%           66.4%             yes
+   12      40.9%           78.2%             yes
+   13      39.8%           95.8%             yes (only just)
+   14      36.3%          140.4%             NO -- impossible
+   15      38.8%           97.0%             yes (only just)
+   16      41.9%          114.3%             NO -- impossible
+
+THAT is the real result, and it is a split by ROUND, not by reason:
+  - r10-r12: preference alone closes the gap, and comfortably (59-78% against
+    a current 41%). Legality is not what is binding there.
+  - r13-r16: it does not. At r14 and r16 no preference change whatever is
+    enough, because Pop is illegal at 92.3% / 87.2% of points. Only supply --
+    food, and the CA to spend on it -- can move those rounds.
+
+SECOND CORRECTION: LEGALITY IS ENDOGENOUS, SO "COULDN'T" IS NOT AN ALIBI.
+"Food unaffordable" at round 12 is not a fact of the rules imposed on the bot;
+it is the consequence of choices the same eval made at rounds 3-9. The Farm is
+legal at 1405 mid-game decision points and chosen ZERO times
+(`farm_never_outranks_mine`), so the food stock that makes Pop unaffordable at
+r12 is itself a preference outcome. Likewise "no CA left" (26.5% of the
+illegal points) is the consequence of having spent those CA on takes.
+
+A decomposition into "illegal" and "declined" therefore cannot separate "the
+rules blocked me" from "I chose earlier not to be able to". Both columns are
+the eval. The 92.7% is best read as the SIZE of the downstream consequence of
+the upstream preference defect, not as evidence that preference is a minor
+term.
+
+WHAT THIS DOES NOT CHANGE: the per-round table, the reason split within the
+illegal points (food 73.3% / no-CA 26.5%), the r14 illegality peak, and the
+r17 preference peak are all measurements and all stand. Only the headline's
+ranking is withdrawn.
