@@ -71,4 +71,7 @@ sources/bgo/journals/
 # repo ptarjan/tta-ai-sources: CGE and BGA copyright, plus 1011 scraped games
 # under real players' account names. Symlink it in as `sources/` to run the
 # replayer or any corpus tool. It must never be committed here.
-sources/
+# No trailing slash: `sources` here is a SYMLINK into the private checkout,
+# and git sees a symlink as a file, so a `sources/` pattern would not match it
+# and it would sit in `git status` inviting a `git add`.
+sources
