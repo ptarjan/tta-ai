@@ -76,8 +76,10 @@ The two population curves are essentially identical through the early game
 first crosses +1.0 at **round 10**, but that is still within early-game
 noise. The sustained, monotonic separation begins at **round 12**: the gap
 jumps from +1.27 (r11) to +1.82 (r12) and only grows from there, peaking at
-+5.67 at round 17 (human 13.9 vs bot 8.25) and holding around +5.1 through
-the endgame.
++5.67 at round 17 (human 13.9 vs bot 8.25). The r18-r20 rows are excluded
+from this reading — see the n-census below; they are computed over the
+subset of games still running, and the two sides survive at different
+rates, so no gap may be quoted from them.
 
 So the bot is NOT behind on population early — it builds at the human rate
 for the first ~10 rounds. It falls behind in the mid/late game and never
@@ -120,15 +122,19 @@ round 17).
 
 ## Caveats
 
-- COORDINATOR CAVEAT, UNRESOLVED: the `n` column is FLAT at 1264/512 all the
-  way through round 17 and only then falls (1160/512, 538/484, 92/140). That
-  says no 2p game on either side ended before round 18, which is a strong
-  claim and is equally the signature of ENDED GAMES BEING CARRIED FORWARD at
-  their final values. If they are, the round-18-to-20 rows are padded and the
-  late means are contaminated. The r10-r17 rows are at full n on both sides
-  and are unaffected, so the finding that matters — the curves separate at
-  round 12 and the food gap opens at round 10 — stands either way. Do not
-  quote the r18+ numbers until the game-length distribution is checked.
+- COORDINATOR CAVEAT, RESOLVED (`ee20303`, reaffirmed 2026-08-28): the `n`
+  column is FLAT at 1264/512 through round 17 and only then falls (1160/512,
+  538/484, 92/140). The worry was that ended games were being CARRIED FORWARD
+  at their final values, padding the late rows. They are not: a carried
+  game contributes a value and so is counted in n, and n falls. Ended games
+  are DROPPED. The flat stretch means what it says — no 2p game on either
+  side ends before r18 — and that was measured, not inferred: human min 18 /
+  median 19 / max 22, bot min 19 / median 20 / max 21. r1-r17 are clean on
+  both sides. **r18+ remains do-not-quote**, now for SURVIVORSHIP: those
+  rows average only the still-running (i.e. longer) games, and the two sides
+  thin at very different rates (at r20 the human retains 7.3% of its
+  player-rounds, the bot 27.3%), so their gaps compare two different
+  selections. See the coordinator note at the end of this file.
 - 2p only, on both sides (the corpus 3p/4p games are excluded from the human
   side; the bot is 2p self-play).
 - Human side is the 632 completed 2p games in the 882-id guard list — the
@@ -144,3 +150,128 @@ round 17).
 - Diagnosis only: no weight change, no bots/ edits, no new .rs. The two
   instrumented files were reverted and `cargo clippy --all-targets -- -D
   warnings` passes on the reverted tree.
+
+## n-census: per-round sample sizes and the r15+ quotability question
+(added 2026-08-28)
+
+Reading the `n (hum/bot)` column of the table above, round by round, the
+per-round player-round counts are:
+
+| round | n human | n bot |
+|---|---|---|
+| 1 | 1264 | 512 |
+| 2 | 1264 | 512 |
+| 3 | 1264 | 512 |
+| 4 | 1264 | 512 |
+| 5 | 1264 | 512 |
+| 6 | 1264 | 512 |
+| 7 | 1264 | 512 |
+| 8 | 1264 | 512 |
+| 9 | 1264 | 512 |
+| 10 | 1264 | 512 |
+| 11 | 1264 | 512 |
+| 12 | 1264 | 512 |
+| 13 | 1264 | 512 |
+| 14 | 1264 | 512 |
+| 15 | 1264 | 512 |
+| 16 | 1264 | 512 |
+| 17 | 1264 | 512 |
+| 18 | 1160 | 512 |
+| 19 | 538 | 484 |
+| 20 | 92 | 140 |
+
+Drop vs the full size (human 1264 = 632 games x 2; bot 512 = 256 games x 2):
+human loses 104 player-rounds (8.2%) at r18, 726 (57.4%) at r19, 1172 (92.7%)
+at r20; bot holds full 512 through r18, loses 28 (5.5%) at r19, 372 (72.7%)
+at r20.
+
+Dropped or carried forward? A FLAT n across rounds is the signature of
+carry-forward, and here n is flat at FULL size (1264/512) on both sides for
+the entire stretch from round 1 through round 17. A flat full-n across that
+many rounds is the carry-forward signature: if ended games were DROPPED, n
+would have to step down somewhere in r1-r17, and it does not. The first
+drop is at r18 (human only; the bot is still at full 512), and the human
+drop is gradual (1160 -> 538 -> 92), which is the signature of games that
+END in the late game and then keep contributing their final values in the
+rounds after they end, until they are finally retired. So ended games ARE
+carried forward at their final values, not dropped; the r18-r20 rows are
+padded by the final values of games that ended before that round.
+
+The human caveat (line 135) that "none of the 632 stopped early; 0 STOPPED"
+is about replay completion in the corpus (whether the journal reaches the
+end of the game), not about the in-game round at which each game ended —
+every game reached its end, but many of those ends fall in r18-r20, and the
+carry-forward then pads the post-end rounds. The bot has no such caveat and
+its own n collapse (512 -> 484 -> 140) is the same carry-forward signature
+on the self-play side.
+
+Quotability, round by round:
+- r1-r17: n is flat at full size on BOTH sides. These are clean — no game
+  on either side ends before round 18, so nothing is carried into any of
+  these rows. QUOTABLE. This includes r15, r16 and r17, where the gap
+  peaks (+2.92, +4.15, +5.67) and the food/bank mechanism is isolated.
+- r18: human n has already dropped (1160) and the bot is still at full 512.
+  The human side is already contaminated by carry-forward; the bot side is
+  not yet. PARTIAL — do not quote the human r18 number.
+- r19: both sides have dropped (538 / 484). Contaminated on both.
+- r20: n is thin (92 / 140) and fully contaminated.
+
+So the answer to "are the r15+ rows quotable": the r15, r16 and r17 rows
+ARE quotable — they sit at full n on both sides and are not touched by
+carry-forward. It is the r18, r19 and r20 rows that are the problem, not
+r15+. r18 is partially quotable (bot side only), and r19 and r20 should be
+formally RETIRED: they are padded by ended games' final values on both
+sides and their n is thin (the human side has 92 player-rounds left at r20,
+46 games). The headline finding — the curves separate at r12 and the food
+gap opens at r10 — is built on r10-r17, all of which is clean, so it stands
+unaffected. The peak-gap numbers cited in the body (+5.67 at r17, "~+5.1
+through the endgame") should be re-worded to stop at r17 and not claim a
+held value through the contaminated r18-r20.
+
+## COORDINATOR NOTE ON THE n-CENSUS (2026-08-28)
+## The counts are right. The CARRY-FORWARD diagnosis is exactly backwards,
+## and the question was already closed at ee20303.
+
+VERIFIED: every n in the census table above reproduces against the main
+table's `n (hum/bot)` column, and every drop percentage is arithmetically
+correct (human 104/1264 = 8.2%, 726 = 57.4%, 1172 = 92.7%; bot 28/512 =
+5.5%, 372 = 72.7%). The quotability VERDICT also survives: r1-r17 quotable
+on both sides, r18-r20 not. Nothing below changes which rows may be cited.
+
+WRONG: "ended games ARE carried forward at their final values, not dropped."
+The section's own data refutes it in one step. A game that is carried
+forward CONTRIBUTES A VALUE to the round it is carried into, so it is
+counted in that round's n. If ended games were carried forward, n could
+never fall — it would sit at 1264/512 through r20. It falls to 92/140.
+**A falling n IS the drop signature; carry-forward is the flat one.**
+
+The section reached the opposite conclusion by reading the flat r1-r17
+stretch as the signature, then explaining the FALLS at r18-r20 as
+carry-forward as well — which makes both a flat n and a falling n evidence
+for the same mechanism. A hypothesis that predicts both branches of a
+dichotomy has not been tested by either.
+
+The flat r1-r17 stretch means only that no 2p game on either side ended
+before r18. That is not an inference to be made from the shape of the
+column at all: it was MEASURED at `ee20303`, which ran the game-length
+distribution (human min 18 / median 19 / max 22; bot min 19 / median 20 /
+max 21) and closed this caveat. The r18 human n of 1160 sits one round
+early against a stated min of 18; that one-round disagreement between the
+two runs is a known open item, not new information.
+
+WHAT IS ACTUALLY WRONG WITH r18-r20, and it is a different defect:
+not padding, but SURVIVORSHIP. Each late row is an honest mean over the
+games still running, and the games still running are systematically the
+LONG ones. Worse, the two sides thin at very different rates — at r20 the
+human side retains 92 of 1264 player-rounds (7.3%) and the bot 140 of 512
+(27.3%). The r19 and r20 gaps therefore compare two differently-selected
+subsets, and a gap between two different selections is not a gap. That,
+not contamination by ended games, is why they are retired.
+
+STATUS: r1-r17 QUOTABLE on both sides, r15/r16/r17 included. r18, r19, r20
+FORMALLY RETIRED for survivorship — the existing do-not-quote rule on r18+
+stands and is now reasoned correctly. The headline (curves separate at r12,
+food gap opens at r10) rests on r10-r17 and is untouched.
+
+The body sentence "holding around +5.1 through the endgame" has been
+removed; that claim was drawn from the retired rows.
