@@ -152,6 +152,16 @@ the population gap only overtakes it at round 16. That ordering is
 consistent with food being upstream of population, but the lead is in
 MAGNITUDE, not in timing — the two gaps open in the same round.
 
+CORRECTED 2026-08-29: the population column of this table came from the human
+curve that `population_curve_bot_vs_human_2026-08-28.txt` has since withdrawn.
+Against the journal-derived series (`human_pop_from_journals_2026-08-29.txt`,
+gap +1 to +3), the population gap does NOT overtake food at round 16 — the
+food gap is the larger of the two at every round from 10 through 17. That
+strengthens the food-upstream reading rather than weakening it. The "both
+gaps first exceed +1.0 at round 10" finding rested on the same column and is
+no longer supported either; what stands is only that food is the larger gap
+throughout, and no timing claim may be quoted from this table.
+
 Sections (1) and (3) are unaffected: neither uses this table. Section 1 is
 the game-length distribution (internally consistent — the dropped-n column
 1160/538/92/4 is exactly 2x the count of games with final round >= R from
@@ -287,7 +297,11 @@ Caveats
   champion gen 121100. Sample sizes differ (1264 vs 512 player-rounds); both
   large enough that the late-game gaps are far outside sampling noise.
 - The round-13 population gap dip (-0.01) is a sampling coincidence, not a
-  behavioural reversal (see section 2 nuance).
+  behavioural reversal (see section 2 nuance). CORRECTED 2026-08-29: that dip
+  is a feature of the withdrawn human column, so the explanation is
+  unsupported — and not re-checkable without re-deriving the per-round human
+  series, which the journal re-derivation does not produce. Do not cite it
+  either way.
 - "Final round" for game length is read as the engine's `state.round` at the
   moment the game ended (the last round whose turn sequence the game reached).
   It is a round number, not an age.

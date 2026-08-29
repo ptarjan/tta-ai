@@ -121,9 +121,13 @@ The near-exact factor of 2 is the shape of a per-game vs per-player-game
 normalisation error. NOT YET DIAGNOSED - a definition read of both sides of
 that report is out for review.
 
-** DO NOT QUOTE THE +5.67 r17 POPULATION GAP, OR ANY ROW OF THAT CURVE, UNTIL
-THIS IS RESOLVED. ** It is the damage figure the whole mid-game investigation
-is resting on.
+** DO NOT QUOTE THE +5.67 r17 POPULATION GAP, OR ANY ROW OF THAT CURVE. **
+
+RESOLVED 2026-08-29 by `human_pop_from_journals_2026-08-29.txt`: the human
+column was the broken side, and it is withdrawn. Re-derived from the journals
+over 1264 player-rounds, humans take 8.089 population-increase actions and
+lose 0.316 workers by the end of round 17, making the mid-game gap +1 to +3,
+not +5.67. The census in THIS file is independent of that curve and stands.
 
 METHOD NOTE: this census was commissioned as the human half of a comparison and
 instead falsified the measurement it was meant to complement. A census of the

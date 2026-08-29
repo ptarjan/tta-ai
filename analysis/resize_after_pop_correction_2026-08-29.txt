@@ -1,0 +1,144 @@
+RESIZE SWEEP AFTER THE POPULATION-CURVE CORRECTION — 2026-08-29
+================================================================
+
+Job: the human mid-game population gap was corrected from +5.67 to +1 to +3
+(analysis/human_pop_from_journals_2026-08-29.txt, from the journals directly).
+Sweep analysis/*.txt and docs/*.md for anything still sized off the old
+figure. Grep targets: "5.67", "13.92", "population curve", and the claim
+"~12 population and the bot ~8". Read-only; this file only.
+
+Ground truth used to judge each hit:
+- Journals, r9->r17 net human pop gain: +3.77 (vs +7.21 in the withdrawn
+  curve; ratio 1.91). Human ~9-11 workers at r17 vs bot 8.25 -> gap +1..+3.
+- The WITHDRAWN column is the HUMAN population column only. The bank
+  columns, food columns, bot side, and the r9 human level (6.71) stand
+  (population_curve_bot_vs_human_2026-08-28.txt, REVIEWER block).
+- The action census (human_midgame_actions_2026-08-28.txt) is independent
+  of the curve and stands.
+
+================================================================
+A. HITS THAT CARRY THE OLD FIGURE (need re-sizing if re-quoted)
+================================================================
+
+1. analysis/population_curve_bot_vs_human_2026-08-28.txt
+   The source artifact. Already carries its own REVIEWER block (2026-08-29)
+   which withdraws the human population column and the +5.67 gap. Hits:
+   - :67  table row r17 "13.92/8.25 (+5.67)" — the withdrawn value, in a
+     table that also holds standing bank/food/bot columns.
+   - :79  "+5.67 at round 17 (human 13.9 vs bot 8.25)" — body sentence.
+   - :86  "by round 16 the human is at ~12 population and the bot at ~8, a
+     4-population gap that is ~half the human's total population" — the
+     "~12 vs ~8" claim the sweep was asked to find. WRONG: human at r16 is
+     ~9-11, not ~12; gap ~+1..+3, not 4, and not "half the human's total".
+     SURVIVING PART: "the bot is not behind on population early (first
+     ~10 rounds)" and "falls behind in the mid/late game and never
+     recovers" — both confirmed by the journal rebuild (peel real, r12+).
+   - :212 "peaks (+2.92, +4.15, +5.67)" — quotability section; the +5.67
+     term is withdrawn, the +2.92/+4.15 (r15/r16) terms come from the same
+     withdrawn human column and are not re-established.
+   - :227 "peak-gap numbers cited in the body (+5.67 at r17, ~+5.1 ...)" —
+     already flagged in-file as needing re-wording; the "~+5.1 through the
+     endgame" sentence was removed per the COORDINATOR NOTE.
+   - :295, :330 — the REVIEWER block itself (correct figure stated: gap
+     near +2.5 pending re-derivation, "not +5.67"). No change needed; the
+     journal rebuild since then refines it to +1..+3.
+   VERDICT: the artifact is internally quarantined; do not quote :67/:79/:86
+   again. :86's "4-population / half the human's total" is the one derived
+   sentence that still reads as live and should not be repeated.
+
+2. analysis/human_midgame_actions_2026-08-28.txt (the action census)
+   - :108-116 "THE CONTRADICTION" block: quotes the curve's 6.71 -> 13.92
+     (+7.21) and says the census sums only 3.66 increases. The CONTRADICTION
+     itself is the finding and stands; it is now RESOLVED (factor 1.91,
+     human column withdrawn). The block's closing "DO NOT QUOTE THE +5.67
+     r17 POPULATION GAP ... UNTIL THIS IS RESOLVED" (:124) can be read as
+     closed by human_pop_from_journals_2026-08-29.txt.
+   VERDICT: census numbers stand (independent of the curve). No re-sizing;
+   optionally the resolution could be cross-referenced.
+
+3. analysis/game_length_and_pop_timing_2026-08-28.txt
+   - :145  table row "17 | +3.14 | +5.67" (food gap | pop gap). The +5.67
+     term is the withdrawn human column; +3.14 (food) stands.
+   - :151  "the population gap only overtakes it [the food gap] at round
+     16" — ordering claim computed from the withdrawn column. With the
+     corrected pop gap (+1..+3) the food gap is the larger of the two at
+     EVERY round 10-17, never overtaken. The sentence as written is now
+     FALSE.
+   - :274  "its population curve peels away from the human's starting
+     ~round 12" — SURVIVES: the peel is confirmed real by the journal
+     rebuild, only the magnitude shrank.
+   - :289  "the round-13 population gap dip (-0.01) is a sampling
+     coincidence" — computed from the withdrawn column; the r13 dip may not
+     exist in the corrected series. Not re-verifiable without re-deriving
+     the per-round human column; treat as unsupported.
+   VERDICT: :151 needs re-sizing (the food gap simply stays larger, which
+   actually STRENGTHENS the "food is upstream" story); :289's r13-dip
+   explanation is unsupported.
+
+4. analysis/human_pop_from_journals_2026-08-29.txt
+   - :88, :90, :96, :97 — the correction itself ("not +5.67", "Anything
+     sized off +5.67 needs re-sizing"). Correct as written; no change.
+
+================================================================
+B. "population curve" MENTIONS THAT DO NOT DEPEND ON THE MAGNITUDE
+================================================================
+
+- analysis/farm_vs_military_decomposition_2026-08-28.txt:404 — "whether
+  +10.64 on strength is itself too high ... needs a human baseline for
+  military strength by round, the way the population curve gave one for
+  population." No figure cited; the OPEN question stands (and the military
+  baseline now exists: military_curve_bot_vs_human_2026-08-28.txt). No
+  re-sizing needed.
+- analysis/military_curve_bot_vs_human_2026-08-28.txt:5 — "Follow-up to the
+  population curve report"; :121 "human 31.0 vs bot 8.1 total strength"
+  (military, not population; the "+22.90 at r20" military gap is its own
+  measurement and UNAFFECTED). The scope paragraph's "That report showed the
+  bot's population peels away from the human's at ~round 12" survives
+  (peel real, magnitude smaller). No re-sizing.
+
+================================================================
+C. FALSE POSITIVES (unrelated 5.67 / 13.92 / "bot 8")
+================================================================
+
+- analysis/divergence_why_2026-08-25.txt:326 — "-145.677..." a weight, not
+  the gap. Unrelated.
+- analysis/eval_share_2026-08-24.txt:527 — "5.672464" a feature stat.
+  Unrelated.
+- analysis/r1_margin_modegap_2026-08-28.txt:13, :97 — "gap to 15.67"
+  (margin-mode gap, a different quantity). Unrelated.
+- docs/CARD_BLINDNESS.md:4990 — "6.05 → 5.67" developments stat. Unrelated.
+- docs/NEURAL_LOOP_NULL.md:182 — "beats the 1-ply bot 88.6%" — matched
+  "bot 8", not a population claim. Unrelated.
+- docs/REPLAY.md:7566 — "loses 1 population" (rule text, event effect).
+  Unrelated.
+
+================================================================
+D. docs/*.md
+================================================================
+
+No docs/*.md file cites 5.67, 13.92, or the "~12 vs ~8" population claim.
+Population mentions in docs (HEURISTICS.md, RULES_SPEC.md, REPLAY.md,
+SCORE_AUDIT.md, CHAMPION_VS_HUMANS.md, EXPERT_STRATEGY.md, HUMAN_PLAY.md,
+STRENGTH_CHECK.md) are rules, opening playbooks, or single-game replay
+traces — none sized off the withdrawn figure. No re-sizing in docs/.
+
+================================================================
+SUMMARY
+================================================================
+
+Re-sizing needed in 3 files (all analysis/):
+1. population_curve_bot_vs_human_2026-08-28.txt:86 — "~12 vs ~8, 4-pop gap,
+   half the human's total" -> human ~9-11 at r16, gap ~+1..+3. (The file's
+   REVIEWER block already quarantines the column; this sentence is the one
+   derived claim that still reads live.)
+2. game_length_and_pop_timing_2026-08-28.txt:151 — "population gap overtakes
+   food gap at round 16" is now false; with the corrected series the food
+   gap is larger at every round 10-17 (strengthens the food-upstream story).
+   Same file :289 — the r13 dip (-0.01) explanation rests on the withdrawn
+   column; unsupported.
+3. human_midgame_actions_2026-08-28.txt:124 — the "do not quote until
+   resolved" flag is now closed by human_pop_from_journals_2026-08-29.txt
+   (resolution: human column withdrawn, gap +1..+3).
+
+Everything else: census numbers, bank/food columns, bot side, the r12 peel
+(itself), the military gap (+22.90 at r20), and all docs/*.md stand as is.

@@ -83,8 +83,12 @@ rates, so no gap may be quoted from them.
 
 So the bot is NOT behind on population early — it builds at the human rate
 for the first ~10 rounds. It falls behind in the mid/late game and never
-recovers: by round 16 the human is at ~12 population and the bot at ~8, a
-4-population gap that is ~half the human's total population.
+recovers. CORRECTED 2026-08-29: the size of that gap was read off the human
+column this file has since withdrawn. Re-derived from the journals
+(`human_pop_from_journals_2026-08-29.txt`), the human is at ~9-11 population
+at round 16 and the gap is +1 to +3, NOT the 4 population — "half the human's
+total" — this sentence originally claimed. The peel is real; only its
+magnitude shrank.
 
 ## What the gap is made of
 
