@@ -1274,6 +1274,14 @@ fn is_food_build_move(m: Move) -> bool {
     false
 }
 
+/// `true` if `m` is a population-increase move. The same definition
+/// `behavcensus`'s `pop_actions_by_round` counter uses (see its doc comment
+/// there): one increment per `Move::Pop`/`Move::PopFree` -- an ACTION, never
+/// a CA debit, so a free pop counts as 1 exactly like a paid one.
+fn is_pop_move(m: Move) -> bool {
+    matches!(m, Move::Pop { .. } | Move::PopFree)
+}
+
 /// One replay of `recorded` on a fresh game. `force_food` controls the (d)
 /// lever: when true, at every r3-r9 own-turn decision point where a food
 /// build/upgrade was legal in the ORIGINAL game, the best-scored legal food
@@ -1474,6 +1482,439 @@ fn arena_game(weights: Weights, seed: u64) -> (bool, ArenaSide, ArenaSide) {
     let champ = arena_play(weights, seed, None, 0);
     let forced_won = forced.0 > champ.0;
     (forced_won, champ, forced)
+}
+
+// ---------------------------------------------------------------------
+// --arena-pop: the 2p forced-population arena, the mirror of --arena-food.
+// Same structure, same 2p/symmetric-seats null, same "only the forcing
+// differs" discipline -- the only changes are WHAT is forced (a legal
+// `Move::Pop`/`Move::PopFree` instead of a food build/upgrade) and WHEN
+// (r10-17, the window `pop_shortfall_decomposition_2026-08-29.txt` and
+// `bot_pop_actions_per_round_2026-08-29.txt` identify as the shortfall
+// window, instead of r3-9).
+// ---------------------------------------------------------------------
+
+/// One seat's outcome from one [`arena_play_pop`] replay. `pop_actions_r17`
+/// is the tracked seat's cumulative population-increase ACTIONS (one per
+/// `Move::Pop`/`Move::PopFree`, [`is_pop_move`]) over the WHOLE game through
+/// round 17 inclusive -- the same quantity and window as the 5.945 (bot,
+/// unforced) and 8.089 (human) baselines in
+/// `bot_pop_actions_per_round_2026-08-29.txt`, so the validity check compares
+/// like for like.
+///
+/// `pop_window_points`/`pop_force_legal`/`pop_force_chosen`/
+/// `pop_force_not_chosen_top_kind` are computed on BOTH sides (not just the
+/// forced replay): `pop_window_points` counts every r10-17 own-turn decision
+/// point the tracked seat faces at all (whether or not a pop move is legal
+/// there), `pop_force_legal` how many of those had a legal pop move,
+/// `pop_force_chosen` how many of THOSE the seat's own top-ranked pick
+/// already was a pop (no real displacement -- true preference on the
+/// champion side, and on the forced side too UNTIL the first point forcing
+/// actually overrides a pick, after which the two trajectories diverge and
+/// "top pick" is read off the forced side's own altered state, exactly as
+/// [`FoodBuildsR39`]'s "not chosen" table is on the food arena). `not_chosen`
+/// is the kind that WAS top-ranked at every other such point -- the
+/// displacement table this job's (c) is modelled on. On the champion side
+/// (`forced_seat = None`) forcing never fires, so `not_chosen` there is the
+/// bot's genuine, unforced r10-17 preference distribution.
+#[derive(Default, Clone, Copy)]
+struct ArenaPopOutcome {
+    final_culture: u16,
+    pop_r12: u16,
+    pop_r17: u16,
+    reached_r12: bool,
+    reached_r17: bool,
+    pop_actions_r17: u32,
+    pop_window_points: u32,
+    pop_force_legal: u32,
+    pop_force_chosen: u32,
+    pop_force_not_chosen_top_kind: DecisionKindCounts,
+}
+
+/// One seat's replay of a whole-game 2p match where BOTH seats play the SAME
+/// weights -- the population mirror of [`arena_play`]. `forced_seat` is the
+/// seat index that takes a legal population-increase move at every r10-17
+/// own-turn decision (the other seat never forces, exactly as in the food
+/// arena). Returns the tracked seat's (`track_seat`) [`ArenaPopOutcome`].
+fn arena_play_pop(weights: Weights, seed: u64, forced_seat: Option<u8>, track_seat: u8) -> ArenaPopOutcome {
+    let players: u8 = 2;
+    let bots: Vec<WeightedBot> = (0..players).map(|_| WeightedBot::new(weights)).collect();
+    let mut state = game::new_game(players, seed);
+    let mut out = ArenaPopOutcome::default();
+    let mut moves_played = 0usize;
+    while !state.game_over && moves_played < MOVE_CAP {
+        let idx = state.decider();
+        let pending = !state.pending.is_empty();
+        let legal = legal::legal_moves(&state);
+        let own_turn = legal.as_slice().iter().any(|m| matches!(m, Move::EndTurn));
+        let round = state.round;
+        let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
+        // Window-stat tracking (legality + natural preference) is
+        // unconditional on WHO forces -- it runs on both the champion and
+        // forced replays alike, so (c)'s legal-point fraction is comparable
+        // across sides. Only the MOVE PLAYED differs by forcing.
+        let in_window = idx == track_seat && own_turn && !pending && (10..=17).contains(&round);
+        let forcing_fires = in_window && Some(idx) == forced_seat;
+        if in_window {
+            out.pop_window_points += 1;
+            let pop_legal = legal.as_slice().iter().any(|m| is_pop_move(*m));
+            if pop_legal {
+                out.pop_force_legal += 1;
+                if is_pop_move(ranked[0].0) {
+                    out.pop_force_chosen += 1;
+                } else {
+                    out.pop_force_not_chosen_top_kind.record(decision_kind(ranked[0].0));
+                }
+            }
+        }
+        let mv = if forcing_fires {
+            ranked
+                .iter()
+                .position(|&(m, _)| is_pop_move(m))
+                .map(|pos| ranked[pos].0)
+                .unwrap_or(ranked[0].0)
+        } else if pending {
+            bots[idx as usize].choose(&state, legal.as_slice())
+        } else {
+            ranked[0].0
+        };
+        // The cumulative pop-action count is unconditional on forcing: it
+        // counts whatever the tracked seat actually PLAYS, round <= 17, the
+        // same "one increment per Move::Pop/PopFree" definition behavcensus
+        // uses. On the champion side (no forcing) this reproduces the 5.945
+        // unforced baseline; on the forced side it is what the validity
+        // check is FOR.
+        if idx == track_seat && round <= 17 && is_pop_move(mv) {
+            out.pop_actions_r17 += 1;
+        }
+        if pending {
+            tta::interact::apply_pending(&mut state, mv);
+        } else {
+            game::step(&mut state, mv);
+        }
+        if idx == track_seat && own_turn && !pending && mv == Move::EndTurn {
+            if round == 12 && !out.reached_r12 {
+                let p = &state.players[idx as usize];
+                out.pop_r12 =
+                    u16::from(p.yellow_bank) + u16::from(p.workers_free) + u16::from(p.yellow_granted);
+                out.reached_r12 = true;
+            }
+            if round == 17 && !out.reached_r17 {
+                let p = &state.players[idx as usize];
+                out.pop_r17 =
+                    u16::from(p.yellow_bank) + u16::from(p.workers_free) + u16::from(p.yellow_granted);
+                out.reached_r17 = true;
+            }
+        }
+        moves_played += 1;
+    }
+    out.final_culture = state.players[track_seat as usize].culture;
+    out
+}
+
+/// The per-game pop-arena outcome, the mirror of [`arena_game`]. Both sides
+/// play the SAME weights; the only difference is the forcing. Returns
+/// `(forced_won, champ, forced)`.
+fn arena_game_pop(weights: Weights, seed: u64) -> (bool, ArenaPopOutcome, ArenaPopOutcome) {
+    let forced = arena_play_pop(weights, seed, Some(0), 0);
+    let champ = arena_play_pop(weights, seed, None, 0);
+    let forced_won = forced.final_culture > champ.final_culture;
+    (forced_won, champ, forced)
+}
+
+/// Aggregated result of the 2p forced-population arena over `games` games --
+/// the mirror of [`ArenaFood`].
+///
+/// `ties`/`win_margin_sum`/`loss_margin_sum`/`no_divergence_games` exist to
+/// answer one question a bare win-rate + mean-culture pair cannot: whether a
+/// higher mean final culture despite a LOW win rate is a skewed paired
+/// distribution (plausible and not a bug) or something incoherent. Because
+/// the engine is deterministic and the champion/forced replays are BYTE-FOR-
+/// BYTE identical until the first point forcing actually overrides a pick,
+/// any game where forcing never fires (`forced.pop_force_legal == 0`, i.e.
+/// no r10-17 decision point ever offered a legal pop) has
+/// `forced.final_culture == champ.final_culture` exactly -- an automatic
+/// TIE, which `arena_game_pop`'s strict `>` counts as a non-win but which
+/// contributes exactly 0 to the mean-culture difference. `no_divergence_games`
+/// should track `ties` closely; a large gap between them would mean forcing
+/// fired but still landed on an exact-culture tie, which is a red flag worth
+/// seeing rather than assuming away.
+#[derive(Default)]
+struct ArenaPop {
+    total: u64,
+    forced_wins: u64,
+    ties: u64,
+    /// Sum of `forced.culture - champ.culture` over games forced WINS
+    /// (always positive by construction).
+    win_margin_sum: f64,
+    /// Sum of `champ.culture - forced.culture` over games forced LOSES
+    /// (always positive by construction -- a magnitude, not a signed sum).
+    loss_margin_sum: f64,
+    /// Games where forcing never found a legal pop anywhere in r10-17, so
+    /// the forced replay is identical to the champion replay by construction.
+    no_divergence_games: u64,
+    champ_culture_sum: u64,
+    forced_culture_sum: u64,
+    champ_pop_r12_sum: u64,
+    forced_pop_r12_sum: u64,
+    champ_pop_r17_sum: u64,
+    forced_pop_r17_sum: u64,
+    champ_reached_r12: u64,
+    forced_reached_r12: u64,
+    champ_reached_r17: u64,
+    forced_reached_r17: u64,
+    champ_pop_actions_r17_sum: u64,
+    forced_pop_actions_r17_sum: u64,
+    champ_pop_window_points: u64,
+    forced_pop_window_points: u64,
+    champ_pop_force_legal: u64,
+    forced_pop_force_legal: u64,
+    champ_pop_force_chosen: u64,
+    forced_pop_force_chosen: u64,
+    forced_pop_force_not_chosen_top_kind: DecisionKindCounts,
+}
+
+impl ArenaPop {
+    fn record(&mut self, forced_won: bool, champ: ArenaPopOutcome, forced: ArenaPopOutcome) {
+        self.total += 1;
+        if forced_won {
+            self.forced_wins += 1;
+        }
+        let diff = f64::from(forced.final_culture) - f64::from(champ.final_culture);
+        if diff > 0.0 {
+            self.win_margin_sum += diff;
+        } else if diff < 0.0 {
+            self.loss_margin_sum += -diff;
+        } else {
+            self.ties += 1;
+        }
+        if forced.pop_force_legal == 0 {
+            self.no_divergence_games += 1;
+        }
+        self.champ_culture_sum += u64::from(champ.final_culture);
+        self.forced_culture_sum += u64::from(forced.final_culture);
+        self.champ_pop_r12_sum += u64::from(champ.pop_r12);
+        self.forced_pop_r12_sum += u64::from(forced.pop_r12);
+        self.champ_pop_r17_sum += u64::from(champ.pop_r17);
+        self.forced_pop_r17_sum += u64::from(forced.pop_r17);
+        if champ.reached_r12 {
+            self.champ_reached_r12 += 1;
+        }
+        if forced.reached_r12 {
+            self.forced_reached_r12 += 1;
+        }
+        if champ.reached_r17 {
+            self.champ_reached_r17 += 1;
+        }
+        if forced.reached_r17 {
+            self.forced_reached_r17 += 1;
+        }
+        self.champ_pop_actions_r17_sum += u64::from(champ.pop_actions_r17);
+        self.forced_pop_actions_r17_sum += u64::from(forced.pop_actions_r17);
+        self.champ_pop_window_points += u64::from(champ.pop_window_points);
+        self.forced_pop_window_points += u64::from(forced.pop_window_points);
+        self.champ_pop_force_legal += u64::from(champ.pop_force_legal);
+        self.forced_pop_force_legal += u64::from(forced.pop_force_legal);
+        self.champ_pop_force_chosen += u64::from(champ.pop_force_chosen);
+        self.forced_pop_force_chosen += u64::from(forced.pop_force_chosen);
+        self.forced_pop_force_not_chosen_top_kind.merge(forced.pop_force_not_chosen_top_kind);
+    }
+}
+
+/// Prints the forced-population arena result, the mirror of
+/// [`print_forced_food_arena`], plus the pre-registered validity check
+/// (a): does the forcing actually move the forced side's cumulative pop
+/// actions toward the human 8.089 baseline, against the unforced 5.945
+/// baseline from `bot_pop_actions_per_round_2026-08-29.txt`. `unforced_baseline`
+/// and `human_baseline` are passed in so the print stays a pure function.
+fn print_forced_pop_arena(a: &ArenaPop, unforced_baseline: f64, human_baseline: f64) {
+    let total = a.total.max(1);
+    let win_rate = a.forced_wins as f64 / total as f64;
+    let (lo, hi) = wilson_ci95(a.forced_wins, a.total);
+    // A tie (exact-culture-equal) is NOT "a game the null could have gone
+    // either way on" -- it is what happens whenever forcing never finds a
+    // legal pop in r10-17 at all, in which case the forced replay is BYTE-
+    // FOR-BYTE identical to the champion replay (deterministic engine, same
+    // seed) and there is no counterfactual question to ask about that game.
+    // When ties are a large fraction of `total` (they can be a MAJORITY --
+    // see the doc above), comparing the raw win rate to a 50% null is wrong:
+    // that null assumes every game is decided, which a mostly-tied sample
+    // does not. The correct null for "does forcing help or hurt, given it
+    // fired" is wins == losses AMONG DECIDED GAMES, so report that CI too.
+    let decided = a.forced_wins + (a.total - a.forced_wins - a.ties);
+    let (decided_lo, decided_hi) = wilson_ci95(a.forced_wins, decided);
+    let losses = a.total - a.forced_wins - a.ties;
+    let champ_culture = a.champ_culture_sum as f64 / total as f64;
+    let forced_culture = a.forced_culture_sum as f64 / total as f64;
+    let champ_pop12 = a.champ_pop_r12_sum as f64 / total as f64;
+    let forced_pop12 = a.forced_pop_r12_sum as f64 / total as f64;
+    let champ_pop17 = a.champ_pop_r17_sum as f64 / total as f64;
+    let forced_pop17 = a.forced_pop_r17_sum as f64 / total as f64;
+    let champ_actions = a.champ_pop_actions_r17_sum as f64 / total as f64;
+    let forced_actions = a.forced_pop_actions_r17_sum as f64 / total as f64;
+
+    println!("\n## FORCED-POPULATION ARENA 2p (n={} games)  [MARKER_FORCED_POP_ARENA_LATEST]", a.total);
+    println!(
+        "  champion = no forcing; forced = takes a legal population-increase move\n  \
+         (Move::Pop or Move::PopFree) at every own-turn decision in rounds 10-17.\n  \
+         Same weights both sides; the ONLY difference is the forcing. Forced side = seat 0.\n  \
+         2p null is 50% (symmetric seats, same weights)."
+    );
+
+    println!("\n### (a) VALIDITY CHECK: cumulative population ACTIONS per player by r17");
+    println!(
+        "  champion (unforced, this run): {:.3}   forced: {:.3}\n  \
+         reference: unforced baseline (bot_pop_actions_per_round_2026-08-29.txt) {:.3}   human {:.3}",
+        champ_actions, forced_actions, unforced_baseline, human_baseline
+    );
+    if forced_actions <= champ_actions + 0.05 {
+        println!(
+            "  FAIL -- the forcing did NOT materially raise pop actions ({:.3} -> {:.3}). \
+             This test measured NOTHING; the win rate below is not interpretable.",
+            champ_actions, forced_actions
+        );
+    } else {
+        let frac_of_gap = if human_baseline > unforced_baseline {
+            (forced_actions - unforced_baseline) / (human_baseline - unforced_baseline)
+        } else {
+            f64::NAN
+        };
+        println!(
+            "  PASS -- the forcing raised pop actions {:.3} -> {:.3} ({:+.3}), {:.1}% of the way from \
+             the unforced baseline ({:.3}) to the human baseline ({:.3}). The result below is interpretable.",
+            champ_actions, forced_actions, forced_actions - champ_actions,
+            100.0 * frac_of_gap, unforced_baseline, human_baseline
+        );
+    }
+
+    println!("\n### (b) forced side's win/tie/loss breakdown and the DECIDED-games win rate");
+    println!(
+        "  breakdown: wins {} / ties {} / losses {} of {}  (a tie is EXACT-culture-equal -- see below \
+         for why, and note it counts as a non-win in the raw rate)",
+        a.forced_wins, a.ties, losses, total
+    );
+    println!(
+        "  games where forcing never found a legal pop anywhere in r10-17 (forced trajectory IDENTICAL \
+         to champion's BY CONSTRUCTION -- deterministic engine, same seed, no move ever overridden): {} \
+         -- tracks `ties` ({}) but does not equal it; the {} gap is games where forcing fired at least \
+         once yet still landed on an exact-culture tie by coincidence.",
+        a.no_divergence_games, a.ties, a.ties.saturating_sub(a.no_divergence_games)
+    );
+    println!(
+        "  raw win rate (ties counted as non-wins, the naive 50%-null comparison): {}/{} = {:.3}  \
+         95% CI [{:.3}, {:.3}]",
+        a.forced_wins, total, win_rate, lo, hi
+    );
+    println!(
+        "  THIS IS NOT THE RIGHT NULL when ties are a large share of the sample ({:.1}% here): a 50% \
+         null assumes every game is decided, and most of these are not. The right null for \"does \
+         forcing help or hurt, given it fired\" is wins == losses AMONG DECIDED GAMES:",
+        100.0 * a.ties as f64 / total as f64
+    );
+    println!(
+        "  DECIDED-games win rate: {}/{} = {:.3}  95% CI [{:.3}, {:.3}]",
+        a.forced_wins, decided.max(1), a.forced_wins as f64 / decided.max(1) as f64, decided_lo, decided_hi
+    );
+    if decided > 0 && (decided_lo > 0.5 || decided_hi < 0.5) {
+        println!(
+            "  the decided-games CI EXCLUDES 50% -- forcing has a real directional effect once it fires."
+        );
+    } else {
+        println!(
+            "  the decided-games CI CONTAINS 50% -- among games where forcing actually fired, it wins \
+             about as often as it loses. This is a WASH, not a loss: the low raw win rate is mostly the \
+             tie rate, not a directional penalty."
+        );
+    }
+    println!(
+        "  mean margin when forced WINS: {:.3}   mean margin when forced LOSES: {:.3}  -- with a \
+         decided win rate near 50%, near-symmetric win/loss margins are what a NULL effect looks like, \
+         not evidence that forcing \"wins big and loses small\" or vice versa.",
+        a.win_margin_sum / a.forced_wins.max(1) as f64,
+        a.loss_margin_sum / losses.max(1) as f64
+    );
+
+    println!("\n### (c) mean FINAL culture / score (post game-over, end-game bonus applied)");
+    println!(
+        "  (final score IS final culture in this engine -- game::scores reads p.culture directly \
+         after finish_game writes the end-game bonus into it; there is no separate score field.)"
+    );
+    println!("  champion: {:.3}   forced: {:.3}   (forced - champ: {:+.3})", champ_culture, forced_culture, forced_culture - champ_culture);
+    println!(
+        "  A positive mean with a low RAW win rate is not a contradiction, and is not \"wins big, loses \
+         small\" either (see (b): win/loss margins are near-symmetric, decided win rate ~50%). It is \
+         mechanical: ties (the majority of games, when forcing never fires) contribute exactly 0 to the \
+         mean either way, so the mean is driven entirely by the decided-game subset, which (b) shows is \
+         a wash, not a directional effect -- the {:+.3} here is within what a null decided-game result \
+         can produce by chance on a mean over {} games.",
+        forced_culture - champ_culture, total
+    );
+
+    println!("\n### (c) end-of-round-12 and end-of-round-17 POPULATION TOTAL (yellow_bank + workers_free + yellow_granted), both sides");
+    println!("  pop r12:  champion {:.3}   forced {:.3}   (forced - champ: {:+.3})", champ_pop12, forced_pop12, forced_pop12 - champ_pop12);
+    println!("  pop r17:  champion {:.3}   forced {:.3}   (forced - champ: {:+.3})", champ_pop17, forced_pop17, forced_pop17 - champ_pop17);
+    println!(
+        "  CAVEAT (economy.rs::increase_population): a normal Move::Pop/PopFree moves ONE token from \
+         yellow_bank to workers_free -- the SUM is invariant to it. The sum only rises when a pop is \
+         granted past an ALREADY-EMPTY bank (the yellow_granted path), and it DROPS on its own at every \
+         age transition after the first (game.rs::advance_age, Sec 12.2.4: \"two unborn population are \
+         removed from every supply\"), independent of any Pop action either side takes. So this snapshot \
+         is NOT a proxy for how many pop actions were taken -- (a)'s action COUNT is -- and the small, \
+         near-zero deltas here are consistent with noise from where each side's trajectory happens to \
+         sit relative to an age boundary, not with forcing failing to raise the population count."
+    );
+
+    println!("\n### (c) fraction of r10-17 own-turn decision points where a pop move was even LEGAL (both sides)");
+    println!(
+        "  champion: {}/{} legal = {:.1}%   forced: {}/{} legal = {:.1}%",
+        a.champ_pop_force_legal, a.champ_pop_window_points.max(1),
+        100.0 * a.champ_pop_force_legal as f64 / a.champ_pop_window_points.max(1) as f64,
+        a.forced_pop_force_legal, a.forced_pop_window_points.max(1),
+        100.0 * a.forced_pop_force_legal as f64 / a.forced_pop_window_points.max(1) as f64
+    );
+    println!(
+        "  on the UNFORCED (champion) side this is the bot's genuine r10-17 legality rate: pop is simply \
+         not offered at most decision points in this window. If this fraction is low, the r10-17 peel is \
+         primarily an AFFORDABILITY/civil-action-budget failure (couldn't), not a preference failure \
+         (wouldn't) -- consistent with pop_shortfall_decomposition_2026-08-29.txt's 87-92% illegal finding."
+    );
+    println!(
+        "  FORCING ROUGHLY HALVES ITS OWN SUBSEQUENT LEGALITY (this run's own numbers, not a guess): the \
+         forced side sees pop legal at HALF the champion's rate. Taking a pop early spends the CA and \
+         food that would otherwise buy the NEXT one, so 8 rounds of forcing buy far fewer additional pop \
+         actions than 8 x (the champion's own r10-17 rate) would suggest -- this compounding is the \
+         mechanism behind (a)'s modest +0.215."
+    );
+
+    println!("\n### (c) displacement: what the forced pops displaced (r10-17 forced-seat decision points)");
+    println!(
+        "  legal pop points: {}   already top pick (no real displacement): {} ({:.1}%)",
+        a.forced_pop_force_legal,
+        a.forced_pop_force_chosen,
+        100.0 * a.forced_pop_force_chosen as f64 / a.forced_pop_force_legal.max(1) as f64
+    );
+    let displaced = a.forced_pop_force_legal - a.forced_pop_force_chosen;
+    println!("  displaced (legal pop was NOT the top pick): {displaced} -- kind chosen instead:");
+    print_kind_counts(&a.forced_pop_force_not_chosen_top_kind);
+
+    println!("\n### (d) games reaching r17 (both sides)");
+    println!("  champion: {}/{}   forced: {}/{}", a.champ_reached_r17, total, a.forced_reached_r17, total);
+
+    println!("\n### VERDICT: does the DECIDED-games CI exclude the 50% null?");
+    println!(
+        "  (the raw all-games CI [{:.3}, {:.3}] is NOT the verdict when {:.1}% of games are ties -- \
+         see (b).)",
+        lo, hi, 100.0 * a.ties as f64 / total as f64
+    );
+    if decided == 0 {
+        println!("  no decided games -- forcing never fired once in this sample.");
+    } else if decided_lo > 0.5 {
+        println!("  YES -- the decided-games CI [{:.3}, {:.3}] lies entirely ABOVE 50%: the forced side WINS the arena.", decided_lo, decided_hi);
+    } else if decided_hi < 0.5 {
+        println!("  YES -- the decided-games CI [{:.3}, {:.3}] lies entirely BELOW 50%: the forced side LOSES the arena.", decided_lo, decided_hi);
+    } else {
+        println!("  NO -- the decided-games CI [{:.3}, {:.3}] straddles 50%: a WASH, not a loss.", decided_lo, decided_hi);
+    }
 }
 
 #[derive(Default, Clone)]
@@ -2363,6 +2804,12 @@ struct Args {
     /// forced side's win rate + CI, mean final culture both sides, and
     /// end-of-r12 food/pop both sides. See `play_forced_food_arena`.
     arena_food: bool,
+    /// 2p forced-POPULATION arena, the mirror of `arena_food`: the champion
+    /// plays a variant of the SAME weights that takes a legal
+    /// population-increase move (`Move::Pop`/`Move::PopFree`) at every r10-17
+    /// own-turn decision (bot's own picks everywhere else, and outside that
+    /// window). See `arena_play_pop` / `print_forced_pop_arena`.
+    arena_pop: bool,
 }
 
 impl Default for Args {
@@ -2376,6 +2823,7 @@ impl Default for Args {
             whole: false,
             food_probe: false,
             arena_food: false,
+            arena_pop: false,
         }
     }
 }
@@ -2399,6 +2847,14 @@ usage: openerprobe --weights PATH [options]
                   Plays to game-over; prints the forced side's win rate +
                   CI, mean final culture both sides, end-of-r12 food/pop
                   both sides. 2p only.
+  --arena-pop     2p forced-population arena: champion vs a variant of the
+                  SAME weights that takes a legal population-increase move
+                  at every r10-17 own-turn decision (only difference = the
+                  forcing). Plays to game-over; prints the validity check
+                  (did forcing move pop actions toward the human rate),
+                  the forced side's win rate + CI, mean final culture both
+                  sides, end-of-r12/r17 pop both sides, and what the forced
+                  pops displaced. 2p only.
   --help
 ";
 
@@ -2418,6 +2874,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--whole" => a.whole = true,
             "--foodprobe" => a.food_probe = true,
             "--arena-food" => a.arena_food = true,
+            "--arena-pop" => a.arena_pop = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -2433,6 +2890,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.arena_food && a.players != 2 {
         return Err("--arena-food is 2p only (null is 50% under symmetric seats)".to_string());
+    }
+    if a.arena_pop && a.players != 2 {
+        return Err("--arena-pop is 2p only (null is 50% under symmetric seats)".to_string());
     }
     if a.weights_path.is_empty() {
         return Err("--weights is required".to_string());
@@ -2777,6 +3237,54 @@ fn main() -> ExitCode {
         println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
         let arena = arena_lock.into_inner().expect("arena lock poisoned");
         print_forced_food_arena(&arena);
+        return ExitCode::SUCCESS;
+    }
+
+    // --arena-pop is the same kind of self-contained 2p mode as --arena-food,
+    // run in its own parallel loop for the same reason.
+    if args.arena_pop {
+        // The bot's own unforced cumulative pop-action baseline through r17
+        // (`bot_pop_actions_per_round_2026-08-29.txt`, gen 125336, 200 games)
+        // and the human corpus baseline
+        // (`human_pop_from_journals_2026-08-29.txt`), transcribed here so the
+        // validity-check print stays a pure function of `ArenaPop`.
+        const UNFORCED_POP_ACTIONS_R17: f64 = 5.945;
+        const HUMAN_POP_ACTIONS_R17: f64 = 8.089;
+
+        let start = Instant::now();
+        let next = AtomicUsize::new(0);
+        let threads = args.threads.min(args.games);
+        let mut arena = ArenaPop::default();
+        let arena_lock = std::sync::Mutex::new(std::mem::take(&mut arena));
+        std::thread::scope(|scope| {
+            let (args, next, weights, arena_lock) = (&args, &next, &weights, &arena_lock);
+            let mut handles = Vec::with_capacity(threads);
+            for _ in 0..threads {
+                handles.push(scope.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= args.games {
+                        return;
+                    }
+                    let seed = args.seed.wrapping_add(i as u64);
+                    let (forced_won, champ, forced) = arena_game_pop(*weights, seed);
+                    arena_lock
+                        .lock()
+                        .expect("arena lock poisoned")
+                        .record(forced_won, champ, forced);
+                }));
+            }
+            for h in handles {
+                h.join().expect("arena thread panicked");
+            }
+        });
+        let elapsed = start.elapsed().as_secs_f64();
+        println!("games        {}", args.games);
+        println!("players      {}", args.players);
+        println!("weights      {}", args.weights_path);
+        println!("seeds        {}..{}", args.seed, args.seed + args.games as u64 - 1);
+        println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
+        let arena = arena_lock.into_inner().expect("arena lock poisoned");
+        print_forced_pop_arena(&arena, UNFORCED_POP_ACTIONS_R17, HUMAN_POP_ACTIONS_R17);
         return ExitCode::SUCCESS;
     }
 

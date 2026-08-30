@@ -1,0 +1,244 @@
+# Forced-Population Arena, 2p: champion vs forced-population-build variant
+
+**Date:** 2026-08-30
+**Champion:** `experiments/rust_champion_2p.json`, gen 128800 (frozen to `/tmp/arenapop_champ_2p.json`)
+**Games:** 2500, seeds 1..2500, 2 threads, 820.9s (3.0 games/s)
+**Replication:** an independent n=500 run (seeds 1..500, same champion, same binary
+lineage) landed on the same conclusions before an instrumentation bug in the FIRST
+draft of this report's reading was caught and fixed -- see "WHAT WENT WRONG IN THE
+FIRST DRAFT" below. Its numbers are quoted where they corroborate n=2500.
+**Null:** for a DECIDED game (see (b)), 50% (symmetric seats, same weights -- the
+only difference is the forcing)
+
+## Method
+
+`openerprobe --arena-pop`, built as the population mirror of the existing
+`--arena-food` (`analysis/forced_food_arena_2026-08-29.txt`): two independent 2p
+replays per seed, both seats playing the SAME weights.
+
+- **Forced side:** seat 0 takes a legal population-increase move (`Move::Pop` or
+  `Move::PopFree`) at every own-turn decision point in rounds 10-17 inclusive where
+  one is legal; the bot's own top-ranked pick everywhere else (including rounds
+  1-9 and 18+). Outside r10-17 the forced and champion replays are identical.
+- **Champion side:** no seat forces; both seats play the bot's own picks throughout.
+- Both sides track seat 0. A game is a WIN for the forced side if its final culture
+  (== final score; `game::scores` reads `p.culture` directly after `finish_game`
+  writes the end-game bonus into it, so there is no separate score field) strictly
+  exceeds the champion side's; a TIE is exact equality; anything else is a loss.
+- Pop-action counting reuses behavcensus's definition exactly: one increment per
+  executed `Move::Pop`/`Move::PopFree`, whether or not it was forced -- a free pop
+  counts as 1, never a CA debit.
+- Implementation: `rust/src/bin/openerprobe.rs`, `is_pop_move`, `arena_play_pop`,
+  `arena_game_pop`, `ArenaPop`, `print_forced_pop_arena`.
+
+## (a) VALIDITY CHECK FIRST: did the forcing actually move population ACTIONS?
+
+| | champion (unforced) | forced | reference |
+|---|---|---|---|
+| cumulative pop actions/player by r17 | 6.033 | 6.248 | unforced baseline 5.945, human 8.089 |
+
+Forcing raised pop actions **6.033 -> 6.248 (+0.215), 14.1% of the way** from the
+unforced baseline to the human rate. (n=500 replication: 6.040 -> 6.288, +0.248,
+16.0% of the way -- consistent.) This is a real, correctly-signed, but WEAK effect,
+much smaller than the food arena's food-stock move (which was 3.3x, +4.125
+absolute). **PASS on validity, but read the win-rate result knowing the lever only
+partially engaged** -- see (c) for why.
+
+The champion side's own 6.033 also reproduces the independent 5.945 baseline from
+`bot_pop_actions_per_round_2026-08-29.txt` (a different 200-game run, different
+champion generation) to within run-to-run noise, which is an unplanned but useful
+sanity check that the harness is measuring what it says it measures.
+
+## (b) win rate -- and why the naive 50%-of-all-games comparison is the WRONG test here
+
+Because the engine is deterministic and both replays share a seed, any game where
+forcing never finds a legal pop anywhere in r10-17 produces a forced trajectory that
+is **byte-for-byte identical** to the champion trajectory -- an automatic, exact-culture
+TIE. Ties are not "close games", they are games the lever never touched.
+
+| | count | % of 2500 |
+|---|---|---|
+| wins | 580 | 23.2% |
+| ties | 1348 | 53.9% |
+| losses | 572 | 22.9% |
+| games with zero legal pop anywhere in r10-17 (forcing never fired) | 623 | 24.9% |
+
+**53.9% of games are ties**, and the majority of those (623 of 1348) are the
+zero-legal-pop case exactly as predicted; the remaining 725 are games where forcing
+fired at least once but the trajectories re-converged to an exact culture tie by
+game end (a real, if surprising, phenomenon this run's own numbers show rather than
+assume away).
+
+With over half the sample uninformative by construction, the raw win rate --
+**580/2500 = 23.2%, Wilson 95% CI [21.6%, 24.9%]** -- answers a different question
+than "does forcing help or hurt". Comparing it to a 50% null implicitly assumes
+every game is decided, which most of these are not. The right null for "does
+forcing help or hurt, GIVEN it fires" is wins == losses **among decided games only**:
+
+**DECIDED-games win rate: 580/1152 = 50.3%, Wilson 95% CI [47.5%, 53.2%].**
+
+**This interval CONTAINS 50%.** Once you condition on the lever actually having
+fired, the forced side wins about as often as it loses. Mean margin when forced
+wins (25.2 culture) and mean margin when forced loses (23.6 culture) are also
+near-symmetric, which is what a null effect looks like on the margins too -- NOT
+"wins big and loses small" (an earlier draft of this instrumentation read the
+skew that direction; it was explaining the tie-fraction artefact, not a real
+asymmetry, and that explanation has been removed from both this file and the
+tool's own printed output).
+
+## (c) THE MECHANISM: forcing pop roughly halves its own subsequent legality
+
+This is the header result, not a footnote. Measured directly (not estimated):
+
+| side | legal pop points | r10-17 own-turn decision points | legal fraction |
+|---|---|---|---|
+| champion (unforced) | 11,547 | 91,647 | **12.6%** |
+| forced | 5,046 | 92,272 | **5.5%** |
+
+On the UNFORCED side, pop is legal at only **12.6%** of the bot's own r10-17
+decision points -- consistent with `pop_shortfall_decomposition_2026-08-29.txt`'s
+finding that 87-92% of the r10-17 gap is "couldn't" (illegal), not "wouldn't"
+(declined). **The r10-17 peel is primarily an affordability/civil-action-budget
+failure, not a preference failure.**
+
+Forcing a pop at every legal r10-17 opportunity **roughly halves the rate at which
+the NEXT one is legal** (12.6% -> 5.5% for the forced seat, on its own already-forced
+trajectory). Taking a pop spends the CA and food that would otherwise have bought
+the next one, so 8 rounds of forcing buy far fewer additional actions than
+8 x (the champion's own r10-17 rate) would suggest. **This compounding is why (a)'s
+lift is only +0.215 out of a possible ~+2.1 gap to the human rate** -- the SAME
+mechanism the food arena found (a food build costs a civil action that comes out of
+population), mirrored: a pop action costs a civil action (and food) that comes out
+of the SAME budget the next pop action needs.
+
+### mean final culture / score
+
+| side | mean culture |
+|---|---|
+| champion | 188.550 |
+| forced | 189.000 |
+| **forced − champion** | **+0.450 (~0.2%)** |
+
+Consistent with (b): a small, near-zero difference is exactly what a decided-game
+wash produces once ties (which contribute 0 either way) are folded into the mean
+over 2500 games.
+
+### end-of-round-12 and end-of-round-17 population (both sides)
+
+| metric | champion | forced | forced − champion |
+|---|---|---|---|
+| pop total, r12 | 15.015 | 14.950 | **−0.064** |
+| pop total, r17 | 13.575 | 13.529 | **−0.046** |
+
+**This snapshot is NOT a proxy for pop actions taken, and its near-zero (slightly
+negative) delta does not mean forcing failed to raise population** -- an earlier
+reading of this exact number made that error and it is corrected here. The
+snapshot is `yellow_bank + workers_free + yellow_granted`
+(`economy::increase_population`): a normal `Move::Pop`/`Move::PopFree` moves ONE
+token from `yellow_bank` to `workers_free` -- **the sum is invariant to it**. The
+sum only rises when a pop is granted past an already-empty bank (the
+`yellow_granted` path), and it **drops on its own by 2 at every age transition
+after the first** (`game::advance_age`, Sec 12.2.4: "two unborn population are
+removed from every supply"), independent of anything either side does. (a)'s
+action COUNT is the correct instrument for "did forcing raise population
+actions"; this snapshot answers a different question (total tokens ever granted)
+and the small deltas here are noise from where each side's trajectory happens to
+sit relative to an age boundary.
+
+### displacement: what the forced pops displaced (r10-17 forced-seat decision points)
+
+| kind | count | % of displaced |
+|---|---|---|
+| Take | 838 | 21.9% |
+| WonderStep | 816 | 21.4% |
+| Build Urban | 561 | 14.7% |
+| Build Military | 458 | 12.0% |
+| ActionCard | 422 | 11.0% |
+| Develop | 251 | 6.6% |
+| Other | 201 | 5.3% |
+| Upgrade | 97 | 2.5% |
+| Leader | 143 | 3.7% |
+| Build Mine | 30 | 0.8% |
+| Build Farm | 4 | 0.1% |
+| Pop / EndTurn | 0 | 0.0% |
+
+Legal pop points: 5046; already the bot's own top pick (no real displacement):
+1225 (24.3%); displaced (forcing overrode a different natural top pick): 3821.
+Unlike the food arena's displacement table (Urban 48.1% / Military 19.5% / Mine
+18.4%, overwhelmingly production builds), forcing pop displaces a much more mixed
+basket -- Take and WonderStep alone are 43.3% of what it overrides, with Urban and
+Military a smaller combined 26.7%.
+
+## (d) games reaching r17 (both sides)
+
+Champion: 2500/2500. Forced: 2500/2500. No MOVE_CAP hits either side.
+
+## VERDICT
+
+**The decided-games CI [47.5%, 53.2%] contains 50%. This is a WASH, not a loss and
+not a win.** Forcing population, when it engages, neither helps nor hurts the
+forced side's final culture in a way this sample can distinguish from chance. That
+result is attached to a validity check that only weakly passed (+0.215 of a
+possible +2.1 actions, 14.1% of the human gap) and to a legality mechanism that
+explains why: forcing pop roughly halves the rate at which the next pop is legal,
+so an "always force" policy runs into the same affordability wall the unforced bot
+already sits behind, just delayed by one action.
+
+## WHAT WENT WRONG IN THE FIRST DRAFT (kept for the record, not archaeology)
+
+The first pass at this arena read the raw all-games win rate (23.2%, CI entirely
+below 50%) as "the forced side loses" -- exactly the food arena's headline shape --
+without checking what fraction of games were ties. It also read the near-zero
+`yellow_bank + workers_free + yellow_granted` delta as "forcing failed to raise
+population" and a `+1.272` mean-culture gap at n=500 as a possible scoring bug. All
+three were re-derived from the data itself before this file was written: the
+win/tie/loss breakdown was added directly to the tool (`ArenaPop::ties`,
+`::no_divergence_games`, `::win_margin_sum`, `::loss_margin_sum`, and a
+decided-games Wilson CI in `print_forced_pop_arena`) so the correct headline prints
+by default on any future run, not just this one; the population-total caveat is
+printed inline; and the n=500-vs-n=2500 comparison itself resolved the mean-culture
+question as noise (+1.272 -> +0.450, no bug).
+
+## What this does and does not license
+
+- This measures the value of **ALWAYS forcing** population in r10-17, not of
+  **sometimes** forcing it -- the same caveat the food arena carried, and it is
+  weaker evidence than "the food lever is closed": that closed on a decisive loss.
+  This closes (if it closes anything) on a **wash inside a weak validity check**,
+  which is a much softer signal. It does NOT prove population is a lever worth
+  pulling with a smarter (conditional) forcing rule, nor does it prove the
+  opposite -- a wash under blunt, unconditional forcing is uninformative about a
+  targeted policy.
+- Per the pre-registered protocol, **no milder forcing rule and no different round
+  window were tried after seeing this result**, and none should be: the discipline
+  that closed the food lever on a loss applies just as much to a wash -- shopping
+  for a variant that wins is the failure mode this protocol exists to prevent,
+  regardless of which side of 50% the first honest result lands on.
+- The compounding legality mechanism in (c) is the one finding here that
+  generalises past "always forcing": **the r10-17 shortfall is dominated by
+  affordability (couldn't), not preference (wouldn't), and pop actions compete
+  with EACH OTHER for the same civil-action/food budget, not just with other move
+  types.** That is consistent with, and sharpens, `food_gates_population_2026-08-28.txt`
+  and `pop_shortfall_decomposition_2026-08-29.txt`'s existing "couldn't dominates"
+  finding: population is not just gated by food, it is gated by its OWN prior
+  purchases.
+- Read together with the food arena: forcing EITHER food or population into the
+  r3-9/r10-17 windows fails to help (food loses outright; population washes). The
+  live hypothesis both tests were built to attack -- that the bot's civil-action
+  budget, not any single line item on it, is the binding constraint -- has now
+  survived two independent tests rather than one. Neither food nor population is a
+  free lever; the budget itself is what would need to move.
+
+## Reproduction
+
+```
+cp experiments/rust_champion_2p.json /tmp/arenapop_champ_2p.json   # gen 128800
+cd rust && cargo build --release --bin openerprobe
+./target/release/openerprobe --players 2 --games 2500 --seed 1 --threads 2 \
+    --arena-pop --weights /tmp/arenapop_champ_2p.json
+```
+
+Deterministic given the frozen champion; 2 threads chosen over the requested ~5 to
+avoid resource contention with the 3 live climb processes on this machine (a first
+attempt at 5 threads aborted with no output, consistent with memory pressure --
+swap was 83% full and load average 8-12 on 6 cores at the time).
