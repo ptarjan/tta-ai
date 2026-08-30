@@ -1,0 +1,89 @@
+CLAMP_CEILING 60 -> 120: the A/B verdict
+========================================
+2026-08-30. Decision: **KEEP 120. No revert.**
+
+BACKGROUND
+==========
+On 2026-08-27 `CLAMP_CEILING` was split from `CLAMP_BLIND` and raised 60 -> 120
+(`06eb563`/`f942741`) as a deliberate experiment. The A side was frozen at
+`analysis/frozen/clamp_ceiling_2026-08-27/` (2p gen 116808, 3p gen 65450,
+4p gen 21445). The rule set in advance: if the climbed champions do not beat
+the frozen A side, revert to 60.0 -- do not split the difference.
+
+PRECONDITION: WAS THE CONSTRAINT BINDING?
+=========================================
+The naive test ("has any weight gone above 60?") was run on 2026-08-27 at 08:20
+and answered NO at all three counts while the experiment was in fact live. It
+would have produced the wrong verdict, because a freshly raised wall takes time
+to be reached and most keys never approach it.
+
+The correct test is per-key and starts from the five keys that sat at EXACTLY
+60.0000 the morning the ceiling was raised. Four of them had a measured bound
+(CLAMP_T=1.0, bound = P95_TOTAL_SPREAD[i]/spread, capped at CLAMP_CEILING)
+that now exceeds 60, so only those four were genuinely freed:
+
+  key                        count  measured bound   value on 2026-08-30
+  strength                    3p     96.76            51.32
+  attack_cost_doubled         3p    120.00            81.77
+  workers_late                4p    120.00            32.92
+  special_techs               4p    120.00            38.73
+
+  best_theater                4p     -- EXCLUDED: zero spread row, so it falls
+                                     to CLAMP_BLIND=60 and can never rise.
+
+**All four moved off exactly 60.0000, and one went through the old wall.**
+`attack_cost_doubled@3p` at 81.77 is a value that is unreachable at
+CLAMP_CEILING=60, so the raise was load-bearing and not merely permissive.
+The other three fell AWAY from the wall, which is the alive-key signature from
+`tta-ceiling-move-is-a-reachability-test`: a key pinned by a wall it does not
+care about follows the wall up, a key that was genuinely constrained comes off
+it. Zero of the four followed the wall. The precondition is met and the A/B
+measures something real.
+
+RESULT
+======
+`kindmatch`, LIVE champion against the frozen A champion of the same count,
+240 games each, run one at a time. Live champions were copied to /tmp first and
+their gen recorded, because the climb rewrites `experiments/rust_champion_Np.json`
+every few minutes.
+
+| players | live win% | null   | +/-  | games | live gen | margin over null |
+|---|---|---|---|---|---|---|
+| 2p | 59.58% | 50.00% | 6.09 | 240 | 128637 | +9.58  |
+| 3p | 48.96% | 33.33% | 6.37 | 240 |  72936 | +15.63 |
+| 4p | 34.79% | 25.00% | 6.88 | 240 |  23136 | +9.79  |
+
+Every interval clears its null:
+  2p [53.49, 65.67] excludes 50.00
+  3p [42.59, 55.33] excludes 33.33
+  4p [27.91, 41.67] excludes 25.00
+
+The nulls are the ones `kindmatch` prints itself, not assumed ones.
+
+VERDICT
+=======
+The climbed champions beat the frozen A side at all three counts, so the
+pre-registered revert condition is not met. **CLAMP_CEILING stays at 120.**
+
+WHAT THIS DOES NOT SHOW
+=======================
+This duel does not isolate the ceiling. The live side has also climbed three
+more days than the frozen side (2p 116808 -> 128637, 3p 65450 -> 72936,
+4p 21445 -> 23136), so "the raise helped" and "more generations helped" are
+confounded and this design cannot separate them. The honest statement is the
+one the decision rule asked for: the post-raise champions are not worse, so
+there is no case for reverting.
+
+The one piece of corroboration beyond that is the precondition: the climb did
+use the new room (`attack_cost_doubled@3p` = 81.77 is unreachable at 60), and
+3p -- the count carrying that key -- has the largest margin over its null
+(+15.63). That is suggestive, not decisive; a single count is one observation.
+
+REPRODUCTION
+============
+  cd rust && cargo build --profile difftest --bin kindmatch
+  cp experiments/rust_champion_2p.json /tmp/clampab_live_2p.json   # record gen
+  ./target/difftest/kindmatch --players 2 --games 240 \
+      --weights /tmp/clampab_live_2p.json \
+      --weights analysis/frozen/clamp_ceiling_2026-08-27/rust_champion_2p.json
+and the same for 3p and 4p.
