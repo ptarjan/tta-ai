@@ -1,0 +1,50 @@
+# Forced-Food Arena, 2p: champion vs forced-food-build variant
+
+**Date:** 2026-08-29
+**Champion:** `experiments/rust_champion_2p.json`, gen 128724 (snapshot `/tmp/champ_2p_1788099566.json`)
+**Games:** 2500, seeds 1..2500, 5 threads, 441 s
+**Null:** 50% (symmetric seats, same weights — the only difference is the forcing)
+
+## (a) forced side's win rate + 95% CI (Wilson)
+
+**233/2500 = 9.3%, 95% CI [8.2%, 10.5%].**
+
+## (b) mean final culture (post game-over, end-game bonus applied)
+
+| side | mean culture |
+|---|---|
+| champion | 191.653 |
+| forced | 96.708 |
+| **forced − champion** | **−94.946** |
+
+## (c) end-of-round-12 food AND population (both sides)
+
+| metric | champion | forced | forced − champion |
+|---|---|---|---|
+| food | 1.821 | 5.946 | **+4.125** |
+| population (yellow_bank + workers_free + yellow_granted) | 15.103 | 11.979 | **−3.124** |
+
+r12 reached: champion 2500/2500, forced 2500/2500.
+
+## (d) does the win-rate CI exclude the 2p null (50%)?
+
+**YES — the CI [8.2%, 10.5%] lies entirely below 50%. The forced side LOSES the arena.**
+
+## Verdict
+
+The forced-food-build variant loses 90.7% of the time against the same weights with no forcing. Forcing a legal food build/upgrade at every r3–r9 own-turn decision is a net loss: it costs 94.9 culture on average, buys +4.1 food at end of r12, but costs −3.1 population. The food the forced side accumulates does not convert into culture; the opportunity cost of the civil actions spent on food builds outweighs the food gained.
+
+The CI is entirely below 50% — this is not a wash. The forced side does not clear the null.
+
+## Method
+
+`openerprobe --arena-food`: two independent 2p replays per seed, both seats play the same weights.
+- **Forced side:** seat 0 takes a legal r3–r9 food build/upgrade (`is_food_build_move`) at every own-turn decision; bot's own picks everywhere else.
+- **Champion side:** no seat forces; both seats play the bot's own picks.
+- Both sides track seat 0. Winner = higher final `culture` after `game_over`.
+- End-of-r12 snapshot: `last_end_of_turn_food` after the tracked seat's last r12 end-of-turn credit/consumption. Population = `yellow_bank + workers_free + yellow_granted` (supply + board + out-of-bank grants).
+
+## Caveats
+
+- The forcing rule is the same lever used in the food-upstream job (`live_counterfactual`): take a legal food build/upgrade at every r3–r9 own-turn decision. This is a blunt instrument — it does not distinguish between "this food build is a good investment" and "this food build is a waste of a civil action." The result measures the value of *always* forcing, not the value of *sometimes* forcing.
+- The −3.1 population gap is the mechanism: food builds spend civil actions that the champion side spends on population increases. Fewer workers means less production, less happy, more famine risk — a compounding disadvantage that the +4.1 food at r12 cannot offset.

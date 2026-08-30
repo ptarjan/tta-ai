@@ -1363,6 +1363,119 @@ fn run_food_counterfactual(
     (reached, false, forced_r12, original_reached, original_r12)
 }
 
+/// One seat's replay of a whole-game 2p match where BOTH seats play the SAME
+/// weights. `forced_seat` is the seat index that takes a legal food
+/// build/upgrade at every r3-r9 own-turn decision (the `live_counterfactual`
+/// lever); the OTHER seat never forces. The ONLY difference between the
+/// champion side and the forced side is which seat forces. Returns
+/// `(final_culture, food_at_end_r12, pop_at_end_r12, reached_end_r12)` for
+/// the seat the caller tracks (`track_seat`):
+/// - `final_culture`: that player's `culture` field after `game_over` flips
+///   (post final-scoring, the end-game bonus already applied -- the quantity
+///   the winner is decided by).
+/// - `food_at_end_r12`: end-of-round-12 food stock, the same snapshot
+///   convention as the upstream job (`last_end_of_turn_food` after the last
+///   r12 end-of-turn credit/consumption).
+/// - `pop_at_end_r12`: the tracked player's TOTAL population (supply +
+///   board) at that instant: `yellow_bank + workers_free + yellow_granted`.
+///   `yellow_bank` is the Population Bank (supply), `workers_free` is the
+///   workers placed on the board (the placed population), and `yellow_granted`
+///   is bookkeeping for granted tokens that outlived an already-empty bank
+///   (see `economy::increase_population`'s doc: "the board is the population,
+///   not the bank"). The sum is the actual token count, which is what the
+///   journal's "increases population" line counts.
+/// - `reached_end_r12`: whether the tracked seat hit an r12 EndTurn (should
+///   always be true on a 2p game that runs to game-over).
+fn arena_play(
+    weights: Weights,
+    seed: u64,
+    forced_seat: Option<u8>,
+    track_seat: u8,
+) -> (u16, u16, u16, bool) {
+    let players: u8 = 2;
+    let bots: Vec<WeightedBot> = (0..players).map(|_| WeightedBot::new(weights)).collect();
+    let mut state = game::new_game(players, seed);
+    let mut food_at_end_r12: Option<u16> = None;
+    let mut pop_at_end_r12: Option<u16> = None;
+    let mut moves_played = 0usize;
+    while !state.game_over && moves_played < MOVE_CAP {
+        let idx = state.decider();
+        let pending = !state.pending.is_empty();
+        let legal = legal::legal_moves(&state);
+        let own_turn = legal.as_slice().iter().any(|m| matches!(m, Move::EndTurn));
+        let round = state.round;
+        let ranked = bots[idx as usize].rank_moves(&state, legal.as_slice());
+        // Only `forced_seat` (if any) takes the food-build lever; the other
+        // seat is the pure champion policy. This is what makes the two arena
+        // sides differ ONLY by the forcing. `forced_seat = None` is the
+        // champion side: no seat ever forces.
+        let mv = if Some(idx) == forced_seat && own_turn && !pending && (3..=9).contains(&round) {
+            ranked
+                .iter()
+                .position(|&(m, _)| is_food_build_move(m))
+                .map(|pos| ranked[pos].0)
+                .unwrap_or(ranked[0].0)
+        } else if pending {
+            bots[idx as usize].choose(&state, legal.as_slice())
+        } else {
+            ranked[0].0
+        };
+        if pending {
+            tta::interact::apply_pending(&mut state, mv);
+        } else {
+            game::step(&mut state, mv);
+        }
+        if food_at_end_r12.is_none()
+            && pop_at_end_r12.is_none()
+            && idx == track_seat
+            && own_turn
+            && !pending
+            && round == 12
+            && mv == Move::EndTurn
+        {
+            // The tracked seat's OWN end-of-round-12 snapshot: `last_end_of_turn_food`
+            // is updated by `game::step` right after this player's end-of-turn
+            // credit/consumption runs, so reading it here (post-step) captures
+            // exactly the state after the last r12 end-of-turn for THIS seat.
+            let p = &state.players[idx as usize];
+            food_at_end_r12 = state
+                .last_end_of_turn_food[idx as usize]
+                .or(Some(p.food));
+            pop_at_end_r12 = Some(
+                u16::from(p.yellow_bank) + u16::from(p.workers_free) + u16::from(p.yellow_granted),
+            );
+        }
+        moves_played += 1;
+    }
+    let p = &state.players[track_seat as usize];
+    (
+        p.culture,
+        food_at_end_r12.unwrap_or(0),
+        pop_at_end_r12.unwrap_or(0),
+        food_at_end_r12.is_some(),
+    )
+}
+
+/// One side's arena numbers: `(final_culture, food_at_end_r12, pop_at_end_r12,
+/// reached_end_r12)`.
+type ArenaSide = (u16, u16, u16, bool);
+
+/// The per-game arena outcome. Both sides play the SAME weights; the only
+/// difference is the forcing. The forced side's replay has seat 0 take a
+/// legal r3-r9 food build (the champion side's replay has NO seat forcing).
+/// Both replays track seat 0 so the comparison is apples-to-apples on the
+/// same seat. The forced side wins if its final culture exceeds the
+/// champion side's; a tie is a non-win. Returns `(forced_won, champ, forced)`.
+fn arena_game(weights: Weights, seed: u64) -> (bool, ArenaSide, ArenaSide) {
+    // Forced side: seat 0 forces, track seat 0's numbers.
+    let forced = arena_play(weights, seed, Some(0), 0);
+    // Champion side: no seat forces, track seat 0 (the same seat the forced
+    // side occupies) so the comparison is apples-to-apples.
+    let champ = arena_play(weights, seed, None, 0);
+    let forced_won = forced.0 > champ.0;
+    (forced_won, champ, forced)
+}
+
 #[derive(Default, Clone)]
 struct R1MarginStats {
     /// Round-1 own-turn decision points at which BOTH a Take and an EndTurn
@@ -1923,6 +2036,111 @@ fn record_food_decision(
 // ---------------------------------------------------------------------
 
 // ---------------------------------------------------------------------
+// --arena-food: the 2p forced-food arena (champion vs forced-food variant)
+// ---------------------------------------------------------------------
+
+/// Aggregated result of the 2p forced-food arena over `games` games.
+/// `forced_wins` is the number of games the forced side (seat 0, forces r3-r9
+/// food builds) won; `total` is the number of games played. Culture and r12
+/// food/pop are summed per side for the means.
+#[derive(Default)]
+struct ArenaFood {
+    total: u64,
+    forced_wins: u64,
+    champ_culture_sum: u64,
+    forced_culture_sum: u64,
+    champ_food_r12_sum: u64,
+    forced_food_r12_sum: u64,
+    champ_pop_r12_sum: u64,
+    forced_pop_r12_sum: u64,
+    champ_reached_r12: u64,
+    forced_reached_r12: u64,
+}
+
+impl ArenaFood {
+    fn record(&mut self, forced_won: bool, champ: (u16, u16, u16, bool), forced: (u16, u16, u16, bool)) {
+        self.total += 1;
+        if forced_won {
+            self.forced_wins += 1;
+        }
+        self.champ_culture_sum += u64::from(champ.0);
+        self.forced_culture_sum += u64::from(forced.0);
+        self.champ_food_r12_sum += u64::from(champ.1);
+        self.forced_food_r12_sum += u64::from(forced.1);
+        self.champ_pop_r12_sum += u64::from(champ.2);
+        self.forced_pop_r12_sum += u64::from(forced.2);
+        if champ.3 {
+            self.champ_reached_r12 += 1;
+        }
+        if forced.3 {
+            self.forced_reached_r12 += 1;
+        }
+    }
+}
+
+/// Wilson score 95% confidence interval for a binomial proportion. The
+/// standard interval used for win-rate CIs in small samples -- it does not
+/// degenerate at 0 or 1 the way the normal approximation does.
+fn wilson_ci95(wins: u64, total: u64) -> (f64, f64) {
+    if total == 0 {
+        return (0.0, 0.0);
+    }
+    let p = wins as f64 / total as f64;
+    let n = total as f64;
+    let z = 1.959963984540054; // 95% two-sided
+    let z2 = z * z;
+    let denom = 1.0 + z2 / n;
+    let center = (p + z2 / (2.0 * n)) / denom;
+    let half = z * ((p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt()) / denom;
+    (center - half, center + half)
+}
+
+/// Prints the forced-food arena result: (a) forced win rate + 95% CI, (b) mean
+/// final culture both sides, (c) end-of-r12 food AND population both sides,
+/// (d) whether the CI excludes 50% (the 2p null). Pure function.
+fn print_forced_food_arena(a: &ArenaFood) {
+    let total = a.total.max(1);
+    let win_rate = a.forced_wins as f64 / total as f64;
+    let (lo, hi) = wilson_ci95(a.forced_wins, a.total);
+    let champ_culture = a.champ_culture_sum as f64 / total as f64;
+    let forced_culture = a.forced_culture_sum as f64 / total as f64;
+    let champ_food = a.champ_food_r12_sum as f64 / total as f64;
+    let forced_food = a.forced_food_r12_sum as f64 / total as f64;
+    let champ_pop = a.champ_pop_r12_sum as f64 / total as f64;
+    let forced_pop = a.forced_pop_r12_sum as f64 / total as f64;
+
+    println!("\n## FORCED-FOOD ARENA 2p (n={} games)  [MARKER_FORCED_FOOD_ARENA_LATEST]", a.total);
+    println!(
+        "  champion = no forcing; forced = takes a legal r3-r9 food build/upgrade at every own-turn decision.\n  \
+         Same weights both sides; the ONLY difference is the forcing. Forced side = seat 0.\n  \
+         2p null is 50% (symmetric seats, same weights)."
+    );
+
+    println!("\n### (a) forced side's win rate + 95% CI (Wilson)");
+    println!("  forced wins {}/{} = {:.3}  95% CI [{:.3}, {:.3}]", a.forced_wins, total, win_rate, lo, hi);
+
+    println!("\n### (b) mean FINAL culture (post game-over, end-game bonus applied)");
+    println!("  champion: {:.3}   forced: {:.3}   (forced - champ: {:+.3})", champ_culture, forced_culture, forced_culture - champ_culture);
+
+    println!("\n### (c) end-of-round-12 food AND population (both sides)");
+    println!("  food:  champion {:.3}   forced {:.3}   (forced - champ: {:+.3})", champ_food, forced_food, forced_food - champ_food);
+    println!("  pop:   champion {:.3}   forced {:.3}   (forced - champ: {:+.3})", champ_pop, forced_pop, forced_pop - champ_pop);
+    println!(
+        "  (r12 reached: champ {}/{}  forced {}/{})",
+        a.champ_reached_r12, total, a.forced_reached_r12, total
+    );
+
+    println!("\n### (d) does the win-rate CI exclude the 2p null (50%)?");
+    if lo > 0.5 {
+        println!("  YES -- the CI [{:.3}, {:.3}] lies entirely ABOVE 50%: the forced side WINS the arena.", lo, hi);
+    } else if hi < 0.5 {
+        println!("  YES -- the CI [{:.3}, {:.3}] lies entirely BELOW 50%: the forced side LOSES the arena.", lo, hi);
+    } else {
+        println!("  NO -- the CI [{:.3}, {:.3}] straddles 50%: the forced side does NOT clear the 2p null.", lo, hi);
+    }
+}
+
+// ---------------------------------------------------------------------
 // --foodprobe: the r3-r17 food-supply upstream decomposition
 // ---------------------------------------------------------------------
 
@@ -2138,6 +2356,13 @@ struct Args {
     /// probe (`food_supply_by_round` / `food_builds_r3_9`) instead of the
     /// r10-17 pop decomposition. See `FoodSupplyByRound`'s doc.
     food_probe: bool,
+    /// 2p forced-food ARENA: the champion plays a variant of the SAME
+    /// weights that takes a legal food build/upgrade at every r3-r9 own-turn
+    /// decision (bot's own picks everywhere else). The ONLY difference between
+    /// the two sides is the forcing. Plays to game-over and reports the
+    /// forced side's win rate + CI, mean final culture both sides, and
+    /// end-of-r12 food/pop both sides. See `play_forced_food_arena`.
+    arena_food: bool,
 }
 
 impl Default for Args {
@@ -2150,6 +2375,7 @@ impl Default for Args {
             threads: 1,
             whole: false,
             food_probe: false,
+            arena_food: false,
         }
     }
 }
@@ -2167,6 +2393,12 @@ usage: openerprobe --weights PATH [options]
   --foodprobe     play the whole game; prints the r3-r17 food-supply
                   upstream decomposition (production/consumption, techs in
                   play, food-build declines at r3-r9, r12 counterfactual)
+  --arena-food    2p forced-food arena: champion vs a variant of the SAME
+                  weights that takes a legal food build/upgrade at every
+                  r3-r9 own-turn decision (only difference = the forcing).
+                  Plays to game-over; prints the forced side's win rate +
+                  CI, mean final culture both sides, end-of-r12 food/pop
+                  both sides. 2p only.
   --help
 ";
 
@@ -2185,6 +2417,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--threads" => a.threads = value(flag)?.parse().map_err(|_| "bad --threads".to_string())?,
             "--whole" => a.whole = true,
             "--foodprobe" => a.food_probe = true,
+            "--arena-food" => a.arena_food = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -2197,6 +2430,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.food_probe {
         a.whole = true;
+    }
+    if a.arena_food && a.players != 2 {
+        return Err("--arena-food is 2p only (null is 50% under symmetric seats)".to_string());
     }
     if a.weights_path.is_empty() {
         return Err("--weights is required".to_string());
@@ -2502,6 +2738,47 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // --arena-food is a self-contained 2p mode: it does not share the
+    // rounds-1-3 `Report` pipeline, so run it in its own parallel loop and
+    // return before the normal dispatch below.
+    if args.arena_food {
+        let start = Instant::now();
+        let next = AtomicUsize::new(0);
+        let threads = args.threads.min(args.games);
+        let mut arena = ArenaFood::default();
+        let arena_lock = std::sync::Mutex::new(std::mem::take(&mut arena));
+        std::thread::scope(|scope| {
+            let (args, next, weights, arena_lock) = (&args, &next, &weights, &arena_lock);
+            let mut handles = Vec::with_capacity(threads);
+            for _ in 0..threads {
+                handles.push(scope.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= args.games {
+                        return;
+                    }
+                    let seed = args.seed.wrapping_add(i as u64);
+                    let (forced_won, champ, forced) = arena_game(*weights, seed);
+                    arena_lock
+                        .lock()
+                        .expect("arena lock poisoned")
+                        .record(forced_won, champ, forced);
+                }));
+            }
+            for h in handles {
+                h.join().expect("arena thread panicked");
+            }
+        });
+        let elapsed = start.elapsed().as_secs_f64();
+        println!("games        {}", args.games);
+        println!("players      {}", args.players);
+        println!("weights      {}", args.weights_path);
+        println!("seeds        {}..{}", args.seed, args.seed + args.games as u64 - 1);
+        println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
+        let arena = arena_lock.into_inner().expect("arena lock poisoned");
+        print_forced_food_arena(&arena);
+        return ExitCode::SUCCESS;
+    }
 
     let start = Instant::now();
     let next = AtomicUsize::new(0);
