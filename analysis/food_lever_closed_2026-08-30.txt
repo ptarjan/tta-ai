@@ -1,0 +1,142 @@
+The food lever is CLOSED: the FoodRate NonNegative floor will not be landed
+===========================================================================
+2026-08-30. Decision: **do not land the `FoodRate => NonNegative` sign_intent.**
+
+This closes a chain queued since 2026-08-27 (`analysis/opener_recheck_2026-08-27.txt`,
+`c47e3df`) and gated in turn on the clamp-ceiling A/B, on a collinearity check, and
+finally on a forced-food arena. The precondition checks all PASSED. The arena did not,
+and it is the one that decides.
+
+
+1. THE ARENA RESULT
+===================
+`analysis/forced_food_arena_2026-08-29.txt` (`099371c`), 2p, 2500 games, champion
+gen 128724, both seats playing the SAME weights; the only difference is that the
+forced seat takes a legal food build/upgrade at every r3-r9 own-turn decision.
+
+  forced side wins 233/2500 = 9.3%, 95% CI (Wilson) [8.2%, 10.5%]
+  null 50% (symmetric seats, identical weights)
+  mean final culture: champion 191.653, forced 96.708   (forced - champ -94.946)
+  end-of-r12 food:    champion   1.821, forced  5.946   (+4.125)
+  end-of-r12 pop:     champion  15.103, forced 11.979   (-3.124)
+
+The interval lies entirely below the null. This is not a wash; forcing food loses
+nine games in ten.
+
+**The (c) check passes, which is what makes the result usable.** The pre-registered
+worry was that the forcing might not actually move food, in which case a win rate
+would measure nothing. It moved food from 1.821 to 5.946 -- 3.3x, +4.125 absolute.
+It undershot the 8.00 the human curve suggested, because the forcing only fires where
+a food build is LEGAL, so it is a partial forcing. But it is a large real shift in
+the intended direction, and the loss is attached to it.
+
+The mechanism is stated by the same table: the food is bought with civil actions, and
+the civil actions come out of population. -3.1 population at r12 against +4.1 food.
+That is the ledger `analysis/food_supply_upstream_2026-08-29.txt` already priced --
+the forced builds displace Urban 48.1% / Military 19.5% / Mine 18.4% -- and it agrees
+with `tta-farm-loses-on-strength-not-food`, which found food_rate to be 2.5% of a
++7.97 farm-vs-mine margin, arrived at by a completely different method.
+
+
+2. THE FLOOR'S MOTIVATION HAS ALSO EVAPORATED ON ITS OWN
+========================================================
+Independently of the arena, the weight the floor was meant to constrain is no longer
+where the proposal found it. Live champions, read 2026-08-30:
+
+  count  gen      food_rate   resource_rate  food_stock  famine_deficit  free_workers
+  2p     128753   -0.0567     +0.1100        +0.0642     -0.0266         +0.5748
+  3p      73000   -0.1350     +6.4463        +38.8754    -0.1011         +6.2572
+  4p      23169   +0.1726     +0.3351        +0.1776     -0.0211         -0.5692
+
+The proposal was written against 2p `food_rate` = **-1.0516** and argued that the
+climb prices food as an active liability, which the rules forbid. Today all three
+arms sit within +/-0.18 of zero, and 4p is positive. The bot does not price food as
+bad. It prices food as **nothing**.
+
+This is not a global rescaling artefact -- that was checked, because a dot-product
+eval is invariant to scaling the whole vector and comparing raw magnitudes across
+generations would be a trap. Against the frozen 2p A-side champion (gen 116808) the
+whole 174-key vector shrank only to 0.643 of its norm (106.31 -> 68.35), while:
+
+  key            frozen      live      live rescaled to the frozen norm
+  food_rate      -1.0516    -0.0567    -0.0883     <- 12x toward zero
+  food_stock     +0.7428    +0.0642    +0.0998     <- 7x toward zero
+  free_workers   +6.3142    +0.5748    +0.8941     <- 7x toward zero
+  strength      +15.2298    +9.1623   +14.2507     <- essentially unmoved
+  end_turn_bias  -2.3476    -3.3349    -5.1869     <- grew
+
+So the food family specifically decayed while `strength` held its share of the
+vector. Scale-corrected, `food_rate@2p` is -0.088 against a vector norm of 68: about
+0.13% of the champion. A `NonNegative` gate would move it from -0.088 to 0.0.
+
+
+3. WHY THAT SETTLES IT
+======================
+Three arguments, any one of which is sufficient, and they are independent:
+
+(a) **The chain it was meant to open is refuted.** The floor's value was never the
+    0.09; it was that food would convert into population and then into culture. The
+    arena bought +4.1 food directly and got -94.9 culture. Whatever is wrong with
+    this bot, more food is not the missing piece.
+
+(b) **The intervention is unmeasurable.** An 0.09 move in a 68-norm vector cannot
+    flip a decision. `analysis/farm_vs_mine_decomposition_2026-08-28.txt` (`33b3d76`)
+    already computed that food would have to reach roughly +0.494 to make the
+    Farm/Mine pair competitive; a floor at 0.0 cannot get there by construction.
+    Corrected Age-A arithmetic (`2d4e83e` + `7d3b350`) puts the 2p gap at -0.761 with
+    both sides positive -- a RANKING failure, not an absolute-value failure, which a
+    floor at zero does not address either.
+
+(c) **A sign_intent is irreversible and this one is unfalsifiable.** Per
+    `tta-sign-gate-snaps-to-zero` the gate is the one decision the climb cannot undo:
+    it pins the key at 0.0 forever. Landing an irreversible constraint whose effect
+    is below the noise floor means the A/B it was promised can never resolve, and the
+    repo carries a permanent restriction it can never re-test. That is a bad trade
+    even if the constraint is philosophically correct.
+
+The rules argument itself is NOT withdrawn. More food production is still never bad
+by the rules -- corruption is levied on the blue bank (Sec 6.2), food is the
+shortfall buffer (Sec 6.6 3b), a consumption shortfall costs 4 culture per missing
+food (Sec 6.6 3d), and no negative `food`/`foodProduction` field exists anywhere in
+base-2015 card data (`89141ca`, audited `8d1ad71`). A negative `food_rate` weight is
+still a fit the rules do not license. It is simply too small to be worth an
+irreversible gate, and the behaviour it was blamed for is not caused by it.
+
+Both preconditions that were cleared, for the record, so nobody re-runs them:
+  - collinearity: `analysis/food_family_collinearity_2026-08-28.txt` (`5277728`).
+    Eight food readers enumerated; `FamineDeficit` is a strict function of
+    FoodStock+FoodRate and silent outside the famine zone; the only wide sink is
+    `FoodStock`, large positive on both converged arms. No collinear neighbour was
+    expressing "food is bad", so the floor WOULD have been a real intervention rather
+    than a relabelling. That check stands; it just no longer matters.
+  - the clamp-ceiling A/B it was blocked behind closed on 2026-08-30
+    (`analysis/clamp_ceiling_ab_2026-08-30.txt`, `3c0ee2a` + `7af9635`).
+
+
+4. WHAT SURVIVES, AND WHAT DOES NOT
+===================================
+UNCHANGED and still true -- these are measurements, and the arena does not touch them:
+  - The bot's food production runs backwards from round 2 while the human curve
+    climbs 2.00 -> 4.95 (`de5f526`).
+  - Food is the binding reason at >= 39.7% of pop-illegal decision points, 44.5%
+    late (`b4e1296`).
+  - The Farm is legal at 1682 opener + 1405 mid-game decisions and chosen zero times.
+  - `bestMine` is 1.00 in all 21 sampled rounds; the bot never upgrades mine tech.
+
+REFUTED as a LEVER:
+  - "Buy more food and the population/culture follows." Directly tested, directly
+    lost. Food bought with civil actions is a net -94.9 culture at 2p.
+
+The correct reading of the two survivors together is that the food shortage is a
+SYMPTOM of the civil-action and population economy, not an input to it. The bot is
+food-poor because it is small ([[tta-bot-is-small-not-militarised]]) and runs at zero
+worker slack, not small because it is food-poor. Every remaining food finding should
+be filed under the economy, not under food.
+
+Per the dispatch, no milder forcing rule was sought after the loss, and none should
+be: the point of pre-registering "a loss is the valuable result" is that you do not
+go shopping for a variant that wins.
+
+DO NOT re-open the food lever without a mechanism that gets food WITHOUT spending a
+civil action on it. That is the only door the arena leaves open, and nobody has
+proposed one.
