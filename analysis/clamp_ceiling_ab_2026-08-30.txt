@@ -31,14 +31,31 @@ that now exceeds 60, so only those four were genuinely freed:
   best_theater                4p     -- EXCLUDED: zero spread row, so it falls
                                      to CLAMP_BLIND=60 and can never rise.
 
-**All four moved off exactly 60.0000, and one went through the old wall.**
-`attack_cost_doubled@3p` at 81.77 is a value that is unreachable at
-CLAMP_CEILING=60, so the raise was load-bearing and not merely permissive.
-The other three fell AWAY from the wall, which is the alive-key signature from
-`tta-ceiling-move-is-a-reachability-test`: a key pinned by a wall it does not
-care about follows the wall up, a key that was genuinely constrained comes off
-it. Zero of the four followed the wall. The precondition is met and the A/B
-measures something real.
+**All four moved off exactly 60.0000**, so the precondition is met: the climb
+did not simply ignore the room it was given, and the A/B is not measuring a
+constraint nobody touched.
+
+But read WHICH way each one moved, per
+`tta-ceiling-move-is-a-reachability-test`: a key with a real fitness gradient,
+released from a wall, moves to where fitness wants it; a key with no gradient
+random-walks and tracks whatever wall exists.
+
+  strength@3p         60 -> 51.32  fell off the wall   -> live gradient
+  workers_late@4p     60 -> 32.92  fell off the wall   -> live gradient
+  special_techs@4p    60 -> 38.73  fell off the wall   -> live gradient
+  attack_cost_doubled@3p  60 -> 120 -> 81.77           -> followed the wall up
+
+**Three of the four settled BELOW 60.** They would have been unconstrained at
+a ceiling of 60. The only key that occupies the new room above 60 is
+`attack_cost_doubled@3p`, and that is precisely the key already identified as
+DEAD in `05fba33` -- on 2026-08-28 it had followed the raise from exactly 60.0
+to exactly 120.0, the no-gradient signature, on a Gandhi-only flag. Its 81.77
+today is drift below the new wall, not a live key exercising new headroom.
+
+So the mechanism evidence does NOT support "the raise was load-bearing".
+Every key with a demonstrated gradient chose a value the old ceiling already
+allowed. That is an argument for reverting on mechanism, and it is recorded
+here as such -- it just is not the question the pre-registered rule asked.
 
 RESULT
 ======
@@ -74,10 +91,24 @@ confounded and this design cannot separate them. The honest statement is the
 one the decision rule asked for: the post-raise champions are not worse, so
 there is no case for reverting.
 
-The one piece of corroboration beyond that is the precondition: the climb did
-use the new room (`attack_cost_doubled@3p` = 81.77 is unreachable at 60), and
-3p -- the count carrying that key -- has the largest margin over its null
-(+15.63). That is suggestive, not decisive; a single count is one observation.
+Nor is there corroborating mechanism evidence, as the precondition section
+says: the three keys with demonstrated gradients all settled below 60, and the
+only occupant of the new room is a key already shown to be dead. If the raise
+is helping, it is not helping through any of the four keys it demonstrably
+freed.
+
+The decision therefore rests entirely on the pre-registered rule, which is the
+point of pre-registering it. Reverting now on the mechanism argument would be
+choosing which evidence to honour AFTER seeing both -- the same move as
+splitting the difference, which the brief ruled out for the same reason.
+
+WHAT WOULD SETTLE IT
+====================
+A ceiling test that is not confounded by elapsed generations: fork one arm at
+a fixed champion and run 60 vs 120 forward from the SAME gen for the same
+wall-clock, rather than comparing a climbed champion against a frozen one.
+Until that exists, "keep 120" means "no evidence to revert on", not "the raise
+works".
 
 REPRODUCTION
 ============
