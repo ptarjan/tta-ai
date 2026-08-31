@@ -1282,6 +1282,313 @@ fn is_pop_move(m: Move) -> bool {
     matches!(m, Move::Pop { .. } | Move::PopFree)
 }
 
+// ------------------------------------------------------------------
+// r10-17 pop-illlegality probe
+// ------------------------------------------------------------------
+
+/// Constraint indices for the r10-17 pop-illlegality co-occurrence table.
+const C_CA: usize = 0;
+const C_FOOD: usize = 1;
+const C_BANK: usize = 2;
+const C_PF: usize = 3;
+const C_N: usize = 4;
+
+/// What the CAs were spent on THIS turn (only recorded when `C_CA` binds).
+const SP_DEVELOP: usize = 0;
+const SP_BUILD: usize = 1;
+const SP_POP: usize = 2;
+const SP_TAKE: usize = 3;
+const SP_OTHER: usize = 4;
+const SP_N: usize = 5;
+
+/// Aggregated r10-17 pop-illlegality statistics over `games` games.
+#[derive(Default)]
+struct PopIllegal {
+    total_window: u64,
+    illegal: u64,
+    legal: u64,
+    raw: [u64; C_N],
+    mask_count: Vec<u64>,
+    counterfactual: [u64; C_N],
+    round_window: [u64; 8],
+    round_illegal: [u64; 8],
+    round_raw: [[u64; C_N]; 8],
+    spent: [u64; SP_N],
+    games_no_window: u64,
+    games: u64,
+}
+
+impl PopIllegal {
+    fn new() -> Self {
+        PopIllegal {
+            mask_count: vec![0u64; 1 << C_N],
+            ..Default::default()
+        }
+    }
+}
+
+/// Classify a move into a CA-spending category for the "what were the CAs
+/// spent on" breakdown. Returns `None` for moves that are not CA spenders
+/// (pending sub-decisions, EndTurn, etc.).
+fn ca_spent_category(m: &Move) -> Option<usize> {
+    match m {
+        Move::Develop { .. } | Move::Upgrade { .. } => Some(SP_DEVELOP),
+        Move::Build { .. } => Some(SP_BUILD),
+        Move::Pop { .. } | Move::PopFree => Some(SP_POP),
+        Move::Take { .. } => Some(SP_TAKE),
+        Move::WonderStep { .. }
+        | Move::Revolution { .. }
+        | Move::PlayLeader { .. }
+        | Move::PlayAction { .. }
+        | Move::Destroy { .. }
+        | Move::PlayTactic { .. }
+        | Move::CopyTactic { .. }
+        | Move::Aggression { .. }
+        | Move::War { .. }
+        | Move::OfferPact { .. }
+        | Move::CancelPact { .. }
+        | Move::PrepareEvent { .. }
+        | Move::RemoveLeaderYellow
+        | Move::ColumbusColonize { .. }
+        | Move::Barbarossa { .. }
+        | Move::BachTheater { .. }
+        | Move::TradeFoodAsResource
+        | Move::TradeResourceAsFood
+        | Move::Churchill { .. } => Some(SP_OTHER),
+        Move::Bid { .. }
+        | Move::BidPass
+        | Move::Defend { .. }
+        | Move::DefendDone
+        | Move::SendUnit { .. }
+        | Move::SendBonus { .. }
+        | Move::SendDiscard { .. }
+        | Move::SendDone
+        | Move::Choose { .. }
+        | Move::EndTurn
+        | Move::PolPass
+        | Move::Resign => None,
+    }
+}
+
+/// Analyze one own-turn decision point in r10-17 for the tracked seat,
+/// recording every constraint that makes a population move illegal and the
+/// per-constraint counterfactual.
+fn pop_illegal_analyze(
+    state: &GameState,
+    p: &PlayerState,
+    legal: &[Move],
+    turn_kinds: &[usize],
+    out: &mut PopIllegal,
+) {
+    out.total_window += 1;
+    let ri = state.round as usize - 10;
+    if (0..8).contains(&ri) {
+        out.round_window[ri] += 1;
+    }
+    let has_pop = legal.iter().any(|m| is_pop_move(*m));
+    if has_pop {
+        out.legal += 1;
+        return;
+    }
+    out.illegal += 1;
+    if (0..8).contains(&ri) {
+        out.round_illegal[ri] += 1;
+    }
+
+    let ca = costs::spare_ca(p);
+    let bank = p.yellow_bank;
+    let base = economy::pop_cost_base(bank);
+    let s = effects::state_stats(state, p);
+    let one_time = p.one_time_discount.pop_food as i32;
+
+    let ca_bind = ca < 1 && !costs::civil_life_ca_free(p.one_time_discount.pop_food);
+    let bank_bind = base.is_none();
+    let food_cost = match base {
+        Some(b) => ((b as i32) - one_time - s.pop_food_discount).max(0),
+        None => 0,
+    };
+    let food_bind = !bank_bind && (p.food as i32) < food_cost;
+
+    let pf_available = s.free_pop_per_turn && !p.ocean_liners_used && bank > 0;
+    let pf_bind = pf_available && p.food < 1;
+
+    let mask = (ca_bind as u64) << C_CA
+        | (food_bind as u64) << C_FOOD
+        | (bank_bind as u64) << C_BANK
+        | (pf_bind as u64) << C_PF;
+    out.mask_count[mask as usize] += 1;
+    for i in 0..C_N {
+        if mask & (1 << i) != 0 {
+            out.raw[i] += 1;
+            if (0..8).contains(&ri) {
+                out.round_raw[ri][i] += 1;
+            }
+        }
+    }
+
+    let paid_legal = |ca_ok: bool, food_ok: bool| ca_ok && food_ok && base.is_some();
+    let pf_legal = |bank_ok: bool, food_ok: bool| {
+        s.free_pop_per_turn && !p.ocean_liners_used && bank_ok && food_ok
+    };
+
+    let cf_ca = paid_legal(true, p.food as i32 >= food_cost) || pf_legal(bank > 0, p.food >= 1);
+    let cf_food = paid_legal(
+        ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food),
+        true,
+    ) || pf_legal(bank > 0, true);
+    let cf_bank = paid_legal(
+        ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food),
+        p.food as i32 >= 0,
+    ) || pf_legal(true, p.food >= 1);
+    let cf_pf = paid_legal(
+        ca >= 1 || costs::civil_life_ca_free(p.one_time_discount.pop_food),
+        p.food as i32 >= food_cost,
+    ) || pf_legal(bank > 0, true);
+
+    out.counterfactual[C_CA] += cf_ca as u64;
+    out.counterfactual[C_FOOD] += cf_food as u64;
+    out.counterfactual[C_BANK] += cf_bank as u64;
+    out.counterfactual[C_PF] += cf_pf as u64;
+
+    if ca_bind {
+        if turn_kinds.is_empty() {
+            out.spent[SP_OTHER] += 1;
+        } else {
+            out.spent[*turn_kinds.last().unwrap()] += 1;
+        }
+    }
+}
+
+/// Play one 2p game and collect r10-17 pop-illlegality data for the tracked
+/// seat (seat 0).
+fn pop_illegal_play(weights: Weights, seed: u64, out: &mut PopIllegal) {
+    let players: u8 = 2;
+    let bot = WeightedBot::new(weights);
+    let mut state = game::new_game(players, seed);
+    let mut moves_played = 0usize;
+    let mut had_window = false;
+    let mut turn_kinds: Vec<usize> = Vec::new();
+    while !state.game_over && moves_played < MOVE_CAP {
+        let idx = state.decider();
+        let pending = !state.pending.is_empty();
+        let legal = legal::legal_moves(&state);
+        let own_turn = legal.as_slice().iter().any(|m| matches!(m, Move::EndTurn));
+        let round = state.round;
+        let in_window = idx == 0 && own_turn && !pending && (10..=17).contains(&round);
+        if in_window {
+            had_window = true;
+            pop_illegal_analyze(&state, &state.players[0], legal.as_slice(), &turn_kinds, out);
+        }
+        let mv = if pending {
+            bot.choose(&state, legal.as_slice())
+        } else {
+            let ranked = bot.rank_moves(&state, legal.as_slice());
+            ranked[0].0
+        };
+        if idx == 0 && !pending && mv != Move::EndTurn {
+            if let Some(cat) = ca_spent_category(&mv) {
+                turn_kinds.push(cat);
+            }
+        }
+        if pending {
+            tta::interact::apply_pending(&mut state, mv);
+        } else {
+            game::step(&mut state, mv);
+            if idx == 0 && mv == Move::EndTurn {
+                turn_kinds.clear();
+            }
+        }
+        moves_played += 1;
+    }
+    if !had_window {
+        out.games_no_window += 1;
+    }
+    out.games += 1;
+}
+
+const CONSTRAINT_NAMES: [&str; C_N] = ["CA", "FOOD", "BANK", "PopFree"];
+const SPENT_NAMES: [&str; SP_N] = ["develop", "build", "pop", "take", "other/unknown"];
+
+fn print_pop_illlegal(out: &PopIllegal) {
+    println!("[MARKER_POP_ILLEGAL_LATEST]");
+    println!("games          {}", out.games);
+    println!(
+        "games_no_window  {}  (tracked seat's turn never came in r10-17)",
+        out.games_no_window
+    );
+    println!("window_points  {}", out.total_window);
+    println!(
+        "pop_legal        {}  ({:.1}%)",
+        out.legal,
+        100.0 * out.legal as f64 / out.total_window.max(1) as f64
+    );
+    println!(
+        "pop_illegal      {}  ({:.1}%)",
+        out.illegal,
+        100.0 * out.illegal as f64 / out.total_window.max(1) as f64
+    );
+    println!();
+
+    println!("=== Per-constraint (raw binding / counterfactual) ===");
+    for (i, name) in CONSTRAINT_NAMES.iter().enumerate() {
+        let raw_pct = 100.0 * out.raw[i] as f64 / out.illegal.max(1) as f64;
+        let cf_pct = 100.0 * out.counterfactual[i] as f64 / out.illegal.max(1) as f64;
+        println!(
+            "  {:>12}  raw {:>5}  ({:5.1}%)   cf {:>5}  ({:5.1}%)",
+            name, out.raw[i], raw_pct, out.counterfactual[i], cf_pct
+        );
+    }
+    println!();
+
+    println!("=== Co-occurrence table (constraints binding simultaneously) ===");
+    println!("  {:>28}  {:>6}  {:>6}", "mask", "count", "%");
+    for (mask, &count) in out.mask_count.iter().enumerate() {
+        if count == 0 {
+            continue;
+        }
+        let names: Vec<&str> = (0..C_N)
+            .filter(|i| mask & (1 << i) != 0)
+            .map(|i| CONSTRAINT_NAMES[i])
+            .collect();
+        let mask_str = if names.is_empty() {
+            "(none)".to_string()
+        } else {
+            names.join("+")
+        };
+        let pct = 100.0 * count as f64 / out.illegal.max(1) as f64;
+        println!("  {:>28}  {:>6}  {:>5.1}%", mask_str, count, pct);
+    }
+    println!();
+
+    println!("=== Per-round (r10..r17) ===");
+    println!(
+        "  {:>4}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}",
+        "rnd", "window", "illegal", "CA%", "FOOD%", "BANK%", "PF%"
+    );
+    for ri in 0..8 {
+        let w = out.round_window[ri];
+        let il = out.round_illegal[ri];
+        let pct = |i: usize| -> String {
+            if w == 0 {
+                return "-".into();
+            }
+            format!("{:.1}%", 100.0 * out.round_raw[ri][i] as f64 / il.max(1) as f64)
+        };
+        println!(
+            "  r{:>3}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}",
+            ri + 10, w, il, pct(C_CA), pct(C_FOOD), pct(C_BANK), pct(C_PF)
+        );
+    }
+    println!();
+
+    println!("=== CAs spent on (when CA constraint binds) ===");
+    let ca_total = out.raw[C_CA];
+    for (i, name) in SPENT_NAMES.iter().enumerate() {
+        let pct = 100.0 * out.spent[i] as f64 / ca_total.max(1) as f64;
+        println!("  {:>20}  {:>5}  ({:5.1}%)", name, out.spent[i], pct);
+    }
+}
+
 /// One replay of `recorded` on a fresh game. `force_food` controls the (d)
 /// lever: when true, at every r3-r9 own-turn decision point where a food
 /// build/upgrade was legal in the ORIGINAL game, the best-scored legal food
@@ -2810,6 +3117,13 @@ struct Args {
     /// own-turn decision (bot's own picks everywhere else, and outside that
     /// window). See `arena_play_pop` / `print_forced_pop_arena`.
     arena_pop: bool,
+    /// 2p r10-17 pop-illlegality measurement: at every own-turn decision
+    /// point where no population move is legal, record every constraint
+    /// binding SIMULTANEOUSLY (CA exhausted, food short, yellow bank empty,
+    /// PopFree-specific) plus the per-constraint counterfactual (relax ONLY
+    /// this one, is pop now legal?). Also records what the CAs were spent on
+    /// this turn. See `pop_illlegal_probe` / `print_pop_illlegal`.
+    pop_illlegal: bool,
 }
 
 impl Default for Args {
@@ -2824,6 +3138,7 @@ impl Default for Args {
             food_probe: false,
             arena_food: false,
             arena_pop: false,
+            pop_illlegal: false,
         }
     }
 }
@@ -2855,6 +3170,11 @@ usage: openerprobe --weights PATH [options]
                   the forced side's win rate + CI, mean final culture both
                   sides, end-of-r12/r17 pop both sides, and what the forced
                   pops displaced. 2p only.
+  --pop-illlegal  2p r10-17 pop-illlegality measurement: at every own-turn
+                  decision where no population move is legal, records every
+                  constraint binding simultaneously plus the per-constraint
+                  counterfactual (relax ONLY this one, is pop now legal?).
+                  2p only.
   --help
 ";
 
@@ -2875,6 +3195,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--foodprobe" => a.food_probe = true,
             "--arena-food" => a.arena_food = true,
             "--arena-pop" => a.arena_pop = true,
+            "--pop-illlegal" => a.pop_illlegal = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -2893,6 +3214,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.arena_pop && a.players != 2 {
         return Err("--arena-pop is 2p only (null is 50% under symmetric seats)".to_string());
+    }
+    if a.pop_illlegal && a.players != 2 {
+        return Err("--pop-illlegal is 2p only".to_string());
     }
     if a.weights_path.is_empty() {
         return Err("--weights is required".to_string());
@@ -3285,6 +3609,40 @@ fn main() -> ExitCode {
         println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
         let arena = arena_lock.into_inner().expect("arena lock poisoned");
         print_forced_pop_arena(&arena, UNFORCED_POP_ACTIONS_R17, HUMAN_POP_ACTIONS_R17);
+        return ExitCode::SUCCESS;
+    }
+
+    if args.pop_illlegal {
+        let start = Instant::now();
+        let next = AtomicUsize::new(0);
+        let threads = args.threads.min(args.games);
+        let mut out = PopIllegal::new();
+        let out_lock = std::sync::Mutex::new(std::mem::take(&mut out));
+        std::thread::scope(|scope| {
+            let (args, next, weights, out_lock) = (&args, &next, &weights, &out_lock);
+            let mut handles = Vec::with_capacity(threads);
+            for _ in 0..threads {
+                handles.push(scope.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= args.games {
+                        return;
+                    }
+                    let seed = args.seed.wrapping_add(i as u64);
+                    pop_illegal_play(*weights, seed, &mut out_lock.lock().expect("lock"));
+                }));
+            }
+            for h in handles {
+                h.join().expect("arena thread panicked");
+            }
+        });
+        let elapsed = start.elapsed().as_secs_f64();
+        println!("games        {}", args.games);
+        println!("players      {}", args.players);
+        println!("weights      {}", args.weights_path);
+        println!("seeds        {}..{}", args.seed, args.seed + args.games as u64 - 1);
+        println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
+        let out = out_lock.into_inner().expect("lock poisoned");
+        print_pop_illlegal(&out);
         return ExitCode::SUCCESS;
     }
 
