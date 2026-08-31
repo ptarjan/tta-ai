@@ -1,0 +1,405 @@
+# Worker-slack arena, 2p: unmodified champion vs a variant that keeps >= 1 free worker
+
+**Date:** 2026-08-31.  MEASUREMENT ONLY -- no weight was fitted, no evaluator
+weight and no climb code was touched.  This file reports numbers and the
+did-the-constraint-bind check.  It deliberately does not rank the result or
+propose anything.
+
+## Binaries and flags
+
+```
+build   cargo build --profile difftest --bin openerprobe
+arena   rust/target/difftest/openerprobe --arena-slack \
+            --players 2 --games 3000 --seed 20260831 --threads 4 \
+            --weights /tmp/frozen_champion_2p_slack_20260831.json
+gate    cargo clippy --all-targets -- -D warnings : clean
+        cargo test --profile difftest --bin openerprobe : 30 passed, 0 failed
+```
+
+Raw run output: `/tmp/arena_slack_run_20260831.txt` (reproduced in full below).
+Implementation: `rust/src/bin/openerprobe.rs` -- `SLACK_FLOOR`, `SLACK_ROUNDS`,
+`keeps_worker_slack`, `SlackSeat`, `arena_play_slack`, `arena_game_slack`,
+`SlackSideAgg`, `ArenaSlack`, `print_worker_slack_arena`.  Built as the third
+member of the existing forced-behaviour arena family (`--arena-food`,
+`--arena-pop`), sharing their self-contained-2p-mode structure, their Wilson-CI
+reporting and their (a)-validity-check-before-the-win-rate output order.
+
+## Games and champion generation
+
+  3000 two-player games, seeds 20260831..20263830, 4 threads, 657.1s
+  (4.6 games/s).  Each game is TWO whole replays of the same seed (see Method),
+  so 6000 games were actually played.
+
+  Run TWICE, from separately built binaries, and every number below reproduced
+  identically (only the elapsed time differed: 631.1s then 657.1s).  The first
+  run was made from a binary predating one added print line, so it did not emit
+  the champion side's total decision-point count; the run reproduced here is the
+  second, whose binary is exactly the committed code.  Nothing else changed
+  between them, and the engine is deterministic, which is why the agreement is
+  exact rather than approximate.
+
+  Champion: gen 133020, players 2, sigma 0.08, since_accept 2, vs_anchor 1.
+  Taken as a FROZEN COPY -- `experiments/rust_champion_2p.json` was copied to
+  `/tmp/frozen_champion_2p_slack_20260831.json`
+  (md5 `2a420eb33e4f984d7539be3a569f724b`) before the run, because the live file
+  is rewritten by the running climb.
+
+  Repo at `801c1fa` plus this commit.
+
+## Why this arena exists
+
+`analysis/human_vs_bot_curves_2026-08-31.txt` measures
+`PlayerState::workers_free` at a matched turn-start instant over 632 human 2p
+games and 300 bot 2p games and finds the bot holding far less of it from round 4
+onward (r4 1.00 human vs 0.61 bot; r6 1.46 vs 0.46; r18 0.65 vs 0.27), while at
+r4 the bot's food CONSUMPTION is HIGHER (0.75 vs 0.44) -- it has taken MORE
+population and still holds FEWER workers free.  That table cannot say whether
+holding the slack is worth anything.  This arena constrains one side to hold it
+and plays it against the unmodified champion.
+
+## Method
+
+Two whole-game 2p replays per seed, both seats playing the SAME champion
+weights, greedy 1-ply, identical `game::new_game(2, seed)`:
+
+- **constrained replay:** seat 0 obeys the constraint; seat 1 is the unmodified
+  champion.  This is the head-to-head game.
+- **champion replay:** neither seat is constrained.  This serves twice: as the
+  SEAT-BIAS CONTROL for the head-to-head (same seeds, nobody constrained), and
+  as the paired-counterfactual baseline in the shape `--arena-food` and
+  `--arena-pop` report.
+
+Nothing else differs between the replays: same weights, same `rank_moves`, same
+pending-interaction handling, same seed.
+
+### The constraint, exactly
+
+At every own-turn, non-pending decision point at which the constrained seat
+holds at least **1** free worker (`SLACK_FLOOR`), it plays the
+**highest-ranked legal move that still leaves it holding at least 1 free worker
+after the move is applied**, instead of its own top-ranked move.  Formally, over
+the bot's own `rank_moves` order, the first `m` with
+`workers_free(apply(state, m)) >= 1`.
+
+- Whether a move satisfies that is read by TRIAL-APPLYING it through the
+  engine's own `apply::apply` -- the exact call `game::step` makes -- on a
+  discarded clone, and reading `PlayerState::workers_free` off the result.  It is
+  never read off a hand-written table of which move kinds take a worker.  This is
+  the same clone-and-apply `WeightedBot::rank_moves` already performs on every
+  candidate; the live state is untouched (guarded by
+  `keeps_worker_slack_reads_the_post_move_state_and_mutates_nothing`).
+- If NO legal move qualifies, the seat plays its own top pick.  This case is
+  counted, not hidden -- it is the one way the constraint could silently fail to
+  bind.  It occurred **0 times in 3000 games** (`EndTurn` always keeps a free
+  worker).
+- If the seat already holds 0 free workers the constraint is **vacuous** and does
+  not fire.  A refusal cannot restore slack that is already spent, and requiring
+  a `Move::Pop` there would make this the population arena instead of a slack
+  arena.  45750 of the constrained seat's 287944 decision points (15.9%) were in
+  this class.
+- Rounds: the whole game.  No window.  The human/bot gap is present at every
+  round the curve file measures (4 through 18+), and rounds 1-2 are vacuous
+  anyway (no legal move in them spends a worker).
+- **Move generation is untouched.**  The constraint is a pick from the champion's
+  own ranked legal-move list, so the champion's own behaviour, its legal move
+  space and its evaluator are all unchanged; nothing in `legal.rs`, `apply.rs`
+  or the weights was modified for this.
+
+### Measurement instant
+
+Free workers are sampled at the FIRST move of every turn, off the PRE-move
+state, with the same turn-boundary test `behavcensus` uses (`state.current` is
+reassigned exactly once per turn, so "the actor changed" is exactly "a new turn
+started").  That is the identical instant and identical test as the `freeW`
+column of `human_vs_bot_curves_2026-08-31.txt`, so the numbers below are
+directly comparable to its 1.00 / 0.61.
+
+## (a) DID THE CONSTRAINT BIND?  YES.
+
+Mean free workers per turn-start sample, rounds 4-18 (the window the human/bot
+gap was measured over), n = 45000 player-rounds per side:
+
+| | mean free workers, r4-r18 |
+|---|---|
+| constrained seat 0 | **1.101** |
+| unmodified champion seat 0 | **0.411** |
+| difference | **+0.690** |
+| seat 1 (unmodified) inside the constrained replay | 0.445 |
+| human corpus, same window, same instant | ~1.02 (per-round band 0.65 - 1.46) |
+
+**PASS.**  The constraint moved the quantity it targets, and moved it onto the
+human level rather than merely upward.  The win rates in (b) and (c) are
+therefore about holding slack; this arena did not return a fake null.
+
+Two independent corroborations of the harness, neither planned:
+
+- The unconstrained champion's own 0.411 reproduces the 0.42 window mean of the
+  300-game census in `human_vs_bot_curves_2026-08-31.txt` -- a different run, a
+  different binary, a different champion generation.
+- Seat 1 inside the constrained replay (0.445) sits at the same unconstrained
+  level, i.e. the constraint moved only the seat it was applied to.
+
+Per-round free workers (constrained seat 0 vs champion seat 0; n =
+player-rounds; the human column is quoted from
+`human_vs_bot_curves_2026-08-31.txt` for reference and is a different sample):
+
+| round | freeW constrained | n | freeW champion | n | freeW human (ref) |
+|---|---|---|---|---|---|
+| 1 | 1.000 | 3000 | 1.000 | 3000 | 1.00 |
+| 2 | 1.000 | 3000 | 1.000 | 3000 | 1.00 |
+| 3 | 0.996 | 3000 | 0.866 | 3000 | 0.92 |
+| 4 | 1.008 | 3000 | 0.598 | 3000 | 1.00 |
+| 5 | 0.967 | 3000 | 0.396 | 3000 | 1.27 |
+| 6 | 1.053 | 3000 | 0.433 | 3000 | 1.46 |
+| 7 | 1.167 | 3000 | 0.516 | 3000 | 1.40 |
+| 8 | 1.235 | 3000 | 0.562 | 3000 | 1.34 |
+| 9 | 1.203 | 3000 | 0.498 | 3000 | 1.27 |
+| 10 | 1.203 | 3000 | 0.473 | 3000 | 1.15 |
+| 11 | 1.148 | 3000 | 0.415 | 3000 | 1.03 |
+| 12 | 1.121 | 3000 | 0.383 | 3000 | 0.91 |
+| 13 | 1.116 | 3000 | 0.372 | 3000 | 0.86 |
+| 14 | 1.145 | 3000 | 0.352 | 3000 | 0.85 |
+| 15 | 1.092 | 3000 | 0.321 | 3000 | 0.78 |
+| 16 | 1.045 | 3000 | 0.290 | 3000 | 0.73 |
+| 17 | 1.021 | 3000 | 0.272 | 3000 | 0.67 |
+| 18 | 0.997 | 3000 | 0.287 | 3000 | 0.65 |
+| 19 | 1.006 | 2999 | 0.263 | 2995 | 0.61 |
+| 20 | 0.982 | 2549 | 0.240 | 2621 | 0.66 |
+| 21 | 1.057 | 441 | 0.245 | 534 | 1.00 (n=4) |
+| 22 | 0.833 | 6 | 0.000 | 1 | -- |
+
+The late-round n columns thin because games end at different rounds; that is
+shown rather than smoothed, exactly as the source curve file does it.
+
+### How often the constraint actually intervened
+
+| | constrained seat 0 | unmodified champion seat 0 |
+|---|---|---|
+| own-turn, non-pending decision points | 287944 | 291773 |
+| ...holding >= 1 free worker (constraint live) | 242194 | 94436 |
+| ...holding 0 free workers (constraint vacuous) | 45750 | 197337 |
+| own top pick would spend the last worker | 111382 (46.0% of live) | 29106 (30.8% of live) |
+| compliant lower-ranked move substituted | 111382 | n/a |
+| NO compliant move existed (fell back to top pick) | **0** | n/a |
+| games where the constraint never substituted once | **0 of 3000** | n/a |
+
+Both columns are produced by the identical code path, on both replays and both
+seats, so a difference between them cannot be an artifact of measuring the two
+sides differently.  The two totals are not expected to match: the champion
+spends its way to zero free workers and stays there (197337 of its 291773
+decision points are in the vacuous class, against 45750 for the constrained
+seat).
+
+Because the constraint substituted at least once in every one of the 3000 games,
+there are no by-construction ties in the paired counterfactual -- unlike
+`--arena-pop`, where 53.9% of games were byte-identical between the replays.
+
+## (b) HEAD-TO-HEAD win rate, with a seat-bias control
+
+Constrained seat 0 vs the unmodified champion in seat 1, in the same game.
+A win is strictly higher final culture (final culture IS final score in this
+engine -- `game::scores` reads `p.culture` after `finish_game` writes the
+end-game bonus into it).
+
+| | wins / decided | rate | 95% Wilson CI | ties |
+|---|---|---|---|---|
+| constrained seat 0 vs champion seat 1 | 1450 / 2987 | **0.485** | [0.468, 0.503] | 13 |
+| CONTROL: same seeds, NOBODY constrained | 1543 / 2980 | **0.518** | [0.500, 0.536] | 20 |
+
+Difference: **-3.3 percentage points** against the same-seed control.
+
+The control is reported because a flat 50% null assumes the two seats are
+interchangeable, and they are not: section 1.9's round-1 civil-action grant is
+seat-dependent.  This run measures that seat effect at +1.8pp for seat 0 rather
+than assuming it away.  (Note that both existing arenas state a flat "2p null is
+50% (symmetric seats, same weights)"; on this evidence that null is off by about
+2 points.  Nothing in this report depends on it -- the paired counterfactual in
+(c) is immune to seat bias by construction, since it compares seat 0 to seat 0.)
+
+The printed VERDICT line applies an overlapping-CI test, which is conservative
+and is not a test of the difference; the two intervals abut at 0.500-0.503.  The
+paired comparison in (c) is the seat-controlled one.
+
+## (c) PAIRED COUNTERFACTUAL (the --arena-food / --arena-pop shape)
+
+Constrained seat 0's final culture vs the SAME seat's final culture in the
+unconstrained replay of the same seed.
+
+| | count | % of 3000 |
+|---|---|---|
+| wins | 1436 | 47.9% |
+| ties | 18 | 0.6% |
+| losses | 1546 | 51.5% |
+
+| | wins / n | rate | 95% Wilson CI |
+|---|---|---|---|
+| raw (ties as non-wins) | 1436 / 3000 | 0.479 | [0.461, 0.497] |
+| **DECIDED games** | 1436 / 2982 | **0.482** | **[0.464, 0.500]** |
+
+Mean culture margin when the constrained side wins: 46.877.  When it loses:
+45.373.  (Near-symmetric.)
+
+## (d) mean FINAL culture and margin, both sides
+
+| replay | seat 0 | seat 1 | margin (seat 0 - seat 1) |
+|---|---|---|---|
+| constrained (seat 0 constrained) | 180.786 | 181.191 | **-0.405** |
+| champion (nobody constrained) | 181.730 | 178.853 | **+2.877** (the seat effect) |
+
+Constrained seat 0 minus unconstrained seat 0, paired on the same seeds:
+**-0.944** culture.
+
+## (e) mean POPULATION, both sides
+
+Total population = `yellow_bank + workers_free + yellow_granted`, snapshotted
+right after that seat's own last end-of-turn in the round.
+
+| | constrained seat 0 | champion seat 0 | difference | reached |
+|---|---|---|---|---|
+| end of r12 | 13.730 | 13.631 | +0.099 | 3000/3000 both |
+| end of r17 | 11.638 | 12.098 | -0.460 | 3000/3000 both |
+
+CAVEAT, mirrored from `print_forced_pop_arena` (`economy.rs::increase_population`):
+a `Move::Pop` moves ONE token from `yellow_bank` to `workers_free`, so this SUM
+is invariant to it; it rises only on a grant past an already-empty bank, and
+drops on its own at every age transition after the first (RULES_SPEC 12.2.4).
+It is a population TOTAL, not a count of population actions.
+
+## (f) what the constraint displaced
+
+The top-ranked pick the constraint refused, at each of the 111382 substitutions:
+
+| kind | count | % |
+|---|---|---|
+| Build Military | 52273 | 46.9% |
+| Build Urban | 51116 | 45.9% |
+| Build Mine | 5200 | 4.7% |
+| Build Farm | 1884 | 1.7% |
+| ActionCard | 909 | 0.8% |
+| Take / Develop / Upgrade / WonderStep / Pop / Leader / EndTurn / Other | 0 | 0.0% |
+
+The zeros are correct by construction: only a move that places a worker can
+spend the last free one, so no `Take`, `Develop` or `EndTurn` can ever be the
+refused pick.  92.8% of what the constraint refused is a Build of an urban
+building or a military unit.
+
+## Full raw output
+
+```
+games        3000
+players      2
+weights      /tmp/frozen_champion_2p_slack_20260831.json
+seeds        20260831..20263830
+elapsed      657.1s  (4.6 games/s)
+
+## WORKER-SLACK ARENA 2p (n=3000 games)  [MARKER_WORKER_SLACK_ARENA_LATEST]
+  champion   = the unmodified bot.
+  constrained = the SAME weights, plus one refusal: at every own-turn, non-pending
+  decision point where it holds >= 1 free worker, it plays the highest-ranked legal
+  move that STILL leaves it holding >= 1 free worker after the move is applied
+  (read by trial-applying through the engine's own apply::apply and reading
+  PlayerState::workers_free -- not from a table of which moves take a worker).
+  If no legal move qualifies it plays its own top pick; if it already holds 0 free
+  workers the constraint is vacuous and does not fire. Nothing else differs.
+  Constrained side = seat 0. Two replays per seed: one with seat 0 constrained
+  (seat 1 unmodified), one with neither seat constrained.
+
+### (a) DID THE CONSTRAINT BIND? mean free workers per turn-start sample
+  (same instant and same turn-boundary test as the freeW column of
+  human_vs_bot_curves_2026-08-31.txt: PlayerState::workers_free on the PRE-move state at
+  the first move of each turn, so these numbers are comparable to its 1.00 / 0.61.)
+  rounds 4-18:  constrained 1.101 (n=45000)   champion 0.411 (n=45000)   (+0.690)
+  the constrained seat's live opponent (seat 1, unmodified, same replay): 0.445
+  human corpus band over these rounds: 0.65 - 1.46
+  PASS -- the constraint raised free workers 0.411 -> 1.101 (+0.690). It moved the quantity it targets, so the win rates below are about holding slack.
+
+  per-round free workers (constrained seat 0 vs champion seat 0; n = player-rounds):
+  | round | freeW constrained | n | freeW champion | n |
+  |---|---|---|---|---|
+  | 1 | 1.000 | 3000 | 1.000 | 3000 |
+  | 2 | 1.000 | 3000 | 1.000 | 3000 |
+  | 3 | 0.996 | 3000 | 0.866 | 3000 |
+  | 4 | 1.008 | 3000 | 0.598 | 3000 |
+  | 5 | 0.967 | 3000 | 0.396 | 3000 |
+  | 6 | 1.053 | 3000 | 0.433 | 3000 |
+  | 7 | 1.167 | 3000 | 0.516 | 3000 |
+  | 8 | 1.235 | 3000 | 0.562 | 3000 |
+  | 9 | 1.203 | 3000 | 0.498 | 3000 |
+  | 10 | 1.203 | 3000 | 0.473 | 3000 |
+  | 11 | 1.148 | 3000 | 0.415 | 3000 |
+  | 12 | 1.121 | 3000 | 0.383 | 3000 |
+  | 13 | 1.116 | 3000 | 0.372 | 3000 |
+  | 14 | 1.145 | 3000 | 0.352 | 3000 |
+  | 15 | 1.092 | 3000 | 0.321 | 3000 |
+  | 16 | 1.045 | 3000 | 0.290 | 3000 |
+  | 17 | 1.021 | 3000 | 0.272 | 3000 |
+  | 18 | 0.997 | 3000 | 0.287 | 3000 |
+  | 19 | 1.006 | 2999 | 0.263 | 2995 |
+  | 20 | 0.982 | 2549 | 0.240 | 2621 |
+  | 21 | 1.057 | 441 | 0.245 | 534 |
+  | 22 | 0.833 | 6 | 0.000 | 1 |
+  (round 23 is a clamped bucket holding every sample from round 23 onward.)
+
+### (a2) how often the constraint actually intervened
+  constrained seat: 287944 own-turn decision points, 242194 with >= 1 free worker (constraint live), 45750 at zero free workers (vacuous).
+  its own top pick would have spent the last worker at 111382 of those live points (46.0%); a compliant lower-ranked move was substituted at 111382 of them and NO compliant move existed at 0.
+  unmodified champion seat 0, measured by the identical code path: 291773 own-turn decision points, 94436 with >= 1 free worker (constraint would have been live), 197337 at zero free workers; its top pick spends the last worker at 29106 of the live ones (30.8%) -- this is the bot's own untouched rate.
+  the two sides' TOTAL decision-point counts are not expected to match: the constrained seat holds a free worker far more of the time, so more of its decision points fall in the live class, and refusing a build leaves it spending its actions on other moves.
+  games in which the constraint never substituted once (constrained replay BYTE-FOR-BYTE identical to the champion replay by construction -- deterministic engine, same seed): 0/3000
+
+### (b) HEAD-TO-HEAD: constrained seat 0 vs unmodified champion seat 1, same game
+  constrained wins 1450/2987 decided games = 0.485   95% CI [0.468, 0.503]   (ties: 13)
+  SEAT-BIAS CONTROL, same seeds, NOBODY constrained: seat 0 wins 1543/2980 decided = 0.518   95% CI [0.500, 0.536]   (ties: 20)
+  the head-to-head rate is to be read against the CONTROL, not against a flat 50%: section 1.9's round-1 civil-action grant is seat-dependent, so the seats are not assumed interchangeable here.
+
+### (c) PAIRED COUNTERFACTUAL (the --arena-food / --arena-pop shape)
+  constrained seat 0's final culture vs the SAME seat's final culture in the unconstrained replay of the same seed.
+  breakdown: wins 1436 / ties 18 / losses 1546 of 3000
+  raw rate (ties as non-wins): 1436/3000 = 0.479  95% CI [0.461, 0.497]
+  DECIDED-games rate: 1436/2982 = 0.482  95% CI [0.464, 0.500]
+  mean margin when constrained WINS: 46.877   mean margin when it LOSES: 45.373
+
+### (d) mean FINAL culture (post game-over, end-game bonus applied) and the MARGIN
+  constrained replay:  seat 0 (constrained) 180.786   seat 1 (champion) 181.191   margin -0.405
+  champion replay:     seat 0 181.730   seat 1 178.853   margin +2.877   (this margin is the SEAT effect)
+  constrained seat 0 minus unconstrained seat 0 (paired, same seeds): -0.944
+
+### (e) mean POPULATION (yellow_bank + workers_free + yellow_granted) at end of r12 / r17
+  r12:  constrained 13.730   champion seat 0 13.631   (+0.099)   [reached: 3000/3000 vs 3000/3000]
+  r17:  constrained 11.638   champion seat 0 12.098   (-0.460)   [reached: 3000/3000 vs 3000/3000]
+  CAVEAT (economy.rs::increase_population, mirrored from print_forced_pop_arena): a Move::Pop moves ONE token from yellow_bank to workers_free, so this SUM is invariant to it; it rises only on a grant past an already-empty bank, and drops on its own at every age transition after the first (RULES_SPEC 12.2.4). It is a population TOTAL, not a count of pop actions.
+
+### (f) what the constraint displaced (the top pick it refused, at every substitution)
+- Take: 0/111382 (0.0%)
+- Build Farm: 1884/111382 (1.7%)
+- Build Mine: 5200/111382 (4.7%)
+- Build Urban: 51116/111382 (45.9%)
+- Build Military: 52273/111382 (46.9%)
+- Develop: 0/111382 (0.0%)
+- Upgrade: 0/111382 (0.0%)
+- WonderStep: 0/111382 (0.0%)
+- Pop: 0/111382 (0.0%)
+- Leader: 0/111382 (0.0%)
+- ActionCard: 909/111382 (0.8%)
+- EndTurn: 0/111382 (0.0%)
+- Other: 0/111382 (0.0%)
+
+### VERDICT
+  head-to-head decided CI [0.468, 0.503] vs seat-bias control [0.500, 0.536].
+  the two CIs OVERLAP: this sample does not separate the constrained policy from the seat effect.
+  paired decided CI [0.464, 0.500] against the 50% null.
+```
+
+## Reproducing
+
+```
+cp experiments/rust_champion_2p.json /tmp/frozen_champion_2p_slack_20260831.json
+cd rust && cargo build --profile difftest --bin openerprobe
+./rust/target/difftest/openerprobe --arena-slack --players 2 --games 3000 \
+    --seed 20260831 --threads 4 \
+    --weights /tmp/frozen_champion_2p_slack_20260831.json
+```
+
+The champion generation will differ -- the climb rewrites
+`experiments/rust_champion_2p.json` every few minutes -- so a rerun reproduces
+the method, not the exact numbers.

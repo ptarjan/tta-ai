@@ -2224,6 +2224,619 @@ fn print_forced_pop_arena(a: &ArenaPop, unforced_baseline: f64, human_baseline: 
     }
 }
 
+// ---------------------------------------------------------------------
+// --arena-slack: the 2p worker-SLACK arena. The same discipline as
+// --arena-food and --arena-pop -- 2p only, both seats playing the SAME
+// champion weights, the ONLY difference between the sides being the
+// constraint -- but the lever is a REFUSAL rather than a forcing: the
+// constrained seat never plays a move that would leave it holding zero
+// unassigned workers.
+//
+// What it is for: `analysis/human_vs_bot_curves_2026-08-31.txt` measures
+// `PlayerState::workers_free` at a matched turn-start instant over 632 human
+// 2p games and 300 bot 2p games, and finds the bot holding far less of it
+// from round 4 onward (r4 1.00 human vs 0.61 bot; r6 1.46 vs 0.46; r18 0.65
+// vs 0.27) while its food CONSUMPTION at r4 is HIGHER (0.75 vs 0.44), i.e.
+// it has taken MORE population and still holds FEWER workers free. This
+// arena asks the one question that table cannot: is holding the slack worth
+// anything.
+// ---------------------------------------------------------------------
+
+/// The floor the constrained seat keeps `PlayerState::workers_free` at or
+/// above -- "do not spend the last free worker". 1, not 2: the human r4-r18
+/// mean in `human_vs_bot_curves_2026-08-31.txt` runs 0.65-1.46, so a floor of
+/// 1 is the constraint whose target sits inside the human band, and a floor
+/// of 2 would overshoot every round of it.
+const SLACK_FLOOR: u8 = 1;
+
+/// Buckets in the per-round free-worker curve. Round 21 is the deepest round
+/// any game in `human_vs_bot_curves_2026-08-31.txt` reaches; a sample past
+/// this is CLAMPED into the last bucket rather than dropped, so the printed
+/// totals can never silently lose a player-round.
+const SLACK_ROUNDS: usize = 24;
+
+/// Whether playing `mv` from `state` leaves player `idx` holding at least
+/// [`SLACK_FLOOR`] unassigned workers.
+///
+/// Read by TRIAL-APPLYING the move through the engine's own `apply::apply`
+/// -- the exact call `game::step` makes (`game.rs`'s `step` is a one-line
+/// forward to it) -- and reading `PlayerState::workers_free` off the result.
+/// Never off a hand-written table of which move kinds take a worker: such a
+/// table would have to be kept in sync with `apply.rs` by hand and would be
+/// wrong the first time a card effect moved a worker through a path it did
+/// not enumerate, and the same "measure the delta the engine itself records"
+/// rule already governs [`ActionPointStats::record`]'s action-point read. The
+/// trial runs on a clone that is discarded, exactly as
+/// `WeightedBot::rank_moves` already clones and applies once per candidate;
+/// the live state is untouched.
+fn keeps_worker_slack(state: &GameState, idx: u8, mv: Move) -> bool {
+    let mut trial = state.clone();
+    tta::apply::apply(&mut trial, mv);
+    trial.players[idx as usize].workers_free >= SLACK_FLOOR
+}
+
+/// One seat's numbers from one [`arena_play_slack`] replay.
+///
+/// Every counter here is recorded for BOTH seats on BOTH replays, whether or
+/// not that seat is the constrained one -- the same discipline
+/// [`arena_play_pop`] uses for its window stats. That is what makes the
+/// did-it-bind check possible at all: the champion seat's own free-worker
+/// curve and its own `top_pick_violates` rate are measured by the identical
+/// code path as the constrained seat's, so a difference between them cannot
+/// be an artifact of measuring the two sides differently.
+///
+/// `free_w_by_round[r]` is `(sum of workers_free, number of samples)` for
+/// round `r`, sampled at the FIRST move of every one of this seat's turns,
+/// off the PRE-move state -- the identical instant and identical turn-boundary
+/// test (`state.current` is reassigned exactly once per turn, so "the actor
+/// changed" is exactly "a new turn started") as the `freeW` column of
+/// `human_vs_bot_curves_2026-08-31.txt`, so the numbers this arena prints are
+/// directly comparable to that table's 1.00/0.61.
+#[derive(Default, Clone, Copy)]
+struct SlackSeat {
+    final_culture: u16,
+    pop_r12: u16,
+    pop_r17: u16,
+    reached_r12: bool,
+    reached_r17: bool,
+    free_w_by_round: [(u32, u32); SLACK_ROUNDS],
+    /// Own-turn, non-pending decision points this seat faced.
+    points: u32,
+    /// ...of those, the ones where the seat held >= [`SLACK_FLOOR`] free
+    /// workers, so the constraint had something to protect and COULD bind.
+    points_active: u32,
+    /// ...of those, the ones where it held none, so the constraint is
+    /// vacuous: a refusal cannot restore slack that is already gone, and
+    /// requiring a `Move::Pop` here would make this the population arena
+    /// instead of a slack arena.
+    points_at_zero: u32,
+    /// Active points where the seat's OWN top-ranked move would have left it
+    /// at zero free workers. On the champion seat this is the bot's genuine
+    /// rate of spending its last worker; on the constrained seat it is the
+    /// count of points where the constraint actually had to intervene.
+    top_pick_violates: u32,
+    /// Of `top_pick_violates`, points where a lower-ranked compliant move was
+    /// found and played instead (the constraint really changed the move).
+    substituted: u32,
+    /// Of `top_pick_violates`, points where NO legal candidate kept a free
+    /// worker, so the seat played its own top pick anyway. Counted, not
+    /// hidden: it is the one way the constraint can silently fail to bind.
+    unsatisfiable: u32,
+    /// What the constrained seat's displaced top pick WAS, at every
+    /// `substituted` point.
+    displaced_kind: DecisionKindCounts,
+}
+
+impl SlackSeat {
+    fn sample_turn_start(&mut self, round: u16, free_workers: u8) {
+        let bucket = usize::from(round).min(SLACK_ROUNDS - 1);
+        self.free_w_by_round[bucket].0 += u32::from(free_workers);
+        self.free_w_by_round[bucket].1 += 1;
+    }
+}
+
+/// One 2p replay in which BOTH seats play the SAME champion weights and
+/// `constrained_seat` (if any) additionally obeys the slack constraint:
+/// at every own-turn, non-pending decision point where it holds at least
+/// [`SLACK_FLOOR`] free workers, it plays the highest-ranked legal move that
+/// still leaves it holding at least [`SLACK_FLOOR`] free workers, falling
+/// back to its own top pick when no legal move does.
+///
+/// `constrained_seat = None` is the pure-champion replay: nobody is
+/// constrained, both seats are the unmodified bot. Returns both seats'
+/// [`SlackSeat`] records, because the head-to-head question ("did the
+/// constrained seat beat the champion sitting opposite it in the SAME game")
+/// and the seat-bias control ("does seat 0 beat seat 1 on these seeds with
+/// NOBODY constrained") both need seat 1's numbers too.
+///
+/// Nothing outside the constrained seat's own move choice differs between the
+/// two replays: same `game::new_game(2, seed)`, same weights, same
+/// `rank_moves`, same pending-interaction handling.
+fn arena_play_slack(weights: Weights, seed: u64, constrained_seat: Option<u8>) -> [SlackSeat; 2] {
+    let players: u8 = 2;
+    let bots: Vec<WeightedBot> = (0..players).map(|_| WeightedBot::new(weights)).collect();
+    let mut state = game::new_game(players, seed);
+    let mut seats = [SlackSeat::default(); 2];
+    // The turn-boundary test, identical to `behavcensus`'s `play_one`:
+    // `state.current` is reassigned exactly once per turn (game.rs's
+    // `end_turn`), and no combat/pending exchange ever reassigns it, so "the
+    // actor differs from the last one sampled" is exactly "this is the first
+    // move of a new turn".
+    let mut prev_actor: Option<u8> = None;
+    let mut moves_played = 0usize;
+    while !state.game_over && moves_played < MOVE_CAP {
+        if prev_actor != Some(state.current) {
+            prev_actor = Some(state.current);
+            let actor = usize::from(state.current);
+            if actor < seats.len() {
+                seats[actor].sample_turn_start(state.round, state.players[actor].workers_free);
+            }
+        }
+        let idx = state.decider();
+        let pending = !state.pending.is_empty();
+        let legal = legal::legal_moves(&state);
+        let own_turn = legal.as_slice().iter().any(|m| matches!(m, Move::EndTurn));
+        let round = state.round;
+        let ranked = bots[usize::from(idx)].rank_moves(&state, legal.as_slice());
+        // Bookkeeping is unconditional on WHO is constrained -- it runs
+        // identically on the champion replay and on the constrained one, and
+        // on both seats of each, so the two sides' numbers are produced by
+        // one code path. Only the MOVE PLAYED depends on `constrained_seat`.
+        let at_decision = own_turn && !pending && usize::from(idx) < seats.len();
+        let free_now = state.players[usize::from(idx)].workers_free;
+        let mut top_pick_violates = false;
+        if at_decision {
+            let s = &mut seats[usize::from(idx)];
+            s.points += 1;
+            if free_now >= SLACK_FLOOR {
+                s.points_active += 1;
+                top_pick_violates = !keeps_worker_slack(&state, idx, ranked[0].0);
+                if top_pick_violates {
+                    s.top_pick_violates += 1;
+                }
+            } else {
+                s.points_at_zero += 1;
+            }
+        }
+        let constrained_here =
+            at_decision && Some(idx) == constrained_seat && free_now >= SLACK_FLOOR;
+        let mv = if constrained_here && top_pick_violates {
+            match ranked.iter().find(|&&(m, _)| keeps_worker_slack(&state, idx, m)) {
+                Some(&(m, _)) => {
+                    let s = &mut seats[usize::from(idx)];
+                    s.substituted += 1;
+                    s.displaced_kind.record(decision_kind(ranked[0].0));
+                    m
+                }
+                None => {
+                    seats[usize::from(idx)].unsatisfiable += 1;
+                    ranked[0].0
+                }
+            }
+        } else if pending {
+            bots[usize::from(idx)].choose(&state, legal.as_slice())
+        } else {
+            ranked[0].0
+        };
+        if pending {
+            tta::interact::apply_pending(&mut state, mv);
+        } else {
+            game::step(&mut state, mv);
+        }
+        // Same population snapshot convention as `arena_play_pop`: the seat's
+        // TOTAL population (supply + board + granted) right after its own last
+        // end-of-turn in that round.
+        if at_decision && mv == Move::EndTurn {
+            let s = &mut seats[usize::from(idx)];
+            let p = &state.players[usize::from(idx)];
+            let pop = u16::from(p.yellow_bank) + u16::from(p.workers_free) + u16::from(p.yellow_granted);
+            if round == 12 && !s.reached_r12 {
+                s.pop_r12 = pop;
+                s.reached_r12 = true;
+            }
+            if round == 17 && !s.reached_r17 {
+                s.pop_r17 = pop;
+                s.reached_r17 = true;
+            }
+        }
+        moves_played += 1;
+    }
+    for (seat, p) in seats.iter_mut().zip(state.players.iter()) {
+        seat.final_culture = p.culture;
+    }
+    seats
+}
+
+/// Everything one game contributes: the constrained replay (seat 0
+/// constrained, seat 1 the unmodified champion) and, on the SAME seed, the
+/// pure-champion replay (neither seat constrained), which serves both as the
+/// paired counterfactual baseline and as the seat-bias control for the
+/// head-to-head.
+struct SlackGame {
+    constrained: [SlackSeat; 2],
+    champion: [SlackSeat; 2],
+}
+
+fn arena_game_slack(weights: Weights, seed: u64) -> SlackGame {
+    SlackGame {
+        constrained: arena_play_slack(weights, seed, Some(0)),
+        champion: arena_play_slack(weights, seed, None),
+    }
+}
+
+/// One seat-of-one-replay's numbers summed over every game.
+#[derive(Default)]
+struct SlackSideAgg {
+    culture_sum: u64,
+    pop_r12_sum: u64,
+    pop_r17_sum: u64,
+    reached_r12: u64,
+    reached_r17: u64,
+    free_w_by_round: [(u64, u64); SLACK_ROUNDS],
+    points: u64,
+    points_active: u64,
+    points_at_zero: u64,
+    top_pick_violates: u64,
+    substituted: u64,
+    unsatisfiable: u64,
+    displaced_kind: DecisionKindCounts,
+}
+
+impl SlackSideAgg {
+    fn add(&mut self, s: &SlackSeat) {
+        self.culture_sum += u64::from(s.final_culture);
+        self.pop_r12_sum += u64::from(s.pop_r12);
+        self.pop_r17_sum += u64::from(s.pop_r17);
+        self.reached_r12 += u64::from(s.reached_r12);
+        self.reached_r17 += u64::from(s.reached_r17);
+        for (dst, src) in self.free_w_by_round.iter_mut().zip(s.free_w_by_round.iter()) {
+            dst.0 += u64::from(src.0);
+            dst.1 += u64::from(src.1);
+        }
+        self.points += u64::from(s.points);
+        self.points_active += u64::from(s.points_active);
+        self.points_at_zero += u64::from(s.points_at_zero);
+        self.top_pick_violates += u64::from(s.top_pick_violates);
+        self.substituted += u64::from(s.substituted);
+        self.unsatisfiable += u64::from(s.unsatisfiable);
+        self.displaced_kind.merge(s.displaced_kind);
+    }
+
+    /// Mean free workers per turn-start sample over `lo..=hi` inclusive, and
+    /// the number of player-rounds that mean is over. `(0.0, 0)` if the window
+    /// holds no samples at all.
+    fn mean_free_workers(&self, lo: usize, hi: usize) -> (f64, u64) {
+        let (mut sum, mut n) = (0u64, 0u64);
+        for (s, c) in self.free_w_by_round.iter().take(hi.min(SLACK_ROUNDS - 1) + 1).skip(lo) {
+            sum += *s;
+            n += *c;
+        }
+        if n == 0 {
+            return (0.0, 0);
+        }
+        (sum as f64 / n as f64, n)
+    }
+}
+
+/// Aggregated result of the 2p worker-slack arena over `games` games.
+///
+/// THREE win rates are kept, because they answer three different questions
+/// and conflating them is how an arena reports a fake result:
+///
+/// - `h2h_*`: the direct HEAD-TO-HEAD -- inside the constrained replay, did
+///   seat 0 (constrained) finish above seat 1 (unmodified champion)? This is
+///   a real game between the two policies, so essentially every game is
+///   decided and the CI is as tight as the sample allows.
+/// - `ctrl_*`: the SEAT-BIAS CONTROL -- the identical comparison on the
+///   identical seeds with NOBODY constrained. A 2p null of exactly 50% assumes
+///   the seats are interchangeable; section 1.9's round-1 civil-action grant
+///   is seat-dependent, so this measures the seat effect instead of assuming
+///   it away. The head-to-head rate must be read against THIS number, not
+///   against 50%.
+/// - `paired_*`: the paired counterfactual in the shape `--arena-food` and
+///   `--arena-pop` report -- constrained seat 0's final culture versus the
+///   SAME seat's final culture in the unconstrained replay of the same seed.
+///   Because the engine is deterministic, a game in which the constraint
+///   never substituted a move is BYTE-FOR-BYTE identical across the two
+///   replays and is an automatic tie (`no_divergence_games`), so this rate is
+///   reported over DECIDED games.
+#[derive(Default)]
+struct ArenaSlack {
+    total: u64,
+    con: SlackSideAgg,
+    con_opp: SlackSideAgg,
+    champ0: SlackSideAgg,
+    champ1: SlackSideAgg,
+    h2h_wins: u64,
+    h2h_ties: u64,
+    ctrl_wins: u64,
+    ctrl_ties: u64,
+    paired_wins: u64,
+    paired_ties: u64,
+    no_divergence_games: u64,
+    win_margin_sum: f64,
+    loss_margin_sum: f64,
+}
+
+impl ArenaSlack {
+    fn record(&mut self, g: &SlackGame) {
+        self.total += 1;
+        self.con.add(&g.constrained[0]);
+        self.con_opp.add(&g.constrained[1]);
+        self.champ0.add(&g.champion[0]);
+        self.champ1.add(&g.champion[1]);
+
+        let (c0, c1) = (g.constrained[0].final_culture, g.constrained[1].final_culture);
+        if c0 > c1 {
+            self.h2h_wins += 1;
+        } else if c0 == c1 {
+            self.h2h_ties += 1;
+        }
+        let (k0, k1) = (g.champion[0].final_culture, g.champion[1].final_culture);
+        if k0 > k1 {
+            self.ctrl_wins += 1;
+        } else if k0 == k1 {
+            self.ctrl_ties += 1;
+        }
+        let diff = f64::from(c0) - f64::from(k0);
+        if diff > 0.0 {
+            self.paired_wins += 1;
+            self.win_margin_sum += diff;
+        } else if diff < 0.0 {
+            self.loss_margin_sum += -diff;
+        } else {
+            self.paired_ties += 1;
+        }
+        if g.constrained[0].substituted == 0 {
+            self.no_divergence_games += 1;
+        }
+    }
+}
+
+/// Prints the worker-slack arena result. Pure function of its inputs.
+///
+/// Section (a) comes FIRST and is the gate on everything below it: an arena
+/// whose constraint did not move the quantity it targets has measured
+/// nothing, and its win rate is not a null result but an uninterpretable one.
+/// `human_lo`/`human_hi` are the human corpus' own r4-r18 free-worker band
+/// from `human_vs_bot_curves_2026-08-31.txt`, passed in so this stays pure.
+fn print_worker_slack_arena(a: &ArenaSlack, human_lo: f64, human_hi: f64) {
+    let total = a.total.max(1);
+    // The window the human/bot free-worker gap was measured over.
+    const W_LO: usize = 4;
+    const W_HI: usize = 18;
+    let (con_free, con_n) = a.con.mean_free_workers(W_LO, W_HI);
+    let (champ_free, champ_n) = a.champ0.mean_free_workers(W_LO, W_HI);
+    let (opp_free, _) = a.con_opp.mean_free_workers(W_LO, W_HI);
+
+    println!("\n## WORKER-SLACK ARENA 2p (n={} games)  [MARKER_WORKER_SLACK_ARENA_LATEST]", a.total);
+    println!(
+        "  champion   = the unmodified bot.\n  \
+         constrained = the SAME weights, plus one refusal: at every own-turn, non-pending\n  \
+         decision point where it holds >= {SLACK_FLOOR} free worker, it plays the highest-ranked legal\n  \
+         move that STILL leaves it holding >= {SLACK_FLOOR} free worker after the move is applied\n  \
+         (read by trial-applying through the engine's own apply::apply and reading\n  \
+         PlayerState::workers_free -- not from a table of which moves take a worker).\n  \
+         If no legal move qualifies it plays its own top pick; if it already holds 0 free\n  \
+         workers the constraint is vacuous and does not fire. Nothing else differs.\n  \
+         Constrained side = seat 0. Two replays per seed: one with seat 0 constrained\n  \
+         (seat 1 unmodified), one with neither seat constrained."
+    );
+
+    println!("\n### (a) DID THE CONSTRAINT BIND? mean free workers per turn-start sample");
+    println!(
+        "  (same instant and same turn-boundary test as the freeW column of\n  \
+         human_vs_bot_curves_2026-08-31.txt: PlayerState::workers_free on the PRE-move state at\n  \
+         the first move of each turn, so these numbers are comparable to its 1.00 / 0.61.)"
+    );
+    println!(
+        "  rounds {W_LO}-{W_HI}:  constrained {:.3} (n={})   champion {:.3} (n={})   ({:+.3})",
+        con_free, con_n, champ_free, champ_n, con_free - champ_free
+    );
+    println!(
+        "  the constrained seat's live opponent (seat 1, unmodified, same replay): {:.3}",
+        opp_free
+    );
+    println!("  human corpus band over these rounds: {human_lo:.2} - {human_hi:.2}");
+    if con_free <= champ_free + 0.05 {
+        println!(
+            "  FAIL -- the constraint did NOT materially raise free workers ({:.3} -> {:.3}). \
+             The constraint failed to bind, so this arena measured NOTHING and no win rate below \
+             is interpretable.",
+            champ_free, con_free
+        );
+    } else {
+        println!(
+            "  PASS -- the constraint raised free workers {:.3} -> {:.3} ({:+.3}). It moved the \
+             quantity it targets, so the win rates below are about holding slack.",
+            champ_free, con_free, con_free - champ_free
+        );
+    }
+    println!("\n  per-round free workers (constrained seat 0 vs champion seat 0; n = player-rounds):");
+    println!("  | round | freeW constrained | n | freeW champion | n |");
+    println!("  |---|---|---|---|---|");
+    for (round, (c, k)) in a.con.free_w_by_round.iter().zip(a.champ0.free_w_by_round.iter()).enumerate() {
+        if c.1 == 0 && k.1 == 0 {
+            continue;
+        }
+        println!(
+            "  | {} | {:.3} | {} | {:.3} | {} |",
+            round,
+            c.0 as f64 / c.1.max(1) as f64,
+            c.1,
+            k.0 as f64 / k.1.max(1) as f64,
+            k.1
+        );
+    }
+    println!(
+        "  (round {} is a clamped bucket holding every sample from round {} onward.)",
+        SLACK_ROUNDS - 1,
+        SLACK_ROUNDS - 1
+    );
+
+    println!("\n### (a2) how often the constraint actually intervened");
+    println!(
+        "  constrained seat: {} own-turn decision points, {} with >= {SLACK_FLOOR} free worker (constraint live), \
+         {} at zero free workers (vacuous).",
+        a.con.points, a.con.points_active, a.con.points_at_zero
+    );
+    println!(
+        "  its own top pick would have spent the last worker at {} of those live points ({:.1}%); \
+         a compliant lower-ranked move was substituted at {} of them and NO compliant move existed at {}.",
+        a.con.top_pick_violates,
+        100.0 * a.con.top_pick_violates as f64 / a.con.points_active.max(1) as f64,
+        a.con.substituted,
+        a.con.unsatisfiable
+    );
+    println!(
+        "  unmodified champion seat 0, measured by the identical code path: {} own-turn decision points, {} \
+         with >= {SLACK_FLOOR} free worker (constraint would have been live), {} at zero free workers; its top pick \
+         spends the last worker at {} of the live ones ({:.1}%) -- this is the bot's own untouched rate.",
+        a.champ0.points,
+        a.champ0.points_active,
+        a.champ0.points_at_zero,
+        a.champ0.top_pick_violates,
+        100.0 * a.champ0.top_pick_violates as f64 / a.champ0.points_active.max(1) as f64
+    );
+    println!(
+        "  the two sides' TOTAL decision-point counts are not expected to match: the constrained seat holds a \
+         free worker far more of the time, so more of its decision points fall in the live class, and refusing \
+         a build leaves it spending its actions on other moves."
+    );
+    println!(
+        "  games in which the constraint never substituted once (constrained replay BYTE-FOR-BYTE identical \
+         to the champion replay by construction -- deterministic engine, same seed): {}/{}",
+        a.no_divergence_games, total
+    );
+
+    println!("\n### (b) HEAD-TO-HEAD: constrained seat 0 vs unmodified champion seat 1, same game");
+    let h2h_decided = a.total - a.h2h_ties;
+    let (h2h_lo, h2h_hi) = wilson_ci95(a.h2h_wins, h2h_decided);
+    println!(
+        "  constrained wins {}/{} decided games = {:.3}   95% CI [{:.3}, {:.3}]   (ties: {})",
+        a.h2h_wins,
+        h2h_decided.max(1),
+        a.h2h_wins as f64 / h2h_decided.max(1) as f64,
+        h2h_lo,
+        h2h_hi,
+        a.h2h_ties
+    );
+    let ctrl_decided = a.total - a.ctrl_ties;
+    let (ctrl_lo, ctrl_hi) = wilson_ci95(a.ctrl_wins, ctrl_decided);
+    println!(
+        "  SEAT-BIAS CONTROL, same seeds, NOBODY constrained: seat 0 wins {}/{} decided = {:.3}   \
+         95% CI [{:.3}, {:.3}]   (ties: {})",
+        a.ctrl_wins,
+        ctrl_decided.max(1),
+        a.ctrl_wins as f64 / ctrl_decided.max(1) as f64,
+        ctrl_lo,
+        ctrl_hi,
+        a.ctrl_ties
+    );
+    println!(
+        "  the head-to-head rate is to be read against the CONTROL, not against a flat 50%: section 1.9's \
+         round-1 civil-action grant is seat-dependent, so the seats are not assumed interchangeable here."
+    );
+
+    println!("\n### (c) PAIRED COUNTERFACTUAL (the --arena-food / --arena-pop shape)");
+    println!(
+        "  constrained seat 0's final culture vs the SAME seat's final culture in the unconstrained replay \
+         of the same seed."
+    );
+    let paired_losses = a.total - a.paired_wins - a.paired_ties;
+    let paired_decided = a.paired_wins + paired_losses;
+    let (p_lo, p_hi) = wilson_ci95(a.paired_wins, paired_decided);
+    let (raw_lo, raw_hi) = wilson_ci95(a.paired_wins, a.total);
+    println!(
+        "  breakdown: wins {} / ties {} / losses {} of {}",
+        a.paired_wins, a.paired_ties, paired_losses, total
+    );
+    println!(
+        "  raw rate (ties as non-wins): {}/{} = {:.3}  95% CI [{:.3}, {:.3}]",
+        a.paired_wins, total, a.paired_wins as f64 / total as f64, raw_lo, raw_hi
+    );
+    println!(
+        "  DECIDED-games rate: {}/{} = {:.3}  95% CI [{:.3}, {:.3}]",
+        a.paired_wins,
+        paired_decided.max(1),
+        a.paired_wins as f64 / paired_decided.max(1) as f64,
+        p_lo,
+        p_hi
+    );
+    println!(
+        "  mean margin when constrained WINS: {:.3}   mean margin when it LOSES: {:.3}",
+        a.win_margin_sum / a.paired_wins.max(1) as f64,
+        a.loss_margin_sum / paired_losses.max(1) as f64
+    );
+
+    println!("\n### (d) mean FINAL culture (post game-over, end-game bonus applied) and the MARGIN");
+    let con_c = a.con.culture_sum as f64 / total as f64;
+    let opp_c = a.con_opp.culture_sum as f64 / total as f64;
+    let k0_c = a.champ0.culture_sum as f64 / total as f64;
+    let k1_c = a.champ1.culture_sum as f64 / total as f64;
+    println!(
+        "  constrained replay:  seat 0 (constrained) {:.3}   seat 1 (champion) {:.3}   margin {:+.3}",
+        con_c, opp_c, con_c - opp_c
+    );
+    println!(
+        "  champion replay:     seat 0 {:.3}   seat 1 {:.3}   margin {:+.3}   (this margin is the SEAT effect)",
+        k0_c, k1_c, k0_c - k1_c
+    );
+    println!(
+        "  constrained seat 0 minus unconstrained seat 0 (paired, same seeds): {:+.3}",
+        con_c - k0_c
+    );
+
+    println!("\n### (e) mean POPULATION (yellow_bank + workers_free + yellow_granted) at end of r12 / r17");
+    println!(
+        "  r12:  constrained {:.3}   champion seat 0 {:.3}   ({:+.3})   [reached: {}/{} vs {}/{}]",
+        a.con.pop_r12_sum as f64 / total as f64,
+        a.champ0.pop_r12_sum as f64 / total as f64,
+        (a.con.pop_r12_sum as f64 - a.champ0.pop_r12_sum as f64) / total as f64,
+        a.con.reached_r12, total, a.champ0.reached_r12, total
+    );
+    println!(
+        "  r17:  constrained {:.3}   champion seat 0 {:.3}   ({:+.3})   [reached: {}/{} vs {}/{}]",
+        a.con.pop_r17_sum as f64 / total as f64,
+        a.champ0.pop_r17_sum as f64 / total as f64,
+        (a.con.pop_r17_sum as f64 - a.champ0.pop_r17_sum as f64) / total as f64,
+        a.con.reached_r17, total, a.champ0.reached_r17, total
+    );
+    println!(
+        "  CAVEAT (economy.rs::increase_population, mirrored from print_forced_pop_arena): a Move::Pop moves \
+         ONE token from yellow_bank to workers_free, so this SUM is invariant to it; it rises only on a grant \
+         past an already-empty bank, and drops on its own at every age transition after the first \
+         (RULES_SPEC 12.2.4). It is a population TOTAL, not a count of pop actions."
+    );
+
+    println!("\n### (f) what the constraint displaced (the top pick it refused, at every substitution)");
+    print_kind_counts(&a.con.displaced_kind);
+
+    println!("\n### VERDICT");
+    if con_free <= champ_free + 0.05 {
+        println!(
+            "  UNINTERPRETABLE -- (a) failed: the constraint did not raise free workers, so nothing below it \
+             measures the value of holding slack."
+        );
+        return;
+    }
+    println!(
+        "  head-to-head decided CI [{:.3}, {:.3}] vs seat-bias control [{:.3}, {:.3}].",
+        h2h_lo, h2h_hi, ctrl_lo, ctrl_hi
+    );
+    if h2h_hi < ctrl_lo {
+        println!("  the head-to-head CI lies entirely BELOW the control CI: constraining COSTS the seat games.");
+    } else if h2h_lo > ctrl_hi {
+        println!("  the head-to-head CI lies entirely ABOVE the control CI: constraining WINS the seat games.");
+    } else {
+        println!("  the two CIs OVERLAP: this sample does not separate the constrained policy from the seat effect.");
+    }
+    println!(
+        "  paired decided CI [{:.3}, {:.3}] against the 50% null.",
+        p_lo, p_hi
+    );
+}
+
 #[derive(Default, Clone)]
 struct R1MarginStats {
     /// Round-1 own-turn decision points at which BOTH a Take and an EndTurn
@@ -3117,6 +3730,14 @@ struct Args {
     /// own-turn decision (bot's own picks everywhere else, and outside that
     /// window). See `arena_play_pop` / `print_forced_pop_arena`.
     arena_pop: bool,
+    /// 2p worker-SLACK arena, the refusal-shaped sibling of `arena_food` /
+    /// `arena_pop`: seat 0 plays the SAME weights plus one constraint --
+    /// never play a move that would leave it holding zero free workers --
+    /// against an unmodified champion in seat 1, with a nobody-constrained
+    /// replay of the same seed as the seat-bias control and the paired
+    /// counterfactual baseline. See `arena_play_slack` /
+    /// `print_worker_slack_arena`.
+    arena_slack: bool,
     /// 2p r10-17 pop-illlegality measurement: at every own-turn decision
     /// point where no population move is legal, record every constraint
     /// binding SIMULTANEOUSLY (CA exhausted, food short, yellow bank empty,
@@ -3138,6 +3759,7 @@ impl Default for Args {
             food_probe: false,
             arena_food: false,
             arena_pop: false,
+            arena_slack: false,
             pop_illlegal: false,
         }
     }
@@ -3170,6 +3792,16 @@ usage: openerprobe --weights PATH [options]
                   the forced side's win rate + CI, mean final culture both
                   sides, end-of-r12/r17 pop both sides, and what the forced
                   pops displaced. 2p only.
+  --arena-slack   2p worker-slack arena: an unmodified champion vs a variant
+                  of the SAME weights that never plays a move leaving it with
+                  zero free workers (only difference = the refusal). Plays to
+                  game-over; prints the did-it-bind check (mean free workers
+                  per round, constrained vs champion, at the same turn-start
+                  instant as human_vs_bot_curves_2026-08-31.txt), the
+                  head-to-head win rate + Wilson CI with a nobody-constrained
+                  seat-bias control, the paired counterfactual in the
+                  --arena-pop shape, and mean culture / population both
+                  sides. 2p only.
   --pop-illlegal  2p r10-17 pop-illlegality measurement: at every own-turn
                   decision where no population move is legal, records every
                   constraint binding simultaneously plus the per-constraint
@@ -3195,6 +3827,7 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
             "--foodprobe" => a.food_probe = true,
             "--arena-food" => a.arena_food = true,
             "--arena-pop" => a.arena_pop = true,
+            "--arena-slack" => a.arena_slack = true,
             "--pop-illlegal" => a.pop_illlegal = true,
             "--help" | "-h" => {
                 print!("{USAGE}");
@@ -3214,6 +3847,9 @@ fn parse_args(argv: &[String]) -> Result<Option<Args>, String> {
     }
     if a.arena_pop && a.players != 2 {
         return Err("--arena-pop is 2p only (null is 50% under symmetric seats)".to_string());
+    }
+    if a.arena_slack && a.players != 2 {
+        return Err("--arena-slack is 2p only (the head-to-head and its seat-bias control are 2p)".to_string());
     }
     if a.pop_illlegal && a.players != 2 {
         return Err("--pop-illlegal is 2p only".to_string());
@@ -3612,6 +4248,52 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // --arena-slack is the same kind of self-contained 2p mode as
+    // --arena-food / --arena-pop, run in its own parallel loop for the same
+    // reason.
+    if args.arena_slack {
+        // The human corpus' own r4-r18 free-worker band
+        // (human_vs_bot_curves_2026-08-31.txt, 632 2p games): the lowest and
+        // highest per-round mean over the window this arena's did-it-bind
+        // check is computed on. Transcribed here so the print stays a pure
+        // function of `ArenaSlack`.
+        const HUMAN_FREE_WORKERS_LO: f64 = 0.65;
+        const HUMAN_FREE_WORKERS_HI: f64 = 1.46;
+
+        let start = Instant::now();
+        let next = AtomicUsize::new(0);
+        let threads = args.threads.min(args.games);
+        let mut arena = ArenaSlack::default();
+        let arena_lock = std::sync::Mutex::new(std::mem::take(&mut arena));
+        std::thread::scope(|scope| {
+            let (args, next, weights, arena_lock) = (&args, &next, &weights, &arena_lock);
+            let mut handles = Vec::with_capacity(threads);
+            for _ in 0..threads {
+                handles.push(scope.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= args.games {
+                        return;
+                    }
+                    let seed = args.seed.wrapping_add(i as u64);
+                    let g = arena_game_slack(*weights, seed);
+                    arena_lock.lock().expect("arena lock poisoned").record(&g);
+                }));
+            }
+            for h in handles {
+                h.join().expect("arena thread panicked");
+            }
+        });
+        let elapsed = start.elapsed().as_secs_f64();
+        println!("games        {}", args.games);
+        println!("players      {}", args.players);
+        println!("weights      {}", args.weights_path);
+        println!("seeds        {}..{}", args.seed, args.seed + args.games as u64 - 1);
+        println!("elapsed      {elapsed:.1}s  ({:.1} games/s)", args.games as f64 / elapsed.max(1e-9));
+        let arena = arena_lock.into_inner().expect("arena lock poisoned");
+        print_worker_slack_arena(&arena, HUMAN_FREE_WORKERS_LO, HUMAN_FREE_WORKERS_HI);
+        return ExitCode::SUCCESS;
+    }
+
     if args.pop_illlegal {
         let start = Instant::now();
         let next = AtomicUsize::new(0);
@@ -3778,6 +4460,95 @@ mod tests {
     #[test]
     fn percentiles_u32_reports_n_a_for_an_empty_sample_rather_than_dividing_by_zero() {
         assert_eq!(percentiles_u32(vec![]), "n/a (no samples)");
+    }
+
+    /// `keeps_worker_slack` must read `workers_free` off the state the engine
+    /// produces AFTER the move, for the seat asked about -- and must leave the
+    /// caller's state untouched, because the arena loop calls it on the LIVE
+    /// state mid-game and then plays a (possibly different) move from it.
+    #[test]
+    fn keeps_worker_slack_reads_the_post_move_state_and_mutates_nothing() {
+        let mut state = game::new_game(2, 7);
+        state.players[0].workers_free = 5;
+        let before = state.players[0].workers_free;
+        assert!(keeps_worker_slack(&state, 0, Move::EndTurn));
+        assert_eq!(
+            state.players[0].workers_free, before,
+            "the trial apply must run on a clone -- the live state may not move"
+        );
+
+        state.players[0].workers_free = 0;
+        assert!(
+            !keeps_worker_slack(&state, 0, Move::EndTurn),
+            "a seat holding no free worker cannot satisfy the floor, whatever it plays"
+        );
+    }
+
+    /// A sample from a round past the last bucket is CLAMPED into it, never
+    /// dropped: the printed `n` column is the guard that no player-round went
+    /// missing, and it can only be that if every sample lands somewhere.
+    #[test]
+    fn slack_seat_clamps_a_late_round_sample_into_the_last_bucket() {
+        let mut s = SlackSeat::default();
+        s.sample_turn_start(4, 2);
+        s.sample_turn_start(999, 3);
+        assert_eq!(s.free_w_by_round[4], (2, 1));
+        assert_eq!(s.free_w_by_round[SLACK_ROUNDS - 1], (3, 1));
+        let n: u32 = s.free_w_by_round.iter().map(|b| b.1).sum();
+        assert_eq!(n, 2, "every sample must land in exactly one bucket");
+    }
+
+    /// The window mean is over the requested rounds INCLUSIVE at both ends,
+    /// and is per-SAMPLE, not per-round: a round with more player-rounds in it
+    /// weighs more, exactly as a mean over the raw samples would.
+    #[test]
+    fn slack_side_agg_mean_free_workers_is_inclusive_and_sample_weighted() {
+        let mut agg = SlackSideAgg::default();
+        agg.free_w_by_round[3] = (100, 1); // outside the window below
+        agg.free_w_by_round[4] = (2, 2); // 1.0 over 2 samples
+        agg.free_w_by_round[5] = (6, 2); // 3.0 over 2 samples
+        agg.free_w_by_round[6] = (100, 1); // outside the window below
+        let (mean, n) = agg.mean_free_workers(4, 5);
+        assert_eq!(n, 4);
+        assert!((mean - 2.0).abs() < 1e-9, "got {mean}");
+        assert_eq!(SlackSideAgg::default().mean_free_workers(4, 18), (0.0, 0));
+    }
+
+    /// The arena's whole claim rests on this: the constrained seat really does
+    /// end up holding more free workers than the same weights unconstrained,
+    /// and it never spends its last one while a legal alternative exists.
+    /// Run on one fixed seed -- a whole 2p game each way -- because the
+    /// constraint is a property of the played trajectory, not of any single
+    /// call, and a unit test on `keeps_worker_slack` alone would still pass if
+    /// the arena loop never consulted it.
+    #[test]
+    fn arena_play_slack_actually_raises_free_workers_against_the_same_weights() {
+        let w = Weights::default();
+        let constrained = arena_play_slack(w, 4242, Some(0));
+        let champion = arena_play_slack(w, 4242, None);
+        let (con_free, con_n) = {
+            let mut agg = SlackSideAgg::default();
+            agg.add(&constrained[0]);
+            agg.mean_free_workers(4, 18)
+        };
+        let (champ_free, champ_n) = {
+            let mut agg = SlackSideAgg::default();
+            agg.add(&champion[0]);
+            agg.mean_free_workers(4, 18)
+        };
+        assert!(con_n > 0 && champ_n > 0, "both replays must reach the measured window");
+        assert!(
+            con_free > champ_free,
+            "the constraint must bind: constrained {con_free} vs champion {champ_free}"
+        );
+        assert_eq!(
+            constrained[0].unsatisfiable, 0,
+            "EndTurn always keeps a free worker, so a compliant move should always exist"
+        );
+        assert!(
+            constrained[0].substituted > 0,
+            "the constraint must have overridden at least one pick on this seed"
+        );
     }
 
     #[test]
