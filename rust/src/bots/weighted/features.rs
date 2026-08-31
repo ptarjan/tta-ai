@@ -85,6 +85,53 @@ const N: usize = WeightKey::ALL.len();
 /// function nobody computes.
 pub const STRENGTH_LEAD_CAP: f64 = 6.0;
 
+/// Where "just behind / just ahead" on the CULTURE rate stops and
+/// "structurally behind / ahead" starts, for [`WeightKey::
+/// CultureRateBehindNear`] and [`WeightKey::CultureRateAheadNear`].
+///
+/// One step of the quantity's own scale: culture rates run to roughly 30 by
+/// age III, so 4 separates a gap a single building closes from one that needs
+/// a different plan. Deliberately NOT the distribution's median gap -- a
+/// median cut would move every time the champion's play style did, and this
+/// is a fixed reading of the rules' own scale.
+const CULTURE_RATE_NEAR: f64 = 4.0;
+
+/// [`CULTURE_RATE_NEAR`] for the SCIENCE rate. Smaller because the quantity
+/// is: science rates run to roughly 20 by age III against culture's 30.
+const SCIENCE_RATE_NEAR: f64 = 3.0;
+
+/// `max(0, (best - mine) / best)` -- how far behind the rate leader I am, as
+/// a fraction of the leader's own rate; `0.0` when level, ahead, or when the
+/// leader produces nothing.
+///
+/// The same formula as `rivals::trailing_fraction`, which prices CARD
+/// MARGINALS off the weight side and has no phi coordinate. Kept as a
+/// separate function rather than shared with it because the two are only
+/// coincidentally the same expression: that one takes a `WeightKey` and
+/// re-derives both rates from the state, this one is handed the two `f64`
+/// rates `features` has already assembled (deferred credit and pact-partner
+/// gains included), and folding them together would drag those adjustments
+/// into the card marginal, which is a behaviour change nobody asked for.
+fn rate_trail_fraction(mine: f64, best: f64) -> f64 {
+    if best <= 0.0 || mine >= best {
+        return 0.0;
+    }
+    (best - mine) / best
+}
+
+/// `1.0` when `gap` is strictly inside `(0, far)`, else `0.0` -- the
+/// near-side indicator of a signed rate gap.
+///
+/// Called twice per race, once with the gap and once with its negation, which
+/// is what makes the ahead and behind sides independent coordinates. Both
+/// read `0.0` when the gap is exactly zero (nobody is ahead) and when it is
+/// at or beyond `far` (the FAR buckets, deliberately not keys: a full
+/// five-way partition of indicators sums to the constant 1 and would add a
+/// flat direction to the weight space).
+fn near_bucket(gap: f64, far: f64) -> f64 {
+    f64::from(gap > 0.0 && gap < far)
+}
+
 /// The raw feature vector `evaluate` (unowned) prices -- Python's `features()`
 /// return value, as an array. See this module's top doc comment for why.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1143,6 +1190,65 @@ pub fn features(
         WeightKey::RivalCultureDeficit,
         (rival_culture_rate - f.get(WeightKey::CultureRate)).max(0.0),
     );
+
+    // --- the SHAPE of the two rate races (2026-08-31).
+    //
+    // The three keys above read each race as an unbounded, one-sided
+    // DIFFERENCE. Everything here reads the same two numbers -- my rate and
+    // the best rival's, both already on `f` -- through a shape a linear
+    // evaluator cannot form from them: a ratio, a bounded share, and two step
+    // functions. Nothing new is measured; only the way it can be priced.
+    //
+    // Promoted from the screening rig's `rel_*` columns after both screens
+    // agreed (`analysis/feature_screen_families_2026-08-31.txt` for held-out
+    // R2 gain over phi, `analysis/feature_discrimination_2026-08-31.txt` for
+    // within-decision spread), and deliberately built off `f`'s OWN
+    // quantities rather than re-deriving them from `effects::compute` the way
+    // the screen did -- the screen had no `deferred_credit` or pact-partner
+    // adjustment available, and a phi coordinate that disagreed with the
+    // `CultureRate`/`RivalCultureRate` pair sitting three lines above it
+    // would be a second, quieter definition of the same race.
+    //
+    // The MIRROR HINGES `max(0, mine - rival)` on these two rates were
+    // screened alongside and are NOT here, on purpose: with `CultureRate`,
+    // `RivalCultureRate` AND `RivalCultureDeficit` all already emitted, the
+    // lead is `CultureRate - RivalCultureRate + RivalCultureDeficit`
+    // EXACTLY, so it is a linear combination of three live columns and adds
+    // no representational power at any weight -- the `StrengthRel` mistake
+    // restated. Only the non-linear shapes below survive that test.
+    let my_cul_rate = f.get(WeightKey::CultureRate);
+    let my_sci_rate = f.get(WeightKey::ScienceRate);
+    // `max(0, (best - mine) / best)`, the scale-free reading of the two
+    // deficits. Zero with no rival producing at all, which is what a `best`
+    // of zero already means -- no separate live-rival guard needed.
+    f.set(WeightKey::CultureRateTrailFrac, rate_trail_fraction(my_cul_rate, rival_culture_rate));
+    f.set(WeightKey::ScienceRateTrailFrac, rate_trail_fraction(my_sci_rate, rival_science_rate));
+    // My share of the two-sided culture rate, over the non-negative parts.
+    // Exactly 0.5 when neither side produces culture, so the coordinate is
+    // flat across candidates in that (opening) case rather than jumping.
+    let cul_rate_sum = my_cul_rate.max(0.0) + rival_culture_rate.max(0.0);
+    f.set(
+        WeightKey::CultureRateShare,
+        if cul_rate_sum > 0.0 { my_cul_rate.max(0.0) / cul_rate_sum } else { 0.5 },
+    );
+    // The near-side indicators. `rival_count` is the count of live,
+    // un-resigned opponents (the `--- rivals` max-loop at the top of this
+    // function), and with none of them `rival_*_rate` is 0.0, which would
+    // read as a full-size LEAD and fire the ahead-side indicator on a race
+    // that no longer exists. The deficit keys above need no such guard
+    // because zero-rival makes their `max(0, ·)` vanish on its own; these do.
+    //
+    // The cuts are one step of each quantity's own scale -- culture rates run
+    // to ~30 and science rates to ~20 by age III -- so they separate "just
+    // behind" from "structurally behind" instead of halving the distribution.
+    if rival_count > 0 {
+        let cul_gap = my_cul_rate - rival_culture_rate;
+        let sci_gap = my_sci_rate - rival_science_rate;
+        f.set(WeightKey::CultureRateBehindNear, near_bucket(-cul_gap, CULTURE_RATE_NEAR));
+        f.set(WeightKey::CultureRateAheadNear, near_bucket(cul_gap, CULTURE_RATE_NEAR));
+        f.set(WeightKey::ScienceRateBehindNear, near_bucket(-sci_gap, SCIENCE_RATE_NEAR));
+        f.set(WeightKey::ScienceRateAheadNear, near_bucket(sci_gap, SCIENCE_RATE_NEAR));
+    }
 
     // --- the events I planted myself (GAP 4). Legal by construction --
     // `my_seeds` filters on `seeded_by == idx` and reads no pile order.

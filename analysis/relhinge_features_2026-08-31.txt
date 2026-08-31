@@ -1,0 +1,498 @@
+HINGED / BUCKETED RELATIVE-RATE COLUMNS PROMOTED TO REAL FEATURES -- 2026-08-31
+
+Seven screening-rig `rel_*` columns become real `WeightKey`s with real phi
+coordinates. One planned column was DROPPED after an exact-redundancy proof;
+that is the only deviation from the brief and it is argued in section 3.
+
+This file reports measurements and the decisions taken. Nothing here was
+promoted into a champion file, and no climb was started, stopped or restarted.
+
+
+====================================================================
+0. WHAT WAS RUN, AND AGAINST WHAT
+====================================================================
+
+Working tree      /Users/pt/tta-relhinge  (a `cp -Rc` clone of /Users/pt/tta-ai
+                  at 9447cc6, its own `target/`)
+
+                  DELIBERATE: the live tree's `rust/target/release/climb` is
+                  what the three league arms execute, and cron relaunches them
+                  every 10 minutes ([[tta-landed-is-not-live]]). Building in
+                  the live tree would have put this change in front of the
+                  2p/3p/4p climbs. It never touched them: the arms ran
+                  undisturbed throughout, and the committed source is NOT live
+                  until someone rebuilds and restarts on purpose.
+
+Frozen champion   /tmp/relhinge/champ_2p_frozen.json
+  generation      gen 133595 (players 2)
+  md5             0df04494e7ba0353156aefc8917f8621
+  provenance      copied out of the clone at clone time, i.e. a snapshot of
+                  `experiments/rust_champion_2p.json`. Every measurement below
+                  reads THIS COPY, never the live file
+                  ([[tta-champion-file-is-live]]).
+  NOTE            this is NOT the gen 133131 / md5 0272cfa7... champion the two
+                  screening reports used -- the 2p arm advanced 464 generations
+                  between those runs and this one. Section 4 shows the
+                  instrument still reproduces the screens' own numbers on it,
+                  which is the check that matters.
+
+Binaries          release build of the clone: featdisc, arena, climb.
+
+Source changed    rust/src/bots/weighted/weights.rs    (+151 -5)
+                  rust/src/bots/weighted/features.rs   (+106)
+                  rust/src/bots/weighted/eval.rs       (+125, a new test only)
+
+
+====================================================================
+1. THE SEVEN KEYS
+====================================================================
+
+All seven are `WeightGroup::Rivals`, all authored default 0.0, all
+`SignIntent::Free`. Formulas are in phi's own units -- see section 2.
+
+  WeightKey                JSON name                   from screen column
+  ---------------------------------------------------------------------
+  CultureRateTrailFrac     culture_rate_trail_frac     rel_trail_culrate
+  ScienceRateTrailFrac     science_rate_trail_frac     rel_trail_scirate
+  CultureRateShare         culture_rate_share          rel_share_culrate
+  CultureRateBehindNear    culture_rate_behind_near    rel_bkt_culrate_m1
+  CultureRateAheadNear     culture_rate_ahead_near     rel_bkt_culrate_p1
+  ScienceRateBehindNear    science_rate_behind_near    rel_bkt_scirate_m1
+  ScienceRateAheadNear     science_rate_ahead_near     rel_bkt_scirate_p1
+
+  *TrailFrac   max(0, (best rival's rate - mine) / best rival's rate)
+  *Share       mine / (mine + best rival's), over the non-negative parts;
+               exactly 0.5 when neither side produces at all
+  *BehindNear  1.0 when I am behind by 1..far-1, else 0.0
+  *AheadNear   1.0 when I am ahead  by 1..far-1, else 0.0
+               far = 4 on culture, 3 on science -- one step of each
+               quantity's own scale, copied from the screening rig
+
+The *Near indicators are guarded by `rival_count > 0`. With no live rival the
+rival rate is 0.0, which would read as a full-size LEAD and fire the ahead-side
+indicator on a race that no longer exists. The existing deficit keys need no
+such guard because zero-rival makes their `max(0, .)` vanish on its own; these
+do, and the screening rig had the same guard via its `r.any` flag.
+
+The FAR and LEVEL buckets are deliberately NOT keys. Five indicators over a
+five-way partition sum to the constant 1 and would add a flat direction to the
+weight space.
+
+
+--------------------------------------------------------------------
+1a. SIGN_INTENT -- Free, all seven, and why
+--------------------------------------------------------------------
+
+[[tta-sign-gate-snaps-to-zero]]: a sign_intent is not a hint, it is a hard
+constraint enforced on every load and every mutation, and a wrong one destroys
+the key's accumulated magnitude every time. The brief said prefer Free over
+guessing. Free is not a shrug here; each has its own argument:
+
+  *TrailFrac    `RivalCultureDeficit` / `RivalScienceDeficit` are already
+                classified Free, with a stated reason (weights.rs: no
+                RULES_SPEC chapter ties a trailing culture or science RATE to a
+                rules-imposed outcome the way the combat chapter does for
+                military strength). These two ARE those deficits divided by the
+                leader's own rate. Dividing a quantity of unfixed sign by a
+                positive quantity cannot fix a sign.
+
+  *Share        the same race read as a bounded fraction, and it points the
+                OPPOSITE way to the two above (higher share = ahead), so it
+                could not share their gate even if they had one.
+
+  *Near         stronger than "no citation": the sign is genuinely two-sided.
+                An indicator's coefficient is measured against the OMITTED
+                level and far buckets, not against zero, so even the
+                behind-side pair has no a-priori direction -- "slightly behind"
+                is worse than level and better than far behind, and one
+                coefficient answers to both. RULES_SPEC imposes no penalty at
+                any of these thresholds; they are cuts this project chose.
+
+Section 5 measures a direction empirically and it is a large effect. It is
+recorded there as a hint for whoever prices these keys, and deliberately NOT
+promoted into a sign_intent: it is one magnitude, at one player count, against
+one champion, and the gate is the one decision the climb cannot undo.
+
+
+--------------------------------------------------------------------
+1b. THE OTHER TABLES A NEW KEY HAS TO LAND IN
+--------------------------------------------------------------------
+
+`WeightKey::group` -> Rivals (with the deficits they are re-shapings of, so
+`Group` mutations move the whole race together). `early`/`late`/`trailing`/
+`needed` -> the four "called on a key outside <SET>" panic arms, since none of
+the seven is phase-suffixed, standing or need-axis.
+
+`p95_candidate_spread` -> `[0,0,0]` for all seven, WITH A COMMENT SAYING WHY.
+That function's doc comment forbids hand-authoring a number ("do not edit a
+number here by hand: hand-transcribing this table out of a text report is how
+the 107x error happened"), and no `featspread` sweep has run against a champion
+that has these keys. `[0,0,0]` is the no-measurement sentinel `clamp_bound`
+reads; it returns CLAMP_BLIND (60.0), the same conservative rail 84.5% of that
+table's cells already take ([[tta-clamp-table-is-mostly-inert]]). The thing the
+row would otherwise prove -- that the feature varies across candidates at all
+-- is proven directly and more strongly in section 4.
+
+DOMINATES: checked, and neither pair (ResourceStock/BlueFree,
+WonderPotential/WonderPromise) involves any of the seven, so no new key can be
+tied to an existing one ([[tta-dominates-ties-two-keys]]). Verified by round
+trip rather than by reading the table -- section 6.
+
+
+====================================================================
+2. ONE DELIBERATE DEVIATION FROM THE SCREEN'S ARITHMETIC
+====================================================================
+
+The screening rig computed each rate from `effects::compute` on the trial
+state. `features.rs` does not: its `CultureRate` is `effects::compute(...)
+.culture + g(GainFeature::CultureRate)` (the deferred-credit adjustment) and
+its `rival_culture_rate` is a max over rivals that also folds in
+`dc.partner_gains` (an offered pact raises the partner's own rate).
+
+The promoted keys are built off phi's OWN `CultureRate` / `RivalCultureRate` /
+`ScienceRate` / `RivalScienceRate`, not re-derived. Reason: a phi coordinate
+that disagreed with the `CultureRate`/`RivalCultureRate` pair sitting three
+lines above it in the same function would be a second, quieter definition of
+the same race. The cost is that the promoted columns are not bit-identical to
+the screened ones; section 4 measures the difference and it is ~1%.
+
+`rate_trail_fraction` is kept as its own function rather than shared with
+`rivals::trailing_fraction`, which is the same expression on the WEIGHT side
+(it scales card marginals through `feature_marginal`, keyed by the pre-existing
+`CultureRateTrailing` / `ScienceRateTrailing`). Folding them together would
+drag the deferred-credit and pact adjustments into the card marginal, which is
+a behaviour change nobody asked for.
+
+NAMING TRAP: `CultureRateTrailing` and `ScienceRateTrailing` ALREADY EXIST as
+weight-side scales with no phi coordinate. The new phi keys are therefore
+`*_trail_frac`, not `*_trailing`. Anyone reading the champion JSON now sees
+four culture/science "trailing" names; two price card marginals, two are
+standing-position coordinates, and they never meet.
+
+
+====================================================================
+3. THE COLUMN I DROPPED, AND WHY -- rel_scirate_lead
+====================================================================
+
+The brief listed `rel_scirate_lead` (R2 +0.000448) as the eighth promotion,
+"the MIRROR of a hinge phi already has". It is NOT promoted. It is an exact
+linear combination of three columns phi already emits.
+
+phi emits, verbatim, in `features.rs`:
+
+    ScienceRate          = my science rate                        (:688)
+    RivalScienceRate     = best rival's science rate              (:1110)
+    RivalScienceDeficit  = max(0, rival - mine)                   (:1128-1131)
+
+and for any real g, `max(0,g) - max(0,-g) == g` identically. With
+g = mine - rival:
+
+    ScienceRateLead = max(0, mine - rival)
+                    = g + max(0, -g)
+                    = ScienceRate - RivalScienceRate + RivalScienceDeficit
+
+exactly, at every state, with no approximation. The leaf eval is dot(w, phi)
+([[tta-leaf-eval-is-a-dot-product]]), so a column in the span of three live
+columns adds ZERO representational power at any weight -- the learner can
+already express any weighting of it by moving those three. This is precisely
+`StrengthRel`, which [[tta-relative-features-need-a-hinge]] already records as
+redundant for the identical reason.
+
+The families report scored it spanned 0.9984 rather than 1.0000 and read that
+as "the mirror half is missing from phi, so the same construction scores 5x to
+25x more". The 0.16% residual is not a missing half: it is the section-2
+definitional gap -- the rig's `effects::compute` rates against phi's
+deferred-credit- and pact-adjusted ones. Implement the column faithfully in
+`features.rs` units, as this work did for the other seven, and the residual
+goes to zero. The R2 gain of +0.000448 is measuring the deferred-credit
+adjustment, not a lead hinge.
+
+The same algebra retires `rel_culrate_lead` (+0.000320, spanned 0.9986), whose
+three phi columns are `CultureRate` (:686), `RivalCultureRate` (:1109) and
+`RivalCultureDeficit` (:1142-1145).
+
+So the families report's section 6 needs one correction: the high-spanned
+hinges it separated into "phi already carries this one" (~0 gain) versus "the
+mirror half is missing" (5-25x more) are the SAME case. Both are spanned; the
+second group's gain is an artefact of the rig's own arithmetic. Where phi
+carries a deficit hinge AND both raw rates, it carries the lead too.
+
+I ALSO AGREE WITH THE BRIEF'S OWN EXCLUSIONS (`rel_proj_*`, `rel_x_*_late`) and
+did not include them.
+
+
+====================================================================
+4. REACHABILITY -- STEP 2, THE GATE BEFORE ANY ARENA
+====================================================================
+
+    featdisc --games 400 --players 2 --threads 3 --seed 1 \
+      --weights /tmp/relhinge/champ_2p_frozen.json \
+      --out /tmp/relhinge/featdisc_new_2p.tsv
+
+    columns    366 (181 phi + 185 extra)     <- 174 + 7, the seven landed
+    decisions  115170  (+5065 forced, excluded)
+    successors 1368796  (11.885 per decision, max 41)
+    elapsed    106.6 s
+
+`spread_ratio` = mean within-decision spread / SD of the chosen-move value. A
+column constant across the legal moves scores 0.000000 and cannot change the
+argmax at any weight. The `CultureRate` yardstick is 0.161034 here (the
+discrimination report's own figure on its champion was 0.1624 -- the instrument
+reproduces across a 464-generation gap).
+
+  key                      mean_spread  spread_ratio   vs yardstick
+  ------------------------------------------------------------------
+  CultureRateTrailFrac        0.070106     0.335490        2.08x
+  ScienceRateTrailFrac        0.225854     0.660701        4.10x
+  CultureRateShare            0.046938     0.326060        2.02x
+  CultureRateBehindNear       0.139906     0.329138        2.04x
+  CultureRateAheadNear        0.136259     0.301044        1.87x
+  ScienceRateBehindNear       0.249014     0.598595        3.72x
+  ScienceRateAheadNear        0.148667     0.349713        2.17x
+
+  CultureRate  (positive control)          0.161034        1.00x
+  RivalCultureRate (negative control)      0.000000        class B, as expected
+
+ALL SEVEN PASS. None is 0.000000; every one is above the yardstick and far
+above the discrimination report's low-spread line of 0.0406. Nothing had to be
+dropped or repaired at this step.
+
+FAITHFULNESS OF THE PROMOTION. The same run still carries the screening rig's
+own 185 extra columns, so the promoted key and the column it came from were
+measured side by side on the same 115170 decisions:
+
+  promoted key            ratio      screen column         ratio     delta
+  ---------------------------------------------------------------------------
+  CultureRateTrailFrac   0.335490    rel_trail_culrate    0.338834   -1.0%
+  ScienceRateTrailFrac   0.660701    rel_trail_scirate    0.663329   -0.4%
+  CultureRateShare       0.326060    rel_share_culrate    0.329494   -1.0%
+  CultureRateBehindNear  0.329138    rel_bkt_culrate_m1   0.334245   -1.5%
+  CultureRateAheadNear   0.301044    rel_bkt_culrate_p1   0.305275   -1.4%
+  ScienceRateBehindNear  0.598595    rel_bkt_scirate_m1   0.603011   -0.7%
+  ScienceRateAheadNear   0.349713    rel_bkt_scirate_p1   0.354922   -1.5%
+
+Within 1.5% everywhere, all in the same direction, which is the section-2
+deferred-credit/pact adjustment showing up exactly where it should.
+
+TWO CONSISTENCY CHECKS FELL OUT FOR FREE. A trail fraction is zero exactly when
+its deficit is, so the pairs must share const_frac and allzero_frac to the
+digit, and they do:
+
+  CultureRateTrailFrac / RivalCultureDeficit   0.712816 / 0.530503  (identical)
+  ScienceRateTrailFrac / RivalScienceDeficit   0.691352 / 0.498046  (identical)
+
+
+====================================================================
+5. ARENA, 2p -- WITH THE NULL MEASURED
+====================================================================
+
+    arena --a <A> --b champ_2p_frozen.json --players 2 \
+          --games 2400 --seed 20260831 --threads 3
+    2400 games = 1200 deals x 2 seats, every deal played from both seats.
+
+THE MEASURED NULL IS EXACTLY 0.500, NOT 0.518. Same-vs-same, n=2400:
+
+    win rate 50.0% +/- 0.0   rho -1.00   deff 0.00   1200 deals
+
+[[tta-forced-slack-arena-loses]] records seat 0 as worth +1.8pp and says to
+read against 0.518. That figure is REAL BUT INSTRUMENT-SPECIFIC: it came from
+`openerprobe`'s constrained replay, where only seat 0 was bound. `arena`
+rotates A through every seat on every deal (`arena.rs`: game g puts A in seat
+g % players, deal seed0 + g / players), so RULES_SPEC 1.9's unfair seating
+order cancels exactly instead of being averaged. rho -1.00 is that cancellation
+being observed, not assumed. Read arena results against 0.500; read
+openerprobe results against a measured seat control.
+
+  variant                                    win rate      CI            verdict
+  -----------------------------------------------------------------------------
+  A: frozen champion (same file both sides)  50.0% +/-0.0  --            null
+  B: 7 new keys present, at default 0.0      50.0% +/-0.0  --            identical
+  C: 7 new keys, intuitive signs, 1% scale   51.1% +/-1.3  [49.8, 52.4]  inconclusive
+  D: 7 new keys, intuitive signs, 5% scale   48.1% +/-1.6  [46.5, 49.7]  reject
+  E: 7 new keys, REVERSED signs, 5% scale    32.4% +/-1.8  [30.6, 34.2]  reject
+  F: 7 EXISTING keys, same 5% perturbation   14.6% +/-1.4  [13.2, 16.0]  reject
+
+The "scale" rule, stated once: each key's weight is set so that its
+contribution to a TYPICAL candidate-set spread is a fixed fraction of what
+`CultureRate` contributes, using featdisc's own mean_spread as the unit --
+w_new = frac * |w_culture_rate| * mean_spread(CultureRate) / mean_spread(new).
+At 5% that is w = -30.75, -9.54, +45.92, -15.41, +15.82, -8.66, +14.50 in the
+table's key order. "Intuitive signs" = behind is bad, ahead and share are good.
+
+WHAT B SAYS. Row B is not a statistical wash, it is BIT-IDENTITY: 50.0% +/-
+0.0, and mean moves 301.5 and mean culture 184.1 match row A to every printed
+digit. The seven keys at their authored 0.0 change nothing whatsoever. That is
+the invariant [[tta-relative-features-need-a-hinge]] requires of a new key, and
+it is the honest reading of "a wash is the expected outcome at defaults" -- the
+arena cannot say more than this, because there is nothing stochastic left to
+measure.
+
+WHAT D DOES NOT SAY. Row D on its own reads "the new features cost 1.9pp".
+That reading is wrong, and rows E and F are why.
+
+  * E is the perfectly matched control: same seven keys, same seven magnitudes,
+    only the signs reversed. 48.1% against 32.4% is a 15.7pp swing produced by
+    nothing but direction. A coordinate that could not reach the argmax could
+    not do that. This is a second, independent proof of reachability, and a
+    much harsher one than section 4's.
+
+  * F asks what a perturbation of this size costs ANYWHERE. Seven established
+    live coordinates (free_workers, ca_left, hand_value, take_cost_paid,
+    science_gap, wonder_stages_left, military_action_gap), moved by the same
+    per-key contribution: 14.6%, a 35.4pp loss. The same-sized move on the
+    seven new coordinates costs 1.9pp, nineteen times less.
+
+    CAVEAT, stated because it cuts against my own conclusion: F is not a
+    perfectly matched control. Those seven keys carry small fitted values
+    (ca_left -0.034, hand_value +0.009), so an equal-contribution delta moves
+    them by multiples of their current magnitude, whereas the new keys move
+    from exactly zero. F is an upper bound on "what perturbing a converged
+    champion costs", not a like-for-like. E is the airtight one.
+
+SO THE HONEST SUMMARY IS: reachable (twice over), inert at defaults (exactly),
+and not actively harmful -- at equal perturbation magnitude they cost 1.9pp
+where established coordinates cost 35.4pp, and at 1% they sit slightly on the
+positive side of the null. The 5% overshoot plus the 1% near-wash is the shape
+of a coordinate whose weight has to be FITTED, which is the climb's job and was
+explicitly out of scope here.
+
+DIRECTIONAL HINT, NOT A GATE. E vs D is a large, clean signal that "behind on a
+rate is bad, ahead is good" is the right direction for these shapes. It is
+recorded here and deliberately NOT encoded as a sign_intent, for the reason in
+section 1a: one magnitude, one player count, one champion, against a constraint
+the climb cannot undo.
+
+
+====================================================================
+6. ROUND TRIP, NOT DIFF
+====================================================================
+
+[[tta-dominates-silently-reverts-a-weight]]: a key-by-key diff of the JSON you
+wrote proves you edited the right keys, not that the engine will USE them. Each
+file was written, loaded through `climb --start <f> --out <g> --players 2
+--gens 0 --hours 0`, and `g` compared to `f`.
+
+  file                    keys in -> out   keys moved
+  ----------------------------------------------------
+  challenger_priced.json     181 -> 181        0
+  challenger_zero.json       181 -> 181        0
+  champ_2p_frozen.json       174 -> 181        0
+
+Row 3 is the load path a real champion takes: 174 keys in, 181 out, the seven
+new ones added at 0.0 and NOTHING else moved.
+
+Row 1 is the one that proves the sign classification is live. Four of the seven
+carry NEGATIVE values in that file (-30.75, -9.54, -15.41, -8.66) and all four
+survive the load unchanged. A `NonNegative` misclassification would have
+snapped every one of them to exactly 0.0 on this very call
+([[tta-sign-gate-snaps-to-zero]]: `parse_weights` runs `dominance_repair` on
+the way out). They did not move, so `Free` is in force and no DOMINATES pair
+touches them.
+
+
+====================================================================
+7. VALIDATION GATES, IN THE ORDER THEY WERE REQUIRED
+====================================================================
+
+1. `cargo clippy --all-targets -- -D warnings`   clean
+   `cargo test --release`                        exit 0
+       1565 lib tests + bin tests + integration suite, 0 failed.
+   Named guards that matter, all green:
+       linear_features_dotted_with_a_weight_vector_reproduces_evaluate_exactly
+       linear_features_still_reproduces_evaluate_once_the_two_new_coordinates_are_nonzero
+       every_weight_key_features_writes_actually_goes_nonzero_on_some_sampled_position
+       every_weight_key_is_named_by_production_source_outside_its_own_declaration
+       every_sign_intent_classification_agrees_with_its_own_authored_default
+       every_weight_key_lands_in_exactly_one_groups_keys
+
+2. Reachability -- section 4. All seven non-zero. PASSED, nothing dropped.
+
+3. Arena with the null measured -- section 5.
+
+No `#[cfg(test)]` item was added mid-file anywhere
+([[tta-cfgtest-midfile-truncates-registry-scan]]); the new test is inside
+eval.rs's existing trailing `#[cfg(test)] mod tests`.
+
+
+--------------------------------------------------------------------
+7a. THE REAL-CORPUS DOT-PRODUCT TEST DID NOT EXIST
+--------------------------------------------------------------------
+
+The brief and [[tta-leaf-eval-is-a-dot-product]] both say there is an existing
+real-corpus identity test,
+`linear_features_dotted_with_the_champion_reproduces_evaluate_on_real_replayed_bgo_positions`,
+in `rust/src/bots/weighted/eval.rs`. THERE IS NOT ONE, and there never was:
+`git log -S` over that path returns no commit that ever contained the string.
+The memory is wrong on this point and should be corrected.
+
+What eval.rs actually had were three identity tests, all on `game::new_game`
+toy deals or hand-built fixtures, all at `Weights::default()`. That leaves
+exactly the blind spot these seven keys sit in: a feature that is structurally
+zero on turn one (nobody has a rate, nobody is ahead) contributes nothing
+whatever weight it is given, and a coordinate whose authored default is 0.0
+(all seven of these, every hinge landed 2026-08-27, and 40-odd others) is
+dotted against zero -- so `linear_features` could read the wrong index for it
+and the sum would not move.
+
+Added, in eval.rs's trailing test block:
+
+    linear_features_reproduces_evaluate_on_played_forward_positions_at_a_nondefault_vector
+
+Real self-play driven to depth at 2p/3p/4p, sampling every 5th move past move
+10, asserting dot(w, candidate_features) == rank_moves' own score for every
+candidate. Every key gets a DISTINCT non-zero weight (0.25 + i * 0.03125) so a
+transposed pair of indices cannot cancel. Two premise assertions stop it
+passing vacuously: >5000 candidates checked, and the seven new coordinates
+non-zero on >1000 of them. It passes. Max discrepancy stays under the existing
+1e-6 tolerance.
+
+It does not read `sources/`, so it runs in a fresh checkout without the private
+corpus symlink -- which is probably why the corpus-based test the memory
+remembers was never committed.
+
+--------------------------------------------------------------------
+7b. A LATENT HAZARD FOUND, NOT FIXED
+--------------------------------------------------------------------
+
+`eval.rs:1081` carries a mid-file `#[cfg(test)] pub(crate) fn
+legacy_phase_early_names()`. That is a live instance of
+[[tta-cfgtest-midfile-truncates-registry-scan]]: registry.rs's production-source
+scan truncates each file at its FIRST `#[cfg(test)]`, so ~150 lines of eval.rs
+are invisible to it. It is harmless today (every WeightKey is named earlier, in
+weights.rs or features.rs, and the test passes), and it is NOT this change's
+doing. Left alone rather than widening this diff. If that test ever fails on a
+key this work does not mention, this is the first thing to look at.
+
+
+====================================================================
+8. WHAT WAS NOT DONE, ON PURPOSE
+====================================================================
+
+* No champion file was written or promoted. The seven keys exist in the binary
+  and default to 0.0; a champion JSON gains them the first time an arm that has
+  them writes one.
+* No climb was started, stopped, restarted or rebuilt. The live tree's release
+  binary is untouched, so all three arms still run the pre-change image and
+  this change is NOT live ([[tta-landed-is-not-live]]). Making it live is a
+  separate, deliberate act: bracket the rebuild with the stop sentinels, or
+  cron refills the arms off the old binary mid-build.
+* No sign_intent was tightened off the section-5 evidence.
+* `featspread` was not run, so `p95_candidate_spread` is the [0,0,0] sentinel
+  and the seven clamp at CLAMP_BLIND. Regenerate that table once a champion has
+  actually climbed with these keys.
+* The clone at /Users/pt/tta-relhinge is removed after this lands.
+
+
+====================================================================
+9. THE NEXT MEASUREMENT WORTH TAKING
+====================================================================
+
+Price them. Everything here says the coordinates are reachable, inert until
+priced, cheap to be wrong about relative to established keys, and directional
+enough that reversing the sign costs 15.7pp. None of that is a win rate. The
+question this work cannot answer is whether a climb given these seven
+coordinates finds something the 174 could not, and the only instrument for that
+is climb time on an arm that has them.
+
+If that is run: the 1% arm (row C, 51.1% [49.8, 52.4]) is a better starting
+point than zero, and the section-5 sign pattern is the direction to start from.

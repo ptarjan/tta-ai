@@ -2708,4 +2708,129 @@ mod tests {
             "weights_json wrote the raw negative value instead of the repaired one"
         );
     }
+
+    /// The dot-product identity on REAL, PLAYED-FORWARD positions, with
+    /// every coordinate carrying a non-default weight.
+    ///
+    /// The three identity tests above all evaluate `game::new_game` deals or
+    /// hand-built fixtures at `Weights::default()`. That leaves two gaps a
+    /// coordinate can hide in, and both are the shape this repo has been
+    /// bitten by before: a feature that is structurally zero on turn one (the
+    /// whole rival-race family is -- nobody has a rate, nobody is ahead) is
+    /// multiplied by whatever weight you like and still contributes nothing,
+    /// and a coordinate whose AUTHORED DEFAULT is `0.0` (all seven rate-race
+    /// shape keys, every hinge landed in 2026-08-27, and 40-odd others) is
+    /// dotted against zero, so `linear_features` could read the wrong index
+    /// for it and the sum would not move.
+    ///
+    /// So: drive real self-play games to depth, give EVERY key a distinct
+    /// non-zero weight (distinct so a transposed pair of indices cannot
+    /// cancel), and assert `dot(w, candidate_features) == rank_moves`' own
+    /// score for every candidate at every sampled decision. `linear_features`
+    /// is exact only at `w == freeze` (see this module's own doc comment on
+    /// the eleven frozen coordinates), so the same `w` is used for both, which
+    /// is precisely the condition every real caller meets.
+    #[test]
+    fn linear_features_reproduces_evaluate_on_played_forward_positions_at_a_nondefault_vector() {
+        // Distinct, non-zero, and small enough that the dot stays far from
+        // f64's cancellation regime. `dominance_repair` is deliberately NOT
+        // applied: this is an arithmetic identity between two functions of
+        // the same vector, and it has to hold for any vector at all, gated or
+        // not.
+        let mut w = Weights::default();
+        for (i, &k) in WeightKey::ALL.iter().enumerate() {
+            w.set(k, 0.25 + (i as f64) * 0.03125);
+        }
+
+        struct Rng(u64);
+        impl Rng {
+            fn below(&mut self, n: usize) -> usize {
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                ((z ^ (z >> 31)) % n as u64) as usize
+            }
+        }
+
+        let bot = WeightedBot::new(w);
+        let mut checked = 0usize;
+        let mut nonzero_new = 0usize;
+        // The seven 2026-08-31 rate-race shape keys: the reason this test
+        // exists in this form, and the ones a toy `new_game` position cannot
+        // reach (on turn one every rate is 0, so every one of them is 0).
+        let shape_keys = [
+            WeightKey::CultureRateTrailFrac,
+            WeightKey::ScienceRateTrailFrac,
+            WeightKey::CultureRateShare,
+            WeightKey::CultureRateBehindNear,
+            WeightKey::CultureRateAheadNear,
+            WeightKey::ScienceRateBehindNear,
+            WeightKey::ScienceRateAheadNear,
+        ];
+
+        for n in [2u8, 3, 4] {
+            for seed in 0u64..8 {
+                let mut state = G::new_game(n, seed.wrapping_mul(7919).wrapping_add(u64::from(n)));
+                let mut rng = Rng(seed ^ 0x5EED);
+                let mut moves = 0usize;
+                while !state.game_over && moves <= crate::game::MOVE_CAP {
+                    let legal = crate::legal::legal_moves(&state);
+                    let playable: Vec<crate::moves::Move> = legal
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .filter(|&m| !matches!(m, crate::moves::Move::Resign))
+                        .collect();
+                    if playable.is_empty() {
+                        break;
+                    }
+                    // Every 5th move, and only once there is a real board to
+                    // read -- the first few plies are the toy case already
+                    // covered above.
+                    if moves > 10 && moves.is_multiple_of(5) {
+                        let ranked = bot.rank_moves(&state, legal.as_slice());
+                        let feats = candidate_features(&state, legal.as_slice(), false, &w);
+                        assert_eq!(
+                            ranked.len(),
+                            feats.len(),
+                            "{n}p seed {seed} move {moves}: candidate set must match rank_moves' own"
+                        );
+                        for &(mv, score) in &ranked {
+                            let (_, f) = feats
+                                .iter()
+                                .find(|&&(m, _)| m == mv)
+                                .unwrap_or_else(|| panic!("{n}p seed {seed}: {mv:?} missing"));
+                            let linear = dot(&w, f);
+                            assert!(
+                                (linear - score).abs() < 1e-6,
+                                "{n}p seed {seed} move {moves} {mv:?}: \
+                                 linear={linear} evaluate={score} diff={}",
+                                linear - score
+                            );
+                            for &k in &shape_keys {
+                                if f[k as usize] != 0.0 {
+                                    nonzero_new += 1;
+                                }
+                            }
+                            checked += 1;
+                        }
+                    }
+                    let mv = playable[rng.below(playable.len())];
+                    crate::game::step(&mut state, mv);
+                    moves += 1;
+                }
+            }
+        }
+
+        assert!(checked > 5_000, "test premise: only {checked} candidates sampled, expected thousands");
+        // Without this the test could pass vacuously on positions where the
+        // seven new coordinates are all zero -- exactly the blind spot it was
+        // written to close.
+        assert!(
+            nonzero_new > 1_000,
+            "test premise: the rate-race shape keys were nonzero on only {nonzero_new} sampled \
+             candidates, so this test is not actually exercising them"
+        );
+    }
 }
