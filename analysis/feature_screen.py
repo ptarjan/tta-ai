@@ -18,10 +18,21 @@ Three things make the number mean something:
   evaluator demonstrably uses out of the base set and offer it back as a
   candidate: if the screen cannot recover a feature the bot already scores
   with, it cannot detect a new one either and every number below it is noise.
-* A NOISE FLOOR, measured not assumed. Gaussian columns and an EXACT linear
-  combination of existing `phi` columns are screened exactly like real
-  candidates. The largest gain any of them scores is the floor; a candidate
-  under it is a null however good the story is.
+* A NOISE FLOOR, measured not assumed. Gaussian columns, an EXACT linear
+  combination of existing `phi` columns, and REAL candidate columns with
+  their row order permuted are screened exactly like real candidates. The
+  largest gain any of them scores is the floor; a candidate under it is a
+  null however good the story is.
+* SAME-SIZE BLOCK NULLS from a SECOND, disjoint gaussian pool
+  (`--block-null-cols`). A family of 99 columns has to be read against 99
+  noise columns added at once, not against a one-column floor. The pool is
+  disjoint from the floor's because the floor is a MAX over its pool, so
+  widening that pool would move the floor and stop it being comparable to
+  the figure already on record.
+* SPANNED-NESS next to every gain. `redundancy` reports how much of a
+  candidate the 174 base columns already reconstruct. The screen measures
+  UNIQUE signal: a zero gain at spanned 1.0 means "phi already has this",
+  not "this does not matter".
 
 ## Why cross-products instead of refitting
 
@@ -203,8 +214,27 @@ def main():
     ap.add_argument("--label", default="margin")
     ap.add_argument("--alpha", type=float, default=1.0)
     ap.add_argument("--noise-cols", type=int, default=40)
+    ap.add_argument(
+        "--block-null-cols",
+        type=int,
+        default=151,
+        help="a SECOND, disjoint gaussian pool used only for same-size block nulls. "
+        "Kept out of the noise-floor pool on purpose: the floor is `max |gain|` over "
+        "the pool, so widening the pool would raise the floor and the number would "
+        "stop being comparable to the one already measured.",
+    )
     ap.add_argument("--alphas", default="1,100,10000,1000000", help="alpha sweep for the summary")
     ap.add_argument("--fold-seed", type=int, default=0, help="which grouped 5-fold split to use")
+    ap.add_argument(
+        "--min-games",
+        type=int,
+        default=30,
+        help="a candidate column that is non-zero in fewer than this many GAMES cannot be "
+        "screened honestly: with a grouped split its whole contribution can land inside one "
+        "fold, so its 'gain' is one game's residual. Such columns are still reported "
+        "individually and flagged; they are additionally excluded from a SECOND, "
+        "supplementary family total printed next to the raw one. Never replaces it.",
+    )
     ap.add_argument("--champion", default=None, help="frozen champion JSON, for the weight column")
     args = ap.parse_args()
 
@@ -235,10 +265,32 @@ def main():
         - 1.9 * raw["phi"][:, lc_src[1]].astype(np.float64)
         + 2.3 * raw["phi"][:, lc_src[2]].astype(np.float64)
     )
-    # Two REAL candidate columns with their row order permuted: same marginal
+    # REAL candidate columns with their row order permuted: same marginal
     # distribution as a live candidate, no relationship to the label left.
-    perm_src = [extra_keys.index(k) for k in ("hand_playable_now_count", "hand_science_cost_total")]
+    # One per candidate family, so no family's headline rests on a control
+    # measured on a different family's column.
+    want_perm = [
+        "hand_playable_now_count",
+        "hand_science_cost_total",
+        "gran_wcomp_stage_total",
+        "gran_board_obsolete_workers",
+        "rel_proj_final_culture_gap",
+        "rel_x_culrate_gap_late",
+    ]
+    perm_src = [extra_keys.index(k) for k in want_perm if k in extra_keys]
     perm = np.column_stack([rng.permutation(raw["extra"][:, i].astype(np.float64)) for i in perm_src])
+    block_noise = rng.standard_normal((n_rows, args.block_null_cols))
+
+    # How many GAMES each candidate column is ever non-zero in. A column
+    # confined to a handful of games cannot be told apart from those games'
+    # residual under a split that holds whole games out, so this is measured
+    # before anything is fitted and printed next to every gain.
+    _, gpos = np.unique(gid, return_inverse=True)
+    n_games_total = int(gpos.max()) + 1
+    extra_games = np.empty(extra, dtype=np.int64)
+    for i in range(extra):
+        nz = raw["extra"][:, i] != 0
+        extra_games[i] = int((np.bincount(gpos[nz], minlength=n_games_total) > 0).sum())
 
     # Preallocated and filled column-block by column-block, then `raw` is
     # dropped: an hstack of these would hold two ~2 GB copies at once.
@@ -246,15 +298,17 @@ def main():
     names += [f"NULL_noise_{i}" for i in range(args.noise_cols)]
     names.append("NULL_lincomb_of_phi")
     names += [f"NULL_permuted:{extra_keys[i]}" for i in perm_src]
+    names += [f"BLOCK_noise_{i}" for i in range(args.block_null_cols)]
     X = np.empty((n_rows, len(names)))
     X[:, :dims] = raw["phi"]
     X[:, dims : dims + extra] = raw["extra"]
     off = dims + extra
     X[:, off : off + args.noise_cols] = noise
     X[:, off + args.noise_cols] = lincomb
-    X[:, off + args.noise_cols + 1 :] = perm
+    X[:, off + args.noise_cols + 1 : off + args.noise_cols + 1 + len(perm_src)] = perm
+    X[:, off + args.noise_cols + 1 + len(perm_src) :] = block_noise
     sd_raw = X[:, :dims].std(axis=0)
-    del raw, noise, lincomb, perm
+    del raw, noise, lincomb, perm, block_noise
     # Global centre and scale: a fixed, label-free linear transform that
     # keeps the cross-product matrices well conditioned. Per-fold
     # standardization inside `Folds.r2` is what actually defines the fit.
@@ -268,6 +322,7 @@ def main():
     extra_cols = [idx[k] for k in extra_keys]
     null_cols = [i for n, i in idx.items() if n.startswith("NULL_")]
     noise_only = [idx[f"NULL_noise_{i}"] for i in range(args.noise_cols)]
+    block_pool = noise_only + [idx[f"BLOCK_noise_{i}"] for i in range(args.block_null_cols)]
 
     print("\nbuilding fold cross-products ...")
     F = Folds(X, y, gid, k=5, seed=args.fold_seed)
@@ -324,40 +379,88 @@ def main():
     floor = max(abs(g) for _, g in nulls)
     print(f"    ... {len(nulls)} null columns; NOISE FLOOR (max |gain|) = {floor:.6f} R2")
 
-    # ---- (4) the candidate family ---------------------------------------
-    print("\n(4) CANDIDATES -- hand composition, gain over base phi")
+    # ---- (4) the candidate columns --------------------------------------
+    # "spanned" is `redundancy`: how much of the candidate the 174 base
+    # columns already reconstruct. Section 2 is what makes it necessary --
+    # five of eight probes there recovered zero purely because they were
+    # spanned, so a zero gain is only readable next to this number.
+    print("\n(4) CANDIDATES -- gain over base phi, one column at a time")
     cands = []
     for k, c in zip(extra_keys, extra_cols):
-        cands.append((k, F.r2(phi_cols + [c], args.alpha) - base))
-    print(f"    {'column':<34} {'gain':>10} {'x floor':>8}  per-fold gains")
-    for k, g in sorted(cands, key=lambda t: -t[1]):
-        if abs(g) > floor:
+        cands.append((k, F.r2(phi_cols + [c], args.alpha) - base, F.redundancy(phi_cols, c)))
+    ng = dict(zip(extra_keys, extra_games.tolist()))
+    rare = {k for k in extra_keys if ng[k] < args.min_games}
+    print(f"    {'column':<34} {'gain':>10} {'x floor':>8} {'spanned':>8} {'games':>6}  per-fold gains")
+    for k, g, sp in sorted(cands, key=lambda t: -t[1]):
+        tag = "  RARE" if k in rare else ""
+        if ng[k] == 0:
+            print(f"    {k:<34} {g:+.6f} {'':>8} {sp:8.4f} {0:6d}  CONSTANT IN THIS DUMP: never non-zero")
+        elif abs(g) > floor:
             per = F.gain_by_fold(phi_cols, [idx[k]], args.alpha)
             spread = "  ".join(f"{v:+.5f}" for v in per)
             sign = "all +" if all(v > 0 for v in per) else ("all -" if all(v < 0 for v in per) else "MIXED")
-            print(f"    {k:<34} {g:+.6f} {g / floor:7.1f}x  {spread}  [{sign}]")
+            print(f"    {k:<34} {g:+.6f} {g / floor:7.1f}x {sp:8.4f} {ng[k]:6d}  {spread}  [{sign}]{tag}")
         else:
-            print(f"    {k:<34} {g:+.6f} {'':>8}  (< noise floor: NULL)")
+            print(f"    {k:<34} {g:+.6f} {'':>8} {sp:8.4f} {ng[k]:6d}  (< noise floor: NULL){tag}")
+    print(f"    {len(rare)} column(s) non-zero in fewer than {args.min_games} games, flagged RARE/CONSTANT above.")
 
-    core = [c for k, c in zip(extra_keys, extra_cols) if not k.startswith("ctrl_")]
+    # Families are keyed off the COLUMN-NAME PREFIX rather than a slice of
+    # `extra_keys`, so adding a column to `feature_screen.rs` cannot silently
+    # shift another family's membership.
+    def pref(*p):
+        return [idx[k] for k in extra_keys if k.startswith(p)]
+
+    hand_cols = [idx[k] for k in extra_keys if not k.startswith(("gran_", "rel_", "ctrl_a_", "ctrl_b_"))]
+    fam_a = pref("gran_", "ctrl_a_")
+    fam_b = pref("rel_", "ctrl_b_")
     groups = {
-        "ALL 34 hand columns": extra_cols,
-        "hand columns minus ctrl_": core,
-        "(A) type families": [idx[k] for k in extra_keys[0:7]],
-        "(B) ages": [idx[k] for k in extra_keys[7:14]],
-        "(C) playable now": [idx[k] for k in extra_keys[14:19]],
-        "(D) cost mass": [idx[k] for k in extra_keys[19:23]],
-        "(E) military hand": [idx[k] for k in extra_keys[23:30]],
-        "(F) hidden counts": [idx[k] for k in extra_keys[30:32]],
+        "HAND COMPOSITION (all)": hand_cols,
+        "  (A) type families": [idx[k] for k in extra_keys[0:7]],
+        "  (B) ages": [idx[k] for k in extra_keys[7:14]],
+        "  (C) playable now": [idx[k] for k in extra_keys[14:19]],
+        "  (D) cost mass": [idx[k] for k in extra_keys[19:23]],
+        "  (E) military hand": [idx[k] for k in extra_keys[23:30]],
+        "  (F) hidden counts": [idx[k] for k in extra_keys[30:32]],
+        "CARD GRANULARITY (all)": fam_a,
+        "  gov identity one-hot": pref("gran_gov_"),
+        "  special-tech one-hot": pref("gran_spec_"),
+        "  unit level by type": pref("gran_best_"),
+        "  wonder completed one-hot": [idx[k] for k in extra_keys if k.startswith("gran_wcomp_") and k != "gran_wcomp_stage_total"],
+        "  wonder in-progress one-hot": [idx[k] for k in extra_keys if k.startswith("gran_wbuild_") and not k.startswith("gran_wbuild_stage") and k != "gran_wbuild_max_stage" and k != "gran_wbuild_num_stages"],
+        "  leader one-hot": [idx[k] for k in extra_keys if k.startswith("gran_leader_") and k != "gran_leader_age"],
+        "  obsolescence + cost/benefit": pref("gran_board_", "gran_hand_"),
+        "OPPONENT-RELATIVE (all)": fam_b,
+        "  hinged halves": pref("rel_culrate", "rel_scirate", "rel_culture", "rel_strength", "rel_tech", "rel_scistock"),
+        "  sign x magnitude buckets": pref("rel_bkt_"),
+        "  gap x lateness / round": pref("rel_x_"),
+        "  projection + shares": pref("rel_proj_", "rel_trail_", "rel_share_"),
+        "  gap-conditional card value": pref("rel_cond_"),
+        "  tempo (CA / mil hand size)": pref("rel_ca_", "rel_milhand_"),
+        "ALL CANDIDATE COLUMNS": extra_cols,
+        "ALL minus every ctrl_": [c for k, c in zip(extra_keys, extra_cols) if not k.startswith("ctrl_")],
     }
-    print("\n    FAMILY / SUBSET gains over base phi")
+    # `keep` is the same block with every RARE column removed. Printed
+    # alongside, never instead of, the raw figure.
+    rare_cols = {idx[k] for k in rare}
+    print("\n    FAMILY / SUBSET gains over base phi (whole block added at once)")
+    print(f"    {'block':<34} {'raw':>10} {'':>6}  {'minus RARE':>11} {'':>6}")
     for name, cols in groups.items():
-        print(f"    {name:<34} {F.r2(phi_cols + list(cols), args.alpha) - base:+.6f}   ({len(cols)} cols)")
-    # The same-size null: adding 34 pure-noise columns at once, so the family
-    # figure has a like-for-like floor and not a one-column one.
-    same = noise_only[: len(extra_cols)]
-    same_size_null = F.r2(phi_cols + same, args.alpha) - base
-    print(f"    {'NULL: ' + str(len(same)) + ' noise columns at once':<34} {same_size_null:+.6f}")
+        keep = [c for c in cols if c not in rare_cols]
+        raw_g = F.r2(phi_cols + list(cols), args.alpha) - base
+        line = f"    {name:<34} {raw_g:+.6f} ({len(cols):>3})"
+        if len(keep) != len(cols):
+            line += f"   {F.r2(phi_cols + keep, args.alpha) - base:+11.6f} ({len(keep):>3})"
+        print(line)
+
+    # Same-size nulls: a block of N pure-noise columns for each N that a
+    # family actually has, so a family total is compared against a block
+    # figure and not a one-column floor.
+    print("\n    SAME-SIZE NULLS -- N gaussian columns added at once")
+    for n in sorted({len(c) for c in groups.values()}):
+        if n > len(block_pool):
+            print(f"    {'NULL: ' + str(n) + ' noise columns':<34} (pool too small: {len(block_pool)})")
+            continue
+        print(f"    {'NULL: ' + str(n) + ' noise columns':<34} {F.r2(phi_cols + block_pool[:n], args.alpha) - base:+.6f}")
 
     # ---- (5) alpha sweep -------------------------------------------------
     # A gain that only exists at one ridge penalty is a property of the
@@ -365,17 +468,18 @@ def main():
     print("\n(5) ALPHA SWEEP -- does any of this depend on the ridge penalty?")
     pc = probes[int(np.argmax([p[5] for p in pos]))]
     pc_reduced = [i for i in phi_cols if i != pc]
-    top = [idx[k] for k, _ in sorted(cands, key=lambda t: -t[1])[:3]]
-    top_names = [k for k, _ in sorted(cands, key=lambda t: -t[1])[:3]]
-    hdr = f"    {'alpha':>7} {'base R2':>10} {'poscontrol':>11} {'floor':>10} {'family':>10}"
+    top_names = [t[0] for t in sorted(cands, key=lambda t: -t[1])[:3]]
+    top = [idx[k] for k in top_names]
+    hdr = f"    {'alpha':>7} {'base R2':>10} {'poscontrol':>11} {'floor':>10} {'hand':>10} {'granul':>10} {'relative':>10}"
     hdr += "".join(f" {n[:14]:>15}" for n in top_names)
     print(hdr)
     for a in (float(v) for v in args.alphas.split(",")):
         b = F.r2(phi_cols, a)
         pcg = F.r2(pc_reduced + [pc], a) - F.r2(pc_reduced, a)
         fl = max(abs(F.r2(phi_cols + [c], a) - b) for c in null_cols)
-        fam = F.r2(phi_cols + extra_cols, a) - b
-        row = f"    {a:7.1f} {b:10.6f} {pcg:+11.6f} {fl:10.6f} {fam:+10.6f}"
+        row = f"    {a:7.1f} {b:10.6f} {pcg:+11.6f} {fl:10.6f}"
+        for cols in (hand_cols, fam_a, fam_b):
+            row += f" {F.r2(phi_cols + list(cols), a) - b:+10.6f}"
         row += "".join(f" {F.r2(phi_cols + [c], a) - b:+15.6f}" for c in top)
         print(row)
     print(f"    (positive control column: {keys[pc]})")

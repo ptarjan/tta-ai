@@ -1,0 +1,516 @@
+CHEAP FEATURE SCREEN, THREE FAMILIES ON ONE PAGE -- 2026-08-31
+Held-out R2 gain over the champion's own phi for CARD GRANULARITY and
+OPPONENT-RELATIVE / GAP-CONDITIONAL candidate columns, measured with the same
+rig, the same frozen champion and the same protocol as the hand-composition
+screen (analysis/feature_screen_2026-08-31.txt), so all three families are
+directly comparable.
+
+NO RECOMMENDATION IS MADE HERE. This file reports measurements only.
+
+
+====================================================================
+0. WHAT WAS RUN -- AND WHY IT IS COMPARABLE
+====================================================================
+
+Frozen champion   /tmp/fs_champ_2p_frozen.json
+  generation      gen 133131 (players 2)
+  md5             0272cfa7dd167b8e73e4096d047504e5
+                  BYTE-IDENTICAL to the hand-composition run: verified by md5
+                  immediately before the dump. Same weight vector, so the same
+                  eleven freeze-priced phi coordinates and the same policy.
+
+Dump              rust/src/bin/phidump.rs, version 2 (format unchanged)
+  command         phidump --games 3000 --players 2 --threads 4 --seed 1 \
+                    --weights /tmp/fs_champ_2p_frozen.json \
+                    --out /tmp/fs_phi_2p_fam.bin
+  games           3000    same count, same seed, same player count
+  rows            903171  IDENTICAL to the previous run, as it must be: the
+                          extra columns are read off the trial state and
+                          cannot change which decisions occur
+  phi dims        174
+  extra dims      185     (34 hand + 99 granularity + 52 relative)
+  file            1311404308 bytes
+  elapsed         302.6 s (9.9 games/s) -- 305.6 s before. The 151 new
+                  columns, including two effects::compute calls per row for
+                  the relative family, cost no measurable time.
+
+Screen            analysis/feature_screen.py, unchanged protocol:
+                  ridge alpha 1.0, columns standardized on training rows,
+                  grouped 5-fold BY GAME, R2 pooled over all held-out rows.
+
+THE PROTOCOL REPRODUCED ITSELF EXACTLY. Both anchors came back bit-for-bit:
+
+  base ridge on phi alone         0.439962   (was 0.439962)
+  positive control, CultureRate  +0.003732   (was +0.003732)
+
+That is the strongest available evidence that nothing in this run drifted:
+the same 174 columns on the same 903171 rows give the same number to six
+decimals, so every figure below sits on the same scale as the hand figures.
+
+EVERYTHING HERE IS VALID AT ONE POINT IN WEIGHT SPACE ONLY (gen 133131).
+
+
+====================================================================
+1. THE TWO NEW ENCODINGS
+====================================================================
+
+--- FAMILY A: CARD GRANULARITY (99 columns, prefix gran_ / ctrl_a_) --------
+
+The claim under test: the evaluator carries one scalar per card TYPE. That is
+literally what features.rs does. Every card in play is collapsed to a per-type
+LEVEL (BestFarm..BestArena, BestUnit, TechLevels, GovLevel = the card's AGE) or
+a per-type COUNT (NumTechs, SpecialTechs, Wonders, Leader as 0/1). So:
+
+  * Monarchy and Theocracy are both GovLevel 1; Communism, Fundamentalism and
+    Democracy are all GovLevel 3.
+  * All twelve special techs are interchangeable: SpecialTechs += 1,
+    TechLevels += age. Masonry reads identically to Warfare.
+  * BestUnit is ONE max over Infantry/Cavalry/Artillery/Air, so Rockets,
+    Tanks and Modern Infantry are the same number.
+  * All 24 leaders are a single bit.
+  * All 16 wonders are a count once completed.
+
+Card identity reaches the score only through the eleven freeze-priced scalars
+(HandPotential, WonderPotential, WonderPromise, ...), and even there as a
+number, never as which card.
+
+  (A1) government one-hot, 8 cols        (A6) in-progress wonder one-hot, 16
+  (A2) government printed prices, 2      (A7) leader one-hot, 24
+  (A3) special-tech one-hot, 12          (A8) obsolescence, structure,
+  (A4) unit level BY TYPE, 4                  cost-to-benefit, 15
+  (A5) completed wonder one-hot, 16      (A9) redundancy controls, 2
+
+Printed data only (science_cost, resource_cost, peaceful_cost,
+revolution_cost, stages, production), never costs::tech_cost, for the same
+reason the hand screen gave: a discount-aware column would score for the wrong
+reason.
+
+--- FAMILY B: OPPONENT-RELATIVE / GAP-CONDITIONAL (52 cols, rel_ / ctrl_b_) -
+
+phi's relative keys are of three kinds, and the gap in them is specific:
+
+  * PLAIN SIGNED DIFFERENCES: StrengthRel, AttackTargetLead,
+    AttackTargetWeakness, PactPartnerLead. Near no-ops in a linear eval.
+  * ONE-SIDED HINGES WITH THE OTHER HALF MISSING: RivalCultureDeficit =
+    max(0, their rate - mine) and RivalScienceDeficit exist. The matching
+    LEADS -- max(0, mine - theirs) -- do not exist at all.
+  * HINGES AGAINST A RULEBOOK THRESHOLD, not against the opponent:
+    FoodGap/ScienceGap/WorkerGap/CivilActionGap and their Surplus mirrors
+    hinge on marginal_needs, which is a rulebook quantity. Only
+    CultureGap/CultureSurplus is opponent-relative, and it is on the culture
+    STOCK, never the rate.
+
+And NO gap key is scaled by the horizon: horizon::RATE_KEYS is
+[CultureRate, ScienceRate, FoodRate, ResourceRate] and the rival rates are
+deliberately excluded from it, so no "gap x how late it is" term exists.
+
+  (B1) hinged halves, 12 cols            (B5) gap-conditional card value, 3
+  (B2) sign x magnitude buckets, 15      (B6) tempo, hinged, 4
+  (B3) gap x lateness / round, 10        (B7) redundancy controls, 2
+  (B4) end-of-game projection, shares, 6
+
+LEGALITY. Family B reads public rival state and only public rival state:
+rating-track culture and science, the face-up tableau / government /
+completed-wonder pile (and the rates effects::compute derives from them),
+civil hand SIZE, and military hand SIZE. A rival's military hand CONTENTS are
+face down and are never read. That is asserted, not promised:
+feature_screen::tests::rival_military_hand_contents_are_not_read replaces
+every card in the rival's military hand at unchanged hand size over a whole
+self-play game and requires every one of the 185 columns to be unmoved.
+
+No column in either family reads deck order, a rival's civil hand identities,
+or the label.
+
+
+====================================================================
+2. CONTROLS -- ALL SIX CAME BACK AT ZERO
+====================================================================
+
+The run is only trustworthy if the controls are, so they are listed first.
+
+REDUNDANCY CONTROLS, two per family, as required.
+
+An EXACT FUNCTION OF LIVE phi COLUMNS (asserted in Rust, not assumed: the
+guard test trial_matches_candidate_features checks each of these four against
+the phi vector on every decision it visits, so "the control came back zero" is
+evidence about the SCREEN and not an accident of a control that was never
+actually redundant):
+
+  column                  is exactly                        gain     spanned
+  ctrl_a_num_techs        NumTechs                      -0.000000     1.0000
+  ctrl_a_wonders_count    Wonders                       -0.000000     1.0000
+  ctrl_b_wonder_gap       Wonders - RivalWonders        -0.000000     1.0000
+  ctrl_b_hand_civil_gap   HandCivil - RivalHandCivil    -0.000000     1.0000
+
+A REAL CANDIDATE COLUMN WITH ITS ROW ORDER PERMUTED -- same marginal
+distribution as a live candidate, no relationship to the label left:
+
+  NULL_permuted:gran_wcomp_stage_total          +0.000001
+  NULL_permuted:gran_board_obsolete_workers     -0.000000
+  NULL_permuted:rel_proj_final_culture_gap      -0.000001
+  NULL_permuted:rel_x_culrate_gap_late          -0.000002
+
+  (the permuted family-A and family-B columns chosen are real candidates that
+  SCORE: gran_board_obsolete_workers +0.000887 and rel_proj_final_culture_gap
+  +0.008046 in their live order. Permuting the top scorer is the sharper test
+  and it is the one that was run.)
+
+ALL SIX ARE AT ~0. The run is trustworthy by its own stated criterion.
+
+Also unchanged, and re-measured here rather than carried over:
+
+  NULL_lincomb_of_phi (0.7*Culture - 1.9*ScienceRate + 2.3*CivilActions)
+                                                -0.000000
+  worst of 40 gaussian noise columns            -0.000003
+  median |gain| over those 40                   +0.000001
+  positive control, CultureRate                 +0.003732  (622x the floor)
+
+  measured floor this run           0.000003   (max |gain| over 47 nulls)
+  ESTABLISHED FLOOR USED FOR RANKING 0.000006
+
+  The two differ only by float accumulation order in the cross-product pass,
+  which is wider now (545 columns vs 253); both are the solver's own rounding
+  noise. Every ranking below uses the ESTABLISHED, more conservative 0.000006,
+  so nothing here is promoted above the floor by a tighter floor.
+
+SAME-SIZE BLOCK NULLS. A 99-column family cannot be read against a one-column
+floor, so a second, disjoint gaussian pool (151 columns, kept out of the floor
+pool so the floor stays comparable) supplies a like-for-like block figure:
+
+  N noise columns added at once:  16 -0.000010   34 -0.000034   52 -0.000052
+                                  99 -0.000098  185 -0.000166
+
+  A block of N pure-noise columns costs about 1e-6 per column in held-out R2.
+  Every family total below is far outside that.
+
+
+====================================================================
+3. COLUMNS THIS DUMP CANNOT SCREEN -- READ BEFORE THE TABLE
+====================================================================
+
+Twelve of the 99 granularity columns are CONSTANT ZERO in all 903171 rows,
+and it is not a bug -- the name lists are pinned to real cards of the right
+type by feature_screen::tests::card_names_all_resolve. The champion NEVER
+STARTS, let alone completes, six of the sixteen wonders in 3000 games:
+
+  Pyramids, Transcontinental Railroad, Ocean Liners,
+  First Space Flight, Fast Food Chains, Internet
+
+(both gran_wcomp_* and gran_wbuild_* are identically zero for all six). Four
+of the original 34 hand columns were already constant for their own reasons
+(hand_age_ahead_count, handmil_pact_count -- there are no pacts at 2p --
+hand_hidden_civil, hand_hidden_military).
+
+Nineteen more granularity columns are RARE (non-zero in fewer than 30 of the
+3000 games). Under a split that holds whole GAMES out, such a column's entire
+contribution can land inside one fold, and its "gain" is then one game's
+residual. The extreme case:
+
+  gran_wcomp_hollywood   -0.002490   non-zero in 10 rows of ONE game
+                         per-fold: -0.01314  -0.00000  -0.00000  +0.00000  +0.00000
+
+That single artifact is what drives the raw "wonder completed one-hot" block
+to -0.001984; with rare columns dropped the same block is +0.000283. RARE
+columns are flagged in the table and in the family totals, never silently
+dropped.
+
+
+====================================================================
+4. THE RANKED TABLE -- ALL THREE FAMILIES, ONE PAGE
+====================================================================
+
+Gain = pooled held-out R2 of ridge on (174 phi + this one column) minus
+pooled held-out R2 on the 174 phi columns alone. Base = 0.439962.
+"xfloor" is in units of the established 0.000006 noise floor.
+"spanned" is the R2 of rebuilding the column by least squares from the 174
+base columns: 1.0000 means phi can already reconstruct it exactly.
+"games" is how many of the 3000 games the column is ever non-zero in.
+"folds" is the sign pattern of the same gain computed in each held-out fold.
+
+YARDSTICKS, on the same scale:
+  positive control  CultureRate dropped and offered back   +0.003732
+  noise floor                                               0.000006
+  best hand-composition single column, hand_gov_count      +0.000378
+
+  rank  family column                                   gain  xfloor spanned games  folds
+     1  REL   rel_proj_final_culture_gap         +0.008046   1341x  0.9016  3000  all +
+     2  REL   rel_x_culrate_gap_round            +0.007580   1263x  0.9524  3000  all +
+     3  REL   rel_x_culrate_gap_late             +0.007506   1251x  0.9586  3000  all +
+     4  REL   rel_x_culrate_lead_late            +0.004905    817x  0.9627  3000  all +
+     5  REL   rel_x_culrate_def_late             +0.004818    803x  0.9576  3000  all +
+     6  REL   rel_proj_final_deficit             +0.004810    802x  0.8866  3000  all +
+     7  REL   rel_x_scirate_gap_late             +0.004359    726x  0.9639  2982  all +
+     8  REL   rel_proj_final_lead                +0.004076    679x  0.8665  3000  all +
+   ---  ----- POSITIVE CONTROL, CultureRate      +0.003732    622x  0.9259  3000 -----
+     9  REL   rel_x_scirate_def_late             +0.003156    526x  0.9596  2980  all +
+    10  REL   rel_share_culrate                  +0.002958    493x  0.6092  3000  all +
+    11  REL   rel_trail_culrate                  +0.002301    384x  0.6976  3000  all +
+    12  REL   rel_trail_scirate                  +0.002283    380x  0.7630  2980  all +
+    13  REL   rel_x_scirate_lead_late            +0.002245    374x  0.9689  2979  all +
+    14  REL   rel_bkt_scirate_m1                 +0.000928    155x  0.2129  2964  4/5 +
+    15  REL   rel_x_culture_gap_late             +0.000915    152x  0.9778  3000  4/5 +
+    16  GRAN  gran_board_obsolete_workers        +0.000887    148x  0.7280  2999  all +
+    17  REL   rel_bkt_culrate_m1                 +0.000883    147x  0.1875  3000  all +
+    18  REL   rel_cond_handvalue_x_cullead       +0.000869    145x  0.7159  3000  all +
+    19  GRAN  gran_hand_costben_mean             +0.000764    127x  0.6002  3000  all +
+    20  GRAN  gran_hand_costben_max              +0.000746    124x  0.7507  3000  all +
+    21  GRAN  gran_leader_alexander_the_great    +0.000716    119x  0.1983   475  4/5 +
+    22  REL   rel_bkt_scirate_p1                 +0.000701    117x  0.2211  2971  4/5 +
+    23  REL   rel_bkt_culrate_p1                 +0.000679    113x  0.1874  3000  all +
+    24  REL   rel_milhand_deficit                +0.000660    110x  0.6160  3000  all +
+    25  GRAN  gran_wcomp_hanging_gardens         +0.000548     91x  0.1386   343  4/5 +
+    26  GRAN  gran_board_age_gap_mean            +0.000535     89x  0.8840  3000  all +
+    27  REL   rel_cond_handvalue_x_culdef        +0.000517     86x  0.7250  3000  all +
+    28  REL   rel_scirate_lead                   +0.000448     75x  0.9984  2979  all +
+    29  GRAN  gran_leader_julius_caesar          +0.000413     69x  0.4389  2092  4/5 +
+    30  REL   rel_bkt_strength_m1                +0.000390     65x  0.3334  3000  4/5 +
+    31  GRAN  gran_leader_age                    +0.000379     63x  0.9274  3000  all +
+    32  HAND  hand_gov_count                     +0.000378     63x  0.8653  3000  all +
+    33  GRAN  gran_wbuild_max_stage              +0.000368     61x  0.9724  3000  4/5 +
+    34  GRAN  gran_wbuild_taj_mahal              +0.000353     59x  0.6109  2842  4/5 +
+    35  GRAN  gran_wbuild_library_of_alexandria  +0.000342     57x  0.2448   534  4/5 +
+    36  REL   rel_culrate_lead                   +0.000320     53x  0.9986  3000  all +
+    37  REL   rel_bkt_strength_p1                +0.000307     51x  0.3861  3000  4/5 +
+    38  GRAN  gran_wbuild_eiffel_tower           +0.000266     44x  0.7589  2749  4/5 +
+    39  HAND  hand_age_mean_gap                  +0.000254     42x  0.4903  3000  4/5 +
+    40  GRAN  gran_leader_moses                  +0.000242     40x  0.5480   478  all +
+    41  REL   rel_tech_lead                      +0.000230     38x  0.7116  3000  all +
+    42  REL   rel_milhand_lead                   +0.000223     37x  0.5270  3000  all +
+    43  GRAN  gran_wcomp_st_peters_basilica      +0.000191     32x  0.5119  2634  4/5 +
+    44  HAND  hand_science_shortfall_total       +0.000189     32x  0.8178  2996  all +
+    45  GRAN  gran_leader_winston_churchill      +0.000170     28x  0.0861   461  4/5 +
+    46  GRAN  gran_spec_military_theory          +0.000167     28x  0.2962   594  4/5 +
+    47  GRAN  gran_leader_aristotle              +0.000164     27x  0.0983   474  all +
+    48  GRAN  gran_leader_genghis_khan           +0.000163     27x  0.0692   394  4/5 +
+    49  HAND  handmil_tactic_count               +0.000158     26x  0.8282  3000  4/5 +
+    50  GRAN  gran_wbuild_kremlin                +0.000132     22x  0.5058  2128  4/5 +
+    51  REL   rel_strength_lead                  +0.000130     22x  0.9948  3000  4/5 +
+    52  HAND  hand_science_cost_total            +0.000128     21x  0.8929  3000  4/5 +
+    53  REL   rel_x_strength_gap_late            +0.000125     21x  0.9951  3000  4/5 +
+    54  GRAN  gran_leader_homer                  +0.000123     20x  0.2695  1186  4/5 +
+    55  REL   rel_strength_deficit               +0.000119     20x  0.9919  3000  all +
+    56  HAND  hand_age_stale_count               +0.000111     18x  0.6962  3000  4/5 +
+    57  REL   rel_bkt_scirate_m2                 +0.000109     18x  0.6660  1932  3/5 +
+    58  REL   rel_tech_deficit                   +0.000103     17x  0.6141  3000  4/5 +
+    59  GRAN  gran_wcomp_stage_total             +0.000092     15x  0.9769  3000  4/5 +
+    60  GRAN  gran_leader_joan_of_arc            +0.000087     14x  0.6295  2916  4/5 +
+    61  GRAN  gran_board_level_spread            +0.000086     14x  0.8638  3000  4/5 +
+    62  GRAN  gran_hand_distinct_types           +0.000076     13x  0.7317  3000  4/5 +
+    63  REL   rel_culrate_deficit                +0.000066     11x  0.9971  3000  all +
+    64  GRAN  gran_spec_strategy                 +0.000063     10x  0.4187   737  4/5 +
+    65  REL   rel_bkt_strength_p2                +0.000058     10x  0.6957  2757  3/5 +
+    66  HAND  hand_science_shortfall_min         +0.000053      9x  0.6945  2996  4/5 +
+    67  GRAN  gran_gov_theocracy                 +0.000048      8x  0.9411  2992  4/5 +
+    68  REL   rel_bkt_scirate_p2                 +0.000046      8x  0.6768  1989  3/5 +
+    69  HAND  hand_resource_cost_total           +0.000044      7x  0.6012  3000  3/5 +
+    70  REL   rel_scistock_deficit               +0.000040      7x  0.8448  3000  4/5 +
+    71  REL   rel_bkt_strength_0                 +0.000038      6x  0.3082  3000  all +
+    72  GRAN  gran_wbuild_num_stages             +0.000035      6x  0.9892  3000  4/5 +
+    73  HAND  hand_age_iii_count                 +0.000035      6x  0.8905  3000  all +
+    74  GRAN  gran_gov_fundamentalism            +0.000032      5x  0.6145  1447  4/5 +
+    75  GRAN  gran_spec_cartography              +0.000029      5x  0.4585   795  4/5 +
+    76  GRAN  gran_leader_leonardo_da_vinci      +0.000029      5x  0.0610   377  3/5 +
+    77  GRAN  gran_leader_js_bach                +0.000028      5x  0.0850   706  3/5 +
+    78  HAND  hand_age_ii_count                  +0.000025      4x  0.6236  3000  4/5 +
+    79  GRAN  gran_gov_despotism                 +0.000025      4x  0.9667  3000  3/5 +
+    80  REL   rel_cond_scishort_x_scitrail       +0.000025      4x  0.4555  2371  4/5 +
+    81  GRAN  gran_gov_const_monarchy            +0.000021      3x  0.0629    46  4/5 +
+    82  GRAN  gran_spec_navigation               +0.000019      3x  0.4433   979  4/5 +
+    83  REL   rel_bkt_culrate_m2                 +0.000019      3x  0.7087  2744  3/5 +
+    84  HAND  hand_specialtech_count             +0.000018      3x  0.2577  2882  4/5 +
+    85  REL   rel_scirate_deficit                +0.000018      3x  0.9985  2980  4/5 +
+    86  GRAN  gran_board_obsolete_levels         +0.000017      3x  0.9872  2999  3/5 +
+    87  GRAN  gran_wbuild_st_peters_basilica     +0.000013      2x  0.7103  2705  2/5 +
+    88  HAND  hand_science_cost_max              +0.000012      2x  0.8081  3000  3/5 +
+    89  HAND  hand_action_count                  +0.000011      2x  0.9061  3000  4/5 +
+    90  GRAN  gran_wcomp_eiffel_tower            +0.000010      2x  0.4910  2550  4/5 +
+    91  REL   rel_strength_lead_over_cap         +0.000007      1x  0.9961  2463  4/5 +
+  ---  ------ established noise floor 0.000006 -------------------------------
+        94 further columns at or below the floor, including all 6 redundancy
+        controls, the 12 constant wonder columns, and the negatives below.
+
+  91 of 185 columns clear the established floor:
+    HAND   13 of 34    (unchanged from the previous run, as it must be)
+    GRAN   37 of 99
+    REL    41 of 52
+
+  Most negative single columns (held-out overfitting cost, not a claim that
+  the quantity is harmful):
+    gran_wcomp_hollywood        -0.002490  ONE-GAME ARTIFACT, see section 3
+    gran_leader_hammurabi       -0.000188
+    gran_wcomp_great_wall       -0.000137
+    gran_wbuild_great_wall      -0.000134
+    gran_leader_christopher_columbus -0.000108
+
+
+====================================================================
+5. FAMILY TOTALS -- WHOLE BLOCK ADDED AT ONCE
+====================================================================
+
+  block                                  raw    cols     minus RARE   cols
+  HAND COMPOSITION (all)           +0.002732   ( 34)      +0.002732   ( 30)
+    (A) type families              +0.000469   (  7)
+    (B) ages                       +0.000361   (  7)      +0.000361   (  6)
+    (C) playable now               +0.000198   (  5)
+    (D) cost mass                  +0.000197   (  4)
+    (E) military hand              +0.000206   (  7)      +0.000206   (  6)
+    (F) hidden counts              -0.000000   (  2)              --  (  0)
+  CARD GRANULARITY (all)           +0.004566   ( 99)      +0.004900   ( 80)
+    gov identity one-hot           +0.000023   ( 10)      +0.000023   (  9)
+    special-tech one-hot           +0.000004   ( 12)
+    unit level by type             -0.000037   (  4)      -0.000036   (  3)
+    wonder completed one-hot       -0.001984   ( 16)      +0.000283   (  8)
+    wonder in-progress one-hot     +0.000344   ( 16)      +0.000344   (  8)
+    leader one-hot                 +0.001474   ( 24)
+    obsolescence + cost/benefit    +0.002537   ( 10)      +0.002534   (  9)
+  OPPONENT-RELATIVE (all)          +0.018605   ( 52)          (none rare)
+    hinged halves                  +0.001393   ( 12)
+    sign x magnitude buckets       +0.003972   ( 15)
+    gap x lateness / round         +0.012838   ( 10)
+    projection + shares            +0.010391   (  6)
+    gap-conditional card value     +0.001019   (  3)
+    tempo (CA / mil hand size)     +0.001034   (  4)
+  ALL 185 CANDIDATE COLUMNS        +0.024515   (185)      +0.026197   (162)
+  ALL minus every ctrl_            +0.024347   (179)      +0.026198   (156)
+
+  AGAINST THE YARDSTICKS:
+    one live decision-relevant feature (CultureRate)      +0.003732
+    same-size null, 34 noise columns at once              -0.000034
+    same-size null, 52 noise columns at once              -0.000052
+    same-size null, 99 noise columns at once              -0.000098
+    same-size null, 185 noise columns at once             -0.000166
+
+  So, in units of the CultureRate yardstick:
+    hand composition    0.73x     card granularity  1.22x (1.31x rare-dropped)
+    opponent-relative   4.99x
+
+  The subsets do not sum to their family: opponent-relative's six subsets sum
+  to +0.030647 against a family total of +0.018605, so the block is heavily
+  overlapping, not a sum of independent parts. The same held for hand
+  composition in the previous run (in the other direction).
+
+
+====================================================================
+6. WHAT THE "spanned" COLUMN SAYS THIS TIME
+====================================================================
+
+In the hand run, spanned-ness explained the zeros: five of eight positive
+control probes recovered nothing because the other 173 columns rebuilt them.
+That reading DOES NOT transfer to family B, and the numbers say so plainly.
+
+  rel_x_culrate_gap_round   spanned 0.9524   gain +0.007580
+  rel_bkt_culrate_m1        spanned 0.1875   gain +0.000883
+
+The heavily spanned column gains 8.6x what the barely spanned one does. Linear
+reconstructibility does not predict gain here, because the top of family B is
+NOT a new fact -- phi already contains CultureRate and RivalCultureRate, so
+their difference is 95% linearly recoverable. What is new is the SHAPE: a
+product with the round counter, or a hinge, is not in the span of the linear
+columns no matter how well the underlying quantity is.
+
+Two internal checks confirm the screen is measuring the missing shape and not
+a missing fact. Where phi ALREADY carries a hinge, the duplicate scores ~0:
+
+  rel_culture_lead      +/- CultureSurplus       -0.000003   spanned 0.9999
+  rel_culture_deficit   +/- CultureGap           -0.000002   spanned 0.9999
+  rel_culrate_deficit    = RivalCultureDeficit   +0.000066   spanned 0.9971
+  rel_scirate_deficit    = RivalScienceDeficit   +0.000018   spanned 0.9985
+  rel_strength_deficit   = StrengthDeficit       +0.000119   spanned 0.9919
+
+Where the MIRROR HALF is missing from phi, the same construction scores
+5x to 25x more:
+
+  rel_culrate_lead       (no phi key)            +0.000320   spanned 0.9986
+  rel_scirate_lead       (no phi key)            +0.000448   spanned 0.9984
+
+  and rel_strength_lead_over_cap = max(0, rel - 6), i.e. exactly what
+  StrengthLead's cap of 6.0 discards, scores +0.000007 -- 1x the floor.
+  The cap throws away essentially nothing.
+
+
+====================================================================
+7. ROBUSTNESS
+====================================================================
+
+Fold split. The whole screen re-run under three grouped 5-fold splits:
+
+  seed   base R2   pos control    floor      HAND      GRAN       REL
+     0  0.439962    +0.003732  0.000003  +0.002732 +0.004566 +0.018605
+     1  0.440744    +0.003633  0.000005  +0.002750 +0.004891 +0.018601
+     2  0.440211    +0.003624  0.000005  +0.002545 +0.004704 +0.018448
+
+  The three family totals move by less than 8% of the smallest of them, and
+  the top two individual columns are stable to the third decimal:
+  rel_proj_final_culture_gap +0.008046 / +0.008092 / +0.007977, all five folds
+  positive at every seed; rel_x_culrate_gap_round +0.007580 / +0.007625 /
+  +0.007497, likewise.
+
+Ridge penalty. At 720k training rows an alpha of 1 or 100 is effectively no
+regularization.
+
+    alpha     base R2  poscontrol      floor      HAND      GRAN       REL
+        1    0.439962   +0.003732   0.000003 +0.002732 +0.004566 +0.018605
+      100    0.439961   +0.003733   0.000003 +0.002734 +0.004599 +0.018585
+    10000    0.439312   +0.003662   0.000005 +0.002568 +0.004991 +0.017280
+  1000000    0.376990   +0.003296   0.001301 +0.001209 +0.008218 +0.050585
+
+  At alpha 1e6 the fit itself is destroyed (base R2 0.377) and the floor rises
+  200x; that row is listed only to show where the screen stops working, and no
+  number in it should be read. Everywhere the base fit is intact the ordering
+  and the magnitudes are unchanged.
+
+  One sub-effect worth recording: at alpha 1e4 the two round-crossed columns
+  lose more than half their gain (+0.007580 -> +0.003577) while
+  rel_proj_final_culture_gap gains slightly (+0.008046 -> +0.008243). The
+  round crosses are large-scale columns that shrinkage bites first; the
+  projection is not.
+
+
+====================================================================
+8. LIMITS -- READ BEFORE RANKING ANYTHING
+====================================================================
+
+1. It measures UNIQUE PREDICTIVE signal at one frozen weight vector, not
+   decision value.
+
+2. It predicts the FINAL MARGIN from a position, and rel_proj_final_culture_gap
+   is by construction an estimate of that margin (current culture gap plus
+   rate gap times horizon::rounds_left). Every input is current public state
+   and there is no label leakage -- but a column shaped like the label should
+   be expected to predict the label, and that is not the same claim as "a bot
+   given it would choose better". This applies to ranks 1-13 as a group.
+
+3. The rows come from the champion playing itself, at 2 players. Six of the
+   sixteen wonders are never begun, so twelve granularity columns are
+   unmeasurable here, and the family-A total is a lower bound on what a
+   granularity family could score against a policy with wider coverage.
+
+4. Family A's leader and wonder one-hots are sparse. The 24 leader columns
+   are non-zero in 377 (Leonardo da Vinci) to 2916 (Joan of Arc) of the 3000
+   games; the wonder one-hots range from 0 to 2842. Their block totals are
+   the honest figure; individual sparse rows in the table are noisier than
+   dense ones, which is what the "games" and "folds" columns are there to
+   show.
+
+5. phi depends on w. Every number is priced at gen 133131.
+
+6. 2p only. There are no pacts at 2p, PactPartnerLead and AttackTargetLead are
+   structurally zero, and the "best rival" max in family B is a max over one
+   opponent. At 3p/4p every relative column would have to be re-measured.
+
+
+Files
+  rust/src/feature_screen.rs                        the 185 columns + guards
+  rust/src/bin/phidump.rs                           v2 dump format (unchanged)
+  analysis/feature_screen.py                        the screen
+  analysis/feature_screen_2026-08-31.txt            the hand-composition run
+  analysis/feature_screen_families_2026-08-31.txt   this file
+
+Reproduce
+  cp experiments/rust_champion_2p.json /tmp/fs_champ_2p_frozen.json
+  # md5 must be 0272cfa7dd167b8e73e4096d047504e5 or the numbers are not these
+  rust/target/release/phidump --games 3000 --players 2 --threads 4 --seed 1 \
+      --weights /tmp/fs_champ_2p_frozen.json --out /tmp/fs_phi_2p_fam.bin
+  python3 analysis/feature_screen.py /tmp/fs_phi_2p_fam.bin \
+      --champion /tmp/fs_champ_2p_frozen.json --alpha 1.0
+  (numpy only; ~5 min for the dump, ~1 min for the screen)
