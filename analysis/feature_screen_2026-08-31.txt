@@ -1,0 +1,357 @@
+CHEAP FEATURE SCREEN -- 2026-08-31
+Ranking candidate evaluator features by held-out R2 gain over the champion's
+own phi, so that arena compute is spent on candidates that already showed a
+signal offline.
+
+NO RECOMMENDATION IS MADE HERE. This file reports measurements only: which
+control recovered, what the noise floor is, and what each candidate scored.
+
+
+====================================================================
+0. WHAT WAS RUN
+====================================================================
+
+Frozen champion   /tmp/fs_champ_2p_frozen.json
+                  a COPY of experiments/rust_champion_2p.json taken 08:35,
+                  never the live file (the climb rewrites it every few
+                  minutes, which would change both the players and the
+                  feature freeze point partway through the dump)
+  generation      gen 133131   (players 2, sigma 0.2219, since_accept 55,
+                  vs_anchor 0.9917)
+  md5             0272cfa7dd167b8e73e4096d047504e5
+
+Dump              rust/src/bin/phidump.rs, version 2
+  command         phidump --games 3000 --players 2 --threads 4 --seed 1 \
+                    --weights /tmp/fs_champ_2p_frozen.json \
+                    --out /tmp/fs_phi_2p.bin
+  games           3000   (2-player self-play, both seats the frozen champion)
+  rows            903171  decision points (~301 per game)
+  phi dims        174    (WeightKey::ALL)
+  extra dims      34     (feature_screen::EXTRA_KEYS)
+  file            765889024 bytes
+  elapsed         305.6 s  (9.8 games/s on 4 threads)
+
+Screen            analysis/feature_screen.py
+  label           margin -- the actor's final culture minus the best other
+                  seat, backfilled at game over (mean 0.147, sd 64.065)
+  fit             ridge, alpha 1.0, columns standardized on training rows
+  split           grouped 5-fold BY GAME, never by row: every decision in a
+                  game shares one backfilled label. R2 is POOLED over all
+                  held-out rows (each row is held out exactly once).
+
+EVERYTHING HERE IS VALID AT ONE POINT IN WEIGHT SPACE ONLY. phi depends on w
+-- eleven coordinates are priced at the freeze vector -- so these numbers
+describe gen 133131 and nothing else.
+
+
+====================================================================
+1. WHAT WAS ADDED TO THE DUMP
+====================================================================
+
+phidump grew an extra block AFTER the phi block. MAGIC UNCHANGED (`TPHI`),
+VERSION BUMPED 1 -> 2, and the header's fourth word -- which v1 always wrote
+as a hard zero -- now carries the extra width. So the phi block's layout is
+byte-identical to v1 and any reader that takes the width from the header
+reads both versions; a v1 file simply declares extra = 0. A reader that
+hard-asserted version == 1 does not, which is why the bump is visible rather
+than silent. analysis/phifit.py was updated to the same rule.
+
+Column names go in a second sidecar <out>.extra_keys, matching the contract
+<out>.keys already has for phi.
+
+The columns are computed in rust/src/feature_screen.rs. THE EVALUATOR IS
+UNTOUCHED: no WeightKey was added, nothing in eval.rs changed, and nothing
+here is reachable from evaluate / rank_moves / pick.
+
+Provenance guard. candidate_features returns (move, phi) and not the
+post-move state phi was priced on, so feature_screen rebuilds that trial
+state (clone, determinize_current_events at plan_rng, apply unless EndTurn)
+to read the extra columns off it -- while still taking phi itself from
+candidate_features, which is never re-derived. The test
+feature_screen::tests::trial_matches_candidate_features asserts that
+linear_features over the rebuilt trial reproduces candidate_features' vector
+EXACTLY over 400+ real self-play decisions, so the extra columns cannot
+silently start describing a different position than the phi beside them.
+
+Legality. Every column reads only the ACTING seat's own hand
+(players[idx].hand_civil / hand_military), its own hidden-card counts, its
+own science and actions, and public board state. No rival hand identity, no
+deck order, no label. Nothing here is information the bot does not already
+legally have at that decision point.
+
+
+====================================================================
+2. THE HAND-COMPOSITION ENCODING, AND WHY
+====================================================================
+
+The standing claim under test is that taking a card is nearly invisible to
+the board features because the card goes to HAND, and the only thing pricing
+a hand is the eval-only HandPotential block. phi already carries the hand
+SIZES and two aggregate values (HandCivil, HandValue, HandValueLate,
+HandPotential, HandPerishable, HandMilitary, HandMilValue, HandMilPotential,
+HandOverCapacity, HandSwapExtra, HandLimit). What it has no feature for is
+the COMPOSITION -- which cards those are. So the 34 columns are a set of
+DECOMPOSITIONS of the same hand, each partitioning or summarising it a
+different way, and the screen asks which cut of the hand carries outcome
+signal the aggregates do not:
+
+  (A) by type family, 7 cols -- production / urban / units / government /
+      leader / action / specialtech. Partitions the civil hand. The coarsest
+      "what kind of thing am I holding" question.
+  (B) by age, 7 cols -- counts at age A/I/II/III, plus stale (age below the
+      current civil age), ahead, and the mean age gap. Absolute age and age
+      RELATIVE to the board are different questions and both are cheap.
+  (C) playable now, 5 cols -- affordable by printed science cost, affordable
+      AND a civil action left, total and minimum science shortfall,
+      unaffordable count. "Can I actually use this" as distinct from "do I
+      have it".
+  (D) cost mass, 4 cols -- total and max printed science cost, total
+      resource cost, and science / total-cost coverage (scale-free, so it is
+      not just hand size again).
+  (E) military hand, 7 cols -- tactic / aggression / war / pact /
+      bonus+territory counts, count playable against military actions left,
+      total MA cost. The military hand is a separate deck with a separate
+      action currency.
+  (F) hidden counts, 2 cols -- hidden_civil / hidden_military.
+  (G) redundancy controls, 2 cols -- ctrl_hand_civil_size and
+      ctrl_hand_military_size, which ARE already in phi. They are here as an
+      internal check that the screen returns ~0 for something the base set
+      already has.
+
+Printed costs are used throughout, never costs::tech_cost / build_cost_for.
+Those are discount- and pact-aware, and a column that folded the rest of the
+board into a hand measurement would score for the wrong reason.
+
+
+====================================================================
+3. POSITIVE CONTROL -- CAN THE SCREEN DETECT ANYTHING?
+====================================================================
+
+Run BEFORE any candidate column was read.
+
+Probes are the 8 phi columns with the largest |champion weight| x column sd:
+the bot demonstrably scores with them (non-zero weight) and the term actually
+moves the score (non-trivial spread). Each is DROPPED from the base set and
+then offered back as a candidate.
+
+"spanned" is the R2 of rebuilding the dropped column by least squares from
+the other 173. It is the number that makes a zero recovery readable.
+
+  column                      |w|*sd   spanned   R2 base-1   R2 +back      gain
+  CultureRate                227.613    0.9259    0.436230   0.439962 +0.003732
+  WorkersLate                105.180    1.0000    0.439962   0.439962 -0.000000
+  Culture                     48.687    1.0000    0.439962   0.439962 -0.000000
+  RivalMeanCulture            37.039    1.0000    0.439962   0.439962 +0.000000
+  Colonies                    35.490    0.8018    0.440028   0.439962 -0.000067
+  RivalYellowBank             34.327    0.7426    0.440044   0.439962 -0.000082
+  Strength                    22.053    1.0000    0.439962   0.439962 -0.000000
+  AttackTargetWeakness        18.479    0.2314    0.438634   0.439962 +0.001327
+
+RECOVERY: +0.003732 R2 for CultureRate -- 622x the noise floor below.
+Second recovery: +0.001327 for AttackTargetWeakness, 221x the floor.
+
+THE SCREEN CAN DETECT A FEATURE THE EVALUATOR ALREADY USES. It is not broken
+and the numbers below are not automatically noise.
+
+BUT READ THE "spanned" COLUMN. Five of the eight probes recover ~0, and every
+one of them is a column the remaining 173 reconstruct at spanned >= 0.74,
+three of them exactly (1.0000). This is not a failure of the screen, it is
+the definition of what it measures: removing a column that the rest of phi
+reproduces exactly removes NOTHING, so handing it back can add nothing.
+
+So the screen measures UNIQUE signal, not importance. A candidate scoring
+zero here means "phi can already reconstruct this", not "this does not matter
+to the game". Two columns with equal gain are equally NEW; neither number
+says anything about how much either would move a bot that has to act on it.
+
+Base R2 note. The base ridge here is 0.4400, against the 0.4931 previously
+recorded by phifit.py. The method is not the difference: the same
+cross-product solver reproduces sklearn's Ridge to four decimals, and
+reproduces 0.4931 EXACTLY on the old 600-game v1 dump under phifit's own
+single 80/20 protocol. The difference is sample size. Running phifit's
+protocol on five disjoint 600-game subsets of this dump gives 0.4071, 0.4087,
+0.4099, 0.4487, 0.4704 -- a 0.06 spread, because a single 80/20 split of 600
+games scores on only 120 held-out games. 0.4931 was a high draw of a noisy
+estimator. The 3000-game pooled 5-fold figure is the tighter estimate.
+
+
+====================================================================
+4. NEGATIVE CONTROLS AND THE NOISE FLOOR
+====================================================================
+
+43 columns that cannot carry information, each screened exactly like a real
+candidate (added singly to the full 174-column base):
+
+  40 x gaussian noise (independent, seeded)
+   1 x EXACT linear combination of live phi columns
+       0.7*Culture - 1.9*ScienceRate + 2.3*CivilActions
+   2 x a real candidate column with its row order permuted (same marginal
+       distribution, no relationship to the label left)
+
+  NULL_lincomb_of_phi                          -0.000000
+  NULL_permuted:hand_playable_now_count        -0.000000
+  NULL_permuted:hand_science_cost_total        +0.000002
+  worst of 40 gaussian noise columns           -0.000006  (NULL_noise_25)
+  median |gain| over the 40 gaussian columns   +0.000001
+
+  >>> MEASURED NOISE FLOOR = 0.000006 R2 (absolute) <<<
+
+  Same-size null, for the family figure: adding 34 gaussian noise columns
+  AT ONCE scores -0.000018 R2. A 34-column block gains nothing collectively
+  either.
+
+Both required negative controls came in at ~0 as they must: the exact linear
+combination scores -0.000000 (ridge extracts nothing from a redundant
+direction) and the noise columns sit at ~1e-6.
+
+ANY CANDIDATE BELOW 0.000006 R2 IS A NULL, whatever the story attached to it.
+
+
+====================================================================
+5. RANKED CANDIDATE GAINS -- HAND COMPOSITION
+====================================================================
+
+Gain = pooled held-out R2 of ridge on (174 phi + this one column) minus
+pooled held-out R2 of ridge on the 174 phi columns alone. Base = 0.439962.
+
+"x floor" is the gain in units of the 0.000006 measured noise floor.
+"folds" is the sign pattern of the same gain computed separately in each of
+the 5 held-out folds -- a gain that is one lucky fold is told from one that
+is not.
+
+  rank  column                            gain      x floor   folds
+  ----  --------------------------------  ----------  -----  -------
+     1  hand_gov_count                    +0.000378   66.3x  all +
+     2  hand_age_mean_gap                 +0.000254   44.5x  MIXED (4/5 +)
+     3  hand_science_shortfall_total      +0.000189   33.2x  all +
+     4  handmil_tactic_count              +0.000158   27.7x  MIXED (4/5 +)
+     5  hand_science_cost_total           +0.000128   22.4x  MIXED (4/5 +)
+     6  hand_age_stale_count              +0.000111   19.4x  MIXED (4/5 +)
+     7  hand_science_shortfall_min        +0.000053    9.2x  MIXED (4/5 +)
+     8  hand_resource_cost_total          +0.000044    7.8x  MIXED (3/5 +)
+     9  hand_age_iii_count                +0.000035    6.2x  all +
+    10  hand_age_ii_count                 +0.000025    4.4x  MIXED (4/5 +)
+    11  hand_specialtech_count            +0.000018    3.2x  MIXED (4/5 +)
+    12  hand_science_cost_max             +0.000012    2.1x  MIXED (3/5 +)
+    13  hand_action_count                 +0.000011    1.9x  MIXED (4/5 +)
+   ---  ------ noise floor 0.000006 ------------------------------------
+    --  handmil_aggression_count          +0.000003          NULL
+    --  hand_playable_now_count           +0.000001          NULL
+    --  hand_age_ahead_count              +0.000000          NULL
+    --  handmil_pact_count                +0.000000          NULL
+    --  hand_hidden_civil                 +0.000000          NULL
+    --  hand_hidden_military              +0.000000          NULL
+    --  ctrl_hand_civil_size              -0.000000          NULL (control)
+    --  ctrl_hand_military_size           -0.000001          NULL (control)
+    --  handmil_ma_cost_total             -0.000001          NULL
+    --  hand_age_a_count                  -0.000001          NULL
+    --  hand_affordable_count             -0.000003          NULL
+    --  hand_unaffordable_count           -0.000003          NULL
+    --  handmil_playable_now_count        -0.000003          NULL
+    --  handmil_war_count                 -0.000004          NULL
+    --  hand_unit_count                   -0.000006          NULL
+    --  hand_science_cover_ratio          -0.000009          negative
+    --  hand_prod_count                   -0.000013          negative
+    --  hand_leader_count                 -0.000014          negative
+    --  hand_urban_count                  -0.000023          negative
+    --  handmil_bonus_territory_count     -0.000043          negative
+
+  (A negative single-column gain is held-out overfitting cost: the column
+  buys nothing on the training rows worth the variance it adds on the
+  held-out ones. It is not a claim that the quantity is harmful.)
+
+  Both deliberate redundancy controls (ctrl_hand_civil_size,
+  ctrl_hand_military_size) land at ~0, as they must -- phi already has both.
+
+FAMILY AND SUBSET GAINS (whole block added at once, over base phi):
+
+  ALL 34 hand columns                     +0.002732   (34 cols)
+  the same 34 minus the 2 ctrl_ columns   +0.002726   (32 cols)
+  (A) type families                       +0.000469   ( 7 cols)
+  (B) ages                                +0.000361   ( 7 cols)
+  (E) military hand                       +0.000206   ( 7 cols)
+  (C) playable now                        +0.000198   ( 5 cols)
+  (D) cost mass                           +0.000197   ( 4 cols)
+  (F) hidden counts                       -0.000000   ( 2 cols)
+  NULL: 34 gaussian noise columns at once -0.000018   (34 cols)
+
+  For scale: the family's +0.002732 sits against a positive control of
+  +0.003732 (CultureRate) and a same-size null of -0.000018.
+
+  The subsets sum to +0.001431, well under the family's +0.002732, so the
+  block is not a sum of independent parts -- the columns carry signal jointly
+  that no one cut of the hand carries alone.
+
+
+====================================================================
+6. ROBUSTNESS
+====================================================================
+
+Ridge penalty. At 720k training rows an alpha of 1 or 100 is effectively no
+regularization; the sweep is flat until shrinkage actually bites.
+
+    alpha      base R2   pos control      floor     family   hand_gov_count
+        1     0.439962     +0.003732   0.000006  +0.002732        +0.000378
+      100     0.439961     +0.003733   0.000006  +0.002734        +0.000378
+    10000     0.439312     +0.003662   0.000006  +0.002568        +0.000382
+  1000000     0.376990     +0.003296   0.001301  +0.001209        +0.000186
+
+  At alpha 1e6 the fit itself is destroyed (base R2 0.377) and the noise
+  floor rises 200x to 0.0013 -- that is a degenerate regime, listed only to
+  show where the screen stops working. Everywhere the base fit is intact,
+  the ordering and magnitudes are unchanged.
+
+Fold split. The whole screen re-run under three different grouped 5-fold
+splits (fold seeds 0, 1, 2):
+
+  seed   base R2   pos control    floor     family
+     0  0.439962    +0.003732  0.000006  +0.002732
+     1  0.440744    +0.003633  0.000004  +0.002750
+     2  0.440211    +0.003624  0.000003  +0.002545
+
+  The top-6 candidate SET is identical under all three seeds, and the order
+  is identical except that ranks 4 and 5 (handmil_tactic_count,
+  hand_science_cost_total) swap under seed 1.
+
+Method check. The cross-product ridge solver used throughout was verified
+against sklearn's Ridge on both this dump and the old 600-game v1 dump under
+an identical single 80/20 game split: 0.4395 vs 0.4395, and 0.4931 vs 0.4931.
+
+
+====================================================================
+7. LIMITS OF THIS SCREEN -- READ BEFORE RANKING ANYTHING
+====================================================================
+
+1. It measures UNIQUE PREDICTIVE signal at one frozen weight vector, not
+   decision value. Section 3 shows five columns the evaluator leans on hard
+   scoring exactly zero because the rest of phi already spans them.
+
+2. It predicts the final margin from a position. It does not measure whether
+   a bot given the column would CHOOSE better; a feature can predict the
+   outcome without being actionable at the decision.
+
+3. The rows come from the champion playing itself. Positions the champion
+   never reaches are not in the sample, so a column that only matters off
+   this policy's trajectory cannot show up.
+
+4. phi depends on w. Every number here is priced at gen 133131 and would
+   have to be re-measured at a different champion.
+
+5. Rank 13 down to rank 7 sit between 2x and 9x the noise floor with mixed
+   fold signs. They are above the floor as measured and that is all.
+
+
+Files
+  rust/src/feature_screen.rs                 the extra columns + provenance guard
+  rust/src/bin/phidump.rs                    v2 dump format
+  analysis/feature_screen.py                 the screen
+  analysis/feature_screen_2026-08-31.txt     this file
+
+Reproduce
+  cp experiments/rust_champion_2p.json /tmp/fs_champ_2p_frozen.json
+  rust/target/release/phidump --games 3000 --players 2 --threads 4 --seed 1 \
+      --weights /tmp/fs_champ_2p_frozen.json --out /tmp/fs_phi_2p.bin
+  python3 analysis/feature_screen.py /tmp/fs_phi_2p.bin \
+      --champion /tmp/fs_champ_2p_frozen.json --alpha 1.0
+  (the screen needs numpy only; the sklearn cross-check in section 6 does not
+  ship as a script)

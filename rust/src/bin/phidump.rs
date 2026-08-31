@@ -38,10 +38,11 @@
 //! ## On-disk format
 //!
 //! Little-endian throughout. A 16-byte header -- magic `TPHI`, `u32` version
-//! (1), `u32` dims, `u32` zero -- then one fixed-width record per decision:
+//! (2), `u32` dims, `u32` extra -- then one fixed-width record per decision:
 //!
 //! ```text
-//! u32 game_id | u8 players | u8 actor | u16 round | f32 margin | f32 win_share | f32[dims] phi
+//! u32 game_id | u8 players | u8 actor | u16 round | f32 margin | f32 win_share |
+//!     f32[dims] phi | f32[extra] candidate columns
 //! ```
 //!
 //! `margin` is the actor's final culture minus the best of the others (a tie
@@ -52,6 +53,24 @@
 //! `<out>.keys` written next to the dump lists those key names in order --
 //! a reader that skips it is one `WeightKey` addition away from silently
 //! misaligned columns.
+//!
+//! ## Version 2: the extra candidate block
+//!
+//! MAGIC UNCHANGED, VERSION BUMPED 1 -> 2, and the header's fourth word --
+//! which version 1 wrote as a hard zero -- now carries `extra`, the width of
+//! a block of `f32` appended AFTER `phi` on every record. So the phi block's
+//! own layout is byte-identical to version 1 and a reader that takes `extra`
+//! from the header (rather than assuming zero) reads both versions: a v1 file
+//! simply declares `extra = 0`. A reader that hard-asserts `version == 1`
+//! does not, which is why the bump is here rather than silent.
+//!
+//! Those columns are `tta::feature_screen::EXTRA_KEYS`, named in order in a
+//! second sidecar `<out>.extra_keys`. They are quantities the champion has
+//! NO `WeightKey` for -- currently the composition of the acting seat's own
+//! hand -- emitted so that "would this feature have helped?" can be screened
+//! as a held-out R2 delta over `phi` (`analysis/feature_screen.py`) instead
+//! of by an arena run. Nothing in the extra block is read by any bot; the
+//! evaluator is untouched by this file.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -61,8 +80,9 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use tta::bots::greedy::{build_bots, BotKind, Search, Seat};
-use tta::bots::weighted::eval::{candidate_features, load_weights};
+use tta::bots::weighted::eval::load_weights;
 use tta::bots::weighted::weights::WeightKey;
+use tta::feature_screen::{self, EXTRA_DIMS, EXTRA_KEYS};
 use tta::game::{self, MOVE_CAP};
 
 #[derive(Clone, Debug)]
@@ -88,8 +108,9 @@ usage: phidump --weights PATH [options]
   --players N    2, 3 or 4 (default 2)
   --seed N       base seed; game g uses seed+g (default 1)
   --threads N    games in parallel (default 1)
-  --out PATH     dump file to write (default phi_dump.bin); a sidecar
-                 <out>.keys lists the feature column names in order
+  --out PATH     dump file to write (default phi_dump.bin); sidecars
+                 <out>.keys and <out>.extra_keys list the phi column names
+                 and the extra candidate column names, each in order
   --weights PATH champion JSON every seat plays, and the freeze point the
                  features are priced at (required; must be a frozen COPY,
                  never the live experiments/ file climb rewrites)
@@ -144,6 +165,7 @@ struct Row {
     actor: u8,
     round: u16,
     phi: Vec<f64>,
+    extra: Vec<f64>,
 }
 
 /// Play one game and return its rows, already labelled. Every seat plays
@@ -169,8 +191,13 @@ fn play_and_collect(
         // `allow_resign: false` matches `rank_moves`' own default; a picked
         // `Move::Resign` is therefore filtered out and yields no row, which
         // is correct -- a resignation is not a position anyone evaluates.
-        if let Some((_, phi)) = candidate_features(s, &[mv], false, &weights).into_iter().next() {
-            rows.push(Row { actor, round, phi });
+        //
+        // `feature_screen::candidate_row` takes `phi` from `candidate_features`
+        // itself and only rebuilds the post-move state for the extra columns,
+        // so the phi half of every record is produced by exactly the call
+        // version 1 of this dump made.
+        if let Some((phi, extra)) = feature_screen::candidate_row(s, mv, &weights) {
+            rows.push(Row { actor, round, phi, extra });
         }
         mv
     });
@@ -193,7 +220,7 @@ fn play_and_collect(
 
 fn encode_game(gid: u32, players: u8, rows: &[Row], margins: &[f32], shares: &[f32]) -> Vec<u8> {
     let dims = WeightKey::ALL.len();
-    let mut buf = Vec::with_capacity(rows.len() * (12 + 4 * dims));
+    let mut buf = Vec::with_capacity(rows.len() * (12 + 4 * (dims + EXTRA_DIMS)));
     for r in rows {
         buf.extend_from_slice(&gid.to_le_bytes());
         buf.push(players);
@@ -202,6 +229,9 @@ fn encode_game(gid: u32, players: u8, rows: &[Row], margins: &[f32], shares: &[f
         buf.extend_from_slice(&margins[r.actor as usize].to_le_bytes());
         buf.extend_from_slice(&shares[r.actor as usize].to_le_bytes());
         for &v in &r.phi {
+            buf.extend_from_slice(&(v as f32).to_le_bytes());
+        }
+        for &v in &r.extra {
             buf.extend_from_slice(&(v as f32).to_le_bytes());
         }
     }
@@ -221,12 +251,18 @@ fn run(args: &Args) -> Result<(), String> {
     std::fs::write(&keys_path, names.join("\n") + "\n")
         .map_err(|e| format!("writing {}: {e}", keys_path.display()))?;
 
+    let mut extra_name = args.out.clone().into_os_string();
+    extra_name.push(".extra_keys");
+    let extra_path = PathBuf::from(extra_name);
+    std::fs::write(&extra_path, EXTRA_KEYS.join("\n") + "\n")
+        .map_err(|e| format!("writing {}: {e}", extra_path.display()))?;
+
     let file = File::create(&args.out).map_err(|e| format!("creating {}: {e}", args.out.display()))?;
     let mut w = BufWriter::new(file);
     w.write_all(b"TPHI").map_err(|e| e.to_string())?;
-    w.write_all(&1u32.to_le_bytes()).map_err(|e| e.to_string())?;
+    w.write_all(&2u32.to_le_bytes()).map_err(|e| e.to_string())?;
     w.write_all(&(dims as u32).to_le_bytes()).map_err(|e| e.to_string())?;
-    w.write_all(&0u32.to_le_bytes()).map_err(|e| e.to_string())?;
+    w.write_all(&(EXTRA_DIMS as u32).to_le_bytes()).map_err(|e| e.to_string())?;
 
     let out = Mutex::new(w);
     let next = AtomicUsize::new(0);
@@ -256,9 +292,11 @@ fn run(args: &Args) -> Result<(), String> {
     println!("players    {}", args.players);
     println!("weights    {}", champ_path.display());
     println!("dims       {dims}");
+    println!("extra      {EXTRA_DIMS}");
     println!("records    {n}");
     println!("out        {}", args.out.display());
     println!("keys       {}", keys_path.display());
+    println!("extra_keys {}", extra_path.display());
     println!("elapsed    {secs:.1}s  ({:.1} games/s)", args.games as f64 / secs);
     Ok(())
 }

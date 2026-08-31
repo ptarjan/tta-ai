@@ -25,6 +25,7 @@ pub mod economy;
 pub mod effects;
 pub mod event_plan;
 pub mod events;
+pub mod feature_screen;
 pub mod fixtures;
 pub mod game;
 pub mod harness;

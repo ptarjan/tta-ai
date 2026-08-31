@@ -28,9 +28,13 @@ def load(path):
     with open(path, "rb") as fh:
         head = fh.read(HEADER)
         assert head[:4] == b"TPHI", f"bad magic {head[:4]!r}"
-        version, dims = np.frombuffer(head, dtype="<u4", count=3, offset=4)[:2]
-        assert version == 1, f"unknown version {version}"
-        dims = int(dims)
+        version, dims, extra = (int(v) for v in np.frombuffer(head, dtype="<u4", count=3, offset=4))
+        assert version in (1, 2), f"unknown version {version}"
+        # v2 appends `extra` screen columns after `phi` (phidump's own format
+        # section). They are not part of the champion's feature vector and
+        # this script's question is about `phi` alone, so they are read and
+        # dropped -- but the record stride has to know they are there.
+        assert version == 2 or extra == 0, "v1 must declare extra=0"
         rec = np.dtype(
             [
                 ("game_id", "<u4"),
@@ -40,6 +44,7 @@ def load(path):
                 ("margin", "<f4"),
                 ("win_share", "<f4"),
                 ("phi", "<f4", (dims,)),
+                ("extra", "<f4", (extra,)),
             ]
         )
         raw = np.fromfile(fh, dtype=rec)
