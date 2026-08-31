@@ -65,6 +65,41 @@ struct AllocAccum {
     n: u64,
 }
 
+/// One player-round's contribution to the "Food and famine curve" -- the
+/// human twin of `bin/behavcensus.rs`'s `FoodAccum`, same fields, same
+/// sample instant (the turn-start `prev_actor` sample, see the accumulation
+/// site below), so the two curves are directly diffable line-for-line.
+/// Unlike the "Production curve"/"Worker allocation curve" sections below,
+/// which are 3-player-only, this one runs over EVERY player count and the
+/// WHOLE game, segmented by player count -- see `food_by_round`'s own
+/// declaration in `run`.
+#[derive(Default, Clone, Copy)]
+struct FoodAccum {
+    free_workers: u64,
+    food_prod: u64,
+    consumption: u64,
+    food_stock: u64,
+    famine_points: u64,
+    famine_deficit_sum: u64,
+    n: u64,
+}
+
+/// The evaluator's own `WeightKey::FamineDeficit` formula shape
+/// (`bots/weighted/features.rs`: `(-(FoodStock + FoodRate)).max(0)`), with
+/// the deferred-gain terms dropped because a census sample has no trial
+/// move pending: `FoodStock = food`, `FoodRate = food_prod - consumption`,
+/// so their negated sum is `consumption - food - food_prod`, floored at
+/// zero. Copied verbatim from `bin/behavcensus.rs`'s own `famine_deficit`
+/// so the two definitions cannot drift apart. There is no starvation flag
+/// in the engine -- RULES_SPEC 6.6 step 3d's penalty is computed inline in
+/// `economy::end_of_turn` and leaves no event -- so this projection is the
+/// only commensurable "would famine" signal on either side.
+fn famine_deficit(food_stock: u16, food_prod: u16, yellow_bank: u8) -> u32 {
+    let need = i32::from(tta::economy::consumption(yellow_bank));
+    let have = i32::from(food_stock) + i32::from(food_prod);
+    (need - have).max(0) as u32
+}
+
 #[derive(Default)]
 struct CostStats {
     /// cost -> number of player-games whose first take had that cost.
@@ -629,7 +664,7 @@ fn parse_outcomes(text: &str) -> Vec<(Color, &'static str)> {
         .collect()
 }
 
-fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
+fn run(index_path: &str, journals_dir: &str, id_filter: Option<&HashSet<String>>) -> Result<(), String> {
     let card_index = build_card_index();
     let games = corpus::parse_index(index_path)?;
 
@@ -669,7 +704,25 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
     let mut mine_tier = TierCounts::default();
     let mut tech_acq_player_games: u64 = 0;
 
+    // Food and famine curve, WHOLE game, every player count, segmented by
+    // player count -- the human twin of `bin/behavcensus.rs`'s
+    // `Report::food_by_round` (see `FoodAccum`'s doc). Segmented and never
+    // pooled for the same reason every other section here is (this file's
+    // own top doc comment); the outer key is `meta.players`, the inner one
+    // the round.
+    let mut food_by_round: BTreeMap<u8, BTreeMap<u16, FoodAccum>> = BTreeMap::new();
+    // Player-games that contributed at least one sample, per player count --
+    // the denominator behind the per-round `n` columns, so a curve that
+    // thins out late can be read against the population it started from.
+    let mut food_player_games: BTreeMap<u8, u64> = BTreeMap::new();
+    let mut food_games: BTreeMap<u8, u64> = BTreeMap::new();
+
     for meta in games.iter() {
+        if let Some(ids) = id_filter {
+            if !ids.contains(&meta.id) {
+                continue;
+            }
+        }
         let n = meta.players as usize;
         let path = format!("{journals_dir}/{}.tsv", meta.id);
         let text = match fs::read_to_string(&path) {
@@ -960,6 +1013,49 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
             }
         }
 
+        // ---- food and famine curve (EVERY player count, WHOLE game): one
+        // sample per player-round at the START of that player's turn, the
+        // same `prev_actor` turn-boundary detection and the same
+        // `economy::production_this_turn` call the production curve above
+        // uses, and the exact instant `bin/behavcensus.rs`'s own
+        // `Report::food_by_round` samples at (`play_one`'s `prev_actor`
+        // block) -- a half-turn offset on either side would manufacture a
+        // divergence that is not in the play. Its own walk rather than a
+        // branch inside the 3p block above, because that block's window is
+        // 3p-only and must not move.
+        {
+            let mut prev_actor: Option<u8> = None;
+            let mut contributed: Vec<bool> = vec![false; n];
+            for d in &result.decisions {
+                let seat = d.state.current;
+                if seat as usize >= n {
+                    continue;
+                }
+                if prev_actor == Some(seat) {
+                    continue;
+                }
+                prev_actor = Some(seat);
+                let p = &d.state.players[seat as usize];
+                let (food, _resources) = tta::economy::production_this_turn(&d.state, seat);
+                let need = tta::economy::consumption(p.yellow_bank);
+                let deficit = famine_deficit(p.food, food, p.yellow_bank);
+                let fa = food_by_round.entry(meta.players).or_default().entry(d.state.round).or_default();
+                fa.free_workers += u64::from(p.workers_free);
+                fa.food_prod += u64::from(food);
+                fa.consumption += u64::from(need);
+                fa.food_stock += u64::from(p.food);
+                fa.famine_points += u64::from(deficit > 0);
+                fa.famine_deficit_sum += u64::from(deficit);
+                fa.n += 1;
+                contributed[seat as usize] = true;
+            }
+            let contributors = contributed.iter().filter(|c| **c).count() as u64;
+            if contributors > 0 {
+                *food_player_games.entry(meta.players).or_default() += contributors;
+                *food_games.entry(meta.players).or_default() += 1;
+            }
+        }
+
         // ---- civil card fate: see the "Civil card fate" section's own doc
         // comment above for why this needs its own recomputed post-move
         // state per decision (unlike the round<=3 opening trackers above,
@@ -1171,6 +1267,37 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
         );
     }
 
+    // ---- food and famine curve: same sample instant as the two curves
+    // above and as `bin/behavcensus.rs`'s own `Report::food_by_round` (see
+    // `FoodAccum`'s doc), same print format as that file's so the two are
+    // directly diffable. `n` is player-ROUNDS that reached that round and
+    // falls as rounds go up -- printed on every row so a thinning tail
+    // reads as the survivorship artifact it is, against the player-game
+    // population stated in the header line.
+    for (players, rounds) in &food_by_round {
+        eprintln!(
+            "\n### Food and famine curve, {players}p ({} games, {} player-games contributing)\n",
+            food_games.get(players).copied().unwrap_or(0),
+            food_player_games.get(players).copied().unwrap_or(0),
+        );
+        eprintln!("| round | freeW | foodProd | consumption | net | foodStock | famine% | meanDeficit | n |");
+        eprintln!("|---|---|---|---|---|---|---|---|---|");
+        for (round, f) in rounds {
+            let n = f.n.max(1) as f64;
+            eprintln!(
+                "| {round} | {:.2} | {:.2} | {:.2} | {:+.2} | {:.2} | {:.1}% | {:.3} | {} |",
+                f.free_workers as f64 / n,
+                f.food_prod as f64 / n,
+                f.consumption as f64 / n,
+                (f.food_prod as f64 - f.consumption as f64) / n,
+                f.food_stock as f64 / n,
+                100.0 * f.famine_points as f64 / n,
+                f.famine_deficit_sum as f64 / n,
+                f.n
+            );
+        }
+    }
+
     // ---- tech acquisition: seen -> taken -> built -> staffed, per
     // `TechKind` bucket, one sample per player-game. See
     // `bin/behavcensus.rs`'s identical print block for the full rationale.
@@ -1225,10 +1352,25 @@ fn run(index_path: &str, journals_dir: &str) -> Result<(), String> {
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
     if argv.len() < 2 {
-        eprintln!("usage: humanopenings <index.tsv> <journals_dir>");
+        eprintln!("usage: humanopenings <index.tsv> <journals_dir> [ids_file]");
+        eprintln!("  ids_file: one game id per line; only those games are measured");
         return ExitCode::FAILURE;
     }
-    match run(&argv[0], &argv[1]) {
+    // Optional whitelist of game ids (one per line), e.g.
+    // `analysis/guard_ids_882.txt` -- restricting the census to games whose
+    // replay is known to complete, so a per-round curve's falling `n` is
+    // game length rather than reconstruction failure.
+    let id_filter: Option<HashSet<String>> = match argv.get(2) {
+        Some(path) => match fs::read_to_string(path) {
+            Ok(t) => Some(t.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()),
+            Err(e) => {
+                eprintln!("error: cannot read ids file {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    match run(&argv[0], &argv[1], id_filter.as_ref()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");

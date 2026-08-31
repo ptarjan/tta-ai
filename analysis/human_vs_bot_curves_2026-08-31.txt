@@ -1,0 +1,124 @@
+Human vs bot per-round food / worker curves, 2 players
+======================================================
+Date: 2026-08-31.  MEASUREMENT ONLY -- no weight was fitted, no evaluator or
+climb code was touched.  This file is a table, not an interpretation.
+
+Binaries and flags
+------------------
+  human  rust/target/difftest/humanopenings \
+             sources/bgo/index.tsv sources/bgo/journals analysis/guard_ids_882.txt
+         (the third argument is new: an optional one-id-per-line whitelist;
+         without it the binary behaves exactly as before)
+  bot    rust/target/difftest/behavcensus \
+             --players 2 --games 300 --seed 20260831 --threads 4 \
+             --weights /tmp/frozen_champion_2p_20260831.json
+  gate   cargo clippy --all-targets -- -D warnings : clean
+         cargo test --bin humanopenings --bin behavcensus : 2 + 13 pass
+
+Game counts
+-----------
+  human  632 two-player games (every 2p entry of analysis/guard_ids_882.txt,
+         the 882-game frozen complete-replay guard list), 1264 player-games,
+         all 1264 contributing a sample from round 1.
+         (The same run also produced 112 3p and 138 4p games; only the 2p
+         slice is reported here, per the like-for-like requirement.)
+  bot    300 two-player self-play games, 600 player-games, both seats the
+         same champion.
+
+Champion generation
+-------------------
+  gen 132999, players 2, sigma 0.08, since_accept 2, vs_anchor 0.9917.
+  Taken as a FROZEN COPY: experiments/rust_champion_2p.json was copied to
+  /tmp/frozen_champion_2p_20260831.json (md5 90216f017537df378066ece5a958ad31)
+  before the run, because the live file is rewritten by the running climb.
+
+Sample instant  (identical on both sides -- this is the point of the exercise)
+-----------------------------------------------------------------------------
+  The FIRST move of every new turn, read from the PRE-move GameState, before
+  that move is applied.  Turn boundaries are detected the same way on both
+  sides: state.current is reassigned exactly once per turn (game.rs's
+  end_turn), so "the actor differs from the last one sampled" is exactly "a
+  new turn started".
+    bot    bin/behavcensus.rs, play_one's `prev_actor` block -- the same block
+           that already feeds Report::production_by_round and
+           Report::alloc_by_round.
+    human  bin/humanopenings.rs, the new "food and famine curve" walk over
+           replay_game's recorded pre-move Decision states, same prev_actor
+           test, same economy::production_this_turn call.
+  One sample per player-round.  No half-turn offset exists between the two
+  populations.
+
+Column definitions
+------------------
+  freeW        mean PlayerState::workers_free at the sample instant.
+  foodProd     mean economy::production_this_turn(state, actor).0 -- the
+               worker-capped food this tableau would produce.
+  consum       mean economy::consumption(yellow_bank) (RULES_SPEC 6.6 step 3d).
+  net          foodProd - consum.
+  foodStock    mean PlayerState::food.
+  famine%      share of player-rounds whose PROJECTED shortfall is strictly
+               positive.  There is no starvation flag in the engine: the
+               penalty (4 culture per missing food) is computed inline in
+               economy::end_of_turn and leaves no event.  The projection used
+               is the SAME formula shape the evaluator's own
+               WeightKey::FamineDeficit uses (features.rs:752,
+               (-(FoodStock + FoodRate)).max(0)), with the deferred-gain terms
+               dropped because a census sample has no trial move pending:
+                   deficit = max(0, consumption(yellow_bank)
+                                    - (food_stock + food_prod))
+               so this is what the BOT can see, not a post-hoc replay of the
+               penalty.  meanDeficit (in the per-side sections of the raw
+               outputs) is the mean of that same quantity.
+  n            player-ROUNDS that reached this round.  It falls late because
+               games end at different rounds; a thin tail is a survivorship
+               artifact and is shown rather than smoothed.
+
+Reconstruction coverage
+-----------------------
+  All FOUR requested quantities reconstruct from the human journals.  Free
+  workers, food stock and yellow bank are ordinary replayed PlayerState
+  fields, and food production / consumption are pure functions of that state
+  (economy::production_this_turn, economy::consumption), so nothing here
+  depends on the journal printing a number.  Nothing was dropped.
+  The one honest limit is the famine COLUMN's meaning, stated above: it is a
+  projected deficit at turn start, not an observed starvation event, because
+  the engine records no such event on either side.  It is computed
+  identically for humans and bot.
+  Human n is flat at 1264 (100% of player-games) from round 1 through round
+  17, so nothing in rounds 1-17 is survivorship-thinned.  It drops at 18
+  (1162), 19 (542), 20 (92), 21 (4) as real games end.  Bot n is flat at 600
+  through round 18, then 598 / 502 / 70.
+
+Per-round table (H = human corpus, B = bot self-play)
+-----------------------------------------------------
+| round | freeW H | freeW B | foodProd H | foodProd B | consum H | consum B | net H | net B | foodStock H | foodStock B | famine% H | famine% B | n H | n B |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1.00 | 1.00 | 2.00 | 2.00 | 0.00 | 0.00 | +2.00 | +2.00 | 0.00 | 0.00 | 0.0% | 0.0% | 1264 | 600 |
+| 2 | 1.00 | 1.00 | 2.00 | 2.00 | 0.00 | 0.00 | +2.00 | +2.00 | 2.00 | 2.00 | 0.0% | 0.0% | 1264 | 600 |
+| 3 | 0.92 | 0.81 | 2.00 | 2.00 | 0.05 | 0.06 | +1.96 | +1.94 | 3.03 | 2.76 | 0.0% | 0.0% | 1264 | 600 |
+| 4 | 1.00 | 0.61 | 2.01 | 2.05 | 0.44 | 0.75 | +1.58 | +1.30 | 3.84 | 3.15 | 0.0% | 0.0% | 1264 | 600 |
+| 5 | 1.27 | 0.50 | 2.05 | 2.08 | 0.81 | 0.92 | +1.24 | +1.17 | 3.92 | 3.34 | 0.0% | 0.0% | 1264 | 600 |
+| 6 | 1.46 | 0.46 | 2.10 | 2.11 | 0.96 | 0.91 | +1.14 | +1.19 | 3.25 | 3.26 | 0.0% | 0.0% | 1264 | 600 |
+| 7 | 1.40 | 0.55 | 2.20 | 2.13 | 1.09 | 0.95 | +1.11 | +1.18 | 3.28 | 3.06 | 0.1% | 0.0% | 1264 | 600 |
+| 8 | 1.34 | 0.58 | 2.34 | 2.17 | 1.61 | 1.37 | +0.73 | +0.79 | 3.20 | 2.91 | 0.1% | 1.2% | 1264 | 600 |
+| 9 | 1.27 | 0.49 | 2.54 | 2.20 | 1.69 | 1.49 | +0.85 | +0.71 | 2.96 | 2.58 | 0.0% | 1.5% | 1264 | 600 |
+| 10 | 1.15 | 0.50 | 2.77 | 2.27 | 1.71 | 1.47 | +1.06 | +0.81 | 3.17 | 2.26 | 0.0% | 2.5% | 1264 | 600 |
+| 11 | 1.03 | 0.46 | 3.05 | 2.33 | 1.73 | 1.49 | +1.32 | +0.84 | 3.51 | 2.20 | 0.1% | 3.5% | 1264 | 600 |
+| 12 | 0.91 | 0.41 | 3.32 | 2.37 | 1.74 | 1.53 | +1.58 | +0.84 | 3.92 | 2.26 | 0.3% | 4.0% | 1264 | 600 |
+| 13 | 0.86 | 0.34 | 3.58 | 2.43 | 2.06 | 1.60 | +1.52 | +0.83 | 4.33 | 2.19 | 1.5% | 5.5% | 1264 | 600 |
+| 14 | 0.85 | 0.32 | 3.83 | 2.52 | 2.28 | 1.92 | +1.55 | +0.60 | 4.53 | 2.38 | 1.3% | 7.8% | 1264 | 600 |
+| 15 | 0.78 | 0.32 | 4.05 | 2.62 | 2.35 | 2.02 | +1.71 | +0.61 | 4.80 | 2.44 | 1.3% | 10.0% | 1264 | 600 |
+| 16 | 0.73 | 0.27 | 4.25 | 2.74 | 2.41 | 2.04 | +1.85 | +0.70 | 5.35 | 2.47 | 0.8% | 11.3% | 1264 | 600 |
+| 17 | 0.67 | 0.26 | 4.43 | 2.85 | 2.57 | 2.06 | +1.87 | +0.78 | 5.42 | 2.71 | 0.8% | 11.8% | 1264 | 600 |
+| 18 | 0.65 | 0.27 | 4.53 | 2.98 | 2.89 | 2.12 | +1.63 | +0.86 | 5.46 | 2.77 | 1.5% | 13.7% | 1162 | 600 |
+| 19 | 0.61 | 0.25 | 4.71 | 3.12 | 3.13 | 2.35 | +1.58 | +0.78 | 5.50 | 2.82 | 2.2% | 14.4% | 542 | 598 |
+| 20 | 0.66 | 0.24 | 4.87 | 3.37 | 3.33 | 2.73 | +1.54 | +0.64 | 5.70 | 3.02 | 0.0% | 17.1% | 92 | 502 |
+| 21 | 1.00 | 0.27 | 4.00 | 3.27 | 3.25 | 2.70 | +0.75 | +0.57 | 6.75 | 3.16 | 0.0% | 18.6% | 4 | 70 |
+
+Raw per-side outputs this table was built from:
+  human  the "### Food and famine curve, 2p" section of the humanopenings
+         stderr run above
+  bot    the "### Food and famine curve" section of the behavcensus stdout
+         run above
+Both sections also carry a meanDeficit column (mean projected shortfall in
+food, including the zeros), omitted from the joined table above for width.

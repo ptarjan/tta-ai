@@ -696,6 +696,49 @@ struct AllocAccum {
     n: u64,
 }
 
+/// One player-round's contribution to the "Food and famine curve" --
+/// summed here, divided by `n` in `print_report`. Sampled at the EXACT same
+/// instant as [`AllocAccum`] and `Report::production_by_round` (the
+/// `prev_actor` turn-start sample in `play_one`), off the same
+/// `economy::production_this_turn` call, so no half-turn offset can
+/// manufacture a divergence against the human curve.
+/// `bin/humanopenings.rs` accumulates the identically-named/-shaped
+/// quantity so the two curves are directly diffable line-for-line.
+///
+/// `famine_points` counts player-rounds whose projected shortfall is
+/// strictly positive under the SAME formula the evaluator's own
+/// `WeightKey::FamineDeficit` uses (`bots/weighted/features.rs`): stock plus
+/// this turn's worker-capped food production, minus
+/// `economy::consumption(yellow_bank)`, floored at zero and negated. There
+/// is no starvation flag in the engine -- RULES_SPEC 6.6 step 3d's penalty
+/// is computed inline in `economy::end_of_turn` and leaves no event -- so
+/// this projection is the only commensurable "would famine" signal, and it
+/// is deliberately the projection the BOT can see rather than a
+/// post-hoc replay of the penalty.
+#[derive(Default, Clone, Copy)]
+struct FoodAccum {
+    free_workers: u64,
+    food_prod: u64,
+    consumption: u64,
+    food_stock: u64,
+    famine_points: u64,
+    famine_deficit_sum: u64,
+    n: u64,
+}
+
+/// The evaluator's own `WeightKey::FamineDeficit` formula shape
+/// (`bots/weighted/features.rs`: `(-(FoodStock + FoodRate)).max(0)`), with
+/// the deferred-gain terms dropped because a census sample has no trial
+/// move pending: `FoodStock = food`, `FoodRate = food_prod - consumption`,
+/// so their negated sum is `consumption - food - food_prod`, floored at
+/// zero. Duplicated verbatim in `bin/humanopenings.rs` so the two censuses
+/// cannot drift apart.
+fn famine_deficit(food_stock: u16, food_prod: u16, yellow_bank: u8) -> u32 {
+    let need = i32::from(tta::economy::consumption(yellow_bank));
+    let have = i32::from(food_stock) + i32::from(food_prod);
+    (need - have).max(0) as u32
+}
+
 // ---------------------------------------------------------------------
 // Tech acquisition: where does a production tech die in the pipeline?
 // ---------------------------------------------------------------------
@@ -856,6 +899,10 @@ struct Report {
     // ---- worker allocation curve (same sample instant as
     // `production_by_round` above, see its doc and `AllocAccum`'s) ----
     alloc_by_round: HashMap<u16, AllocAccum>,
+
+    // ---- food and famine curve (same sample instant as
+    // `production_by_round`/`alloc_by_round` above, see `FoodAccum`'s doc) ----
+    food_by_round: HashMap<u16, FoodAccum>,
 
     // ---- tech acquisition: seen/taken/built/staffed per `TechKind`, one
     // sample per player-game (see the "Tech acquisition" section above for
@@ -1052,6 +1099,7 @@ impl Report {
         self.n_player_games += other.n_player_games;
         merge_triple_map(&mut self.production_by_round, other.production_by_round);
         merge_alloc_map(&mut self.alloc_by_round, other.alloc_by_round);
+        merge_food_map(&mut self.food_by_round, other.food_by_round);
         merge_techacq_map(&mut self.tech_acq, other.tech_acq);
         merge_tier_counts(&mut self.farm_tier, other.farm_tier);
         merge_tier_counts(&mut self.mine_tier, other.mine_tier);
@@ -1157,6 +1205,21 @@ fn merge_alloc_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, AllocAccum>, b: H
         e.staffed_workers += v.staffed_workers;
         e.best_farm_sum += v.best_farm_sum;
         e.best_mine_sum += v.best_mine_sum;
+        e.n += v.n;
+    }
+}
+
+/// [`merge_alloc_map`]'s twin for [`Report::food_by_round`]'s [`FoodAccum`]
+/// -- same "add every field element-wise" merge.
+fn merge_food_map<K: Eq + std::hash::Hash>(a: &mut HashMap<K, FoodAccum>, b: HashMap<K, FoodAccum>) {
+    for (k, v) in b {
+        let e = a.entry(k).or_default();
+        e.free_workers += v.free_workers;
+        e.food_prod += v.food_prod;
+        e.consumption += v.consumption;
+        e.food_stock += v.food_stock;
+        e.famine_points += v.famine_points;
+        e.famine_deficit_sum += v.famine_deficit_sum;
         e.n += v.n;
     }
 }
@@ -1560,6 +1623,20 @@ fn play_one(players: u8, weights: Weights, seed: u64) -> (Report, bool) {
             a.best_farm_sum += u64::from(best_farm.max(0) as u16);
             a.best_mine_sum += u64::from(best_mine.max(0) as u16);
             a.n += 1;
+
+            // ---- food and famine: SAME instant, same player, reusing the
+            // `food` half of the `production_this_turn` call already made
+            // above rather than a second call (see `FoodAccum`'s doc).
+            let need = tta::economy::consumption(p.yellow_bank);
+            let deficit = famine_deficit(p.food, food, p.yellow_bank);
+            let fa = report.food_by_round.entry(round_before).or_default();
+            fa.free_workers += u64::from(p.workers_free);
+            fa.food_prod += u64::from(food);
+            fa.consumption += u64::from(need);
+            fa.food_stock += u64::from(p.food);
+            fa.famine_points += u64::from(deficit > 0);
+            fa.famine_deficit_sum += u64::from(deficit);
+            fa.n += 1;
 
             // ---- tech acquisition: SEEN -- same turn-start instant, every
             // distinct tracked-type card visible in the card row right now
@@ -2890,6 +2967,33 @@ fn print_report(players: u8, r: &Report) {
             a.best_farm_sum as f64 / n,
             a.best_mine_sum as f64 / n,
             a.n
+        );
+    }
+
+    // ---- food and famine curve: same sample instant as the production and
+    // worker-allocation curves above (see `FoodAccum`'s doc), same print
+    // format as `bin/humanopenings.rs`'s so the two are directly diffable.
+    // `n` is player-ROUNDS that reached that round and falls as rounds go
+    // up (games end at different rounds) -- printed on every row so a
+    // thinning tail reads as the survivorship artifact it is.
+    println!("\n### Food and famine curve\n");
+    println!("| round | freeW | foodProd | consumption | net | foodStock | famine% | meanDeficit | n |");
+    println!("|---|---|---|---|---|---|---|---|---|");
+    let mut food_rounds: Vec<u16> = r.food_by_round.keys().copied().collect();
+    food_rounds.sort_unstable();
+    for round in food_rounds {
+        let f = &r.food_by_round[&round];
+        let n = f.n.max(1) as f64;
+        println!(
+            "| {round} | {:.2} | {:.2} | {:.2} | {:+.2} | {:.2} | {:.1}% | {:.3} | {} |",
+            f.free_workers as f64 / n,
+            f.food_prod as f64 / n,
+            f.consumption as f64 / n,
+            (f.food_prod as f64 - f.consumption as f64) / n,
+            f.food_stock as f64 / n,
+            100.0 * f.famine_points as f64 / n,
+            f.famine_deficit_sum as f64 / n,
+            f.n
         );
     }
 
