@@ -69,9 +69,17 @@ def main():
     Xtr, Xte = scaler.transform(X[tr]), scaler.transform(X[te])
     ytr, yte = y[tr], y[te]
 
-    def report(name, model):
-        model.fit(Xtr, ytr)
+    # The MLP is fit on a standardized label and un-standardized for scoring.
+    # A raw culture margin has an SD near 76, and an unscaled target that size
+    # is enough on its own to leave adam short of convergence -- which looks
+    # exactly like "there is no nonlinear structure here" from the outside.
+    y_mu, y_sd = float(ytr.mean()), float(ytr.std())
+
+    def report(name, model, scale_y=False):
+        model.fit(Xtr, (ytr - y_mu) / y_sd if scale_y else ytr)
         pred = model.predict(Xte)
+        if scale_y:
+            pred = pred * y_sd + y_mu
         rmse = float(np.sqrt(np.mean((pred - yte) ** 2)))
         ss_res = float(np.sum((pred - yte) ** 2))
         ss_tot = float(np.sum((yte - yte.mean()) ** 2))
@@ -82,18 +90,26 @@ def main():
     print()
     base = report("constant (mean)", DummyRegressor(strategy="mean"))
     lin = report("ridge (best LINEAR on phi)", Ridge(alpha=1.0))
-    mlp = report(
-        "MLP 64-64 (nonlinear)",
-        MLPRegressor(
-            hidden_layer_sizes=(64, 64),
-            max_iter=60,
-            early_stopping=True,
-            n_iter_no_change=5,
-            random_state=0,
-        ),
-    )
+    # Several capacities, all run to convergence: a single underfit net is not
+    # evidence of anything. `best` is the most generous reading of the
+    # nonlinear side, which is the reading a kill decision has to survive.
+    shapes = [(32,), (64, 64), (256, 128)]
+    best = -1e9
+    for shape in shapes:
+        r2 = report(
+            f"MLP {'-'.join(str(s) for s in shape)} (nonlinear)",
+            MLPRegressor(
+                hidden_layer_sizes=shape,
+                max_iter=400,
+                early_stopping=True,
+                n_iter_no_change=15,
+                random_state=0,
+            ),
+            scale_y=True,
+        )
+        best = max(best, r2)
     print()
-    print(f"nonlinear gain over best linear: {mlp - lin:+.4f} R2  ({(mlp-lin)/max(lin,1e-9)*100:+.1f}% relative)")
+    print(f"nonlinear gain over best linear: {best - lin:+.4f} R2  ({(best-lin)/max(lin,1e-9)*100:+.1f}% relative)")
     print(f"linear gain over constant:       {lin - base:+.4f} R2")
 
 

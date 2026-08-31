@@ -1,0 +1,12 @@
+records 181577  dims 174  games 600
+train rows 145413 (480 games)   held-out rows 36164 (120 games)
+
+constant (mean)              held-out RMSE   75.933   R2 -0.0000
+ridge (best LINEAR on phi)   held-out RMSE   54.060   R2  0.4931
+MLP 32 (nonlinear)           held-out RMSE   57.702   R2  0.4225
+MLP 64-64 (nonlinear)        held-out RMSE   61.865   R2  0.3362
+MLP 256-128 (nonlinear)      held-out RMSE   61.085   R2  0.3528
+
+nonlinear gain over best linear: -0.0706 R2  (-14.3% relative)
+linear gain over constant:       +0.4931 R2
+EXIT 0
