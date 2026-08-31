@@ -1,0 +1,569 @@
+WITHIN-DECISION DISCRIMINATION SCREEN -- 2026-08-31
+Can a candidate feature column separate the LEGAL MOVES at a decision point,
+or does it only separate decision points from each other? Measured for the 91
+above-floor columns of analysis/feature_screen_families_2026-08-31.txt, plus
+controls, at 2 players against the same frozen champion.
+
+NO RECOMMENDATION IS MADE HERE. This file reports measurements only.
+
+
+====================================================================
+0. WHY THE R2 SCREEN CANNOT ANSWER THIS
+====================================================================
+
+The leaf eval is dot(w, phi(candidate)). A column that takes the SAME VALUE on
+every candidate at a decision point adds the same constant to every candidate's
+score and cannot change the argmax AT ANY WEIGHT. It is unreachable, not merely
+underpriced ([[tta-most-keys-cannot-decide]]).
+
+The R2 screen measures something else: how much a column improves a prediction
+of the final margin from the state the champion actually reached. That is
+variation ACROSS DECISION POINTS. The two can come apart completely, and
+[[tta-corpus-fits-lose-three-ways]] records the failure mode -- an outcome model
+prices the scoreboard, one-ply successors barely differ on the scoreboard, so a
+column can explain outcome variance beautifully and still separate nothing.
+
+rel_proj_final_culture_gap, rank 1 in the R2 table at +0.008046, is by
+construction current culture gap + rate gap * rounds_left: SHAPED LIKE THE
+LABEL. The R2 screen cannot tell that apart from a column that earns its number.
+This one can. (Section 5 reports what it says about that column, which is not
+what was expected.)
+
+
+====================================================================
+1. WHAT WAS RUN
+====================================================================
+
+Frozen champion   /tmp/fs_champ_2p_frozen.json
+  generation      gen 133131 (players 2)
+  md5             0272cfa7dd167b8e73e4096d047504e5
+                  BYTE-IDENTICAL to the R2 run, verified by md5 before the run.
+                  Same weight vector, so the same eleven freeze-priced phi
+                  coordinates, the same policy, and the same phi.
+
+Binary            rust/src/bin/featdisc.rs  (new; no evaluator, WeightKey,
+                  weight or eval.rs change anywhere in this work)
+  command         featdisc --games 400 --players 2 --threads 2 --seed 1 \
+                    --weights /tmp/fs_champ_2p_frozen.json \
+                    --out /tmp/featdisc_2p_400.tsv
+  games           400          (NOT 3000: this costs ~one extra rank_moves per
+                               decision, 12.0 successor states instead of 1)
+  decisions       115457       with 2+ real candidates
+  forced          4983         single-candidate points, EXCLUDED from every
+                               statistic -- a forced move is not a decision and
+                               would inflate every column's constant fraction
+  successors      1388633      trial-applied states, 12.03 per decision, max 43
+  columns         359          all 174 phi + all 185 candidate columns
+  elapsed         151.9 s      (74.3 s more for the replication run below)
+
+THE TRAJECTORY IS PHIDUMP'S, VERIFIED. On games 1-4 phidump writes 1215 records
+and featdisc counts 1165 decisions + 50 forced = 1215 exactly. pick() is called
+once per decision before the candidate sweep and the sweep draws no bot
+randomness, so this walks the same games the R2 dump walked at the same seeds --
+these 400 games are a subset of that run's 3000.
+
+HOW THE SUCCESSOR STATES ARE BUILT. Through feature_screen::candidate_row, the
+same call phidump makes: phi from bots::weighted::eval::candidate_features
+itself, extras from a state rebuilt by the engine's own apply::apply. Nothing in
+featdisc knows or asserts which moves ought to move which column. The guard
+feature_screen::tests::trial_matches_candidate_features -- which asserts the
+rebuilt state reproduces candidate_features' phi bit for bit over real self-play
+positions -- passes at this commit and is what makes that claim checkable.
+
+The one thing featdisc decides for itself is the CANDIDATE SET: the legal list
+with Move::Resign dropped unless resigning is the only legal move, mirroring
+bots::filter_resign (pub(crate), so not callable from a binary). That is the set
+rank_moves ranks.
+
+
+====================================================================
+2. THE STATISTIC, AND WHY IT IS NORMALISED THAT WAY
+====================================================================
+
+At each decision point, for each column: spread = max - min over the candidate
+set. Reduced over decisions:
+
+  spread   = mean spread / SD of the column's value AT THE CHOSEN MOVE
+  const    = fraction of decisions where the spread is zero
+  dmed/dmean/d90 = median / mean / p90 count of distinct values per decision
+  rawspr   = the mean spread itself, in the column's own units
+
+WHY DIVIDE BY THE SD AT THE CHOSEN MOVE, in one line: the chosen-move value over
+decisions is EXACTLY the population phidump writes one row of, so the ratio
+reads as "within-decision variation in units of the across-decision variation
+the R2 screen was fit on" -- which is the comparison this file exists to make,
+and it makes columns of wildly different scale comparable (rawspr does not:
+rel_x_culrate_gap_round's 9.54 and hand_gov_count's 0.18 are not on one scale).
+
+Two values count as one below 1e-9 * (1 + max|v|), so f64 accumulation noise in
+linear_features cannot report a structurally inert column as live.
+
+THE STATISTIC IS A PROXY, NOT A FLIP TEST. What actually flips an argmax is
+|w_k| * spread against the winning margin, and a candidate column has no weight
+yet. A spread of zero is a PROOF of inertness at any weight; a nonzero spread is
+a necessary condition, not a sufficient one. The sufficient test is a
+counterfactual argmax flip ([[tta-spread-scan-is-blind-to-multipliers]]) and it
+needs a weight to run.
+
+READ const AGAINST ~0.4, NOT AGAINST 0. The most discriminating live phi column
+in the whole vector is constant across candidates on 21% of decisions
+(HandMilPotential); CultureRate is constant on 50%; the median nonzero phi
+column on 81%. At most decisions most quantities simply cannot move.
+
+
+====================================================================
+3. CONTROLS -- READ THESE BEFORE THE TABLE
+====================================================================
+
+Columns: spread ratio, constant fraction, all-zero fraction, mean distinct
+values per decision, and the same spread ratio in the independent replication
+run (200 games, seed block 5001, no game shared with the main run).
+
+POSITIVE CONTROLS. Live phi columns the champion visibly trades off. Every one
+must show HIGH spread or the instrument is not measuring decisions.
+
+  phi column                 spread    const   allzero   dmean | rep spread
+  FreeWorkers                1.0414   0.3733    0.2734    1.73 |    1.0536
+  FoodRate                   0.7008   0.4680    0.1230    1.74 |    0.7333
+  HandCivil                  0.6067   0.4683    0.0904    1.77 |    0.6046
+  ResourceRate               0.5597   0.4567    0.0297    1.80 |    0.5831
+  ScienceRate                0.4501   0.5241    0.0868    1.59 |    0.4662
+  Strength                   0.3312   0.4311    0.0197    1.95 |    0.3423
+  FoodStock                  0.2861   0.7955    0.2201    1.23 |    0.2985
+  ResourceStock              0.1851   0.7428    0.2145    1.41 |    0.1826
+  CultureRate                0.1624   0.4971    0.0584    1.65 |    0.1646
+  Workers                    0.1389   0.4113    0.0599    1.69 |    0.1368
+  Science                    0.1276   0.8897    0.0613    1.13 |    0.1297
+  MilitaryActions            0.0635   0.9433    0.0000    1.06 |    0.0726
+  CivilActions               0.0191   0.9889    0.0000    1.01 |    0.0182
+  Culture                    0.0077   0.8703    0.0461    1.14 |    0.0074
+
+  PASS. The build/rate columns are all high and all far from zero.
+  FoodRate is non-constant on 53.2% of decisions; the 2026-08-24 3p
+  decisiveness scan measured food_rate firing on 46.8%, so two independent
+  instruments at two player counts agree on the order of magnitude.
+
+  THE LAST THREE ROWS ARE THE POINT OF THE WHOLE EXERCISE. CivilActions and
+  Culture are live, scoring, correctly-signed phi columns that BARELY MOVE
+  ACROSS CANDIDATES -- culture stock is constant across every legal move on 87%
+  of decisions. "Live in the eval" and "able to decide" are different
+  properties, and this instrument separates them on columns whose status is
+  already known.
+
+NEGATIVE CONTROL A -- the multiplier class. 32 WeightKeys never appear in an
+f.set() in features.rs; they are applied inside another feature's computation
+([[tta-spread-scan-is-blind-to-multipliers]]). They MUST read exactly zero.
+
+  phi column                 spread    const   allzero   dmean | rep spread
+  TechBoardCredit            0.0000   1.0000    1.0000    1.00 |    0.0000
+  WonderBoardCredit          0.0000   1.0000    1.0000    1.00 |    0.0000
+  CardBoardCredit            0.0000   1.0000    1.0000    1.00 |    0.0000
+  UnitTechCredit             0.0000   1.0000    1.0000    1.00 |    0.0000
+  ActionBoardCredit          0.0000   1.0000    1.0000    1.00 |    0.0000
+  TerritoryCredit            0.0000   1.0000    1.0000    1.00 |    0.0000
+  CardRateCredit             0.0000   1.0000    1.0000    1.00 |    0.0000
+  FreeActionCredit           0.0000   1.0000    1.0000    1.00 |    0.0000
+
+  PASS, exactly 0.000000 on 115457 decisions and again on the replication.
+  ⚠️ A ZERO HERE IS NOT A PRUNING LICENCE. These read zero because the
+  instrument cannot see them, exactly as featspread cannot -- they have no
+  linear slot to difference. Same blindness, same rule: check for an f.set
+  before believing any "this is dead" claim.
+
+NEGATIVE CONTROL B -- populated but candidate-invariant. Rival state is real,
+varies plenty across decisions, and MY MOVE CANNOT CHANGE IT.
+
+  phi column                 spread    const   allzero   dmean | rep spread
+  RivalCultureRate           0.0000   1.0000    0.0703    1.00 |    0.0000
+  RivalScienceRate           0.0000   1.0000    0.1028    1.00 |    0.0000
+  RivalStrength              0.0000   1.0000    0.0252    1.00 |    0.0000
+  RivalWonders               0.0000   1.0000    0.3131    1.00 |    0.0000
+  RivalHandCivil             0.0000   1.0000    0.1826    1.00 |    0.0000
+  WonderPoolRivalClaimed     0.0000   1.0000    0.9522    1.00 |    0.0000
+
+  PASS, and this is the sharpest control in the file. RivalCultureRate is
+  non-zero on 93% of decisions and has an across-decision SD of 4.38, on a par
+  with CultureRate's own 4.59, so it carries real outcome information -- yet its
+  within-decision spread is IDENTICALLY ZERO. That is the "high R2, zero
+  discrimination" archetype, occurring naturally, and the instrument reports it
+  at exactly zero. The audit's two genuinely-invariant keys (rival_science_rate,
+  rival_wonders) are both here.
+
+  Of the 174 phi columns, 46 have exactly zero within-decision spread at 2p: 40
+  never populated at all, 6 populated but invariant. The 2026-08-24 3p scan
+  found 38 of 160 candidate-invariant, of which 35 were never populated -- same
+  shape, different weight set and player count.
+
+NEGATIVE CONTROL C -- the correction. [[tta-spread-scan-is-blind-to-multipliers]]
+says four of the 3p scan's 38 "invariant" keys are LIVE at 2p, and
+[[tta-zero-spread-row-may-be-thin-sampling]] says eight more read zero in the
+live table but nonzero when actually measured. Both must come back nonzero here
+or this instrument is repeating the 3p scan's error.
+
+  phi column                 spread    const   allzero   dmean | rep spread
+  BestTemple                 0.0207   0.9893    0.5589    1.01 |    0.0208
+  BestLab                    0.0168   0.9927    0.6831    1.01 |    0.0180
+  BestFarm                   0.0151   0.9927    0.6368    1.01 |    0.0136
+  BestLibrary                0.0140   0.9935    0.5856    1.01 |    0.0138
+  BestTheater                0.0138   0.9942    0.7124    1.01 |    0.0141
+  BestArena                  0.0132   0.9951    0.7876    1.00 |    0.0123
+  BestMine                   0.0123   0.9953    0.7741    1.00 |    0.0110
+  HandLimit                  0.0035   0.9991    0.9259    1.00 |    0.0031
+  RivalFreeCa                0.0001   0.9999    0.0000    1.00 |    0.0002
+
+  PASS, in the informative direction: all nine are small but strictly nonzero
+  and reproduce in the replication run. best_mine is NOT candidate-invariant at
+  2p -- it fires on 0.47% of decisions -- which is the 3p-only caveat the
+  correction memory raises, confirmed by a second instrument. Note the contrast
+  with control A: these have an f.set and a real, tiny spread; the credits have
+  no slot and an exactly-zero one. The instrument distinguishes those two.
+
+  ⚠️ AND THAT IS THE TIE FLOOR PROBLEM IN A NEW FORM. A 0.0123 spread ratio is
+  not zero, so nothing here is provably unreachable -- but nine keys firing on
+  under 1% of decisions is not the same claim as a live one. The 0.0406 line
+  used in the table (section 4) sits above all of them on purpose.
+
+CONTROLS VERDICT: PASS. Positives high, negatives at exact zero, the documented
+2p exceptions recovered as nonzero. The instrument measures what it claims to.
+
+
+====================================================================
+4. THE RANKED TABLE -- ALL 91 ABOVE-FLOOR COLUMNS, ONE PAGE
+====================================================================
+
+Ranked by SPREAD (this file's statistic), with the R2 screen's own rank carried
+alongside so the disagreement is visible on every row.
+
+  rank    rank by within-decision spread ratio, 1 = most discriminating
+  fam     family, from the families report
+  r2gain  held-out R2 gain over phi, COPIED VERBATIM from
+          analysis/feature_screen_families_2026-08-31.txt section 4
+  r2rk    that file's own rank, 1 = best predictor
+  spread  mean within-decision spread / SD of the chosen-move value
+  const   fraction of the 115457 decisions where the column is constant
+          across every legal move (higher = less able to decide)
+  dmed    median distinct values per decision -- DEGENERATE, and reported
+          because it was asked for: it is 1 for any column constant on more
+          than half its decisions, which is 85 of the 91. dmean and d90 are
+          the informative versions and are given next to it.
+  rawspr  mean spread in the column's own units (NOT comparable across rows)
+
+  FLAGS
+    HIGH-R2/LOW-SPREAD   r2gain >= +0.003732 AND spread < 0.0406
+    low spread           spread < 0.0406
+    CANNOT-DECIDE        constant across every legal move on >= 99.9% of
+                         decisions
+
+  BOTH THRESHOLDS COME FROM ONE YARDSTICK, CultureRate -- the same column the
+  R2 screen uses as its positive control. Its R2 gain is +0.003732 and its
+  spread ratio is 0.1624, so "high R2" means "worth at least one live feature"
+  and "low spread" means "moves across candidates less than a quarter as
+  readily as that same live feature". A quarter is a choice; the raw numbers
+  are all in the table, so any other line can be drawn on them.
+
+# featdisc games=400 players=2 seed=1 weights=/tmp/fs_champ_2p_frozen.json
+#   decisions=115457 forced=4983 mean_candidates=12.027 max_candidates=43 successor_states=1388633 elapsed_s=151.9
+# r2 yardstick +0.003732   spread yardstick CultureRate 0.1624   low-spread line 0.0406
+ rank  fam   column                                r2gain  r2rk   spread   const dmed  dmean  d90    rawspr  flag
+    1  HAND  hand_specialtech_count             +0.000018    84   1.8039  0.6971    1   1.31    2    0.3094
+    2  HAND  hand_resource_cost_total           +0.000044    69   1.5291  0.5440    1   2.05    4    3.7779
+    3  GRAN  gran_hand_distinct_types           +0.000076    62   0.9319  0.4796    2   1.70    3    0.6965
+    4  HAND  hand_science_cost_total            +0.000128    52   0.7739  0.5316    1   2.58    5    4.9234
+    5  HAND  hand_science_cost_max              +0.000012    88   0.7719  0.5620    1   2.36    5    4.0046
+    6  REL   rel_trail_scirate                  +0.002283    12   0.7397  0.6707    1   1.36    2    0.2457
+    7  REL   rel_bkt_scirate_m1                 +0.000928    14   0.6469  0.7347    1   1.27    2    0.2653
+    8  HAND  hand_science_shortfall_min         +0.000053    66   0.6413  0.6203    1   1.96    4    2.2634
+    9  REL   rel_bkt_strength_0                 +0.000038    71   0.5654  0.8187    1   1.18    2    0.1813
+   10  HAND  hand_science_shortfall_total       +0.000189    44   0.5400  0.6127    1   2.01    4    2.3743
+   11  HAND  hand_action_count                  +0.000011    89   0.5321  0.5149    1   1.61    3    0.6132
+   12  GRAN  gran_wbuild_num_stages             +0.000035    72   0.5119  0.8094    1   1.25    2    0.6851
+   13  HAND  hand_gov_count                     +0.000378    32   0.4744  0.8261    1   1.18    2    0.1770
+   14  GRAN  gran_hand_costben_mean             +0.000764    19   0.4710  0.5582    1   2.15    5    0.2676
+   15  HAND  handmil_tactic_count               +0.000158    49   0.4596  0.3901    2   1.61    2    0.6105
+   16  HAND  hand_age_mean_gap                  +0.000254    39   0.3887  0.7295    1   1.38    2    0.1732
+   17  REL   rel_bkt_strength_p1                +0.000307    37   0.3791  0.8227    1   1.18    2    0.1773
+   18  GRAN  gran_wbuild_max_stage              +0.000368    33   0.3762  0.8094    1   1.26    2    0.8809
+   19  REL   rel_bkt_scirate_p1                 +0.000701    22   0.3709  0.8435    1   1.16    2    0.1565
+   20  GRAN  gran_hand_costben_max              +0.000746    20   0.3676  0.6092    1   1.84    4    0.3444
+   21  REL   rel_trail_culrate                  +0.002301    11   0.3556  0.7033    1   1.36    2    0.0734
+   22  REL   rel_bkt_strength_m1                +0.000390    30   0.3512  0.8348    1   1.17    2    0.1652
+   23  REL   rel_bkt_culrate_m1                 +0.000883    17   0.3445  0.8515    1   1.15    2    0.1485
+   24  REL   rel_share_culrate                  +0.002958    10   0.3383  0.4916    2   1.66    3    0.0488
+   25  REL   rel_scirate_deficit                +0.000018    85   0.3236  0.6705    1   1.36    2    0.3931
+   26  HAND  hand_age_stale_count               +0.000111    56   0.3084  0.7647    1   1.31    2    0.3111
+   27  REL   rel_bkt_culrate_p1                 +0.000679    23   0.3078  0.8596    1   1.14    2    0.1404
+   28  REL   rel_cond_scishort_x_scitrail       +0.000025    80   0.2925  0.8554    1   1.40    3    0.7937
+   29  HAND  hand_age_ii_count                  +0.000025    78   0.2899  0.7857    1   1.28    2    0.2839
+   30  REL   rel_x_scirate_gap_late             +0.004359     7   0.2670  0.5185    1   1.60    3    0.4393
+   31  HAND  hand_age_iii_count                 +0.000035    73   0.2637  0.8161    1   1.24    2    0.2419
+   32  REL   rel_scirate_lead                   +0.000448    28   0.2339  0.7955    1   1.26    2    0.3003
+   33  REL   rel_cond_handvalue_x_cullead       +0.000869    18   0.2238  0.7623    1   1.56    4    4.1737
+   34  REL   rel_milhand_deficit                +0.000660    24   0.2235  0.6167    1   1.38    2    0.3893
+   35  REL   rel_strength_lead                  +0.000130    51   0.2194  0.6953    1   1.51    3    0.6406
+   36  REL   rel_x_scirate_def_late             +0.003156     9   0.2192  0.6704    1   1.36    2    0.2235
+   37  GRAN  gran_board_obsolete_workers        +0.000887    16   0.2145  0.7127    1   1.33    2    0.3616
+   38  REL   rel_cond_handvalue_x_culdef        +0.000517    27   0.2115  0.7231    1   1.57    3    3.9072
+   39  REL   rel_x_scirate_lead_late            +0.002245    13   0.1990  0.7953    1   1.26    2    0.2158
+   40  REL   rel_x_strength_gap_late            +0.000125    53   0.1906  0.4273    2   1.96    3    0.6988
+   41  REL   rel_culrate_deficit                +0.000066    63   0.1898  0.7033    1   1.36    2    0.3857
+   42  REL   rel_strength_deficit               +0.000119    55   0.1870  0.6689    1   1.47    3    0.5333
+   43  REL   rel_bkt_scirate_m2                 +0.000109    57   0.1819  0.9499    1   1.05    1    0.0501
+   44  REL   rel_proj_final_culture_gap         +0.008046     1   0.1779  0.3776    2   1.80    3    7.6078
+   45  REL   rel_x_culrate_gap_late             +0.007506     3   0.1727  0.4895    2   1.66    3    0.4951
+   46  REL   rel_x_culrate_gap_round            +0.007580     2   0.1696  0.4897    2   1.66    3    9.5375
+   47  GRAN  gran_wbuild_library_of_alexandria  +0.000342    35   0.1685  0.9794    1   1.02    1    0.0206
+   48  REL   rel_milhand_lead                   +0.000223    42   0.1669  0.7724    1   1.23    2    0.2326
+   49  REL   rel_culrate_lead                   +0.000320    36   0.1634  0.7576    1   1.32    2    0.3649
+   50  REL   rel_proj_final_deficit             +0.004810     6   0.1602  0.6131    1   1.47    2    4.0962
+   51  REL   rel_bkt_scirate_p2                 +0.000046    68   0.1538  0.9547    1   1.05    1    0.0453
+   52  REL   rel_bkt_strength_p2                +0.000058    65   0.1484  0.9521    1   1.05    1    0.0479
+   53  REL   rel_x_culrate_def_late             +0.004818     5   0.1443  0.7032    1   1.36    2    0.2501
+   54  REL   rel_proj_final_lead                +0.004076     8   0.1358  0.6845    1   1.41    2    3.5116
+   55  REL   rel_x_culrate_lead_late            +0.004905     4   0.1290  0.7575    1   1.32    2    0.2449
+   56  REL   rel_bkt_culrate_m2                 +0.000019    83   0.1240  0.9606    1   1.04    1    0.0394
+   57  REL   rel_strength_lead_over_cap         +0.000007    91   0.1207  0.9402    1   1.11    1    0.1416
+   58  GRAN  gran_leader_age                    +0.000379    31   0.0978  0.9051    1   1.10    1    0.1300
+   59  GRAN  gran_leader_joan_of_arc            +0.000087    60   0.0919  0.9625    1   1.04    1    0.0375
+   60  REL   rel_scistock_deficit               +0.000040    70   0.0651  0.9325    1   1.07    1    0.2331
+   61  GRAN  gran_wbuild_kremlin                +0.000132    50   0.0563  0.9874    1   1.01    1    0.0126
+   62  GRAN  gran_leader_julius_caesar          +0.000413    29   0.0500  0.9869    1   1.01    1    0.0131
+   63  GRAN  gran_leader_js_bach                +0.000028    77   0.0483  0.9914    1   1.01    1    0.0086
+   64  GRAN  gran_leader_alexander_the_great    +0.000716    21   0.0417  0.9946    1   1.01    1    0.0054
+   65  GRAN  gran_wbuild_st_peters_basilica     +0.000013    87   0.0405  0.9898    1   1.01    1    0.0102  low spread
+   66  GRAN  gran_wbuild_taj_mahal              +0.000353    34   0.0351  0.9911    1   1.01    1    0.0089  low spread
+   67  GRAN  gran_wbuild_eiffel_tower           +0.000266    38   0.0337  0.9905    1   1.01    1    0.0095  low spread
+   68  GRAN  gran_board_level_spread            +0.000086    61   0.0303  0.9741    1   1.03    1    0.0272  low spread
+   69  REL   rel_tech_lead                      +0.000230    41   0.0302  0.9560    1   1.04    1    0.0721  low spread
+   70  GRAN  gran_board_obsolete_levels         +0.000017    86   0.0255  0.9688    1   1.03    1    0.0546  low spread
+   71  GRAN  gran_leader_homer                  +0.000123    54   0.0249  0.9954    1   1.00    1    0.0046  low spread
+   72  GRAN  gran_leader_genghis_khan           +0.000163    48   0.0241  0.9965    1   1.00    1    0.0035  low spread
+   73  REL   rel_tech_deficit                   +0.000103    58   0.0221  0.9691    1   1.03    1    0.0477  low spread
+   74  GRAN  gran_leader_aristotle              +0.000164    47   0.0213  0.9972    1   1.00    1    0.0028  low spread
+   75  GRAN  gran_gov_despotism                 +0.000025    79   0.0162  0.9919    1   1.01    1    0.0081  low spread
+   76  GRAN  gran_gov_fundamentalism            +0.000032    74   0.0160  0.9972    1   1.00    1    0.0028  low spread
+   77  GRAN  gran_wcomp_stage_total             +0.000092    59   0.0158  0.9854    1   1.01    1    0.1399  low spread
+   78  GRAN  gran_board_age_gap_mean            +0.000535    26   0.0139  0.9391    1   1.06    1    0.0094  low spread
+   79  GRAN  gran_leader_winston_churchill      +0.000170    45   0.0139  0.9983    1   1.00    1    0.0017  low spread
+   80  GRAN  gran_leader_moses                  +0.000242    40   0.0133  0.9984    1   1.00    1    0.0016  low spread
+   81  GRAN  gran_leader_leonardo_da_vinci      +0.000029    76   0.0125  0.9985    1   1.00    1    0.0015  low spread
+   82  GRAN  gran_gov_theocracy                 +0.000048    67   0.0121  0.9941    1   1.01    1    0.0059  low spread
+   83  REL   rel_x_culture_gap_late             +0.000915    15   0.0119  0.8700    1   1.14    2    0.2633  low spread
+   84  GRAN  gran_wcomp_eiffel_tower            +0.000010    90   0.0085  0.9971    1   1.00    1    0.0029  low spread
+   85  GRAN  gran_spec_navigation               +0.000019    82   0.0077  0.9980    1   1.00    1    0.0020  low spread
+   86  GRAN  gran_wcomp_st_peters_basilica      +0.000191    43   0.0071  0.9968    1   1.00    1    0.0032  low spread
+   87  GRAN  gran_spec_cartography              +0.000029    75   0.0071  0.9981    1   1.00    1    0.0019  low spread
+   88  GRAN  gran_spec_military_theory          +0.000167    46   0.0062  0.9993    1   1.00    1    0.0007  CANNOT-DECIDE
+   89  GRAN  gran_spec_strategy                 +0.000063    64   0.0044  0.9990    1   1.00    1    0.0010  CANNOT-DECIDE
+   90  GRAN  gran_gov_const_monarchy            +0.000021    81   0.0037  0.9999    1   1.00    1    0.0001  CANNOT-DECIDE
+   91  GRAN  gran_wcomp_hanging_gardens         +0.000548    25   0.0029  0.9994    1   1.00    1    0.0006  CANNOT-DECIDE
+
+  THE HIGH-R2/LOW-SPREAD QUADRANT IS EMPTY. Not one of the eight columns above
+  the CultureRate R2 yardstick is below the low-spread line; the lowest of them
+  is rel_x_culrate_lead_late at 0.1290, more than 3x the line and within 21% of
+  CultureRate's own ratio. The prediction that motivated this run is not
+  confirmed -- see section 5.
+
+  FAMILY MEDIANS, reported flatly, with no recommendation attached:
+
+    family  n   median spread   median const   min       max
+    HAND    13     0.5321          0.6203      0.2637    1.8039
+    REL     41     0.1906          0.7576      0.0119    0.7397
+    GRAN    37     0.0249          0.9914      0.0029    0.9319
+
+    The R2 family totals run the other way (REL +0.018605, GRAN +0.004566,
+    HAND +0.002732). The family that predicts the outcome best is not the
+    family that moves most across candidates, and the family with the smallest
+    R2 total has the largest within-decision spread. Both statements are
+    measurements at gen 133131, not advice.
+
+
+====================================================================
+5. rel_proj_final_culture_gap -- THE PREDICTION WAS WRONG
+====================================================================
+
+THE PREDICTION: high R2, LOW spread -- a column shaped like the label, pricing
+the scoreboard, unable to separate any two legal moves.
+
+THE MEASUREMENT:
+
+  column                       r2gain    r2rk   spread    const   dmean
+  rel_proj_final_culture_gap  +0.008046     1   0.1779   0.3776    1.86
+  CultureRate (yardstick)     +0.003732     -   0.1624   0.4971    1.65
+
+It is MORE discriminating than the positive control, not less, on both axes:
+a higher spread ratio, and the LOWEST constant fraction of all 91 candidate
+columns -- 37.8% against CultureRate's 49.7%. It moves across the candidate set
+at nearly two in three decisions. It ranks 44th of 91 by spread, mid-table, not
+at the bottom.
+
+WHY, and the mechanism is measurable in this same run. The column is
+culture_gap + rate_gap * rounds_left. Its two halves behave completely
+differently across candidates:
+
+  Culture (the stock, phi)                   spread 0.0077   const 0.8703
+  rel_x_culture_gap_late (stock x lateness)  spread 0.0119   const 0.8700
+  CultureRate (the rate, phi)                spread 0.1624   const 0.4971
+  rel_x_culrate_gap_late (rate x lateness)   spread 0.1727   const 0.4895
+
+The STOCK half is exactly the inert, scoreboard-shaped thing the hypothesis
+described -- rank 83 of 91 by spread, flagged "low spread" in the table despite
+a respectable +0.000915 R2 gain. The RATE half is not, because a one-ply move
+changes CultureRate on half of all decisions and the horizon multiplier then
+amplifies that difference by rounds_left rather than diluting it. The projection
+is constant across candidates only where BOTH halves are (0.3776, close to the
+0.4326 the two constant fractions would give if independent).
+
+So the label-shaped column earns its discrimination from the investment half of
+its own construction, not from the scoreboard half. The failure mode
+[[tta-corpus-fits-lose-three-ways]] describes is real and is visible in this
+table -- it is what Culture, CivilActions, rel_x_culture_gap_late and the whole
+GRAN one-hot tail are doing -- but rel_proj_final_culture_gap is not an instance
+of it.
+
+WHAT THIS DOES NOT SAY. Nonzero spread is a necessary condition, not a
+sufficient one (section 2). This says the column is REACHABLE -- a weight on it
+could change moves. It says nothing about whether those changed moves are
+better, and nothing about the fact that phi already reconstructs 90.16% of it
+(the families report's spanned column), which is a separate reason a gain here
+might not survive an arena.
+
+
+====================================================================
+6. THE TWO SCREENS ARE VERY NEARLY UNCORRELATED
+====================================================================
+
+Over the 91 columns, R2 gain against spread ratio:
+
+  pearson  -0.045      spearman  +0.149
+
+That is the whole justification for running this. Knowing a column's R2 gain
+tells you essentially nothing about whether it can move a decision, in either
+direction, and neither does the families report's "spanned" column
+(pearson +0.016 against spread ratio). The two screens have to be read together,
+column by column; neither can be inferred from the other.
+
+The OTHER off-diagonal quadrant is populated too, and heavily: the five most
+discriminating columns in the table (hand_specialtech_count 1.8039,
+hand_resource_cost_total 1.5291, gran_hand_distinct_types 0.9319,
+hand_science_cost_total 0.7739, hand_science_cost_max 0.7719) carry R2 gains of
++0.000012 to +0.000128, i.e. 2x to 21x the noise floor, ranks 52-88 of 91. They
+move across candidates more than any live phi column except a handful, and they
+predict the outcome barely at all.
+
+
+====================================================================
+7. SEVEN COLUMNS THE R2 SCREEN CANNOT SEE AT ALL
+====================================================================
+
+Section 3 of the families report lists twelve granularity columns as CONSTANT
+ZERO in all 903171 dump rows and therefore unscreenable: the champion never
+begins six of the sixteen wonders, so both gran_wcomp_* and gran_wbuild_* are
+identically zero for all six.
+
+That is true of the CHOSEN move. It is not true of the candidate set.
+
+  column                                  const   mean spread  max  rep const
+  gran_wbuild_internet                   0.9755      0.02447   1.0    0.9752
+  gran_wbuild_hollywood                  0.9770      0.02299   1.0    0.9769
+  gran_wbuild_fast_food_chains           0.9771      0.02293   1.0    0.9763
+  gran_wbuild_first_space_flight         0.9771      0.02289   1.0    0.9767
+  gran_wbuild_pyramids                   0.9806      0.01938   1.0    0.9795
+  gran_wbuild_transcontinental_railroad  0.9838      0.01616   1.0    0.9830
+  gran_wbuild_ocean_liners               0.9847      0.01527   1.0    0.9847
+
+Starting each of those wonders is a LEGAL MOVE at roughly 2.3% of decisions.
+The champion never takes it, so the column is zero at every chosen move, its
+across-decision SD is exactly 0, and no R2 gain can exist for it -- the spread
+ratio is formally infinite and is printed as such in the TSV. The matching
+gran_wcomp_* columns are genuinely inert here (spread exactly 0), because
+completing a wonder you never started is not on any candidate list.
+
+SIX OF THE SEVEN ARE STRUCTURAL, ONE IS SAMPLING. Pyramids, Transcontinental
+Railroad, Ocean Liners, First Space Flight, Fast Food Chains and Internet are
+the families report's own never-begun six, zero in all 903171 rows of the
+3000-game dump; for those, the R2 screen's blindness is caused by the policy's
+coverage and more games do not fix it. gran_wbuild_hollywood is different: the
+champion did begin Hollywood in ONE of the 3000 games (the same game behind that
+report's gran_wcomp_hollywood -0.002490 one-game artifact) and in none of these
+400, so its infinity here is this run's sample, not a structural fact.
+
+All seven are excluded from the section 4 table because the families report has
+no R2 rank for them to be compared against.
+
+
+====================================================================
+8. STABILITY
+====================================================================
+
+An independent replication: 200 games, seed block 5001, no game shared with the
+main run, 58114 decisions, 691487 successor states.
+
+  max |delta const_frac| over all 359 columns   0.01585  (rel_proj_final_deficit)
+  mean |delta const_frac|                       0.00182
+  pearson r of log spread ratio, n=292          0.9963
+  relative difference in spread ratio           median 3.2%, p90 16.7%
+  zero-spread set                               58 columns vs 59
+
+The zero-spread sets differ by exactly ONE column of 359: gran_gov_communism,
+constant on 99.994% of decisions in the main run (mean spread 6.1e-5) and on
+100% in the replication. Every other zero is a zero in both. So a zero here is
+structural, not thin sampling -- the same conclusion
+[[tta-zero-spread-row-may-be-thin-sampling]] reached for featspread by
+quadrupling its sample, reached here by resampling instead.
+
+Rare columns are the exception that proves it: a column that fires on 0.006% of
+decisions is one game away from reading zero, which is why the CANNOT-DECIDE
+flag is set at 99.9% and not at 100%.
+
+
+====================================================================
+9. LIMITS
+====================================================================
+
+1. SPREAD IS NECESSARY, NOT SUFFICIENT. Zero spread proves a column cannot
+   decide at any weight. Nonzero spread proves only that it could. The
+   sufficient test is |w| * spread against the winning margin, which needs a
+   weight the candidate columns do not have.
+
+2. THIS INSTRUMENT IS BLIND TO MULTIPLIERS, exactly as featspread is. A column
+   applied inside another feature's computation has no linear slot to
+   difference and reads zero however much it changes play. All 185 candidate
+   columns are linear slots by construction, so it does not bite them -- but all
+   20 credit keys are among the 40 never-populated zero phi rows here, and none
+   of them is prunable on this evidence.
+
+3. 9.24% of decisions have an exact winning margin of zero (the tie floor,
+   [[tta-most-keys-cannot-decide]]). This file does not use margins at all, so
+   the floor does not inflate any number here -- but it does mean a small
+   nonzero spread is worth less than it looks.
+
+4. ONE POINT IN WEIGHT SPACE. phi depends on w; the candidate set depends on the
+   policy; the policy is gen 133131. A different champion visits different
+   decisions and the whole table moves ([[tta-spread-table-ages-with-the-
+   champion]]).
+
+5. 2p ONLY. There are no pacts at 2p, and the rival maximum is a maximum over
+   one opponent. Every relative column would have to be re-measured at 3p/4p,
+   and control C shows the player count is not a detail: four keys that are
+   candidate-invariant at 3p are live here.
+
+6. The champion never begins six of sixteen wonders, so the GRAN family is
+   measured against narrow coverage in both screens (section 7).
+
+
+Files
+  rust/src/bin/featdisc.rs                             the screen
+  analysis/feature_discrimination.py                   the join with the R2 table
+  analysis/feature_discrimination_2p_400_2026-08-31.tsv   main run, raw, 359 cols
+  analysis/feature_discrimination_2p_rep_2026-08-31.tsv   replication run, raw
+  analysis/feature_screen_families_2026-08-31.txt      every r2gain came from here
+  analysis/feature_discrimination_2026-08-31.txt       this file
+
+Reproduce
+  cp experiments/rust_champion_2p.json /tmp/fs_champ_2p_frozen.json
+  # md5 must be 0272cfa7dd167b8e73e4096d047504e5 or the numbers are not these
+  rust/target/release/featdisc --games 400 --players 2 --threads 2 --seed 1 \
+      --weights /tmp/fs_champ_2p_frozen.json --out /tmp/featdisc_2p_400.tsv
+  python3 analysis/feature_discrimination.py --disc /tmp/featdisc_2p_400.tsv \
+      --families analysis/feature_screen_families_2026-08-31.txt
+  (no dependencies; ~2.5 min for the run, instant for the join)
