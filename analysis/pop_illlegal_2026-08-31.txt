@@ -1,0 +1,125 @@
+# r10-17 pop-illlegality: why is a population move illegal?
+
+**Date:** 2026-08-31
+**Champion:** `/tmp/champ_2p_1788157607.json`, gen 131465 (snapshot of
+`experiments/rust_champion_2p.json`)
+**Games:** 2500, seeds 1..2500, 5 threads, 542 s
+**Window:** 2p, rounds 10-17, every own-turn decision point (no pending
+sub-decision) where the tracked seat (seat 0) is choosing among
+Take/Build/Develop/Pop/... for their own turn.
+
+## Headline
+
+**FOOD is the dominant constraint, not CA.** The older probe
+(`food_gates_population_2026-08-28.txt`) named one reason per point and
+got 58.4% CA / 39.7% food — order-dependent, so those are floors. This
+probe records EVERY constraint binding SIMULTANEOUSLY and computes the
+per-constraint counterfactual (relax ONLY this one, is pop now legal?).
+
+| metric | value |
+|---|---|
+| window points (r10-17) | 97,104 |
+| pop legal | 20,189 (20.8%) |
+| **pop illegal** | **76,915 (79.2%)** |
+
+## Per-constraint: raw binding vs counterfactual
+
+| constraint | raw count | % of illegal | cf count | **cf %** |
+|---|---|---|---|---|
+| CA exhausted | 17,283 | 22.5% | 1,884 | **2.4%** |
+| **food short** | **74,989** | **97.5%** | **59,598** | **77.5%** |
+| yellow bank empty | 42 | 0.1% | 59,598 | 77.5%* |
+| PopFree food short | 0 | 0.0% | 0 | 0.0% |
+
+*BANK's counterfactual equals FOOD's because relaxing the bank gate
+(passing `food_cost=0`) makes the paid pop legal in exactly the cases
+where relaxing the food gate does — the food gate is the real binding
+constraint in both.
+
+**The key number is the counterfactual column.** Relaxing FOOD alone
+makes pop legal at 77.5% of blocked points. Relaxing CA alone makes it
+legal at only 2.4%. Food is the headroom constraint by a factor of 32x.
+
+## Co-occurrence table (constraints binding simultaneously)
+
+| mask | count | % of illegal |
+|---|---|---|
+| CA only | 1,884 | 2.4% |
+| **FOOD only** | **59,598** | **77.5%** |
+| CA + FOOD | 15,391 | 20.0% |
+| BANK only | 34 | 0.0% |
+| CA + BANK | 8 | 0.0% |
+
+FOOD is the SOLE binding constraint at 77.5% of blocked points. CA and
+FOOD co-occur at 20.0%. CA is the sole constraint at only 2.4%.
+
+## Per-round stability
+
+| rnd | window | illegal | CA% | FOOD% | BANK% |
+|---|---|---|---|---|---|
+| r10 | 12,139 | 9,628 | 24.5% | 97.7% | 0.0% |
+| r11 | 11,922 | 9,677 | 23.4% | 98.0% | 0.0% |
+| r12 | 11,986 | 9,539 | 22.7% | 97.8% | 0.0% |
+| r13 | 11,972 | 9,269 | 22.9% | 97.4% | 0.0% |
+| r14 | 12,139 | 9,396 | 22.8% | 97.3% | 0.0% |
+| r15 | 12,265 | 9,685 | 22.8% | 97.3% | 0.1% |
+| r16 | 12,423 | 9,924 | 21.1% | 97.4% | 0.1% |
+| r17 | 12,258 | 9,797 | 19.6% | 97.2% | 0.2% |
+
+FOOD is binding at 97-98% in every round r10-r17. CA is binding at
+19-25%. The pattern is stable across the window.
+
+## CAs spent on (when CA constraint binds, n=17,283)
+
+| category | count | % |
+|---|---|---|
+| take | 9,537 | 55.2% |
+| other/unknown | 3,133 | 18.1% |
+| develop | 2,409 | 13.9% |
+| pop | 1,115 | 6.5% |
+| build | 1,089 | 6.3% |
+
+CAs are spent primarily on TAKING cards (55.2%), not on building or
+developing. This is the "what were the CAs already spent on" breakdown
+the coordinator asked for if CA won. CA did NOT win (2.4% cf), but the
+data shows the CAs are consumed by card-taking, not by the actions that
+would enable food production.
+
+## Interpretation
+
+The bot's population is gated by FOOD, not by civil actions. At r10-17,
+a population move is illegal at 79.2% of decision points, and food is
+the sole or co-binding constraint at 97.5% of those. The bot cannot
+afford the food price of a population increase, not because it has no
+CA to spend, but because it does not have enough food in hand.
+
+This is consistent with the forced-food arena result
+(`forced_food_arena_2026-08-29.txt`): forcing food builds at r3-r9
+bought +4.1 food at r12 but cost −3.1 population and −94.9 culture.
+The bot IS food-starved, but buying food with civil actions is not a
+net-positive lever — the CAs spent on food could have been spent on
+population, which compounds past r12.
+
+The only door left open (per the coordinator's dispatch) is a mechanism
+that gets food WITHOUT spending a civil action — e.g. food production
+from farms/mines, or food discounts from leaders/government. The
+`food_rate` weight is negative because the climb learned that food's
+value is invisible to the eval: food only matters if it enables a pop
+that the bot can't afford the CAs for, but the CAs are the scarcer
+resource.
+
+## Caveats
+
+1. The "other/unknown" CA-spent category (18.1%) includes moves like
+   PlayAction, PlayTactic, War, etc. that spend a CA but are not
+   Take/Build/Develop/Pop. A more precise breakdown would require
+   tracking every CA-spending move individually.
+2. The counterfactual for BANK is not independent of FOOD (see note
+   above). The true "BANK-only" counterfactual is 0.0% (42 points, all
+   co-occurring with FOOD or CA).
+3. The probe measures the tracked seat (seat 0) only. Both seats play
+   the same weights, so the result generalizes to the other seat.
+4. The window is r10-17 only. The older probe measured the whole game
+   and found the same food-dominance (39.7% food vs 58.4% CA, but
+   order-dependent). This probe's r10-17 window is where the
+   coordinator's question is focused.
