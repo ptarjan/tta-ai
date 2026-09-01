@@ -407,6 +407,42 @@ pub fn marginal_needs(
 ///   this function enforces but the rules make impossible: an inert answer
 ///   is the correct response if either ever fires.
 fn hand_card_affordable(card: CardId, science: f64) -> bool {
+    match hand_science_price(card) {
+        HandSciencePrice::Science(cost) => f64::from(cost) <= science,
+        HandSciencePrice::Free => true,
+        // Not counted as affordable -- the inert answer this function's own
+        // doc comment specifies for a state the rules make impossible.
+        HandSciencePrice::NotInCivilHand => false,
+    }
+}
+
+/// What a civil-hand card costs in SCIENCE to play out of hand, as a
+/// three-way classification rather than an `Option`, so that "free to play"
+/// and "cannot be in this hand at all" stay distinguishable: they are the
+/// same `0.0` contribution to a cost sum but opposite answers to
+/// [`hand_card_affordable`].
+///
+/// This is the ONE place the civil hand's science price is defined.
+/// [`hand_card_affordable`] ([`WeightKey::HandOverCapacity`]),
+/// [`WeightKey::HandScienceCostTotal`] and
+/// [`WeightKey::HandScienceShortfallTotal`] all read it, so the affordability
+/// count and the two cost masses cannot drift into disagreeing about what a
+/// card costs -- which is the failure the `is_levelled_type` comment below
+/// already warns about one level down.
+///
+/// The classification itself is [`hand_card_affordable`]'s doc comment above,
+/// unchanged; it moved here so both callers share it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HandSciencePrice {
+    /// Paid for by developing it, at this printed science price.
+    Science(u8),
+    /// [`CardType::Leader`]/[`CardType::Action`]: costs no science at all.
+    Free,
+    /// Cannot physically reach `p.hand_civil`.
+    NotInCivilHand,
+}
+
+fn hand_science_price(card: CardId) -> HandSciencePrice {
     let kind = card.kind();
     // The ONE classifier for "does this type need Develop's science before
     // anything else" (`marginal_needs`'s own science-threshold loop above
@@ -414,14 +450,15 @@ fn hand_card_affordable(card: CardId, science: f64) -> bool {
     // list here is exactly the drift this crate's own doc comments warn
     // against elsewhere.
     if crate::bots::board_yields::is_levelled_type(kind) {
-        return f64::from(card.get().science_cost) <= science;
+        return HandSciencePrice::Science(card.get().science_cost);
     }
     match kind {
-        CardType::Government => f64::from(card.get().peaceful_cost) <= science,
-        CardType::Leader | CardType::Action => true,
+        CardType::Government => HandSciencePrice::Science(card.get().peaceful_cost),
+        CardType::Leader | CardType::Action => HandSciencePrice::Free,
         // Cannot occur in `p.hand_civil` -- see this function's own doc
-        // comment. `false` (not counted as affordable) is the inert, no-op
-        // answer if this invariant is ever broken elsewhere.
+        // comment. Reported as its own variant, not folded into `Free`, so
+        // each caller can give its own inert answer if the invariant is ever
+        // broken elsewhere.
         CardType::Wonder
         | CardType::Tactic
         | CardType::Aggression
@@ -429,7 +466,7 @@ fn hand_card_affordable(card: CardId, science: f64) -> bool {
         | CardType::Pact
         | CardType::Bonus
         | CardType::Territory
-        | CardType::Event => false,
+        | CardType::Event => HandSciencePrice::NotInCivilHand,
         // Unreachable: `is_levelled_type` above already returned for every
         // one of these -- kept as an explicit arm rather than a wildcard so
         // the match stays exhaustive by construction if `CardType` ever
@@ -1124,11 +1161,75 @@ pub fn features(
     // than a fourth walk of the same bounded list.
     let my_science = f.get(WeightKey::Science);
     let mut hand_affordable = 0.0;
+    // The five civil-hand INVENTORY coordinates, accumulated in this same
+    // single pass for the reason the comment above gives about
+    // `hand_affordable`: five more walks of the same bounded list would buy
+    // nothing. Screening columns of the same names in
+    // `feature_screen.rs`'s `EXTRA_KEYS`; measured spreads in
+    // `analysis/handfeat_features_2026-08-31.txt`.
+    let mut hand_action_count = 0.0;
+    let mut hand_specialtech_count = 0.0;
+    let mut hand_science_cost_total = 0.0;
+    let mut hand_science_shortfall_total = 0.0;
+    let mut hand_resource_cost_total = 0.0;
     for &card in p.hand_civil.as_slice() {
         let left = clock.rounds_until_antiquation(card.get().age);
         hand_perishable += (1.0 - left / clock.rounds_left()).clamp(0.0, 1.0);
         if hand_card_affordable(card, my_science) {
             hand_affordable += 1.0;
+        }
+        // Named exhaustively rather than wildcarded (`Cargo.toml` denies
+        // `wildcard_enum_match_arm`), which also makes the "these two types
+        // and no others" claim a compile-time one if `CardType` ever grows.
+        match card.kind() {
+            CardType::Action => hand_action_count += 1.0,
+            CardType::SpecialTech => hand_specialtech_count += 1.0,
+            CardType::Farm
+            | CardType::Mine
+            | CardType::Lab
+            | CardType::Temple
+            | CardType::Library
+            | CardType::Arena
+            | CardType::Theater
+            | CardType::Infantry
+            | CardType::Cavalry
+            | CardType::Artillery
+            | CardType::Air
+            | CardType::Government
+            | CardType::Leader
+            // The military-deck and wonder types cannot reach `hand_civil`
+            // at all -- `hand_science_price`'s doc comment has the citation.
+            | CardType::Wonder
+            | CardType::Tactic
+            | CardType::Aggression
+            | CardType::War
+            | CardType::Pact
+            | CardType::Bonus
+            | CardType::Territory
+            | CardType::Event => {}
+        }
+        // Every card in hand, not just the ones with a science price: a card
+        // that costs no science to develop can still cost resources to
+        // build (RULES_SPEC 7.2), and the screening column summed the
+        // printed field unconditionally.
+        hand_resource_cost_total += f64::from(card.get().resource_cost);
+        // One classifier, shared with `hand_card_affordable` three lines up,
+        // so the affordability COUNT and the cost MASS can never disagree
+        // about what a card costs. `Free` and `NotInCivilHand` both
+        // contribute nothing to a science sum, which is also exactly what
+        // the screening rig's `science_price` -> `None` did.
+        if let HandSciencePrice::Science(cost) = hand_science_price(card) {
+            let cost = f64::from(cost);
+            hand_science_cost_total += cost;
+            // Hinged against phi's OWN `Science` (deferred credit included),
+            // not `p.science` raw, for the same reason the rate-race shape
+            // keys read phi's `CultureRate` rather than re-deriving it: a
+            // coordinate that disagreed with the `Science` value set a few
+            // lines above would be a second, quieter definition of what this
+            // player can pay. The cost is that it is not bit-identical to
+            // the screened column; that difference is measured in the
+            // analysis file.
+            hand_science_shortfall_total += (cost - my_science).max(0.0);
         }
     }
     f.set(WeightKey::HandPerishable, hand_perishable);
@@ -1136,6 +1237,11 @@ pub fn features(
         WeightKey::HandOverCapacity,
         (f.get(WeightKey::HandCivil) - hand_affordable).max(0.0),
     );
+    f.set(WeightKey::HandActionCount, hand_action_count);
+    f.set(WeightKey::HandSpecialTechCount, hand_specialtech_count);
+    f.set(WeightKey::HandScienceCostTotal, hand_science_cost_total);
+    f.set(WeightKey::HandScienceShortfallTotal, hand_science_shortfall_total);
+    f.set(WeightKey::HandResourceCostTotal, hand_resource_cost_total);
     f.set(WeightKey::HandMilitary, p.hand_military.len() as f64 + g(GainFeature::HandMilitary));
     f.set(WeightKey::HandMilValue, hand_mil_value);
 

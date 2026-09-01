@@ -1,0 +1,562 @@
+FIVE CIVIL-HAND INVENTORY COLUMNS PROMOTED TO REAL FEATURES -- 2026-08-31
+
+ALL GATES PASSED. The four measurement gates the brief named (reachability §3,
+faithfulness §4, round trip §7, bit-identity §6) and both build gates:
+`cargo clippy --all-targets -- -D warnings` CLEAN, and the FULL
+`cargo test --release` observed green end to end -- **1858 passed, 0 failed,
+1 ignored across 47 test binaries**, the lib target reading `1567 passed;
+0 filtered out`. That 1567 is the 1566 pre-existing lib tests plus the new
+guard test, run rather than filtered; see §8 for why that distinction matters.
+
+Five screening-rig `hand_*` columns become real `WeightKey`s with real phi
+coordinates. Nothing was dropped, nothing was re-priced, and no champion file
+was written or promoted.
+
+This is the HAND family: the HIGH within-decision spread / LOW held-out R2
+quadrant that `analysis/feature_discrimination_2026-08-31.txt` identified and
+that nothing had yet been built from. The REL family occupied the other
+quadrant, was built last cycle (78acfbc), and its ablation came back a dead
+wash (c69b111, 50.1% +/- 0.3 on a 0.500 null).
+
+
+====================================================================
+0. WHAT WAS RUN, AND AGAINST WHAT
+====================================================================
+
+Working tree      /Users/pt/tta-handfeat  (a `cp -Rc` clone of /Users/pt/tta-ai
+                  at c69b111, its own `target/`)
+
+                  DELIBERATE, and the same reason 78acfbc gives: the live
+                  tree's `rust/target/release/climb` is what the three league
+                  arms execute and what cron relaunches. Building in the live
+                  tree would have put this change in front of the 2p/3p/4p
+                  climbs. Verified after the fact:
+                  `/Users/pt/tta-ai/rust/target/release/climb` still has its
+                  12:45 mtime and `strings` finds none of the five new key
+                  names in it. The committed source is NOT live until someone
+                  rebuilds and restarts on purpose.
+
+Baseline tree     /Users/pt/tta-handfeat-base  (a second `cp -Rc` clone of the
+                  same commit, NO edits) -- built only to get a genuine
+                  pre-change `selfplay` binary for section 6. The live tree's
+                  own `selfplay` could not serve: it dates from 10:55, before
+                  78acfbc landed, and rejects a current champion outright
+                  ("unknown weight \"culture_rate_ahead_near\""). Measuring
+                  "before" against a binary two changes stale would have
+                  proved nothing about this one.
+
+Frozen champions  /tmp/handfeat/champ_{2,3,4}p_frozen.json
+  2p              gen 134912, md5 7b49e5fdd7c1bd3152c34e722e16a1b4, 181 keys
+  3p              md5 7c9a70e83f203bb233f2bbfcfbc73c3a, 181 keys
+  4p              md5 37b969986e0d02e8c3c5ea677779608c, 181 keys
+  provenance      copied out of `experiments/rust_champion_*.json` at clone
+                  time. Every measurement below reads THESE COPIES, never the
+                  live files, which the running climb rewrites every few
+                  minutes.
+  NOTE            the two screening reports measured gen 133131. The 2p arm
+                  advanced 1781 generations between those runs and this one,
+                  and section 5 shows that gap -- not this implementation --
+                  accounts for every deviation from the screens' predictions.
+
+Source changed    rust/src/bots/weighted/weights.rs    (+120 -9)
+                  rust/src/bots/weighted/features.rs   (+109 -12)
+                  rust/src/bots/weighted/eval.rs       (+119, a new test only)
+
+
+====================================================================
+1. THE FIVE KEYS
+====================================================================
+
+All five are `WeightGroup::Cards`, all authored default 0.0, all
+`SignIntent::Free`. JSON names are the screening rig's own column names
+(`feature_screen.rs`'s `EXTRA_KEYS`), so the screen reports and a champion file
+can be read against each other with no translation step.
+
+  WeightKey                   JSON name                      screen spread
+  ----------------------------------------------------------------------
+  HandActionCount             hand_action_count                    0.5321
+  HandSpecialTechCount        hand_specialtech_count               1.8039
+  HandScienceCostTotal        hand_science_cost_total              0.7739
+  HandScienceShortfallTotal   hand_science_shortfall_total         0.5400
+  HandResourceCostTotal       hand_resource_cost_total             1.5291
+
+Formulas, all over `p.hand_civil` and all in phi's own units:
+
+  HandActionCount            count of `CardType::Action`
+  HandSpecialTechCount       count of `CardType::SpecialTech`
+  HandScienceCostTotal       Σ science_price(c)
+  HandScienceShortfallTotal  Σ max(0, science_price(c) - my science)
+  HandResourceCostTotal      Σ printed `resource_cost`, over EVERY card
+
+`science_price` is the existing hand classifier: printed `science_cost` for a
+levelled/tech type, `peaceful_cost` for a Government, nothing at all for a
+Leader or an Action card. `HandResourceCostTotal` sums over every card and not
+only the priced ones, because a card that costs no science to develop can still
+cost resources to build (RULES_SPEC 7.2) -- and because that is what the
+screened column did.
+
+WHY THE GROUP IS `Cards`. It is the group `HandCivil` uses, and the same group
+`HandPerishable` and `HandOverCapacity` use with a stated reason: both are
+"properties OF the civil hand computed in the same pass over it". All five of
+these are exactly that, and they are accumulated in literally that same single
+loop in `features.rs` -- so a `Group` mutation that reprices "what is in my
+hand" moves all of it together.
+
+
+--------------------------------------------------------------------
+1a. SIGN_INTENT -- Free, all five, argued not defaulted
+--------------------------------------------------------------------
+
+[[tta-sign-gate-snaps-to-zero]]: a sign_intent is a hard constraint enforced on
+every load and every mutation, and a wrong one destroys the key's accumulated
+magnitude every time. The bar is a rules citation. None of the five clears it,
+and each fails it for its own reason:
+
+  *Count keys   `HandActionCount`/`HandSpecialTechCount` are RESIDUALS in
+                exactly the sense `sign_intent`'s existing `HandCivil` arm
+                gives: the per-type counts PARTITION `hand_civil`, so each is a
+                component of a total already classified `Free` and may
+                legitimately price as a negative correction against it.
+
+  *Cost keys    `HandScienceCostTotal`/`HandResourceCostTotal` look like costs
+                and are not. The `HandMilValue` arm already says why: a card
+                sitting in hand is never a rules-level cost, because §2.5's
+                hand limit is enforced by `costs::can_take` making the TAKE
+                illegal -- a full hand is a legality constraint and can never
+                surface as an evaluation penalty. Worse for a gate, printed
+                price is CONFOUNDED WITH CARD POWER: an Age III card costs more
+                because it does more (RULES_SPEC 7.1/7.2 price it that way), so
+                an expensive hand is simultaneously a strong one.
+
+  *Shortfall    This is the one with a tempting gate. `SHORTFALL_GATES` and
+                `TacticShort` both price a marginal-need shortfall
+                `NonPositive`, and "short of science for my hand is bad" reads
+                the same way. IT DOES NOT TRANSFER, because this column's ZERO
+                POINT IS AMBIGUOUS: it reads exactly 0.0 both when every card
+                in hand is affordable (good) and when the hand is EMPTY (bad --
+                the state `HandCivil` exists to price). A gate is a claim about
+                the sign of a coefficient measured against that zero, and a
+                zero that means two opposite things cannot support one.
+
+Unlike 78acfbc, no arena was run here, so this report offers NO empirical
+directional hint either. There is nothing to promote to a gate and nothing
+being withheld from one.
+
+
+--------------------------------------------------------------------
+1b. THE OTHER TABLES A NEW KEY HAS TO LAND IN
+--------------------------------------------------------------------
+
+`WeightKey::group` -> `Cards`. `early`/`late`/`trailing`/`needed` -> the four
+"called on a key outside <SET>" panic arms, since none of the five is
+phase-suffixed, standing or need-axis.
+
+`p95_candidate_spread` -> `[0,0,0]` for all five, with a comment saying why.
+That function's doc comment forbids hand-authoring a number, and no `featspread`
+sweep has run against a champion that has these keys. `[0,0,0]` is the
+no-measurement sentinel `clamp_bound` reads; it returns CLAMP_BLIND (60.0), the
+same conservative rail most of that table already takes. What the row would
+otherwise prove -- that the feature varies across candidates -- is proved
+directly and far more strongly in section 4.
+
+DOMINATES: verified by round trip rather than by reading the table -- section 6.
+
+
+--------------------------------------------------------------------
+1c. WHY ONLY TWO OF THE SEVEN TYPE-FAMILY COUNTS
+--------------------------------------------------------------------
+
+The screen carries seven civil-hand type counts (prod, urban, unit, gov,
+leader, action, specialtech). Only two are promoted, and that is deliberate for
+the reason 78acfbc gives for dropping the far/level rate buckets: the seven
+counts PARTITION `hand_civil`, so all seven plus `HandCivil` would be eight
+columns over a seven-way partition summing to a column phi already has, adding
+a flat direction to the weight space. Two of seven cannot do that -- there is no
+linear combination of `HandActionCount`, `HandSpecialTechCount` and `HandCivil`
+that is identically constant, because the other five families are free to vary.
+Promoting the two the screen actually ranked keeps the space honest.
+
+
+====================================================================
+2. ONE DEFINITIONAL DEVIATION FROM THE SCREEN'S ARITHMETIC, AND
+   FOUR PLACES THERE IS NONE
+====================================================================
+
+The screening rig compares each card's science price against `p.science`, the
+RAW stored value. `features.rs` does not have a raw science: its
+`WeightKey::Science` is `p.science + g(GainFeature::Science)`, the
+deferred-credit-adjusted number, and it is set a few lines above this loop.
+
+`HandScienceShortfallTotal` is hinged against phi's OWN `Science`, not
+re-derived from `p.science`. Reason, and it is 78acfbc's reason restated: a phi
+coordinate that disagreed with the `Science` value sitting in the same function
+would be a second, quieter definition of what this player can pay. Section 4
+measures the cost of that choice and it is +0.06%.
+
+THE OTHER FOUR HAVE NO DEVIATION AT ALL, and section 4 confirms it to the sixth
+decimal place. Counts of a card type and sums of a printed cost field read
+nothing but the cards in hand; there is no rate, no deferred credit and no pact
+adjustment anywhere in them, so the promoted key and the screened column are the
+same arithmetic on the same list. This is a real contrast with 78acfbc, where
+all seven promoted keys sat ~1% off their screened columns.
+
+ONE CLASSIFIER, NOT TWO. `hand_card_affordable` (which feeds the existing
+`HandOverCapacity`) and the two new science keys now both read a single new
+function, `hand_science_price`, which returns a three-way
+`Science(u8)`/`Free`/`NotInCivilHand` rather than an `Option`. The third variant
+exists so "free to play" and "cannot be in this hand at all" stay
+distinguishable: they contribute the same 0.0 to a cost sum but are opposite
+answers to affordability, and collapsing them would have silently changed
+`HandOverCapacity`. `hand_card_affordable`'s behaviour is unchanged -- it is now
+a three-arm match over that enum, and section 7's existing tests for it still
+pass untouched.
+
+NOT SPANNED, AND CHECKED. 78acfbc dropped a planned column on an exact-redundancy
+proof, so the same question was asked of all five:
+
+  * `HandResourceCostTotal` -- phi carried NO resource-cost reading of the hand
+    whatsoever. `HandValue` sums printed levels, `HandPotential` prices yields,
+    and neither reads `resource_cost`. Science buys the develop and resources
+    buy the build; only the first half was represented.
+  * `HandScienceCostTotal` -- correlated with `HandValue` (= Σ level+1) but NOT
+    a linear function of it: two cards of the same level in different lanes
+    print different science costs, so no fixed coefficient maps one sum to the
+    other.
+  * `HandScienceShortfallTotal` -- `HandOverCapacity` COUNTS the cards over the
+    affordability line; this SUMS how far over. A count is not a linear function
+    of the magnitudes it counts.
+  * the two type counts -- phi has no per-type civil-hand count at all.
+
+None is in the span of existing columns, so unlike 78acfbc nothing had to be
+dropped.
+
+
+====================================================================
+3. REACHABILITY -- THE GATE BEFORE ANYTHING ELSE
+====================================================================
+
+    featdisc --games 400 --players 2 --threads 3 --seed 1 \
+      --weights /tmp/handfeat/champ_2p_frozen.json \
+      --out /tmp/handfeat/featdisc_new_2p.tsv
+
+    columns    371 (186 phi + 185 extra)    <- 181 + 5, the five landed
+    decisions  116019  (+4664 forced, excluded)
+    successors 1290752  (11.125 per decision, max 39)
+    elapsed    227.7 s
+
+THE 186 IS ALSO THE REGISTRY CHECK. `eval.rs:1081` still carries the mid-file
+`#[cfg(test)]` that truncates registry.rs's production-source scan
+([[tta-cfgtest-midfile-truncates-registry-scan]]). It did not hide these five:
+the phi block is 186 columns wide, and the five `f.set` calls sit at
+features.rs:1240-1244, well before that file's own first `#[cfg(test)]` at 1432.
+The hazard is real and still there; it is not this change's doing and was left
+alone rather than widening the diff.
+
+`spread_ratio` = mean within-decision spread / SD of the chosen-move value. A
+column constant across the legal moves scores 0.000000 and cannot change the
+argmax at any weight.
+
+  key                          spread_ratio   vs CultureRate   vs HandCivil
+  ---------------------------------------------------------------------------
+  HandSpecialTechCount             1.496296        9.64x           2.43x
+  HandResourceCostTotal            1.134221        7.31x           1.84x
+  HandScienceCostTotal             0.869017        5.60x           1.41x
+  HandScienceShortfallTotal        0.684574        4.41x           1.11x
+  HandActionCount                  0.567497        3.66x           0.92x
+
+  CultureRate       (positive control, yardstick)   0.155180       1.00x
+  HandCivil         (the live hand key)             0.615241
+  RivalCultureRate  (negative control)              0.000000   class B, expected
+
+ALL FIVE PASS. None is 0.000000. The weakest of them moves across candidates
+3.66x as readily as `CultureRate` and 14x the discrimination report's own
+low-spread line of 0.0406. Four of the five out-move `HandCivil`, the live hand
+coordinate; `HandActionCount` is the one that does not, at 0.92x of it.
+
+Nothing had to be dropped or repaired at this step, and no key measured ~0, so
+there is no "unreachable in phi" finding to report.
+
+HOW OFTEN, NOT JUST HOW MUCH. High spread with a high constant fraction means
+"rare but decisive", and the two are worth reading together:
+
+  key                          const_frac  allzero_frac  mean_spread  max
+  ---------------------------------------------------------------------------
+  HandActionCount                0.527396      0.197993       0.5927   3.00
+  HandSpecialTechCount           0.696894      0.674889       0.3092   2.00
+  HandScienceCostTotal           0.535378      0.388859       4.9811  36.00
+  HandScienceShortfallTotal      0.604737      0.520139       2.5465  30.00
+  HandResourceCostTotal          0.547402      0.460244       3.7807  22.00
+
+`HandSpecialTechCount` is the extreme case and behaves exactly as advertised:
+all-zero on 67.5% of decisions, constant across candidates on 69.7%, but when it
+does move it moves the argmax harder than any other column measured here. That
+is a real coordinate, not a noisy one -- the two facts are consistent, and the
+guard test in section 7 is calibrated to tell "rare" apart from "unreachable".
+
+
+====================================================================
+4. FAITHFULNESS: THE PROMOTED KEY vs THE COLUMN IT CAME FROM
+====================================================================
+
+The same run still carries the screening rig's own 185 extra columns, so each
+promoted key and its source column were measured SIDE BY SIDE on the same
+116019 decisions:
+
+  promoted key                ratio      screen column                  ratio     delta
+  ----------------------------------------------------------------------------------
+  HandActionCount           0.567497   hand_action_count             0.567497   +0.00%
+  HandSpecialTechCount      1.496296   hand_specialtech_count        1.496296   +0.00%
+  HandScienceCostTotal      0.869017   hand_science_cost_total       0.869017   +0.00%
+  HandResourceCostTotal     1.134221   hand_resource_cost_total      1.134221   +0.00%
+  HandScienceShortfallTotal 0.684574   hand_science_shortfall_total  0.684164   +0.06%
+
+THIS TABLE IS ITS OWN CONSISTENCY CHECK, and it is the cleanest result in this
+report. Section 2 predicted exactly one key would differ from its screened
+column and named it in advance. Exactly one does, and it is that one, by 0.06%.
+The other four are identical to six decimal places, which is what "the same
+arithmetic on the same list" has to look like if the promotion is faithful.
+
+Had I mis-transcribed a definition -- summed the wrong field, filtered the wrong
+card types, hinged against the wrong quantity -- this is the table that would
+have shown it, and it would not have shown it as a rounding difference.
+
+
+====================================================================
+5. PREDICTED vs MEASURED -- THE ONE THING THAT DID NOT BEHAVE
+====================================================================
+
+The brief supplied each key's spread from the discrimination report. Measured
+here, they are all off, by -26% to +27%:
+
+  key                            predicted   measured    delta
+  ---------------------------------------------------------------
+  hand_specialtech_count            1.8039     1.4963   -17.1%
+  hand_resource_cost_total          1.5291     1.1342   -25.8%
+  hand_science_cost_total           0.7739     0.8690   +12.3%
+  hand_science_shortfall_total      0.5400     0.6846   +26.8%
+  hand_action_count                 0.5321     0.5675    +6.7%
+
+  CultureRate yardstick             0.1624     0.1552    -4.4%
+  HandCivil                         0.6067     0.6152    +1.4%
+
+THIS IS NOT AN IMPLEMENTATION DIFFERENCE, and section 4 is what proves it. The
+SCREENING RIG'S OWN COLUMN, unchanged code, re-measured in this very run, reads
+1.496296 where the discrimination report published 1.8039. The rig disagrees
+with its own published number by the same -17.1%. Whatever moved, it is not the
+promotion.
+
+What moved is the champion. The screens ran against gen 133131; this ran against
+gen 134912, 1781 generations later, and the whole instrument shifts with it --
+mean candidates per decision 12.027 -> 11.125, forced decisions 4983 -> 4664,
+and the `CultureRate` yardstick itself -4.4%. A within-decision spread is a
+property of the CANDIDATE SETS a particular champion generates, not of the
+column alone, and a champion that has changed which moves it considers has
+changed the thing being measured.
+
+TWO THINGS SURVIVED THE DRIFT, and they are the ones worth trusting:
+
+  * THE RANK ORDER IS EXACTLY PRESERVED. specialtech > resource_cost >
+    science_cost > shortfall > action, in the screen and in this run, with no
+    inversions -- even though the magnitudes moved up to 26.8% and two pairs
+    (0.7739/0.5400 and 0.5400/0.5321) were close enough to swap.
+  * EVERY ONE STAYED FAR ABOVE THE LINE. The brief's claim was that all five are
+    reachable by a wide margin. The weakest measures 3.66x the yardstick; the
+    brief's own comparator `HandCivil` moved only +1.4%, so the comparison it
+    offered holds.
+
+The honest reading is that the discrimination report's absolute spread figures
+have a shelf life measured in ~1000 generations of climb, while its ORDERING
+does not. Anyone using that report to pick the next family should read the ranks
+and re-measure the magnitudes, and should not treat a published spread as a
+number a later run will reproduce.
+
+
+====================================================================
+6. IT PLAYS BIT-IDENTICALLY -- MEASURED ACROSS TWO BINARIES
+====================================================================
+
+78acfbc established "inert at defaults" by running two FILES through one
+binary. That is the weaker form of the claim: it cannot see a change in the
+engine itself. This ran two BINARIES -- pre-change (`tta-handfeat-base`, no new
+keys, `strings` confirms) and post-change -- over the same frozen champion, the
+same seeds and the same rotation:
+
+  selfplay --games N --players P --seed S --threads 2 --weights champ_Pp_frozen.json
+
+  players   games   result
+  ------------------------------------------------------------------
+  2          60     identical on every printed game statistic
+  3          60     identical on every printed game statistic
+  4          60     identical on every printed game statistic
+  2         400     identical on every printed game statistic
+
+The 400-game 2p run is 800 seat-rotated games: mean moves 301.2, win rate 50.0%,
+mean culture 184.0, seat 0 46.9% / seat 1 53.1% -- every digit the same on both
+sides. The ONLY textual difference in any of the four comparisons is the
+`elapsed` wall-clock line, which is excluded by `grep -v ^elapsed` and is not a
+game statistic.
+
+The 181-key champion is what BOTH sides were given; the post-change binary's
+loader adds the five at 0.0 on the way in. So this is the real landing scenario,
+not a constructed one, and champions on disk play bit-identically the moment
+this lands.
+
+
+====================================================================
+7. ROUND TRIP, NOT DIFF
+====================================================================
+
+[[tta-dominates-silently-reverts-a-weight]]: a key-by-key diff of a file you
+wrote proves you edited the right keys, not that the engine will USE them. Each
+file was written, loaded through `climb --start <f> --out <g> --players P
+--gens 0 --hours 0`, and `g` compared to `f`.
+
+  file                       keys in -> out   pre-existing keys moved
+  ------------------------------------------------------------------
+  champ_2p_frozen.json          181 -> 186              0
+  champ_3p_frozen.json          181 -> 186              0
+  champ_4p_frozen.json          181 -> 186              0
+  priced_neg_2p.json            186 -> 186              0
+
+All three champions gain exactly the five new names, at exactly 0.0, and NOTHING
+else moves. That is the load path a real champion takes, at every player count.
+
+ROW 4 IS THE ONE THAT PROVES THE SIGN CLASSIFICATION IS LIVE. It carries five
+DISTINCT NEGATIVE values (-11.25, -7.5, -3.125, -19.0, -2.375) and all five
+survive the load unchanged. A `NonNegative` misclassification would have snapped
+every one to exactly 0.0 on this call ([[tta-sign-gate-snaps-to-zero]]:
+`parse_weights` runs `dominance_repair` on the way out). They did not move, so
+`Free` is in force AND no DOMINATES pair ties any of the five to another key --
+distinct values would have been forced equal if one did.
+
+
+====================================================================
+8. VALIDATION GATES
+====================================================================
+
+1. `cargo clippy --all-targets -- -D warnings`   CLEAN (clippy 1.98.0)
+   `cargo check --all-targets`                   CLEAN
+   `cargo test --release` (FULL SUITE)           GREEN -- 1858 passed, 0 failed
+
+   THE TEST GATE, RUN TO COMPLETION 2026-08-31 20:24. Log
+   `/tmp/handfeat_cargo_test_full.log`:
+
+       47 test binaries, 1858 passed, 0 failed, 1 ignored
+       lib target -> test result: ok. 1567 passed; 0 failed; 0 filtered out
+
+   WHY THE `0 filtered out` IS THE POINT. An earlier invocation reported
+   `1 passed; 0 failed; 1566 filtered out` from
+   `cargo test --release --lib hand_inventory_keys_live` -- one test RUN and the
+   whole rest of the lib suite SKIPPED. A filtered run prints `ok.` just as
+   loudly as a complete one, so it is a false green; the only thing that
+   distinguishes them is the `filtered out` field. This run reads 1567 = the
+   1566 pre-existing lib tests plus the new guard, with nothing filtered.
+
+   The named guards from 78acfbc that matter most here, all re-run green in
+   that 1567: every_weight_key_features_writes_actually_goes_
+   nonzero_on_some_sampled_position, every_weight_key_is_named_by_production_
+   source_outside_its_own_declaration, every_sign_intent_classification_agrees_
+   with_its_own_authored_default, every_weight_key_lands_in_exactly_one_
+   groups_keys.
+
+   The lint gate caught one real thing: the first draft of the type-count loop
+   used `_ => {}`, and `rust/Cargo.toml` denies `wildcard_enum_match_arm`. It is
+   now an exhaustive match naming all 22 `CardType` variants, which also makes
+   "these two types and no others" a compile-time claim.
+
+2. Reachability -- section 3. All five non-zero, nothing dropped.
+
+3. Faithfulness against the screened columns -- section 4.
+
+4. Bit-identity across binaries at 2p/3p/4p -- section 6.
+
+5. Round trip incl. the negative-value sign probe -- section 7.
+
+No `#[cfg(test)]` item was added mid-file
+([[tta-cfgtest-midfile-truncates-registry-scan]]); the new test is inside
+eval.rs's existing trailing `#[cfg(test)] mod tests`.
+
+THE NEW GUARD TEST
+
+    linear_features_reproduces_evaluate_on_played_forward_positions_with_the_
+      hand_inventory_keys_live
+
+Modelled on 78acfbc's `..._at_a_nondefault_vector`, with ONE deliberate
+strengthening: THE PREMISE IS ASSERTED PER KEY, NOT IN AGGREGATE. The sibling
+test counts "the new coordinates were nonzero somewhere" across all seven of its
+keys together, which passes even if one of them is structurally zero at every
+position -- and that is precisely the failure that matters, because a coordinate
+that never leaves 0.0 in phi contributes nothing at any weight and the climb
+would price it forever against a column of zeros.
+
+Real self-play driven to depth at 2p/3p/4p, sampling every 5th move past move
+10, asserting dot(w, candidate_features) == `rank_moves`' own score for every
+candidate, at a weight vector giving every key a distinct non-zero value (and a
+different ramp from the sibling test, so the two are not one arithmetic
+coincidence checked twice). It then requires each of the five individually to
+have been non-zero on a floor of sampled candidates -- 1000 for the two cost
+sums, 200 for the shortfall and the action count, and 50 for
+`HandSpecialTechCount`, which gets the lowest bar on purpose because the screen
+measured it all-zero on 67.5% of decisions. Rare is not unreachable, and the
+floors are set to fail on the second without failing on the first.
+
+It passes, and it does not read `sources/`, so it runs in a fresh checkout
+without the private corpus symlink.
+
+
+====================================================================
+9. WHAT WAS NOT DONE, ON PURPOSE
+====================================================================
+
+* No champion file was written or promoted. The five keys exist in the binary
+  and default to 0.0; a champion JSON gains them the first time an arm that has
+  them writes one.
+* No arena was run, so there is no win-rate claim here at all -- not even the
+  "1% scale" probe 78acfbc reported. At authored defaults there is nothing
+  stochastic to measure (section 6 is exact, not statistical), and pricing them
+  is the climb's job.
+* No climb was started, stopped, restarted or rebuilt by this work, and the live
+  release binary is untouched -- so this change is NOT live
+  ([[tta-landed-is-not-live]]).
+* No sign_intent was tightened; no existing key was re-priced.
+* `featspread` was not run, so `p95_candidate_spread` is the [0,0,0] sentinel
+  and the five clamp at CLAMP_BLIND. Regenerate once a champion has climbed
+  with these keys.
+* The clones at /Users/pt/tta-handfeat and /Users/pt/tta-handfeat-base are
+  removed after this lands.
+
+A NOTE ON THE LEAGUE ARMS, since the brief named pids. 8759 (2p) and 8767 (4p)
+were alive and same-elapsed (5:18:47) at the start of this work and are NOT
+alive at the end. They were not signalled by anything here. Both were launched
+with `--hours 6` at ~12:41, so they reached their own time limit at ~18:41 and
+exited; cron relaunched the pair at exactly 18:50:00 as pids 39278/39286. The
+3p arm had already turned over the same way at 18:00:01. The evidence that this
+is the designed lifecycle and not interference: the relaunches land on exact
+10-minute cron boundaries, the champion generation kept advancing across the
+handover (2p gen 134912 -> 135003), the new arms still carry 181 keys (i.e.
+they are running the OLD binary, as they must be), and the live tree's
+`target/release/climb` never changed mtime.
+
+
+====================================================================
+10. THE NEXT MEASUREMENT WORTH TAKING
+====================================================================
+
+Price them, and read the ablation. Everything here says the five coordinates are
+reachable (the weakest at 3.66x the yardstick, four of five out-moving the live
+`HandCivil`), faithful to the columns that were screened (four of them exactly),
+and inert until priced (bit-identical across binaries at all three player
+counts). None of that is a win rate.
+
+The REL family cleared both screens, was built, and ablated to a dead wash. The
+open question these five exist to answer is whether the OTHER quadrant behaves
+differently -- whether a column that moves the argmax hard while barely
+predicting the outcome is worth more than one that predicts the outcome while
+barely moving the argmax. This report cannot answer it; only climb time on an
+arm that has these keys can, followed by the same ablation c69b111 ran.
+
+If that is run, `HandSpecialTechCount` is the one to watch. It is the most
+discriminating column in the entire 91-column screen and the most sharply
+conditional: silent on two decisions in three, and then larger than anything
+else measured. That is the shape a linear evaluator is worst at representing on
+its own, and the reason it was worth a coordinate.

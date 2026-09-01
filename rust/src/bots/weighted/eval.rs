@@ -2833,4 +2833,121 @@ mod tests {
              candidates, so this test is not actually exercising them"
         );
     }
+
+    /// The same real-position dot-product identity as the test above, for the
+    /// five civil-hand INVENTORY keys landed 2026-08-31, with one deliberate
+    /// strengthening: the premise is asserted PER KEY, not in aggregate.
+    ///
+    /// An aggregate "the new coordinates were nonzero somewhere" counter
+    /// passes even when one of the five is structurally zero at every
+    /// position -- which is precisely the failure mode that matters here. A
+    /// key that never leaves 0.0 in `phi` contributes nothing at any weight,
+    /// so the climb would price it forever against a column of zeros and
+    /// nobody would find out. Four of these five are counts or sums that a
+    /// `new_game` toy position genuinely cannot exercise (turn one has an
+    /// empty or near-empty civil hand), so the existing default-vector
+    /// identity tests are blind to them in exactly the same way.
+    ///
+    /// `hand_specialtech_count` gets the lowest bar of the five on purpose:
+    /// the screen measured it constant across the legal moves on 69.7% of
+    /// decisions, the highest of the five, so it is genuinely rare -- rare is
+    /// not the same as unreachable, and the assertion is calibrated to catch
+    /// the second without failing on the first.
+    #[test]
+    fn linear_features_reproduces_evaluate_on_played_forward_positions_with_the_hand_inventory_keys_live()
+    {
+        let mut w = Weights::default();
+        for (i, &k) in WeightKey::ALL.iter().enumerate() {
+            // Distinct per key and offset from the sibling test's ramp, so a
+            // transposed pair of indices cannot cancel in either test and the
+            // two are not testing one arithmetic coincidence twice.
+            w.set(k, -0.375 + (i as f64) * 0.01953125);
+        }
+
+        struct Rng(u64);
+        impl Rng {
+            fn below(&mut self, n: usize) -> usize {
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                ((z ^ (z >> 31)) % n as u64) as usize
+            }
+        }
+
+        let bot = WeightedBot::new(w);
+        let mut checked = 0usize;
+        // (key, minimum candidates it must be nonzero on for this test to be
+        // exercising it at all).
+        let hand_keys: [(WeightKey, usize); 5] = [
+            (WeightKey::HandActionCount, 200),
+            (WeightKey::HandSpecialTechCount, 50),
+            (WeightKey::HandScienceCostTotal, 1_000),
+            (WeightKey::HandScienceShortfallTotal, 200),
+            (WeightKey::HandResourceCostTotal, 1_000),
+        ];
+        let mut nonzero = [0usize; 5];
+
+        for n in [2u8, 3, 4] {
+            for seed in 0u64..8 {
+                let mut state = G::new_game(n, seed.wrapping_mul(6151).wrapping_add(u64::from(n)));
+                let mut rng = Rng(seed ^ 0x0DAD_C0DE);
+                let mut moves = 0usize;
+                while !state.game_over && moves <= crate::game::MOVE_CAP {
+                    let legal = crate::legal::legal_moves(&state);
+                    let playable: Vec<crate::moves::Move> = legal
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .filter(|&m| !matches!(m, crate::moves::Move::Resign))
+                        .collect();
+                    if playable.is_empty() {
+                        break;
+                    }
+                    if moves > 10 && moves.is_multiple_of(5) {
+                        let ranked = bot.rank_moves(&state, legal.as_slice());
+                        let feats = candidate_features(&state, legal.as_slice(), false, &w);
+                        assert_eq!(
+                            ranked.len(),
+                            feats.len(),
+                            "{n}p seed {seed} move {moves}: candidate set must match rank_moves' own"
+                        );
+                        for &(mv, score) in &ranked {
+                            let (_, f) = feats
+                                .iter()
+                                .find(|&&(m, _)| m == mv)
+                                .unwrap_or_else(|| panic!("{n}p seed {seed}: {mv:?} missing"));
+                            let linear = dot(&w, f);
+                            assert!(
+                                (linear - score).abs() < 1e-6,
+                                "{n}p seed {seed} move {moves} {mv:?}: \
+                                 linear={linear} evaluate={score} diff={}",
+                                linear - score
+                            );
+                            for (i, &(k, _)) in hand_keys.iter().enumerate() {
+                                if f[k as usize] != 0.0 {
+                                    nonzero[i] += 1;
+                                }
+                            }
+                            checked += 1;
+                        }
+                    }
+                    let mv = playable[rng.below(playable.len())];
+                    crate::game::step(&mut state, mv);
+                    moves += 1;
+                }
+            }
+        }
+
+        assert!(checked > 5_000, "test premise: only {checked} candidates sampled, expected thousands");
+        for (i, &(k, floor)) in hand_keys.iter().enumerate() {
+            assert!(
+                nonzero[i] > floor,
+                "test premise: {k:?} was nonzero on only {} of {checked} sampled candidates \
+                 (floor {floor}), so either this test is not exercising it or the coordinate is \
+                 unreachable in phi -- the second is a real defect, not a test-tuning problem",
+                nonzero[i]
+            );
+        }
+    }
 }
