@@ -1,0 +1,141 @@
+relhinge ablation: did the seven hinged relative-rate keys landed in 78acfbc
+earn their weight, or are they passengers?
+2026-08-31
+
+Question. commit 78acfbc promoted seven WeightGroup::Rivals / SignIntent::Free
+keys (culture_rate_trail_frac, science_rate_trail_frac, culture_rate_share,
+culture_rate_behind_near, culture_rate_ahead_near, science_rate_behind_near,
+science_rate_ahead_near), authored 0.0. They went live on all three climb arms
+12:46 today and the champion files now report them nonzero. A nonzero value
+after ~100 keys move per accepted climb step (rust_climb_2p.jsonl "kick" ops
+moved 104 keys at a time) is not evidence the seven keys themselves do
+anything -- see memory tta-row-family-carries-r1-margin, the passenger
+problem. A peer also flagged that the climb log records ops by GROUP: 2p
+logged 69 accepted steps since restart, 7 of them group:rivals /
+rescale:rivals / group:rivals+row -- a group op moves the whole Rivals group
+at once, so the seven keys could be riding a move accepted for other Rivals
+keys entirely. Only a counterfactual (ablation arena) separates these.
+
+
+STEP 1 -- raw and normalised values (memory tta-normalise-before-comparing-weights:
+the eval is scale-invariant, a raw magnitude is noise until divided by the
+champion vector's L2 norm).
+
+Read directly from experiments/rust_champion_{2,3,4}p.json (181 keys each,
+"weights" object).
+
+  2p  L2 norm = 80.5905
+    culture_rate_trail_frac    raw -0.473544   normalised -0.005876   rank 56/181  (69.6th pct of |normalised|)
+    culture_rate_behind_near   raw +0.518707   normalised +0.006436   rank 54/181  (70.7th pct)
+    culture_rate_ahead_near    raw -0.084552   normalised -0.001049   rank 113/181 (38.1st pct)
+    science_rate_trail_frac    raw +0.081868   normalised +0.001016   rank 116/181 (36.5th pct)
+    science_rate_ahead_near    raw +0.069443   normalised +0.000862   rank 125/181 (31.5th pct)
+    science_rate_behind_near   raw +0.036597   normalised +0.000454   rank 144/181 (21.0th pct)
+    culture_rate_share         raw -0.030039   normalised -0.000373   rank 147/181 (19.3rd pct)
+    (top-10 |normalised| among all 181 keys: 0.579, 0.484, 0.360, 0.310, 0.289, 0.147, 0.139, 0.115, 0.109, 0.106;
+     median |normalised| = 0.0018)
+
+  3p  L2 norm = 160.2312
+    culture_rate_ahead_near    raw +0.177945   normalised +0.001111
+    culture_rate_trail_frac    raw +0.026266   normalised +0.000164
+    science_rate_behind_near   raw -0.042968   normalised -0.000268
+    culture_rate_share         raw +0.057444   normalised +0.000359
+    culture_rate_behind_near   raw -0.031607   normalised -0.000197
+    science_rate_trail_frac    raw +0.016291   normalised +0.000102
+    science_rate_ahead_near    raw -0.011808   normalised -0.000074
+    (top-10 |normalised|: 0.507, 0.415, 0.360, 0.300, 0.237, 0.222, 0.217, 0.213, 0.189, 0.153; median 0.0017)
+
+  4p  L2 norm = 189.7966 -- all seven are ~0, two are exact 0.0
+    culture_rate_share         0.000000
+    culture_rate_ahead_near    0.000000
+    culture_rate_behind_near   raw +0.001875   normalised +0.000010
+    culture_rate_trail_frac    raw -0.028282   normalised -0.000149
+    science_rate_behind_near   raw +0.019324   normalised +0.000102
+    science_rate_trail_frac    raw +0.002248   normalised +0.000012
+    science_rate_ahead_near    raw -0.083373   normalised -0.000439
+    (top-10 |normalised|: 0.533, 0.352, 0.307, 0.297, 0.274, 0.228, 0.205, 0.199, 0.171, 0.166; median 0.0013)
+
+Plainly: +0.5187 (culture_rate_behind_near, 2p) is NOT large. Normalised it is
+0.0064, an order of magnitude below the top handful of keys (0.29-0.58) and
+only in the 71st percentile of 181 keys by |normalised| -- solidly mid-pack,
+not a standout. Only two of the seven, both at 2p (culture_rate_trail_frac,
+culture_rate_behind_near), clear the scatter of the other ~174 keys at all;
+the other five (all three at 3p, all seven at 4p) sit at or below the median,
+indistinguishable from noise, and two at 4p are exactly 0.0.
+
+
+STEP 2 -- ablation arena, 2p.
+
+Froze the live champion: cp experiments/rust_champion_2p.json ->
+/tmp/relhinge_ablation_2026-08-31/full_2p.json, md5 c14e52795d8ba4ccd651b314dcca4465.
+Never touched experiments/rust_champion_2p.json itself (memory
+tta-champion-file-is-live); the climb (pid 8759) kept running throughout and
+was still at it afterward -- md5 of the scratch copy was re-checked
+post-run and is unchanged.
+
+Made a second copy with only the seven keys forced to 0.0
+(/tmp/relhinge_ablation_2026-08-31/ablated_2p.json, md5
+4ed1994cb5313c53b45bc721bcda8869). `python3 -m json.tool` diff of the two
+scratch files shows exactly those seven lines changed, nothing else.
+
+Round-tripped BOTH scratch files through the real loader
+(eval::load_weights, which runs dominance_repair on every load -- memory
+tta-dominates-silently-reverts-a-weight) using a throwaway bin
+(rust/src/bin/roundtrip_scratch.rs, deleted after use) that loads both files
+and diffs every WeightKey. Output:
+
+  CultureRateTrailFrac:  -0.473544 -> 0.000000
+  ScienceRateTrailFrac:   0.081868 -> 0.000000
+  CultureRateShare:      -0.030039 -> 0.000000
+  CultureRateBehindNear:  0.518707 -> 0.000000
+  CultureRateAheadNear:  -0.084552 -> 0.000000
+  ScienceRateBehindNear:  0.036597 -> 0.000000
+  ScienceRateAheadNear:   0.069443 -> 0.000000
+  total keys differing after load-through-repair: 7
+
+Confirmed by round trip, not by reading the edit: exactly the seven target
+keys differ, none of the four negative values got snapped or tied by
+dominance_repair (SignIntent::Free is in force, matches the peer's separate
+check of the DOMINATES table).
+
+Arena run: rust/target/release/arena --a full_2p.json --b ablated_2p.json
+--players 2 --games 2400 --threads 6 --seed 7 (prebuilt release binary, no
+rebuild of climb, both climb arms confirmed still running throughout --
+pids 8759/8767, unaffected).
+
+  games        2400 (1200 deals x 2 seats)
+  win rate     50.1%  +/- 0.3   (null 50.0%)   p = 0.6116
+               [naive +/- 2.0, rho -0.97, deff 0.03, 1200 deals]
+  culture      A 184.4   best other 184.3   lead +0.0 +/- 0.4  (null 0.0)
+  mean moves   301.7
+  verdict (arena's own)  inconclusive -- the interval still straddles the null
+
+The arena's null here is exactly 0.500 (it rotates A through every seat on
+every deal), and 50.1% +/- 0.3 sits on top of it. Mean culture margin (A's
+"centred lead") is +0.0 +/- 0.4 games, also on the null. Mean moves 301.7,
+same as the full-champion self-play baseline (~301-308 across smaller sanity
+runs) -- ablating the seven keys didn't even change game length.
+
+
+STEP 3 -- interpretation.
+
+The seven keys are passengers. Full champion beats seven-key-ablated
+champion at 50.1% +/- 0.3 against a null of 50.0%, p = 0.61 -- a wash, not a
+win. This matches what step 1 already suggested structurally: five of the
+seven never cleared the scatter of the other ~174 keys in the first place,
+and even the two that did (culture_rate_trail_frac, culture_rate_behind_near
+at 2p) only reached the 70th percentile, not the top of the distribution.
+Combined with the peer's finding that 7 of 2p's 69 accepted climb steps were
+GROUP moves on all of Rivals at once, the picture is consistent: these keys
+moved because they were dragged along by an accepted step that paid for
+other Rivals keys, not because moving them paid for anything themselves.
+
+Per the standing instruction: this is a wash, so no second (two-key) arena
+was run -- that would be fishing on a null result, not confirming one.
+
+This is the expected, unremarkable result for keys authored at 0.0 and
+promoted without their own screen: most keys landed this way turn out to be
+passengers (memory tta-most-keys-cannot-decide: 61 of 160 keys already known
+never to flip a decision). Nothing here says the seven keys are wrong to
+have or actively harmful -- only that, on the current 2p champion, they are
+not doing any measurable work.
