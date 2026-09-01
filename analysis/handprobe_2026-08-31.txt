@@ -1,0 +1,113 @@
+ADDITIVE ARENA PROBE OF TWO HAND-INVENTORY KEYS
+2026-08-31/09-01, 2 players, frozen champion, binary at d522218
+
+WHAT THIS MEASURES
+------------------
+The five civil-hand columns promoted in d522218 all default to exactly 0.0 on
+every champion. That is the precondition named in memory/tta-probe-additively-
+not-absolutely.md: a fixed-c weight probe is only interpretable against a zero
+baseline, because +c and -c are then symmetric excursions from the live policy
+rather than perturbations of an already-fitted value.
+
+Two of the five were probed, the two with the largest measured within-decision
+spread ratios from analysis/handfeat_features_2026-08-31.txt:
+
+  hand_specialtech_count      spread ratio 1.496296   mean spread 0.3092
+  hand_resource_cost_total    spread ratio 1.134221   mean spread 3.7807
+
+c was scaled per key so each induces a score swing comparable to the live
+HandCivil key (spread ratio 0.615241):
+
+  c_specialtech = 0.619594
+  c_resource    = 0.050673
+
+Baseline is the frozen 2p champion (181 keys) with the 5 new columns appended
+at 0.0 => 186 keys, /tmp/handprobe/baseline_186.json. Every probe file differs
+from it in exactly one key. All runs: rust/target/release/arena
+--games 2400 --players 2, except the null at --games 1200.
+
+RESULTS
+-------
+run  A weights                 games  win rate    p        rho    deff  culture lead   verdict
+---  ----------------------    -----  ----------  ------   -----  ----  ------------   ------------
+A    baseline_186 (null)        1200  50.0 +/-0.0 1.0000   -1.00  0.00  +0.0 +/- 0.0   inconclusive
+B    specialtech  +c            2400  51.3 +/-1.5 0.0893   -0.42  0.58  +2.5 +/- 1.7   inconclusive
+C    specialtech  -c            2400  44.5 +/-1.4 0.0000   -0.53  0.47  -7.1 +/- 1.4   reject (worse)
+D    resource     +c            2400  46.3 +/-1.6 0.0000   -0.39  0.61  -5.5 +/- 1.7   reject (worse)
+E    resource     -c            2400  53.3 +/-1.5 0.0000   -0.42  0.58  +4.5 +/- 1.7   ACCEPT (better)
+
+B is against baseline_186 in every row. mean moves 288.0-289.2 across all five,
+so no run degenerated.
+
+THE NULL IS MEASURED, NOT ASSUMED
+---------------------------------
+Run A is baseline against a byte-identical opponent: 50.0% +/- 0.0, rho -1.00,
+deff 0.00. The arena pairs each deal with the seats swapped, so seat bias
+cancels by construction and the null for this configuration really is 0.500.
+This matters because memory/tta-forced-slack-arena-loses.md records seat 0
+alone being worth +1.8pp in a differently-configured arena. Here it is not.
+
+Per memory/tta-common-opponent-needs-headroom.md, an exact 50.00 +/- 0.00 can
+also mean the instrument is measuring nothing. It does not mean that here: the
+four probe runs against the same baseline return rho -0.39..-0.53 and deff
+0.47..0.61, i.e. real per-deal variation survives the pairing as soon as the
+two sides actually differ. The zero variance in run A is the correct answer to
+"identical weights", not a dead harness.
+
+READING
+-------
+Both keys are ANTISYMMETRIC: the two signs land on opposite sides of the null.
+That is the signature of a gradient. A column that could not decide would leave
+both arms inside the interval; a column being merely damaged by perturbation
+would push both arms the same way. Neither happened.
+
+  hand_specialtech_count   gradient sign POSITIVE
+      -c is decisive (44.5%, p=0.0000, lead -7.1 +/- 1.4).
+      +c is NOT (51.3%, p=0.0893, interval straddles the null).
+      Established: the direction. NOT established: that this magnitude of c
+      is an improvement.
+
+  hand_resource_cost_total gradient sign NEGATIVE
+      Both arms clear. +c 46.3% (p=0.0000) and -c 53.3% (p=0.0000), and the
+      -c arm BEATS the frozen champion by +3.3pp with the interval clear of
+      the null.
+
+Direction of both is one coherent statement: prefer special-tech cards in
+hand, penalise total resource cost sitting in hand. Cheap playable cards are
+worth holding; cards that cannot be afforded are dead weight. That is
+consistent with memory/tta-bot-underbuys-and-wastes-cards.md (the bot takes
+17.5 cards and plays 61%, humans 26.9 and 78%) -- a hand-cost penalty is
+pressure toward not accumulating unplayable cards.
+
+WHAT THIS IS NOT
+----------------
++3.3pp against a FROZEN champion at a hand-tuned c is not a promotion. It is
+evidence the column is reachable and signed, which is exactly the thing both
+offline screens could not tell us. memory/tta-two-screens-disagree.md is
+explicit that clearing both screens is necessary and not sufficient, and the
+REL family is the standing counterexample: it won the R2 screen, landed at
+78acfbc, and ablated to 50.1% +/- 0.3 (c69b111). The verdict that counts is
+whether a climb starting from these keys at 0.0 finds and keeps a non-zero
+value for them, judged by ablation.
+
+Note also that HAND is the quadrant tta-two-screens-disagree.md described as
+"moves most, predicts least" (median spread 0.5321, R2 total +0.002732) --
+the family that looked worse on the screen that REL won.
+
+OPEN
+----
+- The three unprobed keys: hand_science_cost_total, hand_science_shortfall_
+  total, hand_action_count. Spread ratios 0.869017 / 0.684574 / 0.567497.
+- c was hand-scaled, not fitted. The optimum for either key is unmeasured;
+  only the sign is.
+- 2p only. 3p and 4p unprobed.
+- featspread was never run for these five, so p95_candidate_spread is still
+  the [0,0,0] sentinel and all five clamp at CLAMP_BLIND. Regenerate once a
+  champion has actually climbed with them.
+- Ablation, once the arms have climbed on the d522218 binary, is the real test.
+
+REPRODUCE
+---------
+Weight files in /tmp/handprobe/ (tmp is wiped on reboot; the constants above
+plus baseline are enough to rebuild them). Raw arena output in
+/tmp/handprobe/run{A_null,B_plus,C_stminus,D_resplus,E_resminus}.log.
