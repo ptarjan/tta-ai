@@ -2445,130 +2445,108 @@ mod tests {
         }
     }
 
-    /// The same guarantee for the four coordinates added for the wonder
-    /// rank-deficiency (`wonder_promise`, `wonder_age_overrun`,
-    /// `take_cost_share`, `hand_perishable`), checked against EVERY frozen
-    /// gauntlet member rather than one of them -- the gauntlet is the ladder
-    /// a candidate is judged against (docs/RUST_LEAGUE.md), so a member whose
-    /// play changed the day a coordinate was added would silently move the
-    /// ruler along with the thing being measured.
+    /// Every frozen gauntlet member loads `keys` at exactly the value that
+    /// member plays them at, checked against the WHOLE directory rather than
+    /// one file -- the gauntlet is the ladder a candidate is judged against
+    /// (docs/RUST_LEAGUE.md), so a member whose play changed the day a
+    /// coordinate was added would silently move the ruler along with the thing
+    /// being measured.
     ///
-    /// The load path is what makes this hold: [`parse_weights`] starts from
-    /// [`Weights::defaults`] and overwrites only the names the file actually
-    /// carries, so a key that did not exist when the file was written keeps
-    /// its default -- and every one of these four defaults to exactly 0.0, so
-    /// its contribution to [`evaluate`]'s dot product is `0.0 * feature`.
-    /// Seeding any of them nonzero would move every file below at once, which
-    /// is precisely what this test refuses.
+    /// Which value that is depends on when the member was frozen, and the
+    /// directory holds both cohorts because it is append-only
+    /// (`analysis/frozen/gauntlet/README.md`):
+    ///
+    /// * A member frozen BEFORE the coordinate existed cannot name it, so
+    ///   [`parse_weights`] -- which starts from [`Weights::defaults`] and
+    ///   overwrites only the names the file carries -- must hand it back at its
+    ///   `0.0` default, contributing `0.0 * feature` to [`evaluate`]'s dot
+    ///   product. Seeding any such default nonzero would move every one of
+    ///   those files at once, which is what this refuses.
+    /// * A member frozen AFTER prices the coordinate itself, and needs the
+    ///   other half of the same guarantee: the number in the file is the number
+    ///   that loads, so appending a member never quietly reprices it.
+    ///
+    /// The cohort is read off the file's own contents, never off its name or
+    /// the date in it: a test that assumed the whole directory predated a key
+    /// could only stay green until the next member was appended.
+    fn every_frozen_gauntlet_member_loads_unchanged(keys: &[WeightKey]) {
+        for &k in keys {
+            assert_eq!(
+                k.default_weight(),
+                0.0,
+                "{} must default to 0.0: the older gauntlet members predate it and would \
+                 silently inherit anything else written here",
+                k.name()
+            );
+        }
+
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../analysis/frozen/gauntlet");
+        let mut predating = 0usize;
+        let mut pricing = 0usize;
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display())) {
+            let path = entry.expect("a readable directory entry").path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+            let doc = crate::fixtures::parse_json(&text).unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+            let w = parse_weights(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let mut names_any = false;
+            for &k in keys {
+                // The file's own value for the key, read straight out of the
+                // JSON rather than inferred from the filename.
+                let written = doc
+                    .get("weights")
+                    .unwrap_or(&doc)
+                    .get(k.name())
+                    .and_then(crate::fixtures::Json::as_f64);
+                names_any |= written.is_some();
+                assert_eq!(
+                    w.get(k),
+                    written.unwrap_or(0.0),
+                    "{}: {} must come back at the value this member plays it at -- {}",
+                    path.display(),
+                    k.name(),
+                    match written {
+                        Some(_) => "the file names it, so the load must not reprice it",
+                        None => "the file predates it, so anything but 0.0 means the DEFAULT moved",
+                    }
+                );
+            }
+            if names_any {
+                pricing += 1;
+            } else {
+                predating += 1;
+            }
+        }
+        // Neither branch is vacuous: the directory really does hold members
+        // narrower than the vector they load into, AND members that price these
+        // keys, which is the whole situation under test.
+        assert!(predating >= 6, "expected at least the six 140-key members to predate these keys, found {predating}");
+        assert!(pricing >= 1, "expected at least one member that prices these keys, found {pricing}");
+    }
+
+    /// The four coordinates added for the wonder rank-deficiency.
     #[test]
     fn a_champion_file_saved_before_these_keys_existed_still_loads_with_them_at_zero() {
-        let new_keys = [
+        every_frozen_gauntlet_member_loads_unchanged(&[
             WeightKey::WonderPromise,
             WeightKey::WonderAgeOverrun,
             WeightKey::TakeCostShare,
             WeightKey::HandPerishable,
-        ];
-        for &k in &new_keys {
-            assert_eq!(
-                k.default_weight(),
-                0.0,
-                "{} must default to 0.0: every champion file on disk predates it and would \
-                 silently inherit anything else written here",
-                k.name()
-            );
-        }
-
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../analysis/frozen/gauntlet");
-        let mut checked = 0usize;
-        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display())) {
-            let path = entry.expect("a readable directory entry").path();
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-            let w = parse_weights(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            for &k in &new_keys {
-                assert_eq!(
-                    w.get(k),
-                    0.0,
-                    "{}: {} must come back at 0.0 -- a file written before the key existed cannot \
-                     name it, so anything else here means the DEFAULT moved",
-                    path.display(),
-                    k.name()
-                );
-            }
-            // Not vacuous: the file really is narrower than the vector it is
-            // being loaded into, which is the whole situation under test.
-            for &k in &new_keys {
-                assert!(
-                    !text.contains(k.name()),
-                    "{}: names {}, so this file does NOT predate the key and cannot stand in for \
-                     one that does",
-                    path.display(),
-                    k.name()
-                );
-            }
-            checked += 1;
-        }
-        assert!(checked >= 6, "expected the frozen gauntlet's six members, found {checked}");
+        ]);
     }
 
     /// The same guarantee, for `leader_replacement` and
-    /// `wonder_pool_rival_claimed` -- the two coordinates this task adds.
-    /// Both default to 0.0 (`weights.rs`'s `weight_keys!` table), so by the
-    /// same `parse_weights`-starts-from-`Weights::defaults` mechanism the
-    /// sibling test above exercises, every champion already on disk --
-    /// including everything under `analysis/frozen/`, which is FROZEN AND
-    /// APPEND-ONLY -- must come back with both new keys at exactly 0.0 and
-    /// must therefore evaluate every position bit-identically to how it did
-    /// before this task landed.
+    /// `wonder_pool_rival_claimed`. Both default to 0.0 (`weights.rs`'s
+    /// `weight_keys!` table), so the 140-key members must evaluate every
+    /// position bit-identically to how they did before those coordinates
+    /// landed, and the members frozen since must play them at the value they
+    /// were frozen with.
     #[test]
     fn a_champion_file_saved_before_leader_replacement_and_wonder_pool_rival_claimed_existed_still_loads_with_them_at_zero(
     ) {
-        let new_keys = [WeightKey::LeaderReplacement, WeightKey::WonderPoolRivalClaimed];
-        for &k in &new_keys {
-            assert_eq!(
-                k.default_weight(),
-                0.0,
-                "{} must default to 0.0: every champion file on disk predates it and would \
-                 silently inherit anything else written here",
-                k.name()
-            );
-        }
-
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../analysis/frozen/gauntlet");
-        let mut checked = 0usize;
-        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display())) {
-            let path = entry.expect("a readable directory entry").path();
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-            let w = parse_weights(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            for &k in &new_keys {
-                assert_eq!(
-                    w.get(k),
-                    0.0,
-                    "{}: {} must come back at 0.0 -- a file written before the key existed cannot \
-                     name it, so anything else here means the DEFAULT moved",
-                    path.display(),
-                    k.name()
-                );
-            }
-            // Not vacuous: the file really is narrower than the vector it is
-            // being loaded into, which is the whole situation under test.
-            for &k in &new_keys {
-                assert!(
-                    !text.contains(k.name()),
-                    "{}: names {}, so this file does NOT predate the key and cannot stand in for \
-                     one that does",
-                    path.display(),
-                    k.name()
-                );
-            }
-            checked += 1;
-        }
-        assert!(checked >= 6, "expected the frozen gauntlet's six members, found {checked}");
+        every_frozen_gauntlet_member_loads_unchanged(&[WeightKey::LeaderReplacement, WeightKey::WonderPoolRivalClaimed]);
     }
 
     /// Every champion on disk still carries the twelve retired names. They
