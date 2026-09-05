@@ -73,6 +73,24 @@ GAUNTLET_2P_LATE=analysis/frozen/gauntlet/champion_2p_gen19554_140key_2026-08-08
 GAUNTLET_3P_LATE=analysis/frozen/gauntlet/champion_3p_gen12364_140key_2026-08-08.json
 GAUNTLET_4P_LATE=analysis/frozen/gauntlet/champion_4p_gen4034_140key_2026-08-08.json
 
+# A THIRD cut, 2026-09-05.  The 08-08 files were added to give `--pool` a
+# same-strength sparring partner rather than only weak ancestors, and by this
+# date they no longer are one: 2p had moved 19554 -> 157130 generations, and the
+# basis itself grew from 140 keys to 186, so the "late" cut is neither recent nor
+# the same vocabulary.  Appended, not substituted -- the 08-06 and 08-08 files
+# stay exactly where they are, because a gauntlet score is only comparable over
+# time against an opponent that never moves (analysis/frozen/gauntlet/README.md,
+# "Frozen forever.  Append-only.").  `--gauntlet-search` below now scores its
+# beam leaves with THIS cut: the hybrid is the one panel member that actually
+# vetoes, and pointing it at a 137k-generation-stale vector was quietly making
+# the only real gate weaker every day.  Cost: at the `--gauntlet-every 50` /
+# `--gauntlet-games 60` defaults each observational member is 1.2
+# games/generation amortized, so three more is +3.6.  The pool veto's own cost
+# does not move -- `--pool-k` samples a fixed number however many members exist.
+GAUNTLET_2P_SEP=analysis/frozen/gauntlet/champion_2p_gen157130_186key_2026-09-05.json
+GAUNTLET_3P_SEP=analysis/frozen/gauntlet/champion_3p_gen92751_186key_2026-09-05.json
+GAUNTLET_4P_SEP=analysis/frozen/gauntlet/champion_4p_gen27546_186key_2026-09-05.json
+
 # A fourth, DIFFERENT-KIND panel member: the human-imitation fit
 # (docs/HUMAN_MODEL.md), reported alongside the three same-kind champions
 # above. `climb`'s `--gauntlet` used to load every member with the champion
@@ -119,9 +137,9 @@ for PLAYERS in 2 3 4; do
 
     OUT=experiments/rust_champion_${PLAYERS}p.json
     case $PLAYERS in
-        2) HYBRID_EVAL=$GAUNTLET_2P_LATE ;;
-        3) HYBRID_EVAL=$GAUNTLET_3P_LATE ;;
-        4) HYBRID_EVAL=$GAUNTLET_4P_LATE ;;
+        2) HYBRID_EVAL=$GAUNTLET_2P_SEP ;;
+        3) HYBRID_EVAL=$GAUNTLET_3P_SEP ;;
+        4) HYBRID_EVAL=$GAUNTLET_4P_SEP ;;
     esac
     log "[${PLAYERS}p] launching (champion $OUT)"
     # --hours 6 rather than forever: a process that re-executes periodically
@@ -151,6 +169,9 @@ for PLAYERS in 2 3 4; do
         --gauntlet "$GAUNTLET_2P_LATE" \
         --gauntlet "$GAUNTLET_3P_LATE" \
         --gauntlet "$GAUNTLET_4P_LATE" \
+        --gauntlet "$GAUNTLET_2P_SEP" \
+        --gauntlet "$GAUNTLET_3P_SEP" \
+        --gauntlet "$GAUNTLET_4P_SEP" \
         --gauntlet-kind human --gauntlet "$GAUNTLET_HUMAN" \
         --gauntlet-kind human --gauntlet-search "$HYBRID_EVAL" \
             --gauntlet "$GAUNTLET_HUMAN" \

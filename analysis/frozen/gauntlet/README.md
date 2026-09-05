@@ -36,6 +36,19 @@ which this borrows.
 | `champion_2p_gen19554_140key_2026-08-08.json` | 19554 | 140 | 2026-08-08 |
 | `champion_3p_gen12364_140key_2026-08-08.json` | 12364 | 140 | 2026-08-08 |
 | `champion_4p_gen4034_140key_2026-08-08.json` | 4034 | 140 | 2026-08-08 |
+| `champion_2p_gen157130_186key_2026-09-05.json` | 157130 | 186 | 2026-09-05 |
+| `champion_3p_gen92751_186key_2026-09-05.json` | 92751 | 186 | 2026-09-05 |
+| `champion_4p_gen27546_186key_2026-09-05.json` | 27546 | 186 | 2026-09-05 |
+
+The 09-05 cut is the first one taken on the **186-key** basis; everything above
+it is 140-key. That is not a naming detail — a gauntlet member can only be
+scored on the vocabulary it was frozen with, so the older files measure the
+lineage's progress and the newer one measures its current strength, and the two
+are answering different questions. It was added because the 08-08 "late" cut had
+stopped being the same-strength sparring partner it was appended to be: 2p moved
+19,554 → 157,130 generations between them. `experiments/rust_league.sh` points
+`--gauntlet-search` at this cut, since the search hybrid is the one panel member
+that actually vetoes.
 
 ## These are snapshots, not "the champion"
 
