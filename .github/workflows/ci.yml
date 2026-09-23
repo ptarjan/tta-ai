@@ -45,7 +45,7 @@ jobs:
         # `tta` package, not `trainer`'s candle/GPU dependency tree.
         working-directory: rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The gate runs the LATEST stable clippy, which catches lints an older
       # pinned toolchain cannot see. Select it explicitly with `+stable` rather
