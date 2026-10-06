@@ -18,3 +18,10 @@ set "ROOT=C:\Users\micro\tta-desk"
 echo %DATE% %TIME% %K%p> "%ROOT%\run_%K%p.flag"
 call "%ROOT%\climb_%K%p.bat"
 del /f /q "%ROOT%\run_%K%p.flag" 2>nul
+rem Both callers launch this through `start`, which runs a batch file under
+rem cmd /K, so without this exit every launch leaves an idle cmd.exe plus a
+rem conhost behind in SYSTEM's session-0 window station.  ~120 of them filled
+rem its desktop heap and every new SYSTEM console process (llamaswap-boot)
+rem died at start with 0xC0000142.  Only append below this line: cmd re-reads
+rem a running batch file by byte offset.
+exit
